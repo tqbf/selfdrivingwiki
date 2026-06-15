@@ -3,58 +3,99 @@ import FileProvider
 import Observation
 import WikiFSCore
 
-/// Drives the File Provider domain from the app: register it, resolve the
-/// user-visible Unix path (always asked of the system — never hardcoded), and
-/// signal the daemon when the wiki changes so Terminal reads stay fresh.
+/// Drives the File Provider domains from the app — now ONE domain per wiki
+/// (`plans/llm-wiki.md` Phase 0). Registers/removes a domain per wiki, resolves
+/// the user-visible Unix path of the active wiki's mount (always asked of the
+/// system — never hardcoded), and signals the daemon when a wiki changes so
+/// Terminal reads stay fresh.
+///
+/// **Domain identity = the wiki's ULID.** `domainFor(id:displayName:)` builds an
+/// `NSFileProviderDomain(identifier: <ulid>, displayName: <name>)`; the extension
+/// reads `domain.identifier` to pick `<ulid>.sqlite`. The display name only sets
+/// the Finder mount label (`~/Library/CloudStorage/WikiFS-<name>`), so a rename
+/// is cosmetic and never breaks the DB mapping.
 @MainActor
 @Observable
 final class FileProviderSpike {
-    private static let domain = NSFileProviderDomain(
-        identifier: NSFileProviderDomainIdentifier(rawValue: "WikiFS"),
-        displayName: "WikiFS"
-    )
-
     var status = "Not registered"
+    /// The user-visible mount path of the ACTIVE wiki (resolved at select time).
     var path: String?
 
-    /// Idempotent launch-time registration: ADD-IF-ABSENT. Query the existing
-    /// domains and add ours only when it's missing, then resolve the path.
-    ///
-    /// Phase 2 used `remove(_, mode: .removeAll)` + re-add on every launch as a
-    /// blunt cache-buster. Phase 3 replaces that with real change signaling
-    /// (`signalChange()`), so we keep the domain — and its materialized tree —
-    /// across launches instead of tearing it down each time.
-    func registerIfNeeded() async {
-        // Structural-change escape hatch (Phase 4). `signalEnumerator` /
-        // `enumerateChanges` reliably refreshes existing items and surfaces NEW
-        // FILES (e.g. `manifest.json`), but the daemon does not always synthesize
-        // a brand-new top-level FOLDER (e.g. `indexes/`) into a root it has
-        // already materialized from an older appex. When the projection's shape
-        // changes between versions, a one-shot remove+re-add forces a clean full
-        // `enumerateItems` so the new tree appears. Gated on an env var so normal
-        // launches keep the lightweight add-if-absent path (no Phase-2 teardown).
+    /// The wiki whose mount `path` currently reflects, so `signalChange` and the
+    /// path popover target the right domain.
+    private var activeWikiID: String?
+    private var activeDisplayName: String?
+
+    /// Build the File Provider domain for a wiki. Identifier is the ULID (stable
+    /// across rename); displayName drives the `WikiFS-<name>` mount label.
+    private func domain(id: String, displayName: String) -> NSFileProviderDomain {
+        NSFileProviderDomain(
+            identifier: NSFileProviderDomainIdentifier(rawValue: id),
+            displayName: displayName
+        )
+    }
+
+    // MARK: - Per-wiki registration
+
+    /// Idempotent ADD-IF-ABSENT registration for ONE wiki's domain. Generalizes
+    /// the v0 single-domain logic: query existing domains, add ours only when
+    /// missing. The `WIKIFS_REENUMERATE` escape hatch (a one-shot remove+re-add to
+    /// force a clean full enumeration on a structurally-changed projection) is
+    /// preserved, now scoped to the named wiki.
+    func registerDomain(id: String, displayName: String) async {
+        let domain = domain(id: id, displayName: displayName)
+
         if ProcessInfo.processInfo.environment["WIKIFS_REENUMERATE"] == "1" {
-            try? await NSFileProviderManager.remove(Self.domain)
+            try? await NSFileProviderManager.remove(domain)
         }
 
         let alreadyRegistered = (try? await NSFileProviderManager.domains())?
-            .contains { $0.identifier == Self.domain.identifier } ?? false
+            .contains { $0.identifier == domain.identifier } ?? false
 
         if !alreadyRegistered {
             do {
-                try await NSFileProviderManager.add(Self.domain)
-                status = "Domain registered — resolving path…"
+                try await NSFileProviderManager.add(domain)
             } catch {
-                // A racing add can still report "already exists"; treat as benign
-                // and fall through to resolve the path.
-                status = "add(domain): \(error.localizedDescription)"
+                // A racing add can still report "already exists"; benign.
+                status = "add(domain \(displayName)): \(error.localizedDescription)"
             }
         }
-        await resolvePath()
     }
 
+    /// Remove ONE wiki's domain (on delete). Clears the cached active path if it
+    /// belonged to that wiki.
+    func removeDomain(id: String) async {
+        let domain = domain(id: id, displayName: id)
+        do {
+            try await NSFileProviderManager.remove(domain)
+            if activeWikiID == id {
+                activeWikiID = nil
+                path = nil
+                status = "Removed"
+            }
+        } catch {
+            status = "remove(domain) failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Make `id` the active wiki for path/signal purposes and resolve its mount
+    /// path. Called when the user switches wikis.
+    func activate(id: String, displayName: String) async {
+        activeWikiID = id
+        activeDisplayName = displayName
+        await resolvePath(id: id, displayName: displayName)
+    }
+
+    /// Re-resolve the ACTIVE wiki's mount path (used by the path popover, which
+    /// doesn't track the wiki id itself). No-op if no wiki is active yet.
     func resolvePath() async {
-        guard let manager = NSFileProviderManager(for: Self.domain) else {
+        guard let id = activeWikiID, let name = activeDisplayName else { return }
+        await resolvePath(id: id, displayName: name)
+    }
+
+    func resolvePath(id: String, displayName: String) async {
+        let domain = domain(id: id, displayName: displayName)
+        guard let manager = NSFileProviderManager(for: domain) else {
             status = "No manager for domain"
             return
         }
@@ -67,16 +108,14 @@ final class FileProviderSpike {
         }
     }
 
-    /// Open an ingested file in its default app (e.g. Preview for a PDF).
-    ///
-    /// Resolves the file's user-visible URL from the daemon by its `by-id` leaf
-    /// identifier (the canonical path — built from the shared prefix so it can't
-    /// drift from the projection), then hands it to `NSWorkspace`. The URL is
-    /// asked of the system at click time, never hardcoded (INITIAL §10). Opening
-    /// materializes the bytes on demand via the extension's `fetchContents`, so
-    /// it works even when the file isn't yet cached locally.
+    /// Open an ingested file in its default app (e.g. Preview for a PDF), in the
+    /// ACTIVE wiki's domain. Resolves the file's user-visible URL from the daemon
+    /// by its `by-id` leaf identifier (built from the shared prefix so it can't
+    /// drift), then hands it to `NSWorkspace`. URL asked at click time.
     func openIngestedFile(id: PageID) async {
-        guard let manager = NSFileProviderManager(for: Self.domain) else {
+        guard let wikiID = activeWikiID else { return }
+        let domain = domain(id: wikiID, displayName: wikiID)
+        guard let manager = NSFileProviderManager(for: domain) else {
             status = "No manager for domain"
             return
         }
@@ -89,29 +128,19 @@ final class FileProviderSpike {
         }
     }
 
-    /// Tell the daemon the wiki changed so it re-runs `enumerateChanges` and
-    /// re-fetches the edited page's bytes (INITIAL §6/§10). Signals BOTH page
-    /// containers AND the working set:
-    /// - signaling only the root would NOT refresh the page-list children (root
-    ///   never lists page files), so the edited file would stay stale;
-    /// - the working set is the daemon's actively-tracked materialized set.
-    /// Best-effort + non-throwing: signaling is advisory, not load-bearing for
-    /// correctness (the version bump is). Awaited so callers may show a status.
+    /// Tell the daemon the ACTIVE wiki changed so it re-runs `enumerateChanges`
+    /// and re-fetches edited bytes. Signals the page containers, the root, the
+    /// indexes folder, and the files views, plus the working set — the same set
+    /// v0 signaled, now scoped to the active wiki's domain. Best-effort.
     func signalChange() async {
-        guard let manager = NSFileProviderManager(for: Self.domain) else { return }
+        guard let wikiID = activeWikiID else { return }
+        let domain = domain(id: wikiID, displayName: wikiID)
+        guard let manager = NSFileProviderManager(for: domain) else { return }
         let containers: [NSFileProviderItemIdentifier] = [
             NSFileProviderItemIdentifier(WikiFSContainerID.pagesByTitle),
             NSFileProviderItemIdentifier(WikiFSContainerID.pagesByID),
-            // The generated index bytes (manifest.json at root; the JSONL files
-            // under `indexes`) derive from page content, so an edit must
-            // invalidate them too — signal both their containers (Phase 4).
             .rootContainer,
             NSFileProviderItemIdentifier(WikiFSContainerID.indexes),
-            // Ingested files (Phase 5): a drop OR a removal changes the `files/`
-            // tree and the files.jsonl/manifest indexes. The model fires
-            // `onPageDidChange?()` (wired to this) after ingest AND delete, so
-            // signaling both `files/` views (and `indexes`, already above)
-            // refreshes the projection without relaunch.
             NSFileProviderItemIdentifier(WikiFSContainerID.files),
             NSFileProviderItemIdentifier(WikiFSContainerID.filesByID),
             NSFileProviderItemIdentifier(WikiFSContainerID.filesByName),
@@ -123,16 +152,6 @@ final class FileProviderSpike {
                     continuation.resume()
                 }
             }
-        }
-    }
-
-    func remove() async {
-        do {
-            try await NSFileProviderManager.remove(Self.domain)
-            path = nil
-            status = "Removed"
-        } catch {
-            status = "remove(domain) failed: \(error.localizedDescription)"
         }
     }
 }

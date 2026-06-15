@@ -7,6 +7,8 @@ import WikiFSCore
 /// the modern inset + hidden-background list look matches Notes/Mail (§4.2).
 struct SidebarView: View {
     @Bindable var store: WikiStoreModel
+    /// The multi-wiki manager — backs the switcher header at the top of the list.
+    @Bindable var manager: WikiManager
     /// Used to open an ingested file in its default app via its user-visible URL.
     let fileProvider: FileProviderSpike
     @State private var renameTarget: WikiPageSummary?
@@ -14,7 +16,12 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $store.selection) {
-            // Pinned at the top: the singleton system-prompt document, projected
+            // The wiki switcher — the top-level container switch (which knowledge
+            // base am I in). No `.tag`, so it never feeds the page selection.
+            WikiSwitcher(manager: manager)
+                .listRowSeparator(.hidden)
+
+            // Pinned: the singleton system-prompt document, projected
             // at the wiki root as CLAUDE.md / AGENTS.md. Selecting it edits the
             // doc in the main pane, exactly like a page.
             Label("System Prompt", systemImage: "sparkles")
@@ -56,7 +63,7 @@ struct SidebarView: View {
         }
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
-        .navigationTitle("WikiFS")
+        .navigationTitle(activeWikiName)
         .navigationSplitViewColumnWidth(
             min: PageEditorMetrics.sidebarMinWidth,
             ideal: PageEditorMetrics.sidebarIdealWidth
@@ -76,6 +83,13 @@ struct SidebarView: View {
                 renameTarget = nil
             }
         }
+    }
+
+    /// The active wiki's display name for the window title (falls back to the app
+    /// name when no wiki is selected yet).
+    private var activeWikiName: String {
+        guard let id = manager.activeWikiID else { return "WikiFS" }
+        return manager.wikis.first { $0.id == id }?.displayName ?? "WikiFS"
     }
 
     private func beginRename(_ summary: WikiPageSummary) {

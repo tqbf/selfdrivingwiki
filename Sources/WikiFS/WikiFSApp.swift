@@ -1,59 +1,79 @@
 import SwiftUI
 import WikiFSCore
 
-/// Entry point for the WikiFS macOS app (Phase 1 — Local wiki).
+/// Entry point for the WikiFS macOS app.
 ///
-/// Owns the `WikiStoreModel` at App level so a single instance survives the
-/// window lifecycle, and flushes any pending autosave when the app stops being
-/// active (§3.5 immediate-on-background — don't lose buffered edits on quit).
+/// Phase 0 (many wikis): a `WikiManager` owns the registry of wikis, the active
+/// store, and the create/select/delete operations. One File Provider domain is
+/// registered per wiki on launch. The legacy single-wiki `WikiFS.sqlite` is
+/// migrated into the registry as wiki #1 by `WikiManager.bootstrap()`.
+///
+/// Flushes pending autosave when the app stops being active (§3.5
+/// immediate-on-background — don't lose buffered edits on quit).
 @main
 struct WikiFSApp: App {
-    @State private var store: WikiStoreModel
+    @State private var manager: WikiManager
     @State private var fileProvider = FileProviderSpike()
     @State private var agentLauncher = AgentLauncher()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
-        // Phase 2: the DB lives in the App Group container so the sandboxed File
-        // Provider extension reads the same file. Migrate the Phase 1
-        // Application Support DB across once (best-effort), then open read-write.
-        // Fall back to an in-memory DB only if the container is somehow
-        // unavailable, so the app still launches rather than crashing.
-        let store: WikiStoreModel
-        do {
-            DatabaseLocation.migrateFromApplicationSupportIfNeeded()
-            let url = try DatabaseLocation.appGroupContainerURL()
-            let sqlite = try SQLiteWikiStore(databaseURL: url)
-            store = WikiStoreModel(store: sqlite)
-            // The projection is empty without at least one page; ensure a Home
-            // exists (covers the fresh-container / failed-migration path).
-            if store.summaries.isEmpty { store.newPage(title: "Home") }
-        } catch {
-            print("WikiFS: falling back to in-memory store: \(error)")
-            // swiftlint:disable:next force_try
-            let memory = try! SQLiteWikiStore(databaseURL: URL(fileURLWithPath: ":memory:"))
-            store = WikiStoreModel(store: memory)
-        }
-        _store = State(initialValue: store)
+        // The single legacy v0 DB still lives at the literal App Group path; the
+        // one-time Application-Support → container migration must still run before
+        // the registry adopts it. Then the WikiManager migrates that legacy file
+        // into the registry as wiki #1 and opens the most-recently-used wiki.
+        DatabaseLocation.migrateFromApplicationSupportIfNeeded()
+        let directory = (try? DatabaseLocation.appGroupContainerDirectory())
+            ?? FileManager.default.temporaryDirectory
+        _manager = State(initialValue: WikiManager(containerDirectory: directory))
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView(store: store, fileProvider: fileProvider, agentLauncher: agentLauncher)
+            RootView(manager: manager, fileProvider: fileProvider, agentLauncher: agentLauncher)
                 .task {
-                    // Wire change signaling: every persisted edit asks the File
-                    // Provider daemon to re-enumerate so Terminal reads see the
-                    // update without relaunch (INITIAL §6/§10). Set before the
-                    // first edit can fire; registration resolves the path.
-                    store.onPageDidChange = { [fileProvider] in
-                        Task { await fileProvider.signalChange() }
+                    // Wire the File Provider side effects into the manager: it
+                    // imports no FileProvider symbols (testable core), so the app
+                    // injects domain registration/removal + per-store signaling.
+                    fileProvider.wire(into: manager)
+                    manager.bootstrap()
+                    await manager.registerAllDomains()
+                    if let active = manager.activeWikiID,
+                       let descriptor = manager.wikis.first(where: { $0.id == active }) {
+                        await fileProvider.activate(id: descriptor.id, displayName: descriptor.displayName)
                     }
-                    await fileProvider.registerIfNeeded()
                 }
         }
         .windowToolbarStyle(.unified)
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { store.flushPendingSaves() }
+            if phase != .active { manager.activeStore?.flushPendingSaves() }
+        }
+    }
+}
+
+extension FileProviderSpike {
+    /// Inject this provider's per-wiki domain side effects into the manager, and
+    /// keep the active store's `onPageDidChange` wired to `signalChange()` after
+    /// every store swap (select / create / delete).
+    @MainActor
+    func wire(into manager: WikiManager) {
+        manager.registerDomain = { [weak self] id, name in
+            await self?.registerDomain(id: id, displayName: name)
+        }
+        manager.removeDomain = { [weak self] id in
+            await self?.removeDomain(id: id)
+        }
+        manager.onActiveStoreDidChange = { [weak self, weak manager] in
+            guard let self, let manager else { return }
+            // Re-point the freshly-swapped store's change hook at the active
+            // domain's signaling, and resolve the new mount path.
+            manager.activeStore?.onPageDidChange = { [weak self] in
+                Task { await self?.signalChange() }
+            }
+            if let active = manager.activeWikiID,
+               let descriptor = manager.wikis.first(where: { $0.id == active }) {
+                Task { await self.activate(id: descriptor.id, displayName: descriptor.displayName) }
+            }
         }
     }
 }

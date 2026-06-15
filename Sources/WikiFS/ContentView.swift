@@ -1,12 +1,13 @@
 import SwiftUI
 import WikiFSCore
 
-/// Phase 1 shell: a sidebar of pages and a detail pane that either edits the
-/// selected page or shows a designed empty state (§7.1 ContentUnavailableView).
-/// The Phase 0 spike (WelcomeView / FileProviderSpike) is no longer hosted here
-/// but still compiles in this target for Phase 2.
+/// The active wiki's shell: a sidebar (wiki switcher + pages + files) and a
+/// detail pane that edits the selected page, the system prompt, or shows a
+/// designed empty state (§7.1 ContentUnavailableView). Hosted by `RootView`,
+/// which swaps it wholesale (via `.id`) when the user switches wikis.
 struct ContentView: View {
     @Bindable var store: WikiStoreModel
+    @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
     @Bindable var agentLauncher: AgentLauncher
     @State private var showingPathPopover = false
@@ -19,7 +20,7 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
-            SidebarView(store: store, fileProvider: fileProvider)
+            SidebarView(store: store, manager: manager, fileProvider: fileProvider)
         } detail: {
             switch store.selection {
             case .none:
