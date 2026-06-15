@@ -28,14 +28,16 @@ progress lives in `PROGRESS.md`. To get a future agent up to speed:
 
 ## Status
 
-See `PROGRESS.md` for the running log. Current: **Milestone 0 — app skeleton
-on its legs.** A hello-world SwiftUI app builds via `make`, bundles into
-`build/WikiFS.app`, codesigns, and launches.
+See `PROGRESS.md` for the running log. Current: **Phase 1 (M0+M1) — DONE ✅.**
+A usable standalone SQLite-backed Markdown wiki — sidebar, editor, live preview,
+debounced autosave, persistence — verified on the running app and at the SQLite
+layer. On branch `phase-1-local-wiki` (unmerged; the pipeline stacks each phase
+branch and keeps `main` pristine). **Next: Phase 2 — File Provider projection.**
 
 ## Milestones (from `plans/INITIAL.md`)
 
 - **M0 — App skeleton** ✅ build environment + launching SwiftUI window.
-- **M1 — Markdown editor** sidebar page list, `TextEditor`, preview, autosave.
+- **M1 — Markdown editor** ✅ sidebar page list, `TextEditor`, preview, autosave, SQLite persistence.
 - **M2 — File Provider domain** extension target, domain registration, static root + `README.md`.
 - **M3 — SQLite-backed page files** `pages/by-id`, `pages/by-title`, content from SQLite.
 - **M4 — Path button** `Copy Unix Path`, verification commands in-app.
