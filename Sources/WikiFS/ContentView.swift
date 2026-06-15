@@ -19,7 +19,7 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
-            SidebarView(store: store)
+            SidebarView(store: store, fileProvider: fileProvider)
         } detail: {
             if store.selection == nil {
                 ContentUnavailableView {

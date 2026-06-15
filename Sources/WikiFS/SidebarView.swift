@@ -7,6 +7,8 @@ import WikiFSCore
 /// the modern inset + hidden-background list look matches Notes/Mail (§4.2).
 struct SidebarView: View {
     @Bindable var store: WikiStoreModel
+    /// Used to open an ingested file in its default app via its user-visible URL.
+    let fileProvider: FileProviderSpike
     @State private var renameTarget: WikiPageSummary?
     @State private var renameText: String = ""
 
@@ -34,9 +36,11 @@ struct SidebarView: View {
             if !store.ingestedFiles.isEmpty {
                 Section("Files") {
                     ForEach(store.ingestedFiles) { file in
-                        IngestedFileRow(file: file) {
-                            store.deleteIngestedFile(file.id)
-                        }
+                        IngestedFileRow(
+                            file: file,
+                            onOpen: { Task { await fileProvider.openIngestedFile(id: file.id) } },
+                            onRemove: { store.deleteIngestedFile(file.id) }
+                        )
                     }
                 }
             }

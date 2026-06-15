@@ -42,7 +42,9 @@ enum Projection {
 
         static let byIDPrefix = "page-by-id:"
         static let byTitlePrefix = "page-by-title:"
-        static let fileByIDPrefix = "file-by-id:"
+        // Shared with the app (which resolves a per-file user-visible URL to open
+        // it in the default app), so the two sides build the identical identifier.
+        static let fileByIDPrefix = WikiFSContainerID.fileByIDPrefix
         static let fileByNamePrefix = "file-by-name:"
 
         static func pageByID(_ ulid: String) -> NSFileProviderItemIdentifier {

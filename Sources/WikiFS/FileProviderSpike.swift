@@ -1,3 +1,4 @@
+import AppKit
 import FileProvider
 import Observation
 import WikiFSCore
@@ -63,6 +64,28 @@ final class FileProviderSpike {
             status = "Mounted"
         } catch {
             status = "getUserVisibleURL failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Open an ingested file in its default app (e.g. Preview for a PDF).
+    ///
+    /// Resolves the file's user-visible URL from the daemon by its `by-id` leaf
+    /// identifier (the canonical path — built from the shared prefix so it can't
+    /// drift from the projection), then hands it to `NSWorkspace`. The URL is
+    /// asked of the system at click time, never hardcoded (INITIAL §10). Opening
+    /// materializes the bytes on demand via the extension's `fetchContents`, so
+    /// it works even when the file isn't yet cached locally.
+    func openIngestedFile(id: PageID) async {
+        guard let manager = NSFileProviderManager(for: Self.domain) else {
+            status = "No manager for domain"
+            return
+        }
+        let identifier = NSFileProviderItemIdentifier(WikiFSContainerID.fileByID(id.rawValue))
+        do {
+            let url = try await manager.getUserVisibleURL(for: identifier)
+            NSWorkspace.shared.open(url)
+        } catch {
+            status = "open file failed: \(error.localizedDescription)"
         }
     }
 

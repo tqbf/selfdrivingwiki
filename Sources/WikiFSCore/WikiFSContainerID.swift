@@ -30,4 +30,15 @@ public enum WikiFSContainerID {
     public static let filesByID = "files-by-id"
     public static let filesByName = "files-by-name"
     public static let indexFilesJSONL = "index-files-jsonl"
+
+    /// Prefix for a single ingested file's `by-id` LEAF identifier (carries the
+    /// full ULID, never the filename — INITIAL §6). Shared so the extension's
+    /// `Projection.Identity.fileByID(_:)` and the app's "open this file"
+    /// resolution build the EXACT same identifier and can't drift.
+    public static let fileByIDPrefix = "file-by-id:"
+
+    /// Build the `by-id` leaf identifier string for an ingested file's ULID.
+    public static func fileByID(_ ulid: String) -> String {
+        fileByIDPrefix + ulid
+    }
 }
