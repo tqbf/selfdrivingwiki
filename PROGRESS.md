@@ -2,7 +2,76 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-06-15 — Post-v0 feature: System-prompt document (CLAUDE.md / AGENTS.md) — DONE ✅ (gate passed)
+## 2026-06-15 — LLM Wiki Phase 0: Many wikis (foundation) — CODE COMPLETE ⏳ (gate pending)
+
+DRAFT entry — code + unit tests are done and all build/test gates are green, but
+the independent live-mount gate has NOT run yet. Branch
+`llmwiki/phase-0-many-wikis` (stacked on the post-v0 line). Implements
+`plans/llm-wiki.md` Phase 0: one SQLite DB + one File Provider domain **per
+wiki**, a registry, an in-app switcher, and migration of the single v0 wiki as
+wiki #1.
+
+**Added / changed**
+- **Registry (`WikiFSCore`).** New `WikiDescriptor` (id ULID, displayName,
+  createdAt, lastUsedAt) — `dbFileName` (`<ulid>.sqlite`) and `domainIdentifier`
+  (the bare ULID) BOTH derive from the ULID, **never the display name**, so a
+  rename can't orphan the DB or the mount (the doc's explicit open-risk). New
+  `WikiRegistry` (Codable) persisted as `wikis.json` in the App Group container:
+  MRU-ordered list, add/rename/touch/remove, atomic save, corrupt/missing →
+  empty (no launch crash).
+- **`DatabaseLocation` generalized.** Split into `appGroupContainerDirectory()`
+  (literal home path, app) + `extensionContainerDirectory()` (security API,
+  extension), each with a per-wiki `…URL(forWikiID:)` → `<ulid>.sqlite`. The
+  literal-vs-`containerURL` app/extension split is preserved; the legacy
+  `WikiFS.sqlite` constant + Application-Support migration are kept for the v0
+  adoption.
+- **Extension maps domain → DB (the crux).** `Projection` went from a static
+  `enum` to a `struct Projection { let wikiID }`; `init(domain:)` builds
+  `Projection(wikiID: domain.identifier.rawValue)` and threads it through
+  `WikiFSEnumerator`. `openReadStore()` resolves
+  `extensionContainerURL(forWikiID:)` — same projection logic, different DB per
+  domain, **no registry read** in the extension. The token-keyed index cache is
+  now keyed by `(wikiID, identifier)` so two domains in one process can't collide.
+- **`WikiManager` (`WikiFSCore`, `@MainActor @Observable`).** Owns the registry,
+  the active `WikiStoreModel`, and create/select/rename/delete. File-Provider
+  side effects (`registerDomain`/`removeDomain`) + `onActiveStoreDidChange` are
+  injected CLOSURES, so the whole switcher logic is unit-testable without
+  importing `FileProvider` (same pattern as `onPageDidChange`). Resolves per-wiki
+  DB paths under an injected `containerDirectory` (hermetic tests).
+- **One domain per wiki.** `FileProviderSpike` rewritten from a single static
+  domain to per-wiki `registerDomain`/`removeDomain`/`activate`/`signalChange`,
+  each keyed by the wiki ULID; mounts at `~/Library/CloudStorage/WikiFS-<name>`.
+  The v0 `WIKIFS_REENUMERATE` one-shot hatch is preserved, scoped per domain.
+  Obsolete single-domain `WelcomeView` spike removed.
+- **Switcher UI.** `WikiSwitcher` — a sidebar-header `Menu` (`.headline`, native
+  "account header" idiom) listing wikis to select, with New Wiki…/Rename/Delete;
+  a `NewWikiSheet` for naming; a destructive-confirm delete alert. `RootView`
+  hosts the active wiki's `ContentView` keyed by `.id(activeWikiID)` so no
+  draft/selection leaks across a switch. `WikiFSApp` builds the manager, wires
+  the FP closures, bootstraps, and registers all domains on launch.
+- **v0 migration.** On first launch `WikiManager.bootstrap()` renames the legacy
+  `WikiFS.sqlite` (+ `-wal`/`-shm`) to `<ulid>.sqlite` and registers it as wiki
+  #1 named "WikiFS" — all pages/files/system_prompt ride along untouched (same
+  file). Idempotent (won't re-run / duplicate).
+- Tests: 69 → **84** (+15). New `WikiRegistryTests` (round-trip, MRU,
+  rename-keeps-identity, ULID-derived paths) + `WikiManagerTests` (fresh-seed,
+  per-wiki DB isolation, distinct files on disk, delete removes DB, MRU
+  launch-pick, rename doesn't move the file, v0 migration preserves content +
+  doesn't re-run). `make test` → **84/84**; `make check` clean; real `make`
+  app-bundle build + codesign (app + appex) clean.
+
+**For the independent verifier to watch**
+- **Per-domain `WIKIFS_REENUMERATE`:** a freshly-created wiki's domain is brand
+  new, so its tree should materialize without the hatch. But the **migrated v0
+  wiki** changes domain identity (old domain id was `"WikiFS"`; new is the ULID),
+  so the daemon may need a one-shot `WIKIFS_REENUMERATE=1` launch to drop the old
+  `WikiFS-WikiFS` mount and surface the ULID-identified one. Confirm on the live
+  mount.
+- **Mount labels:** each wiki mounts at `~/Library/CloudStorage/WikiFS-<display>`;
+  two wikis with the same display name would collide on the Finder label (not the
+  DB — identity is the ULID). Out of scope to dedupe for the gate.
+- Two-writer/many-domain lifecycle limits (the doc's open risk) are untested at
+  the daemon level here — the gate is the place to observe add/remove timing.
 
 A user-editable singleton "system prompt" document — the instructions the
 managing agent reads each run — projected **read-only at the wiki root under TWO
