@@ -1,18 +1,29 @@
 # WikiFS
 
-A native macOS SwiftUI wiki with a SQLite backend and a File Provider–backed
-filesystem projection, so the wiki can be inspected by Unix tools and agents
-(`find`, `cat`, `grep`) from Terminal.
+**What this is.** A native macOS SwiftUI wiki backed by SQLite, mirrored
+read-only onto the filesystem by a **File Provider extension** so the same
+content can be browsed by Unix tools and agents (`find`, `cat`, `grep`) under
+`~/Library/CloudStorage/WikiFS-WikiFS`. You edit in the app; the mount reflects
+every change. It also ingests dropped files (verbatim bytes under `files/`) and
+projects a singleton agent system prompt as `CLAUDE.md` + `AGENTS.md` at the
+root. Runs locally only — free, local dev signing; no Developer ID / notarization.
 
-**Core goal:** this project is also a proof-of-concept of the macOS **File
-Provider API**. The File Provider extension is essential, not optional — it is
-*not* to be replaced with a plain-folder export, even though that would avoid
-the (free, local-only) signing requirement. App runs locally only; no
-Developer ID / notarization is needed.
+**Core goal (non-negotiable).** This is a proof-of-concept of the macOS **File
+Provider API**. The extension is essential, not optional — do **not** replace it
+with a plain-folder export, even though that would dodge the signing requirement.
 
-This file is the **master index**. Deep docs live in `plans/`. Day-to-day
-progress lives in `PROGRESS.md`. To get a future agent up to speed:
-**read `PLAN.md` and `PROGRESS.md`.**
+**Where to find things.**
+
+- **This file (`PLAN.md`)** — the master index: the doc map below, milestone
+  status, and the build quick-reference.
+- **`PROGRESS.md`** — the running log, newest first: what was built each step and
+  the evidence each gate passed. *To get a future agent up to speed, read
+  `PLAN.md` then `PROGRESS.md`.*
+- **`plans/`** — the deep design docs (architecture, build, File Provider,
+  signing); see the table below for which is which.
+- **`ISSUES.md`** — known limitations we've chosen to live with.
+- **`SWIFTUI-RULES.md`** / **`CLAUDE.md`** — coding rules and the working
+  agreement (docs to keep, skills to use, PR rules).
 
 ## Documentation index
 
@@ -25,6 +36,7 @@ progress lives in `PROGRESS.md`. To get a future agent up to speed:
 | [`plans/signing.md`](plans/signing.md) | The Apple cert / App Group / File Provider provisioning checklist (manual portal). Do this before Phase 2. Source of truth for *the Apple incantations*. |
 | [`SWIFTUI-RULES.md`](SWIFTUI-RULES.md) | Hard-won SwiftUI/macOS rules. Apply when writing or reviewing any view. |
 | [`CLAUDE.md`](CLAUDE.md) | Working agreement (docs, skills to use, PR rules). |
+| [`ISSUES.md`](ISSUES.md) | Known limitations we've chosen to live with (with context to revisit), e.g. the ~5s replicated-File-Provider read-after-write window. |
 
 ## Status
 

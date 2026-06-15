@@ -2,7 +2,7 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-06-15 — Post-v0 feature: System-prompt document (CLAUDE.md / AGENTS.md) — code complete, gate pending
+## 2026-06-15 — Post-v0 feature: System-prompt document (CLAUDE.md / AGENTS.md) — DONE ✅ (gate passed)
 
 A user-editable singleton "system prompt" document — the instructions the
 managing agent reads each run — projected **read-only at the wiki root under TWO
@@ -52,10 +52,29 @@ first-class document, not a sheet/settings window.
   pages + files). Updated `SQLiteWikiStoreTests` (user_version 3, `system_prompt`
   table, `:1` token suffix) and the `IngestedFilesTests` migration assertion (→3).
 
+**Verified (live signed mount, real `make install`, computer-use + Bash)**
+- **Byte-identity:** `CLAUDE.md` and `AGENTS.md` byte-identical to each other AND
+  to the seeded DB body (`writefile` raw compare; sha `17e74587…`, 770 bytes —
+  762 *chars*, the gap is UTF-8 em-dashes). 69/69 tests; real Apple Development
+  signing chain.
+- **Refresh on edit (no relaunch):** edited the prompt **in-app** (appended a
+  sentinel to the heading via the pinned "System Prompt" item), switched pages to
+  flush → `system_prompt.version` bumped (1→3 across autosave+flush), sentinel
+  persisted to SQLite. Within ~6 s the mount's `CLAUDE.md` AND `AGENTS.md` showed
+  the new bytes (sha `f7021881…`), **app pid unchanged** (no relaunch). Reverted
+  the sentinel in-app → both files returned to the clean default (sha
+  `17e74587…`). The change-token's `spVersion` fold drives this end to end.
+- **Read-only enforced:** append/overwrite of both files rejected (`operation not
+  permitted`); SQLite row untouched; projected bytes still matched the DB (no
+  client-side staging leak).
+- **One-shot re-enumerate needed** on the already-materialized (phase-5) domain to
+  surface the two new root files — launched once with `WIKIFS_REENUMERATE=1`, as
+  predicted; fresh installs wouldn't need it.
+
 **Notes / known gaps**
-- **Gate still pending**: not yet verified on a live signed mount (`cat
-  CLAUDE.md` / `cat AGENTS.md` byte-identical to the in-app edit, refresh on
-  edit, read-only enforced). Code builds clean and the unit suite is green.
+- The ~5 s read-after-write window (replicated-File-Provider replica invalidation,
+  NOT a stale SQLite read) is documented in `ISSUES.md` — two items signaled
+  together (`CLAUDE.md` + `AGENTS.md`) can also refresh a few seconds apart.
 - Same `files/`-style caveat: on an already-materialized (upgraded) domain the
   two new root files may need the one-shot `WIKIFS_REENUMERATE=1` launch to
   appear; fresh installs are fine.
