@@ -9,7 +9,15 @@ import FileProvider
 /// would mangle it to `WikiFSFileProvider.FileProviderExtension`).
 @objc(FileProviderExtension)
 final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
+    /// The projection bound to THIS domain's wiki. The File Provider instantiates
+    /// one extension per domain, so `domain.identifier` IS the wiki's ULID — we
+    /// derive the per-wiki `<ulid>.sqlite` straight from it (no registry read),
+    /// the multi-wiki crux from `plans/llm-wiki.md` Phase 0. Every request below
+    /// goes through this instance, so it always reads the right wiki's DB.
+    private let projection: Projection
+
     required init(domain: NSFileProviderDomain) {
+        projection = Projection(wikiID: domain.identifier.rawValue)
         super.init()
     }
 
@@ -18,7 +26,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     func item(for identifier: NSFileProviderItemIdentifier,
               request: NSFileProviderRequest,
               completionHandler: @escaping (NSFileProviderItem?, Error?) -> Void) -> Progress {
-        if let node = Projection.node(for: identifier) {
+        if let node = projection.node(for: identifier) {
             completionHandler(WikiFSItem(node: node), nil)
         } else {
             completionHandler(nil, noSuchItem)
@@ -30,8 +38,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                        version requestedVersion: NSFileProviderItemVersion?,
                        request: NSFileProviderRequest,
                        completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void) -> Progress {
-        guard let data = Projection.contents(for: itemIdentifier),
-              let node = Projection.node(for: itemIdentifier) else {
+        guard let data = projection.contents(for: itemIdentifier),
+              let node = projection.node(for: itemIdentifier) else {
             completionHandler(nil, nil, noSuchItem)
             return Progress()
         }
@@ -79,7 +87,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
 
     func enumerator(for containerItemIdentifier: NSFileProviderItemIdentifier,
                     request: NSFileProviderRequest) throws -> NSFileProviderEnumerator {
-        WikiFSEnumerator(container: containerItemIdentifier)
+        WikiFSEnumerator(container: containerItemIdentifier, projection: projection)
     }
 
     private var noSuchItem: NSError {

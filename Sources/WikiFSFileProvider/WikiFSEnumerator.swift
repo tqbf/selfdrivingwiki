@@ -18,6 +18,10 @@ import FileProvider
 /// from the version-forced re-fetch (INITIAL §10).
 final class WikiFSEnumerator: NSObject, NSFileProviderEnumerator {
     private let container: NSFileProviderItemIdentifier
+    /// The per-wiki projection (bound to this domain's `<ulid>.sqlite`). All
+    /// reads — items AND the sync anchor — go through it, so the enumerator
+    /// serves exactly the wiki its domain points at (multi-wiki, Phase 0).
+    private let projection: Projection
     private let pageSize = 256
 
     /// The legacy spike/Phase-2 constant anchor. An incoming anchor that equals
@@ -25,8 +29,9 @@ final class WikiFSEnumerator: NSObject, NSFileProviderEnumerator {
     /// drops its cache and does a clean full `enumerateItems`.
     private static let legacyAnchor = Data("v2-sqlite".utf8)
 
-    init(container: NSFileProviderItemIdentifier) {
+    init(container: NSFileProviderItemIdentifier, projection: Projection) {
         self.container = container
+        self.projection = projection
     }
 
     func invalidate() {}
@@ -48,7 +53,7 @@ final class WikiFSEnumerator: NSObject, NSFileProviderEnumerator {
     }
 
     func enumerateChanges(for observer: NSFileProviderChangeObserver, from anchor: NSFileProviderSyncAnchor) {
-        let current = Self.currentSyncAnchorData()
+        let current = currentSyncAnchorData()
         let incoming = anchor.rawValue
 
         // A legacy/unparseable anchor predates this scheme: expire it so the
@@ -74,19 +79,20 @@ final class WikiFSEnumerator: NSObject, NSFileProviderEnumerator {
     }
 
     func currentSyncAnchor(completionHandler: @escaping (NSFileProviderSyncAnchor?) -> Void) {
-        completionHandler(NSFileProviderSyncAnchor(Self.currentSyncAnchorData()))
+        completionHandler(NSFileProviderSyncAnchor(currentSyncAnchorData()))
     }
 
     // MARK: - Helpers
 
-    /// The current items for this container, freshly resolved from SQLite.
+    /// The current items for this container, freshly resolved from this wiki's
+    /// SQLite DB.
     private func currentItems() -> [WikiFSItem] {
-        Projection.children(of: container).map { WikiFSItem(node: $0) }
+        projection.children(of: container).map { WikiFSItem(node: $0) }
     }
 
-    /// The live anchor bytes: the whole-database change token (count:sum).
-    private static func currentSyncAnchorData() -> Data {
-        Data(Projection.changeToken().utf8)
+    /// The live anchor bytes: this wiki's whole-database change token (count:sum).
+    private func currentSyncAnchorData() -> Data {
+        Data(projection.changeToken().utf8)
     }
 
     private static var expiredError: NSError {
