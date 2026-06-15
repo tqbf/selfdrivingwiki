@@ -7,6 +7,8 @@ import WikiFSCore
 /// but still compiles in this target for Phase 2.
 struct ContentView: View {
     @Bindable var store: WikiStoreModel
+    let fileProvider: FileProviderSpike
+    @State private var showingPathPopover = false
 
     var body: some View {
         NavigationSplitView {
@@ -22,6 +24,18 @@ struct ContentView: View {
                 }
             } else {
                 PageDetailView(store: store)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Copy Unix Path", systemImage: "terminal") {
+                    showingPathPopover = true
+                }
+                .keyboardShortcut("u", modifiers: [.command, .shift])
+                .help("Copy the Terminal path of the read-only filesystem view")
+                .popover(isPresented: $showingPathPopover, arrowEdge: .bottom) {
+                    VerificationPopover(fileProvider: fileProvider)
+                }
             }
         }
         // List(selection:) writes store.selection directly; observe it here so
