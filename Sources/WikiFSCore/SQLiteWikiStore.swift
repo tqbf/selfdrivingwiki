@@ -256,10 +256,94 @@ public final class SQLiteWikiStore: WikiStore {
     }
 
     public func deletePage(id: PageID) throws {
-        let stmt = try statement("DELETE FROM pages WHERE id = ?1;")
+        // FK safety (Phase 4): `page_links` has FKs onto `pages(id)` for BOTH
+        // `from_page_id` and `to_page_id`, and `foreign_keys=ON`. Once links are
+        // populated, deleting a page referenced as a link SOURCE or TARGET would
+        // throw a constraint violation. So clear every link touching this page
+        // first, then delete the row — in ONE transaction so a failure can't
+        // leave dangling link rows.
+        try exec("BEGIN IMMEDIATE;")
+        do {
+            let unlink = try statement(
+                "DELETE FROM page_links WHERE from_page_id = ?1 OR to_page_id = ?1;")
+            unlink.reset()
+            try unlink.bind(id.rawValue, at: 1)
+            _ = try unlink.step()
+
+            let stmt = try statement("DELETE FROM pages WHERE id = ?1;")
+            stmt.reset()
+            try stmt.bind(id.rawValue, at: 1)
+            _ = try stmt.step()
+            try exec("COMMIT;")
+        } catch {
+            try? exec("ROLLBACK;")
+            throw error
+        }
+    }
+
+    // MARK: - Wiki links (Phase 4)
+
+    public func resolveTitleToID(_ title: String) throws -> PageID? {
+        // Lowest ULID == oldest page on a duplicate-title collision.
+        let stmt = try statement(
+            "SELECT id FROM pages WHERE title = ?1 ORDER BY id ASC LIMIT 1;")
         defer { stmt.reset() }
-        try stmt.bind(id.rawValue, at: 1)
-        _ = try stmt.step()
+        try stmt.bind(title, at: 1)
+        guard try stmt.step() else { return nil }
+        return PageID(rawValue: stmt.text(at: 0))
+    }
+
+    public func replaceLinks(from pageID: PageID,
+                             parsedLinks: [WikiLinkParser.ParsedLink]) throws {
+        // One transaction: wipe this page's outgoing links, then insert the
+        // resolved subset. Unresolved targets are OMITTED (NULL to_page_id is
+        // forbidden by the schema). `INSERT OR IGNORE` collapses duplicate
+        // (from,to) pairs from distinct titles that resolve to the same page.
+        try exec("BEGIN IMMEDIATE;")
+        do {
+            let del = try statement("DELETE FROM page_links WHERE from_page_id = ?1;")
+            del.reset()
+            try del.bind(pageID.rawValue, at: 1)
+            _ = try del.step()
+
+            let ins = try statement("""
+            INSERT OR IGNORE INTO page_links (from_page_id, to_page_id, link_text)
+            VALUES (?1, ?2, ?3);
+            """)
+            for link in parsedLinks {
+                guard let target = try resolveTitleToID(link.target) else { continue }
+                ins.reset()
+                try ins.bind(pageID.rawValue, at: 1)
+                try ins.bind(target.rawValue, at: 2)
+                try ins.bind(link.linkText, at: 3)
+                _ = try ins.step()
+            }
+            try exec("COMMIT;")
+        } catch {
+            try? exec("ROLLBACK;")
+            throw error
+        }
+    }
+
+    /// All link rows, ordered by `(from_page_id, to_page_id)`. Read-side helper
+    /// for the File Provider projection's `links.jsonl` generator. Not on the
+    /// `WikiStore` protocol — like `listAllPagesOrderedByID`, it is a
+    /// read-projection helper, not part of the editing API.
+    public func listAllLinks() throws -> [IndexGenerators.LinkRow] {
+        let stmt = try statement("""
+        SELECT from_page_id, to_page_id, link_text
+        FROM page_links ORDER BY from_page_id, to_page_id;
+        """)
+        defer { stmt.reset() }
+        var out: [IndexGenerators.LinkRow] = []
+        while try stmt.step() {
+            out.append(IndexGenerators.LinkRow(
+                from: stmt.text(at: 0),
+                to: stmt.text(at: 1),
+                linkText: stmt.text(at: 2)
+            ))
+        }
+        return out
     }
 
     // MARK: - Slugs

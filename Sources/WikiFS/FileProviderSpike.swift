@@ -24,6 +24,18 @@ final class FileProviderSpike {
     /// (`signalChange()`), so we keep the domain — and its materialized tree —
     /// across launches instead of tearing it down each time.
     func registerIfNeeded() async {
+        // Structural-change escape hatch (Phase 4). `signalEnumerator` /
+        // `enumerateChanges` reliably refreshes existing items and surfaces NEW
+        // FILES (e.g. `manifest.json`), but the daemon does not always synthesize
+        // a brand-new top-level FOLDER (e.g. `indexes/`) into a root it has
+        // already materialized from an older appex. When the projection's shape
+        // changes between versions, a one-shot remove+re-add forces a clean full
+        // `enumerateItems` so the new tree appears. Gated on an env var so normal
+        // launches keep the lightweight add-if-absent path (no Phase-2 teardown).
+        if ProcessInfo.processInfo.environment["WIKIFS_REENUMERATE"] == "1" {
+            try? await NSFileProviderManager.remove(Self.domain)
+        }
+
         let alreadyRegistered = (try? await NSFileProviderManager.domains())?
             .contains { $0.identifier == Self.domain.identifier } ?? false
 
@@ -67,6 +79,11 @@ final class FileProviderSpike {
         let containers: [NSFileProviderItemIdentifier] = [
             NSFileProviderItemIdentifier(WikiFSContainerID.pagesByTitle),
             NSFileProviderItemIdentifier(WikiFSContainerID.pagesByID),
+            // The generated index bytes (manifest.json at root; the JSONL files
+            // under `indexes`) derive from page content, so an edit must
+            // invalidate them too — signal both their containers (Phase 4).
+            .rootContainer,
+            NSFileProviderItemIdentifier(WikiFSContainerID.indexes),
             .workingSet,
         ]
         for container in containers {

@@ -8,7 +8,9 @@ import WikiFSCore
 struct ContentView: View {
     @Bindable var store: WikiStoreModel
     let fileProvider: FileProviderSpike
+    @Bindable var agentLauncher: AgentLauncher
     @State private var showingPathPopover = false
+    @State private var showingAgentSheet = false
 
     var body: some View {
         NavigationSplitView {
@@ -28,6 +30,12 @@ struct ContentView: View {
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
+                Button("Run Agent", systemImage: "play.circle") {
+                    showingAgentSheet = true
+                }
+                .help("Run a command with WIKI_ROOT set to the read-only mount")
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button("Copy Unix Path", systemImage: "terminal") {
                     showingPathPopover = true
                 }
@@ -37,6 +45,9 @@ struct ContentView: View {
                     VerificationPopover(fileProvider: fileProvider)
                 }
             }
+        }
+        .sheet(isPresented: $showingAgentSheet) {
+            AgentLauncherView(launcher: agentLauncher, fileProvider: fileProvider)
         }
         // List(selection:) writes store.selection directly; observe it here so
         // the model flushes the outgoing page and loads the incoming one

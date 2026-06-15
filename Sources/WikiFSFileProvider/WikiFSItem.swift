@@ -19,6 +19,11 @@ final class WikiFSItem: NSObject, NSFileProviderItem {
     var contentType: UTType {
         if node.isFolder { return .folder }
         if node.name.hasSuffix(".md") { return UTType(filenameExtension: "md") ?? .plainText }
+        // manifest.json → public.json; the .jsonl indexes are line-delimited
+        // JSON with no registered UTI, so present them as plain text (an agent
+        // reads them with `cat`, not a typed loader).
+        if node.name.hasSuffix(".json") { return .json }
+        if node.name.hasSuffix(".jsonl") { return .plainText }
         return .plainText
     }
 

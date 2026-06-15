@@ -10,6 +10,7 @@ import WikiFSCore
 struct WikiFSApp: App {
     @State private var store: WikiStoreModel
     @State private var fileProvider = FileProviderSpike()
+    @State private var agentLauncher = AgentLauncher()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -38,7 +39,7 @@ struct WikiFSApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(store: store, fileProvider: fileProvider)
+            ContentView(store: store, fileProvider: fileProvider, agentLauncher: agentLauncher)
                 .task {
                     // Wire change signaling: every persisted edit asks the File
                     // Provider daemon to re-enumerate so Terminal reads see the

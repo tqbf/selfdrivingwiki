@@ -29,4 +29,14 @@ public protocol WikiStore {
     func createPage(title: String) throws -> WikiPage
     func updatePage(id: PageID, title: String, body: String) throws
     func deletePage(id: PageID) throws
+
+    /// Resolve a page *title* to its id, or nil if no page has that title.
+    /// On duplicate titles, the lowest ULID (oldest page) wins. Used by
+    /// `[[wiki-link]]` resolution (INITIAL §4 v1).
+    func resolveTitleToID(_ title: String) throws -> PageID?
+
+    /// Replace ALL outgoing links for `pageID` with the resolved subset of
+    /// `parsedLinks`, in one transaction. Targets that don't resolve to a page
+    /// are omitted (the schema forbids a NULL `to_page_id`). Self-links allowed.
+    func replaceLinks(from pageID: PageID, parsedLinks: [WikiLinkParser.ParsedLink]) throws
 }

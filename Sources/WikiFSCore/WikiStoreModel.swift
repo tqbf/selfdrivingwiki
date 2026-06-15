@@ -99,6 +99,12 @@ public final class WikiStoreModel {
         guard let id = loadedPage else { return }
         do {
             try store.updatePage(id: id, title: draftTitle, body: draftBody)
+            // Re-resolve this page's [[wiki-links]] against the current title
+            // graph (Phase 4). Parsing is pure; the store resolves targets and
+            // rewrites `page_links`. v0 limitation: a *rename* does NOT re-walk
+            // the whole graph, so links that targeted the old title go stale
+            // until the linking page is next saved (they self-heal then).
+            try store.replaceLinks(from: id, parsedLinks: WikiLinkParser.parse(draftBody))
             reloadSummaries()
             onPageDidChange?()
         } catch {
@@ -121,6 +127,10 @@ public final class WikiStoreModel {
         flushPendingSave()
         do {
             let page = try store.createPage(title: title)
+            // A fresh page has an empty body, so this resolves to no links — but
+            // run it for uniformity with the save() path (and so a future
+            // create-with-body wouldn't silently skip link indexing).
+            try store.replaceLinks(from: page.id, parsedLinks: WikiLinkParser.parse(page.bodyMarkdown))
             reloadSummaries()
             selection = page.id
             loadDrafts(for: page.id)
