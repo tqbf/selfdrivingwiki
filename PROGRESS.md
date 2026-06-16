@@ -2,13 +2,13 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-06-15 — LLM Wiki Phase A: Write path + change bridge — DRAFT (gate pending)
+## 2026-06-15 — LLM Wiki Phase A: Write path + change bridge — DONE ✅ (gate passed)
 
 Branch `llmwiki/phase-a-write-path` (stacked on `llmwiki/phase-0-many-wikis`).
 Implements `plans/llm-wiki.md` Phase A: the `wikictl` write path, the shared
 link-reparse refactor, and the Darwin-notification → debounced app refresh +
 `signalChange()` change bridge. **All deterministic (no agent yet).** Independent
-live-mount gate NOT yet run — this entry is a DRAFT.
+live-mount gate (Bash + one UI check) PASSED.
 
 **Added / changed**
 - **Shared upsert+reparse seam (`WikiFSCore/PageUpsert.swift`).** Lifted "create-
@@ -82,18 +82,50 @@ live-mount gate NOT yet run — this entry is a DRAFT.
   returned to 2). Error paths return the right exit codes (unknown wiki → 1, bad
   args → 2).
 
-**What the independent verifier should watch**
-- The **~5 s mount-refresh window**: `wikictl page upsert` → app sidebar updates
-  (live, if it's the on-screen wiki) → mount reflects it within ~5 s (the existing
-  replicated-FP read-after-write window; the bridge signals, the daemon re-fetches
-  lazily). The CLI's own `page get` is the instant-read escape hatch.
-- **`WIKIFS_REENUMERATE=1`** only matters if a brand-new file TYPE appears — Phase
-  A adds none (pages already exist), so it should not be needed.
+**Verified (independent live gate, real `make clean && make install`, real-signed, Bash + one computer-use UI check)**
+All five Phase A criteria passed; the decisive end-to-end run was on a
+**freshly-created wiki `GateAClean`** (`01KV7BHTQM…`, mount `WikiFS-GateAClean`),
+with items 1–2 also reconfirmed on the live `WikiFS` wiki.
+- **(1) CLI write:** `printf 'Gate A body linking [[Home]]\n' | wikictl --wiki
+  <id> page upsert --title "GateA-CLEAN9" --body-file -` → printed new id
+  `01KV7BJWS8…`; SQLite row confirmed directly (title + body).
+- **(2) Sidebar updates live (no relaunch):** the new page appeared in the running
+  app's sidebar above Home, app pid unchanged — proving the per-wiki Darwin
+  notification → debounced `WikiChangeBridge` → `reloadFromStore()` path
+  (reconfirmed with two successive upserts on the WikiFS wiki).
+- **(3) Mount reflects it (~1 s):** `pages/by-id/01KV7BJW….md` +
+  `pages/by-title/GateA-CLEAN9--01KV7BJW.md` both served the exact body.
+- **(4) Read-only intact:** overwrite/append of projected files AND of
+  `indexes/links.jsonl` → "operation not permitted"; SQLite untouched.
+- **(5) Link graph:** `page_links` row `01KV7BJW… → <Home>` and mount
+  `indexes/links.jsonl` `{"from":"01KV7BJW…","to":"<Home>","link_text":"Home"}` —
+  the CLI-written `[[Home]]` resolved through the shared `PageUpsert` seam end to
+  end. Command surface (`get`/`list` TSV+JSON/`WIKI_DB` env/`delete`, exit codes
+  1 unknown-wiki / 2 usage) all confirmed. 113/113 tests; real-signed app + appex
+  + `wikictl`.
+
+**Notes / carry-forward**
+- **Heavily-churned domain replica can wedge (operational, NOT a code defect →
+  use a fresh wiki for live gates).** The long-lived `WikiFS` domain's mount would
+  not reflect CLI writes during the gate: `fileproviderctl dump` showed the
+  daemon's replica holding a *phantom* page from an earlier session, `-1005`
+  fetch errors, a missing `indexes/`, and "Stale NFS file handle" on
+  previously-valid files — the extension wasn't even invoked. The DB itself is
+  intact (a `wal_checkpoint(TRUNCATE)` confirmed all pages durable + readable by a
+  fresh reader); this is a corrupted **daemon-side materialized replica**
+  accumulated over many prior gate runs on that one domain. It did NOT recover via
+  the app's `WIKIFS_REENUMERATE` remove+re-add, a `fileproviderd` bounce, or ~90 s
+  of reconciliation — a true reset needs a domain teardown (only the signed app's
+  lifecycle can do it; an ad-hoc CLI gets FP -2001/-2014). A **freshly-created**
+  domain (`GateAClean`) materialized fully and correctly in ~1 s. **Phase B/C live
+  gates should run against a freshly-created wiki, not the churned `WikiFS` one.**
+  Logged to `ISSUES.md`.
+- **~5 s mount-refresh window** (replicated-FP read-after-write) still applies; the
+  CLI's `page get` is the instant-SoT escape hatch.
 - **macOS-26 TCC prompt** ("access data from other apps") re-fires on a re-signed
-  install and holds the app until "Allow" (carry-forward from Phase 0).
-- Gate criteria (`plans/llm-wiki.md` Phase A): `wikictl page upsert` writes a page
-  → app sidebar updates → mount reflects it (~5 s) → filesystem writes still
-  rejected → `indexes/links.jsonl` reflects `[[links]]` the CLI wrote.
+  install and holds the app until "Allow" (Phase 0 carry-forward).
+- A gate artifact wiki **`GateAClean`** was left in place (deleting is destructive;
+  the gate doesn't require teardown); its only content is a seeded empty `Home`.
 
 ## 2026-06-15 — LLM Wiki Phase 0: Many wikis (foundation) — DONE ✅ (gate passed)
 

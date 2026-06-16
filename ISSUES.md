@@ -41,3 +41,30 @@ means abandoning the replicated model, which is the whole point of this POC.
 
 Recorded 2026-06-15 (system-prompt live-mount gate). Originally observed in the
 Phase 2/3 caveats in `PROGRESS.md`.
+
+## Heavily-churned File Provider domain replica can wedge
+
+**Symptom.** A single domain that has been hammered across many repeated
+gate runs (create/delete pages, `WIKIFS_REENUMERATE` cycles, app re-signs and
+reinstalls, mid-run kills) can get its **daemon-side materialized replica** into a
+bad state: `fileproviderctl dump` shows phantom items from earlier sessions,
+`NSFileProviderErrorDomain Code=-1005 "The file doesn't exist"` fetch errors, a
+missing `indexes/` subtree, and "Stale NFS file handle" on files that used to
+read. New `wikictl`/app writes stop appearing on that mount even though they ARE
+in SQLite. The extension may not even be invoked.
+
+**Why.** This is `fileproviderd`'s replica bookkeeping for that one domain getting
+corrupted/desynced by churn — NOT our code and NOT the SQLite source of truth (a
+`PRAGMA wal_checkpoint(TRUNCATE)` + read with a fresh reader confirms all rows are
+durable). The same build on a **freshly-created** domain materializes fully and
+correctly in ~1 s.
+
+**Why it's probably fine.** It only shows up on the one domain we abuse during
+testing; a fresh wiki is clean. It did NOT recover via the app's
+`WIKIFS_REENUMERATE` remove+re-add, a `fileproviderd` bounce, or ~90 s of
+reconciliation — a true reset needs a full domain teardown, which only the signed
+app's lifecycle can do (`NSFileProviderManager.remove`; an ad-hoc CLI gets
+FP -2001/-2014). **For live gates, create a fresh wiki rather than reusing the
+long-lived `WikiFS` one.**
+
+Recorded 2026-06-15 (Phase A write-path live gate).

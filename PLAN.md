@@ -42,14 +42,14 @@ with a plain-folder export, even though that would dodge the signing requirement
 ## Status
 
 See `PROGRESS.md` for the running log. Current: **LLM Wiki Phase A (Write path +
-change bridge) — code complete, live gate pending.** The `wikictl` CLI
+change bridge) DONE ✅ — live gate passed.** The `wikictl` CLI
 (`page list/get/upsert/delete`, selecting a wiki via `--wiki`/`WIKI_DB`) writes
 straight to a wiki's `<ulid>.sqlite`; a shared `PageUpsert` op keeps the
 `[[link]]` graph identical across the app and the CLI; `wikictl` posts a per-wiki
 Darwin notification and the app's debounced change bridge rebuilds the sidebar +
 `signalChange()`s that wiki's mount. 113 tests; clean signed bundle (app + appex +
 `wikictl`). Branch `llmwiki/phase-a-write-path` (stacked on
-`llmwiki/phase-0-many-wikis`, unmerged).
+`llmwiki/phase-0-many-wikis`, unmerged). Next: Phase B (`log.md` + `index.md`).
 
 **Prior: LLM Wiki Phase 0 (Many wikis) DONE ✅ — live gate passed.** One SQLite DB
 + one File Provider domain **per wiki**, a `wikis.json` registry, an in-app
