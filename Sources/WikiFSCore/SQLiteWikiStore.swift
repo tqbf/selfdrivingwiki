@@ -189,6 +189,54 @@ public final class SQLiteWikiStore: WikiStore {
             try exec("PRAGMA user_version=3;")
             version = 3
         }
+
+        // Step 3 → 4 (Phase B): the append-only `log` table — one ULID-keyed row
+        // per agent operation (an ingest, a query, a lint). `id` is a ULID so it
+        // sorts == chronological; `ts` carries the wall-clock time the row was
+        // appended; `note` is optional. NOT a singleton: each `wikictl log append`
+        // INSERTs a fresh row. Projected read-only at the root as `log.md`.
+        if version < 4 {
+            try exec("""
+            CREATE TABLE log (
+                id TEXT PRIMARY KEY,
+                ts REAL NOT NULL,
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                note TEXT
+            );
+            """)
+            try exec("PRAGMA user_version=4;")
+            version = 4
+        }
+
+        // Step 4 → 5 (Phase B): the singleton `wiki_index` table — the curated
+        // catalog document the managing agent rewrites wholesale on each ingest,
+        // projected read-only at the root as `index.md`. Modeled EXACTLY on
+        // `system_prompt` (v2→3): one row pinned to `id = 1` by a CHECK, a
+        // `version` bumped on every write, seeded with `WikiIndex.defaultBody` so
+        // the document exists from day one.
+        if version < 5 {
+            try exec("""
+            CREATE TABLE wiki_index (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                body_markdown TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1
+            );
+            """)
+            // Seed the singleton via a bound statement (the default body has
+            // newlines — never interpolate it into the DDL string).
+            let seed = try statement("""
+            INSERT INTO wiki_index (id, body_markdown, updated_at, version)
+            VALUES (1, ?1, ?2, 1);
+            """)
+            seed.reset()
+            try seed.bind(WikiIndex.defaultBody, at: 1)
+            try seed.bind(Date().timeIntervalSince1970, at: 2)
+            _ = try seed.step()
+            try exec("PRAGMA user_version=5;")
+            version = 5
+        }
     }
 
     // MARK: - WikiStore
@@ -261,15 +309,27 @@ public final class SQLiteWikiStore: WikiStore {
     /// file change) must still advance the anchor, or the projected
     /// `CLAUDE.md`/`AGENTS.md` would never refresh without a relaunch. Falls back
     /// to `0` on a not-yet-migrated read connection (table absent).
+    ///
+    /// Phase B (v4/v5): the token ALSO appends the `log` row COUNT and the
+    /// singleton `wiki_index` row's `version`
+    /// (`"…:\(logCount):\(idxVersion)"`). Same reasoning as the `spVersion` fold:
+    /// appending ONLY a log entry, or editing ONLY the index, must still advance
+    /// the anchor or the projected `log.md` / `index.md` would never refresh. The
+    /// `log` part uses COUNT (it is append-only — rows only ever grow, never bump
+    /// a per-row version) and the index part uses the row `version` (it UPSERTs
+    /// like `system_prompt`). Both fall back to `0` on a not-yet-migrated read
+    /// connection (the v4/v5 tables absent), exactly like the `spVersion` fold.
     public func changeToken() throws -> String {
         let pages = try statement("SELECT COUNT(*), COALESCE(SUM(version), 0) FROM pages;")
         defer { pages.reset() }
-        guard try pages.step() else { return "0:0:0:0:0" }
+        guard try pages.step() else { return "0:0:0:0:0:0:0" }
         let pCount = pages.int(at: 0)
         let pSum = pages.int(at: 1)
         let (fCount, fSum) = ingestedFileCountSum()
         let spVersion = systemPromptVersion()
-        return "\(pCount):\(pSum):\(fCount):\(fSum):\(spVersion)"
+        let logCount = logRowCount()
+        let idxVersion = wikiIndexVersion()
+        return "\(pCount):\(pSum):\(fCount):\(fSum):\(spVersion):\(logCount):\(idxVersion)"
     }
 
     /// COUNT/SUM(version) over `ingested_files`, resilient to the table not
@@ -291,6 +351,29 @@ public final class SQLiteWikiStore: WikiStore {
     private func systemPromptVersion() -> Int64 {
         guard let stmt = try? statement(
             "SELECT COALESCE(version, 0) FROM system_prompt WHERE id = 1;") else {
+            return 0
+        }
+        defer { stmt.reset() }
+        guard (try? stmt.step()) == true else { return 0 }
+        return stmt.int(at: 0)
+    }
+
+    /// The append-only `log` table's row COUNT, resilient to the table not
+    /// existing yet (a read connection opened against a pre-v4 DB). On any failure
+    /// returns `0` so `changeToken()` still answers.
+    private func logRowCount() -> Int64 {
+        guard let stmt = try? statement("SELECT COUNT(*) FROM log;") else { return 0 }
+        defer { stmt.reset() }
+        guard (try? stmt.step()) == true else { return 0 }
+        return stmt.int(at: 0)
+    }
+
+    /// The singleton `wiki_index` row's `version`, resilient to the table not
+    /// existing yet (a read connection opened against a pre-v5 DB). On any failure
+    /// returns `0` so `changeToken()` still answers.
+    private func wikiIndexVersion() -> Int64 {
+        guard let stmt = try? statement(
+            "SELECT COALESCE(version, 0) FROM wiki_index WHERE id = 1;") else {
             return 0
         }
         defer { stmt.reset() }
@@ -614,6 +697,94 @@ public final class SQLiteWikiStore: WikiStore {
             body_markdown = excluded.body_markdown,
             updated_at = excluded.updated_at,
             version = system_prompt.version + 1;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(body, at: 1)
+        try stmt.bind(Date().timeIntervalSince1970, at: 2)
+        _ = try stmt.step()
+    }
+
+    // MARK: - Log (append-only chronological log, Phase B)
+
+    /// Append one row to the `log` table. The id is a fresh ULID (sortable ==
+    /// chronological); `ts` is "now". `kind` is the stable rawValue of the closed
+    /// `LogEntry.Kind` set. Returns the inserted entry (so the CLI can echo its
+    /// id). Append-only: this never updates or UPSERTs.
+    @discardableResult
+    public func appendLog(kind: LogEntry.Kind, title: String, note: String?) throws -> LogEntry {
+        let id = PageID(rawValue: ULID.generate())
+        let now = Date()
+        let stmt = try statement("""
+        INSERT INTO log (id, ts, kind, title, note)
+        VALUES (?1, ?2, ?3, ?4, ?5);
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        try stmt.bind(now.timeIntervalSince1970, at: 2)
+        try stmt.bind(kind.rawValue, at: 3)
+        try stmt.bind(title, at: 4)
+        if let note { try stmt.bind(note, at: 5) }  // else leave NULL
+        _ = try stmt.step()
+        return LogEntry(id: id, timestamp: now, kind: kind, title: title, note: note)
+    }
+
+    /// All log rows ordered by `id` (ULID == chronological), oldest-first, for the
+    /// `log.md` projection. Read-side helper (like `listAllPagesOrderedByID`) — not
+    /// on the `WikiStore` protocol. Resilient to the table not existing yet is the
+    /// caller's job (the projection wraps this in `try?`).
+    public func listAllLogEntriesOrderedByID() throws -> [LogEntry] {
+        let stmt = try statement("""
+        SELECT id, ts, kind, title, note FROM log ORDER BY id ASC;
+        """)
+        defer { stmt.reset() }
+        var out: [LogEntry] = []
+        while try stmt.step() {
+            let note = sqlite3_column_type(stmt.handle, 4) == SQLITE_NULL ? nil : stmt.text(at: 4)
+            out.append(LogEntry(
+                id: PageID(rawValue: stmt.text(at: 0)),
+                timestamp: Date(timeIntervalSince1970: stmt.double(at: 1)),
+                kind: LogEntry.Kind(rawValue: stmt.text(at: 2)) ?? .ingest,
+                title: stmt.text(at: 3),
+                note: note
+            ))
+        }
+        return out
+    }
+
+    // MARK: - Wiki index (singleton catalog document, Phase B)
+
+    /// Read the singleton `wiki_index` document. Returns the seeded default if no
+    /// row exists yet (defensive — the v4→5 migration seeds one). The read
+    /// projection wraps this in `try?` and falls back to the default if the table
+    /// itself is absent on a not-yet-migrated read connection. Mirrors
+    /// `getSystemPrompt()`.
+    public func getWikiIndex() throws -> WikiIndex {
+        let stmt = try statement(
+            "SELECT body_markdown, updated_at, version FROM wiki_index WHERE id = 1;")
+        defer { stmt.reset() }
+        guard try stmt.step() else {
+            return WikiIndex(body: WikiIndex.defaultBody,
+                             updatedAt: Date(timeIntervalSince1970: 0), version: 0)
+        }
+        return WikiIndex(
+            body: stmt.text(at: 0),
+            updatedAt: Date(timeIntervalSince1970: stmt.double(at: 1)),
+            version: Int(stmt.int(at: 2))
+        )
+    }
+
+    /// Replace the wiki-index body wholesale, bumping `version` (so `changeToken()`
+    /// advances and the projected `index.md` refreshes) and `updated_at`. UPSERT so
+    /// it works even if the singleton row is somehow missing (creates it at version
+    /// 1; otherwise increments). Mirrors `updateSystemPrompt(body:)`.
+    public func updateWikiIndex(body: String) throws {
+        let stmt = try statement("""
+        INSERT INTO wiki_index (id, body_markdown, updated_at, version)
+        VALUES (1, ?1, ?2, 1)
+        ON CONFLICT(id) DO UPDATE SET
+            body_markdown = excluded.body_markdown,
+            updated_at = excluded.updated_at,
+            version = wiki_index.version + 1;
         """)
         defer { stmt.reset() }
         try stmt.bind(body, at: 1)

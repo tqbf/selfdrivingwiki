@@ -62,9 +62,9 @@ struct SystemPromptTests {
     @Test func changeTokenAdvancesOnSystemPromptEdit() throws {
         let store = try tempStore()
         // No pages, no files: only the system-prompt version moves.
-        #expect(try store.changeToken() == "0:0:0:0:1")
+        #expect(try store.changeToken() == "0:0:0:0:1:0:1")
         try store.updateSystemPrompt(body: "edited")
-        #expect(try store.changeToken() == "0:0:0:0:2")
+        #expect(try store.changeToken() == "0:0:0:0:2:0:1")
     }
 
     // MARK: - UPSERT recreates a missing singleton row (defensive)
@@ -119,7 +119,8 @@ struct SystemPromptTests {
         #expect(sqlite3_exec(raw, v2SQL, nil, nil, nil) == SQLITE_OK)
         sqlite3_close(raw)
 
-        // Open via the store → runs ONLY the v2→3 step.
+        // Open via the store → runs the v2→3 step (and the later v3→4 + v4→5
+        // steps up to head).
         let store = try SQLiteWikiStore(databaseURL: url)
 
         // system_prompt now exists, seeded with the default.
@@ -134,7 +135,7 @@ struct SystemPromptTests {
         #expect(file.filename == "keep.txt")
         #expect(try store.ingestedFileContent(id: file.id) == Data("keep".utf8))
 
-        // user_version is now 3.
+        // user_version is now 5 (migration runs through every step to head).
         var check: OpaquePointer?
         #expect(sqlite3_open(url.path, &check) == SQLITE_OK)
         defer { sqlite3_close(check) }
@@ -142,7 +143,7 @@ struct SystemPromptTests {
         #expect(sqlite3_prepare_v2(check, "PRAGMA user_version;", -1, &stmt, nil) == SQLITE_OK)
         defer { sqlite3_finalize(stmt) }
         #expect(sqlite3_step(stmt) == SQLITE_ROW)
-        #expect(sqlite3_column_int(stmt, 0) == 3)
+        #expect(sqlite3_column_int(stmt, 0) == 5)
         _ = store
     }
 }

@@ -67,4 +67,25 @@ public protocol WikiStore {
 
     /// Replace the system-prompt body, bumping its version + `updated_at`.
     func updateSystemPrompt(body: String) throws
+
+    // MARK: - Log + wiki index (Phase B)
+    //
+    // The append-only `log` write and the singleton `wiki_index` read/write live
+    // on the protocol so the `wikictl log append` / `index set` commands run
+    // against `WikiStore` (testable against any conforming store), mirroring how
+    // the `page` commands do. The `log.md` read-projection helper
+    // (`listAllLogEntriesOrderedByID`) stays concrete on `SQLiteWikiStore`, exactly
+    // like `listAllPagesOrderedByID` / `listAllIngestedFilesOrderedByID`.
+
+    /// Append one row to the append-only chronological log, returning the inserted
+    /// entry (so the caller can echo its id).
+    @discardableResult
+    func appendLog(kind: LogEntry.Kind, title: String, note: String?) throws -> LogEntry
+
+    /// Read the curated singleton index document (projected at the root as
+    /// `index.md`). Returns the seeded default if absent.
+    func getWikiIndex() throws -> WikiIndex
+
+    /// Replace the wiki-index body wholesale, bumping its version + `updated_at`.
+    func updateWikiIndex(body: String) throws
 }
