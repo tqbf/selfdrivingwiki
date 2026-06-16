@@ -32,6 +32,12 @@ struct SidebarView: View {
                 .tag(WikiSelection.systemPrompt)
                 .help("Agent instructions, projected read-only as CLAUDE.md and AGENTS.md")
 
+            Label("Change Log", systemImage: "clock.arrow.circlepath")
+                .font(.body)
+                .lineLimit(1)
+                .tag(WikiSelection.changeLog)
+                .help("Operation history, projected read-only as log.md")
+
             Section("Pages") {
                 ForEach(store.summaries) { summary in
                     Text(summary.title.isEmpty ? "Untitled" : summary.title)
@@ -48,19 +54,18 @@ struct SidebarView: View {
                         }
                 }
             }
-            // Files section appears only once at least one file is ingested. The
-            // rows are management-only (no `.tag`), so they never feed the page
-            // selection binding above — clicking one is a no-op on the detail pane.
-            // The header carries an inline "Add from URL…" button so the affordance
-            // sits right next to the content it produces.
+            // Files are most-recently-added first (the store orders by created_at
+            // DESC). Selecting one opens a detail pane with direct ingest controls.
             if !store.ingestedFiles.isEmpty {
                 Section {
                     ForEach(store.ingestedFiles) { file in
                         IngestedFileRow(
                             file: file,
+                            hasBeenIngested: store.hasIngestedFile(file),
                             onOpen: { Task { await fileProvider.openIngestedFile(id: file.id) } },
                             onRemove: { store.deleteIngestedFile(file.id) }
                         )
+                        .tag(WikiSelection.ingestedFile(file.id))
                     }
                 } header: {
                     HStack {

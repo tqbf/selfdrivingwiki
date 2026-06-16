@@ -93,6 +93,18 @@ struct LogIndexTests {
         #expect(LogRenderer.render([]).isEmpty)
     }
 
+    @MainActor
+    @Test func modelCurrentLogMarkdownUsesProjectionRenderer() throws {
+        let store = try tempStore()
+        _ = try store.appendLog(kind: .query, title: "What changed?", note: "The agent answered from the wiki.")
+        let model = WikiStoreModel(store: store)
+        let markdown = model.currentLogMarkdown()
+
+        #expect(markdown.contains("## ["))
+        #expect(markdown.contains("query | What changed?"))
+        #expect(markdown.contains("The agent answered from the wiki."))
+    }
+
     // MARK: - index set (UPSERT)
 
     @Test func updateWikiIndexPersistsAndBumpsVersion() throws {

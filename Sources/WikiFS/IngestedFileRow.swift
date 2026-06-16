@@ -2,12 +2,11 @@ import SwiftUI
 import WikiFSCore
 
 /// One row in the sidebar's "Files" section: an ingested file's name + size.
-/// Double-clicking (or the "Open" menu item) opens the file in its default app
-/// (e.g. Preview for a PDF); remove is available via context menu and swipe.
-/// The row carries NO `.tag(...)`, so it never participates in the
-/// page-`List(selection:)` binding — clicking it can't load a phantom page.
+/// Selecting the row opens a file detail pane with the agent-ingest affordance;
+/// the context menu keeps direct file actions close at hand.
 struct IngestedFileRow: View {
     let file: IngestedFileSummary
+    let hasBeenIngested: Bool
     let onOpen: () -> Void
     let onRemove: () -> Void
 
@@ -22,14 +21,15 @@ struct IngestedFileRow: View {
                 Text(Self.sizeFormatter.string(fromByteCount: Int64(file.byteSize)))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Image(systemName: hasBeenIngested ? "checkmark.circle.fill" : "circle.dashed")
+                    .font(.caption)
+                    .foregroundStyle(hasBeenIngested ? .green : .secondary)
+                    .help(hasBeenIngested ? "Ingested into the wiki" : "Ready to ingest into the wiki")
             }
         } icon: {
             Image(systemName: Self.symbol(forExtension: file.ext))
         }
-        // Whole row is the hit target; a double-click opens the file. Use a
-        // simultaneous gesture so it doesn't swallow the context-menu / swipe.
         .contentShape(Rectangle())
-        .onTapGesture(count: 2, perform: onOpen)
         .contextMenu {
             Button("Open", systemImage: "arrow.up.forward.app", action: onOpen)
             Button("Remove", role: .destructive, action: onRemove)

@@ -22,6 +22,11 @@ public final class WikiStoreModel {
     /// ALWAYS rebuilt from `store.listIngestedFiles()` after a change, never
     /// incrementally patched (§3.1). Most-recent-first.
     public private(set) var ingestedFiles: [IngestedFileSummary] = []
+    /// Best-effort UI status for whether a raw source has already been processed
+    /// by an agent Ingest run. The source of truth is the append-only log; agents
+    /// can choose their log title, so matching accepts the filename, id, by-id
+    /// projection leaf, or path in either the log title or note.
+    private var ingestedFileStatus: [PageID: Bool] = [:]
 
     /// Invoked on the main actor after any successful persisted mutation
     /// (save / new / rename / delete). The app wires this to the File Provider
@@ -124,6 +129,14 @@ public final class WikiStoreModel {
             loadedPage = id
         case .systemPrompt:
             draftSystemPrompt = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
+            loadedPage = nil
+        case .changeLog:
+            draftTitle = ""
+            draftBody = ""
+            loadedPage = nil
+        case .ingestedFile:
+            draftTitle = ""
+            draftBody = ""
             loadedPage = nil
         case nil:
             draftTitle = ""
@@ -391,6 +404,10 @@ public final class WikiStoreModel {
     public func deleteIngestedFile(_ id: PageID) {
         do {
             try store.deleteIngestedFile(id: id)
+            if selection == .ingestedFile(id) {
+                selection = nil
+                loadDrafts(for: nil)
+            }
             reloadIngestedFiles()
             onPageDidChange?()
         } catch {
@@ -427,6 +444,15 @@ public final class WikiStoreModel {
         return WikiStateSnapshot.make(allTitles: titles, indexBody: indexBody, logLines: logLines)
     }
 
+    /// Render the operation log exactly as the File Provider's `log.md` does, so
+    /// the in-app document and filesystem projection show the same query/ingest/
+    /// lint history. Bounded generously for UI responsiveness; entries remain in
+    /// chronological order so newest activity sits at the bottom.
+    public func currentLogMarkdown(limit: Int = 10_000) -> String {
+        let entries = (try? store.recentLogEntries(limit: limit)) ?? []
+        return LogRenderer.render(entries)
+    }
+
     /// The verbatim bytes of one ingested source, read from SQLite at click time so
     /// the agent run can STAGE it onto reliable local disk (`source.<ext>`) rather
     /// than reading from the ~5s-laggy read-only mount. `nil` if the read fails;
@@ -434,6 +460,10 @@ public final class WikiStoreModel {
     /// would fall back to probing the mount.
     public func ingestedSourceBytes(id: PageID) -> Data? {
         try? store.ingestedFileContent(id: id)
+    }
+
+    public func hasIngestedFile(_ file: IngestedFileSummary) -> Bool {
+        ingestedFileStatus[file.id] ?? false
     }
 
     // MARK: - Source-of-truth rebuild
@@ -454,5 +484,23 @@ public final class WikiStoreModel {
 
     private func reloadIngestedFiles() {
         ingestedFiles = (try? store.listIngestedFiles()) ?? []
+        let entries = (try? store.recentLogEntries(limit: 10_000)) ?? []
+        let ingestTexts = entries
+            .filter { $0.kind == .ingest }
+            .map { "\($0.title) \($0.note ?? "")".lowercased() }
+
+        ingestedFileStatus = Dictionary(uniqueKeysWithValues: ingestedFiles.map { file in
+            let filename = file.filename.lowercased()
+            let byIDLeaf = FilenameEscaping
+                .byIDIngestedFilename(fileID: file.id.rawValue, ext: file.ext)
+                .lowercased()
+            let path = "files/by-id/\(byIDLeaf)"
+            let matchers = [filename, file.id.rawValue.lowercased(), byIDLeaf, path]
+                .filter { !$0.isEmpty }
+            let hasLogEntry = ingestTexts.contains { text in
+                matchers.contains { text.contains($0) }
+            }
+            return (file.id, hasLogEntry)
+        })
     }
 }

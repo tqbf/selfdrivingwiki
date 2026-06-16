@@ -12,6 +12,7 @@ struct ContentView: View {
     @Bindable var agentLauncher: AgentLauncher
     @State private var showingPathPopover = false
     @State private var showingAgentSheet = false
+    @State private var isTranscriptExpanded = false
     /// Driven by `.dropDestination`'s `isTargeted` callback to fade in a subtle
     /// accent border while a drag hovers the window (set via the closure param —
     /// no `Binding(get:set:)`).
@@ -22,20 +23,25 @@ struct ContentView: View {
         NavigationSplitView {
             SidebarView(store: store, manager: manager, fileProvider: fileProvider)
         } detail: {
-            switch store.selection {
-            case .none:
-                ContentUnavailableView {
-                    Label("No Page Selected", systemImage: "doc.text")
-                } description: {
-                    Text("Select a page from the sidebar, or create a new one.")
-                } actions: {
-                    Button("New Page", systemImage: "plus") { store.newPage() }
-                }
-            case .systemPrompt:
-                SystemPromptDetailView(store: store)
-            case .page:
-                PageDetailView(store: store)
+            HStack(spacing: 0) {
+                WikiDetailView(
+                    store: store,
+                    launcher: agentLauncher,
+                    manager: manager,
+                    fileProvider: fileProvider,
+                    onIngestFile: runIngest
+                )
+
+                Divider()
+                    .opacity(isTranscriptExpanded ? 1 : 0)
+
+                AgentTranscriptSidebar(
+                    launcher: agentLauncher,
+                    isExpanded: isTranscriptExpanded,
+                    onCollapse: collapseTranscript
+                )
             }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isTranscriptExpanded)
         }
         // Drop a file anywhere on the window to ingest it (raw bytes → SQLite →
         // the read-only `files/` projection). The whole content is the target.
@@ -58,6 +64,13 @@ struct ContentView: View {
                 .ignoresSafeArea()
         }
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Toggle Transcript", systemImage: "sidebar.trailing") {
+                    toggleTranscript()
+                }
+                .disabled(!canShowTranscript)
+                .help(isTranscriptExpanded ? "Hide agent transcript" : "Show agent transcript")
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button("Maintain Wiki", systemImage: "sparkles") {
                     showingAgentSheet = true
@@ -88,6 +101,37 @@ struct ContentView: View {
         // (§3.5). The view, not the binding, is the right place for this.
         .onChange(of: store.selection) { _, newValue in
             store.handleSelectionChange(to: newValue)
+        }
+        .onChange(of: agentLauncher.isRunning) { _, isRunning in
+            if isRunning {
+                isTranscriptExpanded = true
+            }
+        }
+    }
+
+    private var canShowTranscript: Bool {
+        agentLauncher.isRunning
+            || !agentLauncher.events.isEmpty
+            || agentLauncher.preflightError != nil
+            || !agentLauncher.stderr.isEmpty
+    }
+
+    private func toggleTranscript() {
+        isTranscriptExpanded.toggle()
+    }
+
+    private func collapseTranscript() {
+        isTranscriptExpanded = false
+    }
+
+    private func runIngest(fileID: PageID) {
+        Task {
+            await AgentOperationRunner.runIngest(
+                fileID: fileID,
+                launcher: agentLauncher,
+                store: store,
+                manager: manager,
+                fileProvider: fileProvider)
         }
     }
 }

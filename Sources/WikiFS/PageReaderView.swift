@@ -5,6 +5,8 @@ import WikiFSCore
 /// agent maintains; manual source editing lives behind PageDetailView's Edit action.
 struct PageReaderView: View {
     @Bindable var store: WikiStoreModel
+    let isRunning: Bool
+    let onQuery: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -25,6 +27,9 @@ struct PageReaderView: View {
             MarkdownPreview(store: store, markdown: readerMarkdown)
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: PageEditorMetrics.previewMinHeight)
+
+            Divider().opacity(PageEditorMetrics.dividerOpacity)
+            PageQueryPrompt(isRunning: isRunning, onSubmit: onQuery)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .textBackgroundColor))

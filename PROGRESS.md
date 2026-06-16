@@ -2,6 +2,81 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-16 — Change Log surfaced in the sidebar
+
+Surfaced the append-only operation log in the app UI, next to the other pinned
+wiki-level documents.
+
+**Changed**
+- Added a pinned **Change Log** row beside **System Prompt** in the sidebar.
+- Added `WikiSelection.changeLog` and a read-only `ChangeLogDetailView` that renders
+  the same markdown body as projected `log.md`, including query answers and agent
+  notes.
+- Added `WikiStoreModel.currentLogMarkdown()` as the app-side seam over the existing
+  `LogRenderer`, so the UI and File Provider projection share one formatter.
+
+**Skill pass.** Before and after code: `swiftui-pro` kept the log as a separate
+leaf view with a small model seam; `macos-design` placed it as a pinned sidebar
+document alongside System Prompt; `typography-designer` kept the detail view on
+the existing reader scale (`.largeTitle`, `.callout`, rendered markdown body).
+
+**Verified.** `make check` passes and `make test` passes (**322/322**). Added a
+core regression test that `WikiStoreModel.currentLogMarkdown()` includes query log
+notes via the projection renderer.
+
+## 2026-06-16 — Inline agent transcript inspector
+
+Added an expandable trailing transcript sidebar for inline Query/Ingest runs, so
+the page can remain visible while the wiki is edit-locked and the user can still
+see what the agent is doing.
+
+**Changed**
+- `ContentView` now hosts a trailing inspector pane beside the selected detail
+  content. It auto-expands when an agent run starts and can be toggled from the
+  toolbar or collapsed from inside the pane.
+- `AgentTranscriptSidebar` reuses `AgentActivityView`, the same live transcript
+  renderer used by the dedicated Maintain Wiki sheet, so tool calls, subagent rows,
+  assistant text, diagnostics, and results render consistently.
+- Split selected-detail rendering into `WikiDetailView`, keeping the app shell
+  focused on navigation/chrome and avoiding a growing monolithic view body.
+
+**Skill pass.** Before and after code: `swiftui-pro` favored extracting the detail
+switch and reusing the existing activity view; `macos-design` pointed to a trailing
+inspector rather than a modal; `typography-designer` kept the panel on existing
+semantic macOS styles (`.headline`, `.callout`, `.caption`, monospaced transcript
+rows). The toggle and collapse controls keep text labels for accessibility even
+when rendered as icons.
+
+**Verified.** `make check` passes and `make test` passes (**321/321**).
+
+## 2026-06-16 — Ingestion and query affordances moved into the content flow
+
+Made Ingest and Query discoverable where the user is already working instead of
+requiring the toolbar's Maintain Wiki sheet.
+
+**Changed**
+- The Files list remains most-recently-added first and now shows a per-file status
+  badge: a green check when an ingest log matches that source, otherwise a dashed
+  "ready" indicator.
+- Files are selectable sidebar items. Selecting one opens a file detail pane with
+  **Ingest into Wiki** and **Open File** actions, so a raw source can be processed
+  on the spot.
+- Added a shared `AgentOperationRunner` so the existing operations sheet, the file
+  detail pane, and page-level queries all use the same mount refresh, staging, and
+  edit-lock launch path.
+- Every page reader now has a compact query field pinned below the rendered page,
+  launching the same Query operation without opening the operations sheet.
+
+**Skill pass.** Before code: `swiftui-pro`, `macos-design`, and
+`typography-designer` pointed toward semantic Dynamic Type, standard macOS list
+selection/detail behavior, labeled icon buttons, and progressive disclosure in the
+content area. Post-code review checked the new views against SwiftUI design,
+accessibility, and hygiene guidance: controls keep text labels for VoiceOver, type
+uses system styles, and status is icon+color rather than color-only.
+
+**Verified.** `make check` passes and `make test` passes (**321/321**). Added a
+core regression test for the ingested-file status derived from log entries.
+
 ## 2026-06-16 — Product rename to Self Driving Wiki
 
 Renamed app-facing product copy from WikiFS to **Self Driving Wiki** while leaving

@@ -232,64 +232,31 @@ struct OperationsView: View {
     // MARK: - Run
 
     private func run() {
-        guard let wikiID = manager.activeWikiID else { return }
-
         Task {
-            // Refresh the mount + resolve WIKI_ROOT at click time (never hardcoded),
-            // so the agent sees current content before it reads.
-            await fileProvider.signalChange()
-            guard let root = fileProvider.path else { return }
-
-            // Gather the live wiki state HERE, at click time (§3.5), and render it as
-            // the WIKI_STATE.md the launcher stages — so the agent reads the CURRENT
-            // titles / index.md / log tail from local disk and skips orientation.
-            let stateMarkdown = store.currentStateSnapshot().renderStateFile()
-            guard let request = makeRequest(stateMarkdown: stateMarkdown) else { return }
-
-            let systemPrompt = store.currentSystemPromptBody()
-
-            launcher.run(
-                request: request,
-                wikiID: wikiID,
-                wikiRoot: root,
-                systemPrompt: systemPrompt,
-                wikictlDirectory: HelpersLocation.wikictlDirectory,
-                onLock: { store.beginAgentRun() },
-                onUnlock: { store.endAgentRun() }
-            )
+            switch selectedKind {
+            case .ingest:
+                guard let selectedSourceID else { return }
+                await AgentOperationRunner.runIngest(
+                    fileID: selectedSourceID,
+                    launcher: launcher,
+                    store: store,
+                    manager: manager,
+                    fileProvider: fileProvider)
+            case .query:
+                await AgentOperationRunner.runQuery(
+                    question: queryText,
+                    launcher: launcher,
+                    store: store,
+                    manager: manager,
+                    fileProvider: fileProvider)
+            case .lint:
+                await AgentOperationRunner.runLint(
+                    launcher: launcher,
+                    store: store,
+                    manager: manager,
+                    fileProvider: fileProvider)
+            }
         }
-    }
-
-    /// Build the `OperationRequest` from the current selection + input. For Ingest,
-    /// reads the source bytes from SQLite (not the mount) so the launcher can stage
-    /// them; the Ingest mode (single Opus pass vs Opus curator + Sonnet digesters) is
-    /// decided from the staged source size at stage time.
-    private func makeRequest(stateMarkdown: String) -> OperationRequest? {
-        switch selectedKind {
-        case .ingest:
-            guard let id = selectedSourceID,
-                  let file = store.ingestedFiles.first(where: { $0.id == id }),
-                  let bytes = store.ingestedSourceBytes(id: id)
-            else { return nil }
-            return .ingest(
-                sourceBytes: bytes,
-                ext: file.ext,
-                sourcePath: ingestSourcePath(for: file),
-                stateMarkdown: stateMarkdown)
-        case .query:
-            let trimmed = queryText.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : .query(question: trimmed, stateMarkdown: stateMarkdown)
-        case .lint:
-            return .lint(stateMarkdown: stateMarkdown)
-        }
-    }
-
-    /// The mount-relative path of an ingested file's `files/by-id` projection, so
-    /// the agent can Read it directly. Uses the SAME `FilenameEscaping` helper the
-    /// projection uses for the leaf filename, so it can't drift.
-    private func ingestSourcePath(for file: IngestedFileSummary) -> String {
-        let leaf = FilenameEscaping.byIDIngestedFilename(fileID: file.id.rawValue, ext: file.ext)
-        return "files/by-id/\(leaf)"
     }
 }
 

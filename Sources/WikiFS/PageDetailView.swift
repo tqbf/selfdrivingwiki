@@ -6,6 +6,9 @@ import WikiFSCore
 /// editor and keeps the existing autosave buffers intact.
 struct PageDetailView: View {
     @Bindable var store: WikiStoreModel
+    @Bindable var launcher: AgentLauncher
+    @Bindable var manager: WikiManager
+    let fileProvider: FileProviderSpike
     @State private var isEditing = false
 
     var body: some View {
@@ -15,7 +18,11 @@ struct PageDetailView: View {
             if isEditing {
                 PageEditorView(store: store)
             } else {
-                PageReaderView(store: store)
+                PageReaderView(
+                    store: store,
+                    isRunning: launcher.isRunning,
+                    onQuery: runQuery
+                )
             }
         }
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
@@ -44,5 +51,16 @@ struct PageDetailView: View {
             store.flushPendingSave()
         }
         isEditing.toggle()
+    }
+
+    private func runQuery(_ question: String) {
+        Task {
+            await AgentOperationRunner.runQuery(
+                question: question,
+                launcher: launcher,
+                store: store,
+                manager: manager,
+                fileProvider: fileProvider)
+        }
     }
 }

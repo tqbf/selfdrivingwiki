@@ -114,6 +114,23 @@ struct IngestedFilesTests {
         #expect(list.last?.id == first.id)
     }
 
+    @MainActor
+    @Test func modelTracksWhetherFileHasBeenAgentIngested() throws {
+        let store = try tempStore()
+        let raw = try store.ingestFile(filename: "source.pdf", data: Data("%PDF".utf8))
+        let untouched = try store.ingestFile(filename: "notes.txt", data: Data("notes".utf8))
+
+        let model = WikiStoreModel(store: store)
+        #expect(model.hasIngestedFile(raw) == false)
+        #expect(model.hasIngestedFile(untouched) == false)
+
+        try store.appendLog(kind: .ingest, title: "files/by-id/\(raw.id.rawValue).pdf", note: nil)
+        model.reloadFromStore()
+
+        #expect(model.hasIngestedFile(raw) == true)
+        #expect(model.hasIngestedFile(untouched) == false)
+    }
+
     // MARK: - Stepwise migration (v1 DB with pages → v2, pages intact)
 
     @Test func migratesV1DatabaseToV2PreservingPages() throws {
