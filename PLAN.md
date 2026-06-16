@@ -41,20 +41,38 @@ with a plain-folder export, even though that would dodge the signing requirement
 
 ## Status
 
-See `PROGRESS.md` for the running log. Current: **LLM Wiki Phase C (`claude -p`
-operations) DONE ✅ — live gate passed.** The app runs three discrete, scoped
-`claude -p` operations against the selected wiki — **Ingest** (summarize a
-dropped source into pages + index + log), **Query** (cited answer), **Lint**
-(health report) — each spawned with `--append-system-prompt` (the wiki's
-`CLAUDE.md`), `--dangerously-skip-permissions`, and the wiki layout injected up
-front (+ a projected `TREE.md`), writing only via `wikictl`. A **live activity
-panel** streams the agent's tool calls/text in real time (`--output-format
-stream-json`) with a **backend `run.jsonl`** per run; the in-app editor is
-**locked** during a run; the sidebar refreshes live as writes land; and
-`[[wiki-links]]` are now **clickable** in the preview. 207 tests; clean signed
-bundle (app + appex + `wikictl`). Branch `llmwiki/phase-c-claude-ops` (stacked on
-`llmwiki/phase-b-index-log`, unmerged). Next: Phase D (the real `CLAUDE.md`
-schema — and slim the now-duplicated inline prompt preamble).
+See `PROGRESS.md` for the running log. Current: **🎉 LLM Wiki COMPLETE ✅ — all
+five phases (0, A, B, C, D) gate-passed.** WikiFS is now a self-maintaining LLM
+wiki: a user keeps **many** wikis (one SQLite DB + one File Provider domain
+each); an LLM (`claude -p`, run as **Ingest / Query / Lint** from the app)
+authors and maintains each one — reading the read-only mount and writing via the
+new **`wikictl`** CLI — keeping curated `index.md` + chronological `log.md`
+current, cross-linking pages with clickable `[[wiki-links]]`, all under a real
+maintainer schema projected as `CLAUDE.md`/`AGENTS.md`. Agent runs stream live
+(tool calls + text, `--output-format stream-json`) with per-run backend
+`run.jsonl` logs and an editor edit-lock. **221 tests; clean signed bundle (app +
+appex + `wikictl`).** Delivered across five stacked, **unmerged** branches off the
+post-v0 line (`llmwiki/phase-0-many-wikis` → `phase-a-write-path` →
+`phase-b-index-log` → `phase-c-claude-ops` → `phase-d-schema`); `main` untouched —
+review/merge locally.
+
+**Phase summary (newest first; see `PROGRESS.md` for each gate's evidence):**
+- **Phase D — the schema** ✅ real maintainer `CLAUDE.md` schema (layout,
+  conventions, `wikictl` reference, read-after-write rule, Ingest/Query/Lint
+  playbooks); `-p` prompts slimmed to rely on it; new wikis seed it, existing
+  unaffected. Also hardened File Provider domain registration (verify/retry/nudge/
+  surface-errors).
+- **Phase C — `claude -p` operations** ✅ Ingest/Query/Lint scoped runs +
+  `--dangerously-skip-permissions` + layout-up-front (`TREE.md`) + live streaming
+  panel + backend logs + per-wiki edit-lock + clickable `[[wiki-links]]`.
+- **Phase B — `log.md` + `index.md`** ✅ v3→4 `log` table + v4→5 `wiki_index`
+  singleton; `wikictl log append` / `index set`; both projected read-only at root;
+  `changeToken()` folds.
+- **Phase A — write path + change bridge** ✅ `wikictl` (page upsert/get/list/
+  delete) + shared `PageUpsert` link-reparse + per-wiki Darwin notification →
+  debounced sidebar rebuild + `signalChange()`.
+- **Phase 0 — many wikis** ✅ wiki registry (ULID identity), per-wiki DBs +
+  per-wiki File Provider domains, in-app switcher, v0 wiki migrated as wiki #1.
 
 **Prior: LLM Wiki Phase A (Write path + change bridge) DONE ✅ — live gate
 passed.** The `wikictl` CLI (`page list/get/upsert/delete`, selecting a wiki via

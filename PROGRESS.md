@@ -2,13 +2,33 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-06-16 — LLM Wiki Phase D: the schema — DRAFT (independent gate pending)
+## 2026-06-16 — LLM Wiki Phase D: the schema — DONE ✅ (gate passed)
 
 Branch `llmwiki/phase-d-schema` (stacked on `llmwiki/phase-c-claude-ops`).
 Implements `plans/llm-wiki.md` Phase D: replaces the stub `SystemPrompt.defaultBody`
 with the real wiki-maintainer schema, and slims the operation `-p` prompts now that
 the schema is delivered every run via `--append-system-prompt`. **Cheap, mostly
-prose — no new views, no migration changes.** DRAFT until the independent live gate.
+prose — no new views, no migration changes.**
+
+**Verified (live gate — user created the wiki; orchestrator verified via Bash; real `make clean && make install`, real-signed, fresh wiki `GateD`)**
+- **Byte-identity ✅:** a freshly-created wiki's `CLAUDE.md` ≡ `AGENTS.md` ≡ the
+  seeded `system_prompt` row body — all `sha256 f3174a5b…`, **5362 bytes**, the
+  new "# Wiki Maintainer Instructions" schema (read raw via `writefile` to avoid
+  the `sqlite3`-CLI trailing-newline artifact). The projection serves the same
+  body under both names, as in the post-v0 system-prompt gate.
+- **Agent reads it ✅:** a real `claude -p` launched with the new schema as
+  `--append-system-prompt` named the FULL `wikictl` surface from its instructions
+  alone — `page list/get/upsert/delete`, `index set`, `log append --kind …`.
+- **Migration ✅:** the new wiki seeds the new schema; an EXISTING wiki
+  (`GateCFresh`) is **unaffected** — still the old 762-byte stub (no `wikictl`),
+  exactly as required (only `defaultBody`, the v2→3 seed + projection fallback,
+  changed; no path rewrites an existing row).
+- **Prompt de-duplication ✅:** the ~30-line `toolingPreamble` (layout +
+  `wikictl` cheatsheet + read-after-write rule) is GONE from the `-p` prompts —
+  each op now carries just the task + the resolved `WIKI_ROOT` (+ Ingest's source
+  path / Query's question), relying on `CLAUDE.md` (via `--append-system-prompt`)
+  for the schema. The exact seam the user flagged during Phase C.
+- 211 → **221** tests (also fixed the last same-millisecond ULID flake), all green.
 
 **What changed**
 - **`SystemPrompt.defaultBody` is now the real maintainer schema** (`WikiFSCore/
