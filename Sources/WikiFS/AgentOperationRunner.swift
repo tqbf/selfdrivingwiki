@@ -74,8 +74,23 @@ enum AgentOperationRunner {
     ) async {
         guard let wikiID = manager.activeWikiID else { return }
 
-        await fileProvider.signalChange()
-        guard let root = fileProvider.path else { return }
+        switch request {
+        case .ingest:
+            break
+        case .query, .lint:
+            await fileProvider.signalChange()
+        }
+        let root: String
+        if let resolvedRoot = fileProvider.path {
+            root = resolvedRoot
+        } else if case .ingest = request {
+            // Ingest stages both the raw source bytes and WIKI_STATE.md from SQLite,
+            // so it can proceed even if the File Provider mount URL is still being
+            // resolved. Query/Lint keep requiring the mount for raw-file reads.
+            root = ""
+        } else {
+            return
+        }
 
         launcher.run(
             request: request,

@@ -12,6 +12,7 @@ struct ContentView: View {
     @Bindable var agentLauncher: AgentLauncher
     @State private var showingPathPopover = false
     @State private var showingAgentSheet = false
+    @State private var operationInitialSourceID: PageID?
     @State private var isTranscriptExpanded = false
     /// Driven by `.dropDestination`'s `isTargeted` callback to fade in a subtle
     /// accent border while a drag hovers the window (set via the closure param —
@@ -73,6 +74,7 @@ struct ContentView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Button("Maintain Wiki", systemImage: "sparkles") {
+                    operationInitialSourceID = nil
                     showingAgentSheet = true
                 }
                 .help("Run an agent: Ingest a source, Query the wiki, or Lint it")
@@ -93,7 +95,8 @@ struct ContentView: View {
                 launcher: agentLauncher,
                 store: store,
                 manager: manager,
-                fileProvider: fileProvider
+                fileProvider: fileProvider,
+                initialSourceID: operationInitialSourceID
             )
         }
         // List(selection:) writes store.selection directly; observe it here so
@@ -125,13 +128,7 @@ struct ContentView: View {
     }
 
     private func runIngest(fileID: PageID) {
-        Task {
-            await AgentOperationRunner.runIngest(
-                fileID: fileID,
-                launcher: agentLauncher,
-                store: store,
-                manager: manager,
-                fileProvider: fileProvider)
-        }
+        operationInitialSourceID = fileID
+        showingAgentSheet = true
     }
 }

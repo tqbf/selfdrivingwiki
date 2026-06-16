@@ -61,10 +61,10 @@ From the repo root (full detail in [`plans/build-environment.md`](plans/build-en
 
 ```sh
 make            # debug build → build/Self Driving Wiki.app (also builds + embeds wikictl)
-make run        # build + open the app
+make run        # install to /Applications, register File Provider, then open the app
 make check      # compile-only gate, no bundle/sign (CI / agent verification)
-make test       # the SwiftPM test suite (320 tests)
-make install    # copy to /Applications and register with LaunchServices
+make test       # the SwiftPM test suite
+make install    # copy to /Applications and register LaunchServices + File Provider
 make help       # every target
 ```
 
@@ -155,8 +155,8 @@ A deeper map is in [`plans/architecture.md`](plans/architecture.md); the short v
   ingest path as a drag-dropped file.
 - **Projected root docs.** Each mount root carries `CLAUDE.md`/`AGENTS.md` (the
   agent schema), `index.md` (curated catalog), `log.md` (grep-able chronological
-  log), `TREE.md` (layout map), plus `pages/`, `files/`, `manifest.json`, and
-  `indexes/*.jsonl`.
+  log), `WIKI-STRUCTURE.md` (layout map; `TREE.md` is a legacy alias), plus
+  `pages/`, `files/`, `manifest.json`, and `indexes/*.jsonl`.
 
 ---
 

@@ -145,6 +145,8 @@ extension WikiOperation {
 
     \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath, sourceFilePath: stagedSourcePath))
 
+    \(footnoteConclusionsRule)
+
     TASK — Ingest this one source into the wiki, following the Ingest workflow from \
     your instructions. Act immediately; do not explore the mount first. Read the \
     staged source, DECIDE what belongs in the wiki, and write one or more \
@@ -171,6 +173,8 @@ extension WikiOperation {
     \(IngestWriteRule.writes)
 
     \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath, sourceFilePath: stagedSourcePath))
+
+    \(footnoteConclusionsRule)
 
     TASK — Ingest this one source into the wiki, following the Ingest workflow from \
     your instructions. You are the CURATOR: you decide what goes in the wiki and you \
@@ -207,6 +211,16 @@ extension WikiOperation {
     """
   }
 
+  /// Ingest-written pages should make provenance visible without making the agent
+  /// chase or construct durable URLs. The reader renders Markdown footnotes.
+  private static let footnoteConclusionsRule = """
+    FOOTNOTE CONCLUSIONS — When you add synthesized conclusions, interpretations, \
+    or non-obvious facts to wiki pages, footnote them in Markdown using `[^id]` \
+    references and `[^id]: Source filename, page N` definitions. We do NOT need \
+    real links; use concise provenance such as a source file name plus page, \
+    section, heading, line range, or chunk range.
+    """
+
   // MARK: - Query / Lint prompts
 
   /// Query stays single-agent Opus, but still gets the write rule (it may file an
@@ -222,9 +236,20 @@ extension WikiOperation {
     \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
 
     TASK — Answer a question from this wiki, following the Query workflow from your \
-    instructions. Cite the page titles or files/ paths your answer draws on. If you \
-    file a useful answer back as a page, write it via `wikictl page upsert` and log \
-    it with `wikictl log append --kind query`.
+    instructions. The mount has a root `WIKI-STRUCTURE.md` file that explains the \
+    current filesystem layout and `wikictl` cheatsheet; read it when you need to \
+    orient to paths or raw sources.
+
+    To answer, pull wiki pages from SQLite with `wikictl page get --title T` (or \
+    `--id I`) so you see fresh authoritative content. If a page contains Markdown \
+    footnotes (`[^id]: ...`) that cite a raw source, FOLLOW THEM: resolve the source \
+    filename/path using `$WIKI_ROOT/files/by-name/`, `$WIKI_ROOT/files/by-id/`, or \
+    `$WIKI_ROOT/indexes/files.jsonl`, then read the raw file from the mount (use the \
+    `Read` tool or shell commands such as `cat`, `python`, `pdftotext`, or `strings` \
+    as appropriate for text/PDF/binary files). Cite the page titles and any \
+    `files/...` paths or footnote source locations your answer draws on. If you file \
+    a useful answer back as a page, write it via `wikictl page upsert` and log it \
+    with `wikictl log append --kind query`.
 
     WIKI_ROOT (resolved, read-only mount — reference only): \(wikiRoot)
     Question: \(question)

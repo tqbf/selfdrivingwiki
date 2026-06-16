@@ -53,6 +53,7 @@ public enum WikiFSContainerID {
     // the root, refreshed by `signalChange()` signaling `.rootContainer` (+ the
     // working set), exactly as for `log.md`/`index.md`.
     public static let treeMD = "tree-md"
+    public static let wikiStructureMD = "wiki-structure-md"
 
     /// Prefix for a single ingested file's `by-id` LEAF identifier (carries the
     /// full ULID, never the filename — INITIAL §6). Shared so the extension's

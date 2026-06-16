@@ -6,7 +6,10 @@ import PackageDescription
 // bundles the executable produced here into build/Self Driving Wiki.app and codesigns it.
 let package = Package(
     name: "WikiFS",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v15)],
+    dependencies: [
+        .package(url: "https://github.com/gonzalezreal/textual", from: "0.5.0"),
+    ],
     targets: [
         // Non-UI core: page model, ULID, the WikiStore protocol + SQLite
         // implementation, and the @Observable WikiStoreModel. Depended on by
@@ -18,7 +21,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "WikiFS",
-            dependencies: ["WikiFSCore"],
+            dependencies: [
+                "WikiFSCore",
+                .product(name: "Textual", package: "textual"),
+            ],
             path: "Sources/WikiFS"
         ),
         // wikictl's logic (arg parsing, command dispatch, wiki resolution, the
