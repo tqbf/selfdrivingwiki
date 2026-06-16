@@ -157,9 +157,9 @@ extension WikiOperation {
     """
   }
 
-  /// Large-source Ingest: an Opus CURATOR orchestrates reading the large source via
-  /// Sonnet `source-reader` digesters, then DECIDES the page set and WRITES every
-  /// page + index.md + the log entry itself. The 2..19 digester guardrail and the
+  /// Large-source Ingest: an Opus CURATOR delegates raw source ingestion to Sonnet
+  /// `source-reader` digesters, then DECIDES the page set and WRITES every page +
+  /// index.md + the log entry itself. The 2..19 digester guardrail and the
   /// "fork more for follow-up questions / pull pages to double-check" affordances are
   /// stated prompt-level. Leads with the write rule because Opus is the writer.
   private static func ingestCuratorPrompt(
@@ -174,14 +174,15 @@ extension WikiOperation {
 
     TASK — Ingest this one source into the wiki, following the Ingest workflow from \
     your instructions. You are the CURATOR: you decide what goes in the wiki and you \
-    write everything. The source is LARGE — use Sonnet `source-reader` workers to \
-    read its bulk for you so you don't have to read the whole thing yourself. Act \
-    immediately; do not explore the mount first.
+    write everything. The source is LARGE — use Sonnet `source-reader` workers, not \
+    Opus, to do the raw source ingestion: they read the bulk source chunks and return \
+    structured digests for you to synthesize. Act immediately; do not explore the \
+    mount first.
 
     1. INSPECT the staged source's size and structure WITHOUT reading the whole bulk \
        — e.g. `wc -l`/`head` for text, or count pages for a PDF — then split it into \
        chunks (byte/line ranges, sections, or page ranges).
-    2. FAN OUT the READING to `source-reader` subagents via the Task tool — \
+    2. FAN OUT RAW INGESTION to Sonnet `source-reader` subagents via the Task tool — \
        use MORE THAN 1 and FEWER THAN 20 workers (between 2 and 19). Size the fan-out \
        to the material: do NOT spawn 15 workers for 3 pages; one worker can digest \
        adjacent chunks. In each worker's task, give it the staged source path \

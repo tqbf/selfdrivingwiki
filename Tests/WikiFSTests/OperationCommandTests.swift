@@ -288,6 +288,8 @@ struct OperationCommandTests {
     #expect(prompt.contains("MORE THAN 1 and FEWER THAN 20"))
     #expect(prompt.contains("between 2 and 19"))
     #expect(prompt.contains("source-reader"))
+    #expect(prompt.contains("use Sonnet `source-reader` workers, not Opus"))
+    #expect(prompt.contains("FAN OUT RAW INGESTION to Sonnet `source-reader` subagents"))
     // Size the fan-out to the material.
     #expect(prompt.contains("do NOT spawn 15 workers for 3 pages"))
     // Opus may fork MORE workers for follow-up questions, and may pull pages to

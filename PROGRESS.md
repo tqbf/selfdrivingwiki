@@ -2,6 +2,53 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-16 — Prompt help made navigable
+
+Changed the Claude Prompt Templates Help window from one long scroll into a
+sidebar/detail view listing each prompt artifact directly: Command, Ingest
+variants, Query, Lint, Agents, and appended System Prompt. The window now defaults
+to **Query -p Prompt**, so Query is visible immediately instead of buried below
+the long ingest prompt. The detail body still renders from `ClaudePromptHelp`,
+which renders from the production prompt builders.
+
+**Verified.** `make check` passes and `swift test` passes (**325/325**).
+
+## 2026-06-16 — Fan-out prompt names Sonnet for raw ingestion
+
+Tightened the large-source Ingest curator prompt so it explicitly tells Opus to
+use **Sonnet `source-reader` workers, not Opus**, for raw source ingestion. Opus
+still curates/synthesizes and writes pages/index/log; Sonnet handles the bulk
+read/digest work. Added a regression assertion in `OperationCommandTests`, and
+the Help-menu prompt reference picks this up automatically from the production
+`WikiOperation` builder.
+
+**Verified.** `make check` passes and `swift test` passes (**325/325**).
+
+## 2026-06-16 — Claude prompt templates added to Help
+
+Added a secondary Help-menu reference for the actual `claude -p` command surface:
+the argv/env/cwd template, each operation's `-p` prompt, the large-ingest
+`--agents` JSON, and a pointer to the active wiki's editable System Prompt body.
+
+**Changed**
+- Added `ClaudePromptHelp` in `WikiFSCore`, rendering Help documents from the
+  production `OperationCommand`, `WikiOperation`, and `IngestPlan` builders using
+  placeholder paths/inputs so the reference tracks the real launch payload.
+- Added a **Help → Claude Prompt Templates** window with selectable monospaced
+  prompt blocks. The window is secondary UI, separate from the main wiki/editor
+  flow.
+- Added `ClaudePromptHelpTests` to assert the Help reference includes command,
+  operation, subagent, and system-prompt sections and that the operation prompt
+  bodies come from the production builders.
+
+**Skill pass.** Before and after code: `swiftui-pro` kept the renderer pure and
+the SwiftUI views split into leaf types; `macos-design` placed the reference in
+the Help menu rather than primary navigation; `typography-designer` kept semantic
+system styles for prose and monospaced body text only for literal prompt/code
+content.
+
+**Verified.** `make check` passes and `swift test` passes (**325/325**).
+
 ## 2026-06-16 — Change Log surfaced in the sidebar
 
 Surfaced the append-only operation log in the app UI, next to the other pinned

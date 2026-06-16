@@ -58,6 +58,9 @@ struct WikiFSApp: App {
                 }
         }
         .windowToolbarStyle(.unified)
+        .commands {
+            ClaudePromptHelpCommands()
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { manager.activeStore?.flushPendingSaves() }
         }
@@ -67,6 +70,11 @@ struct WikiFSApp: App {
         .onChange(of: manager.wikis) { _, _ in
             changeBridge?.refreshObservations()
         }
+
+        Window("Claude Prompt Templates", id: "claudePromptHelp") {
+            ClaudePromptHelpView()
+        }
+        .defaultSize(width: 880, height: 680)
     }
 }
 
