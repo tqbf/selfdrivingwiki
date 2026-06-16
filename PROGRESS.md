@@ -2,13 +2,13 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-06-15 — LLM Wiki Phase B: `log.md` + `index.md` — DRAFT (built, tests green; live gate pending)
+## 2026-06-15 — LLM Wiki Phase B: `log.md` + `index.md` — DONE ✅ (gate passed)
 
 Branch `llmwiki/phase-b-index-log` (stacked on `llmwiki/phase-a-write-path`).
 Implements `plans/llm-wiki.md` Phase B: the append-only `log` table + the curated
 `wiki_index` singleton, two `wikictl` subcommands to write them, and both
-projected read-only at each wiki's root. All deterministic (no agent yet). **Not
-yet independently live-gated** — left for the verifier.
+projected read-only at each wiki's root. All deterministic (no agent yet).
+Independent live-mount gate (Bash, on a freshly-created wiki) PASSED.
 
 **Added / changed**
 - **Two stepwise migrations** slotted into the existing `bootstrapSchema()` ladder
@@ -85,18 +85,41 @@ yet independently live-gated** — left for the verifier.
   token reflected the writes (`…:logCount=2:idxVersion=2`), proving both folds
   advance live. DB migrated to `user_version 5`.
 
-**Notes / carry-forward for the live gate**
-- **Use a FRESHLY-CREATED wiki** (per Phase A's churned-domain finding) — on it,
-  `log.md`/`index.md` appear without any hatch. On an ALREADY-materialized domain
-  they are BRAND-NEW root files, so they may need a one-shot `WIKIFS_REENUMERATE=1`
-  launch to surface (same caveat as `CLAUDE.md`/`files/`).
-- **~5 s mount-refresh window** still applies (the agent's instant-SoT read is
-  `wikictl page get`); a log-only/index-only edit advances the anchor so the
-  projected file refreshes WITHOUT a relaunch (the load-bearing claim to verify).
-- **macOS-26 TCC prompt** ("access data from other apps") re-fires on a re-signed
-  install and holds the app until "Allow".
-- The `wikictl` binary the gate invokes directly is `build/wikictl`; wiki ids live
-  in `wikis.json` in the App Group container.
+**Verified (independent live gate, real `make clean && make install`, real-signed, Bash + minimal computer-use)**
+On a **freshly-created wiki `GateBClean`** (`01KV7CWPJE…`, mount
+`WikiFS-GateBClean`, made via the in-app switcher) — no `WIKIFS_REENUMERATE`
+needed, the new root files materialized cleanly in seconds (confirming Phase A's
+churned-domain finding). App pid **44966 unchanged through every step** (no
+relaunch anywhere).
+- **(1) `log append` → grep-able `log.md`:** appended `--kind ingest` (with
+  `--note`) and `--kind query` (no note) → mount `log.md` refreshed in ~2 s to
+  `## [2026-06-16] ingest | Article One` / `## [2026-06-16] query | How does X
+  compare?`; `grep "^## \["` returned exactly the two headings; the note renders
+  for the ingest entry and is absent for the no-note query entry. `--kind bogus`
+  rejected (exit 2).
+- **(2) `index set` → rewrites root `index.md`:** `printf … | wikictl index set
+  --body-file -` bumped `wiki_index.version` 1→2; mount `index.md` refreshed in
+  ~1 s and `diff` vs the set body was IDENTICAL (verbatim).
+- **(3) log-only / index-only edit advances the anchor + refresh, no relaunch:**
+  a fresh `log append --kind lint` advanced the token fold `logCount` 2→3
+  (idxVersion held at 2) → `log.md` changed bytes in ~2 s; a fresh `index set`
+  advanced `idxVersion` 2→3 (logCount held at 3) → `index.md` refreshed in ~3 s;
+  pid 44966 unchanged both times. Both halves of the `…:logCount:idxVersion` fold
+  drive the sync anchor independently.
+- **SoT confirmed:** `PRAGMA user_version` migrated 3→5 **lazily on the first
+  `wikictl` write** (a fresh wiki ships at 3); `wiki_index` at version 3, all 3
+  `log` rows intact. 135/135 tests; real-signed app + appex + `wikictl`.
+
+**Notes / carry-forward**
+- A fresh wiki's DB ships at `user_version 3` and migrates to 5 **lazily on the
+  first `wikictl` write** (the `bootstrapSchema()` ladder runs on store-open) —
+  expected; the projected `log.md`/`index.md` exist (default/empty) before then.
+- **~5 s mount-refresh window** still applies; `wikictl page get` is the instant
+  SoT escape hatch.
+- **macOS-26 TCC prompt** re-fires on a re-signed install and holds the app until
+  "Allow" (Phase 0 carry-forward).
+- Gate artifact wiki **`GateBClean`** left in place (deleting is destructive; the
+  gate doesn't require teardown), as with `GateAClean`.
 
 ## 2026-06-15 — LLM Wiki Phase A: Write path + change bridge — DONE ✅ (gate passed)
 

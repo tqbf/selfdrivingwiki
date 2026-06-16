@@ -42,7 +42,7 @@ with a plain-folder export, even though that would dodge the signing requirement
 ## Status
 
 See `PROGRESS.md` for the running log. Current: **LLM Wiki Phase B (`log.md` +
-`index.md`) DRAFT — built, tests green; live gate pending.** Two stepwise DB
+`index.md`) DONE ✅ — live gate passed.** Two stepwise DB
 migrations (v3→4 `log` table, v4→5 `wiki_index` singleton seeded like
 `system_prompt`); `wikictl log append --kind … --title … [--note …]` and
 `wikictl index set --body-file <path|->` (both select the wiki via
