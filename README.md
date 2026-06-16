@@ -1,5 +1,7 @@
 # Self Driving Wiki
 
+![SDW Screen Shot](SDW.png)
+
 A native **macOS SwiftUI wiki**, backed by **SQLite**, mirrored **read-only** onto
 the filesystem by a **File Provider extension** — and now a **self-maintaining LLM
 wiki**. A user keeps **many** wikis (a personal one, a research one, a per-book
