@@ -49,11 +49,15 @@ struct PageUpsertTests {
 
     @Test func upsertByTitleResolvesDuplicateToLowestULID() throws {
         let store = try tempStore()
-        let first = try store.createPage(title: "Dup")   // oldest → lowest ULID
-        _ = try store.createPage(title: "Dup")
+        let a = try store.createPage(title: "Dup")
+        let b = try store.createPage(title: "Dup")
+        // `ULID.generate()` is NOT monotonic within a millisecond (80 independent
+        // random bits), so creation order does not guarantee ULID order — pick the
+        // actually-lowest ULID to assert against rather than assuming `a` < `b`.
+        let lowest = a.id.rawValue < b.id.rawValue ? a.id : b.id
         let outcome = try PageUpsert.upsert(in: store, id: nil, title: "Dup", body: "edited")
-        #expect(outcome.id == first.id)
-        #expect(try store.getPage(id: first.id).bodyMarkdown == "edited")
+        #expect(outcome.id == lowest)
+        #expect(try store.getPage(id: lowest).bodyMarkdown == "edited")
     }
 
     // MARK: - link reparse (the load-bearing reason it's shared)
