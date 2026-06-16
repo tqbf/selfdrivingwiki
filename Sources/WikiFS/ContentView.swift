@@ -65,6 +65,18 @@ struct ContentView: View {
                 .ignoresSafeArea()
         }
         .toolbar {
+            ToolbarItemGroup(placement: .navigation) {
+                Button("Back", systemImage: "chevron.left", action: navigateBack)
+                    .disabled(!store.canNavigateBack)
+                    .keyboardShortcut("[", modifiers: .command)
+                    .help("Go back")
+
+                Button("Forward", systemImage: "chevron.right", action: navigateForward)
+                    .disabled(!store.canNavigateForward)
+                    .keyboardShortcut("]", modifiers: .command)
+                    .help("Go forward")
+            }
+
             ToolbarItem(placement: .primaryAction) {
                 Button("Toggle Transcript", systemImage: "sidebar.trailing") {
                     toggleTranscript()
@@ -125,6 +137,14 @@ struct ContentView: View {
 
     private func collapseTranscript() {
         isTranscriptExpanded = false
+    }
+
+    private func navigateBack() {
+        store.navigateBack()
+    }
+
+    private func navigateForward() {
+        store.navigateForward()
     }
 
     private func runIngest(fileID: PageID) {

@@ -2,6 +2,70 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-16 — Reader links no longer use Textual's stale selection overlay
+
+- Reproduced the page shape from Test Wiki 4 in SQLite: `Missing Heritability
+  Revisited (Gusev Talk)` starts with ordinary `**[[Alexander Gusev]]**` markup,
+  and the target page exists, so the failed click was not an unresolved/malformed
+  wiki link.
+- Traced the hover/click failure to Textual's macOS document-selection overlay:
+  its AppKit `TextSelectionModel` owns both the hand cursor and URL hit testing,
+  and can get stale after reader navigation.
+- Removed document-wide Textual text selection from the rendered Markdown page
+  body so wiki links use Textual's per-fragment tap path instead of the stale
+  selection overlay. The page title remains selectable, and full source
+  selection is still available in Edit mode.
+
+**Skill pass.** Before code: `swiftui-pro` kept the fix local to the leaf
+renderer and avoided changing the model/navigation path, which was already
+unit-tested; `macos-design` prioritized reliable direct link interaction over
+document-wide text selection in the reader. After code: no new state or custom
+gesture stack was introduced, and the reader-first layout is unchanged.
+
+**Verified.** `make check` passes, focused `swift test --filter WikiLink`
+passes (**40/40**), and full `swift test` passes (**344/344**).
+
+## 2026-06-16 — Reader navigation has Back/Forward history
+
+- Added per-wiki navigation history to `WikiStoreModel`, shared by sidebar
+  selection, `[[wiki-link]]` clicks, and programmatic page creation.
+- Added Back/Forward toolbar controls with standard macOS shortcuts: `Cmd-[` and
+  `Cmd-]`. Buttons disable when their stack is empty.
+- Preserved the existing selection-switch invariant: navigating history flushes
+  pending edits for the outgoing page before loading the destination.
+- Pruned deleted pages/files from history on UI deletes and external store
+  reloads, so agent/CLI deletes do not leave stale Back/Forward destinations.
+
+**Skill pass.** Before code: `swiftui-pro` kept history in the existing
+`@MainActor @Observable` model rather than view-local state, preserving the
+single selection source of truth and autosave-on-switch path; `macos-design`
+favored standard toolbar chevrons plus conventional macOS shortcuts. After code:
+the controls are discoverable, disabled states are model-driven, and history
+navigation uses the same draft-loading path as sidebar/wiki-link navigation.
+
+**Verified.** `make check` passes, focused `swift test --filter NavigationHistory`
+passes (**7/7**), and full `swift test` passes (**344/344**).
+
+## 2026-06-16 — Wiki links stay clickable after reader navigation
+
+- Diagnosed a reader-only link interaction regression after the Textual Markdown
+  renderer landed: following links could leave subsequent links visually rendered
+  but unresponsive in the current wiki.
+- Keyed the `StructuredText` subtree by the fully rendered Markdown body so
+  Textual's macOS text-selection/link overlay is rebuilt when navigation swaps
+  the selected page's document content, instead of reusing stale hit-test state.
+
+**Skill pass.** Before code: `swiftui-pro` pointed to the existing
+`openURL`/model selection seam as the right navigation path and to keeping the
+fix local to the leaf renderer; `macos-design` kept links as direct in-document
+navigation without adding extra UI. After code: the change preserves the
+reader-first layout, keeps parsing/link transforms outside SwiftUI view logic,
+and only resets the third-party renderer subtree when its rendered document
+changes.
+
+**Verified.** `make check` passes, focused `swift test --filter WikiLink`
+passes (**40/40**), and full `swift test` passes (**337/337**).
+
 ## 2026-06-16 — Agent runs show quiet-live status and can be stopped inline
 
 - Diagnosed a Query run that appeared hung: the spawned `claude -p` process was

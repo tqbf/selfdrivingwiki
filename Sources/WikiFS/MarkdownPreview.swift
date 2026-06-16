@@ -24,6 +24,8 @@ struct MarkdownPreview: View {
     let markdown: String
 
     var body: some View {
+        let renderedBody = renderedMarkdown
+
         ScrollView {
             VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
                 if markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -31,8 +33,10 @@ struct MarkdownPreview: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {
-                    StructuredText(markdown: renderedMarkdown)
-                        .textual.textSelection(.enabled)
+                    StructuredText(markdown: renderedBody)
+                        .id(renderedBody)
+                        // Textual's macOS document-selection overlay owns cursor/link hit-testing
+                        // and can get stale after navigation; keep links on the fragment tap path.
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }

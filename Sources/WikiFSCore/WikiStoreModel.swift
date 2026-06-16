@@ -17,6 +17,11 @@ public final class WikiStoreModel {
     public private(set) var summaries: [WikiPageSummary] = []
     /// The sidebar selection: a page, the system-prompt document, or nothing.
     public var selection: WikiSelection?
+    public private(set) var backStack: [WikiSelection] = []
+    public private(set) var forwardStack: [WikiSelection] = []
+
+    public var canNavigateBack: Bool { !backStack.isEmpty }
+    public var canNavigateForward: Bool { !forwardStack.isEmpty }
 
     /// The removable list of ingested files (Phase 5). Like `summaries`, this is
     /// ALWAYS rebuilt from `store.listIngestedFiles()` after a change, never
@@ -58,6 +63,8 @@ public final class WikiStoreModel {
     /// What the drafts currently hold, so a flush saves the RIGHT document even
     /// after `selection` has advanced (§3.5 read-state-at-save-time).
     private var loadedSelection: WikiSelection?
+    private var isApplyingHistorySelection = false
+    private static let navigationHistoryLimit = 100
 
     public init(store: WikiStore) {
         self.store = store
@@ -76,6 +83,7 @@ public final class WikiStoreModel {
     public func select(_ newValue: WikiSelection?) {
         guard newValue != selection else { return }
         flushPendingSaves()
+        recordHistoryTransition(from: loadedSelection, to: newValue)
         selection = newValue
         loadDrafts(for: newValue)
     }
@@ -88,7 +96,25 @@ public final class WikiStoreModel {
     public func handleSelectionChange(to newValue: WikiSelection?) {
         guard newValue != loadedSelection else { return }
         flushPendingSaves()     // persists drafts to loadedSelection
+        recordHistoryTransition(from: loadedSelection, to: newValue)
         loadDrafts(for: newValue)
+    }
+
+    public func navigateBack() {
+        guard let destination = backStack.popLast() else { return }
+        if let current = loadedSelection {
+            forwardStack.append(current)
+        }
+        applyHistorySelection(destination)
+    }
+
+    public func navigateForward() {
+        guard let destination = forwardStack.popLast() else { return }
+        if let current = loadedSelection {
+            backStack.append(current)
+        }
+        trimBackStackIfNeeded()
+        applyHistorySelection(destination)
     }
 
     /// True if `title` resolves to an existing page. Drives the in-app preview's
@@ -143,6 +169,36 @@ public final class WikiStoreModel {
             draftBody = ""
             loadedPage = nil
         }
+    }
+
+    private func recordHistoryTransition(from oldValue: WikiSelection?, to newValue: WikiSelection?) {
+        guard !isApplyingHistorySelection, oldValue != newValue else { return }
+        if let oldValue {
+            backStack.append(oldValue)
+            trimBackStackIfNeeded()
+        }
+        forwardStack.removeAll()
+    }
+
+    private func applyHistorySelection(_ newValue: WikiSelection) {
+        guard newValue != selection else { return }
+        flushPendingSaves()
+        isApplyingHistorySelection = true
+        selection = newValue
+        loadDrafts(for: newValue)
+        isApplyingHistorySelection = false
+    }
+
+    private func trimBackStackIfNeeded() {
+        let overflow = backStack.count - Self.navigationHistoryLimit
+        if overflow > 0 {
+            backStack.removeFirst(overflow)
+        }
+    }
+
+    private func removeFromHistory(_ value: WikiSelection) {
+        backStack.removeAll { $0 == value }
+        forwardStack.removeAll { $0 == value }
     }
 
     // MARK: - Editing / autosave
@@ -274,8 +330,10 @@ public final class WikiStoreModel {
             // create-with-body wouldn't silently skip link indexing).
             try store.replaceLinks(from: page.id, parsedLinks: WikiLinkParser.parse(page.bodyMarkdown))
             reloadSummaries()
-            selection = .page(page.id)
-            loadDrafts(for: .page(page.id))
+            let newSelection = WikiSelection.page(page.id)
+            recordHistoryTransition(from: loadedSelection, to: newSelection)
+            selection = newSelection
+            loadDrafts(for: newSelection)
             onPageDidChange?()
         } catch {
             print("WikiStoreModel.newPage failed: \(error)")
@@ -299,6 +357,7 @@ public final class WikiStoreModel {
     public func delete(_ id: PageID) {
         do {
             try store.deletePage(id: id)
+            removeFromHistory(.page(id))
             if selection == .page(id) {
                 autosaveTask?.cancel()
                 autosaveTask = nil
@@ -404,6 +463,7 @@ public final class WikiStoreModel {
     public func deleteIngestedFile(_ id: PageID) {
         do {
             try store.deleteIngestedFile(id: id)
+            removeFromHistory(.ingestedFile(id))
             if selection == .ingestedFile(id) {
                 selection = nil
                 loadDrafts(for: nil)
@@ -476,6 +536,7 @@ public final class WikiStoreModel {
     public func reloadFromStore() {
         reloadSummaries()
         reloadIngestedFiles()
+        pruneHistoryToCurrentStore()
     }
 
     private func reloadSummaries() {
@@ -502,5 +563,27 @@ public final class WikiStoreModel {
             }
             return (file.id, hasLogEntry)
         })
+    }
+
+    private func pruneHistoryToCurrentStore() {
+        let pageIDs = Set(summaries.map(\.id))
+        let fileIDs = Set(ingestedFiles.map(\.id))
+        backStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, fileIDs: fileIDs) }
+        forwardStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, fileIDs: fileIDs) }
+    }
+
+    private func isAvailableHistorySelection(
+        _ value: WikiSelection,
+        pageIDs: Set<PageID>,
+        fileIDs: Set<PageID>
+    ) -> Bool {
+        switch value {
+        case .page(let id):
+            pageIDs.contains(id)
+        case .ingestedFile(let id):
+            fileIDs.contains(id)
+        case .systemPrompt, .changeLog:
+            true
+        }
     }
 }
