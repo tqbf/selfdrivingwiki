@@ -338,6 +338,42 @@ public final class WikiStoreModel {
         if didIngestAny { onPageDidChange?() }
     }
 
+    /// Ingest a resource by URL: fetch it, convert HTML→Markdown (or store a PDF /
+    /// text / binary verbatim), and land it as an ingested file — exactly like a
+    /// drag-dropped file, so the existing "Ingest into wiki" `claude -p` operation
+    /// can summarize it afterward. Lands through the SAME `store.ingestFile` path as
+    /// drag-ingest, so it appears under Files + `files/by-{id,name}` immediately and
+    /// is pickable in Operations → Ingest. Returns the outcome on success; throws a
+    /// user-readable `URLIngestService.IngestError` on a bad URL, non-2xx, empty
+    /// body, or store failure (the caller surfaces it in the sheet). The store write
+    /// hops to the main actor (this type is `@MainActor`); the fetch runs off it.
+    @discardableResult
+    public func ingestURL(
+        _ rawInput: String,
+        fetcher: any URLIngestService.URLResourceFetcher = URLSessionFetcher()
+    ) async throws -> URLIngestService.IngestOutcome {
+        // Validate + fetch OFF the main actor (the GET shouldn't stall the UI);
+        // `fetch` is `Sendable` and the service is stateless. Then store the result
+        // back HERE on the main actor, where we own `store`. Splitting fetch (async,
+        // off-actor) from store (main-actor) keeps the @Sendable boundary honest —
+        // no `assumeIsolated` gamble on which thread a continuation resumes.
+        guard let url = URLIngestService.normalizeURL(rawInput) else {
+            throw URLIngestService.IngestError.invalidURL(
+                rawInput.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        let response = try await fetcher.fetch(url)
+        guard !response.data.isEmpty else { throw URLIngestService.IngestError.empty }
+
+        // Pure dispatch decides the filename + bytes; we store directly on the main
+        // actor (no @Sendable store closure crossing the actor boundary).
+        let plan = URLIngestService.plan(for: response)
+        _ = try store.ingestFile(filename: plan.filename, data: plan.data)
+        reloadIngestedFiles()
+        onPageDidChange?()
+        return URLIngestService.IngestOutcome(
+            filename: plan.filename, byteSize: plan.data.count, kind: plan.kind)
+    }
+
     /// Synchronous ingest seam used by tests/verifiers (no drag gesture). Stores
     /// the bytes, rebuilds the list, and signals the daemon.
     public func ingestFile(filename: String, data: Data) {
