@@ -12,15 +12,23 @@ import WikiFSCore
 /// immediate-on-background — don't lose buffered edits on quit).
 @main
 struct WikiFSApp: App {
+    private let launchLocationWarning: LaunchLocationWarning?
     @State private var manager: WikiManager
     @State private var fileProvider = FileProviderSpike()
     @State private var agentLauncher = AgentLauncher()
+    @State private var showingLaunchLocationWarning: Bool
+    @State private var fileProviderSetupWarning: FileProviderSetupWarning?
+    @State private var showingFileProviderSetupWarning = false
     /// Built lazily after `bootstrap` (it needs the registered wikis) — see the
     /// `.task` below. The change bridge observes `wikictl`'s Darwin notifications.
     @State private var changeBridge: WikiChangeBridge?
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        let warning = LaunchLocationWarning.current()
+        launchLocationWarning = warning
+        _showingLaunchLocationWarning = State(initialValue: warning != nil)
+
         let directory = (try? DatabaseLocation.appGroupContainerDirectory())
             ?? FileManager.default.temporaryDirectory
         // The v0 legacy import is strictly FIRST-RUN-ONLY. We gate the whole chain
@@ -39,7 +47,41 @@ struct WikiFSApp: App {
     var body: some Scene {
         WindowGroup {
             RootView(manager: manager, fileProvider: fileProvider, agentLauncher: agentLauncher)
+                .alert(
+                    "Install Self Driving Wiki in Applications",
+                    isPresented: $showingLaunchLocationWarning,
+                    presenting: launchLocationWarning
+                ) { warning in
+                    Button("Open Installed Copy") {
+                        NSWorkspace.shared.open(warning.expectedURL)
+                    }
+                    Button("Reveal This Copy") {
+                        NSWorkspace.shared.activateFileViewerSelecting([warning.actualURL])
+                    }
+                    Button("OK", role: .cancel) {}
+                } message: { warning in
+                    Text(warning.message)
+                }
+                .alert(
+                    "File Provider Setup Needs Attention",
+                    isPresented: $showingFileProviderSetupWarning,
+                    presenting: fileProviderSetupWarning
+                ) { warning in
+                    Button("Open Installed Copy") {
+                        NSWorkspace.shared.open(warning.expectedAppURL)
+                    }
+                    Button("Reveal Installed App") {
+                        NSWorkspace.shared.activateFileViewerSelecting([warning.expectedAppURL])
+                    }
+                    Button("OK", role: .cancel) {}
+                } message: { warning in
+                    Text(warning.message)
+                }
                 .task {
+                    if let warning = await FileProviderSetupVerifier.verifyAndRepairInstalledProvider() {
+                        fileProviderSetupWarning = warning
+                        showingFileProviderSetupWarning = true
+                    }
                     // Wire the File Provider side effects into the manager: it
                     // imports no FileProvider symbols (testable core), so the app
                     // injects domain registration/removal + per-store signaling.
@@ -75,6 +117,29 @@ struct WikiFSApp: App {
             ClaudePromptHelpView()
         }
         .defaultSize(width: 880, height: 680)
+    }
+}
+
+private struct LaunchLocationWarning {
+    let actualURL: URL
+    let expectedURL: URL
+
+    var message: String {
+        """
+        File Provider mounts are only reliable from the installed app at \(expectedURL.path). \
+        This copy is running from \(actualURL.path), so wiki mounts may be unavailable. \
+        Run `make install`, then open the installed app.
+        """
+    }
+
+    static func current() -> LaunchLocationWarning? {
+        let actualURL = Bundle.main.bundleURL.standardizedFileURL
+        let expectedURL = URL(fileURLWithPath: AppInstallationPolicy.expectedAppPath)
+            .standardizedFileURL
+        guard !AppInstallationPolicy.isExpectedInstallLocation(bundlePath: actualURL.path) else {
+            return nil
+        }
+        return LaunchLocationWarning(actualURL: actualURL, expectedURL: expectedURL)
     }
 }
 

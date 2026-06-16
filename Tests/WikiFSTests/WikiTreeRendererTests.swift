@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import WikiFSCore
 
-/// Phase C: the pure `WikiTreeRenderer` that produces the wiki's `TREE.md`
+/// Phase C: the pure `WikiTreeRenderer` that produces the wiki's layout
 /// orientation map. The body is deterministic for a fixed pair of counts and
 /// carries the fixed layout + the `wikictl` cheatsheet, so a managing agent (and a
 /// human browsing the mount) has the map without probing for structure — the gap
@@ -14,7 +14,9 @@ struct WikiTreeRendererTests {
         // The full projection layout the agent needs to navigate.
         #expect(body.contains("index.md"))
         #expect(body.contains("log.md"))
+        #expect(body.contains("WIKI-STRUCTURE.md"))
         #expect(body.contains("TREE.md"))
+        #expect(body.contains("legacy alias"))
         #expect(body.contains("CLAUDE.md"))
         #expect(body.contains("pages/by-title/"))
         #expect(body.contains("pages/by-id/"))

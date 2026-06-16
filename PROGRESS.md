@@ -2,6 +2,157 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-16 — Reader renders full Markdown blocks with Textual
+
+- Replaced the reader's inline-only Markdown preview with
+  `gonzalezreal/textual`'s `StructuredText(markdown:)`, so page bodies render
+  headings, paragraphs, lists, dividers, code blocks, and links as actual
+  Markdown blocks.
+- Kept the app's wiki-specific preprocessing: `[[wiki-links]]` are still
+  rewritten to private `wiki://` links before rendering, footnote references
+  remain generated local note links, and extracted footnotes are appended as an
+  ordered Markdown notes section.
+- Bumped the package platform to macOS 15 because Textual 0.5.0 requires it.
+
+**Skill pass.** Before and after code: `swiftui-pro` kept the renderer isolated
+in the existing leaf preview view and left parsing/link transforms in pure core
+helpers; `macos-design` and `typography-designer` favored Textual's native
+SwiftUI/system text rendering and document spacing rather than custom fixed type.
+
+**Verified.** `make check` passes and `swift test` passes (**337/337**).
+
+## 2026-06-16 — File Provider install path is enforced
+
+- Diagnosed the unavailable mount: `pluginkit` had multiple enabled
+  `org.sockpuppet.WikiFS.FileProvider` records from old `WikiFS.app`, temp
+  bundles, and the build product, and `fileproviderctl dump` showed the daemon
+  binding domains to stale/unreachable app-extension records instead of the
+  current installed app.
+- Changed `make run` to go through `make install`, so local launches use
+  `/Applications/Self Driving Wiki.app` rather than the `build/` copy.
+- `make install` now prunes stale provider registrations for old dev paths,
+  copies the app into `/Applications`, registers it with LaunchServices, and
+  explicitly registers/enables the nested File Provider with `pluginkit`; it
+  fails if `pluginkit` does not report the provider at the installed path.
+- Added a launch-location warning in the app: if the bundle is not running from
+  `/Applications/Self Driving Wiki.app`, it alerts that File Provider mounts may
+  be unavailable and offers to open the installed copy or reveal the current one.
+- Added a startup File Provider setup verifier. It checks `pluginkit` for
+  `org.sockpuppet.WikiFS.FileProvider`, attempts to register/enable the installed
+  `.appex` if the path is wrong or missing, and alerts if the provider still is
+  not registered to `/Applications/Self Driving Wiki.app`.
+
+## 2026-06-16 — Ingest sheet no longer waits on a broken File Provider mount
+
+- The Maintain Wiki sheet now auto-selects the newest ingested source when the
+  Ingest tab opens, so the magic-wand path does not strand the user on
+  "Choose a file..." with a disabled Run button.
+- The file-detail "Ingest into Wiki" action opens the same sheet with that file
+  preselected, keeping the operation visible and making the selected source
+  explicit before launch.
+- `AgentOperationRunner` no longer signals the File Provider before an Ingest
+  run. Ingest stages source bytes and `WIKI_STATE.md` from SQLite and writes via
+  `wikictl`, so a daemon/provider registration failure must not delay or block
+  the agent start. Query and Lint still signal/use the mount.
+- Verified with `make check`, `swift test`, and a signed `make` build.
+
+## 2026-06-16 — Mount resolution no longer hangs the agent run UI
+
+Fixed a fresh-wiki failure where Ingest/Query/Lint could become nonresponsive in
+the Maintain Wiki sheet: `NSFileProviderManager.getUserVisibleURL` could hang
+forever while resolving a newly-created File Provider domain, leaving the UI stuck
+at "Resolving mount..." and the Run button disabled.
+
+**Changed**
+- Added bounded mount URL resolution in `FileProviderSpike`; if File Provider
+  does not return a root URL within 5 seconds, the app retries domain
+  registration/enumeration once and then surfaces a real status instead of
+  looking permanently busy.
+- Allowed Ingest to run without a resolved mount because the app already stages
+  the source bytes and `WIKI_STATE.md` directly from SQLite; Query/Lint still
+  require the mount because they may need raw-file reads.
+- Bounded File Provider enumerator signals so pre-run refresh cannot hang before
+  launch.
+- Added explicit `isResolvingPath` state so `OperationsView` can distinguish
+  active progress from a failed/unavailable mount and show the underlying status.
+- Reused the bounded resolver when opening ingested files so file opens also fail
+  visibly instead of waiting indefinitely on File Provider.
+
+**Skill pass.** Before and after code: `swiftui-pro` kept shared state in the
+existing `@MainActor @Observable` model, kept File Provider access main-actor
+isolated, and left the view as a small status presentation change.
+
+**Verified.** `make check` passes and `swift test` passes (**333/333**).
+
+## 2026-06-16 — Query can follow footnotes to raw files
+
+Updated Query orientation so an agent answering from the wiki can use the new
+source-location footnotes instead of stopping at the synthesized wiki page.
+
+**Changed**
+- Added a root-level `WIKI-STRUCTURE.md` projection that serves the same layout
+  map as the legacy `TREE.md` alias, and updated the renderer/schema/README to
+  name `WIKI-STRUCTURE.md` first.
+- Expanded the Query prompt to name `WIKI-STRUCTURE.md`, pull fresh page content
+  with `wikictl page get`, inspect Markdown footnote definitions, resolve cited
+  source files through `files/by-name`, `files/by-id`, or `indexes/files.jsonl`,
+  and read raw sources from the mount with `Read` or shell tools such as
+  `pdftotext`.
+- Added regression assertions for the Query prompt's footnote-following workflow
+  and the new layout-map name.
+
+**Skill pass.** Before and after code: `swiftui-pro` kept this in pure prompt /
+projection code with focused tests; no SwiftUI layout or typography changes were
+needed.
+
+**Verified.** `make check` passes and `swift test` passes (**333/333**).
+
+## 2026-06-16 — Ingest prompts ask for source-location footnotes
+
+Updated the Opus Ingest prompts so wiki pages written during Ingest should
+footnote synthesized conclusions, interpretations, and non-obvious facts using
+Markdown footnotes. The requested provenance is intentionally lightweight: source
+file name plus page number, section, heading, line range, or chunk range; no real
+links required.
+
+**Changed**
+- Added a shared "FOOTNOTE CONCLUSIONS" prompt fragment used by both tiny
+  single-Opus Ingest and large Opus-curator Ingest.
+- Kept the instruction out of Query/Lint prompts and out of the Sonnet
+  `source-reader` digester prompt, because only Opus writes pages during Ingest.
+- Added regression assertions in `OperationCommandTests` for the ingest-only
+  footnote rule and digester exclusion.
+
+**Skill pass.** Before and after code: `swiftui-pro` kept the prompt logic pure,
+shared, and unit-tested; no SwiftUI layout or typography changes were needed.
+
+**Verified.** `make check` passes and `swift test` passes (**332/332**).
+
+## 2026-06-16 — Wiki footnotes render in the reader
+
+Verified the prior renderer could not render Markdown-style wiki footnotes:
+Foundation's `AttributedString(markdown:)` left `[^id]` references and
+`[^id]: ...` definitions as literal text.
+
+**Changed**
+- Added a pure `WikiFootnoteMarkdown` transform in `WikiFSCore` that extracts
+  `[^id]: ...` definitions, numbers referenced notes by first use, rewrites
+  in-body references to local note links, and leaves unknown references literal.
+- Updated `MarkdownPreview` to run the footnote pass before block rendering and
+  show extracted definitions as a secondary `.footnote` notes section below the
+  article body. Wiki source in SQLite / the File Provider projection remains
+  unchanged.
+- Added regression coverage for numbering, repeated references, continuation
+  lines, unknown references, and code-span/fence protection.
+
+**Skill pass.** Before code: `swiftui-pro` pointed toward keeping parsing out of
+SwiftUI and covering it with unit tests; `macos-design` and
+`typography-designer` kept the reader as the content focus with semantic system
+type. Post-code review kept the view small, used `.body` / `.footnote` rather
+than custom sizes, and handled generated note links locally.
+
+**Verified.** `make check` passes and `swift test` passes (**330/330**).
+
 ## 2026-06-16 — Prompt help made navigable
 
 Changed the Claude Prompt Templates Help window from one long scroll into a

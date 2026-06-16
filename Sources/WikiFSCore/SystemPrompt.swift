@@ -41,7 +41,7 @@ public struct SystemPrompt: Equatable, Sendable {
     ## Layout
 
     The wiki is projected read-only at `$WIKI_ROOT`. Browse it with
-    `find`/`cat`/`grep`/`Read`; orient with `$WIKI_ROOT/TREE.md` first.
+    `find`/`cat`/`grep`/`Read`; orient with `$WIKI_ROOT/WIKI-STRUCTURE.md` first.
 
     - `pages/by-title/`, `pages/by-id/` — the wiki pages you author (one file per
       page, addressed by title and by ULID).
@@ -49,7 +49,8 @@ public struct SystemPrompt: Equatable, Sendable {
       verbatim (the bytes the user dropped). Cite a source by its `files/…` path.
     - `index.md` — the curated catalog you maintain (rewritten wholesale on ingest).
     - `log.md` — the append-only chronological log of ingests/queries/lints.
-    - `TREE.md` — an orientation map of this layout plus live page/file counts.
+    - `WIKI-STRUCTURE.md` — an orientation map of this layout plus live page/file counts.
+    - `TREE.md` — legacy alias for `WIKI-STRUCTURE.md`.
     - `indexes/*.jsonl` — machine-readable indexes (`pages.jsonl`, `links.jsonl`,
       `files.jsonl`) for cheap programmatic navigation.
     - `manifest.json` — the generated wiki manifest.
@@ -113,7 +114,7 @@ public struct SystemPrompt: Equatable, Sendable {
 
     **Query** — answer a question from the wiki:
     1. Search (`wikictl page list`, then `wikictl page get`; `grep`/`cat` over
-       `index.md` and `log.md`).
+       `index.md`, `log.md`, and `WIKI-STRUCTURE.md`).
     2. Answer concisely, CITING the page titles or `files/…` paths you drew on. If
        the wiki lacks the information, say so plainly rather than guessing.
     3. Optionally file a useful answer back as a page via `wikictl page upsert`,

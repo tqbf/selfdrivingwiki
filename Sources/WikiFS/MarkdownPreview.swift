@@ -1,19 +1,24 @@
 import SwiftUI
+import Textual
 import WikiFSCore
 
-/// Live, read-only render of the page body. Uses Foundation's built-in
-/// `AttributedString(markdown:)` with inline-only interpretation — the accepted
-/// v0 choice (INITIAL.md §4 "avoid a full markdown engine"). The body is split
-/// on blank lines so paragraphs and headings read as distinct blocks rather
-/// than one collapsed run; each block is its own selectable `Text`.
+/// Live, read-only render of the page body. The preview keeps wiki-specific
+/// preprocessing here, then hands the resulting CommonMark document to Textual's
+/// block renderer so headings, lists, rules, code, and paragraphs are laid out as
+/// real Markdown rather than one collapsed inline text run.
 ///
-/// Wiki-links: CommonMark has no `[[…]]`, so before parsing each block we run it
+/// Footnotes: Foundation leaves `[^id]` references and `[^id]: …` definitions as
+/// literal text, so the preview first runs a pure `WikiFootnoteMarkdown` pass.
+/// References become local note links (`wiki-footnote://…`) and definitions are
+/// appended as an ordered notes section after the body. The stored wiki source
+/// stays unchanged.
+///
+/// Wiki-links: CommonMark has no `[[…]]`, so before rendering we run the document
 /// through `WikiLinkMarkdown.linkified` (in `WikiFSCore`), which rewrites every
 /// `[[Title]]` / `[[Target|alias]]` into a real Markdown link on the private
 /// `wiki://` scheme — EXCEPT inside code spans/fences, which stay literal. A
-/// link whose target resolves to a page renders as a normal accent link and
-/// navigates on click; an unresolved one renders dimmed and is inert. The
-/// on-disk body is never rewritten — this is preview-only.
+/// link whose target resolves to a page navigates on click; an unresolved one is
+/// inert. The on-disk body is never rewritten — this is preview-only.
 struct MarkdownPreview: View {
     @Bindable var store: WikiStoreModel
     let markdown: String
@@ -26,12 +31,9 @@ struct MarkdownPreview: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                        Text(rendered(block))
-                            .font(.body)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                    StructuredText(markdown: renderedMarkdown)
+                        .textual.textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
@@ -44,6 +46,9 @@ struct MarkdownPreview: View {
         // the system browser via .systemDefault.
         .environment(\.openURL, OpenURLAction { url in
             guard let title = WikiLinkMarkdown.target(from: url) else {
+                if WikiFootnoteMarkdown.isFootnoteURL(url) {
+                    return .handled
+                }
                 return .systemAction
             }
             if WikiLinkMarkdown.isResolvedURL(url) {
@@ -53,40 +58,19 @@ struct MarkdownPreview: View {
         })
     }
 
-    /// Split the source into paragraph-ish blocks on blank lines.
-    private var blocks: [String] {
-        markdown
-            .components(separatedBy: "\n\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+    private var renderedMarkdown: String {
+        let renderedFootnotes = WikiFootnoteMarkdown.rendered(markdown)
+        let body = linkified(renderedFootnotes.bodyMarkdown)
+        guard !renderedFootnotes.footnotes.isEmpty else { return body }
+
+        let footnotes = renderedFootnotes.footnotes
+            .map { "\($0.number). \(linkified($0.markdown))" }
+            .joined(separator: "\n")
+        return "\(body)\n\n---\n\n\(footnotes)"
     }
 
-    /// Render one block: rewrite its wiki-links, parse as inline Markdown, then
-    /// dim any unresolved (`wiki://missing`) link runs. Falls back to the raw
-    /// text if markdown parsing fails.
-    private func rendered(_ block: String) -> AttributedString {
-        let linkified = WikiLinkMarkdown.linkified(block) { store.pageExists(title: $0) }
-        let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace
-        )
-        guard var attributed = try? AttributedString(markdown: linkified, options: options) else {
-            return AttributedString(block)
-        }
-        dimUnresolvedLinks(in: &attributed)
-        return attributed
-    }
-
-    /// Recolor unresolved wiki-link runs so a dead link reads as "no page here":
-    /// secondary foreground, no accent. Resolved links keep the default accent
-    /// link styling. We can't gate the parse per-link, so we style after the fact
-    /// by inspecting each run's link URL.
-    private func dimUnresolvedLinks(in text: inout AttributedString) {
-        for run in text.runs where run.link != nil {
-            guard let url = run.link, url.scheme == WikiLinkMarkdown.scheme else { continue }
-            if !WikiLinkMarkdown.isResolvedURL(url) {
-                text[run.range].foregroundColor = .secondary
-            }
-        }
+    private func linkified(_ body: String) -> String {
+        WikiLinkMarkdown.linkified(body) { store.pageExists(title: $0) }
     }
 }
 

@@ -20,6 +20,7 @@ final class FileProviderSpike {
     var status = "Not registered"
     /// The user-visible mount path of the ACTIVE wiki (resolved at select time).
     var path: String?
+    var isResolvingPath = false
 
     /// The wiki whose mount `path` currently reflects, so `signalChange` and the
     /// path popover target the right domain.
@@ -130,11 +131,7 @@ final class FileProviderSpike {
         let domain = domain(id: id, displayName: id)
         guard let manager = NSFileProviderManager(for: domain) else { return }
         for container in [NSFileProviderItemIdentifier.rootContainer, .workingSet] {
-            await withCheckedContinuation { continuation in
-                manager.signalEnumerator(for: container) { _ in
-                    continuation.resume()
-                }
-            }
+            await signalEnumerator(manager: manager, container: container, timeout: .seconds(3))
         }
     }
 
@@ -170,17 +167,40 @@ final class FileProviderSpike {
     }
 
     func resolvePath(id: String, displayName: String) async {
+        path = nil
+        isResolvingPath = true
+        defer { isResolvingPath = false }
+
         let domain = domain(id: id, displayName: displayName)
         guard let manager = NSFileProviderManager(for: domain) else {
             status = "No manager for domain"
             return
         }
         do {
-            let url = try await manager.getUserVisibleURL(for: .rootContainer)
+            let url = try await userVisibleURL(
+                manager: manager,
+                itemIdentifier: .rootContainer,
+                timeout: .seconds(5))
             path = url.path
             status = "Mounted"
         } catch {
-            status = "getUserVisibleURL failed: \(error.localizedDescription)"
+            status = "Resolving mount timed out; retrying domain registration…"
+            if await registerDomain(id: id, displayName: displayName) {
+                await nudgeInitialEnumeration(forWikiID: id)
+                do {
+                    let url = try await userVisibleURL(
+                        manager: manager,
+                        itemIdentifier: .rootContainer,
+                        timeout: .seconds(5))
+                    path = url.path
+                    status = "Mounted"
+                    return
+                } catch {
+                    status = "Mount unavailable: \(error.localizedDescription)"
+                }
+            } else {
+                status = "Mount unavailable: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -197,7 +217,10 @@ final class FileProviderSpike {
         }
         let identifier = NSFileProviderItemIdentifier(WikiFSContainerID.fileByID(id.rawValue))
         do {
-            let url = try await manager.getUserVisibleURL(for: identifier)
+            let url = try await userVisibleURL(
+                manager: manager,
+                itemIdentifier: identifier,
+                timeout: .seconds(5))
             NSWorkspace.shared.open(url)
         } catch {
             status = "open file failed: \(error.localizedDescription)"
@@ -231,11 +254,99 @@ final class FileProviderSpike {
             .workingSet,
         ]
         for container in containers {
-            await withCheckedContinuation { continuation in
-                manager.signalEnumerator(for: container) { _ in
-                    continuation.resume()
+            await signalEnumerator(manager: manager, container: container, timeout: .seconds(3))
+        }
+    }
+
+    private func signalEnumerator(
+        manager: NSFileProviderManager,
+        container: NSFileProviderItemIdentifier,
+        timeout: Duration
+    ) async {
+        await withCheckedContinuation { continuation in
+            let resolution = SignalResolution(continuation: continuation)
+            manager.signalEnumerator(for: container) { _ in
+                Task { @MainActor in
+                    resolution.finish()
                 }
             }
+            Task {
+                try? await Task.sleep(for: timeout)
+                await MainActor.run {
+                    resolution.finish()
+                }
+            }
+        }
+    }
+
+    private func userVisibleURL(
+        manager: NSFileProviderManager,
+        itemIdentifier: NSFileProviderItemIdentifier,
+        timeout: Duration
+    ) async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            let resolution = MountURLResolution(continuation: continuation)
+            Task { @MainActor in
+                do {
+                    let url = try await manager.getUserVisibleURL(for: itemIdentifier)
+                    resolution.succeed(url)
+                } catch {
+                    resolution.fail(error)
+                }
+            }
+            Task {
+                try? await Task.sleep(for: timeout)
+                await MainActor.run {
+                    resolution.fail(MountResolutionError.timedOut)
+                }
+            }
+        }
+    }
+
+    private enum MountResolutionError: LocalizedError {
+        case timedOut
+
+        var errorDescription: String? {
+            switch self {
+            case .timedOut:
+                "File Provider did not return a mount URL in time"
+            }
+        }
+    }
+
+    @MainActor
+    private final class MountURLResolution {
+        private var continuation: CheckedContinuation<URL, Error>?
+
+        init(continuation: CheckedContinuation<URL, Error>) {
+            self.continuation = continuation
+        }
+
+        func succeed(_ url: URL) {
+            guard let continuation else { return }
+            self.continuation = nil
+            continuation.resume(returning: url)
+        }
+
+        func fail(_ error: Error) {
+            guard let continuation else { return }
+            self.continuation = nil
+            continuation.resume(throwing: error)
+        }
+    }
+
+    @MainActor
+    private final class SignalResolution {
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        init(continuation: CheckedContinuation<Void, Never>) {
+            self.continuation = continuation
+        }
+
+        func finish() {
+            guard let continuation else { return }
+            self.continuation = nil
+            continuation.resume()
         }
     }
 }

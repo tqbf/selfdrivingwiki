@@ -21,6 +21,20 @@ struct OperationsView: View {
     @State private var selectedSourceID: PageID?
     @State private var queryText = ""
 
+    init(
+        launcher: AgentLauncher,
+        store: WikiStoreModel,
+        manager: WikiManager,
+        fileProvider: FileProviderSpike,
+        initialSourceID: PageID? = nil
+    ) {
+        self.launcher = launcher
+        self.store = store
+        self.manager = manager
+        self.fileProvider = fileProvider
+        _selectedSourceID = State(initialValue: initialSourceID)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: OperationMetrics.sectionSpacing) {
             header
@@ -32,6 +46,10 @@ struct OperationsView: View {
         }
         .padding(OperationMetrics.padding)
         .frame(width: OperationMetrics.sheetWidth, height: OperationMetrics.sheetHeight)
+        .onAppear(perform: reconcileSelectedSource)
+        .onChange(of: store.ingestedFiles.map(\.id)) { _, _ in
+            reconcileSelectedSource()
+        }
     }
 
     // MARK: - Header
@@ -162,10 +180,22 @@ struct OperationsView: View {
                 .truncationMode(.middle)
                 .lineLimit(1)
                 .help("WIKI_ROOT — the live read-only File Provider mount")
-        } else {
+        } else if selectedKind == .ingest {
+            Label("Ingest can run without the mount", systemImage: "doc.badge.plus")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .help(fileProvider.status)
+        } else if fileProvider.isResolvingPath {
             Label("Resolving mount…", systemImage: "hourglass")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        } else {
+            Label(fileProvider.status, systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .lineLimit(1)
+                .help(fileProvider.status)
         }
     }
 
@@ -218,14 +248,18 @@ struct OperationsView: View {
         return descriptor.displayName
     }
 
-    /// Run is enabled only when the active wiki's mount is resolved and the
-    /// operation's required input is present.
+    /// Run is enabled when the operation's required input is present. Ingest can
+    /// run from staged SQLite bytes without a mount; Query/Lint still need one.
     private var canRun: Bool {
-        guard manager.activeWikiID != nil, fileProvider.path != nil else { return false }
+        guard manager.activeWikiID != nil else { return false }
         switch selectedKind {
-        case .ingest: return selectedSourceID != nil
-        case .query: return !queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .lint: return true
+        case .ingest:
+            return selectedSourceID != nil
+        case .query:
+            return fileProvider.path != nil
+                && !queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .lint:
+            return fileProvider.path != nil
         }
     }
 
@@ -257,6 +291,15 @@ struct OperationsView: View {
                     fileProvider: fileProvider)
             }
         }
+    }
+
+    private func reconcileSelectedSource() {
+        guard selectedKind == .ingest else { return }
+        if let selectedSourceID,
+           store.ingestedFiles.contains(where: { $0.id == selectedSourceID }) {
+            return
+        }
+        selectedSourceID = store.ingestedFiles.first?.id
     }
 }
 

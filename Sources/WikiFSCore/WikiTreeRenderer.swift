@@ -1,13 +1,13 @@
 import Foundation
 
-/// Pure, deterministic rendering of the wiki's `TREE.md` orientation map (Phase C).
+/// Pure, deterministic rendering of the wiki's layout orientation map (Phase C).
 ///
-/// `TREE.md` is a read-only root-level document — projected like `index.md` /
-/// `log.md` — that hands a managing agent (or a human browsing the mount) a
-/// concrete map of the wiki's layout the moment it lands, so it doesn't waste
-/// turns probing for structure (`ls`, `env`, `mount`, `wikictl --help`). The live
-/// Phase-C gate showed the agent burning ~6 turns doing exactly that; this map,
-/// plus the in-prompt layout, removes the need.
+/// `WIKI-STRUCTURE.md` and its legacy alias `TREE.md` are read-only root-level
+/// documents — projected like `index.md` / `log.md` — that hand a managing agent
+/// (or a human browsing the mount) a concrete map of the wiki's layout the moment
+/// it lands, so it doesn't waste turns probing for structure (`ls`, `env`, `mount`,
+/// `wikictl --help`). The live Phase-C gate showed the agent burning ~6 turns
+/// doing exactly that; this map, plus the in-prompt layout, removes the need.
 ///
 /// The layout is FIXED (the projection's tree never changes shape per wiki), so
 /// the body is **static per wiki** EXCEPT two cheap live counts (pages, files)
@@ -22,7 +22,7 @@ public enum WikiTreeRenderer {
     /// ingested files. Deterministic: same counts → identical bytes.
     public static func render(pageCount: Int, fileCount: Int) -> String {
         """
-        # Wiki Layout (TREE.md)
+        # Wiki Layout (WIKI-STRUCTURE.md)
 
         A read-only map of this Self Driving Wiki wiki. Everything under the mount is served
         read-only — WRITE only through the `wikictl` command (see the cheatsheet
@@ -36,7 +36,8 @@ public enum WikiTreeRenderer {
 
         - `index.md`          — the curated catalog; rewrite wholesale via `wikictl index set`.
         - `log.md`            — append-only chronological log (grep-able `## [date] kind | title`).
-        - `TREE.md`           — this orientation map.
+        - `WIKI-STRUCTURE.md` — this orientation map.
+        - `TREE.md`           — legacy alias for `WIKI-STRUCTURE.md`.
         - `CLAUDE.md` / `AGENTS.md` — the agent system prompt (identical bytes).
         - `manifest.json`     — generated wiki manifest (page/file counts, generated_at).
         - `pages/by-title/`   — one file per wiki page, named by title.

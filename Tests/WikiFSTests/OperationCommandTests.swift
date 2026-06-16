@@ -146,6 +146,7 @@ struct OperationCommandTests {
     #expect(!prompt.contains("page upsert"))
     #expect(!prompt.contains("index set"))
     #expect(!prompt.contains("log append"))
+    #expect(!prompt.contains("FOOTNOTE CONCLUSIONS"))
   }
 
   // MARK: - Env / PATH / cwd (unchanged surface)
@@ -267,6 +268,29 @@ struct OperationCommandTests {
     }
   }
 
+  @Test func ingestPromptsTellOpusToFootnoteConclusionsWithSourceLocations() {
+    for operation in [Self.tinyIngest(), Self.curatedIngest()] {
+      let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)
+      #expect(prompt.contains("FOOTNOTE CONCLUSIONS"))
+      #expect(prompt.contains("synthesized conclusions"))
+      #expect(prompt.contains("`[^id]`"))
+      #expect(prompt.contains("`[^id]: Source filename, page N`"))
+      #expect(prompt.contains("We do NOT need real links"))
+      #expect(prompt.contains("section, heading, line range, or chunk range"))
+    }
+  }
+
+  @Test func queryAndLintPromptsDoNotCarryIngestFootnoteRule() {
+    for operation: WikiOperation in [
+      .query(question: "q", stateFilePath: Self.stateFile),
+      .lint(stateFilePath: Self.stateFile),
+    ] {
+      let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)
+      #expect(!prompt.contains("FOOTNOTE CONCLUSIONS"))
+      #expect(!prompt.contains("`[^id]: Source filename, page N`"))
+    }
+  }
+
   @Test func queryAndLintPromptsNameStateAndForbidRediscovery() {
     for operation: WikiOperation in [
       .query(question: "q", stateFilePath: Self.stateFile),
@@ -278,6 +302,24 @@ struct OperationCommandTests {
       // No source for query/lint, so it must not claim a staged source.
       #expect(!prompt.contains("source is staged"))
     }
+  }
+
+  @Test func queryPromptNamesWikiStructureAndCanFollowFootnotesToRawFiles() {
+    let prompt = WikiOperation.query(
+      question: "q",
+      stateFilePath: Self.stateFile
+    ).prompt(wikiRoot: Self.resolvedRoot)
+
+    #expect(prompt.contains("WIKI-STRUCTURE.md"))
+    #expect(prompt.contains("wikictl page get --title T"))
+    #expect(prompt.contains("Markdown footnotes"))
+    #expect(prompt.contains("FOLLOW THEM"))
+    #expect(prompt.contains("$WIKI_ROOT/files/by-name/"))
+    #expect(prompt.contains("$WIKI_ROOT/files/by-id/"))
+    #expect(prompt.contains("$WIKI_ROOT/indexes/files.jsonl"))
+    #expect(prompt.contains("Read` tool") || prompt.contains("Read tool"))
+    #expect(prompt.contains("pdftotext"))
+    #expect(prompt.contains("files/..."))
   }
 
   // MARK: - Prompts: the curator digester-fan-out guardrail (large ingest only)
@@ -314,11 +356,10 @@ struct OperationCommandTests {
 
   // MARK: - Prompts: DRY against the schema (no layout duplication)
 
-  @Test func promptsDoNotDuplicateTheSchemaLayoutMap() {
+  @Test func ingestAndLintPromptsDoNotDuplicateTheSchemaLayoutMap() {
     for operation: WikiOperation in [
       Self.tinyIngest(),
       Self.curatedIngest(),
-      .query(question: "q", stateFilePath: Self.stateFile),
       .lint(stateFilePath: Self.stateFile),
     ] {
       let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)

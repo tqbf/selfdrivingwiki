@@ -16,7 +16,12 @@
 CONFIG       := debug
 APP_NAME      := Self Driving Wiki
 APP          := build/$(APP_NAME).app
+INSTALLED_APP := /Applications/$(APP_NAME).app
+LEGACY_APP    := /Applications/WikiFS.app
+EXT_NAME      := WikiFSFileProvider
+EXT_BUNDLE_ID := org.sockpuppet.WikiFS.FileProvider
 LSREGISTER   := /System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister
+PLUGINKIT    := pluginkit
 MIN_MACOS    := 14
 MIN_SWIFT    := 6.0
 
@@ -53,7 +58,7 @@ NOTARY_PROFILE ?= wikifs-notary
 PROVISION_PROFILE ?=
 NOTES_FILE       ?=
 
-.PHONY: all deps build check test release run clean install uninstall register help \
+.PHONY: all deps build check test release run clean install uninstall register help prune-provider-registrations \
         check-version notary-setup sign zip-notary notarize staple zip-release \
         checksum verify-release dist github-release print-version icon
 
@@ -66,14 +71,14 @@ help:
 	@echo "  check             Compile only (swift build) — no bundle/sign; CI/agent gate"
 	@echo "  test              Run the SwiftPM test suite"
 	@echo "  release           Build release into ./$(APP)"
-	@echo "  run               Build and launch $(APP_NAME)"
+	@echo "  run               Install to /Applications and launch $(APP_NAME)"
 	@echo "  clean             Remove ./build/ ./.build/ ./dist/"
 	@echo "  deps              Verify build prerequisites (auto-run before build)"
 	@echo ""
 	@echo "Local install:"
-	@echo "  install           Copy $(APP_NAME).app to /Applications/ and register it"
+	@echo "  install           Copy $(APP_NAME).app to /Applications/ and register app + File Provider"
 	@echo "  uninstall         Remove /Applications/$(APP_NAME).app"
-	@echo "  register          Refresh LaunchServices for ./$(APP)"
+	@echo "  register          Same as install; File Provider must run from /Applications"
 	@echo ""
 	@echo "Release pipeline (require an exact 'vX.Y.Z' git tag):"
 	@echo "  notary-setup      One-time: store notary creds in keychain ($(NOTARY_PROFILE))"
@@ -157,28 +162,54 @@ print-version:
 # Run / install / register
 # ---------------------------------------------------------------------------
 
-run: build
-	open "$(APP)"
+run: install
+	open "$(INSTALLED_APP)"
 
-install: build
+install: build prune-provider-registrations
 	@if [ ! -d "$(APP)" ]; then echo "✗ $(APP) missing — build failed?"; exit 1; fi
-	rm -rf "/Applications/$(APP_NAME).app"
+	rm -rf "$(INSTALLED_APP)"
 	cp -R "$(APP)" /Applications/
-	@echo "✓ copied to /Applications/$(APP_NAME).app"
-	$(LSREGISTER) -f "/Applications/$(APP_NAME).app"
-	@echo "✓ registered /Applications/$(APP_NAME).app with LaunchServices"
+	@echo "✓ copied to $(INSTALLED_APP)"
+	$(LSREGISTER) -f "$(INSTALLED_APP)"
+	$(PLUGINKIT) -a "$(INSTALLED_APP)/Contents/PlugIns/$(EXT_NAME).appex"
+	$(PLUGINKIT) -e use -i "$(EXT_BUNDLE_ID)" -p com.apple.fileprovider-nonui >/dev/null 2>&1 || true
+	@for attempt in 1 2 3; do \
+	  if $(PLUGINKIT) -m -p com.apple.fileprovider-nonui -i "$(EXT_BUNDLE_ID)" -A -D -vvv 2>/dev/null \
+	    | grep -Fq "Path = $(INSTALLED_APP)/Contents/PlugIns/$(EXT_NAME).appex"; then \
+	    exit 0; \
+	  fi; \
+	  sleep 1; \
+	done; \
+	echo "✗ $(EXT_BUNDLE_ID) did not register at $(INSTALLED_APP)" >&2; \
+	$(PLUGINKIT) -m -p com.apple.fileprovider-nonui -i "$(EXT_BUNDLE_ID)" -A -D -vvv 2>&1 || true; \
+	exit 1
+	@echo "✓ registered $(INSTALLED_APP) and $(EXT_BUNDLE_ID)"
+
+prune-provider-registrations:
+	@for appex in \
+	  "$(INSTALLED_APP)/Contents/PlugIns/$(EXT_NAME).appex" \
+	  "$(APP)/Contents/PlugIns/$(EXT_NAME).appex" \
+	  "$(LEGACY_APP)/Contents/PlugIns/$(EXT_NAME).appex" \
+	  "build/WikiFS.app/Contents/PlugIns/$(EXT_NAME).appex" \
+	  "/private/tmp/Wtest.app/Contents/PlugIns/$(EXT_NAME).appex"; do \
+	  if [ -d "$$appex" ]; then $(PLUGINKIT) -r "$$appex" >/dev/null 2>&1 || true; fi; \
+	done
+	@for app in "$(APP)" "$(LEGACY_APP)" "build/WikiFS.app" "/private/tmp/Wtest.app"; do \
+	  if [ -d "$$app" ]; then $(LSREGISTER) -u "$$app" >/dev/null 2>&1 || true; fi; \
+	done
 
 uninstall:
-	@if [ -d "/Applications/$(APP_NAME).app" ]; then \
-	  rm -rf "/Applications/$(APP_NAME).app" 2>/dev/null || sudo rm -rf "/Applications/$(APP_NAME).app"; \
-	  echo "✓ removed /Applications/$(APP_NAME).app"; \
+	@if [ -d "$(INSTALLED_APP)/Contents/PlugIns/$(EXT_NAME).appex" ]; then \
+	  $(PLUGINKIT) -r "$(INSTALLED_APP)/Contents/PlugIns/$(EXT_NAME).appex" >/dev/null 2>&1 || true; \
+	fi
+	@if [ -d "$(INSTALLED_APP)" ]; then \
+	  rm -rf "$(INSTALLED_APP)" 2>/dev/null || sudo rm -rf "$(INSTALLED_APP)"; \
+	  echo "✓ removed $(INSTALLED_APP)"; \
 	else \
-	  echo "  (no /Applications/$(APP_NAME).app to remove)"; \
+	  echo "  (no $(INSTALLED_APP) to remove)"; \
 	fi
 
-register: build
-	$(LSREGISTER) -f "$(APP)"
-	@echo "✓ registered $(APP) with LaunchServices"
+register: install
 
 # ---------------------------------------------------------------------------
 # Clean
