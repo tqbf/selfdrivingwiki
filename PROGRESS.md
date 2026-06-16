@@ -2,9 +2,9 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-06-16 — Ingest division of labor: Opus curates/writes, Sonnet only digests
+## 2026-06-16 — Ingest division of labor: Opus curates/writes, Sonnet only digests — DONE ✅ (user-verified, merged to main)
 
-Branch `feature/ingest-fewer-turns`. CORRECTION to the model-tiering build below.
+CORRECTION to the model-tiering build below.
 The prior build (commit `caebfd7`) tiered by model but with the WRONG division of
 labor (tiny → Sonnet single pass; large → Opus *planner* that delegated **page
 writing** to Sonnet `ingest-worker`s). The user's guiding principle: **Opus is
@@ -139,9 +139,9 @@ clean signed bundle. The original failing URL
 (`www.dropbox.com/scl/fi/…/CPP_behaviorgen.pdf?…&dl=0`) now normalizes to
 `dl.dropboxusercontent.com`, fetches `%PDF` bytes, and stores `CPP_behaviorgen.pdf`.
 
-## 2026-06-16 — Feature: ingest a resource by URL — code-complete (live gate pending)
+## 2026-06-16 — Feature: ingest a resource by URL — DONE ✅ (live-verified, merged to main)
 
-Branch `feature/url-ingest` (off `main`). Fetch a URL and land it as an ingested
+Fetch a URL and land it as an ingested
 file in the ACTIVE wiki — exactly like a drag-dropped file, so the existing
 "Ingest into wiki" `claude -p` operation can summarize it. HTML is converted to
 clean Markdown; PDFs/text/binaries are stored verbatim. All deterministic logic is

@@ -29,6 +29,8 @@ with a plain-folder export, even though that would dodge the signing requirement
 
 | Doc | What it covers |
 | --- | --- |
+| [`README.md`](README.md) | **Start here (new developers).** What WikiFS is, the non-negotiable read-only-mount / write-via-`wikictl` invariant, quick start (`make` targets + the runtime gotchas), repo layout, and a tour of how it works. |
+| [`plans/architecture.md`](plans/architecture.md) | **The system map.** Components/targets, the per-wiki SQLite data model + migration ladder + `changeToken()`, the File Provider projection, the read/write split + change bridge, the `claude -p` operations (Ingest tiering, Query, Lint), URL ingest, and the key invariants/gotchas. Read after the README to go deep. |
 | [`plans/INITIAL.md`](plans/INITIAL.md) | Original full product/architecture plan (milestones, schema, File Provider design, definition of done). Source of truth for *what we're building*. |
 | [`plans/llm-wiki.md`](plans/llm-wiki.md) | **Next major effort:** turning WikiFS into a self-maintaining LLM Wiki — **many** wikis (one SQLite DB + one File Provider domain each), with `claude -p` authoring/maintaining each one by writing via a new `wikictl` CLI (read via the mount, write via the CLI). Locked decisions, components, and the Phase 0 → A–D plan. Read before Phase 0. |
 | [`plans/BRINGUP.md`](plans/BRINGUP.md) | The 4-phase bring-up plan from skeleton to v0 (groups INITIAL.md's M0–M6). Source of truth for *the order we build in*. |
@@ -50,11 +52,22 @@ new **`wikictl`** CLI — keeping curated `index.md` + chronological `log.md`
 current, cross-linking pages with clickable `[[wiki-links]]`, all under a real
 maintainer schema projected as `CLAUDE.md`/`AGENTS.md`. Agent runs stream live
 (tool calls + text, `--output-format stream-json`) with per-run backend
-`run.jsonl` logs and an editor edit-lock. **221 tests; clean signed bundle (app +
-appex + `wikictl`).** Delivered across five stacked, **unmerged** branches off the
-post-v0 line (`llmwiki/phase-0-many-wikis` → `phase-a-write-path` →
-`phase-b-index-log` → `phase-c-claude-ops` → `phase-d-schema`); `main` untouched —
-review/merge locally.
+`run.jsonl` logs and an editor edit-lock. **All five phases plus the post-completion
+features below are merged to `main` (single-branch repo, ready for developer
+handoff). 320 tests green; clean signed bundle (app + appex + `wikictl`).**
+
+**Post-completion features (also on `main`):**
+- **Ingest model-tiering** — Ingest is now **Opus-curated**: Opus decides what goes
+  in the wiki and writes every page; for a large source it fans out **2–19 Sonnet
+  `source-reader` subagents** (via `claude -p --agents`) that only *digest* the
+  bulk content and return extracts (they never write), and Opus may fork follow-up
+  readers / pull pages to double-check. Tiny sources are a single Opus pass. The
+  per-run scratch dir stages the source + a live `WIKI_STATE.md` snapshot from
+  SQLite so the agent never re-derives structure from the laggy mount.
+- **Ingest a resource by URL** — an "Add from URL…" sheet fetches a URL, normalizes
+  known file-share links (Dropbox `www`→`dl`; Drive/OneDrive stubbed), content-sniffs
+  the bytes, converts HTML→Markdown (hand-rolled, dependency-free) or stores
+  PDFs/binaries verbatim — landing through the same ingest path as drag-drop.
 
 **Phase summary (newest first; see `PROGRESS.md` for each gate's evidence):**
 - **Phase D — the schema** ✅ real maintainer `CLAUDE.md` schema (layout,
