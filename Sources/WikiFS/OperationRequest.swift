@@ -25,9 +25,9 @@ enum OperationRequest {
 
   /// Stage this request's inputs into `scratch` and return the finalized
   /// `WikiOperation`. Writes `WIKI_STATE.md` (always) and, for Ingest, the raw
-  /// `source.<ext>`; the Ingest plan (single Sonnet pass vs Opus planner + Sonnet
-  /// workers) is decided from the staged source's byte size. Throws if a write
-  /// fails.
+  /// `source.<ext>`; the Ingest plan (single Opus pass vs Opus curator + Sonnet
+  /// `source-reader` digesters) is decided from the staged source's byte size. Throws
+  /// if a write fails.
   func stage(into scratch: URL) throws -> WikiOperation {
     switch self {
     case .ingest(let sourceBytes, let ext, let sourcePath, let stateMarkdown):

@@ -6,10 +6,11 @@ import Foundation
 ///
 /// Two staged files, both read from SQLite at click time:
 /// - `WIKI_STATE.md` — the live wiki-state snapshot (titles + index.md + log tail),
-///   so the planner and every worker read the cross-link vocabulary locally and the
-///   agent skips orientation turns (problem #2).
-/// - `source.<ext>` — the raw bytes of the ingest source (Ingest only), so the
-///   planner and all Sonnet workers read the source from local disk, not the mount.
+///   so the Opus curator reads the cross-link vocabulary locally and skips
+///   orientation turns (problem #2).
+/// - `source.<ext>` — the raw bytes of the ingest source (Ingest only), so the Opus
+///   curator and its Sonnet `source-reader` digesters read the source from local
+///   disk, not the mount.
 ///
 /// The path math (leaf filenames, the `source.<ext>` extension handling) is PURE
 /// and unit-tested via `stateFileName` / `sourceFileName`; only the actual writes

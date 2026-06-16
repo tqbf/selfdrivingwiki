@@ -28,11 +28,11 @@ public enum AgentEvent: Equatable, Sendable {
     case toolResult(isError: Bool, summary: String)
 
     /// A subagent delegation lifecycle event (`{"type":"system",
-    /// "subtype":"task_started" | "task_completed"}`), emitted when the Opus planner
-    /// fans out to a Sonnet `ingest-worker` via the Task/Agent tool. Surfacing these
-    /// makes the Opus→Sonnet fan-out visible in the panel as distinct rows rather
-    /// than an opaque `Agent` tool call. `subagentType` is the worker name
-    /// (`ingest-worker`); `description` is the planner's one-line task label;
+    /// "subtype":"task_started" | "task_completed"}`), emitted when the Opus curator
+    /// fans out to a Sonnet `source-reader` digester via the Task/Agent tool.
+    /// Surfacing these makes the Opus→Sonnet fan-out visible in the panel as distinct
+    /// rows rather than an opaque `Agent` tool call. `subagentType` is the worker name
+    /// (`source-reader`); `description` is the curator's one-line task label;
     /// `isCompletion` distinguishes the start row from the finish row.
     case subagent(subagentType: String, description: String, isCompletion: Bool)
 
@@ -76,7 +76,7 @@ public enum AgentEventParser {
         case "system" where envelope.subtype == "init":
             return .systemInit(model: envelope.model ?? "claude")
 
-        // Subagent fan-out: the planner delegating to a Sonnet worker emits a
+        // Subagent fan-out: the curator delegating to a Sonnet digester emits a
         // `task_started` (the delegation begins) and a terminal `task_notification`
         // (the worker finished). Surface both so the Opus→Sonnet fan-out is visible.
         // `task_updated` is an intermediate status patch we skip (the notification
@@ -288,7 +288,7 @@ public enum ToolInputSummary {
             summary = input["pattern"]?.scalarString ?? fallback(input)
         // The delegation tool (the CLI names it `Agent`; `Task` is the historical
         // alias). Render `<subagent_type>: <description>` so a fan-out row reads like
-        // `Agent  ingest-worker: Write the Calvin Cycle page` instead of a JSON blob.
+        // `Agent  source-reader: Digest pages 1-20` instead of a JSON blob.
         case "Agent", "Task":
             let worker = input["subagent_type"]?.scalarString
             let detail = input["description"]?.scalarString ?? input["prompt"]?.scalarString

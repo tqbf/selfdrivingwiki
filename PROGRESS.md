@@ -2,9 +2,60 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-06-16 — Ingest redesign: write-rule in the prompt, local staging, model tiering
+## 2026-06-16 — Ingest division of labor: Opus curates/writes, Sonnet only digests
+
+Branch `feature/ingest-fewer-turns`. CORRECTION to the model-tiering build below.
+The prior build (commit `caebfd7`) tiered by model but with the WRONG division of
+labor (tiny → Sonnet single pass; large → Opus *planner* that delegated **page
+writing** to Sonnet `ingest-worker`s). The user's guiding principle: **Opus is
+ALWAYS the curator — it decides what goes in the wiki and WRITES everything. Sonnet
+exists ONLY to chew through large volumes of source content; Sonnet NEVER writes.**
+
+**Corrected architecture.**
+- **Tiny source** (`< 4 KB`, `IngestPlan.singleOpus`) → a single `--model opus` pass,
+  no `--agents`. Opus reads the small staged source and writes the pages + index +
+  log itself. (Opus must decide what belongs even for small sources.)
+- **Large source** (`IngestPlan.opusCurator`) → `--model opus` curator + `--agents`
+  `'{"source-reader":{"model":"sonnet","tools":["Bash","Read"],…}}'`. Opus INSPECTS
+  the source's size/structure (`wc`/`head`/page count) WITHOUT reading the whole bulk,
+  splits it into chunks, and forks **2–19** Sonnet `source-reader` DIGESTERS to READ
+  the chunks in parallel and return STRUCTURED DIGESTS. Opus then synthesizes the
+  digests, decides the page set, and WRITES every page + `index.md` + the log entry
+  itself. Opus MAY fork more workers for follow-up QUESTIONS and MAY pull pages via
+  `wikictl page get` to double-check — the `<20` cap is on TOTAL Sonnet invocations.
+- The Sonnet worker has **read-only tools** (`["Read","Bash"]`, no wikictl), and its
+  prompt (`IngestPlan.digesterPrompt`) carries NO write rule — it only reads + returns
+  a digest. The write rule (`IngestWriteRule.writes`) now leads ONLY the Opus prompts
+  (single + curator), since Opus is the writer (`OperationCommandTests` asserts both
+  ways). Top-level `--model` is `opus` in BOTH Ingest modes; the tiering is purely in
+  the fan-out. Query/Lint unchanged (single-Opus + write rule + WIKI_STATE +
+  don't-rediscover).
+
+**Verified (CLI 2.1.178, real `--agents` smoke test):** top level ran on
+`claude-opus-4-8`; the `source-reader` subagent resolved to `claude-sonnet-4-6`
+(`"resolvedModel":"claude-sonnet-4-6"`), READ the staged source via its `Read` tool,
+and returned its digest to the Opus parent, which replied `DIGEST_RECEIVED: …`. No
+wikictl anywhere in the worker. Delegation still surfaces as an `Agent` `tool_use` +
+`system`/`task_started`/`task_notification` events; the `AgentEvent` parser maps those
+to `.subagent` and the activity panel renders the fan-out as purple "reading" / green
+"digested" rows (relabeled from "delegated"/"finished" + `doc.text.magnifyingglass`
+icon, since the workers now READ, not write).
+
+**Tests / build.** Reworked the two-mode argv + plan tests: tiny → `--model opus` no
+`--agents`; large → `--model opus` + a read-only `source-reader` digester whose prompt
+DIGESTS (not writes); the curator prompt carries the 2–19 guardrail + "fork more for
+questions / pull pages to double-check" + "Opus writes every page"; the worker prompt
+has no wiki-write instructions. `make test` → **320/320** green; `make` clean signed
+bundle. Live gate (orchestrator `make install` + watch a large Ingest) pending: proof
+is no mount-probing, Opus does the writing, a visible fan-out of 2–19 Sonnet *reader*
+workers, and Opus optionally asking follow-ups / pulling pages.
+
+### Superseded — 2026-06-16 — Ingest redesign: write-rule in the prompt, local staging, model tiering
 
 Branch `feature/ingest-fewer-turns`. Fixes three problems a live Ingest run exposed.
+(The model-tiering division of labor in item #3 below was corrected by the entry
+above; items #1 and #2 — the write rule in the `-p` prompt, and local staging — still
+stand.)
 
 **1. Agent probed the read-only mount instead of writing.** Phase D moved the
 `wikictl` write rule entirely into `--append-system-prompt`, which the agent

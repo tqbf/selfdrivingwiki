@@ -262,8 +262,8 @@ struct OperationsView: View {
 
     /// Build the `OperationRequest` from the current selection + input. For Ingest,
     /// reads the source bytes from SQLite (not the mount) so the launcher can stage
-    /// them; the model tier (single Sonnet pass vs Opus planner) is decided from the
-    /// staged source size at stage time.
+    /// them; the Ingest mode (single Opus pass vs Opus curator + Sonnet digesters) is
+    /// decided from the staged source size at stage time.
     private func makeRequest(stateMarkdown: String) -> OperationRequest? {
         switch selectedKind {
         case .ingest:

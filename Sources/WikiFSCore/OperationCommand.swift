@@ -69,11 +69,13 @@ public struct OperationCommand: Equatable, Sendable {
             // `$WIKI_ROOT`-expanded command rejected.
             "-p", operation.prompt(wikiRoot: wikiRoot),
             // Model tiering (problem #3, verified against CLI 2.1.178): `--model`
-            // sets the TOP-LEVEL model. Ingest tiers it (`sonnet` for the single
-            // pass, `opus` for the planner); Query/Lint stay on `opus`. A planned
-            // Ingest also passes `--agents` (below) defining a Sonnet `ingest-worker`
-            // — the workers inherit the process env (WIKI_DB, PATH) but NOT
-            // `--append-system-prompt`, so the worker prompt is self-sufficient.
+            // sets the TOP-LEVEL model, which is ALWAYS `opus` — Opus is the
+            // curator/writer for both Ingest modes and for Query/Lint. The tiering is
+            // in the FAN-OUT: a large-source Ingest also passes `--agents` (below)
+            // defining a Sonnet `source-reader` DIGESTER that reads source volume and
+            // returns digests (it never writes). Workers inherit the process env
+            // (WIKI_DB, PATH) but NOT `--append-system-prompt`, so the worker prompt
+            // is self-sufficient (and carries no write rule, since it only reads).
             "--model", operation.topLevelModelAlias,
             // Stream the run as NDJSON so the UI can render activity in real time
             // instead of staring at a silent panel until the final result. The
@@ -101,10 +103,11 @@ public struct OperationCommand: Equatable, Sendable {
             "--dangerously-skip-permissions",
         ]
 
-        // A planned Ingest fans out to a Sonnet `ingest-worker` subagent defined
-        // inline. The JSON shape (`description`/`prompt`/`model`/`tools`) and that
-        // the worker actually runs on `claude-sonnet-4-6` were verified by a real
-        // `--agents` smoke test against CLI 2.1.178.
+        // A large-source Ingest fans out to a Sonnet `source-reader` DIGESTER defined
+        // inline. The JSON shape (`description`/`prompt`/`model`/`tools`) and that the
+        // worker actually runs on `claude-sonnet-4-6`, reads the staged source via
+        // its read-only `["Read","Bash"]` tools, and returns its digest to the Opus
+        // parent were verified by a real `--agents` smoke test against CLI 2.1.178.
         if let agentsJSON = operation.agentsJSON {
             arguments.append(contentsOf: ["--agents", agentsJSON])
         }

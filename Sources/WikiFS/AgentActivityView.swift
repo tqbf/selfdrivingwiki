@@ -181,12 +181,14 @@ private struct AgentEventRow: View {
         }
     }
 
-    /// A subagent fan-out row: the Opus planner delegating to (or hearing back from)
-    /// a Sonnet `ingest-worker`. Indented + tinted so the fan-out reads as a distinct
-    /// nested activity, making the Opus→Sonnet hand-off visible in the panel.
+    /// A subagent fan-out row: the Opus curator delegating to (or hearing back from)
+    /// a Sonnet `source-reader` digester. Indented + tinted so the fan-out reads as a
+    /// distinct nested activity, making the Opus→Sonnet hand-off visible in the panel.
+    /// The Sonnet workers READ source volume and return digests; the rows are labelled
+    /// "reading" / "digested" to reflect that they do not write the wiki.
     private func subagentRow(subagentType: String, description: String, isCompletion: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: isCompletion ? "checkmark.circle" : "person.2.fill")
+            Image(systemName: isCompletion ? "checkmark.circle" : "doc.text.magnifyingglass")
                 .font(.caption)
                 .foregroundStyle(isCompletion ? Color.green : Color.purple)
                 .frame(width: 16)
@@ -194,7 +196,7 @@ private struct AgentEventRow: View {
                 .font(.system(.caption, design: .monospaced))
                 .fontWeight(.semibold)
                 .foregroundStyle(.purple)
-            Text(isCompletion ? "finished" : "delegated")
+            Text(isCompletion ? "digested" : "reading")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             if !description.isEmpty {

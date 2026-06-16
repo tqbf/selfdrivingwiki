@@ -14,15 +14,16 @@ import Foundation
 /// broader layout/conventions stay in the schema (DRY — see the assertions in
 /// `OperationCommandTests`).
 ///
-/// PURE: two constant blocks, composed into each operation prompt. A worker
-/// subagent's `prompt` does NOT inherit `--append-system-prompt`, so the worker
-/// prompt must carry the SAME write rule — these blocks are the single source for
-/// both, so they can't drift.
+/// PURE: two constant blocks, composed into each operation prompt. The write rule
+/// belongs with WHOEVER WRITES — which is always the top-level OPUS run (the single
+/// Ingest pass, the Ingest curator, Query, and Lint). The Sonnet `source-reader`
+/// digester never writes, so it carries NO write rule (see `IngestPlan.digesterPrompt`).
 public enum IngestWriteRule {
-  /// The unmissable imperative write-rule block. Leads every operation prompt (and
-  /// the ingest-worker subagent prompt). States the read-only-by-design rule, the
-  /// "never search for a mutation tool / never test the mount" guard, and the exact
-  /// `wikictl` write commands — the three problems #1 fixes.
+  /// The unmissable imperative write-rule block. Leads every Opus operation prompt
+  /// (the single Ingest pass, the Ingest curator, Query, Lint — the writers). States
+  /// the read-only-by-design rule, the "never search for a mutation tool / never test
+  /// the mount" guard, and the exact `wikictl` write commands — the three problems
+  /// #1 fixes. It is NOT in the Sonnet digester prompt, which only reads.
   public static let writes = """
     WRITES — READ THIS FIRST. The wiki mount is READ-ONLY BY DESIGN. NEVER write \
     files under it and NEVER search for a "mutation tool" or test whether the mount \

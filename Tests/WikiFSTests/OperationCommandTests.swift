@@ -4,11 +4,13 @@ import Testing
 
 /// Tests for Phase C / `feature/ingest-fewer-turns` deterministic seams: the
 /// `WikiOperation` prompts (the write rule + staged paths + don't-rediscover), the
-/// `OperationCommand` env/argv/cwd construction (the EXACT `claude -p` flag surface
-/// incl. `--model` tiering and the `--agents` Sonnet worker), the `IngestPlan`
-/// tiny-vs-non-tiny decision, and the `PathPreflight`. These are the seams the
-/// structural gate verifier relies on — kept pure/injectable so they test without a
-/// real `claude -p` run.
+/// `OperationCommand` env/argv/cwd construction (the EXACT `claude -p` flag surface —
+/// Opus top-level in both Ingest modes, plus the `--agents` Sonnet `source-reader`
+/// DIGESTER for the large-source mode), the `IngestPlan` tiny-vs-large decision, and
+/// the `PathPreflight`. The corrected division of labor: Opus is ALWAYS the
+/// curator/writer; Sonnet only digests source volume and never writes. These are the
+/// seams the structural gate verifier relies on — kept pure/injectable so they test
+/// without a real `claude -p` run.
 struct OperationCommandTests {
 
   // MARK: - Fixtures
@@ -17,26 +19,26 @@ struct OperationCommandTests {
   private static let stagedSource = "/tmp/scratch-xyz/source.pdf"
   private static let stateFile = "/tmp/scratch-xyz/WIKI_STATE.md"
 
-  /// A planned (non-tiny) ingest operation — Opus planner + Sonnet workers.
-  private static func plannedIngest() -> WikiOperation {
+  /// A large-source ingest operation — Opus curator + Sonnet source-reader digesters.
+  private static func curatedIngest() -> WikiOperation {
     .ingest(
       sourcePath: "files/by-id/01ABC.pdf",
       stagedSourcePath: stagedSource,
       stateFilePath: stateFile,
-      plan: .opusPlanner)
+      plan: .opusCurator)
   }
 
-  /// A tiny ingest operation — single Sonnet pass.
+  /// A tiny ingest operation — single Opus pass.
   private static func tinyIngest() -> WikiOperation {
     .ingest(
       sourcePath: "files/by-id/01ABC.txt",
       stagedSourcePath: "/tmp/scratch-xyz/source.txt",
       stateFilePath: stateFile,
-      plan: .singleSonnet)
+      plan: .singleOpus)
   }
 
   private func build(
-    operation: WikiOperation = OperationCommandTests.plannedIngest(),
+    operation: WikiOperation = OperationCommandTests.curatedIngest(),
     wikictlDir: String = "/Apps/WikiFS.app/Contents/Helpers",
     basePATH: String = "/usr/bin:/bin"
   ) -> OperationCommand {
@@ -65,7 +67,7 @@ struct OperationCommandTests {
     #expect(cmd.arguments[0] == "-p")
     #expect(cmd.arguments[1] == Self.tinyIngest().prompt(wikiRoot: Self.resolvedRoot))
     #expect(cmd.arguments[2] == "--model")
-    #expect(cmd.arguments[3] == "sonnet")  // tiny → single Sonnet pass
+    #expect(cmd.arguments[3] == "opus")  // tiny → single Opus pass (Opus is the writer)
     #expect(cmd.arguments[4] == "--output-format")
     #expect(cmd.arguments[5] == "stream-json")
     #expect(cmd.arguments[6] == "--verbose")
@@ -76,32 +78,35 @@ struct OperationCommandTests {
     #expect(!cmd.arguments.contains("--allowedTools"))
   }
 
-  // MARK: - Model tiering (problem #3)
+  // MARK: - Model tiering (problem #3) — Opus always writes; Sonnet only digests
 
-  @Test func tinyIngestRunsSingleSonnetPassWithNoAgents() {
+  @Test func tinyIngestRunsSingleOpusPassWithNoAgents() {
     let cmd = build(operation: Self.tinyIngest())
-    // Tiny source → top-level model is sonnet, and NO --agents (single agent).
+    // Tiny source → top-level model is OPUS (Opus is the curator/writer even for a
+    // small source), and NO --agents (single agent, no fan-out).
     let modelIndex = cmd.arguments.firstIndex(of: "--model")!
-    #expect(cmd.arguments[modelIndex + 1] == "sonnet")
+    #expect(cmd.arguments[modelIndex + 1] == "opus")
     #expect(!cmd.arguments.contains("--agents"))
   }
 
-  @Test func plannedIngestRunsOpusWithASonnetWorkerAgent() {
-    let cmd = build(operation: Self.plannedIngest())
-    // Non-tiny → top-level model is opus, plus --agents defining a sonnet worker.
+  @Test func largeIngestRunsOpusWithASonnetDigesterAgent() {
+    let cmd = build(operation: Self.curatedIngest())
+    // Large source → top-level model is opus (the curator/writer), plus --agents
+    // defining a sonnet `source-reader` DIGESTER (read-only).
     let modelIndex = cmd.arguments.firstIndex(of: "--model")!
     #expect(cmd.arguments[modelIndex + 1] == "opus")
     #expect(cmd.arguments.contains("--agents"))
     let agentsIndex = cmd.arguments.firstIndex(of: "--agents")!
     let json = cmd.arguments[agentsIndex + 1]
-    // The agents JSON defines the ingest-worker on the sonnet model.
-    #expect(json.contains("ingest-worker"))
+    // The agents JSON defines the source-reader on the sonnet model.
+    #expect(json.contains("source-reader"))
     #expect(json.contains("\"model\":\"sonnet\""))
     // It must be valid JSON with the verified shape (description/prompt/model/tools).
     let data = json.data(using: .utf8)!
     let parsed = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
-    let worker = parsed["ingest-worker"] as! [String: Any]
+    let worker = parsed["source-reader"] as! [String: Any]
     #expect(worker["model"] as? String == "sonnet")
+    // READ-ONLY tools — no wikictl / no write tools (the worker only digests).
     #expect((worker["tools"] as? [String]) == ["Bash", "Read"])
     #expect((worker["description"] as? String)?.isEmpty == false)
     #expect((worker["prompt"] as? String)?.isEmpty == false)
@@ -119,21 +124,28 @@ struct OperationCommandTests {
     }
   }
 
-  // MARK: - Worker prompt is self-sufficient (does NOT inherit --append-system-prompt)
+  // MARK: - Digester prompt digests, does NOT write (no write rule, no wikictl)
 
-  @Test func workerPromptCarriesTheWriteRuleAndWikictlCommands() {
-    // The custom agent's prompt does NOT inherit --append-system-prompt, so it must
-    // carry the read-only rule + the wikictl write commands on its own.
-    let json = IngestPlan.opusPlanner.agentsJSON()!
+  @Test func digesterPromptDigestsAndDoesNotWriteTheWiki() {
+    // The Sonnet `source-reader` worker ONLY reads source volume and returns a
+    // digest. Its prompt must NOT carry the write rule or any wikictl write commands —
+    // Opus is the only writer.
+    let json = IngestPlan.opusCurator.agentsJSON()!
     let data = json.data(using: .utf8)!
     let parsed = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
-    let worker = parsed["ingest-worker"] as! [String: Any]
+    let worker = parsed["source-reader"] as! [String: Any]
     let prompt = worker["prompt"] as! String
-    #expect(prompt.contains("READ-ONLY BY DESIGN"))
-    #expect(prompt.contains("wikictl page upsert"))
-    #expect(prompt.contains("$WIKI_DB"))
-    // The worker writes pages but must NOT touch index.md / the log (the planner does).
-    #expect(prompt.lowercased().contains("do not rewrite index.md"))
+    // It tells the worker to digest, not write.
+    #expect(prompt.contains("STRUCTURED DIGEST"))
+    #expect(prompt.lowercased().contains("you do not write to the wiki"))
+    #expect(prompt.contains("Return your digest as your final message"))
+    // It carries NO wiki-write instructions: no write rule, no wikictl write
+    // commands. (It may NAME wikictl to say it has none — "You have NO wikictl" —
+    // so we assert on the write COMMANDS, not the bare word.)
+    #expect(!prompt.contains("READ-ONLY BY DESIGN"))
+    #expect(!prompt.contains("page upsert"))
+    #expect(!prompt.contains("index set"))
+    #expect(!prompt.contains("log append"))
   }
 
   // MARK: - Env / PATH / cwd (unchanged surface)
@@ -170,7 +182,7 @@ struct OperationCommandTests {
   @Test func eachOperationKindBuildsAValidCommand() {
     for operation: WikiOperation in [
       Self.tinyIngest(),
-      Self.plannedIngest(),
+      Self.curatedIngest(),
       .query(question: "How does X compare to Y?", stateFilePath: Self.stateFile),
       .lint(stateFilePath: Self.stateFile),
     ] {
@@ -191,16 +203,16 @@ struct OperationCommandTests {
     }
   }
 
-  // MARK: - IngestPlan decision (the tiny-vs-non-tiny threshold)
+  // MARK: - IngestPlan decision (the tiny-vs-large threshold)
 
-  @Test func tinySourceUnderThresholdPicksSingleSonnet() {
-    #expect(IngestPlan.decide(sourceByteSize: 0) == .singleSonnet)
-    #expect(IngestPlan.decide(sourceByteSize: IngestPlan.tinySourceByteThreshold - 1) == .singleSonnet)
+  @Test func tinySourceUnderThresholdPicksSingleOpus() {
+    #expect(IngestPlan.decide(sourceByteSize: 0) == .singleOpus)
+    #expect(IngestPlan.decide(sourceByteSize: IngestPlan.tinySourceByteThreshold - 1) == .singleOpus)
   }
 
-  @Test func sourceAtOrAboveThresholdPicksOpusPlanner() {
-    #expect(IngestPlan.decide(sourceByteSize: IngestPlan.tinySourceByteThreshold) == .opusPlanner)
-    #expect(IngestPlan.decide(sourceByteSize: 5_000_000) == .opusPlanner)
+  @Test func sourceAtOrAboveThresholdPicksOpusCurator() {
+    #expect(IngestPlan.decide(sourceByteSize: IngestPlan.tinySourceByteThreshold) == .opusCurator)
+    #expect(IngestPlan.decide(sourceByteSize: 5_000_000) == .opusCurator)
   }
 
   @Test func thresholdIsAround4KB() {
@@ -208,11 +220,13 @@ struct OperationCommandTests {
     #expect(IngestPlan.tinySourceByteThreshold == 4096)
   }
 
-  @Test func planModelAliasesMatchTheTier() {
-    #expect(IngestPlan.singleSonnet.topLevelModelAlias == "sonnet")
-    #expect(IngestPlan.opusPlanner.topLevelModelAlias == "opus")
-    #expect(IngestPlan.singleSonnet.agentsJSON() == nil)
-    #expect(IngestPlan.opusPlanner.agentsJSON() != nil)
+  @Test func bothModesRunTopLevelOpusOnlyTheFanOutDiffers() {
+    // Opus is the curator/writer in BOTH modes — the top-level model is always opus.
+    #expect(IngestPlan.singleOpus.topLevelModelAlias == "opus")
+    #expect(IngestPlan.opusCurator.topLevelModelAlias == "opus")
+    // The tiering is in the fan-out: only the large-source mode forks Sonnet digesters.
+    #expect(IngestPlan.singleOpus.agentsJSON() == nil)
+    #expect(IngestPlan.opusCurator.agentsJSON() != nil)
   }
 
   // MARK: - Prompts: the write rule (problem #1)
@@ -220,7 +234,7 @@ struct OperationCommandTests {
   @Test func everyOperationPromptLeadsWithTheUnmissableWriteRule() {
     for operation: WikiOperation in [
       Self.tinyIngest(),
-      Self.plannedIngest(),
+      Self.curatedIngest(),
       .query(question: "q", stateFilePath: Self.stateFile),
       .lint(stateFilePath: Self.stateFile),
     ] {
@@ -241,7 +255,7 @@ struct OperationCommandTests {
   // MARK: - Prompts: the staged paths + don't-rediscover (problem #2)
 
   @Test func ingestPromptsNameTheStagedSourceAndStateAndForbidRediscovery() {
-    for operation in [Self.tinyIngest(), Self.plannedIngest()] {
+    for operation in [Self.tinyIngest(), Self.curatedIngest()] {
       let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)
       // Names the staged WIKI_STATE.md and the staged source path.
       #expect(prompt.contains(Self.stateFile) || prompt.contains("/tmp/scratch-xyz/WIKI_STATE.md"))
@@ -266,23 +280,34 @@ struct OperationCommandTests {
     }
   }
 
-  // MARK: - Prompts: the worker-count guardrail (planned ingest only)
+  // MARK: - Prompts: the curator digester-fan-out guardrail (large ingest only)
 
-  @Test func plannedIngestPromptStatesThe2to19WorkerGuardrail() {
-    let prompt = Self.plannedIngest().prompt(wikiRoot: Self.resolvedRoot)
+  @Test func curatorPromptStatesThe2to19DigesterGuardrailAndIterativeUse() {
+    let prompt = Self.curatedIngest().prompt(wikiRoot: Self.resolvedRoot)
+    // The 2..19 guardrail, on the Sonnet `source-reader` digesters.
     #expect(prompt.contains("MORE THAN 1 and FEWER THAN 20"))
     #expect(prompt.contains("between 2 and 19"))
-    // And it must tell the planner to size the fan-out to the material.
+    #expect(prompt.contains("source-reader"))
+    // Size the fan-out to the material.
     #expect(prompt.contains("do NOT spawn 15 workers for 3 pages"))
-    // The planner synthesizes index.md + the log after the workers.
+    // Opus may fork MORE workers for follow-up questions, and may pull pages to
+    // double-check before/while writing — the iterative use, capped at <20 total.
+    #expect(prompt.contains("follow-up QUESTIONS"))
+    #expect(prompt.contains("wikictl page get"))
+    #expect(prompt.contains("double-check"))
+    #expect(prompt.contains("under 20"))
+    // The workers DIGEST (read) — they do not write the wiki.
+    #expect(prompt.lowercased().contains("workers do not"))
+    // The curator (Opus) writes the pages + index + log itself.
+    #expect(prompt.contains("WRITE every page yourself"))
     #expect(prompt.contains("wikictl index set"))
   }
 
-  @Test func tinyIngestPromptHasNoWorkerGuardrail() {
-    // The single Sonnet pass has no fan-out.
+  @Test func tinyIngestPromptHasNoDigesterFanOut() {
+    // The single Opus pass has no fan-out.
     let prompt = Self.tinyIngest().prompt(wikiRoot: Self.resolvedRoot)
     #expect(!prompt.contains("between 2 and 19"))
-    #expect(!prompt.contains("ingest-worker"))
+    #expect(!prompt.contains("source-reader"))
   }
 
   // MARK: - Prompts: DRY against the schema (no layout duplication)
@@ -290,7 +315,7 @@ struct OperationCommandTests {
   @Test func promptsDoNotDuplicateTheSchemaLayoutMap() {
     for operation: WikiOperation in [
       Self.tinyIngest(),
-      Self.plannedIngest(),
+      Self.curatedIngest(),
       .query(question: "q", stateFilePath: Self.stateFile),
       .lint(stateFilePath: Self.stateFile),
     ] {

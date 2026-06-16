@@ -1,101 +1,112 @@
 import Foundation
 
-/// The app-side decision of HOW to run an Ingest: a single cheap Sonnet pass for a
-/// tiny source, or an Opus planner that fans out to Sonnet `ingest-worker`
-/// subagents for anything larger (`plans/llm-wiki.md` Phase D /
-/// `feature/ingest-fewer-turns` — problem #3, model tiering).
+/// The app-side decision of HOW to run an Ingest: a single Opus pass for a tiny
+/// source, or an Opus curator that fans out to Sonnet `source-reader` DIGESTERS for
+/// anything larger (`plans/llm-wiki.md` Phase D / `feature/ingest-fewer-turns`).
+///
+/// **Guiding principle (the user's correction).** Opus is ALWAYS the curator — it
+/// decides what goes in the wiki and WRITES everything (pages + index + log) via
+/// `wikictl`. Sonnet exists ONLY to chew through large volumes of source content: a
+/// Sonnet worker READS an assigned chunk and returns a structured DIGEST. Sonnet
+/// NEVER writes wiki content and has no `wikictl`.
 ///
 /// PURE and unit-tested. The decision is driven purely by source size against a
-/// named threshold; the plan then carries the top-level `--model` alias and, for
-/// the planned mode, the `--agents` JSON defining one Sonnet `ingest-worker`. The
-/// app picks the mode when building the Ingest command; `OperationCommand.build`
-/// turns the plan into argv.
+/// named threshold; the plan then carries the top-level `--model` alias (always
+/// `opus`) and, for the large-source mode, the `--agents` JSON defining one Sonnet
+/// `source-reader` digester. The app picks the mode when building the Ingest command;
+/// `OperationCommand.build` turns the plan into argv.
 ///
-/// **Model tiering (verified against the installed CLI 2.1.178).** `--model <m>`
-/// sets the top-level model; the aliases `opus` and `sonnet` resolve to
+/// **Model tiering (verified against the installed CLI 2.1.178, real smoke test).**
+/// `--model <m>` sets the top-level model; the aliases `opus` and `sonnet` resolve to
 /// `claude-opus-4-8` and `claude-sonnet-4-6`. `--agents '{…}'` defines inline
-/// subagents that carry their OWN `model` (a smoke test confirmed the worker ran on
-/// `claude-sonnet-4-6` while the top level ran on `claude-opus-4-8`). The custom
-/// agent's `prompt` does NOT inherit `--append-system-prompt`, so the worker prompt
-/// is SELF-SUFFICIENT about `wikictl` + the read-only rule (it embeds
-/// `IngestWriteRule.writes`).
+/// subagents that carry their OWN `model` (a smoke test confirmed the `source-reader`
+/// worker ran on `claude-sonnet-4-6` while the top level ran on `claude-opus-4-8`,
+/// and the worker — given only `["Read","Bash"]` — read the staged source and
+/// returned its digest to the Opus parent). The custom agent's `prompt` does NOT
+/// inherit `--append-system-prompt`, so the worker prompt is SELF-SUFFICIENT — but
+/// because the worker never writes, it carries NO write rule; it only digests.
 public enum IngestPlan: Equatable, Sendable {
-  /// A single Sonnet pass does the whole ingest via `wikictl`. No planner, no
-  /// `--agents` — cheapest path for a small source.
-  case singleSonnet
+  /// A single Opus pass does the whole ingest via `wikictl`. No fan-out, no
+  /// `--agents` — for a small source Opus reads it directly and writes the pages +
+  /// index + log itself (Opus must be the one deciding what goes in the wiki, even
+  /// for small sources).
+  case singleOpus
 
-  /// An Opus planner reads the source + wiki state, plans the page set, fans out to
-  /// 2–19 Sonnet `ingest-worker` subagents, then synthesizes `index.md` + the log
-  /// entry itself.
-  case opusPlanner
+  /// An Opus curator orchestrates reading a large source WITHOUT reading the whole
+  /// bulk itself: it inspects the source's size/structure, splits it into chunks,
+  /// and fans out to 2–19 Sonnet `source-reader` DIGESTERS to read the chunks in
+  /// parallel. Opus then synthesizes the digests, decides the page set, and WRITES
+  /// all pages + `index.md` + the log entry itself.
+  case opusCurator
 
-  /// The byte threshold below which a source is "tiny" and gets the single-pass
-  /// treatment. Text under ~4 KB is tiny; a large PDF is NOT (it exceeds this even
-  /// before counting its non-text heft). Chosen so a short note or paragraph stays
-  /// cheap while anything substantial gets the planner's fan-out.
+  /// The byte threshold below which a source is "tiny" and gets the single Opus pass.
+  /// Text under ~4 KB is tiny; a large PDF is NOT (it exceeds this even before
+  /// counting its non-text heft). Chosen so a short note or paragraph stays a single
+  /// pass while anything substantial gets the curator's digester fan-out.
   public static let tinySourceByteThreshold = 4096
 
   /// Pick the mode from the raw source size. The app passes the source's byte size
   /// (from `IngestedFileSummary.byteSize` / the staged bytes); the decision is a
   /// pure function of that size and the threshold.
   public static func decide(sourceByteSize: Int) -> IngestPlan {
-    sourceByteSize < tinySourceByteThreshold ? .singleSonnet : .opusPlanner
+    sourceByteSize < tinySourceByteThreshold ? .singleOpus : .opusCurator
   }
 
-  /// The top-level `--model` alias: cheap Sonnet for the single pass, Opus for the
-  /// planner that does the planning/synthesis.
+  /// The top-level `--model` alias. ALWAYS `opus` — Opus is the curator/writer in
+  /// both modes; the single pass and the curator both run on Opus.
   public var topLevelModelAlias: String {
     switch self {
-    case .singleSonnet: "sonnet"
-    case .opusPlanner: "opus"
+    case .singleOpus, .opusCurator: "opus"
     }
   }
 
-  /// The `--agents` JSON for the planned mode (one Sonnet `ingest-worker`), or nil
-  /// for the single pass (no subagents). Built from `workerPrompt` so the worker's
-  /// write rule can't drift from the top-level prompt's.
+  /// The `--agents` JSON for the large-source mode (one Sonnet `source-reader`
+  /// digester), or nil for the single pass (no subagents). Built from
+  /// `digesterPrompt` so the worker's read-only digest contract is in one place.
   public func agentsJSON() -> String? {
     switch self {
-    case .singleSonnet:
+    case .singleOpus:
       return nil
-    case .opusPlanner:
-      return Self.agentsJSON(workerPrompt: Self.workerPrompt)
+    case .opusCurator:
+      return Self.agentsJSON(digesterPrompt: Self.digesterPrompt)
     }
   }
 
-  /// The self-sufficient `ingest-worker` subagent prompt. Because a custom agent's
-  /// `prompt` does NOT inherit `--append-system-prompt`, this embeds the FULL write
-  /// rule (`IngestWriteRule.writes`) — the worker must know `wikictl` + the
-  /// read-only rule on its own. The planner hands each worker its assigned page(s)
-  /// and the staged source path in the delegated task.
-  public static let workerPrompt = """
-    You are an ingest-worker. The planner has assigned you one or a few wiki pages \
-    to write for an ingest. Write exactly the page(s) you were assigned — full, \
-    well-structured bodies that summarize the assigned material and cross-link \
-    related pages with [[Page Title]] — then report tersely which titles you wrote. \
-    Do NOT rewrite index.md or append the log; the planner does that after you finish.
+  /// The self-sufficient `source-reader` subagent prompt. The worker is a pure
+  /// DIGESTER: it reads an assigned chunk of the staged source and returns a
+  /// structured digest. It does NOT write to the wiki, has no `wikictl`, and carries
+  /// NO write rule — its only job is to read volume and hand structured facts back to
+  /// the Opus curator, which does all the writing. Because a custom agent's `prompt`
+  /// does NOT inherit `--append-system-prompt`, this is self-contained.
+  public static let digesterPrompt = """
+    You are a source-reader. The curator has assigned you one chunk / section / \
+    page-range of a large source document. READ ONLY that assigned chunk and return a \
+    STRUCTURED DIGEST of it — key facts, named entities, the concepts it covers, and \
+    any notable quotes WITH their location in the source. Read the assigned chunk from \
+    the staged local path (and byte/line range, or page range) the curator gives you, \
+    using the Read tool or `cat`/`sed`/`grep` on that file.
 
-    \(IngestWriteRule.writes)
-
-    Read your assigned source material from the staged local path the planner gives \
-    you (reliable local disk), not from the read-only mount. After each \
-    `wikictl page upsert`, read it back with `wikictl page get` to confirm it landed.
+    You do NOT write to the wiki. You have NO wikictl and NO write tools — do not look \
+    for one and do not touch the read-only mount. Return your digest as your final \
+    message; the curator synthesizes the digests and writes every page itself.
     """
 
-  /// Build the `--agents` JSON object for one Sonnet `ingest-worker`. The shape was
-  /// verified against the installed CLI (2.1.178): keys `description`, `prompt`,
-  /// `model`, `tools` — `model` is the per-subagent alias (`sonnet`). `tools` is
-  /// `["Bash","Read"]` (Bash for `wikictl`, Read for the staged source). JSON is
-  /// assembled via `JSONSerialization` so the multi-line prompt is correctly
-  /// escaped.
-  static func agentsJSON(workerPrompt: String) -> String {
+  /// Build the `--agents` JSON object for one Sonnet `source-reader` digester. The
+  /// shape was verified against the installed CLI (2.1.178): keys `description`,
+  /// `prompt`, `model`, `tools` — `model` is the per-subagent alias (`sonnet`).
+  /// `tools` is `["Bash","Read"]`: READ-ONLY (Read for the staged source, Bash for
+  /// `cat`/`sed`/`grep` on the chunk) — NO wiki-writing tools, since the worker only
+  /// digests. JSON is assembled via `JSONSerialization` so the multi-line prompt is
+  /// correctly escaped.
+  static func agentsJSON(digesterPrompt: String) -> String {
     let agents: [String: Any] = [
-      "ingest-worker": [
+      "source-reader": [
         "description":
-          "Writes assigned wiki page(s) for an ingest via wikictl. Use to fan out "
-          + "page-writing across the planned page set.",
+          "Reads an assigned chunk/section/page-range of a large source and returns "
+          + "a structured digest (facts, entities, concepts, quotes+locations). Does "
+          + "NOT write to the wiki. Use to read source volume in parallel.",
         "model": "sonnet",
-        "prompt": workerPrompt,
+        "prompt": digesterPrompt,
         "tools": ["Bash", "Read"],
       ]
     ]

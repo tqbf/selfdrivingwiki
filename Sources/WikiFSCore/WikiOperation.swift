@@ -32,9 +32,9 @@ public enum WikiOperation: Equatable, Sendable {
   ///   reads.
   /// - `stateFilePath`: the ABSOLUTE scratch path of the staged `WIKI_STATE.md`
   ///   snapshot (titles + index.md + log tail) — so the agent skips orientation.
-  /// - `plan`: the model-tiering decision (single Sonnet pass vs Opus planner +
-  ///   Sonnet workers), which selects between the single-pass and plan-and-fan-out
-  ///   prompt.
+  /// - `plan`: the model-tiering decision (single Opus pass vs Opus curator + Sonnet
+  ///   digesters), which selects between the single-pass and curate-and-fan-out
+  ///   prompt. Opus writes in BOTH modes.
   case ingest(
     sourcePath: String,
     stagedSourcePath: String,
@@ -74,9 +74,10 @@ public enum WikiOperation: Equatable, Sendable {
     }
   }
 
-  /// The top-level `--model` alias for this operation. Ingest tiers by its plan
-  /// (cheap Sonnet for a tiny source, Opus for the planner); Query and Lint stay on
-  /// Opus (light, single-agent, judgement-heavy).
+  /// The top-level `--model` alias for this operation. ALWAYS `opus`: Opus is the
+  /// curator/writer for both Ingest modes, and Query/Lint are light, single-agent,
+  /// judgement-heavy Opus runs. (Ingest's tiering is in the FAN-OUT — whether it
+  /// forks Sonnet digesters — not in the top-level model.)
   public var topLevelModelAlias: String {
     switch self {
     case .ingest(_, _, _, let plan): plan.topLevelModelAlias
@@ -85,8 +86,8 @@ public enum WikiOperation: Equatable, Sendable {
   }
 
   /// The `--agents` JSON for this operation, or nil when it runs single-agent.
-  /// Only a planned Ingest defines subagents (the Sonnet `ingest-worker`); Query
-  /// and Lint never do.
+  /// Only a large-source Ingest defines subagents (the Sonnet `source-reader`
+  /// digester); the tiny Ingest, Query, and Lint never do.
   public var agentsJSON: String? {
     switch self {
     case .ingest(_, _, _, let plan): plan.agentsJSON()
@@ -109,13 +110,13 @@ extension WikiOperation {
     switch self {
     case .ingest(_, let stagedSourcePath, let stateFilePath, let plan):
       switch plan {
-      case .singleSonnet:
+      case .singleOpus:
         return Self.ingestSinglePrompt(
           wikiRoot: wikiRoot,
           stagedSourcePath: stagedSourcePath,
           stateFilePath: stateFilePath)
-      case .opusPlanner:
-        return Self.ingestPlannerPrompt(
+      case .opusCurator:
+        return Self.ingestCuratorPrompt(
           wikiRoot: wikiRoot,
           stagedSourcePath: stagedSourcePath,
           stateFilePath: stateFilePath)
@@ -130,8 +131,10 @@ extension WikiOperation {
 
   // MARK: - Ingest prompts
 
-  /// Single-pass Ingest (tiny source): one Sonnet agent does the whole ingest via
-  /// `wikictl`.
+  /// Single-pass Ingest (tiny source): one Opus pass does the whole ingest itself via
+  /// `wikictl`. No fan-out — Opus reads the small staged source and writes the pages
+  /// + index + log. (Opus is the curator even for small sources.) Leads with the
+  /// write rule because Opus is the writer.
   private static func ingestSinglePrompt(
     wikiRoot: String,
     stagedSourcePath: String,
@@ -144,19 +147,22 @@ extension WikiOperation {
 
     TASK — Ingest this one source into the wiki, following the Ingest workflow from \
     your instructions. Act immediately; do not explore the mount first. Read the \
-    staged source, write one or more summary/entity/concept pages via \
-    `wikictl page upsert` (cross-linking with [[wiki links]]), rewrite index.md via \
-    `wikictl index set`, and record it with `wikictl log append --kind ingest`. \
-    Work autonomously to completion; the live app shows your changes as they land.
+    staged source, DECIDE what belongs in the wiki, and write one or more \
+    summary/entity/concept pages via `wikictl page upsert` (cross-linking with \
+    [[wiki links]]), rewrite index.md via `wikictl index set`, and record it with \
+    `wikictl log append --kind ingest`. Work autonomously to completion; the live \
+    app shows your changes as they land.
 
     WIKI_ROOT (resolved, read-only mount — reference only): \(wikiRoot)
     """
   }
 
-  /// Planned Ingest (non-tiny source): an Opus planner plans the page set, fans out
-  /// to Sonnet `ingest-worker` subagents, then synthesizes index.md + the log entry.
-  /// The 2..19 worker guardrail is stated prompt-level.
-  private static func ingestPlannerPrompt(
+  /// Large-source Ingest: an Opus CURATOR orchestrates reading the large source via
+  /// Sonnet `source-reader` digesters, then DECIDES the page set and WRITES every
+  /// page + index.md + the log entry itself. The 2..19 digester guardrail and the
+  /// "fork more for follow-up questions / pull pages to double-check" affordances are
+  /// stated prompt-level. Leads with the write rule because Opus is the writer.
+  private static func ingestCuratorPrompt(
     wikiRoot: String,
     stagedSourcePath: String,
     stateFilePath: String
@@ -167,21 +173,32 @@ extension WikiOperation {
     \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath, sourceFilePath: stagedSourcePath))
 
     TASK — Ingest this one source into the wiki, following the Ingest workflow from \
-    your instructions. You are the PLANNER. Act immediately; do not explore the \
-    mount first.
+    your instructions. You are the CURATOR: you decide what goes in the wiki and you \
+    write everything. The source is LARGE — use Sonnet `source-reader` workers to \
+    read its bulk for you so you don't have to read the whole thing yourself. Act \
+    immediately; do not explore the mount first.
 
-    1. Read the staged source and the staged WIKI_STATE.md to understand the \
-       material and the existing pages.
-    2. PLAN the set of wiki pages this ingest should produce (summary pages plus the \
-       entity/concept pages it mentions), reusing existing titles where they fit.
-    3. Fan out the page-writing to `ingest-worker` subagents via the Task tool — \
-       use MORE THAN 1 and FEWER THAN 20 workers (between 2 and 19). Size the \
-       fan-out to the material: do NOT spawn 15 workers for 3 pages; one worker can \
-       own several closely-related pages. In each worker's task, give it the staged \
-       source path (\(stagedSourcePath)) and the exact page title(s) it must write.
-    4. After the workers finish, YOU synthesize: rewrite index.md wholesale via \
-       `wikictl index set` so it catalogs the new pages, then append the log entry \
-       with `wikictl log append --kind ingest`.
+    1. INSPECT the staged source's size and structure WITHOUT reading the whole bulk \
+       — e.g. `wc -l`/`head` for text, or count pages for a PDF — then split it into \
+       chunks (byte/line ranges, sections, or page ranges).
+    2. FAN OUT the READING to `source-reader` subagents via the Task tool — \
+       use MORE THAN 1 and FEWER THAN 20 workers (between 2 and 19). Size the fan-out \
+       to the material: do NOT spawn 15 workers for 3 pages; one worker can digest \
+       adjacent chunks. In each worker's task, give it the staged source path \
+       (\(stagedSourcePath)) and the exact chunk/section/page-range it must DIGEST. \
+       Each worker READS its chunk and returns a structured digest; workers do NOT \
+       write to the wiki.
+    3. SYNTHESIZE the digests, DECIDE the set of wiki pages this ingest should \
+       produce (summary pages plus the entity/concept pages it mentions), reusing \
+       existing titles where they fit. You MAY fork MORE `source-reader` workers to \
+       ask follow-up QUESTIONS of the source ("re-read section 4 and tell me X"), \
+       and you MAY pull specific existing wiki pages with `wikictl page get` to \
+       double-check facts before/while writing. Keep TOTAL Sonnet worker invocations \
+       under 20 across the whole run (initial digest fan-out plus any follow-ups).
+    4. WRITE every page yourself via `wikictl page upsert` (cross-linking with \
+       [[wiki links]]), then rewrite index.md wholesale via `wikictl index set` so it \
+       catalogs the new pages, and append the log entry with \
+       `wikictl log append --kind ingest`.
 
     Work autonomously to completion; the live app shows changes as they land.
 
