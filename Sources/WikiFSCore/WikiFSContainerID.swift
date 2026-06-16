@@ -39,6 +39,15 @@ public enum WikiFSContainerID {
     public static let claudeMD = "claude-md"
     public static let agentsMD = "agents-md"
 
+    // Phase B. Two more root-level read-only docs:
+    //  * `log.md`   — the append-only `log` table rendered as grep-able lines.
+    //  * `index.md` — the singleton `wiki_index` catalog body, served verbatim.
+    // Both are children of the root, so the app's `signalChange()` refreshes them
+    // by signaling `.rootContainer` (+ the working set), exactly as for
+    // `CLAUDE.md`/`AGENTS.md`/`manifest.json`.
+    public static let logMD = "log-md"
+    public static let indexMD = "index-md"
+
     /// Prefix for a single ingested file's `by-id` LEAF identifier (carries the
     /// full ULID, never the filename — INITIAL §6). Shared so the extension's
     /// `Projection.Identity.fileByID(_:)` and the app's "open this file"

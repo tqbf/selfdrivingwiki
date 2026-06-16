@@ -57,6 +57,12 @@ struct Projection {
         static let claudeMD = NSFileProviderItemIdentifier(WikiFSContainerID.claudeMD)
         static let agentsMD = NSFileProviderItemIdentifier(WikiFSContainerID.agentsMD)
 
+        // Phase B: two more root-level read-only docs. `log.md` renders the
+        // append-only `log` table as grep-able lines; `index.md` serves the
+        // singleton `wiki_index` body verbatim.
+        static let logMD = NSFileProviderItemIdentifier(WikiFSContainerID.logMD)
+        static let indexMD = NSFileProviderItemIdentifier(WikiFSContainerID.indexMD)
+
         static let byIDPrefix = "page-by-id:"
         static let byTitlePrefix = "page-by-title:"
         // Shared with the app (which resolves a per-file user-visible URL to open
@@ -112,6 +118,8 @@ struct Projection {
     Useful paths:
 
     - `CLAUDE.md` / `AGENTS.md` (the agent system prompt — identical)
+    - `index.md` (the curated catalog)
+    - `log.md` (the append-only chronological log)
     - `pages/by-id/`
     - `pages/by-title/`
     - `files/by-id/`
@@ -257,6 +265,58 @@ struct Projection {
                      created: nil, modified: prompt.updatedAt)
     }
 
+    // MARK: - index.md (singleton catalog)
+
+    /// The singleton `wiki_index` document, read live from SQLite. Falls back to
+    /// the seeded default (`version 0`) when the row/table can't be read — e.g. a
+    /// read connection opened against a not-yet-migrated DB — so `index.md` ALWAYS
+    /// exists at the root. Mirrors `systemPromptDocument()`.
+    private func wikiIndexDocument() -> WikiIndex {
+        guard let store = openReadStore(),
+              let index = try? store.getWikiIndex() else {
+            return WikiIndex(body: WikiIndex.defaultBody,
+                             updatedAt: Date(timeIntervalSince1970: 0), version: 0)
+        }
+        return index
+    }
+
+    /// Build the root-level `index.md` file node, sized + versioned from the
+    /// singleton row exactly like the system-prompt node.
+    private func wikiIndexNode(for id: NSFileProviderItemIdentifier) -> ProjectedNode {
+        let index = wikiIndexDocument()
+        let body = Data(index.body.utf8)
+        let version = Data(String(index.version).utf8)
+        return .file(id: id, parent: .rootContainer, name: "index.md", size: body.count,
+                     version: version, metadataVersion: version,
+                     created: nil, modified: index.updatedAt)
+    }
+
+    // MARK: - log.md (append-only log)
+
+    /// The rendered `log.md` body — the whole `log` table as grep-able lines.
+    /// Resilient to the table not existing yet (pre-v4 read connection) → empty,
+    /// so the file always exists. Like the generated index files, its bytes derive
+    /// from many rows (not a single versioned row), so its node is versioned by the
+    /// change token rather than a row `version`.
+    private func logBody() -> Data {
+        guard let store = openReadStore(),
+              let entries = try? store.listAllLogEntriesOrderedByID() else {
+            return Data(LogRenderer.render([]).utf8)
+        }
+        return Data(LogRenderer.render(entries).utf8)
+    }
+
+    /// Build the root-level `log.md` file node, sized from the rendered body and
+    /// versioned by the change token so any append re-fetches it (the append bumps
+    /// the token's `logCount` fold).
+    private func logNode(for id: NSFileProviderItemIdentifier) -> ProjectedNode {
+        let body = logBody()
+        let version = Data(changeToken().utf8)
+        return .file(id: id, parent: .rootContainer, name: "log.md", size: body.count,
+                     version: version, metadataVersion: version,
+                     created: nil, modified: nil)
+    }
+
     // MARK: - Change token (sync anchor)
 
     /// The whole-database change token used as the File Provider sync anchor.
@@ -287,6 +347,10 @@ struct Projection {
             return systemPromptNode(for: id, name: "CLAUDE.md")
         case Identity.agentsMD:
             return systemPromptNode(for: id, name: "AGENTS.md")
+        case Identity.indexMD:
+            return wikiIndexNode(for: id)
+        case Identity.logMD:
+            return logNode(for: id)
         case Identity.pages:
             return .folder(id: id, parent: .rootContainer, name: "pages")
         case Identity.pagesByID:
@@ -384,6 +448,8 @@ struct Projection {
                 node(for: Identity.readme),
                 node(for: Identity.claudeMD),
                 node(for: Identity.agentsMD),
+                node(for: Identity.indexMD),
+                node(for: Identity.logMD),
                 node(for: Identity.manifest),
                 node(for: Identity.pages),
                 node(for: Identity.files),
@@ -424,7 +490,8 @@ struct Projection {
                 + ingestedFileNodes(byName: false) + ingestedFileNodes(byName: true)
                 + [Identity.manifest, Identity.indexPagesJSONL,
                    Identity.indexLinksJSONL, Identity.indexFilesJSONL,
-                   Identity.claudeMD, Identity.agentsMD]
+                   Identity.claudeMD, Identity.agentsMD,
+                   Identity.indexMD, Identity.logMD]
                     .compactMap { node(for: $0) }
         default:
             return []
@@ -468,6 +535,14 @@ struct Projection {
         // System prompt: both names serve the same live body (read like a page).
         if id == Identity.claudeMD || id == Identity.agentsMD {
             return Data(systemPromptDocument().body.utf8)
+        }
+        // index.md: the singleton catalog body, served verbatim (like the prompt).
+        if id == Identity.indexMD {
+            return Data(wikiIndexDocument().body.utf8)
+        }
+        // log.md: the whole log table rendered as grep-able lines.
+        if id == Identity.logMD {
+            return logBody()
         }
         // Generated index files: serve the SAME token-cached bytes whose length
         // `node(for:)` reported as `documentSize` (else `cat` truncates).
