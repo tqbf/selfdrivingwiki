@@ -67,4 +67,19 @@ app's lifecycle can do (`NSFileProviderManager.remove`; an ad-hoc CLI gets
 FP -2001/-2014). **For live gates, create a fresh wiki rather than reusing the
 long-lived `WikiFS` one.**
 
-Recorded 2026-06-15 (Phase A write-path live gate).
+**Mitigation (Phase D, 2026-06-16).** A *related, milder* symptom — a
+freshly-created wiki failing to register/mount until relaunch, with NO error —
+was hardened against in `FileProviderSpike.registerDomain`. It no longer does a
+single best-effort `add(domain)` that swallows failures: it now **verifies** the
+domain actually appears in `NSFileProviderManager.domains()` after each `add`,
+**retries** a bounded number of times with a short backoff if a busy daemon
+didn't take it (`DomainRegistrationPolicy.maxAttempts`, async sleep — never
+blocks the main actor), **nudges** the new domain's root/working-set enumerator
+on success so the mount materializes promptly, and **surfaces** any real `add`
+failure to the console + `status` (never swallowed). This makes create→mount
+immediate on a healthy-but-busy daemon and makes failures LOUD + self-healing.
+It does NOT rescue a fully *wedged* replica (the case above) — that still needs a
+domain teardown — but it covers the transient-busy window that was silently
+dropping fresh registrations.
+
+Recorded 2026-06-15 (Phase A write-path live gate); mitigation added 2026-06-16.

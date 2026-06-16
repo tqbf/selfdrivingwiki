@@ -37,27 +37,103 @@ final class FileProviderSpike {
 
     // MARK: - Per-wiki registration
 
-    /// Idempotent ADD-IF-ABSENT registration for ONE wiki's domain. Generalizes
-    /// the v0 single-domain logic: query existing domains, add ours only when
-    /// missing. The `WIKIFS_REENUMERATE` escape hatch (a one-shot remove+re-add to
-    /// force a clean full enumeration on a structurally-changed projection) is
-    /// preserved, now scoped to the named wiki.
-    func registerDomain(id: String, displayName: String) async {
+    /// Idempotent ADD-IF-ABSENT registration for ONE wiki's domain, hardened to
+    /// VERIFY + bounded-RETRY + NUDGE so a freshly-created wiki mounts immediately
+    /// even when `fileproviderd` is momentarily busy.
+    ///
+    /// Background (Phase D gate): a freshly-created wiki ("GateD") did not mount
+    /// until relaunch and showed NO error. The create→register→mount path is the
+    /// same `add(domain)` launch uses; the defect was that registration was
+    /// *brittle and silent* — a single `add`, with any failure swallowed into an
+    /// unsurfaced `status` and never verified. So a busy daemon gave us no mount
+    /// and no signal. This now:
+    ///
+    /// 1. **Surfaces failures** — a real `add` error (anything other than
+    ///    already-exists) is logged to the console AND retained in `status`, never
+    ///    swallowed.
+    /// 2. **Verifies + retries** — after each `add` it confirms the domain
+    ///    actually appears in `NSFileProviderManager.domains()`; if not (daemon
+    ///    busy) it backs off and retries, up to `DomainRegistrationPolicy.maxAttempts`.
+    /// 3. **Nudges enumeration** — on success it signals the new domain's root /
+    ///    working-set enumerator (the same `signalEnumerator` path `signalChange`
+    ///    uses, scoped to THIS domain) so the daemon materializes the root promptly
+    ///    instead of waiting for an external trigger.
+    ///
+    /// Idempotent and safe to call repeatedly: launch calls it per wiki, create
+    /// calls it once; an already-registered domain short-circuits to a nudge. The
+    /// `WIKIFS_REENUMERATE` one-shot remove+re-add hatch is preserved. The backoff
+    /// is an async sleep — it never blocks the main actor.
+    @discardableResult
+    func registerDomain(id: String, displayName: String) async -> Bool {
         let domain = domain(id: id, displayName: displayName)
 
         if ProcessInfo.processInfo.environment["WIKIFS_REENUMERATE"] == "1" {
             try? await NSFileProviderManager.remove(domain)
         }
 
-        let alreadyRegistered = (try? await NSFileProviderManager.domains())?
-            .contains { $0.identifier == domain.identifier } ?? false
+        var attemptsMade = 0
+        while attemptsMade < DomainRegistrationPolicy.maxAttempts {
+            // Add only if absent — a present domain (already registered, or a
+            // racing add that won) must not error out the whole flow.
+            if !(await isDomainRegistered(id: id)) {
+                do {
+                    try await NSFileProviderManager.add(domain)
+                } catch {
+                    // Distinguish benign already-exists (the verify below confirms
+                    // presence) from a real failure we must not bury: log it AND
+                    // keep it in `status` so it shows in the console and the UI.
+                    print("FileProviderSpike.registerDomain(\(displayName)): add failed: \(error)")
+                    status = "Register \(displayName) failed: \(error.localizedDescription)"
+                }
+            }
 
-        if !alreadyRegistered {
-            do {
-                try await NSFileProviderManager.add(domain)
-            } catch {
-                // A racing add can still report "already exists"; benign.
-                status = "add(domain \(displayName)): \(error.localizedDescription)"
+            attemptsMade += 1
+            let present = await isDomainRegistered(id: id)
+            switch DomainRegistrationPolicy.decide(domainPresent: present, attemptsMade: attemptsMade) {
+            case .registered:
+                // Materialize the root now instead of waiting for an external
+                // trigger — this is what makes the mount appear right after create.
+                await nudgeInitialEnumeration(forWikiID: id)
+                status = "Registered \(displayName)"
+                return true
+
+            case .retry:
+                try? await Task.sleep(for: DomainRegistrationPolicy.retryBackoff)
+
+            case .failed:
+                print("""
+                    FileProviderSpike.registerDomain(\(displayName)): domain \(id) \
+                    still absent after \(attemptsMade) attempts — daemon may be wedged.
+                    """)
+                status = "Register \(displayName) failed: domain did not appear after \(attemptsMade) tries."
+                return false
+            }
+        }
+        return false
+    }
+
+    /// Is `id`'s domain present in the daemon's current domain list? Maps the
+    /// `domains()` result to raw identifiers and defers the membership test to the
+    /// pure policy helper. A failed `domains()` call reads as "not present" so the
+    /// retry loop keeps trying.
+    private func isDomainRegistered(id: String) async -> Bool {
+        let domainIDs = (try? await NSFileProviderManager.domains())?
+            .map(\.identifier.rawValue) ?? []
+        return DomainRegistrationPolicy.isRegistered(domainIDs: domainIDs, wikiID: id)
+    }
+
+    /// Nudge the freshly-registered domain's root + working-set enumerator so the
+    /// daemon materializes the root promptly after create. Reuses the same
+    /// `signalEnumerator` path `signalChange` uses, scoped to THIS domain.
+    /// Best-effort.
+    private func nudgeInitialEnumeration(forWikiID id: String) async {
+        let domain = domain(id: id, displayName: id)
+        guard let manager = NSFileProviderManager(for: domain) else { return }
+        for container in [NSFileProviderItemIdentifier.rootContainer, .workingSet] {
+            await withCheckedContinuation { continuation in
+                manager.signalEnumerator(for: container) { _ in
+                    continuation.resume()
+                }
             }
         }
     }

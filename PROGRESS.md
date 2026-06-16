@@ -43,6 +43,42 @@ prose — no new views, no migration changes.** DRAFT until the independent live
   `AGENTS.md`≡seeded body still holds structurally (both projection nodes serve
   `systemPromptDocument().body`, which returns the seeded `defaultBody`).
 
+**Also in this phase — hardened File Provider domain registration (Phase D gate
+finding).** During the Phase D gate a freshly-created wiki ("GateD") did NOT mount
+until the app was relaunched, with NO error shown. The create→register→mount code
+path was logically correct (`WikiManager.createWiki` → `registerDomain` →
+`FileProviderSpike.registerDomain` → `NSFileProviderManager.add(domain)`, the same
+call launch uses), but registration was **brittle and silent under a busy/churned
+`fileproviderd`**: a single `add(domain)` that swallowed any error into an
+unsurfaced `status` string and never verified/retried/nudged. Hardened
+`FileProviderSpike.registerDomain(id:displayName:)` WITHOUT changing its injected
+shape:
+- **Surfaces failures** — a real `add` error is now `print`ed to the console AND
+  kept in `status` (never buried); already-exists stays benign (the verify below
+  confirms presence).
+- **Verifies + bounded retry** — after each `add` it confirms the domain actually
+  appears in `NSFileProviderManager.domains()`; if a busy daemon didn't take it, it
+  backs off (~0.6 s async sleep — never blocks the main actor) and retries, up to 3
+  attempts, then fails LOUDLY (console + `status`) and returns `false`.
+- **Nudges initial enumeration** — on a verified add it signals the new domain's
+  `.rootContainer` + `.workingSet` enumerator (the same `signalEnumerator` path
+  `signalChange` uses, scoped to THIS domain) so the daemon materializes the root
+  promptly instead of waiting for an external trigger — this is what makes the mount
+  appear right after create.
+The decision arithmetic (registered? / retry? / failed?) is extracted into a PURE,
+unit-tested `WikiFSCore/DomainRegistrationPolicy` (mirroring `PathPreflight`) so the
+FileProvider-importing `FileProviderSpike` stays thin side-effect glue. Idempotent +
+safe to call repeatedly (launch calls it per wiki via `registerAllDomains`, create
+once); the `WIKIFS_REENUMERATE` one-shot remove+re-add hatch is preserved.
+`DomainRegistrationPolicyTests` (10) covers exact-match membership, the
+retry-while-attempts-remain / fail-after-max decision table, and full-loop
+simulations (registers on the final attempt; fails when the domain never appears).
+**Guaranteed by the code:** on a healthy-but-momentarily-busy daemon, create→mount
+is immediate (verify+retry+nudge) and any real failure is loud + self-healing rather
+than silent. **Still daemon-dependent:** a fully *wedged* replica (the `ISSUES.md`
+churned-domain case) is NOT rescued by retry — it needs a domain teardown — and the
+exact end-to-end timing can't be proven without a clean (un-churned) `fileproviderd`.
+
 **Tests/build.** Updated `OperationCommandTests` to the slimmed prompt shape: each
 prompt now carries the resolved `WIKI_ROOT` and defers to "the … workflow from your
 instructions", and the inline layout map / `wikictl` cheatsheet / read-after-write /
@@ -53,8 +89,8 @@ last same-millisecond ULID flake** (`PageUpsertTests.upsertByTitleResolvesDuplic
 ToLowestULID` assumed creation order == ULID order; `ULID.generate()` is NOT
 monotonic within a ms, so it now derives the expected lowest id from the actual ids
 — matching the fix already applied to `WikiLinkNavigationTests`/`WikiLinkStoreTests`).
-`make test` → **211/211 green, 10/10 runs deterministic**; `make` produces a clean
-signed bundle (app + appex + `wikictl`, real identity).
+`make test` → **221/221 green** (211 schema-phase + 10 `DomainRegistrationPolicyTests`);
+`make` produces a clean signed bundle (app + appex + `wikictl`, real identity).
 
 **Notes / what the independent verifier should watch (the Phase-D gate)**
 - The new default is **byte-identical** across a wiki's `CLAUDE.md` and `AGENTS.md`
