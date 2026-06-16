@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# build.sh — compile WikiFS + its File Provider extension, bundle them into a
-# proper macOS .app (with the .appex nested under Contents/PlugIns), embed
-# provisioning profiles, and codesign inside-out.
+# build.sh — compile Self Driving Wiki + its File Provider extension, bundle
+# them into a proper macOS .app (with the .appex nested under Contents/PlugIns),
+# embed provisioning profiles, and codesign inside-out.
 #
 #   ./build.sh [debug|release]
 #
@@ -20,7 +20,8 @@ set -euo pipefail
 
 CONFIG="${1:-debug}"
 
-APP_NAME="WikiFS"
+APP_NAME="Self Driving Wiki"
+APP_TARGET_NAME="WikiFS"
 EXT_NAME="WikiFSFileProvider"
 CTL_NAME="wikictl"
 BUNDLE_ID="org.sockpuppet.WikiFS"
@@ -55,7 +56,7 @@ VERSION="${VERSION:-0.0.0-dev}"
 echo "→ swift build -c ${CONFIG}"
 swift build -c "${CONFIG}"
 BIN_DIR="$(swift build -c "${CONFIG}" --show-bin-path)"
-APP_BIN="${BIN_DIR}/${APP_NAME}"
+APP_BIN="${BIN_DIR}/${APP_TARGET_NAME}"
 EXT_BIN="${BIN_DIR}/${EXT_NAME}"
 CTL_BIN="${BIN_DIR}/${CTL_NAME}"
 for b in "${APP_BIN}" "${EXT_BIN}" "${CTL_BIN}"; do
@@ -104,7 +105,7 @@ cat > "${APPEX_CONTENTS}/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key><string>${EXT_NAME}</string>
-	<key>CFBundleDisplayName</key><string>WikiFS File Provider</string>
+	<key>CFBundleDisplayName</key><string>Self Driving Wiki File Provider</string>
 	<key>CFBundleExecutable</key><string>${EXT_NAME}</string>
 	<key>CFBundleIdentifier</key><string>${EXT_BUNDLE_ID}</string>
 	<key>CFBundlePackageType</key><string>XPC!</string>

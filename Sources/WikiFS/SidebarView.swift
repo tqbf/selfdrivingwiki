@@ -112,8 +112,8 @@ struct SidebarView: View {
     /// The active wiki's display name for the window title (falls back to the app
     /// name when no wiki is selected yet).
     private var activeWikiName: String {
-        guard let id = manager.activeWikiID else { return "WikiFS" }
-        return manager.wikis.first { $0.id == id }?.displayName ?? "WikiFS"
+        guard let id = manager.activeWikiID else { return "Self Driving Wiki" }
+        return manager.wikis.first { $0.id == id }?.displayName ?? "Self Driving Wiki"
     }
 
     private func beginRename(_ summary: WikiPageSummary) {

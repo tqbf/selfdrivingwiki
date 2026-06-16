@@ -2,11 +2,34 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-16 — Product rename to Self Driving Wiki
+
+Renamed app-facing product copy from WikiFS to **Self Driving Wiki** while leaving
+bundle identifiers, SwiftPM target/module names, signing assets, and legacy
+database filenames intact.
+
+**Changed**
+- `build.sh` and `Makefile` now produce/install `Self Driving Wiki.app`, with the
+  SwiftPM executable target still built from `WikiFS` and copied into the renamed
+  bundle.
+- App/File Provider display strings, projection README/root labels, default legacy
+  wiki display name, manifest product name, agent scratch/log cache directory, and
+  the read-only error now say Self Driving Wiki.
+- `README.md` and `PLAN.md` now present Self Driving Wiki as the product name while
+  keeping technical identifiers such as `WikiFSCore`, `WikiFSFileProvider`, and
+  `org.sockpuppet.WikiFS` explicit where they remain true.
+
+**Skill pass.** Before code: `swiftui-pro`, `macos-design`, and
+`typography-designer` pointed toward preserving semantic SwiftUI text and native
+macOS naming surfaces rather than adding custom typography or visual treatment.
+Post-code review kept the rename to visible strings/build metadata only, with no
+new UI layout or type-scale changes.
+
 ## 2026-06-16 — Reader-first page detail UI
 
 Started correcting the app's main interface: page selection now defaults to a
 rendered reader instead of an always-visible markdown editor + preview split. The
-product principle is that WikiFS is agent-maintained first; users should rarely
+product principle is that Self Driving Wiki is agent-maintained first; users should rarely
 need manual source editing.
 
 **Changed**

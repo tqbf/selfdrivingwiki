@@ -1,4 +1,4 @@
-# WikiFS
+# Self Driving Wiki
 
 A native **macOS SwiftUI wiki**, backed by **SQLite**, mirrored **read-only** onto
 the filesystem by a **File Provider extension** — and now a **self-maintaining LLM
@@ -60,7 +60,7 @@ that the project exists to demonstrate. The split is deliberate:
 From the repo root (full detail in [`plans/build-environment.md`](plans/build-environment.md)):
 
 ```sh
-make            # debug build → build/WikiFS.app (also builds + embeds wikictl)
+make            # debug build → build/Self Driving Wiki.app (also builds + embeds wikictl)
 make run        # build + open the app
 make check      # compile-only gate, no bundle/sign (CI / agent verification)
 make test       # the SwiftPM test suite (320 tests)
@@ -100,8 +100,8 @@ Defined in [`Package.swift`](Package.swift):
 | Target | Kind | Purpose |
 | --- | --- | --- |
 | **`WikiFSCore`** | library | The dependency-free core: data model, hand-rolled SQLite store, multi-wiki registry, the `claude -p` operation seams, log/index/TREE rendering, URL-ingest + HTML→Markdown. Shared by the app, the extension, the CLI, and the tests. |
-| **`WikiFS`** | executable | The SwiftUI app — the editor/viewer, the wiki switcher, the Operations panel (Ingest/Query/Lint), domain registration + change bridge. |
-| **`WikiFSFileProvider`** | executable* | The File Provider extension — the read-only SQLite→filesystem projection. (*Built as an executable, then repackaged into a `.appex` by `build.sh`; entry point overridden to `_NSExtensionMain`.) |
+| **`WikiFS`** | executable | The SwiftUI app target for Self Driving Wiki — the editor/viewer, the wiki switcher, the Operations panel (Ingest/Query/Lint), domain registration + change bridge. |
+| **`WikiFSFileProvider`** | executable* | The File Provider extension target — the read-only SQLite→filesystem projection. (*Built as an executable, then repackaged into a `.appex` by `build.sh`; entry point overridden to `_NSExtensionMain`.) |
 | **`WikiCtlCore`** | library | `wikictl`'s logic: arg parsing, command dispatch, wiki resolution, the Darwin post. Library-split so it's unit-testable. |
 | **`wikictl`** | executable | The agent's **write path** — a scriptable CLI that writes straight to a wiki's `<ulid>.sqlite` and posts a per-wiki Darwin notification. A thin shell over `WikiCtlCore`. |
 
@@ -125,7 +125,7 @@ A deeper map is in [`plans/architecture.md`](plans/architecture.md); the short v
 - **Many wikis.** A `wikis.json` registry lists the user's wikis. Each wiki is one
   self-contained `<ulid>.sqlite` file in the App Group container **plus one File
   Provider domain** (`NSFileProviderDomain`), mounting at its own
-  `~/Library/CloudStorage/WikiFS-<name>`. A wiki's stable identity is its **ULID**,
+  `~/Library/CloudStorage/Self Driving Wiki-<name>`. A wiki's stable identity is its **ULID**,
   never its display name (rename-safe). The extension is instantiated per domain;
   `domain.identifier` *is* the wiki ULID, which selects the DB to open.
 

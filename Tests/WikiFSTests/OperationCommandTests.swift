@@ -39,7 +39,7 @@ struct OperationCommandTests {
 
   private func build(
     operation: WikiOperation = OperationCommandTests.curatedIngest(),
-    wikictlDir: String = "/Apps/WikiFS.app/Contents/Helpers",
+    wikictlDir: String = "/Apps/Self Driving Wiki.app/Contents/Helpers",
     basePATH: String = "/usr/bin:/bin"
   ) -> OperationCommand {
     OperationCommand.build(
@@ -157,8 +157,8 @@ struct OperationCommandTests {
   }
 
   @Test func prependsWikictlDirectoryToChildPATH() {
-    let cmd = build(wikictlDir: "/Apps/WikiFS.app/Contents/Helpers", basePATH: "/usr/bin:/bin")
-    #expect(cmd.environment["PATH"] == "/Apps/WikiFS.app/Contents/Helpers:/usr/bin:/bin")
+    let cmd = build(wikictlDir: "/Apps/Self Driving Wiki.app/Contents/Helpers", basePATH: "/usr/bin:/bin")
+    #expect(cmd.environment["PATH"] == "/Apps/Self Driving Wiki.app/Contents/Helpers:/usr/bin:/bin")
   }
 
   @Test func cwdIsTheWritableScratchDirNotTheMount() {

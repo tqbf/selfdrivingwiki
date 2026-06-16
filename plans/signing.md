@@ -75,7 +75,7 @@ the certificate, device registration, App IDs, App Group, provisioning
 profiles, and any macOS approval prompts.
 
 **`build.sh` / app code handles** (automated): assembling the `.appex` under
-`WikiFS.app/Contents/PlugIns/`, the extension `NSExtension` Info.plist keys,
+`Self Driving Wiki.app/Contents/PlugIns/`, the extension `NSExtension` Info.plist keys,
 both `.entitlements` files, embedding the downloaded `.provisionprofile`s,
 inside-out codesigning, and `NSFileProviderManager.add(domain:)` at runtime.
 

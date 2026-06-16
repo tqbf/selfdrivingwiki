@@ -12,7 +12,7 @@ import WikiFSCore
 /// **Domain identity = the wiki's ULID.** `domainFor(id:displayName:)` builds an
 /// `NSFileProviderDomain(identifier: <ulid>, displayName: <name>)`; the extension
 /// reads `domain.identifier` to pick `<ulid>.sqlite`. The display name only sets
-/// the Finder mount label (`~/Library/CloudStorage/WikiFS-<name>`), so a rename
+/// the Finder mount label (`~/Library/CloudStorage/Self Driving Wiki-<name>`), so a rename
 /// is cosmetic and never breaks the DB mapping.
 @MainActor
 @Observable
@@ -27,7 +27,7 @@ final class FileProviderSpike {
     private var activeDisplayName: String?
 
     /// Build the File Provider domain for a wiki. Identifier is the ULID (stable
-    /// across rename); displayName drives the `WikiFS-<name>` mount label.
+    /// across rename); displayName drives the `Self Driving Wiki-<name>` mount label.
     private func domain(id: String, displayName: String) -> NSFileProviderDomain {
         NSFileProviderDomain(
             identifier: NSFileProviderDomainIdentifier(rawValue: id),

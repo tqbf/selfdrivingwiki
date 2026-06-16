@@ -15,7 +15,7 @@ public struct WikiDescriptor: Codable, Identifiable, Equatable, Sendable {
     public let id: String
 
     /// Human-facing label, shown in the switcher and used to name the Finder
-    /// mount (`~/Library/CloudStorage/WikiFS-<displayName>`). Mutable — a rename
+    /// mount (`~/Library/CloudStorage/Self Driving Wiki-<displayName>`). Mutable — a rename
     /// changes ONLY this, never `id`.
     public var displayName: String
 

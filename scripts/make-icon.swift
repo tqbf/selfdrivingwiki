@@ -1,6 +1,6 @@
 #!/usr/bin/env swift
 //
-// make-icon.swift — render the WikiFS app icon at every macOS icon size into
+// make-icon.swift — render the Self Driving Wiki app icon at every macOS icon size into
 // build/AppIcon.iconset, which the Makefile then packs with `iconutil`.
 //
 // The icon: a rounded-rect "squircle" with a blue→indigo gradient and a white

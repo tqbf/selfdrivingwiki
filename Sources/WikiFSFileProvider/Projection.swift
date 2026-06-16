@@ -115,9 +115,9 @@ struct Projection {
     /// The generated `README.md` (INITIAL §5). Static across the DB lifetime, so
     /// a constant version is correct.
     static let readmeBytes = Data("""
-    # WikiFS
+    # Self Driving Wiki
 
-    This is a read-only filesystem projection of the WikiFS database.
+    This is a read-only filesystem projection of the Self Driving Wiki database.
 
     Useful paths:
 
@@ -367,7 +367,7 @@ struct Projection {
     /// Resolve a single item's metadata by identifier.
     func node(for id: NSFileProviderItemIdentifier) -> ProjectedNode? {
         if id == .rootContainer {
-            return .folder(id: .rootContainer, parent: .rootContainer, name: "WikiFS")
+            return .folder(id: .rootContainer, parent: .rootContainer, name: "Self Driving Wiki")
         }
         switch id {
         case Identity.readme:

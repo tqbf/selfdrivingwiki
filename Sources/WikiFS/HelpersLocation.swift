@@ -2,12 +2,12 @@ import Foundation
 
 /// Locates the embedded `wikictl` helper so the spawned agent can invoke it
 /// (`plans/llm-wiki.md` Phase C — "ensure `wikictl` is resolvable: prepend
-/// `WikiFS.app/Contents/Helpers` to the child's PATH").
+/// `Self Driving Wiki.app/Contents/Helpers` to the child's PATH").
 ///
-/// `build.sh` embeds + codesigns `wikictl` at `WikiFS.app/Contents/Helpers/wikictl`
-/// and ALSO drops a copy at `build/wikictl` next to the dev binaries. We resolve
-/// the directory in priority order so it works both from the signed bundle and
-/// from a `swift run` dev launch.
+/// `build.sh` embeds + codesigns `wikictl` at
+/// `Self Driving Wiki.app/Contents/Helpers/wikictl` and ALSO drops a copy at
+/// `build/wikictl` next to the dev binaries. We resolve the directory in priority
+/// order so it works both from the signed bundle and from a `swift run` dev launch.
 enum HelpersLocation {
     /// The directory that should be prepended to the agent's PATH so `wikictl`
     /// resolves. Returns the first directory that actually contains an executable

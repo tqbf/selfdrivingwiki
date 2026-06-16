@@ -1,9 +1,9 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
-// WikiFS — native macOS SwiftUI wiki with a File Provider filesystem
+// Self Driving Wiki — native macOS SwiftUI wiki with a File Provider filesystem
 // projection. Built with SwiftPM (no Xcode IDE, no xcodebuild); ./build.sh
-// bundles the executable produced here into build/WikiFS.app and codesigns it.
+// bundles the executable produced here into build/Self Driving Wiki.app and codesigns it.
 let package = Package(
     name: "WikiFS",
     platforms: [.macOS(.v14)],
@@ -46,7 +46,7 @@ let package = Package(
             path: "Tests/WikiFSTests"
         ),
         // The File Provider extension binary. build.sh repackages this into a
-        // .appex bundle under WikiFS.app/Contents/PlugIns and signs it.
+        // .appex bundle under Self Driving Wiki.app/Contents/PlugIns and signs it.
         .executableTarget(
             name: "WikiFSFileProvider",
             dependencies: ["WikiFSCore"],

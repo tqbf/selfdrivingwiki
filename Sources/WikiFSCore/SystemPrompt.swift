@@ -36,7 +36,7 @@ public struct SystemPrompt: Equatable, Sendable {
 
     You read this document at the start of every run: it is projected read-only at
     the wiki root as both `CLAUDE.md` and `AGENTS.md`. The user co-evolves it in
-    the WikiFS app over time. Do not edit it through the filesystem.
+    the Self Driving Wiki app over time. Do not edit it through the filesystem.
 
     ## Layout
 

@@ -36,7 +36,7 @@ public struct OperationCommand: Equatable, Sendable {
     ///     `--append-system-prompt`. No `CLAUDE.md` is written onto the mount.
     ///   - scratchDirectory: a per-run writable dir (under the app caches). The cwd.
     ///   - wikictlDirectory: the directory containing the `wikictl` binary
-    ///     (`WikiFS.app/Contents/Helpers`). PREPENDED to the child's PATH so the
+    ///     (`Self Driving Wiki.app/Contents/Helpers`). PREPENDED to the child's PATH so the
     ///     agent's `Bash(wikictl:*)` calls resolve.
     ///   - claudeExecutable: the `claude` binary name (default `"claude"`; the
     ///     PATH preflight confirms it resolves on the login shell).

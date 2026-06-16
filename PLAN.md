@@ -1,12 +1,13 @@
-# WikiFS
+# Self Driving Wiki
 
 **What this is.** A native macOS SwiftUI wiki backed by SQLite, mirrored
 read-only onto the filesystem by a **File Provider extension** so the same
 content can be browsed by Unix tools and agents (`find`, `cat`, `grep`) under
-`~/Library/CloudStorage/WikiFS-WikiFS`. You edit in the app; the mount reflects
-every change. It also ingests dropped files (verbatim bytes under `files/`) and
-projects a singleton agent system prompt as `CLAUDE.md` + `AGENTS.md` at the
-root. Runs locally only — free, local dev signing; no Developer ID / notarization.
+`~/Library/CloudStorage/Self Driving Wiki-<wiki name>`. You edit in the app; the
+mount reflects every change. It also ingests dropped files (verbatim bytes under
+`files/`) and projects a singleton agent system prompt as `CLAUDE.md` +
+`AGENTS.md` at the root. Runs locally only — free, local dev signing; no Developer
+ID / notarization.
 
 **Core goal (non-negotiable).** This is a proof-of-concept of the macOS **File
 Provider API**. The extension is essential, not optional — do **not** replace it
@@ -29,10 +30,10 @@ with a plain-folder export, even though that would dodge the signing requirement
 
 | Doc | What it covers |
 | --- | --- |
-| [`README.md`](README.md) | **Start here (new developers).** What WikiFS is, the non-negotiable read-only-mount / write-via-`wikictl` invariant, quick start (`make` targets + the runtime gotchas), repo layout, and a tour of how it works. |
+| [`README.md`](README.md) | **Start here (new developers).** What Self Driving Wiki is, the non-negotiable read-only-mount / write-via-`wikictl` invariant, quick start (`make` targets + the runtime gotchas), repo layout, and a tour of how it works. |
 | [`plans/architecture.md`](plans/architecture.md) | **The system map.** Components/targets, the per-wiki SQLite data model + migration ladder + `changeToken()`, the File Provider projection, the read/write split + change bridge, the `claude -p` operations (Ingest tiering, Query, Lint), URL ingest, and the key invariants/gotchas. Read after the README to go deep. |
 | [`plans/INITIAL.md`](plans/INITIAL.md) | Original full product/architecture plan (milestones, schema, File Provider design, definition of done). Source of truth for *what we're building*. |
-| [`plans/llm-wiki.md`](plans/llm-wiki.md) | **Next major effort:** turning WikiFS into a self-maintaining LLM Wiki — **many** wikis (one SQLite DB + one File Provider domain each), with `claude -p` authoring/maintaining each one by writing via a new `wikictl` CLI (read via the mount, write via the CLI). Locked decisions, components, and the Phase 0 → A–D plan. Read before Phase 0. |
+| [`plans/llm-wiki.md`](plans/llm-wiki.md) | **Next major effort:** turning Self Driving Wiki into a self-maintaining LLM Wiki — **many** wikis (one SQLite DB + one File Provider domain each), with `claude -p` authoring/maintaining each one by writing via a new `wikictl` CLI (read via the mount, write via the CLI). Locked decisions, components, and the Phase 0 → A–D plan. Read before Phase 0. |
 | [`plans/page-reader-ui.md`](plans/page-reader-ui.md) | **Current UI direction:** page detail is reader-first because the agent should maintain wiki content; manual source editing is an explicit, rare mode. |
 | [`plans/BRINGUP.md`](plans/BRINGUP.md) | The 4-phase bring-up plan from skeleton to v0 (groups INITIAL.md's M0–M6). Source of truth for *the order we build in*. |
 | [`plans/build-environment.md`](plans/build-environment.md) | How the app is built: SwiftPM + `build.sh` + `Makefile`, signing, icon generation, app-bundle layout. Source of truth for *how we build and run*. |
@@ -45,7 +46,7 @@ with a plain-folder export, even though that would dodge the signing requirement
 ## Status
 
 See `PROGRESS.md` for the running log. Current: **🎉 LLM Wiki COMPLETE ✅ — all
-five phases (0, A, B, C, D) gate-passed.** WikiFS is now a self-maintaining LLM
+five phases (0, A, B, C, D) gate-passed.** Self Driving Wiki is now a self-maintaining LLM
 wiki: a user keeps **many** wikis (one SQLite DB + one File Provider domain
 each); an LLM (`claude -p`, run as **Ingest / Query / Lint** from the app)
 authors and maintains each one — reading the read-only mount and writing via the
@@ -136,7 +137,7 @@ gate's evidence and the known v0 gaps.
 ## Build quick reference
 
 ```sh
-make          # debug build → build/WikiFS.app
+make          # debug build → build/Self Driving Wiki.app
 make run      # build + launch
 make check    # compile-only gate (no bundle/sign)
 make help     # all targets

@@ -255,7 +255,7 @@ public final class WikiManager {
         // Mint the descriptor for the migrated wiki and move the file to its
         // ULID-keyed name. If the move fails, leave everything as-is (the app
         // can retry next launch).
-        let descriptor = WikiDescriptor.make(displayName: "WikiFS")
+        let descriptor = WikiDescriptor.make(displayName: "Self Driving Wiki")
         let target = databaseURL(forWikiID: descriptor.id)
         guard !fm.fileExists(atPath: target.path) else { return }
 

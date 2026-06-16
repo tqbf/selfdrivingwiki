@@ -96,6 +96,6 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
 
     private var readOnly: NSError {
         NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError,
-                userInfo: [NSLocalizedDescriptionKey: "WikiFS is read-only"])
+                userInfo: [NSLocalizedDescriptionKey: "Self Driving Wiki is read-only"])
     }
 }

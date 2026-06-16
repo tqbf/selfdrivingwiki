@@ -26,7 +26,7 @@ struct IndexGeneratorTests {
         let data = IndexGenerators.manifest(pages: pages, fileCount: 3,
                                             generatedAt: Date(timeIntervalSince1970: 0))
         let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        #expect(obj?["name"] as? String == "WikiFS")
+        #expect(obj?["name"] as? String == "Self Driving Wiki")
         #expect(obj?["version"] as? Int == 1)
         #expect(obj?["page_count"] as? Int == 2)
         #expect(obj?["file_count"] as? Int == 3)

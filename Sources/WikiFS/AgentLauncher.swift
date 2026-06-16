@@ -75,7 +75,7 @@ final class AgentLauncher {
     /// - `wikiID`/`wikiRoot`/`systemPrompt` come from the active wiki at click time
     ///   (`wikiRoot` resolved from the FP manager — never hardcoded).
     /// - `wikictlDirectory` is the dir holding the embedded `wikictl`
-    ///   (`WikiFS.app/Contents/Helpers`), prepended to the child's PATH so the
+    ///   (`Self Driving Wiki.app/Contents/Helpers`), prepended to the child's PATH so the
     ///   agent's `wikictl` calls resolve.
     /// - `onLock`/`onUnlock` are the edit-lock callbacks: `onLock` fires before the
     ///   spawn, `onUnlock` from the `terminationHandler` (so a killed agent still
@@ -285,7 +285,7 @@ final class AgentLauncher {
             .urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         let scratch = base
-            .appendingPathComponent("WikiFS-agent", isDirectory: true)
+            .appendingPathComponent("Self Driving Wiki-agent", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)

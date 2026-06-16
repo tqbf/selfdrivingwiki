@@ -1,6 +1,6 @@
 # Page Reader UI
 
-WikiFS is agent-maintained first and manually edited only occasionally. The main
+Self Driving Wiki is agent-maintained first and manually edited only occasionally. The main
 page surface should therefore behave like a wiki reader, not a source editor.
 
 ## Product Direction

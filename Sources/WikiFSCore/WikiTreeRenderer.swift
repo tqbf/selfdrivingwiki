@@ -24,7 +24,7 @@ public enum WikiTreeRenderer {
         """
         # Wiki Layout (TREE.md)
 
-        A read-only map of this WikiFS wiki. Everything under the mount is served
+        A read-only map of this Self Driving Wiki wiki. Everything under the mount is served
         read-only — WRITE only through the `wikictl` command (see the cheatsheet
         below). `wikictl` already targets THIS wiki via the `$WIKI_DB` environment
         variable, so never pass `--wiki`.

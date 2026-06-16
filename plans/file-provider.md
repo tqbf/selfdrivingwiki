@@ -58,7 +58,7 @@ signs are non-interactive.
 - **Two SwiftPM executable targets**: `WikiFS` (app) and `WikiFSFileProvider`
   (extension binary), the latter with `.linkedFramework("FileProvider")` and the
   `-e _NSExtensionMain` entry override.
-- **`build.sh`** assembles `WikiFS.app/Contents/PlugIns/WikiFSFileProvider.appex`
+- **`build.sh`** assembles `Self Driving Wiki.app/Contents/PlugIns/WikiFSFileProvider.appex`
   by hand: copies the binary, writes the appex `Info.plist`
   (`CFBundlePackageType = XPC!`, `NSExtension` dict with point id
   `com.apple.fileprovider-nonui`, principal class `FileProviderExtension`,

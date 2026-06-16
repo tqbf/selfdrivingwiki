@@ -83,7 +83,7 @@ public enum IndexGenerators {
         let iso = iso8601(generatedAt)
         let json = """
         {
-          "name": "WikiFS",
+          "name": "Self Driving Wiki",
           "version": 1,
           "generated_at": "\(iso)",
           "page_count": \(pages.count),

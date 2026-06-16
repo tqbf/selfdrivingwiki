@@ -1,6 +1,6 @@
 # Build environment
 
-How WikiFS is compiled, bundled, signed, and run. This is the source of truth
+How Self Driving Wiki is compiled, bundled, signed, and run. This is the source of truth
 for *how we build*; `plans/INITIAL.md` is the source of truth for *what we
 build*.
 
@@ -28,7 +28,7 @@ WikiFS/
 scripts/make-icon.swift       renders build/AppIcon.iconset from an SF Symbol
 build.sh                      swift build → assemble .app → write Info.plist → codesign
 Makefile                      orchestration (adapted from Makefile.example)
-build/                        output (gitignored): WikiFS.app, AppIcon.icns, .iconset
+build/                        output (gitignored): Self Driving Wiki.app, AppIcon.icns, .iconset
 .build/                       SwiftPM intermediate (gitignored)
 dist/                         release zips (gitignored)
 ```
@@ -45,7 +45,7 @@ dist/                         release zips (gitignored)
    icon sizes into `build/AppIcon.iconset`; `iconutil -c icns` packs it.
 3. **`build.sh <config>`**:
    - `swift build -c <config>` produces the executable.
-   - Assembles `build/WikiFS.app/Contents/{MacOS,Resources}`, copies the
+   - Assembles `build/Self Driving Wiki.app/Contents/{MacOS,Resources}`, copies the
      binary and `AppIcon.icns`.
    - Writes `Info.plist` (bundle id `org.sockpuppet.WikiFS`, min macOS 14,
      `NSHighResolutionCapable`, productivity category). Version resolves from
@@ -58,7 +58,7 @@ dist/                         release zips (gitignored)
 
 | Target | Effect |
 | --- | --- |
-| `make` / `make build` | Debug build → `build/WikiFS.app` |
+| `make` / `make build` | Debug build → `build/Self Driving Wiki.app` |
 | `make run` | Build + `open` the app |
 | `make check` | `swift build` only — no bundle/sign. **The CI / agent gate.** |
 | `make test` | `swift test` (no test target yet) |
@@ -83,7 +83,7 @@ change, run it and confirm the process survives the first display cycle:
 
 ```sh
 make run
-sleep 4 && pgrep -x WikiFS && echo alive
+sleep 4 && pgrep -x "Self Driving Wiki" && echo alive
 ```
 
 ## What's deliberately deferred

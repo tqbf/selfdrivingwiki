@@ -145,7 +145,7 @@ struct WikiManagerTests {
 
         #expect(manager.wikis.count == 1)
         let descriptor = manager.wikis[0]
-        #expect(descriptor.displayName == "WikiFS")
+        #expect(descriptor.displayName == "Self Driving Wiki")
 
         // The legacy file was renamed to <ulid>.sqlite; the old name is gone.
         #expect(!FileManager.default.fileExists(atPath: legacy.path))
@@ -181,7 +181,7 @@ struct WikiManagerTests {
     /// import must be strictly one-time — gated on an EMPTY registry — so a legacy
     /// file reappearing alongside a non-empty registry adds ZERO wikis and keeps
     /// the same wiki #1 active. This reproduces the duplication loop the gate
-    /// caught (1 wiki → 2, both "WikiFS").
+    /// caught (1 wiki → 2, both named from the legacy product default).
     @Test func legacyFileReappearingAfterFirstLaunchDoesNotDuplicate() throws {
         let dir = tempDirectory()
         let legacy = dir.appendingPathComponent(DatabaseLocation.legacyDatabaseFileName)

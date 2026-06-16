@@ -1,10 +1,10 @@
-# LLM Wiki — WikiFS as a self-maintaining knowledge base
+# LLM Wiki — Self Driving Wiki as a self-maintaining knowledge base
 
-**What this adds.** Turns WikiFS from a hand-edited wiki into the
+**What this adds.** Turns Self Driving Wiki from a hand-edited wiki into the
 [LLM Wiki pattern](../problems/): an LLM (`claude -p`) *writes and maintains* the
 wiki — ingesting raw sources, authoring summary/entity/concept pages,
 cross-linking, and keeping a curated index + chronological log current. The human
-curates sources and asks questions; the agent does the bookkeeping. WikiFS is the
+curates sources and asks questions; the agent does the bookkeeping. Self Driving Wiki is the
 "Obsidian" in the pattern (the live viewer) and the storage; `claude -p` is the
 maintainer.
 
@@ -18,10 +18,10 @@ This doc is the source of truth for *what we're adding and in what order*. Read
 
 ## How the pattern maps onto what we already have
 
-The pattern's three layers already exist in WikiFS — only the wiki's **write
+The pattern's three layers already exist in Self Driving Wiki — only the wiki's **write
 path** is missing.
 
-| Pattern layer | WikiFS today | Work |
+| Pattern layer | Self Driving Wiki today | Work |
 | --- | --- | --- |
 | **Raw sources** (immutable) | `files/` ingestion — verbatim bytes in SQLite, read-only under `files/by-{id,name}` | none — done |
 | **The schema** (`CLAUDE.md`/`AGENTS.md`) | `system_prompt` singleton projected read-only at root as both names | rewrite the *content* (Phase D) |
@@ -65,7 +65,7 @@ A user has **N independent wikis**. Each is fully self-contained:
   `wiki_id` columns and no per-query filtering. A wiki is a single portable,
   git-able file; deleting one = drop the file + remove its domain.
 - **One `NSFileProviderDomain` per wiki** — each mounts at its own
-  `~/Library/CloudStorage/WikiFS-<name>` in Finder's sidebar. `NSFileProviderManager`
+  `~/Library/CloudStorage/Self Driving Wiki-<name>` in Finder's sidebar. `NSFileProviderManager`
   is built for multiple domains; this leans *harder* into the File Provider API
   than v0 did (v0 registered exactly one domain).
 - **A registry** — the set of wikis (id, display name, DB filename, domain
@@ -279,7 +279,7 @@ Stacked, unmerged branches off the current line, like v0 / the post-v0 features.
   domain per wiki** and gains a switcher to **create / select / delete** wikis
   (each new wiki = fresh DB seeded with the default schema + a new domain). The
   existing single v0 wiki migrates into the registry as wiki #1. *Gate:* create a
-  second wiki in-app → it mounts as its own `~/Library/CloudStorage/WikiFS-<name>`;
+  second wiki in-app → it mounts as its own `~/Library/CloudStorage/Self Driving Wiki-<name>`;
   pages written in wiki A never appear in wiki B's mount; both DBs are independent
   files; deleting a wiki removes its domain + file; v0 single-wiki content
   preserved as wiki #1.

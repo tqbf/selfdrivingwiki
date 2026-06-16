@@ -48,7 +48,7 @@ Five SwiftPM targets ([`Package.swift`](../Package.swift)):
   the wiki switcher, domain registration, and the change bridge.
 - **`WikiFSFileProvider`** is the `NSFileProviderReplicatedExtension`. Built as an
   executable, then `build.sh` repackages it into a `.appex` under
-  `WikiFS.app/Contents/PlugIns`. Its Mach-O entry point is overridden to
+  `Self Driving Wiki.app/Contents/PlugIns`. Its Mach-O entry point is overridden to
   `_NSExtensionMain` via a linker flag — a Swift `main()` that calls
   `NSExtensionMain()` recurses infinitely on re-invocation and SIGSEGVs (see the
   comment in `Package.swift` and the appex-entry memory).

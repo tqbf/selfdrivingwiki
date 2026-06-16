@@ -1,7 +1,7 @@
-# WikiFS — native macOS SwiftUI wiki with a filesystem projection
+# Self Driving Wiki — native macOS SwiftUI wiki with a filesystem projection
 #
 # Quick start:
-#   make           # debug-builds via SwiftPM into ./build/WikiFS.app
+#   make           # debug-builds via SwiftPM into ./build/Self Driving Wiki.app
 #   make run       # build + launch
 #   make check     # compile only, no bundling/signing (agent / CI gate)
 #   make install   # copy to /Applications/ and register with LaunchServices
@@ -14,12 +14,12 @@
 # release zip.
 
 CONFIG       := debug
-APP          := build/WikiFS.app
+APP_NAME      := Self Driving Wiki
+APP          := build/$(APP_NAME).app
 LSREGISTER   := /System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister
 MIN_MACOS    := 14
 MIN_SWIFT    := 6.0
 
-APP_NAME      := WikiFS
 ENTITLEMENTS  := WikiFS/WikiFS.entitlements
 
 # ---------------------------------------------------------------------------
@@ -162,15 +162,15 @@ run: build
 
 install: build
 	@if [ ! -d "$(APP)" ]; then echo "✗ $(APP) missing — build failed?"; exit 1; fi
-	rm -rf /Applications/$(APP_NAME).app
+	rm -rf "/Applications/$(APP_NAME).app"
 	cp -R "$(APP)" /Applications/
 	@echo "✓ copied to /Applications/$(APP_NAME).app"
-	$(LSREGISTER) -f /Applications/$(APP_NAME).app
+	$(LSREGISTER) -f "/Applications/$(APP_NAME).app"
 	@echo "✓ registered /Applications/$(APP_NAME).app with LaunchServices"
 
 uninstall:
-	@if [ -d /Applications/$(APP_NAME).app ]; then \
-	  rm -rf /Applications/$(APP_NAME).app 2>/dev/null || sudo rm -rf /Applications/$(APP_NAME).app; \
+	@if [ -d "/Applications/$(APP_NAME).app" ]; then \
+	  rm -rf "/Applications/$(APP_NAME).app" 2>/dev/null || sudo rm -rf "/Applications/$(APP_NAME).app"; \
 	  echo "✓ removed /Applications/$(APP_NAME).app"; \
 	else \
 	  echo "  (no /Applications/$(APP_NAME).app to remove)"; \
@@ -280,7 +280,7 @@ zip-release: staple
 	@echo "✓ wrote $(RELEASE_ZIP)"
 
 checksum: zip-release
-	cd "$(DIST_DIR)" && shasum -a 256 "$$(basename $(RELEASE_ZIP))" > "$$(basename $(RELEASE_ZIP)).sha256"
+	cd "$(DIST_DIR)" && shasum -a 256 "$$(basename "$(RELEASE_ZIP)")" > "$$(basename "$(RELEASE_ZIP)").sha256"
 	@echo "✓ wrote $(RELEASE_ZIP).sha256"
 
 verify-release: zip-release
