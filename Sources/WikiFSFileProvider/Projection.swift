@@ -63,6 +63,10 @@ struct Projection {
         static let logMD = NSFileProviderItemIdentifier(WikiFSContainerID.logMD)
         static let indexMD = NSFileProviderItemIdentifier(WikiFSContainerID.indexMD)
 
+        // Phase C: a root-level read-only orientation map of the wiki layout
+        // (`TREE.md`), served exactly like `log.md`/`index.md`.
+        static let treeMD = NSFileProviderItemIdentifier(WikiFSContainerID.treeMD)
+
         static let byIDPrefix = "page-by-id:"
         static let byTitlePrefix = "page-by-title:"
         // Shared with the app (which resolves a per-file user-visible URL to open
@@ -120,6 +124,7 @@ struct Projection {
     - `CLAUDE.md` / `AGENTS.md` (the agent system prompt — identical)
     - `index.md` (the curated catalog)
     - `log.md` (the append-only chronological log)
+    - `TREE.md` (the layout/orientation map)
     - `pages/by-id/`
     - `pages/by-title/`
     - `files/by-id/`
@@ -317,6 +322,33 @@ struct Projection {
                      created: nil, modified: nil)
     }
 
+    // MARK: - TREE.md (layout/orientation map)
+
+    /// The rendered `TREE.md` body — a deterministic map of the wiki's FIXED layout
+    /// (`WikiTreeRenderer`) plus two cheap live counts (pages, files). Resilient to
+    /// the tables not existing yet (pre-migration read connection) → zero counts, so
+    /// the file always exists. The layout text is static; only the counts move, and
+    /// they move with the same page/file folds the change token already tracks.
+    private func treeBody() -> Data {
+        let store = openReadStore()
+        let pageCount = (try? store?.listAllPagesOrderedByID())??.count ?? 0
+        let fileCount = (try? store?.listAllIngestedFilesOrderedByID())??.count ?? 0
+        return Data(WikiTreeRenderer.render(pageCount: pageCount, fileCount: fileCount).utf8)
+    }
+
+    /// Build the root-level `TREE.md` file node. Versioned by the change token (like
+    /// `log.md`): the layout text is static, but the two folded-in counts move with
+    /// any page/file create, and those are exactly the folds the token tracks — so a
+    /// token-versioned node re-fetches precisely when (and only when) the counts can
+    /// have changed. No separate `changeToken()` term is needed.
+    private func treeNode(for id: NSFileProviderItemIdentifier) -> ProjectedNode {
+        let body = treeBody()
+        let version = Data(changeToken().utf8)
+        return .file(id: id, parent: .rootContainer, name: "TREE.md", size: body.count,
+                     version: version, metadataVersion: version,
+                     created: nil, modified: nil)
+    }
+
     // MARK: - Change token (sync anchor)
 
     /// The whole-database change token used as the File Provider sync anchor.
@@ -351,6 +383,8 @@ struct Projection {
             return wikiIndexNode(for: id)
         case Identity.logMD:
             return logNode(for: id)
+        case Identity.treeMD:
+            return treeNode(for: id)
         case Identity.pages:
             return .folder(id: id, parent: .rootContainer, name: "pages")
         case Identity.pagesByID:
@@ -450,6 +484,7 @@ struct Projection {
                 node(for: Identity.agentsMD),
                 node(for: Identity.indexMD),
                 node(for: Identity.logMD),
+                node(for: Identity.treeMD),
                 node(for: Identity.manifest),
                 node(for: Identity.pages),
                 node(for: Identity.files),
@@ -491,7 +526,7 @@ struct Projection {
                 + [Identity.manifest, Identity.indexPagesJSONL,
                    Identity.indexLinksJSONL, Identity.indexFilesJSONL,
                    Identity.claudeMD, Identity.agentsMD,
-                   Identity.indexMD, Identity.logMD]
+                   Identity.indexMD, Identity.logMD, Identity.treeMD]
                     .compactMap { node(for: $0) }
         default:
             return []
@@ -543,6 +578,10 @@ struct Projection {
         // log.md: the whole log table rendered as grep-able lines.
         if id == Identity.logMD {
             return logBody()
+        }
+        // TREE.md: the layout/orientation map + live counts.
+        if id == Identity.treeMD {
+            return treeBody()
         }
         // Generated index files: serve the SAME token-cached bytes whose length
         // `node(for:)` reported as `documentSize` (else `cat` truncates).

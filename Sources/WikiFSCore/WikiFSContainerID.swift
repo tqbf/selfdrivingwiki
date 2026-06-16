@@ -48,6 +48,12 @@ public enum WikiFSContainerID {
     public static let logMD = "log-md"
     public static let indexMD = "index-md"
 
+    // Phase C. A root-level read-only orientation map of the wiki's fixed layout
+    // (`WikiTreeRenderer`) plus two live counts, served like `log.md`. A child of
+    // the root, refreshed by `signalChange()` signaling `.rootContainer` (+ the
+    // working set), exactly as for `log.md`/`index.md`.
+    public static let treeMD = "tree-md"
+
     /// Prefix for a single ingested file's `by-id` LEAF identifier (carries the
     /// full ULID, never the filename — INITIAL §6). Shared so the extension's
     /// `Projection.Identity.fileByID(_:)` and the app's "open this file"
