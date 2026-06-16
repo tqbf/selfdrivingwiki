@@ -33,7 +33,7 @@ struct PageDetailView: View {
 
             Divider().opacity(PageEditorMetrics.dividerOpacity)
 
-            MarkdownPreview(markdown: store.draftBody)
+            MarkdownPreview(store: store, markdown: store.draftBody)
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: PageEditorMetrics.previewMinHeight)
                 .background(.quaternary.opacity(0.25))

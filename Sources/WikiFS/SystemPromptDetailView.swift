@@ -39,7 +39,7 @@ struct SystemPromptDetailView: View {
 
             Divider().opacity(PageEditorMetrics.dividerOpacity)
 
-            MarkdownPreview(markdown: store.draftSystemPrompt)
+            MarkdownPreview(store: store, markdown: store.draftSystemPrompt)
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: PageEditorMetrics.previewMinHeight)
                 .background(.quaternary.opacity(0.25))

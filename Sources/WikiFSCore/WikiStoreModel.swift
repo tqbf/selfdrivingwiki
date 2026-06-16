@@ -86,6 +86,28 @@ public final class WikiStoreModel {
         loadDrafts(for: newValue)
     }
 
+    /// True if `title` resolves to an existing page. Drives the in-app preview's
+    /// resolved-vs-unresolved `[[wiki-link]]` styling (a missing target renders
+    /// dimmed + inert). Duplicate titles resolve to the lowest-ULID page, same as
+    /// the link graph (`replaceLinks`).
+    public func pageExists(title: String) -> Bool {
+        (try? store.resolveTitleToID(title)) != nil
+    }
+
+    /// Navigate to the page with `title` from a clicked `[[wiki-link]]` in the
+    /// preview. Resolves title → id (lowest-ULID on a duplicate-title collision,
+    /// matching the link graph) and selects it through the SAME `select(_:)` seam
+    /// the sidebar uses — so the outgoing page's pending edits flush first and the
+    /// incoming draft loads (§3.5). Returns whether navigation happened, so the
+    /// click handler can report `.handled`. A no-op (returns `false`) if the title
+    /// has no page.
+    @discardableResult
+    public func selectPage(byTitle title: String) -> Bool {
+        guard let id = (try? store.resolveTitleToID(title)) ?? nil else { return false }
+        select(.page(id))
+        return true
+    }
+
     private func loadDrafts(for newValue: WikiSelection?) {
         loadedSelection = newValue
         switch newValue {
