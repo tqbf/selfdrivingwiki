@@ -165,6 +165,86 @@ struct URLIngestServiceTests {
         #expect(collector.data == bytes)
     }
 
+    // MARK: - Content sniffing (mislabeled content)
+
+    @Test func htmlLabeledButPDFBytesStoredAsPDFVerbatim() async throws {
+        let collector = StoreCollector()
+        // A Dropbox-style interstitial slip: server says text/html but the bytes are
+        // a real PDF (incl. a NUL to prove it's raw, not HTML→Markdown'd).
+        var pdf = Data("%PDF-1.3\n".utf8)
+        pdf.append(contentsOf: [0x00, 0x01, 0xFF, 0xFE])
+        pdf.append(contentsOf: Data("trailer".utf8))
+        let fetcher = FakeFetcher(response: URLIngestService.FetchResponse(
+            data: pdf, contentType: "text/html; charset=utf-8",
+            finalURL: URL(string: "https://dl.dropboxusercontent.com/scl/fi/x/CPP_behaviorgen.pdf?rlkey=k")!))
+
+        let outcome = try await makeService(fetcher, collector).ingest(
+            rawInput: "https://dl.dropboxusercontent.com/scl/fi/x/CPP_behaviorgen.pdf?rlkey=k")
+
+        #expect(outcome.kind == .pdf)
+        #expect(collector.filename == "CPP_behaviorgen.pdf")
+        #expect(collector.data == pdf)  // byte-identical, NOT converted to markdown
+    }
+
+    @Test func octetStreamPNGBytesSniffedToImage() async throws {
+        let collector = StoreCollector()
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])  // PNG magic
+        let fetcher = FakeFetcher(response: URLIngestService.FetchResponse(
+            data: png, contentType: "application/octet-stream",
+            finalURL: URL(string: "https://example.com/blob")!))
+
+        let outcome = try await makeService(fetcher, collector).ingest(rawInput: "https://example.com/blob")
+        #expect(outcome.kind == .binary)
+        #expect(collector.filename == "blob.png")
+        #expect(collector.data == png)
+    }
+
+    @Test func genuineHTMLStillConvertedToMarkdown() async throws {
+        // Real HTML labeled text/html must NOT trip the sniffer (no binary magic).
+        let collector = StoreCollector()
+        let fetcher = FakeFetcher(response: response(
+            "<html><head><title>Real Page</title></head><body><p>hi</p></body></html>",
+            mime: "text/html", url: "https://example.com/page"))
+        let outcome = try await makeService(fetcher, collector).ingest(rawInput: "https://example.com/page")
+        #expect(outcome.kind == .htmlConverted)
+        #expect(collector.filename == "Real Page.md")
+    }
+
+    @Test func realPDFContentTypeStillStoredAsPDF() async throws {
+        // A correctly-labeled PDF takes the application/pdf path (not sniffed away).
+        let collector = StoreCollector()
+        let pdf = Data("%PDF-1.7\nbody".utf8)
+        let fetcher = FakeFetcher(response: URLIngestService.FetchResponse(
+            data: pdf, contentType: "application/pdf",
+            finalURL: URL(string: "https://example.com/docs/report.pdf")!))
+        let outcome = try await makeService(fetcher, collector).ingest(rawInput: "https://example.com/docs/report.pdf")
+        #expect(outcome.kind == .pdf)
+        #expect(collector.filename == "report.pdf")
+        #expect(collector.data == pdf)
+    }
+
+    @Test func sniffContentTypeMagicNumbers() {
+        #expect(URLIngestService.sniffContentType(Data("%PDF-1.4".utf8)) == "application/pdf")
+        #expect(URLIngestService.sniffContentType(Data([0x89, 0x50, 0x4E, 0x47])) == "image/png")
+        #expect(URLIngestService.sniffContentType(Data([0xFF, 0xD8, 0xFF, 0xE0])) == "image/jpeg")
+        #expect(URLIngestService.sniffContentType(Data("GIF89a".utf8)) == "image/gif")
+        #expect(URLIngestService.sniffContentType(Data([0x50, 0x4B, 0x03, 0x04])) == "application/zip")
+        // Plain text / HTML carries no magic → nil (falls back to declared type).
+        #expect(URLIngestService.sniffContentType(Data("<!DOCTYPE html>".utf8)) == nil)
+        #expect(URLIngestService.sniffContentType(Data("hello".utf8)) == nil)
+        #expect(URLIngestService.sniffContentType(Data()) == nil)
+    }
+
+    @Test func shouldSniffOnlyAmbiguousTypes() {
+        #expect(URLIngestService.shouldSniff(nil))
+        #expect(URLIngestService.shouldSniff("text/html"))
+        #expect(URLIngestService.shouldSniff("application/octet-stream"))
+        // A specific declared type is trusted, not sniffed.
+        #expect(!URLIngestService.shouldSniff("application/pdf"))
+        #expect(!URLIngestService.shouldSniff("image/png"))
+        #expect(!URLIngestService.shouldSniff("text/plain"))
+    }
+
     // MARK: - Errors
 
     @Test func nonHTTPSuccessSurfacedAsError() async throws {

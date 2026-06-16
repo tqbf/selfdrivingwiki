@@ -150,6 +150,22 @@ public struct URLIngestService {
     public static func plan(for response: FetchResponse) -> StorePlan {
         let mime = normalizedMIME(response.contentType)
 
+        // Content-sniff the bytes when the declared type is one a misconfigured /
+        // interstitial-serving host commonly lies about: `text/html`, missing, or a
+        // generic `application/octet-stream`. If the bytes carry a known binary magic
+        // number (e.g. a Dropbox interstitial that slipped past the normalizer but
+        // actually returned a `%PDF`), store them verbatim as the SNIFFED type instead
+        // of running HTML→Markdown on binary garbage. We trust an explicit, specific
+        // declared type (`application/pdf`, `image/png`, …) and only sniff the
+        // ambiguous ones, so a server that knows what it's serving wins.
+        if shouldSniff(mime), let sniffed = sniffContentType(response.data) {
+            let ext = binaryExtension(forMIME: sniffed, url: response.finalURL)
+            let stem = stemFromURL(response.finalURL, droppingExtension: ext)
+            let filename = ext.isEmpty ? sanitizeStem(stem) : ensureExtension(sanitizeStem(stem), ext: ext)
+            let kind: IngestOutcome.Kind = sniffed == "application/pdf" ? .pdf : .binary
+            return StorePlan(filename: filename, data: response.data, kind: kind)
+        }
+
         if mime == "text/html" || mime == "application/xhtml+xml" {
             let html = decodeText(response.data)
             let result = HTMLToMarkdown.convert(html)
@@ -176,6 +192,39 @@ public struct URLIngestService {
         let stem = stemFromURL(response.finalURL, droppingExtension: ext)
         let filename = ext.isEmpty ? sanitizeStem(stem) : ensureExtension(sanitizeStem(stem), ext: ext)
         return StorePlan(filename: filename, data: response.data, kind: .binary)
+    }
+
+    // MARK: - Content sniffing (pure)
+
+    /// Whether a declared MIME is ambiguous enough to second-guess via the bytes:
+    /// `text/html` (the interstitial case), a missing type, or the catch-all
+    /// `application/octet-stream`. A specific declared type is trusted as-is.
+    static func shouldSniff(_ mime: String?) -> Bool {
+        switch mime {
+        case nil, "text/html", "application/xhtml+xml", "application/octet-stream":
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Detect a known binary content type from leading magic-number bytes, else
+    /// `nil` (so the caller falls back to the declared type). Cheap prefix checks;
+    /// extend the table as needed.
+    static func sniffContentType(_ data: Data) -> String? {
+        // Examine a small prefix; `prefix` is a view, so this copies at most 8 bytes.
+        let head = Array(data.prefix(8))
+        func starts(with magic: [UInt8]) -> Bool {
+            guard head.count >= magic.count else { return false }
+            return Array(head.prefix(magic.count)) == magic
+        }
+
+        if starts(with: Array("%PDF".utf8)) { return "application/pdf" }
+        if starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "image/png" }  // \x89PNG
+        if starts(with: [0xFF, 0xD8, 0xFF]) { return "image/jpeg" }
+        if starts(with: Array("GIF8".utf8)) { return "image/gif" }
+        if starts(with: [0x50, 0x4B, 0x03, 0x04]) { return "application/zip" }  // PK\x03\x04
+        return nil
     }
 
     // MARK: - Helpers (pure)

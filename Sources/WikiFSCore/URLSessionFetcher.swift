@@ -33,7 +33,14 @@ public struct URLSessionFetcher: URLIngestService.URLResourceFetcher {
     }
 
     public func fetch(_ url: URL) async throws -> URLIngestService.FetchResponse {
-        var request = URLRequest(url: url)
+        // Rewrite recognized file-share preview links (e.g. a Dropbox `www.dropbox.com`
+        // share URL) to their direct-download host BEFORE the request — otherwise the
+        // host serves a non-browser an HTML JS interstitial instead of the file. Pure +
+        // conservative: an unrecognized URL passes through unchanged. See
+        // `ShareLinkNormalizer`.
+        let fetchURL = ShareLinkNormalizer.normalize(url)
+
+        var request = URLRequest(url: fetchURL)
         request.httpMethod = "GET"
         // Be explicit about what we accept; some servers vary content by Accept.
         request.setValue(
@@ -55,7 +62,7 @@ public struct URLSessionFetcher: URLIngestService.URLResourceFetcher {
             return URLIngestService.FetchResponse(
                 data: data,
                 contentType: response.mimeType,
-                finalURL: response.url ?? url
+                finalURL: response.url ?? fetchURL
             )
         }
 
@@ -67,7 +74,7 @@ public struct URLSessionFetcher: URLIngestService.URLResourceFetcher {
         return URLIngestService.FetchResponse(
             data: data,
             contentType: contentType,
-            finalURL: http.url ?? url
+            finalURL: http.url ?? fetchURL
         )
     }
 }
