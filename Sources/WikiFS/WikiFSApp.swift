@@ -13,6 +13,7 @@ import WikiFSCore
 @main
 struct WikiFSApp: App {
     private let launchLocationWarning: LaunchLocationWarning?
+    private let containerDirectory: URL
     @State private var manager: WikiManager
     @State private var fileProvider = FileProviderSpike()
     @State private var agentLauncher = AgentLauncher()
@@ -41,6 +42,7 @@ struct WikiFSApp: App {
         if WikiRegistry.load(from: directory).isEmpty {
             DatabaseLocation.migrateFromApplicationSupportIfNeeded()
         }
+        containerDirectory = directory
         _manager = State(initialValue: WikiManager(containerDirectory: directory))
     }
 
@@ -117,6 +119,10 @@ struct WikiFSApp: App {
             ClaudePromptHelpView()
         }
         .defaultSize(width: 880, height: 680)
+
+        Settings {
+            ZoteroSettingsView(containerDirectory: containerDirectory)
+        }
     }
 }
 
