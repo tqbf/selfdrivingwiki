@@ -17,6 +17,9 @@ struct WikiSwitcher: View {
     @State private var renameTarget: WikiDescriptor?
     @State private var renameText = ""
     @State private var deleteTarget: WikiDescriptor?
+    @State private var importSourceURL: URL?
+    @State private var importWikiName = ""
+    @State private var failureMessage: String?
 
     var body: some View {
         Menu {
@@ -41,9 +44,18 @@ struct WikiSwitcher: View {
                     renameText = active.displayName
                     renameTarget = active
                 }
+                Button("Export “\(active.displayName)”…", systemImage: "square.and.arrow.up") {
+                    exportWiki(active)
+                }
                 Button("Delete “\(active.displayName)”…", systemImage: "trash", role: .destructive) {
                     deleteTarget = active
                 }
+            }
+
+            Divider()
+
+            Button("Import Wiki Backup…", systemImage: "square.and.arrow.down") {
+                importWiki()
             }
         } label: {
             HStack(spacing: 6) {
@@ -68,8 +80,20 @@ struct WikiSwitcher: View {
             TextField("Name", text: $renameText)
             Button("Cancel", role: .cancel) { renameTarget = nil }
             Button("Rename") {
-                manager.renameWiki(id: target.id, to: renameText)
+                Task { await manager.renameWiki(id: target.id, to: renameText) }
                 renameTarget = nil
+            }
+        }
+        .sheet(isPresented: importPresented) {
+            ImportWikiSheet(name: $importWikiName) { name in
+                guard let sourceURL = importSourceURL else { return }
+                Task {
+                    do {
+                        _ = try await manager.importWiki(from: sourceURL, displayName: name)
+                    } catch {
+                        failureMessage = String(describing: error)
+                    }
+                }
             }
         }
         .alert("Delete Wiki?", isPresented: deletePresented, presenting: deleteTarget) { target in
@@ -80,6 +104,11 @@ struct WikiSwitcher: View {
             }
         } message: { target in
             Text("“\(target.displayName)” and all its pages, files, and its filesystem mount will be permanently deleted. This cannot be undone.")
+        }
+        .alert("Wiki Operation Failed", isPresented: failurePresented) {
+            Button("OK", role: .cancel) { failureMessage = nil }
+        } message: {
+            Text(failureMessage ?? "An unknown error occurred.")
         }
     }
 
@@ -98,6 +127,37 @@ struct WikiSwitcher: View {
 
     private var deletePresented: Binding<Bool> {
         Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })
+    }
+
+    private var importPresented: Binding<Bool> {
+        Binding(
+            get: { importSourceURL != nil },
+            set: {
+                if !$0 {
+                    importSourceURL = nil
+                    importWikiName = ""
+                }
+            }
+        )
+    }
+
+    private var failurePresented: Binding<Bool> {
+        Binding(get: { failureMessage != nil }, set: { if !$0 { failureMessage = nil } })
+    }
+
+    private func exportWiki(_ wiki: WikiDescriptor) {
+        guard let destinationURL = WikiFilePanels.exportURL(defaultName: wiki.displayName) else { return }
+        do {
+            try manager.exportWiki(id: wiki.id, to: destinationURL)
+        } catch {
+            failureMessage = String(describing: error)
+        }
+    }
+
+    private func importWiki() {
+        guard let sourceURL = WikiFilePanels.importURL() else { return }
+        importSourceURL = sourceURL
+        importWikiName = sourceURL.deletingPathExtension().lastPathComponent
     }
 }
 
@@ -135,6 +195,43 @@ private struct NewWikiSheet: View {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         onCreate(trimmed)
+        dismiss()
+    }
+}
+
+/// Names a restored wiki after the user chooses a SQLite backup. The source file
+/// already exists; this sheet only asks for the new display name.
+private struct ImportWikiSheet: View {
+    @Binding var name: String
+    let onImport: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Import Wiki Backup")
+                .font(.headline)
+
+            TextField("Wiki name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 260)
+                .onSubmit(importBackup)
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Import", action: importBackup)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(20)
+    }
+
+    private func importBackup() {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        onImport(trimmed)
         dismiss()
     }
 }

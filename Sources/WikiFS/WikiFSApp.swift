@@ -155,6 +155,9 @@ extension FileProviderSpike {
         manager.removeDomain = { [weak self] id in
             await self?.removeDomain(id: id)
         }
+        manager.renameDomain = { [weak self] id, name in
+            await self?.renameDomain(id: id, displayName: name)
+        }
         manager.onActiveStoreDidChange = { [weak self, weak manager] in
             guard let self, let manager else { return }
             // Re-point the freshly-swapped store's change hook at the active

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SQLite3
 
 /// Owns the multi-wiki foundation at the app layer (`plans/llm-wiki.md` Phase 0):
 /// the registry of wikis, the currently-active store/model, and the create /
@@ -41,6 +42,8 @@ public final class WikiManager {
     /// `removeDomain(id:)` tears it down on delete.
     @ObservationIgnored public var registerDomain: ((_ id: String, _ displayName: String) async -> Void)?
     @ObservationIgnored public var removeDomain: ((_ id: String) async -> Void)?
+    /// Update a wiki domain's user-visible display name. Identity stays the ULID.
+    @ObservationIgnored public var renameDomain: ((_ id: String, _ displayName: String) async -> Void)?
 
     /// Invoked after the active store swaps (select / create / migrate). The app
     /// re-wires `onPageDidChange` to the new store's File Provider signaling.
@@ -146,14 +149,62 @@ public final class WikiManager {
         openActive(id)
     }
 
-    /// Rename a wiki: change ONLY its display name (identity/DB/domain untouched).
-    public func renameWiki(id: String, to displayName: String) {
+    /// Rename a wiki: change ONLY its display name (identity/DB untouched).
+    public func renameWiki(id: String, to displayName: String) async {
         let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         var registry = WikiRegistry.load(from: containerDirectory)
         registry.rename(id: id, to: trimmed)
         try? registry.save(to: containerDirectory)
         wikis = registry.wikis
+        await renameDomain?(id, trimmed)
+    }
+
+    /// Export one wiki as a single SQLite file. A WAL checkpoint runs first so
+    /// the copied `.sqlite` contains the latest committed pages, files, prompt,
+    /// index, and log without requiring `-wal` / `-shm` sidecars.
+    public func exportWiki(id: String, to destinationURL: URL) throws {
+        guard descriptorExists(id) else { throw WikiManagerError.unknownWiki(id) }
+        if id == activeWikiID { activeStore?.flushPendingSaves() }
+        let sourceURL = databaseURL(forWikiID: id)
+        guard sourceURL.standardizedFileURL != destinationURL.standardizedFileURL else {
+            throw WikiManagerError.exportWouldOverwriteSource
+        }
+        try checkpointDatabase(at: sourceURL)
+
+        let fm = FileManager.default
+        if fm.fileExists(atPath: destinationURL.path) {
+            try fm.removeItem(at: destinationURL)
+        }
+        try fm.copyItem(at: sourceURL, to: destinationURL)
+    }
+
+    /// Import a standalone SQLite wiki file as a new wiki with a new ULID and a
+    /// caller-provided display name. The source file is copied, opened once to
+    /// validate/migrate it, registered, and selected.
+    @discardableResult
+    public func importWiki(from sourceURL: URL, displayName: String) async throws -> WikiDescriptor {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw WikiManagerError.emptyDisplayName }
+
+        let descriptor = WikiDescriptor.make(displayName: trimmed)
+        let destinationURL = databaseURL(forWikiID: descriptor.id)
+        do {
+            try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+            _ = try makeStore(destinationURL)
+        } catch {
+            deleteDatabaseFiles(forWikiID: descriptor.id)
+            throw error
+        }
+
+        var registry = WikiRegistry.load(from: containerDirectory)
+        registry.add(descriptor)
+        try registry.save(to: containerDirectory)
+        wikis = registry.wikis
+
+        await registerDomain?(descriptor.id, descriptor.displayName)
+        select(descriptor.id)
+        return descriptor
     }
 
     /// Delete a wiki: remove its File Provider domain, its registry entry, and its
@@ -229,6 +280,25 @@ public final class WikiManager {
     private func makeModelIfEmpty(_ store: WikiStore) -> WikiStoreModel? {
         let model = WikiStoreModel(store: store)
         return model.summaries.isEmpty ? model : nil
+    }
+
+    /// Force any committed WAL pages back into the main database file so backup
+    /// export can be a single portable `.sqlite` file.
+    private func checkpointDatabase(at url: URL) throws {
+        var handle: OpaquePointer?
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        let rc = sqlite3_open_v2(url.path, &handle, flags, nil)
+        guard rc == SQLITE_OK, let handle else {
+            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "rc \(rc)"
+            if let handle { sqlite3_close(handle) }
+            throw WikiManagerError.sqlite(message)
+        }
+        defer { sqlite3_close(handle) }
+
+        let checkpoint = sqlite3_exec(handle, "PRAGMA wal_checkpoint(TRUNCATE);", nil, nil, nil)
+        guard checkpoint == SQLITE_OK else {
+            throw WikiManagerError.sqlite(String(cString: sqlite3_errmsg(handle)))
+        }
     }
 
     // MARK: - v0 migration

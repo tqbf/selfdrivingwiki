@@ -151,6 +151,17 @@ final class FileProviderSpike {
         }
     }
 
+    /// Refresh a registered domain's display name after a wiki rename. The
+    /// identifier stays stable, so remove+add is cosmetic from the extension's
+    /// point of view: both old and new domains map to the same `<ulid>.sqlite`.
+    func renameDomain(id: String, displayName: String) async {
+        let wasActive = activeWikiID == id
+        await removeDomain(id: id)
+        if await registerDomain(id: id, displayName: displayName), wasActive {
+            await activate(id: id, displayName: displayName)
+        }
+    }
+
     /// Make `id` the active wiki for path/signal purposes and resolve its mount
     /// path. Called when the user switches wikis.
     func activate(id: String, displayName: String) async {

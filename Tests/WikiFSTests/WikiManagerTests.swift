@@ -117,11 +117,90 @@ struct WikiManagerTests {
         let path = dir.appendingPathComponent("\(id).sqlite").path
         #expect(FileManager.default.fileExists(atPath: path))
 
-        manager.renameWiki(id: id, to: "Renamed")
+        await manager.renameWiki(id: id, to: "Renamed")
         // Same file, same id — only the label changed.
         #expect(FileManager.default.fileExists(atPath: path))
         #expect(manager.activeWikiID == id)
         #expect(manager.wikis.first { $0.id == id }?.displayName == "Renamed")
+    }
+
+    @Test func renameRefreshesTheFileProviderDomainName() async throws {
+        let manager = WikiManager(containerDirectory: tempDirectory())
+        manager.bootstrap()
+        let id = try #require(manager.activeWikiID)
+        var renamedDomain: (id: String, displayName: String)?
+        manager.renameDomain = { id, displayName in
+            renamedDomain = (id, displayName)
+        }
+
+        await manager.renameWiki(id: id, to: "Readable Name")
+
+        #expect(renamedDomain?.id == id)
+        #expect(renamedDomain?.displayName == "Readable Name")
+    }
+
+    // MARK: - Backup / restore
+
+    @Test func exportWritesAPortableSQLiteFileWithCurrentContent() throws {
+        let dir = tempDirectory()
+        let manager = WikiManager(containerDirectory: dir)
+        manager.bootstrap()
+        let id = try #require(manager.activeWikiID)
+
+        manager.activeStore?.newPage(title: "Exported Page")
+        manager.activeStore?.draftBody = "backup body"
+        manager.activeStore?.flushPendingSaves()
+
+        let backupURL = dir.appendingPathComponent("backup.sqlite")
+        try manager.exportWiki(id: id, to: backupURL)
+
+        let restoredStore = try SQLiteWikiStore(databaseURL: backupURL)
+        let resolvedPageID = try restoredStore.resolveTitleToID("Exported Page")
+        let pageID = try #require(resolvedPageID)
+        let page = try restoredStore.getPage(id: pageID)
+        #expect(page.bodyMarkdown == "backup body")
+    }
+
+    @Test func exportRefusesToOverwriteTheSourceDatabase() throws {
+        let dir = tempDirectory()
+        let manager = WikiManager(containerDirectory: dir)
+        manager.bootstrap()
+        let id = try #require(manager.activeWikiID)
+        let sourceURL = dir.appendingPathComponent("\(id).sqlite")
+
+        #expect(throws: WikiManagerError.exportWouldOverwriteSource) {
+            try manager.exportWiki(id: id, to: sourceURL)
+        }
+        #expect(FileManager.default.fileExists(atPath: sourceURL.path))
+    }
+
+    @Test func importCopiesSQLiteFileAsANewNamedWiki() async throws {
+        let dir = tempDirectory()
+        let manager = WikiManager(containerDirectory: dir)
+        manager.bootstrap()
+        let originalID = try #require(manager.activeWikiID)
+
+        manager.activeStore?.newPage(title: "Restored Page")
+        manager.activeStore?.draftBody = "restored body"
+        manager.activeStore?.flushPendingSaves()
+
+        let backupURL = dir.appendingPathComponent("restore-source.sqlite")
+        try manager.exportWiki(id: originalID, to: backupURL)
+
+        let imported = try await manager.importWiki(from: backupURL, displayName: "Restored Wiki")
+
+        #expect(imported.id != originalID)
+        #expect(imported.displayName == "Restored Wiki")
+        #expect(manager.activeWikiID == imported.id)
+        #expect(manager.wikis.first?.id == imported.id)
+        #expect(FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("\(imported.id).sqlite").path))
+
+        let restoredPage = try #require(manager.activeStore?.summaries.first {
+            $0.title == "Restored Page"
+        })
+        manager.activeStore?.select(.page(restoredPage.id))
+        #expect(manager.activeStore?.draftBody == "restored body")
     }
 
     // MARK: - v0 migration: legacy WikiFS.sqlite becomes wiki #1, content intact

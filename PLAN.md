@@ -56,9 +56,13 @@ maintainer schema projected as `CLAUDE.md`/`AGENTS.md`. Agent runs stream live
 (tool calls + text, `--output-format stream-json`) with per-run backend
 `run.jsonl` logs and an editor edit-lock. **All five phases plus the post-completion
 features below are merged to `main` (single-branch repo, ready for developer
-handoff). 320 tests green; clean signed bundle (app + appex + `wikictl`).**
+handoff). 341 tests green; clean signed bundle (app + appex + `wikictl`).**
 
 **Post-completion features (also on `main`):**
+- **Wiki backup/restore management** — the wiki switcher can rename the active
+  wiki, export its checkpointed standalone SQLite file, and import a SQLite wiki
+  backup under a new display name/new ULID. Rename refreshes the File Provider
+  display name while preserving identity; export refuses to overwrite its source.
 - **Ingest model-tiering** — Ingest is now **Opus-curated**: Opus decides what goes
   in the wiki and writes every page; for a large source it fans out **2–19 Sonnet
   `source-reader` subagents** (via `claude -p --agents`) that only *digest* the
