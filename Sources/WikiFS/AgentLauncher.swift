@@ -31,6 +31,7 @@ final class AgentLauncher {
     /// stderr captured separately (claude's diagnostics): a failed start, a flag
     /// error, an auth prompt. Surfaced prominently in the UI rather than swallowed.
     private(set) var stderr = ""
+    var extractionLog = ""
     /// True while a spawned `claude -p` process is running.
     private(set) var isRunning = false
     /// Exit status of the last finished process, or nil if none finished / one is

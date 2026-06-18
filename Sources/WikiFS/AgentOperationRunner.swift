@@ -19,10 +19,46 @@ enum AgentOperationRunner {
               let bytes = store.ingestedSourceBytes(id: fileID)
         else { return }
 
+        // If the source is a PDF, try to convert it to Markdown locally via
+        // docling before the agent ever sees it.  Skip if pdf2md isn't ready.
+        // Show a simple status line in the activity area — docling doesn't
+        // stream per-page progress, so we animate dots as proof of life.
+        var sourceBytes = bytes
+        var sourceExt = file.ext
+        if file.ext == "pdf" {
+            launcher.extractionLog = ""
+            if await PdfExtractionService.checkReady() {
+                launcher.extractionLog = "Converting PDF"
+                // Animate dots while conversion runs.
+                let dotTask = Task { @MainActor in
+                    for _ in 0... {
+                        guard !Task.isCancelled else { break }
+                        try? await Task.sleep(for: .seconds(1))
+                        launcher.extractionLog.append(".")
+                    }
+                }
+                do {
+                    let markdown = try await PdfExtractionService.convert(
+                        pdfData: bytes, filename: file.filename)
+                    dotTask.cancel()
+                    sourceBytes = markdown.data(using: .utf8) ?? bytes
+                    sourceExt = "md"
+                    launcher.extractionLog = "PDF conversion done — \(markdown.count) chars extracted."
+                } catch {
+                    dotTask.cancel()
+                    let msg = error.localizedDescription
+                    print("[pdf2md] \(msg)")
+                    launcher.extractionLog = "PDF conversion: \(msg)"
+                }
+            } else {
+                launcher.extractionLog = "PDF extraction not ready — ~2 GB deps need downloading first."
+            }
+        }
+
         await run(
             request: .ingest(
-                sourceBytes: bytes,
-                ext: file.ext,
+                sourceBytes: sourceBytes,
+                ext: sourceExt,
                 sourcePath: ingestSourcePath(for: file),
                 stateMarkdown: stateMarkdown),
             launcher: launcher,
