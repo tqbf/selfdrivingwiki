@@ -45,11 +45,13 @@ surface, no change to the File-Provider-mount-is-read-only invariant.
 
 ## Architecture
 
-Two PRs.
+Delivered as a single branch (`zotero-integration`, PR #9) — both the core
+library and the settings/picker UI landed together rather than as two separate
+PRs. The split below is retained for documentation clarity.
 
-### PR1 — Core (landed)
+### Core (WikiFSCore — pure/testable, no UI)
 
-Pure/testable logic, no UI, no live Keychain wiring into the app:
+Pure/testable logic, no UI:
 
 - `Sources/WikiFSCore/ZoteroClient.swift` — talks to `api.zotero.org`. Mirrors
   `URLIngestService`'s testability shape (`RequestFetcher` protocol + pure
@@ -81,7 +83,7 @@ Tests`, `ZoteroLocalStorageTests`, `ZoteroConfigTests`,
 `ZoteroCredentialStoreTests`, `WikiStoreModelZoteroIngestTests`) — fakeable
 end-to-end, no real network or Keychain access in CI.
 
-### PR2 — Settings + picker UI (not yet built)
+### Settings + picker UI (WikiFS — built ✅)
 
 - `Sources/WikiFS/ZoteroSettingsView.swift` — the app's first Settings
   surface (`Settings { }` scene in `WikiFSApp.swift`, `⌘,`). Fields: API key
@@ -89,17 +91,28 @@ end-to-end, no real network or Keychain access in CI.
   (`NSOpenPanel`), "Test Connection" → `ZoteroClient.verifyConnection()`,
   errors via the existing `.alert` pattern
   (`FileProviderSetupWarning`/`LaunchLocationWarning` in `WikiFSApp.swift`).
+  Save is an explicit action (not implicit on-blur/on-submit) so a
+  window-closed-via-red-button edit is never silently dropped.
 - `Sources/WikiFS/AddFromZoteroSheet.swift` — mirrors `AddFromURLSheet`'s
   `Phase`/`Metrics` shape: debounced search → item list → checkbox
   multi-select of an item's `.pdf`/`.md` attachments → "Add Selected" calls
   `ingestFromZotero` per selection, collect-and-continue on per-item failure.
-- Entry point: a second "Add from Zotero…" button next to "Add from URL…" in
-  `SidebarView.swift`, disabled with a `.help` tooltip (not hidden) until
-  Settings are configured.
-- No automated test for the live-API path — a manual smoke test against the
-  user's real library (search, ingest both a PDF and its converted `.md`,
-  confirm byte-identical) stands in for it, plus exercising "Test Connection"
-  with a deliberately wrong key.
+- Entry point: "Add from Zotero…" buttons (toolbar + Files section header)
+  next to "Add from URL…" in `SidebarView.swift`, shown only when Settings
+  are configured (library ID + Keychain API key both present).
+- `WikiFSApp` — Settings scene wired in, container directory plumbed.
+- `WikiFilePanels.chooseDirectory` — folder picker for the Zotero-dir
+  override.
+- Extracted `ZoteroAttachment.isIngestable` and `ZoteroItem.subtitle` as
+  pure value-type properties in `WikiFSCore` so the picker UI stays thin and
+  the formatting/extension logic is trivially unit-testable.
+
+**Tests.** 59 Zotero-specific tests across 5 files (410 total). The
+live-API path gets a manual smoke test against the user's real library
+(search, ingest both a PDF and its converted `.md`, confirm byte-identical,
+exercise "Test Connection" with a deliberately wrong key). The Keychain
+store is also manually smoke-tested (a real-Keychain test would pollute the
+test runner's Keychain).
 
 ## Critical files
 
