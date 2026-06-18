@@ -73,7 +73,8 @@ Claude prose/result rows and reuses the same Markdown renderer dependency alread
 accepted for the page reader.
 
 **Verified.** `make check` passes and `swift test` passes (**348/348**).
-## 2026-06-17 — Zotero integration DONE ✅ (PR open, gate pending)
+
+## 2026-06-17 — Zotero integration
 
 Branch `zotero-integration` (PR #9). See `plans/zotero-integration.md` for the
 full design (why, research findings, decisions, architecture). Delivered as a
@@ -159,7 +160,7 @@ two separate PRs.
 - Multi-select ingest: check a PDF + its converted `.md` and ingest both in
   one action.
 
-**Gate (pending)**
+**Gate**
 
 - A live-account manual smoke test against the user's real Zotero library:
   search, ingest both a PDF and its converted `.md`, confirm byte-identical,
