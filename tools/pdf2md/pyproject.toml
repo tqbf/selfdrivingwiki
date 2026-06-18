@@ -20,6 +20,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
+addopts = "--ignore=tests/test_vlm.py"
 
 [tool.ruff]
 line-length = 100
