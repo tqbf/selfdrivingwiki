@@ -40,7 +40,7 @@ with a plain-folder export, even though that would dodge the signing requirement
 | [`plans/build-environment.md`](plans/build-environment.md) | How the app is built: SwiftPM + `build.sh` + `Makefile`, signing, icon generation, app-bundle layout. Source of truth for *how we build and run*. |
 | [`plans/file-provider.md`](plans/file-provider.md) | File Provider extension build + the 5 hard-won gotchas (entry-point recursion, entitlements⊆profile, user-enable toggle, /Applications, keychain). Proven by the 2026-06-15 spike. Read before Phase 2. |
 | [`plans/signing.md`](plans/signing.md) | The Apple cert / App Group / File Provider provisioning checklist (manual portal). Do this before Phase 2. Source of truth for *the Apple incantations*. |
-| [`plans/zotero-integration.md`](plans/zotero-integration.md) | **Complete ✅:** browse a Zotero library from inside the app, ingest PDF/Markdown attachments through the existing ingest pipeline. Settings scene (`⌘,`), debounced search with checkbox multi-select picker, Keychain-backed API key. Merged to `main`. |
+| [`plans/zotero-integration.md`](plans/zotero-integration.md) | browse a Zotero library from inside the app, ingest PDF/Markdown attachments through the existing ingest pipeline. |
 | [`SWIFTUI-RULES.md`](SWIFTUI-RULES.md) | Hard-won SwiftUI/macOS rules. Apply when writing or reviewing any view. |
 | [`CLAUDE.md`](CLAUDE.md) | Working agreement (docs, skills to use, PR rules). |
 | [`ISSUES.md`](ISSUES.md) | Known limitations we've chosen to live with (with context to revisit), e.g. the ~5s replicated-File-Provider read-after-write window. |
