@@ -462,6 +462,28 @@ public final class WikiStoreModel {
         }
     }
 
+    /// Ingest one Zotero attachment by reading its local file and storing the
+    /// verbatim bytes — exactly like a drag-dropped file. We already know the
+    /// filename and bytes from Zotero's metadata, so this goes straight to the
+    /// `ingestFile(filename:data:)` seam rather than `URLIngestService`'s
+    /// content-type dispatch (that dispatch exists for the unknown-bytes-from-a-
+    /// URL case, which doesn't apply here). No network fallback in v1: an
+    /// attachment that isn't synced to `~/Zotero/storage` yet throws
+    /// `ZoteroIngestError.unavailable` rather than downloading it.
+    public func ingestFromZotero(_ attachment: ZoteroAttachment, zoteroDir: URL) async throws {
+        switch ZoteroLocalStorage.resolve(attachment, zoteroDir: zoteroDir) {
+        case .local(let path):
+            // Read off the main actor — same rationale as `ingest(fileURLs:)`:
+            // `Data(contentsOf:)` is blocking I/O and shouldn't stall the UI.
+            let data = try await Task.detached(priority: .userInitiated) {
+                try Data(contentsOf: path)
+            }.value
+            ingestFile(filename: path.lastPathComponent, data: data)
+        case .unavailable(let reason):
+            throw ZoteroIngestError.unavailable(reason)
+        }
+    }
+
     /// Remove an ingested file from the list and the store, then signal so the
     /// `files/` tree drops it.
     public func deleteIngestedFile(_ id: PageID) {
@@ -588,6 +610,19 @@ public final class WikiStoreModel {
             fileIDs.contains(id)
         case .query, .systemPrompt, .changeLog:
             true
+        }
+    }
+}
+
+/// Thrown by `WikiStoreModel.ingestFromZotero` when an attachment can't be
+/// ingested — currently just the "not synced locally yet" case, since v1 has no
+/// network-download fallback (see `ZoteroLocalStorage`).
+public enum ZoteroIngestError: LocalizedError, Equatable {
+    case unavailable(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unavailable(let reason): return reason
         }
     }
 }

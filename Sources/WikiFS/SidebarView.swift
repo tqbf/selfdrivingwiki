@@ -15,6 +15,8 @@ struct SidebarView: View {
     @State private var renameText: String = ""
     /// Drives the "Add from URL…" sheet (fetch a URL → ingested file).
     @State private var showingAddFromURL = false
+    /// Drives the "Add from Zotero…" sheet (browse the library → ingested file).
+    @State private var showingAddFromZotero = false
 
     var body: some View {
         List(selection: $store.selection) {
@@ -81,6 +83,14 @@ struct SidebarView: View {
                     HStack {
                         Text("Files")
                         Spacer()
+                        if isZoteroConfigured {
+                            Button("Add from Zotero…", systemImage: "books.vertical") {
+                                showingAddFromZotero = true
+                            }
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
+                            .help("Browse your Zotero library and ingest a PDF or Markdown attachment")
+                        }
                         Button("Add from URL…", systemImage: "link.badge.plus") {
                             showingAddFromURL = true
                         }
@@ -99,6 +109,14 @@ struct SidebarView: View {
             ideal: PageEditorMetrics.sidebarIdealWidth
         )
         .toolbar {
+            if isZoteroConfigured {
+                ToolbarItem {
+                    Button("Add from Zotero…", systemImage: "books.vertical") {
+                        showingAddFromZotero = true
+                    }
+                    .help("Browse your Zotero library and ingest a PDF or Markdown attachment")
+                }
+            }
             ToolbarItem {
                 Button("Add from URL…", systemImage: "link.badge.plus") {
                     showingAddFromURL = true
@@ -112,6 +130,9 @@ struct SidebarView: View {
         .sheet(isPresented: $showingAddFromURL) {
             AddFromURLSheet(store: store)
         }
+        .sheet(isPresented: $showingAddFromZotero) {
+            AddFromZoteroSheet(store: store, containerDirectory: zoteroContainerDirectory)
+        }
         .alert("Rename Page", isPresented: renamePresented) {
             TextField("Title", text: $renameText)
             Button("Cancel", role: .cancel) { renameTarget = nil }
@@ -122,6 +143,20 @@ struct SidebarView: View {
                 renameTarget = nil
             }
         }
+    }
+
+    /// The App Group container — same fallback `WikiFSApp.init()` uses, resolved
+    /// independently here rather than threaded through `ContentView`/`RootView`
+    /// (existing precedent: `WikiResolver` does the same in `WikiCtlCore`).
+    private var zoteroContainerDirectory: URL {
+        (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
+    }
+
+    /// Whether Settings has a library ID AND an API key — both required before
+    /// the picker can do anything useful.
+    private var isZoteroConfigured: Bool {
+        ZoteroConfig.load(from: zoteroContainerDirectory).isConfigured
+            && KeychainZoteroCredentialStore().apiKey() != nil
     }
 
     /// The active wiki's display name for the window title (falls back to the app

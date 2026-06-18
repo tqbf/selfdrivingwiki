@@ -74,6 +74,98 @@ accepted for the page reader.
 
 **Verified.** `make check` passes and `swift test` passes (**348/348**).
 
+## 2026-06-17 — Zotero integration
+
+Branch `zotero-integration` (PR #9). See `plans/zotero-integration.md` for the
+full design (why, research findings, decisions, architecture). Delivered as a
+single branch — both the core library and the settings/picker UI, rather than
+two separate PRs.
+
+**Added — Core (`WikiFSCore`, pure/testable, no UI)**
+
+- `ZoteroClient` — talks to `api.zotero.org` for search/browse; mirrors
+  `URLIngestService`'s testable-fetcher + pure-dispatch shape (`RequestFetcher`
+  protocol, `decodeItems`/`decodeAttachments`/`buildSearchRequest`/
+  `buildChildrenRequest` statics). `searchItems`, `childAttachments`,
+  `verifyConnection`. Production fetcher `URLSessionZoteroFetcher`.
+- `ZoteroLocalStorage` — resolves an attachment to
+  `~/Zotero/storage/<key>/<filename>` (pure path composition + injectable
+  existence check, mirrors `PathPreflight`). Confirmed via direct research
+  against Zotero's own open-source sync client that this path is safe to read
+  directly (single atomic `OS.File.move` commits a download — never a torn
+  file for the plain PDF/Markdown case this feature targets).
+- `ZoteroConfig` — non-secret app-wide config (library ID, Zotero-dir
+  override), JSON load/save following `WikiRegistry`'s pattern
+  (`zotero-config.json`, sibling to `wikis.json`).
+- `ZoteroCredentialStore` — the API key (a secret) behind a protocol:
+  `KeychainZoteroCredentialStore` (generic-password Keychain item, no
+  entitlement needed — the app has no App Sandbox) and
+  `InMemoryZoteroCredentialStore` for tests.
+- `WikiStoreModel.ingestFromZotero(_:zoteroDir:)` — resolves the attachment,
+  reads bytes off the main actor, and lands them through the EXISTING public
+  `ingestFile(filename:data:)` seam (the same one drag-ingest uses) — no new
+  storage path, no schema change. Throws `ZoteroIngestError.unavailable` for
+  an attachment not yet synced locally (no network-download fallback in v1).
+
+**Added — Settings + picker UI (`WikiFS`)**
+
+- `ZoteroSettingsView` — the app's first Settings scene (`⌘,`): API key
+  (`SecureField`, Keychain-backed), library ID, an optional Zotero data
+  directory override (`NSOpenPanel`), and a "Test Connection" button that
+  surfaces failures via `.alert`, matching `WikiFSApp`'s existing warning
+  pattern. Save is an explicit action (not implicit on-blur/on-submit) so a
+  window-closed-via-red-button edit is never silently dropped.
+- `AddFromZoteroSheet` — mirrors `AddFromURLSheet`'s `Phase`/`Metrics` shape:
+  debounced live search → item list → checkbox multi-select of an item's PDF
+  and/or `.md` attachments → "Add Selected" calls `ingestFromZotero` per
+  selection, collect-and-continue on per-item failure. Two-level: search
+  results, then drill-down into the selected item's attachments.
+- `SidebarView` — "Add from Zotero…" button (toolbar + Files section header)
+  next to "Add from URL…", shown only when `ZoteroConfig` has a library ID and
+  the Keychain has an API key. Both buttons kept as always-mounted views
+  (§SWIFTUI-RULES 1.1).
+- `WikiFSApp` — Settings scene wired in, container directory plumbed through.
+- `WikiFilePanels` — `chooseDirectory` helper for the Zotero-dir override.
+- Extracted `ZoteroAttachment.isIngestable` (`.pdf`/`.md` extension check,
+  case-insensitive) and `ZoteroItem.subtitle` ("Ito, K. · 2016") as pure
+  value-type properties in `WikiFSCore` so the picker UI stays thin.
+
+**Tests**
+
+- 5 test files (35 tests): `ZoteroClientTests`, `ZoteroLocalStorageTests`,
+  `ZoteroConfigTests`, `ZoteroCredentialStoreTests`,
+  `WikiStoreModelZoteroIngestTests` — all fakeable, no real network or Keychain
+  access in CI.
+- +24 additional tests after gap analysis: `isIngestable` extension filtering
+  (5), `subtitle` formatting (5), decode/status boundary edge cases (7), config
+  empty-override + nil round-trip (2), multi-ingest + `ZoteroIngestError`
+  conformance (3). Total: **410 green** (59 Zotero-specific across 5 files).
+- `KeychainZoteroCredentialStore` is NOT covered by automated tests (would
+  pollute the test runner's Keychain) — gets a manual smoke test instead.
+  Same for the live-API path (real search/ingest against the user's library).
+
+**Verified**
+
+- `make check` compiles clean; `make` produces a clean signed (ad-hoc) bundle.
+- `swift test`: 410 tests green, no regressions.
+- Rebased onto `main` (2026-06-17) — resolved a single conflict in
+  `PROGRESS.md`.
+
+**Decisions** (confirmed with the user before implementation)
+
+- No network-download fallback in v1 — unsynced attachments error clearly
+  instead.
+- Zotero credentials are app-wide, not per-wiki.
+- Search is live/debounced against the API, no session cache.
+- Multi-select ingest: check a PDF + its converted `.md` and ingest both in
+  one action.
+
+**Gate**
+
+- A live-account manual smoke test against the user's real Zotero library:
+  search, ingest both a PDF and its converted `.md`, confirm byte-identical,
+  exercise "Test Connection" with a deliberately wrong key.
+
 ## 2026-06-16 — Wiki rename plus SQLite backup/restore
 
 - Added wiki-level management actions to the switcher menu: rename the active
