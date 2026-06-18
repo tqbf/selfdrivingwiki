@@ -78,6 +78,11 @@ handoff). 341 tests green; clean signed bundle (app + appex + `wikictl`).**
   known file-share links (Dropbox `www`→`dl`; Drive/OneDrive stubbed), content-sniffs
   the bytes, converts HTML→Markdown (hand-rolled, dependency-free) or stores
   PDFs/binaries verbatim — landing through the same ingest path as drag-drop.
+- **PDF extraction pipeline** — local `pdf2md` script (docling + granite-docling VLM)
+  converts PDFs to Markdown before the agent sees them. `PdfExtractionService` spawns
+  `pdf2md` as a subprocess with continuous pipe draining; `PdfExtractionView` shows
+  readiness, download progress, and live conversion log during ingest. 22 Swift tests
+  + 67 Python tests. (PR #11.)
 
 **Phase summary (newest first; see `PROGRESS.md` for each gate's evidence):**
 - **Phase D — the schema** ✅ real maintainer `CLAUDE.md` schema (layout,

@@ -2,6 +2,74 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-18 — PDF extraction pipeline: PdfExtractionService + pdf2md integration
+
+Branch `feature/pdf2md-docling-pipeline` (PR #11). Integrated the `pdf2md` local
+PDF-to-Markdown converter into the app so PDFs are converted to Markdown before
+the agent sees them, replacing Claude `Read`-tool PDF extraction.
+
+**Added — PdfExtractionService (WikiFS)**
+
+- `PdfExtractionService` — spawns `pdf2md` as a subprocess, matching the existing
+  `wikictl`/`claude` subprocess pattern. Converts PDF bytes → Markdown via a temp
+  file; streams stderr progress; returns the extracted markdown.
+- `PdfExtractionService.preDownload()` — two-phase pre-download (uv packages then
+  HuggingFace model weights), with streaming progress. `probeReady()` uses `uv run
+  --offline` for a fast cached-probe without triggering downloads.
+- `PdfExtractionService.OutputBuffer` — thread-safe byte accumulator for pipe
+  draining off the main actor. `ProcessRegistry` — tracks live subprocesses for
+  app-termination cleanup.
+- Continuous stdout/stderr pipe draining via `readabilityHandler` — pipes are
+  drained as data arrives, never allowed to fill the 64 KB kernel buffer. Spawns
+  `pdf2md` as a subprocess, matching the existing `wikictl`/`claude` pattern.
+
+**Fixed**
+
+- `run()` termination handler now drains the pipe tail (`readToEnd()`) after
+  nil'ing the readability handler, preventing data loss at the kernel buffer
+  boundary.
+- `streamProcess()` now buffers stderr via `OutputBuffer` so error messages
+  actually contain the failure output (was always empty — the handler had already
+  consumed the data by the time `readDataToEndOfFile()` ran).
+
+**Added — UI (WikiFS)**
+
+- `PdfExtractionView` — inline readiness probe + download progress + live
+  conversion log, shown above the agent activity feed during ingest.
+- `AgentTranscriptSidebar` — draggable horizontal grippy between PDF conversion
+  and agent activity sections, letting the user resize both.
+- `IngestSheetView` — button label shortened to "Ingest", centered.
+- `AgentOperationRunner.runIngest()` — runs PDF conversion BEFORE the agent
+  launch; passes extracted markdown as a staged sibling file so the agent
+  prefers it over the raw PDF.
+
+**Tests added**
+
+- `PdfExtractionServiceTests` — `OutputBufferTests` (5, incl. 500-write × 10-task
+  concurrent safety) + `PipeDrainingTests` (5, incl. 256 KB stdout drain proving
+  the subprocess doesn't block) + the existing ProcessRegistry / error-description
+  / resolveScript suites. **22 tests.**
+- `pdf2md` integration tests — `TestCLIStdout` (4, covering the stdout code path
+  `PdfExtractionService` exercises), `TestErrorOutput` (2), `TestCLIWithMinimalPdf`
+  (3) + a `minimal_pdf` fixture (538-byte hand-crafted valid PDF for fast,
+  hang-proof tests). **67 total (48 unit + 19 integration).**
+
+**Skill pass.** Before and after code: `swiftui-pro` kept service/process state in
+`@MainActor @Observable` types and the views as thin leaf surfaces; `macos-design`
+kept the transcript sidebar as a quiet inspector with native split-drag controls;
+`typography-designer` kept semantic system fonts (`.subheadline`, `.caption`,
+monospaced logs).
+
+**Verified.** `make check` clean; `swift test` passes (**all 22 PdfExtractionService
+tests green**); `uv run pytest tests/test_pdf2md.py -v` **(48/48 green)**;
+`uv run pytest tests/test_integration.py -v -k "not vlm"` (standard-pipeline +
+stdout/error tests green; VLM pipeline test skipped — requires ~2 GB model download +
+a real PDF fixture, and the full suite hung, likely GPU resource contention).
+
+**Carry-forward.** The `pdf2md` VLM pipeline (`--pipeline vlm`) is not tested in
+CI (requires model download). `--json -o` ignoring the `-o` flag is existing
+behaviour (documented in tests, not yet changed).
+
 ## 2026-06-17 — Dedicated interactive Query page
 
 - Added a first-class Query destination in the sidebar, separate from individual
