@@ -42,6 +42,7 @@ with a plain-folder export, even though that would dodge the signing requirement
 | [`plans/signing.md`](plans/signing.md) | The Apple cert / App Group / File Provider provisioning checklist (manual portal). Do this before Phase 2. Source of truth for *the Apple incantations*. |
 | [`plans/zotero-integration.md`](plans/zotero-integration.md) | browse a Zotero library from inside the app, ingest PDF/Markdown attachments through the existing ingest pipeline. |
 | [`plans/pdf-extraction.md`](plans/pdf-extraction.md) | Add docling + granite-docling pipeline. A `pdf2md` CLI converts PDFs to markdown at ingest time; extracted markdown stored as a sibling `ingested_files` row, projected on the mount. Agent prefers `.md` siblings, falls back to `Read` on the original. |
+| [`plans/semantic-search.md`](plans/semantic-search.md) | Semantic (meaning-based) search over pages using sqlite-vec + Apple NLEmbedding. Embedding at save time, cosine-similarity ranking inside SQLite, search bar in the sidebar, `wikictl search` for the agent. v7 migration. |
 | [`SWIFTUI-RULES.md`](SWIFTUI-RULES.md) | Hard-won SwiftUI/macOS rules. Apply when writing or reviewing any view. |
 | [`CLAUDE.md`](CLAUDE.md) | Working agreement (docs, skills to use, PR rules). |
 | [`ISSUES.md`](ISSUES.md) | Known limitations we've chosen to live with (with context to revisit), e.g. the ~5s replicated-File-Provider read-after-write window. |
