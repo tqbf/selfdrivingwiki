@@ -243,14 +243,6 @@ struct SidebarView: View {
                             }
                         }
                         Spacer()
-                        if !selectedFileIDs.isEmpty {
-                            Button("Ingest Selected") {
-                                let ids = Array(selectedFileIDs)
-                                onBatchIngest?(ids)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                        }
                         Picker("Filter", selection: $fileFilter) {
                             ForEach(FileFilter.allCases, id: \.self) { filter in
                                 Text(filter.rawValue).tag(filter)
