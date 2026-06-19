@@ -227,6 +227,7 @@ final class FileProviderSpike {
     /// drift), then hands it to `NSWorkspace`. URL asked at click time.
     func openIngestedFile(id: PageID) async {
         DebugLog.agent("openIngestedFile: id=\(id.rawValue) activeWiki=\(activeWikiID ?? "nil")")
+        status = ""   // clear any stale error from a prior attempt
         guard let wikiID = activeWikiID else {
             DebugLog.agent("openIngestedFile: ABORT — no active wiki")
             status = "Can’t open file — no active wiki."

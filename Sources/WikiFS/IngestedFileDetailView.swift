@@ -10,6 +10,7 @@ struct IngestedFileDetailView: View {
     /// True while THIS file's ingest is in flight (local conversion + agent run).
     let isIngesting: Bool
     let isRunning: Bool
+    let fileProvider: FileProviderSpike
     let onOpen: () -> Void
     let onIngest: () -> Void
 
@@ -40,7 +41,16 @@ struct IngestedFileDetailView: View {
                            systemImage: "text.badge.plus", action: onIngest)
                         .keyboardShortcut(.return, modifiers: .command)
                         .disabled(isRunning || isIngesting)
-                    Button("Open File", systemImage: "arrow.up.forward.app", action: onOpen)
+                    Button("Open File", systemImage: "arrow.up.forward.app") {
+                        DebugLog.agent("IngestedFileDetailView: Open File tapped — id=\(file.id.rawValue)")
+                        onOpen()
+                    }
+                }
+
+                if !fileProvider.status.isEmpty, fileProvider.status != "Not registered" {
+                    Label(fileProvider.status, systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
                 }
             }
             .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
