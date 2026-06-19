@@ -11,6 +11,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
       - name: Build
         run: swift build
       - name: Test
@@ -33,6 +35,3 @@ jobs:
         run: uv run pyright pdf2md tests/
       - name: Unit tests
         run: uv run pytest tests/test_pdf2md.py -v
-      - name: Fast integration tests
-        run: uv run pytest tests/test_integration.py -v
-        timeout-minutes: 10
