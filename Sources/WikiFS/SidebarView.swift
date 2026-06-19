@@ -94,7 +94,39 @@ struct SidebarView: View {
 
             Section {
                 if isPagesExpanded {
-                    ForEach(store.summaries) { summary in
+                    // Search bar
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(.secondary)
+                            .font(.callout)
+                        TextField("Search pages…", text: $store.searchQuery)
+                            .textFieldStyle(.plain)
+                            .font(.callout)
+                            .disableAutocorrection(true)
+                        if !store.searchQuery.isEmpty {
+                            Button {
+                                store.searchQuery = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 2)
+
+                    // Results or full list
+                    let source = store.searchQuery.isEmpty
+                        ? store.summaries : store.searchResults
+                    if source.isEmpty, !store.searchQuery.isEmpty {
+                        Text("No matching pages")
+                            .foregroundStyle(.secondary)
+                            .font(.callout)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    ForEach(source) { summary in
                         SidebarPageRow(summary: summary)
                             .tag(WikiSelection.page(summary.id))
                             .contextMenu {
@@ -209,6 +241,12 @@ struct SidebarView: View {
             }
             ToolbarItem {
                 Button("New Page", systemImage: "plus") { store.newPage() }
+            }
+            ToolbarItem {
+                Button("Reindex Search", systemImage: "arrow.triangle.2.circlepath") {
+                    _ = store.recomputeMissingEmbeddings()
+                }
+                .help("Recompute embeddings for all pages that are missing one, so semantic search covers pre‑v7 pages.")
             }
         }
         .sheet(isPresented: $showingAddFromURL) {

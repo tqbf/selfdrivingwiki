@@ -171,7 +171,7 @@ struct NavigationHistoryTests {
         let (model, store) = try tempModel()
         let a = try store.createPage(title: "A")
         Thread.sleep(forTimeInterval: 0.002)
-        let b = try store.createPage(title: "B")
+        _ = try store.createPage(title: "B")
         // Touch A so it becomes most-recently-edited under lastUpdated.
         try store.updatePage(id: a.id, title: "A", body: "edited")
         model.reloadFromStore()

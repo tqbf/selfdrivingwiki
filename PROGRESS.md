@@ -2,6 +2,16 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-18 — Semantic search via sqlite-vec + NLEmbedding
+
+Added meaning-based search over wiki pages. sqlite-vec ranks by cosine similarity
+inside SQLite; Apple NLEmbedding generates 512‑dim embeddings at save time. The
+sidebar has a search bar (debounced 300ms); `wikictl search --query "…"` gives
+the agent the same capability. Falls back to LIKE title match when the extension
+or model is unavailable — never a hard dependency. v7 migration. 16 files, 472+.
+
+See `plans/semantic-search.md`.
+
 ## 2026-06-18 — Collapsible sidebar sections + page sort order
 
 All four sidebar sections (Tools, System, Pages, Files) are now collapsible via

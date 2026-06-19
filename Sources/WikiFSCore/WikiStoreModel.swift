@@ -22,6 +22,13 @@ public final class WikiStoreModel {
             reloadSummaries()
         }
     }
+    /// Live search query from the sidebar search bar. Debounced 300ms.
+    public var searchQuery: String = "" {
+        didSet { scheduleSearch() }
+    }
+    /// Results of the last search (empty when searchQuery is empty).
+    public private(set) var searchResults: [WikiPageSummary] = []
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
     /// The sidebar selection: a page, the system-prompt document, or nothing.
     public var selection: WikiSelection?
     public private(set) var backStack: [WikiSelection] = []
@@ -578,6 +585,31 @@ public final class WikiStoreModel {
     /// refresh after an external write.
     public func reloadSummaries() {
         summaries = (try? store.listPages(sortBy: pageSortOrder)) ?? []
+    }
+
+    // MARK: - Search
+
+    /// Recompute embeddings for all pages that are missing one, so semantic
+    /// search covers pre‑v7 pages. Returns the count of newly‑embedded pages.
+    public func recomputeMissingEmbeddings() -> Int {
+        store.recomputeMissingEmbeddings()
+    }
+
+    private func scheduleSearch() {
+        searchTask?.cancel()
+        guard !searchQuery.isEmpty else {
+            searchResults = []
+            return
+        }
+        searchTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, let self else { return }
+            let results = (try? self.store.searchSimilar(
+                query: self.searchQuery, limit: 20
+            )) ?? []
+            guard !Task.isCancelled else { return }
+            self.searchResults = results
+        }
     }
 
     private func reloadIngestedFiles() {

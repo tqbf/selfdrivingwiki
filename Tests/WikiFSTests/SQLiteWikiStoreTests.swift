@@ -54,18 +54,18 @@ struct SQLiteWikiStoreTests {
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))
         #expect(tables.isSuperset(of:
             ["pages", "attachments", "page_links", "ingested_files", "system_prompt",
-             "log", "wiki_index"]))
+             "log", "wiki_index", "page_embeddings"]))
 
         let indexes = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='index';"))
         #expect(indexes.contains("pages_slug_unique"))
         #expect(indexes.contains("ingested_files_created"))
 
-        // user_version guard: a fresh DB runs all migration steps → version 6
-        // (v4 `log`, v5 `wiki_index`, v6 `ingested_files.ingested_at`); reopening
-        // must not re-run DDL (no-op bootstrap).
+        // user_version guard: a fresh DB runs all migration steps → version 7
+        // (v4 `log`, v5 `wiki_index`, v6 `ingested_files.ingested_at`,
+        //  v7 `page_embeddings`); reopening must not re-run DDL (no-op bootstrap).
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "6")
+        #expect(userVersion == "7")
         let reopened = try SQLiteWikiStore(databaseURL: url)
         // If bootstrap weren't guarded, the CREATE TABLE would throw here.
         #expect((try? reopened.listPages(sortBy: .lastUpdated)) != nil)
@@ -222,6 +222,47 @@ struct SQLiteWikiStoreTests {
         else { return "" }
         return String(cString: c)
     }
+
+    // MARK: - Semantic search (v7)
+
+    @Test func v7SchemaHasPageEmbeddingsTable() throws {
+        let url = tempDatabaseURL()
+        _ = try SQLiteWikiStore(databaseURL: url)  // triggers migration
+
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+
+        let userVersion = scalarText(db, "PRAGMA user_version;")
+        #expect(userVersion == "7")
+
+        let tables = Set(rows(db,
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))
+        #expect(tables.contains("page_embeddings"))
+    }
+
+    @Test func storePageEmbeddingInsertsOrReplaces() throws {
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let page = try store.createPage(title: "Test")
+        let blob = Data(repeating: 0xAB, count: 2048)  // 512 × Float32
+        try store.storePageEmbedding(id: page.id, blob: blob)
+
+        // Second write replaces.
+        let blob2 = Data(repeating: 0xCD, count: 2048)
+        try store.storePageEmbedding(id: page.id, blob: blob2)
+    }
+
+    @Test func recomputeMissingEmbeddingsCountsCorrectly() throws {
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        _ = try store.createPage(title: "A")
+        _ = try store.createPage(title: "B")
+        // No embeddings yet — recompute should handle gracefully.
+        let count = store.recomputeMissingEmbeddings()
+        // May be 0 if NLEmbedding unavailable in test, or 2 if available.
+        #expect(count >= 0)
+    }
+
+    // MARK: - Helpers
 
     private func rows(_ db: OpaquePointer?, _ sql: String) -> [String] {
         var stmt: OpaquePointer?

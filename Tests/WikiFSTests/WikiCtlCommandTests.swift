@@ -101,6 +101,39 @@ struct WikiCtlCommandTests {
         }
     }
 
+    // MARK: - Search parsing
+
+    @Test func parsesSearchWithQueryAndDefaultLimit() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "search", "--query", "electric cars"], env: noEnv)
+        #expect(invocation.command == .search(query: "electric cars", limit: 10))
+    }
+
+    @Test func parsesSearchWithCustomLimit() throws {
+        let invocation = try ArgumentParser.parse(
+            ["search", "--query", "ai", "--limit", "5"],
+            env: { _ in "W" })
+        #expect(invocation.command == .search(query: "ai", limit: 5))
+    }
+
+    @Test func searchRequiresQuery() {
+        #expect(throws: ArgumentParser.Failure.self) {
+            try ArgumentParser.parse(["--wiki", "W", "search", "--limit", "10"], env: noEnv)
+        }
+    }
+
+    @Test func searchRejectsLimitZero() {
+        #expect(throws: ArgumentParser.Failure.self) {
+            try ArgumentParser.parse(["--wiki", "W", "search", "--query", "x", "--limit", "0"], env: noEnv)
+        }
+    }
+
+    @Test func searchRejectsLimitOver100() {
+        #expect(throws: ArgumentParser.Failure.self) {
+            try ArgumentParser.parse(["--wiki", "W", "search", "--query", "x", "--limit", "101"], env: noEnv)
+        }
+    }
+
     // MARK: - Command dispatch (against a temp DB)
 
     @Test func upsertCommitsAndReturnsID() throws {
@@ -161,6 +194,25 @@ struct WikiCtlCommandTests {
         let result = try PageCommand.run(.delete(id: id), in: store)
         #expect(result.didCommit)
         #expect(try store.listPages(sortBy: .lastUpdated).isEmpty)
+    }
+
+    // MARK: - Search dispatch
+
+    @Test func searchReturnsTSVAndDoesNotCommit() throws {
+        let store = try tempStore()
+        _ = try PageCommand.run(.upsert(id: nil, title: "Cars", body: "electric vehicles"), in: store)
+        _ = try PageCommand.run(.upsert(id: nil, title: "Recipes", body: "baking bread"), in: store)
+        let result = try PageCommand.run(.search(query: "car", limit: 10), in: store)
+        #expect(!result.didCommit)
+        let lines = result.output.split(separator: "\n")
+        #expect(!lines.isEmpty)
+        // Each line is "id\ttitle"
+        for line in lines {
+            let cols = line.split(separator: "\t")
+            #expect(cols.count == 2)
+            #expect(!cols[0].isEmpty)
+            #expect(!cols[1].isEmpty)
+        }
     }
 
     // MARK: - Darwin notification naming

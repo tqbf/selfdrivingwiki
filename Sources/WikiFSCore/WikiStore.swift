@@ -109,4 +109,21 @@ public protocol WikiStore {
 
     /// Replace the wiki-index body wholesale, bumping its version + `updated_at`.
     func updateWikiIndex(body: String) throws
+
+    // MARK: - Semantic search (v7 page embeddings)
+
+    /// Store or replace a page's embedding BLOB (512 × Float32). No-op if the
+    /// store does not support embeddings (pre‑v7 schema, or extension not loaded).
+    func storePageEmbedding(id: PageID, blob: Data) throws
+
+    /// Search pages semantically (cosine similarity via `vec_distance_cosine`).
+    /// Falls back to a `LIKE` title match when the vec extension or embedding
+    /// model is unavailable. Only pages WITH an embedding appear in semantic
+    /// results (pages saved before v7 must be re‑saved or reindexed).
+    func searchSimilar(query: String, limit: Int) throws -> [WikiPageSummary]
+
+    /// Compute + store embeddings for every page that is missing one. Returns the
+    /// count of newly-embedded pages. Per‑page failures are logged and skipped so
+    /// one bad page doesn't abort the batch.
+    func recomputeMissingEmbeddings() -> Int
 }
