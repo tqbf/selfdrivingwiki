@@ -2,45 +2,47 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-06-19 — File filter + batch select → multi-source Ingest
+## 2026-06-19 — File filter + native multi-select + batch ingest in single agent run
 
-Added a filter picker and batch-select mode to the Files section. Users can now:
+Added a filter picker and native multi-select to the Files section, and generalized
+the ingest pipeline so multiple selected files are staged and processed in a single
+agent run.
 
-- **Filter** the file list by ingest status: All, Ready, or Ingested
-- **Batch select** multiple files with checkboxes and ingest them all in a **single
-  agent run** — all sources staged together as `source-1.md`, `source-2.md`, … so the
-  agent cross-references and synthesizes holistically
+- **Filter picker** (All / Ready / Ingested) in the Files header
+- **Native List multi-select** — Shift+Arrow, Shift+Click, Command+Click select
+  multiple files; selected files highlight and show "Ingest Selected" button
+- **Multi-source ingest** — selected files staged together as `source-1.md`,
+  `source-2.pdf`, … in ONE agent run so the agent cross-references holistically
+- **ProgressView spinner** on file rows while being ingested
+- **`ingestingFileID` → `ingestingFileIDs: Set<PageID>`** to track multiple files
+- **Right-click → "Ingest Selected"** on a selected file in the context menu
 
 **Changed — Core pipeline (WikiFSCore)**
 - `WikiOperation.ingest` generalized from one source to N: `sourcePath`→`sourcePaths`,
-  `stagedSourcePath`→`stagedSourcePaths`. Prompt builders updated to list all sources
-  and instruct the agent to cross-reference and log each source ID.
+  `stagedSourcePath`→`stagedSourcePaths`. Prompt builders list all sources and
+  instruct the agent to cross-reference and log each source ID.
 - `AgentStaging` gained `stageSources(_:in:)` (stages `source-1.<ext>`, …) and
-  `sourceFileName(ext:index:)` (indexed leaf names).
-- `IngestWriteRule.dontRediscover` now takes `sourceFilePaths: [String]` instead of
-  a single optional.
+  `sourceFileName(ext:index:)`. `IngestWriteRule.dontRediscover` takes `[String]`.
+- `AgentOperationRunner.runMultiIngest(fileIDs:)` reads all files, converts PDFs,
+  builds `[StagedSource]`, stages together, launches one agent run.
 
-**Changed — App pipeline (WikiFS)**
-- `OperationRequest.ingest` now takes `sources: [StagedSource]` (new struct with
-  bytes, ext, displayPath) instead of single values. `stage(into:)` stages all sources
-  and computes `IngestPlan` from total byte size.
-- `AgentOperationRunner.runIngest(fileID:)` delegates to new `runMultiIngest(fileIDs:)`
-  which reads all files' bytes, converts PDFs, builds `[StagedSource]`, and stages
-  via the new multi-source path.
-- `SidebarView`: filter picker (All/Ready/Ingested) in Files header; "Select…" button
-  toggles batch mode with checkboxes per row; "Ingest N Files" action with callback
-  to `ContentView.batchIngest(fileIDs:)`.
-- `IngestedFileRow`: optional batch-mode params (`isBatchSelecting`, `isChecked`,
-  `onToggle`) adding a leading checkbox.
+**Changed — App (WikiFS)**
+- `OperationRequest.ingest` takes `sources: [StagedSource]` (bytes, ext, displayPath).
+- `SidebarView`: `listSelection: Set<WikiSelection>` bridges native multi-select to
+  single-item detail navigation. "Ingest Selected" appears when file IDs are selected.
+- `IngestedFileRow`: simplified — no custom checkboxes; shows spinner when ingesting;
+  context menu has "Ingest Selected" on selected files.
+- Removed all custom checkbox / batch-mode toggle code.
 
 **Tests**
-- Updated `OperationCommandTests`, `ClaudePromptHelpTests` for new `WikiOperation.ingest`
-  signature.
-- Added `AgentStagingTests`: `sourceFileNameWithIndex`, `stagesMultipleSourcesIntoScratch`,
+- Updated `OperationCommandTests`, `ClaudePromptHelpTests` for new signatures.
+- `AgentStagingTests`: `sourceFileNameWithIndex`, `stagesMultipleSourcesIntoScratch`,
   `stagesEmptySourcesListReturnsEmpty`.
 
-**Verified.** `make check` clean; `swift test` **479/479** green (3 new tests, updated
-existing); `make` produces a clean signed bundle.
+**Verified.** `make check` clean; `swift test` **479/479** green; `make` produces a
+clean signed bundle. PR #16.
+
+See `plans/markdown-folder-import.md`.
 
 ## 2026-06-19 — Import Markdown Folder (Obsidian, LogSeq, general .md directories)
 
