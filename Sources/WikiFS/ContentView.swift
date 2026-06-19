@@ -12,7 +12,6 @@ struct ContentView: View {
     @Bindable var agentLauncher: AgentLauncher
     @State private var showingPathPopover = false
     @State private var showingMaintainSheet = false
-    @State private var ingestFileID: PageID?
     @State private var isTranscriptExpanded = false
     /// Driven by `.dropDestination`'s `isTargeted` callback to fade in a subtle
     /// accent border while a drag hovers the window (set via the closure param —
@@ -30,7 +29,7 @@ struct ContentView: View {
                     launcher: agentLauncher,
                     manager: manager,
                     fileProvider: fileProvider,
-                    onIngestFile: runIngest
+                    runIngest: runIngest
                 )
 
                 if isTranscriptExpanded && !isQuerySelected {
@@ -111,15 +110,6 @@ struct ContentView: View {
                 fileProvider: fileProvider
             )
         }
-        .sheet(item: $ingestFileID) { fileID in
-            IngestSheetView(
-                launcher: agentLauncher,
-                store: store,
-                manager: manager,
-                fileProvider: fileProvider,
-                sourceID: fileID
-            )
-        }
         // List(selection:) writes store.selection directly; observe it here so
         // the model flushes the outgoing page and loads the incoming one
         // (§3.5). The view, not the binding, is the right place for this.
@@ -176,6 +166,16 @@ struct ContentView: View {
     }
 
     private func runIngest(fileID: PageID) {
-        ingestFileID = fileID   // .sheet(item:) auto-presents
+        DebugLog.ingest("ContentView.runIngest: user pressed Ingest (fileID=\(fileID.rawValue))")
+        let task = Task {
+            defer { agentLauncher.ingestTask = nil }
+            await AgentOperationRunner.runIngest(
+                fileID: fileID,
+                launcher: agentLauncher,
+                store: store,
+                manager: manager,
+                fileProvider: fileProvider)
+        }
+        agentLauncher.ingestTask = task
     }
 }

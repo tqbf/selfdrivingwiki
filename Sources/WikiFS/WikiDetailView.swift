@@ -9,7 +9,7 @@ struct WikiDetailView: View {
     @Bindable var launcher: AgentLauncher
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
-    let onIngestFile: (PageID) -> Void
+    let runIngest: (PageID) -> Void
 
     var body: some View {
         switch store.selection {
@@ -47,7 +47,7 @@ struct WikiDetailView: View {
                     isRunning: launcher.isRunning,
                     fileProvider: fileProvider,
                     onOpen: { Task { await fileProvider.openIngestedFile(id: file.id) } },
-                    onIngest: { onIngestFile(file.id) }
+                    runIngest: runIngest
                 )
             } else {
                 ContentUnavailableView {

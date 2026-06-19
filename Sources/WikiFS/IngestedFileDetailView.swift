@@ -1,9 +1,9 @@
 import SwiftUI
 import WikiFSCore
 
-/// Detail pane for one raw source file. It keeps file management simple and makes
-/// "Ingest this into the wiki" a primary local action instead of a toolbar-only
-/// workflow.
+/// Detail pane for one raw source file. The "Ingest into Wiki" button kicks off
+/// the agent run directly — no intermediate confirmation sheet. Progress streams
+/// into the transcript sidebar.
 struct IngestedFileDetailView: View {
     let file: IngestedFileSummary
     let hasBeenIngested: Bool
@@ -12,7 +12,8 @@ struct IngestedFileDetailView: View {
     let isRunning: Bool
     let fileProvider: FileProviderSpike
     let onOpen: () -> Void
-    let onIngest: () -> Void
+    /// Launch the ingest directly. Called with the source file's PageID.
+    let runIngest: (PageID) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -36,9 +37,22 @@ struct IngestedFileDetailView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
+                if alreadyIngested {
+                    Label(
+                        "This document has already been ingested. Running ingest again may create duplicate pages.",
+                        systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.primary)
+                        .padding(10)
+                        .background(.yellow.opacity(0.18), in: RoundedRectangle(cornerRadius: 6))
+                }
+
                 HStack(spacing: 10) {
                     Button(isIngesting ? "Ingesting…" : "Ingest into Wiki",
-                           systemImage: "text.badge.plus", action: onIngest)
+                           systemImage: "text.badge.plus") {
+                        DebugLog.ingest("IngestedFileDetailView: Ingest tapped — id=\(file.id.rawValue)")
+                        runIngest(file.id)
+                    }
                         .keyboardShortcut(.return, modifiers: .command)
                         .disabled(isRunning || isIngesting)
                     Button("Open File", systemImage: "arrow.up.forward.app") {
@@ -72,6 +86,8 @@ struct IngestedFileDetailView: View {
     private var displayName: String {
         file.filename.isEmpty ? "Untitled" : file.filename
     }
+
+    private var alreadyIngested: Bool { hasBeenIngested }
 
     @ViewBuilder
     private var statusLabel: some View {
