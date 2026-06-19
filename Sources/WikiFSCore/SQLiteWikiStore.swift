@@ -321,7 +321,7 @@ public final class SQLiteWikiStore: WikiStore {
         }
         vecLoadAttempted = true
         guard vecDylibPath != nil else {
-            print("SQLiteWikiStore: vec0.dylib not found — semantic search disabled")
+            FileHandle.standardError.write(Data("SQLiteWikiStore: vec0.dylib not found — semantic search disabled\n".utf8))
             return
         }
         // Spin a throwaway connection just to enable extension loading once.
@@ -354,21 +354,21 @@ public final class SQLiteWikiStore: WikiStore {
               let loadPtr = dlsym(UnsafeMutableRawPointer(bitPattern: -2)!,
                                   "sqlite3_load_extension")
         else {
-            print("SQLiteWikiStore: dlsym failed for sqlite3_*_load_extension")
+            FileHandle.standardError.write(Data("SQLiteWikiStore: dlsym failed for sqlite3_*_load_extension\n".utf8))
             return
         }
         let enableFn = unsafeBitCast(enablePtr, to: EnableFn.self)
         let loadFn = unsafeBitCast(loadPtr, to: LoadFn.self)
 
         guard enableFn(db, 1) == SQLITE_OK else {
-            print("SQLiteWikiStore: sqlite3_enable_load_extension failed")
+            FileHandle.standardError.write(Data("SQLiteWikiStore: sqlite3_enable_load_extension failed\n".utf8))
             return
         }
         let rc = dylibPath.withCString { path in
             loadFn(db, path, "sqlite3_vec_init", nil)
         }
         if rc != SQLITE_OK, let err = sqlite3_errmsg(db) {
-            print("SQLiteWikiStore: sqlite3_load_extension failed: \(String(cString: err))")
+            FileHandle.standardError.write(Data("SQLiteWikiStore: sqlite3_load_extension failed: \(String(cString: err))\n".utf8))
         }
     }
 
@@ -1175,7 +1175,7 @@ public final class SQLiteWikiStore: WikiStore {
                 }
             }
         } catch {
-            print("SQLiteWikiStore.recomputeMissingEmbeddings: \(error)")
+            FileHandle.standardError.write(Data("SQLiteWikiStore.recomputeMissingEmbeddings: \(error)\n".utf8))
         }
         return count
     }
