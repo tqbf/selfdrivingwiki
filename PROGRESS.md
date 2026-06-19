@@ -2,6 +2,53 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-19 — Multi-tab editor space (Obsidian-style)
+
+Added a multi-tab editor space: a horizontal tab bar above the detail pane lets
+users keep multiple pages, Query, Instructions, and Activity open simultaneously.
+Obsidian-style — clicking a page in the sidebar opens it in a new tab.
+
+- **EditorTab** (`WikiFSCore/EditorTab.swift`) — `Identifiable, Hashable, Sendable`
+  value type holding a `UUID` identity, a `WikiSelection`, and a display `title`.
+  Plus `WikiStoreModel` helpers `tabTitle(for:)` and `tabIcon(for:)` that derive
+  labels/icons from the live summaries/ingestedFiles arrays.
+- **Tab management** on `WikiStoreModel`:
+  - `tabs: [EditorTab]`, `activeTabIndex: Int`, `recentlyClosedTabs: [EditorTab]`
+  - `openTab(_:title:)` — create or focus a tab. Singleton types (`.query`,
+    `.systemPrompt`, `.changeLog`) reuse existing; pages/files always create new
+    (Obsidian-style).
+  - `selectTab(at:)` — switch tabs, flushing outgoing drafts
+  - `closeTab(at:)` — close tab, push to recently-closed stack, activate neighbor
+  - `reopenLastClosedTab()` — Cmd+Shift+T support
+  - `newPageInNewTab(title:)` — create page + open in new tab
+  - `handleSelectionChange`, `delete`, `deleteIngestedFile`, `rename`, `newPage`,
+    `select`, `selectPage`, `applyHistorySelection` all updated for tab awareness
+- **TabBarView** (`WikiFS/TabBarView.swift`) — horizontal `ScrollView` tab strip
+  with `.regularMaterial` background, 34pt height
+- **TabBarItemView** (`WikiFS/TabBarItemView.swift`) — icon + truncated title +
+  hover-revealed close button; active tab: accent underline + control background;
+  inactive: subtle hover highlight. Semantic typography (`.caption`, `.semibold`).
+- **ContentView** — tab bar integrated above detail content; hidden keyboard
+  shortcut buttons (Cmd+W close, Cmd+Shift+T reopen, Cmd+1–9 switch, Cmd+N new
+  page); New Tab toolbar menu (New Page / Query / Instructions / Activity)
+- **SidebarView** — single-click calls `store.openTab(_:)` (Obsidian-style)
+
+**Tests** — `EditorTabTests` (31 tests): initial state, tab creation, open/close/
+switch/reopen, singleton reuse, delete-page-closes-tab, rename-updates-title,
+ingested-file-tab-close, history-preserves-tab-metadata, tabTitle/tabIcon helpers.
+
+**Verified.** `make check` clean; `swift test` **510/510** green (31 new, 0
+regressions); `make` produces a clean signed bundle.
+
+**Post-merge fix:** Opening a file (switching tabs) was bumping `updated_at` on the
+outgoing page because `flushPendingSaves()` called `save()` unconditionally, and
+`PageUpsert.upsert` always writes. Added `isDraftDirty` / `isSystemPromptDirty`
+flags — set by `didSet` on `draftTitle`/`draftBody`/`draftSystemPrompt` (and by
+`bodyChanged`/`titleChanged`/`systemPromptChanged`), cleared by `loadDrafts` and
+after a successful save. `flushPendingSave()` and `flushPendingSystemPromptSave()`
+now skip the save when the draft is clean, so viewing a page without editing no
+longer touches its timestamp.
+
 ## 2026-06-19 — File filter + native multi-select + batch ingest in single agent run
 
 Added a filter picker and native multi-select to the Files section, and generalized

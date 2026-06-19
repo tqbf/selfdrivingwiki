@@ -25,23 +25,29 @@ struct ContentView: View {
                         onBatchIngest: batchIngest,
                         ingestingFileIDs: agentLauncher.ingestingFileIDs)
         } detail: {
-            HStack(spacing: 0) {
-                WikiDetailView(
-                    store: store,
-                    launcher: agentLauncher,
-                    manager: manager,
-                    fileProvider: fileProvider,
-                    runIngest: runIngest
-                )
-                .frame(maxWidth: .infinity)
+            VStack(spacing: 0) {
+                TabBarView(store: store)
 
-                if isTranscriptExpanded && !isQuerySelected {
-                    Divider()
-                    AgentTranscriptSidebar(launcher: agentLauncher)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                HStack(spacing: 0) {
+                    WikiDetailView(
+                        store: store,
+                        launcher: agentLauncher,
+                        manager: manager,
+                        fileProvider: fileProvider,
+                        runIngest: runIngest
+                    )
+                    .frame(maxWidth: .infinity)
+
+                    if isTranscriptExpanded && !isQuerySelected {
+                        Divider()
+                        AgentTranscriptSidebar(launcher: agentLauncher)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
                 }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isTranscriptExpanded)
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isTranscriptExpanded)
+            // Hidden buttons for keyboard shortcuts.
+            .background { keyboardShortcutButtons }
         }
         // Drop a file anywhere on the window to ingest it (raw bytes → SQLite →
         // the read-only `files/` projection). The whole content is the target.
@@ -103,6 +109,26 @@ struct ContentView: View {
                 .popover(isPresented: $showingPathPopover, arrowEdge: .bottom) {
                     VerificationPopover(fileProvider: fileProvider)
                 }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button("New Page", systemImage: "doc.badge.plus") {
+                        store.newPageInNewTab()
+                    }
+                    .keyboardShortcut("n", modifiers: .command)
+                    Button("Query", systemImage: "bubble.left.and.text.bubble.right") {
+                        store.openTab(.query)
+                    }
+                    Button("Instructions", systemImage: "sparkles") {
+                        store.openTab(.systemPrompt)
+                    }
+                    Button("Activity", systemImage: "clock.arrow.circlepath") {
+                        store.openTab(.changeLog)
+                    }
+                } label: {
+                    Label("New Tab", systemImage: "plus.square.on.square")
+                }
+                .help("Open a new tab")
             }
         }
         .sheet(isPresented: $showingMaintainSheet) {
@@ -194,5 +220,37 @@ struct ContentView: View {
                 fileProvider: fileProvider)
         }
         agentLauncher.ingestTask = task
+    }
+
+    // MARK: - Keyboard shortcuts
+
+    /// Hidden buttons that provide Cmd+W, Cmd+Shift+T, and Cmd+1–9 shortcuts.
+    /// Placed in the detail background so they're always in the responder chain.
+    @ViewBuilder
+    private var keyboardShortcutButtons: some View {
+        // Cmd+W: Close active tab
+        Button("") { store.closeTab(at: store.activeTabIndex) }
+            .keyboardShortcut("w", modifiers: .command)
+            .opacity(0).allowsHitTesting(false)
+            .disabled(store.tabs.isEmpty)
+
+        // Cmd+Shift+T: Reopen last closed tab
+        Button("") { store.reopenLastClosedTab() }
+            .keyboardShortcut("t", modifiers: [.command, .shift])
+            .opacity(0).allowsHitTesting(false)
+            .disabled(store.recentlyClosedTabs.isEmpty)
+
+        // Cmd+1 through Cmd+9: Switch to tab by index
+        let keys: [KeyEquivalent] = [
+            "1", "2", "3", "4", "5", "6", "7", "8", "9"
+        ]
+        ForEach(Array(zip(keys.indices, keys)), id: \.0) { i, key in
+            Button("") {
+                guard store.tabs.indices.contains(i) else { return }
+                store.selectTab(at: i)
+            }
+            .keyboardShortcut(key, modifiers: .command)
+            .opacity(0).allowsHitTesting(false)
+        }
     }
 }

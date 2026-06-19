@@ -37,6 +37,15 @@ public final class WikiStoreModel {
     public var canNavigateBack: Bool { !backStack.isEmpty }
     public var canNavigateForward: Bool { !forwardStack.isEmpty }
 
+    // MARK: - Tab management
+
+    /// All open editor tabs, in display order (left to right).
+    public private(set) var tabs: [EditorTab] = []
+    /// Index into `tabs` for the active tab. 0 when `tabs` is empty.
+    public var activeTabIndex: Int = 0
+    /// Stack of recently-closed tabs for Cmd+Shift+T reopen. Max 10.
+    public private(set) var recentlyClosedTabs: [EditorTab] = []
+
     /// The removable list of ingested files (Phase 5). Like `summaries`, this is
     /// ALWAYS rebuilt from `store.listIngestedFiles()` after a change, never
     /// incrementally patched (§3.1). Most-recent-first.
@@ -55,13 +64,19 @@ public final class WikiStoreModel {
     @ObservationIgnored public var onPageDidChange: (@MainActor () -> Void)?
 
     /// Live editing buffers — the single source of in-flight text.
-    public var draftTitle: String = ""
-    public var draftBody: String = ""
+    public var draftTitle: String = "" {
+        didSet { if draftTitle != oldValue { isDraftDirty = true } }
+    }
+    public var draftBody: String = "" {
+        didSet { if draftBody != oldValue { isDraftDirty = true } }
+    }
 
     /// Live editing buffer for the system-prompt document (the singleton
     /// `CLAUDE.md`/`AGENTS.md`). Separate track from the page drafts above so the
     /// well-tested page autosave path is untouched.
-    public var draftSystemPrompt: String = ""
+    public var draftSystemPrompt: String = "" {
+        didSet { if draftSystemPrompt != oldValue { isSystemPromptDirty = true } }
+    }
 
     /// True while a `claude -p` operation is running against THIS wiki (Phase C /
     /// decision #6). The editor binds this to go read-only with a banner, and
@@ -78,7 +93,17 @@ public final class WikiStoreModel {
     /// after `selection` has advanced (§3.5 read-state-at-save-time).
     private var loadedSelection: WikiSelection?
     private var isApplyingHistorySelection = false
+    /// True when the page drafts differ from the last persisted state. Cleared on
+    /// save and on load. Prevents `flushPendingSaves()` from bumping `updated_at`
+    /// on a tab switch when the user only viewed a page without editing.
+    private var isDraftDirty = false
+    /// Same for the system prompt draft (separate track).
+    private var isSystemPromptDirty = false
+    /// Suppresses double-processing in `handleSelectionChange` during tab switches.
+    /// Follows the same pattern as `isApplyingHistorySelection`.
+    @ObservationIgnored private var isSwitchingTab = false
     private static let navigationHistoryLimit = 100
+    private static let maxRecentlyClosedTabs = 10
 
     public init(store: WikiStore) {
         self.store = store
@@ -94,12 +119,18 @@ public final class WikiStoreModel {
     /// Switch the selection programmatically. Flushes any pending save
     /// SYNCHRONOUSLY first (§3.5 immediate-on-switch) so the outgoing document
     /// can't lose buffered edits, then loads the new selection's text.
+    /// Updates the active tab's metadata to stay in sync.
     public func select(_ newValue: WikiSelection?) {
         guard newValue != selection else { return }
         flushPendingSaves()
         recordHistoryTransition(from: loadedSelection, to: newValue)
         selection = newValue
         loadDrafts(for: newValue)
+        // Keep the active tab in sync.
+        if tabs.indices.contains(activeTabIndex), let newValue {
+            tabs[activeTabIndex].selection = newValue
+            tabs[activeTabIndex].title = tabTitle(for: newValue)
+        }
     }
 
     /// Bridge for SwiftUI's `List(selection:)`, which writes `selection`
@@ -108,10 +139,22 @@ public final class WikiStoreModel {
     /// belong to `loadedSelection`, so the outgoing document's edits are
     /// persisted before we load the incoming one (§3.5).
     public func handleSelectionChange(to newValue: WikiSelection?) {
-        guard newValue != loadedSelection else { return }
+        // Skip if triggered programmatically by a tab switch.
+        guard !isSwitchingTab, newValue != loadedSelection else { return }
         flushPendingSaves()     // persists drafts to loadedSelection
         recordHistoryTransition(from: loadedSelection, to: newValue)
         loadDrafts(for: newValue)
+
+        // Keep the active tab's metadata in sync after a sidebar-driven change.
+        // If no tabs exist yet, create the initial tab.
+        if tabs.isEmpty {
+            let label = tabTitle(for: newValue ?? .query)
+            tabs.append(EditorTab(selection: newValue ?? .query, title: label))
+            activeTabIndex = 0
+        } else if tabs.indices.contains(activeTabIndex), let newValue {
+            tabs[activeTabIndex].selection = newValue
+            tabs[activeTabIndex].title = tabTitle(for: newValue)
+        }
     }
 
     public func navigateBack() {
@@ -153,6 +196,107 @@ public final class WikiStoreModel {
         return true
     }
 
+    // MARK: - Tab operations
+
+    /// Open a new tab with the given selection. For singleton selection types
+    /// (.query, .systemPrompt, .changeLog), switches to their existing tab instead
+    /// of creating a duplicate. Flushes the current tab's drafts first.
+    public func openTab(_ selection: WikiSelection, title: String? = nil) {
+        // Singleton types: switch to existing tab if one exists.
+        switch selection {
+        case .query, .systemPrompt, .changeLog:
+            if let existingIndex = tabs.firstIndex(where: { $0.selection == selection }) {
+                selectTab(at: existingIndex)
+                return
+            }
+        default:
+            // Page/file tabs: always create new (Obsidian-style).
+            break
+        }
+
+        flushPendingSaves()
+        let label = title ?? tabTitle(for: selection)
+        let tab = EditorTab(selection: selection, title: label)
+        tabs.append(tab)
+        activeTabIndex = tabs.count - 1
+
+        // Switch to the new tab without recording history.
+        isSwitchingTab = true
+        self.selection = selection
+        loadDrafts(for: selection)
+        isSwitchingTab = false
+    }
+
+    /// Switch to a specific tab by index. Flushes the outgoing tab's drafts and
+    /// loads the incoming tab's content. Does NOT record in navigation history.
+    public func selectTab(at index: Int) {
+        guard tabs.indices.contains(index), index != activeTabIndex else { return }
+        flushPendingSaves()
+        isSwitchingTab = true
+        activeTabIndex = index
+        selection = tabs[index].selection
+        loadDrafts(for: selection)
+        isSwitchingTab = false
+    }
+
+    /// Close the tab at the given index. Preserves it in `recentlyClosedTabs`
+    /// for Cmd+Shift+T. Activates the right-neighbor tab (or left if closing the
+    /// rightmost). Closing the last tab shows the empty state.
+    public func closeTab(at index: Int) {
+        guard tabs.indices.contains(index) else { return }
+        flushPendingSaves()
+
+        // Save to recently-closed stack.
+        let closedTab = tabs[index]
+        recentlyClosedTabs.append(closedTab)
+        if recentlyClosedTabs.count > Self.maxRecentlyClosedTabs {
+            recentlyClosedTabs.removeFirst()
+        }
+
+        let wasActive = index == activeTabIndex
+        tabs.remove(at: index)
+
+        if tabs.isEmpty {
+            // Last tab closed: show the empty state.
+            activeTabIndex = 0
+            isSwitchingTab = true
+            selection = nil
+            loadDrafts(for: nil)
+            isSwitchingTab = false
+        } else if wasActive {
+            // Activate the right neighbor, or left if removing the rightmost.
+            let newIndex = min(index, tabs.count - 1)
+            isSwitchingTab = true
+            activeTabIndex = newIndex
+            selection = tabs[newIndex].selection
+            loadDrafts(for: selection)
+            isSwitchingTab = false
+        } else if index < activeTabIndex {
+            // A tab to the left of the active one was closed — shift the index.
+            activeTabIndex -= 1
+        }
+    }
+
+    /// Reopen the last closed tab.
+    public func reopenLastClosedTab() {
+        guard let lastClosed = recentlyClosedTabs.popLast() else { return }
+        openTab(lastClosed.selection, title: lastClosed.title)
+    }
+
+    /// Create a new page and open it in a new tab.
+    public func newPageInNewTab(title: String = "Untitled") {
+        flushPendingSaves()
+        do {
+            let page = try store.createPage(title: title)
+            try store.replaceLinks(from: page.id, parsedLinks: WikiLinkParser.parse(page.bodyMarkdown))
+            reloadSummaries()
+            openTab(.page(page.id), title: title)
+            onPageDidChange?()
+        } catch {
+            print("WikiStoreModel.newPageInNewTab failed: \(error)")
+        }
+    }
+
     private func loadDrafts(for newValue: WikiSelection?) {
         loadedSelection = newValue
         switch newValue {
@@ -187,6 +331,8 @@ public final class WikiStoreModel {
             draftBody = ""
             loadedPage = nil
         }
+        isDraftDirty = false
+        isSystemPromptDirty = false
     }
 
     private func recordHistoryTransition(from oldValue: WikiSelection?, to newValue: WikiSelection?) {
@@ -205,6 +351,11 @@ public final class WikiStoreModel {
         selection = newValue
         loadDrafts(for: newValue)
         isApplyingHistorySelection = false
+        // Update the active tab's metadata so the tab bar stays in sync.
+        if tabs.indices.contains(activeTabIndex) {
+            tabs[activeTabIndex].selection = newValue
+            tabs[activeTabIndex].title = tabTitle(for: newValue)
+        }
     }
 
     private func trimBackStackIfNeeded() {
@@ -223,8 +374,8 @@ public final class WikiStoreModel {
 
     /// Called on each keystroke in the title or body. Cancels and restarts a
     /// 500ms debounce; when it fires it reads the live drafts and saves.
-    public func bodyChanged() { scheduleAutosave() }
-    public func titleChanged() { scheduleAutosave() }
+    public func bodyChanged() { isDraftDirty = true; scheduleAutosave() }
+    public func titleChanged() { isDraftDirty = true; scheduleAutosave() }
 
     private func scheduleAutosave() {
         // Paused while an agent runs (decision #6): an in-app autosave must never
@@ -242,8 +393,8 @@ public final class WikiStoreModel {
     /// belong to) + `draftTitle` + `draftBody` AT CALL TIME (§3.5 live read) so
     /// a debounce that fires after further typing — or a flush triggered once
     /// `selection` has already advanced to the next page — still writes the
-    /// freshest text to the RIGHT page. No-op when nothing is loaded. Always
-    /// rebuilds `summaries` from source on success.
+    /// freshest text to the RIGHT page. No-op when nothing is loaded.
+    /// Always rebuilds `summaries` from source on success.
     public func save() {
         guard let id = loadedPage else { return }
         do {
@@ -255,6 +406,7 @@ public final class WikiStoreModel {
             // that targeted the old title go stale until the linking page is next
             // saved (they self-heal then).
             try PageUpsert.upsert(in: store, id: id, title: draftTitle, body: draftBody)
+            isDraftDirty = false
             reloadSummaries()
             onPageDidChange?()
         } catch {
@@ -265,9 +417,12 @@ public final class WikiStoreModel {
 
     /// Cancel any pending debounce and save synchronously. Called on page
     /// switch and on app backgrounding (§3.5 immediate-on-background).
+    /// No-op when the draft hasn't been modified since the last load/save
+    /// (prevents bumping `updated_at` on a tab switch for a view-only page).
     public func flushPendingSave() {
         autosaveTask?.cancel()
         autosaveTask = nil
+        guard isDraftDirty else { return }
         save()
     }
 
@@ -278,6 +433,7 @@ public final class WikiStoreModel {
     public func systemPromptChanged() {
         // Paused while an agent runs (decision #6), same as the page autosave.
         guard !isAgentRunning else { return }
+        isSystemPromptDirty = true
         systemPromptAutosaveTask?.cancel()
         systemPromptAutosaveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(500))
@@ -288,12 +444,14 @@ public final class WikiStoreModel {
 
     /// Persist the system-prompt draft. Guarded on `loadedSelection` so a flush
     /// triggered once selection has moved off the prompt doesn't clobber it with
-    /// stale text (mirrors `save()`'s `loadedPage` guard). Bumps the row version,
-    /// which advances `changeToken()` so `CLAUDE.md`/`AGENTS.md` refresh.
+    /// stale text (mirrors `save()`'s `loadedPage` guard). No-op when the draft
+    /// hasn't been modified (prevents bumping the row version on a tab switch
+    /// when the user only viewed the Instructions page).
     public func saveSystemPrompt() {
         guard loadedSelection == .systemPrompt else { return }
         do {
             try store.updateSystemPrompt(body: draftSystemPrompt)
+            isSystemPromptDirty = false
             onPageDidChange?()
         } catch {
             print("WikiStoreModel.saveSystemPrompt failed: \(error)")
@@ -301,9 +459,12 @@ public final class WikiStoreModel {
     }
 
     /// Cancel the system-prompt debounce and save synchronously.
+    /// No-op when the draft hasn't been modified (prevents bumping the row
+    /// version on a tab switch when the user only viewed the Instructions page).
     public func flushPendingSystemPromptSave() {
         systemPromptAutosaveTask?.cancel()
         systemPromptAutosaveTask = nil
+        guard isSystemPromptDirty else { return }
         saveSystemPrompt()
     }
 
@@ -350,8 +511,7 @@ public final class WikiStoreModel {
             reloadSummaries()
             let newSelection = WikiSelection.page(page.id)
             recordHistoryTransition(from: loadedSelection, to: newSelection)
-            selection = newSelection
-            loadDrafts(for: newSelection)
+            openTab(newSelection, title: title)
             onPageDidChange?()
         } catch {
             print("WikiStoreModel.newPage failed: \(error)")
@@ -366,6 +526,10 @@ public final class WikiStoreModel {
             try store.updatePage(id: id, title: newTitle, body: page.bodyMarkdown)
             reloadSummaries()
             if selection == .page(id) { draftTitle = newTitle }
+            // Update any tab showing this renamed page.
+            for i in tabs.indices where tabs[i].selection == .page(id) {
+                tabs[i].title = newTitle
+            }
             onPageDidChange?()
         } catch {
             print("WikiStoreModel.rename failed: \(error)")
@@ -376,11 +540,9 @@ public final class WikiStoreModel {
         do {
             try store.deletePage(id: id)
             removeFromHistory(.page(id))
-            if selection == .page(id) {
-                autosaveTask?.cancel()
-                autosaveTask = nil
-                selection = nil
-                loadDrafts(for: nil)
+            // Close any tab showing this deleted page.
+            if let tabIndex = tabs.firstIndex(where: { $0.selection == .page(id) }) {
+                closeTab(at: tabIndex)
             }
             reloadSummaries()
             onPageDidChange?()
@@ -542,9 +704,9 @@ public final class WikiStoreModel {
         do {
             try store.deleteIngestedFile(id: id)
             removeFromHistory(.ingestedFile(id))
-            if selection == .ingestedFile(id) {
-                selection = nil
-                loadDrafts(for: nil)
+            // Close any tab showing this deleted file.
+            if let tabIndex = tabs.firstIndex(where: { $0.selection == .ingestedFile(id) }) {
+                closeTab(at: tabIndex)
             }
             reloadIngestedFiles()
             onPageDidChange?()

@@ -194,7 +194,8 @@ struct SidebarView: View {
             case .ingestedFile: activeSection = .files
             default: break
             }
-            store.selection = first
+            // Obsidian-style: single-click opens/activates a tab.
+            store.openTab(first)
         }
     }
 
