@@ -33,6 +33,7 @@ struct ContentView: View {
                     fileProvider: fileProvider,
                     runIngest: runIngest
                 )
+                .frame(maxWidth: .infinity)
 
                 if isTranscriptExpanded && !isQuerySelected {
                     Divider()
