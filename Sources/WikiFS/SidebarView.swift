@@ -179,6 +179,7 @@ struct SidebarView: View {
     }
 
     private func selectionDidChange(_ newValue: Set<WikiSelection>) {
+        // Track which section was last interacted with.
         for item in newValue {
             switch item {
             case .page: activeSection = .pages
@@ -186,6 +187,15 @@ struct SidebarView: View {
             default: break
             }
         }
+
+        // Cmd+A selects everything — filter to the active section only.
+        let hasPage = newValue.contains(where: { if case .page = $0 { true } else { false } })
+        let hasFile = newValue.contains(where: { if case .ingestedFile = $0 { true } else { false } })
+        if hasPage && hasFile {
+            handleSelectAll()
+            return
+        }
+
         if newValue.count == 1, let first = newValue.first {
             store.selection = first
         }
