@@ -35,8 +35,7 @@ struct MarkdownPreview: View {
                 } else {
                     StructuredText(markdown: renderedBody)
                         .id(renderedBody)
-                        // Textual's macOS document-selection overlay owns cursor/link hit-testing
-                        // and can get stale after navigation; keep links on the fragment tap path.
+                        .textual.textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
