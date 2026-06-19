@@ -84,6 +84,14 @@ if [ -f "${PDF2MD_SRC}" ]; then
 else
   echo "  (pdf2md not found at ${PDF2MD_SRC} — skipping; PDF extraction will fall back to agent Read tool)"
 fi
+# Copy sqlite-vec dylib for semantic search. Loaded at runtime via
+# sqlite3_load_extension when a WikiStore DB is first opened.
+VEC_DYLIB="Resources/vec0.dylib"
+if [ -f "${VEC_DYLIB}" ]; then
+  cp "${VEC_DYLIB}" "${HELPERS_DIR}/"
+else
+  echo "  (vec0.dylib not found at ${VEC_DYLIB} — semantic search will fall back to LIKE)"
+fi
 [ -f "${APP_ICON}" ] && cp "${APP_ICON}" "${RESOURCES_DIR}/AppIcon.icns"
 
 cat > "${CONTENTS}/Info.plist" <<PLIST
@@ -160,6 +168,8 @@ if [ "${REAL_SIGNING}" = "1" ]; then
   echo "→ codesign wikictl helper (${IDENTITY})"
   codesign --force --timestamp=none --sign "${IDENTITY}" \
     "${HELPERS_DIR}/${CTL_NAME}"
+  codesign --force --timestamp=none --sign "${IDENTITY}" \
+    "${HELPERS_DIR}/vec0.dylib"
   echo "→ codesign appex (${IDENTITY})"
   codesign --force --timestamp=none --sign "${IDENTITY}" \
     --entitlements "${EXT_ENTITLEMENTS}" \
@@ -172,6 +182,7 @@ if [ "${REAL_SIGNING}" = "1" ]; then
 else
   echo "→ ad-hoc codesign (File Provider extension will NOT load)"
   codesign --force --sign - "${HELPERS_DIR}/${CTL_NAME}"
+  codesign --force --sign - "${HELPERS_DIR}/vec0.dylib"
   if [ -f "${HELPERS_DIR}/${PDF2MD_NAME}" ]; then
     codesign --force --sign - "${HELPERS_DIR}/${PDF2MD_NAME}"
   fi

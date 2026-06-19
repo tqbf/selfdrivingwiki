@@ -35,6 +35,9 @@ public enum PageCommand {
         /// resolves create-or-update.
         case upsert(id: PageID?, title: String, body: String)
         case delete(id: PageID)
+        /// Semantic search: find pages by meaning (cosine similarity via
+        /// sqlite-vec), falling back to LIKE title match.
+        case search(query: String, limit: Int)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -60,6 +63,8 @@ public enum PageCommand {
             return try upsert(id: id, title: title, body: body, in: store)
         case .delete(let id):
             return try delete(id: id, in: store)
+        case .search(let query, let limit):
+            return try search(query: query, limit: limit, in: store)
         }
     }
 
@@ -139,6 +144,19 @@ public enum PageCommand {
     private static func delete(id: PageID, in store: WikiStore) throws -> Result {
         try store.deletePage(id: id)
         return Result(output: id.rawValue, didCommit: true)
+    }
+
+    // MARK: - search
+
+    private static func search(
+        query: String, limit: Int, in store: WikiStore
+    ) throws -> Result {
+        let results = try store.searchSimilar(query: query, limit: limit)
+        let output = results.map { summary in
+            let title = summary.title.replacingOccurrences(of: "\t", with: " ")
+            return "\(summary.id.rawValue)\t\(title)"
+        }.joined(separator: "\n")
+        return Result(output: output, didCommit: false)
     }
 
     // MARK: - Selector resolution

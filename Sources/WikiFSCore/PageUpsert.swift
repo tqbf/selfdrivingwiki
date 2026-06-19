@@ -53,6 +53,11 @@ public enum PageUpsert {
     ) throws -> Outcome {
         let outcome = try writePage(in: store, id: id, title: title, body: body)
         try store.replaceLinks(from: outcome.id, parsedLinks: WikiLinkParser.parse(body))
+        // Compute + store a semantic embedding for the page body.
+        // Non-fatal: embedding failure never breaks the save.
+        if let blob = EmbeddingService.embeddingBlob(title: title, body: body) {
+            try? store.storePageEmbedding(id: outcome.id, blob: blob)
+        }
         return outcome
     }
 

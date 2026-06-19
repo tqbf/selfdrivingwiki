@@ -44,6 +44,10 @@ public enum ArgumentParser {
         /// Phase B: rewrite the singleton wiki-index body. Like `upsert`, the body
         /// source is `-` for stdin or a file path; `main` reads it.
         case indexSet(bodyFile: String)
+        /// Semantic search: find pages by meaning, not keyword. Returns ranked
+        /// results (most relevant first). Falls back to LIKE title match when
+        /// embeddings aren't available.
+        case search(query: String, limit: Int)
     }
 
     public enum Failure: Error, Equatable, CustomStringConvertible {
@@ -71,6 +75,8 @@ public enum ArgumentParser {
                                              append one dated row to log.md;
                                              --source stamps that file "Ingested"
       index set --body-file <path|->         rewrite the curated index.md body
+      search --query X [--limit N]           semantic search (cosine similarity);
+                                             falls back to LIKE title match
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -103,6 +109,8 @@ public enum ArgumentParser {
             command = try parseLogCommand(Array(args.dropFirst()))
         case "index":
             command = try parseIndexCommand(Array(args.dropFirst()))
+        case "search":
+            command = try parseSearchCommand(Array(args.dropFirst()))
         default:
             throw Failure.usage("unknown command \((args.first ?? "").debugDescription)")
         }
@@ -160,6 +168,23 @@ public enum ArgumentParser {
         }
         let source = options.value("--source").map { PageID(rawValue: $0) }
         return .logAppend(kind: kind, title: title, note: options.value("--note"), source: source)
+    }
+
+    private static func parseSearchCommand(_ args: [String]) throws -> Command {
+        let options = try Options(args)
+        guard let query = options.value("--query") else {
+            throw Failure.usage("search: --query is required")
+        }
+        let limit: Int
+        if let raw = options.value("--limit") {
+            guard let n = Int(raw), n > 0, n <= 100 else {
+                throw Failure.usage("search: --limit must be 1–100")
+            }
+            limit = n
+        } else {
+            limit = 10
+        }
+        return .search(query: query, limit: limit)
     }
 
     private static func parseIndexCommand(_ args: [String]) throws -> Command {

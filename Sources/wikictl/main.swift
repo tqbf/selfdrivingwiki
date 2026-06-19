@@ -75,6 +75,8 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
     case .indexSet(let bodyFile):
         let body = try readBody(from: bodyFile)
         return try LogIndexCommand.run(.indexSet(body: body), in: store)
+    case .search(let query, let limit):
+        return try PageCommand.run(.search(query: query, limit: limit), in: store)
     }
 }
 

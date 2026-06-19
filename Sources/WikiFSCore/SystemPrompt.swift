@@ -87,6 +87,7 @@ public struct SystemPrompt: Equatable, Sendable {
     wikictl page delete --id I                 delete a page
     printf '%s' "<body>" | wikictl index set --body-file -               rewrite index.md wholesale
     wikictl log append --kind ingest|query|lint --title "…" [--note "…"] [--source <file-id>]  record an action (--source marks an ingest done)
+    wikictl search --query "…" [--limit N]    semantic search — find pages by meaning; defaults to 10 results, max 100
     ```
 
     **Read back what you just wrote with `wikictl page get`** — the mount lags a
@@ -115,8 +116,10 @@ public struct SystemPrompt: Equatable, Sendable {
        file Ingested in the app — always pass it on a successful ingest.
 
     **Query** — answer a question from the wiki:
-    1. Search (`wikictl page list`, then `wikictl page get`; `grep`/`cat` over
-       `index.md`, `log.md`, and `WIKI-STRUCTURE.md`).
+    1. Search: start with `wikictl search --query "…"` for semantic (meaning-based)
+       search across page bodies. If that misses, fall back to `wikictl page list`,
+       then `wikictl page get`; `grep`/`cat` over `index.md`, `log.md`, and
+       `WIKI-STRUCTURE.md`.
     2. Answer concisely, CITING the page titles or `files/…` paths you drew on. If
        the wiki lacks the information, say so plainly rather than guessing.
     3. Optionally file a useful answer back as a page via `wikictl page upsert`,

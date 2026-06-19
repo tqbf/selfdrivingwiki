@@ -1,6 +1,7 @@
 import Foundation
 import SQLite3
 import UniformTypeIdentifiers
+import Darwin
 
 /// SQLite-backed `WikiStore`. Hand-wraps the system `SQLite3` C API — no
 /// third-party dependency (per the BRINGUP decision). Owns one serial
@@ -16,6 +17,12 @@ public final class SQLiteWikiStore: WikiStore {
     /// Tests inject a temp-dir or `:memory:` URL; the app injects
     /// `DatabaseLocation.appGroupContainerURL()`.
     public init(databaseURL: URL) throws {
+        // Load sqlite-vec on the first DB open of the process lifetime.
+        // Idempotent — sqlite3_load_extension short-circuits if already loaded
+        // on this connection. On failure (dylib missing, sandbox), semantic
+        // search degrades to LIKE fallback; save + open never fail.
+        Self.ensureVecExtensionLoaded()
+
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         let rc = sqlite3_open_v2(databaseURL.path, &handle, flags, nil)
@@ -29,6 +36,9 @@ public final class SQLiteWikiStore: WikiStore {
         do {
             try configurePragmas()
             try bootstrapSchema()
+            // Load extension on THIS connection (connection-scoped).
+            // Non-fatal: logged, semantic search degrades gracefully.
+            Self.loadVecExtension(on: db)
         } catch {
             sqlite3_close(db)
             throw error
@@ -63,6 +73,7 @@ public final class SQLiteWikiStore: WikiStore {
         do {
             try exec("PRAGMA busy_timeout=5000;")
             try exec("PRAGMA query_only=ON;")
+            Self.loadVecExtension(on: db)
         } catch {
             sqlite3_close(db)
             throw error
@@ -249,6 +260,125 @@ public final class SQLiteWikiStore: WikiStore {
             try exec("PRAGMA user_version=6;")
             version = 6
         }
+
+        // v6 → v7: page embeddings for semantic search (sqlite-vec).
+        // The BLOB holds 512 × Float32 (2048 bytes) produced by Apple
+        // NLEmbedding. ON DELETE CASCADE mirrors the v0 attachment FK:
+        // removing a page removes its embedding.
+        if version < 7 {
+            try exec("""
+            CREATE TABLE page_embeddings (
+                page_id TEXT PRIMARY KEY REFERENCES pages(id) ON DELETE CASCADE,
+                embedding BLOB NOT NULL
+            );
+            """)
+            try exec("PRAGMA user_version=7;")
+            version = 7
+        }
+    }
+
+    // MARK: - vec extension loading
+
+    /// Called ONCE per process lifetime. Finds the bundled vec0.dylib, enables
+    /// extension loading on a throwaway connection so the module is available
+    /// on every subsequent `sqlite3_load_extension` call across connections.
+    /// Failure is non-fatal: logged, semantic search degrades to LIKE fallback.
+    /// Written before any concurrent access — `nonisolated(unsafe)` tells Swift 6
+    /// we accept responsibility for that invariant.
+    nonisolated(unsafe) private static var vecDylibPath: String?
+    nonisolated(unsafe) private static var vecLoadAttempted = false
+
+    private static func ensureVecExtensionLoaded() {
+        guard !vecLoadAttempted else { return }  // already attempted
+        // Production: dylib lives in Contents/Helpers/ (copied by build.sh).
+        // Development (swift build / Xcode): the binary runs from a build
+        // directory.  We walk up from the bundle URL to find the project
+        // root's Resources/ dir.  Also respect an explicit env-var override.
+        var candidatePaths: [String] = []
+        if let envPath = ProcessInfo.processInfo.environment["WIKIFS_VEC_DYLIB_PATH"] {
+            candidatePaths.append(envPath)
+        }
+        let bundle = Bundle.main.bundleURL
+        candidatePaths.append(
+            bundle.appendingPathComponent("Contents/Helpers/vec0.dylib").path)
+        // Walk up from the bundle to find Resources/vec0.dylib (dev builds).
+        // make → build/*.app; swift build → .build/debug/*.app or .build/release/*.app.
+        var cursor = bundle
+        for _ in 0..<6 {
+            cursor = cursor.deletingLastPathComponent()
+            candidatePaths.append(
+                cursor.appendingPathComponent("Resources/vec0.dylib").path)
+        }
+        if let resourceURL = Bundle.main.resourceURL {
+            candidatePaths.append(
+                resourceURL.appendingPathComponent("vec0.dylib").path)
+        }
+        for path in candidatePaths {
+            if FileManager.default.fileExists(atPath: path) {
+                vecDylibPath = path
+                break
+            }
+        }
+        vecLoadAttempted = true
+        guard vecDylibPath != nil else {
+            print("SQLiteWikiStore: vec0.dylib not found — semantic search disabled")
+            return
+        }
+        // Spin a throwaway connection just to enable extension loading once.
+        var tmp: OpaquePointer?
+        guard sqlite3_open(":memory:", &tmp) == SQLITE_OK, let tmp else { return }
+        defer { sqlite3_close(tmp) }
+        loadVecExtension(on: tmp)
+    }
+
+    /// Load the sqlite-vec extension on ONE connection. Safe to call on every
+    /// open — sqlite3_load_extension short-circuits if already loaded on this
+    /// connection. Errors are printed but not thrown.
+    ///
+    /// Apple's Swift `SQLite3` module intentionally omits
+    /// `sqlite3_enable_load_extension` and `sqlite3_load_extension`. Both
+    /// symbols ARE present in the system libsqlite3.dylib — we resolve them
+    /// via `dlsym(RTLD_DEFAULT)` so no experimental compiler flags are needed.
+    private static func loadVecExtension(on db: OpaquePointer) {
+        guard let dylibPath = vecDylibPath else { return }
+
+        typealias EnableFn = @convention(c) (OpaquePointer?, Int32) -> Int32
+        typealias LoadFn = @convention(c) (
+            OpaquePointer?, UnsafePointer<CChar>?,
+            UnsafePointer<CChar>?,
+            UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+        ) -> Int32
+
+        guard let enablePtr = dlsym(UnsafeMutableRawPointer(bitPattern: -2)!,
+                                     "sqlite3_enable_load_extension"),
+              let loadPtr = dlsym(UnsafeMutableRawPointer(bitPattern: -2)!,
+                                  "sqlite3_load_extension")
+        else {
+            print("SQLiteWikiStore: dlsym failed for sqlite3_*_load_extension")
+            return
+        }
+        let enableFn = unsafeBitCast(enablePtr, to: EnableFn.self)
+        let loadFn = unsafeBitCast(loadPtr, to: LoadFn.self)
+
+        guard enableFn(db, 1) == SQLITE_OK else {
+            print("SQLiteWikiStore: sqlite3_enable_load_extension failed")
+            return
+        }
+        let rc = dylibPath.withCString { path in
+            loadFn(db, path, "sqlite3_vec_init", nil)
+        }
+        if rc != SQLITE_OK, let err = sqlite3_errmsg(db) {
+            print("SQLiteWikiStore: sqlite3_load_extension failed: \(String(cString: err))")
+        }
+    }
+
+    /// Whether sqlite-vec scalar functions are available on THIS connection.
+    /// Probes with a lightweight `SELECT vec_distance_cosine` on zero-length
+    /// BLOBs — succeeds if registered, fails with "no such function" otherwise.
+    private func isVecAvailable() -> Bool {
+        (try? queryScalarText(
+            "SELECT vec_distance_cosine(x'00000000', x'00000000');"
+        )) != nil
     }
 
     // MARK: - WikiStore
@@ -950,5 +1080,103 @@ public final class SQLiteWikiStore: WikiStore {
         guard step == SQLITE_ROW else { return "" }
         guard let c = sqlite3_column_text(handle, 0) else { return "" }
         return String(cString: c)
+    }
+
+    // MARK: - Semantic search (v7)
+
+    public func storePageEmbedding(id: PageID, blob: Data) throws {
+        let stmt = try statement("""
+        INSERT OR REPLACE INTO page_embeddings (page_id, embedding)
+        VALUES (?1, ?2);
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        try stmt.bind(blob, at: 2)
+        _ = try stmt.step()
+    }
+
+    public func searchSimilar(query: String, limit: Int) throws -> [WikiPageSummary] {
+        // Try semantic search first; fall back to LIKE title match.
+        if isVecAvailable(), let queryBlob = EmbeddingService.embeddingBlob(for: query) {
+            return try searchSimilarSemantic(blob: queryBlob, limit: limit)
+        }
+        return try searchSimilarFallback(query: query, limit: limit)
+    }
+
+    private func searchSimilarSemantic(blob queryBlob: Data, limit: Int) throws -> [WikiPageSummary] {
+        let sql = """
+        SELECT p.id, p.title, p.updated_at, p.created_at
+        FROM pages p
+        JOIN page_embeddings pe ON pe.page_id = p.id
+        ORDER BY vec_distance_cosine(pe.embedding, ?1) ASC
+        LIMIT ?2;
+        """
+        let stmt = try statement(sql)
+        defer { stmt.reset() }
+        try stmt.bind(queryBlob, at: 1)
+        try stmt.bind(Int64(limit), at: 2)
+
+        var out: [WikiPageSummary] = []
+        while try stmt.step() {
+            out.append(WikiPageSummary(
+                id: PageID(rawValue: stmt.text(at: 0)),
+                title: stmt.text(at: 1),
+                updatedAt: Date(timeIntervalSince1970: stmt.double(at: 2)),
+                createdAt: Date(timeIntervalSince1970: stmt.double(at: 3))
+            ))
+        }
+        return out
+    }
+
+    private func searchSimilarFallback(query: String, limit: Int) throws -> [WikiPageSummary] {
+        let pattern = "%\(query)%"
+        let sql = """
+        SELECT id, title, updated_at, created_at
+        FROM pages
+        WHERE title LIKE ?1
+        ORDER BY updated_at DESC
+        LIMIT ?2;
+        """
+        let stmt = try statement(sql)
+        defer { stmt.reset() }
+        try stmt.bind(pattern, at: 1)
+        try stmt.bind(Int64(limit), at: 2)
+
+        var out: [WikiPageSummary] = []
+        while try stmt.step() {
+            out.append(WikiPageSummary(
+                id: PageID(rawValue: stmt.text(at: 0)),
+                title: stmt.text(at: 1),
+                updatedAt: Date(timeIntervalSince1970: stmt.double(at: 2)),
+                createdAt: Date(timeIntervalSince1970: stmt.double(at: 3))
+            ))
+        }
+        return out
+    }
+
+    public func recomputeMissingEmbeddings() -> Int {
+        guard isVecAvailable() else { return 0 }
+        var count = 0
+        do {
+            let stmt = try statement("""
+            SELECT p.id, p.title, p.body_markdown
+            FROM pages p
+            LEFT JOIN page_embeddings pe ON pe.page_id = p.id
+            WHERE pe.page_id IS NULL;
+            """)
+            defer { stmt.reset() }
+            while try stmt.step() {
+                let id = PageID(rawValue: stmt.text(at: 0))
+                let title = stmt.text(at: 1)
+                let body = stmt.text(at: 2)
+                if let blob = EmbeddingService.embeddingBlob(title: title, body: body) {
+                    try? storePageEmbedding(id: id, blob: blob)
+                    count += 1
+                }
+            }
+        } catch {
+            print("SQLiteWikiStore.recomputeMissingEmbeddings: \(error)")
+        }
+        return count
     }
 }
