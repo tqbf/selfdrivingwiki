@@ -227,7 +227,7 @@ struct SQLiteWikiStoreTests {
 
     @Test func v7SchemaHasPageEmbeddingsTable() throws {
         let url = tempDatabaseURL()
-        let store = try SQLiteWikiStore(databaseURL: url)
+        _ = try SQLiteWikiStore(databaseURL: url)  // triggers migration
 
         var db: OpaquePointer?
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
