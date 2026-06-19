@@ -22,14 +22,22 @@ struct WikiCtlLogIndexTests {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "log", "append", "--kind", "ingest", "--title", "T", "--note", "N"],
             env: noEnv)
-        #expect(invocation.command == .logAppend(kind: .ingest, title: "T", note: "N"))
+        #expect(invocation.command == .logAppend(kind: .ingest, title: "T", note: "N", source: nil))
     }
 
     @Test func parsesLogAppendWithoutNote() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "log", "append", "--kind", "query", "--title", "T"],
             env: noEnv)
-        #expect(invocation.command == .logAppend(kind: .query, title: "T", note: nil))
+        #expect(invocation.command == .logAppend(kind: .query, title: "T", note: nil, source: nil))
+    }
+
+    @Test func parsesLogAppendWithSource() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "log", "append", "--kind", "ingest", "--title", "T", "--source", "FILE123"],
+            env: noEnv)
+        #expect(invocation.command
+            == .logAppend(kind: .ingest, title: "T", note: nil, source: PageID(rawValue: "FILE123")))
     }
 
     @Test func logAppendRejectsBadKind() {
@@ -85,13 +93,35 @@ struct WikiCtlLogIndexTests {
     @Test func logAppendCommitsAndReturnsID() throws {
         let store = try tempStore()
         let result = try LogIndexCommand.run(
-            .logAppend(kind: .ingest, title: "Ingested X", note: "note"), in: store)
+            .logAppend(kind: .ingest, title: "Ingested X", note: "note", source: nil), in: store)
         #expect(result.didCommit)
         let all = try store.listAllLogEntriesOrderedByID()
         #expect(all.count == 1)
         #expect(all[0].id.rawValue == result.output)  // echoed id matches the row
         #expect(all[0].title == "Ingested X")
         #expect(all[0].note == "note")
+    }
+
+    @Test func logAppendWithSourceMarksFileIngested() throws {
+        let store = try tempStore()
+        let file = try store.ingestFile(filename: "paper.pdf", data: Data("%PDF".utf8))
+        #expect(try store.markedIngestedFileIDs().isEmpty)
+
+        _ = try LogIndexCommand.run(
+            .logAppend(kind: .ingest, title: "Anything", note: nil, source: file.id), in: store)
+
+        #expect(try store.markedIngestedFileIDs() == [file.id.rawValue])
+    }
+
+    @Test func logAppendWithoutSourceLeavesFileUnmarked() throws {
+        let store = try tempStore()
+        let file = try store.ingestFile(filename: "paper.pdf", data: Data("%PDF".utf8))
+
+        _ = try LogIndexCommand.run(
+            .logAppend(kind: .ingest, title: "Ingested paper.pdf", note: nil, source: nil), in: store)
+
+        #expect(try store.markedIngestedFileIDs().isEmpty)
+        _ = file
     }
 
     @Test func indexSetCommitsAndPersistsBody() throws {

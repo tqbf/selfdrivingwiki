@@ -112,18 +112,21 @@ extension WikiOperation {
   ///     (NOT `$WIKI_ROOT` for the agent to expand).
   public func prompt(wikiRoot: String) -> String {
     switch self {
-    case .ingest(_, let stagedSourcePath, let stateFilePath, let plan):
+    case .ingest(let sourcePath, let stagedSourcePath, let stateFilePath, let plan):
+      let sourceID = Self.sourceID(fromPath: sourcePath)
       switch plan {
       case .singleOpus:
         return Self.ingestSinglePrompt(
           wikiRoot: wikiRoot,
           stagedSourcePath: stagedSourcePath,
-          stateFilePath: stateFilePath)
+          stateFilePath: stateFilePath,
+          sourceID: sourceID)
       case .opusCurator:
         return Self.ingestCuratorPrompt(
           wikiRoot: wikiRoot,
           stagedSourcePath: stagedSourcePath,
-          stateFilePath: stateFilePath)
+          stateFilePath: stateFilePath,
+          sourceID: sourceID)
       }
     case .query(let question, let stateFilePath):
       return Self.queryPrompt(
@@ -135,6 +138,14 @@ extension WikiOperation {
     }
   }
 
+  /// Recover the ingested-file id from its `files/by-id/<id>[.ext]` source path —
+  /// the leaf stem IS the id (`FilenameEscaping.byIDIngestedFilename`). The agent
+  /// echoes it back via `wikictl log append --kind ingest --source <id>`.
+  static func sourceID(fromPath path: String) -> String {
+    let leaf = (path as NSString).lastPathComponent
+    return (leaf as NSString).deletingPathExtension
+  }
+
   // MARK: - Ingest prompts
 
   /// Single-pass Ingest (tiny source): one Opus pass does the whole ingest itself via
@@ -144,7 +155,8 @@ extension WikiOperation {
   private static func ingestSinglePrompt(
     wikiRoot: String,
     stagedSourcePath: String,
-    stateFilePath: String
+    stateFilePath: String,
+    sourceID: String
   ) -> String {
     """
     \(IngestWriteRule.writes)
@@ -158,10 +170,12 @@ extension WikiOperation {
     staged source, DECIDE what belongs in the wiki, and write one or more \
     summary/entity/concept pages via `wikictl page upsert` (cross-linking with \
     [[wiki links]]), rewrite index.md via `wikictl index set`, and record it with \
-    `wikictl log append --kind ingest`. Work autonomously to completion; the live \
-    app shows your changes as they land.
+    `wikictl log append --kind ingest --source \(sourceID) --title "<source>"`. The \
+    `--source` id is REQUIRED on success — it marks this file Ingested in the app. \
+    Work autonomously to completion; the live app shows your changes as they land.
 
     WIKI_ROOT (resolved, read-only mount — reference only): \(wikiRoot)
+    SOURCE_ID (pass to `--source` on the final log append): \(sourceID)
     """
   }
 
@@ -173,7 +187,8 @@ extension WikiOperation {
   private static func ingestCuratorPrompt(
     wikiRoot: String,
     stagedSourcePath: String,
-    stateFilePath: String
+    stateFilePath: String,
+    sourceID: String
   ) -> String {
     """
     \(IngestWriteRule.writes)
@@ -209,11 +224,13 @@ extension WikiOperation {
     4. WRITE every page yourself via `wikictl page upsert` (cross-linking with \
        [[wiki links]]), then rewrite index.md wholesale via `wikictl index set` so it \
        catalogs the new pages, and append the log entry with \
-       `wikictl log append --kind ingest`.
+       `wikictl log append --kind ingest --source \(sourceID) --title "<source>"`. The \
+       `--source` id is REQUIRED on success — it marks this file Ingested in the app.
 
     Work autonomously to completion; the live app shows changes as they land.
 
     WIKI_ROOT (resolved, read-only mount — reference only): \(wikiRoot)
+    SOURCE_ID (pass to `--source` on the final log append): \(sourceID)
     """
   }
 

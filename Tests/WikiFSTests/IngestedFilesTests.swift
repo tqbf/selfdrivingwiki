@@ -165,7 +165,7 @@ struct IngestedFilesTests {
         #expect(page.title == "Kept")
         #expect(page.bodyMarkdown == "# kept")
 
-        // user_version is now 5 (migration runs through every step to head).
+        // user_version is now 6 (migration runs through every step to head).
         var check: OpaquePointer?
         #expect(sqlite3_open(url.path, &check) == SQLITE_OK)
         defer { sqlite3_close(check) }
@@ -173,7 +173,7 @@ struct IngestedFilesTests {
         #expect(sqlite3_prepare_v2(check, "PRAGMA user_version;", -1, &stmt, nil) == SQLITE_OK)
         defer { sqlite3_finalize(stmt) }
         #expect(sqlite3_step(stmt) == SQLITE_ROW)
-        #expect(sqlite3_column_int(stmt, 0) == 5)
+        #expect(sqlite3_column_int(stmt, 0) == 6)
         _ = store
     }
 }

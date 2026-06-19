@@ -24,6 +24,8 @@ APP_NAME="Self Driving Wiki"
 APP_TARGET_NAME="WikiFS"
 EXT_NAME="WikiFSFileProvider"
 CTL_NAME="wikictl"
+PDF2MD_NAME="pdf2md"
+PDF2MD_SRC="tools/pdf2md/pdf2md"
 BUNDLE_ID="org.sockpuppet.WikiFS"
 EXT_BUNDLE_ID="org.sockpuppet.WikiFS.FileProvider"
 APP_GROUP="group.org.sockpuppet.wiki"
@@ -74,6 +76,14 @@ cp "${EXT_BIN}" "${APPEX_MACOS}/${EXT_NAME}"
 cp "${CTL_BIN}" "${HELPERS_DIR}/${CTL_NAME}"
 # Also drop a copy at build/wikictl for the Phase A gate to invoke directly.
 cp "${CTL_BIN}" "${BUILD_DIR}/${CTL_NAME}"
+# Bundle the pdf2md PEP 723 script alongside wikictl so PdfExtractionService
+# can spawn it at ingest time.
+if [ -f "${PDF2MD_SRC}" ]; then
+  cp "${PDF2MD_SRC}" "${HELPERS_DIR}/${PDF2MD_NAME}"
+  cp "${PDF2MD_SRC}" "${BUILD_DIR}/${PDF2MD_NAME}"
+else
+  echo "  (pdf2md not found at ${PDF2MD_SRC} — skipping; PDF extraction will fall back to agent Read tool)"
+fi
 [ -f "${APP_ICON}" ] && cp "${APP_ICON}" "${RESOURCES_DIR}/AppIcon.icns"
 
 cat > "${CONTENTS}/Info.plist" <<PLIST
@@ -162,6 +172,9 @@ if [ "${REAL_SIGNING}" = "1" ]; then
 else
   echo "→ ad-hoc codesign (File Provider extension will NOT load)"
   codesign --force --sign - "${HELPERS_DIR}/${CTL_NAME}"
+  if [ -f "${HELPERS_DIR}/${PDF2MD_NAME}" ]; then
+    codesign --force --sign - "${HELPERS_DIR}/${PDF2MD_NAME}"
+  fi
   codesign --force --sign - "${APPEX}"
   codesign --force --sign - "${APP_BUNDLE}"
   echo "✓ built ${APP_BUNDLE} (${CONFIG}, v${VERSION}, ad-hoc)"

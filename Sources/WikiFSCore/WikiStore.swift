@@ -65,6 +65,15 @@ public protocol WikiStore {
     /// Remove an ingested file by id.
     func deleteIngestedFile(id: PageID) throws
 
+    /// Stamp an ingested file as summarized-into-the-wiki. The agent calls this on
+    /// successful completion via `wikictl log append --kind ingest --source <id>`;
+    /// the UI reads it as the authoritative "Ingested" status.
+    func markIngestedFile(id: PageID) throws
+
+    /// IDs of ingested files the agent has marked ingested — the deterministic
+    /// source of truth for the "Ingested" badge (no fuzzy log-title matching).
+    func markedIngestedFileIDs() throws -> Set<String>
+
     // MARK: - System prompt (singleton document, v3)
 
     /// Read the user-editable singleton system-prompt document (projected at the

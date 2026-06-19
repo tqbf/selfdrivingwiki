@@ -16,5 +16,23 @@ PROGRESS.md" and trust it's up to speed with this codebase.
 
 * You may push PRs, but you MUST NOT ever merge them youself to main.
 
+## Testing
+
+**Swift** (from repo root):
+```
+swift build          # compile
+swift test           # full suite
+swift test --filter PdfExtractionServiceTests  # pdf extraction only
+```
+
+**Python / pdf2md** (from `tools/pdf2md`):
+```
+uv run pytest tests/                                     # unit + fast integration (60, never hangs)
+uv run pytest tests/test_vlm.py -v                       # VLM pipeline (slow, needs real PDF + ~2 GB model)
+uv run ruff check pdf2md tests/                          # lint
+uv run pyright pdf2md tests/                             # type check
+```
+
+Python tests are NOT in CI — run them manually when changing pdf2md or PdfExtractionService.
 
 

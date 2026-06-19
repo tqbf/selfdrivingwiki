@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  swift:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Environment
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun --show-sdk-version
+          xcrun --show-sdk-path
+          which swift || echo "swift not in PATH"
+          swift --version || xcrun swift --version
+      - name: Build
+        run: swift build || xcrun swift build
+      - name: Test
+        run: swift test || xcrun swift test
+
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/pdf2md
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Lint
+        run: uv run ruff check pdf2md tests/
+      - name: Type check
+        run: uv run pyright pdf2md tests/
+      - name: Unit tests
+        run: uv run pytest tests/test_pdf2md.py -v

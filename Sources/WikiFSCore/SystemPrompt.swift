@@ -86,7 +86,7 @@ public struct SystemPrompt: Equatable, Sendable {
     printf '%s' "<body>" | wikictl page upsert --title T --body-file -   create or update a page
     wikictl page delete --id I                 delete a page
     printf '%s' "<body>" | wikictl index set --body-file -               rewrite index.md wholesale
-    wikictl log append --kind ingest|query|lint --title "…" [--note "…"]  record an action
+    wikictl log append --kind ingest|query|lint --title "…" [--note "…"] [--source <file-id>]  record an action (--source marks an ingest done)
     ```
 
     **Read back what you just wrote with `wikictl page get`** — the mount lags a
@@ -110,7 +110,9 @@ public struct SystemPrompt: Equatable, Sendable {
        `[[wiki links]]`.
     4. Rewrite `index.md` via `wikictl index set` so the catalog lists the pages
        you just wrote (read the current set with `wikictl page list` first).
-    5. Record it: `wikictl log append --kind ingest --title "<source>" --note "…"`.
+    5. Record it: `wikictl log append --kind ingest --source <file-id> --title "<source>" --note "…"`.
+       The `--source <file-id>` (given in the ingest task as SOURCE_ID) marks the
+       file Ingested in the app — always pass it on a successful ingest.
 
     **Query** — answer a question from the wiki:
     1. Search (`wikictl page list`, then `wikictl page get`; `grep`/`cat` over

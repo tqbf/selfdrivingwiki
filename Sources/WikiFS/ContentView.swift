@@ -11,8 +11,8 @@ struct ContentView: View {
     let fileProvider: FileProviderSpike
     @Bindable var agentLauncher: AgentLauncher
     @State private var showingPathPopover = false
-    @State private var showingAgentSheet = false
-    @State private var operationInitialSourceID: PageID?
+    @State private var showingMaintainSheet = false
+    @State private var ingestFileID: PageID?
     @State private var isTranscriptExpanded = false
     /// Driven by `.dropDestination`'s `isTargeted` callback to fade in a subtle
     /// accent border while a drag hovers the window (set via the closure param —
@@ -35,10 +35,7 @@ struct ContentView: View {
 
                 if isTranscriptExpanded && !isQuerySelected {
                     Divider()
-                    AgentTranscriptSidebar(
-                        launcher: agentLauncher,
-                        onCollapse: collapseTranscript
-                    )
+                    AgentTranscriptSidebar(launcher: agentLauncher)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
@@ -82,14 +79,18 @@ struct ContentView: View {
                     toggleTranscript()
                 }
                 .disabled(!canShowTranscript)
+                // Light up (tint + pulse) while the agent is busy — including the
+                // PDF-conversion phase, before the agent process itself starts — so
+                // the user can tell something is running and open the transcript.
+                .foregroundStyle(agentBusy ? Color.orange : Color.primary)
+                .symbolEffect(.pulse, isActive: agentBusy)
                 .help(isTranscriptExpanded ? "Hide agent transcript" : "Show agent transcript")
             }
             ToolbarItem(placement: .primaryAction) {
                 Button("Maintain Wiki", systemImage: "sparkles") {
-                    operationInitialSourceID = nil
-                    showingAgentSheet = true
+                    showingMaintainSheet = true
                 }
-                .help("Run an agent: Ingest a source, Query the wiki, or Lint it")
+                .help("Query the wiki or lint it")
             }
             ToolbarItem(placement: .primaryAction) {
                 Button("Copy Unix Path", systemImage: "terminal") {
@@ -102,13 +103,21 @@ struct ContentView: View {
                 }
             }
         }
-        .sheet(isPresented: $showingAgentSheet) {
+        .sheet(isPresented: $showingMaintainSheet) {
             OperationsView(
                 launcher: agentLauncher,
                 store: store,
                 manager: manager,
+                fileProvider: fileProvider
+            )
+        }
+        .sheet(item: $ingestFileID) { fileID in
+            IngestSheetView(
+                launcher: agentLauncher,
+                store: store,
+                manager: manager,
                 fileProvider: fileProvider,
-                initialSourceID: operationInitialSourceID
+                sourceID: fileID
             )
         }
         // List(selection:) writes store.selection directly; observe it here so
@@ -125,11 +134,26 @@ struct ContentView: View {
                 isTranscriptExpanded = true
             }
         }
+        // Auto-open the transcript the moment an ingest starts — even during the
+        // PDF-conversion phase, before the agent process spawns — so the
+        // conversion box is visible.
+        .onChange(of: agentLauncher.ingestingFileID) { _, newValue in
+            if newValue != nil && !isQuerySelected {
+                isTranscriptExpanded = true
+            }
+        }
+    }
+
+    /// The agent is doing work — running, or in the local PDF-conversion phase of
+    /// an ingest (which precedes the agent process). Drives the toolbar glow.
+    private var agentBusy: Bool {
+        agentLauncher.isRunning || agentLauncher.ingestingFileID != nil
     }
 
     private var canShowTranscript: Bool {
         !isQuerySelected
             && (agentLauncher.isRunning
+                || agentLauncher.ingestingFileID != nil
                 || !agentLauncher.events.isEmpty
                 || agentLauncher.preflightError != nil
                 || !agentLauncher.stderr.isEmpty)
@@ -143,10 +167,6 @@ struct ContentView: View {
         isTranscriptExpanded.toggle()
     }
 
-    private func collapseTranscript() {
-        isTranscriptExpanded = false
-    }
-
     private func navigateBack() {
         store.navigateBack()
     }
@@ -156,7 +176,6 @@ struct ContentView: View {
     }
 
     private func runIngest(fileID: PageID) {
-        operationInitialSourceID = fileID
-        showingAgentSheet = true
+        ingestFileID = fileID   // .sheet(item:) auto-presents
     }
 }

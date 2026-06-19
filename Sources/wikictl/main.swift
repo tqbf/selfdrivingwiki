@@ -70,8 +70,8 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
     case .upsert(let id, let title, let bodyFile):
         let body = try readBody(from: bodyFile)
         return try PageCommand.run(.upsert(id: id, title: title, body: body), in: store)
-    case .logAppend(let kind, let title, let note):
-        return try LogIndexCommand.run(.logAppend(kind: kind, title: title, note: note), in: store)
+    case .logAppend(let kind, let title, let note, let source):
+        return try LogIndexCommand.run(.logAppend(kind: kind, title: title, note: note, source: source), in: store)
     case .indexSet(let bodyFile):
         let body = try readBody(from: bodyFile)
         return try LogIndexCommand.run(.indexSet(body: body), in: store)

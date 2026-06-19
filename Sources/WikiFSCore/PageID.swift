@@ -10,3 +10,8 @@ public struct PageID: Hashable, Codable, RawRepresentable, Sendable {
         self.rawValue = rawValue
     }
 }
+
+extension PageID: Identifiable {
+    public var id: String { rawValue }
+}
+

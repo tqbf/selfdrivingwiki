@@ -571,12 +571,20 @@ public final class WikiStoreModel {
 
     private func reloadIngestedFiles() {
         ingestedFiles = (try? store.listIngestedFiles()) ?? []
+        // Authoritative source: the flag the agent stamps via
+        // `wikictl log append --kind ingest --source <id>` on success.
+        let markedIDs = (try? store.markedIngestedFileIDs()) ?? []
+        // Legacy fallback: wikis ingested before the flag existed only have the
+        // free-text log entry, so keep the old best-effort title/path match too.
         let entries = (try? store.recentLogEntries(limit: 10_000)) ?? []
         let ingestTexts = entries
             .filter { $0.kind == .ingest }
             .map { "\($0.title) \($0.note ?? "")".lowercased() }
 
         ingestedFileStatus = Dictionary(uniqueKeysWithValues: ingestedFiles.map { file in
+            if markedIDs.contains(file.id.rawValue) {
+                return (file.id, true)
+            }
             let filename = file.filename.lowercased()
             let byIDLeaf = FilenameEscaping
                 .byIDIngestedFilename(fileID: file.id.rawValue, ext: file.ext)

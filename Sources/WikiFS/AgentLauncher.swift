@@ -31,6 +31,22 @@ final class AgentLauncher {
     /// stderr captured separately (claude's diagnostics): a failed start, a flag
     /// error, an auth prompt. Surfaced prominently in the UI rather than swallowed.
     private(set) var stderr = ""
+    var extractionLog = ""
+    /// True while a local `pdf2md` conversion subprocess is running (before the
+    /// agent itself starts). Drives the PDF-extraction spinner / Cancel affordance.
+    var isExtracting = false
+    /// PID of the running `pdf2md` conversion subprocess, surfaced in the UI so a
+    /// stuck conversion can be identified (and killed) by the user.
+    var extractionPID: Int32?
+    /// The ingested-file id currently being operated on — from the moment its
+    /// ingest starts (local conversion included) until the agent run ends. Drives
+    /// the "Ingesting…" status in `IngestedFileDetailView`. Cleared in `finish()`.
+    var ingestingFileID: PageID?
+    /// The in-flight ingest operation Task (set by `IngestSheetView`). Cancelling
+    /// it aborts a running `pdf2md` conversion (via its task-cancellation handler).
+    /// Held here so `stop()` — driven from the transcript sidebar too — can cancel
+    /// the conversion phase, not just the agent process. Self-clears when done.
+    @ObservationIgnored var ingestTask: Task<Void, Never>?
     /// True while a spawned `claude -p` process is running.
     private(set) var isRunning = false
     /// Exit status of the last finished process, or nil if none finished / one is
@@ -62,6 +78,9 @@ final class AgentLauncher {
     }
 
     private var process: Process?
+    /// Backstop poller that reconciles the UI if the process `terminationHandler`
+    /// is ever missed (see `startCompletionWatchdog`). Cancelled on teardown.
+    private var watchdogTask: Task<Void, Never>?
     /// Carries-over bytes from a stdout read that ended mid-line, so the parser only
     /// ever sees complete NDJSON lines.
     private var stdoutLineBuffer = ""
@@ -183,6 +202,7 @@ final class AgentLauncher {
             stdoutPipe.fileHandleForReading.readabilityHandler = nil
             stderrPipe.fileHandleForReading.readabilityHandler = nil
             let status = proc.terminationStatus
+            DebugLog.agent("terminationHandler fired: pid=\(proc.processIdentifier) status=\(status)")
             Task { @MainActor [weak self] in
                 self?.finish(status: status)
                 onUnlock()
@@ -190,10 +210,14 @@ final class AgentLauncher {
         }
 
         do {
+            DebugLog.agent("run: spawning kind=\(operation.kind.rawValue) wikiID=\(wikiID) exe=\(command.executable)")
             try process.run()
             self.process = process
             currentProcessID = process.processIdentifier
+            DebugLog.agent("run: spawned pid=\(process.processIdentifier) kind=\(operation.kind.rawValue)")
+            startCompletionWatchdog()
         } catch {
+            DebugLog.agent("run: spawn FAILED: \(error.localizedDescription)")
             preflightError = "Failed to launch claude: \(error.localizedDescription)"
             closeLogFiles()
             try? FileManager.default.removeItem(at: scratch)
@@ -202,6 +226,36 @@ final class AgentLauncher {
             currentProcessID = nil
             lastActivityAt = Date()
             onUnlock()
+        }
+    }
+
+    /// Poll the spawned process's liveness as a backstop for a missed
+    /// `terminationHandler`. The handler is the primary completion signal, but if
+    /// it ever fails to fire (or the run hangs), the UI would spin forever with no
+    /// way to tell whether the child is alive. This loop logs a heartbeat for
+    /// post-hoc analysis and — if the OS reports the process gone while the UI
+    /// still thinks it is running — reconciles by calling `finish()` itself.
+    private func startCompletionWatchdog() {
+        watchdogTask?.cancel()
+        watchdogTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                guard let self, self.isRunning else { return }
+                let alive = self.process?.isRunning ?? false
+                let pid = self.currentProcessID ?? -1
+                let idle = self.lastActivityAt.map { Date().timeIntervalSince($0) } ?? -1
+                DebugLog.agent(
+                    "heartbeat pid=\(pid) procAlive=\(alive) isRunning=\(self.isRunning) "
+                    + "events=\(self.events.count) idleSec=\(String(format: "%.1f", idle))")
+                if let proc = self.process, !proc.isRunning {
+                    let status = proc.terminationStatus
+                    DebugLog.agent(
+                        "watchdog: process exited (status=\(status)) but UI still marked "
+                        + "running — terminationHandler was missed; reconciling via finish()")
+                    self.finish(status: status)
+                    return
+                }
+            }
         }
     }
 
@@ -335,12 +389,40 @@ final class AgentLauncher {
         }
     }
 
-    /// Terminate the running process, if any. The `terminationHandler` releases the
-    /// edit lock and clears `isRunning`.
+    /// Terminate the running process, if any, and tear the UI state down
+    /// immediately so Cancel is responsive even when the child ignores `SIGTERM`
+    /// or its `terminationHandler` is slow/missed. The real handler (if it does
+    /// fire) calls `finish()` again, which guards on `isRunning` and no-ops.
     func stop() {
+        DebugLog.agent(
+            "stop() requested: isRunning=\(isRunning) extracting=\(isExtracting) "
+            + "process=\(process != nil) procAlive=\(process?.isRunning ?? false) "
+            + "pid=\(currentProcessID ?? -1)")
+        // Cancel an in-flight ingest Task first — this aborts a running pdf2md
+        // conversion (the agent process may not have started yet during the
+        // conversion phase).
+        ingestTask?.cancel()
         try? inputHandle?.close()
         inputHandle = nil
         process?.terminate()
+        if isRunning {
+            finish(status: -1)  // -1 sentinel = user-cancelled / forced teardown
+        }
+    }
+
+    /// Clear the visible activity feed so a freshly-opened surface (e.g. the ingest
+    /// sheet for a different file) doesn't show the previous run's events. No-op
+    /// while a run is in flight, so we never wipe a live transcript.
+    func resetActivityIfIdle() {
+        guard !isRunning && !isExtracting else { return }
+        events = []
+        rawTranscript = ""
+        stderr = ""
+        stdoutLineBuffer = ""
+        exitStatus = nil
+        preflightError = nil
+        extractionLog = ""
+        extractionPID = nil
     }
 
     // MARK: - Stream ingestion (main actor)
@@ -374,7 +456,16 @@ final class AgentLauncher {
     }
 
     /// Drain any trailing partial line, record the exit status, and tear down.
+    /// Guarded on `isRunning` so it runs EXACTLY ONCE per run: `stop()` and the
+    /// watchdog may both race the real `terminationHandler` to call it.
     private func finish(status: Int32) {
+        guard isRunning else {
+            DebugLog.agent("finish: ignored (already torn down) status=\(status)")
+            return
+        }
+        DebugLog.agent("finish: status=\(status) events=\(events.count)")
+        watchdogTask?.cancel()
+        watchdogTask = nil
         if !stdoutLineBuffer.isEmpty {
             if let event = AgentEventParser.parse(line: stdoutLineBuffer) {
                 events.append(event)
@@ -389,11 +480,14 @@ final class AgentLauncher {
         process = nil
         inputHandle = nil
         currentProcessID = nil
+        ingestingFileID = nil
         lastActivityAt = Date()
     }
 
     /// Clear per-run state at the start of (or on abort before) a run.
     private func resetRunState() {
+        watchdogTask?.cancel()
+        watchdogTask = nil
         events = []
         rawTranscript = ""
         stderr = ""

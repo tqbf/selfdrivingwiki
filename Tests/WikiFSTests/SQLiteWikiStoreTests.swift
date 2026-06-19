@@ -61,11 +61,11 @@ struct SQLiteWikiStoreTests {
         #expect(indexes.contains("pages_slug_unique"))
         #expect(indexes.contains("ingested_files_created"))
 
-        // user_version guard: a fresh DB runs all migration steps → version 5
-        // (v4 `log`, v5 `wiki_index`); reopening must not re-run DDL (no-op
-        // bootstrap).
+        // user_version guard: a fresh DB runs all migration steps → version 6
+        // (v4 `log`, v5 `wiki_index`, v6 `ingested_files.ingested_at`); reopening
+        // must not re-run DDL (no-op bootstrap).
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "5")
+        #expect(userVersion == "6")
         let reopened = try SQLiteWikiStore(databaseURL: url)
         // If bootstrap weren't guarded, the CREATE TABLE would throw here.
         #expect((try? reopened.listPages()) != nil)

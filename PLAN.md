@@ -41,6 +41,7 @@ with a plain-folder export, even though that would dodge the signing requirement
 | [`plans/file-provider.md`](plans/file-provider.md) | File Provider extension build + the 5 hard-won gotchas (entry-point recursion, entitlements⊆profile, user-enable toggle, /Applications, keychain). Proven by the 2026-06-15 spike. Read before Phase 2. |
 | [`plans/signing.md`](plans/signing.md) | The Apple cert / App Group / File Provider provisioning checklist (manual portal). Do this before Phase 2. Source of truth for *the Apple incantations*. |
 | [`plans/zotero-integration.md`](plans/zotero-integration.md) | browse a Zotero library from inside the app, ingest PDF/Markdown attachments through the existing ingest pipeline. |
+| [`plans/pdf-extraction.md`](plans/pdf-extraction.md) | Add docling + granite-docling pipeline. A `pdf2md` CLI converts PDFs to markdown at ingest time; extracted markdown stored as a sibling `ingested_files` row, projected on the mount. Agent prefers `.md` siblings, falls back to `Read` on the original. |
 | [`SWIFTUI-RULES.md`](SWIFTUI-RULES.md) | Hard-won SwiftUI/macOS rules. Apply when writing or reviewing any view. |
 | [`CLAUDE.md`](CLAUDE.md) | Working agreement (docs, skills to use, PR rules). |
 | [`ISSUES.md`](ISSUES.md) | Known limitations we've chosen to live with (with context to revisit), e.g. the ~5s replicated-File-Provider read-after-write window. |
@@ -76,6 +77,11 @@ handoff). 341 tests green; clean signed bundle (app + appex + `wikictl`).**
   known file-share links (Dropbox `www`→`dl`; Drive/OneDrive stubbed), content-sniffs
   the bytes, converts HTML→Markdown (hand-rolled, dependency-free) or stores
   PDFs/binaries verbatim — landing through the same ingest path as drag-drop.
+- **PDF extraction pipeline** — local `pdf2md` script (docling + granite-docling VLM)
+  converts PDFs to Markdown before the agent sees them. `PdfExtractionService` spawns
+  `pdf2md` as a subprocess with continuous pipe draining; `PdfExtractionView` shows
+  readiness, download progress, and live conversion log during ingest. 22 Swift tests
+  + 67 Python tests. (PR #11.)
 
 **Phase summary (newest first; see `PROGRESS.md` for each gate's evidence):**
 - **Phase D — the schema** ✅ real maintainer `CLAUDE.md` schema (layout,

@@ -237,6 +237,18 @@ public final class SQLiteWikiStore: WikiStore {
             try exec("PRAGMA user_version=5;")
             version = 5
         }
+
+        // Step 5 → 6: record WHICH ingested files the agent has actually
+        // summarized into the wiki. `ingested_at` stays NULL until the agent
+        // finishes an ingest and stamps it via `wikictl log append --kind ingest
+        // --source <id>`. The UI's "Ingested" badge reads this deterministic flag
+        // instead of fuzzy-matching the agent's free-text log titles (which the
+        // agent is free to phrase however it likes, so the match silently failed).
+        if version < 6 {
+            try exec("ALTER TABLE ingested_files ADD COLUMN ingested_at REAL;")
+            try exec("PRAGMA user_version=6;")
+            version = 6
+        }
     }
 
     // MARK: - WikiStore
@@ -617,6 +629,28 @@ public final class SQLiteWikiStore: WikiStore {
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         _ = try stmt.step()
+    }
+
+    /// Stamp an ingested file as summarized-into-the-wiki. Idempotent and a no-op
+    /// for an unknown id. Called from `wikictl log append --kind ingest --source`.
+    public func markIngestedFile(id: PageID) throws {
+        let stmt = try statement(
+            "UPDATE ingested_files SET ingested_at = ?2 WHERE id = ?1;")
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        try stmt.bind(Date().timeIntervalSince1970, at: 2)
+        _ = try stmt.step()
+    }
+
+    /// IDs of ingested files the agent has marked ingested — the authoritative
+    /// status the UI's "Ingested" badge reads.
+    public func markedIngestedFileIDs() throws -> Set<String> {
+        let stmt = try statement(
+            "SELECT id FROM ingested_files WHERE ingested_at IS NOT NULL;")
+        defer { stmt.reset() }
+        var ids: Set<String> = []
+        while try stmt.step() { ids.insert(stmt.text(at: 0)) }
+        return ids
     }
 
     /// All ingested files as `IndexGenerators.FileRow`s, ordered by id (ULID ==

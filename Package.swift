@@ -48,7 +48,7 @@ let package = Package(
         ),
         .testTarget(
             name: "WikiFSTests",
-            dependencies: ["WikiFSCore", "WikiCtlCore"],
+            dependencies: ["WikiFSCore", "WikiCtlCore", "WikiFS"],
             path: "Tests/WikiFSTests"
         ),
         // The File Provider extension binary. build.sh repackages this into a

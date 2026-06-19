@@ -1,0 +1,296 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12,<3.14"
+# dependencies = [
+#     "beartype>=0.20",
+#     "docling[vlm]>=2.0.0",
+#     "spacy>=3.8.14",
+#     "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+# ]
+# ///
+"""pdf2md — Convert a PDF to Markdown using docling + granite-docling VLM.
+
+Usage:
+    uv run --script pdf2md input.pdf [--output output.md] [--pipeline vlm|standard] [--json]
+    ./pdf2md input.pdf  (if uv is in PATH)
+
+If uv is not installed, download it first:
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+
+Exit codes:
+    0   Success
+    1   Unable to parse PDF
+    2   PDF contains no extractable text
+    3   docling is not available
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+from beartype import beartype
+
+# ── docling imports (deferred so --help is instant) ──────────────────────
+
+
+def _import_docling():
+    """Import docling, surfacing a clear error if it is not installed."""
+    try:
+        from docling.datamodel import vlm_model_specs
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import (
+            PdfPipelineOptions,
+            TableFormerMode,
+            VlmPipelineOptions,
+        )
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline
+        from docling.pipeline.vlm_pipeline import VlmPipeline
+        from docling_core.types.doc.labels import DocItemLabel
+
+        return (
+            vlm_model_specs,
+            InputFormat,
+            PdfPipelineOptions,
+            TableFormerMode,
+            VlmPipelineOptions,
+            DocumentConverter,
+            PdfFormatOption,
+            StandardPdfPipeline,
+            VlmPipeline,
+            DocItemLabel,
+        )
+    except ImportError:
+        print(
+            "Error: docling is not available. "
+            "Run: uv run --script pdf2md --help",
+            file=sys.stderr,
+        )
+        sys.exit(3)
+
+
+# ── Text cleanup ─────────────────────────────────────────────────────────
+
+_MULTI_SPACE_RE = re.compile(r"(?m)(?<=\S) {2,}")
+_LINE_NUMBER_BLOCK_RE = re.compile(r"^[\d ]+$")
+_SOFT_HYPHEN_RE = re.compile(r"­\s*")
+_BLOCK_SKIP_PREFIXES = ("#", "```", "    ", "\t", "- ", "* ", "| ", ">")
+
+_nlp = None  # spacy Language, loaded lazily
+
+
+def _get_nlp():
+    global _nlp
+    if _nlp is None:
+        import spacy
+        _nlp = spacy.load("en_core_web_sm", disable=["ner", "lemmatizer"])
+    return _nlp
+
+
+def _is_prose(block: str) -> bool:
+    s = block.strip()
+    return bool(s) and not any(s.startswith(p) for p in _BLOCK_SKIP_PREFIXES)
+
+
+def _should_join(b1: str, b2: str, nlp) -> bool:
+    """Return True if b2 continues the sentence started in b1."""
+    s1 = b1.strip()
+    s2 = b2.strip()
+    if not s1 or not s2:
+        return False
+    if s1[-1] in ".!?":
+        return False
+    combined = s1 + " " + s2
+    junction = len(s1) + 1
+    doc = nlp(combined)
+    for sent in doc.sents:  # noqa: SIM110
+        if junction - 2 <= sent.start_char <= junction + 5:
+            return False
+    return True
+
+
+def _fix_page_breaks(text: str) -> str:
+    """Join paragraphs split by PDF page breaks (spaCy-verified)."""
+    nlp = _get_nlp()
+    blocks = text.split("\n\n")
+    out: list[str] = []
+    i = 0
+    while i < len(blocks):
+        block = blocks[i]
+        if (
+            _is_prose(block)
+            and i + 1 < len(blocks)
+            and _is_prose(blocks[i + 1])
+            and _should_join(block, blocks[i + 1], nlp)
+        ):
+            blocks[i + 1] = block.strip() + " " + blocks[i + 1].strip()
+            i += 1
+            continue
+        out.append(block)
+        i += 1
+    return "\n\n".join(out)
+
+
+def _clean(text: str) -> str:
+    # 1. Strip margin line-number blocks (preprint templates).
+    blocks = text.split("\n\n")
+    blocks = [b for b in blocks if not _LINE_NUMBER_BLOCK_RE.fullmatch(b.strip())]
+    text = "\n\n".join(blocks)
+
+    # 2. Per-line fixes (skip fenced code blocks).
+    in_fence = False
+    lines = []
+    for line in text.split("\n"):
+        if line.startswith("```"):
+            in_fence = not in_fence
+        if not in_fence:
+            line = _MULTI_SPACE_RE.sub(" ", line)
+            line = _SOFT_HYPHEN_RE.sub("", line)
+        lines.append(line)
+
+    # 3. Join paragraphs split by PDF page breaks.
+    return _fix_page_breaks("\n".join(lines))
+
+
+# ── Pipeline construction ────────────────────────────────────────────────
+
+
+def _build_vlm_converter(
+    vlm_model_specs, InputFormat, VlmPipelineOptions,
+    DocumentConverter, PdfFormatOption, VlmPipeline,
+):
+    return DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_cls=VlmPipeline,
+                pipeline_options=VlmPipelineOptions(
+                    vlm_options=vlm_model_specs.GRANITEDOCLING_MLX,
+                ),
+            ),
+        }
+    )
+
+
+def _build_standard_converter(
+    InputFormat, PdfPipelineOptions, TableFormerMode,
+    DocumentConverter, PdfFormatOption, StandardPdfPipeline,
+):
+    pipeline_options = PdfPipelineOptions()
+    pipeline_options.do_ocr = True
+    pipeline_options.do_table_structure = True
+    pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
+    return DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_cls=StandardPdfPipeline,
+                pipeline_options=pipeline_options,
+            ),
+        }
+    )
+
+
+# ── Main conversion ──────────────────────────────────────────────────────
+
+
+@beartype
+def convert_pdf(pdf_path: Path, pipeline: str) -> str:
+    """Convert a PDF to Markdown.  Raises ValueError on empty output."""
+    (
+        vlm_model_specs, InputFormat, PdfPipelineOptions, TableFormerMode,
+        VlmPipelineOptions, DocumentConverter, PdfFormatOption,
+        StandardPdfPipeline, VlmPipeline, DocItemLabel,
+    ) = _import_docling()
+
+    excluded = {DocItemLabel.FOOTNOTE, DocItemLabel.PAGE_HEADER, DocItemLabel.PAGE_FOOTER}
+    included = set(lbl for lbl in DocItemLabel if lbl not in excluded)
+
+    if pipeline == "vlm":
+        converter = _build_vlm_converter(
+            vlm_model_specs, InputFormat, VlmPipelineOptions,
+            DocumentConverter, PdfFormatOption, VlmPipeline,
+        )
+    else:
+        converter = _build_standard_converter(
+            InputFormat, PdfPipelineOptions, TableFormerMode,
+            DocumentConverter, PdfFormatOption, StandardPdfPipeline,
+        )
+
+    result = converter.convert(pdf_path)
+    text = result.document.export_to_markdown(labels=included)
+    text = _clean(text)
+
+    if not text.strip():
+        raise ValueError("PDF contains no extractable text")
+
+    return text
+
+
+# ── CLI ──────────────────────────────────────────────────────────────────
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser (extracted for testability)."""
+    parser = argparse.ArgumentParser(
+        description="Convert a PDF to Markdown using docling + granite-docling."
+    )
+    parser.add_argument("input", type=Path, help="Path to the PDF file")
+    parser.add_argument(
+        "--output", "-o", type=Path, default=None,
+        help="Write markdown to file (default: stdout)",
+    )
+    parser.add_argument(
+        "--pipeline", choices=("vlm", "standard"), default="vlm",
+        help="Pipeline: vlm (GRANITEDOCLING_MLX, best quality) or standard (faster)",
+    )
+    parser.add_argument(
+        "--json", action="store_true",
+        help="Output JSON with metadata instead of raw markdown",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if not args.input.exists():
+        print(f"Error: file not found: {args.input}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        text = convert_pdf(args.input.resolve(), args.pipeline)
+    except ValueError as e:
+        msg = str(e)
+        if args.json:
+            json.dump({"error": msg, "input": str(args.input)}, sys.stdout)
+        else:
+            print(f"Error: {msg}", file=sys.stderr)
+        sys.exit(2)
+    except Exception as e:
+        msg = f"Unable to parse PDF: {e}"
+        if args.json:
+            json.dump({"error": msg, "input": str(args.input)}, sys.stdout)
+        else:
+            print(f"Error: {msg}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.json:
+        json.dump({
+            "input": str(args.input),
+            "pipeline": args.pipeline,
+            "char_count": len(text),
+            "line_count": text.count("\n") + 1,
+        }, sys.stdout)
+        sys.stdout.write("\n")
+    elif args.output:
+        args.output.write_text(text, encoding="utf-8")
+    else:
+        sys.stdout.write(text)
+
+
+if __name__ == "__main__":
+    main()

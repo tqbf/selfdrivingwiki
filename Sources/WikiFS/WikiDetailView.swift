@@ -43,6 +43,7 @@ struct WikiDetailView: View {
                 IngestedFileDetailView(
                     file: file,
                     hasBeenIngested: store.hasIngestedFile(file),
+                    isIngesting: launcher.ingestingFileID == file.id,
                     isRunning: launcher.isRunning,
                     onOpen: { Task { await fileProvider.openIngestedFile(id: file.id) } },
                     onIngest: { onIngestFile(file.id) }

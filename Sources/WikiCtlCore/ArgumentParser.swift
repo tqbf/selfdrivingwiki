@@ -11,7 +11,7 @@ import WikiFSCore
 ///   wikictl [--wiki <id>] page get (--title X | --id Y)
 ///   wikictl [--wiki <id>] page upsert --title X [--id Y] --body-file <path|->
 ///   wikictl [--wiki <id>] page delete --id Y
-///   wikictl [--wiki <id>] log append --kind ingest|query|lint --title X [--note N]
+///   wikictl [--wiki <id>] log append --kind ingest|query|lint --title X [--note N] [--source <file-id>]
 ///   wikictl [--wiki <id>] index set --body-file <path|->
 ///
 /// `--wiki` may be omitted when the `WIKI_DB` env var supplies the selector.
@@ -38,8 +38,9 @@ public enum ArgumentParser {
         case upsert(id: PageID?, title: String, bodyFile: String)
         case delete(id: PageID)
         /// Phase B: append one dated log row. Carries its values directly (no
-        /// deferred I/O) — the note is optional.
-        case logAppend(kind: LogEntry.Kind, title: String, note: String?)
+        /// deferred I/O) — the note is optional. `source` is the ingested-file id
+        /// to stamp as ingested (only meaningful with `--kind ingest`).
+        case logAppend(kind: LogEntry.Kind, title: String, note: String?, source: PageID?)
         /// Phase B: rewrite the singleton wiki-index body. Like `upsert`, the body
         /// source is `-` for stdin or a file path; `main` reads it.
         case indexSet(bodyFile: String)
@@ -66,8 +67,9 @@ public enum ArgumentParser {
       page upsert --title X [--id Y] --body-file <path|->
                                              create-or-update a page from a body
       page delete --id Y                     delete a page
-      log append --kind ingest|query|lint --title X [--note N]
-                                             append one dated row to log.md
+      log append --kind ingest|query|lint --title X [--note N] [--source <file-id>]
+                                             append one dated row to log.md;
+                                             --source stamps that file "Ingested"
       index set --body-file <path|->         rewrite the curated index.md body
     """
 
@@ -156,7 +158,8 @@ public enum ArgumentParser {
         guard let title = options.value("--title") else {
             throw Failure.usage("log append: --title is required")
         }
-        return .logAppend(kind: kind, title: title, note: options.value("--note"))
+        let source = options.value("--source").map { PageID(rawValue: $0) }
+        return .logAppend(kind: kind, title: title, note: options.value("--note"), source: source)
     }
 
     private static func parseIndexCommand(_ args: [String]) throws -> Command {

@@ -14,21 +14,91 @@ enum AgentOperationRunner {
         manager: WikiManager,
         fileProvider: FileProviderSpike
     ) async {
+        DebugLog.ingest("runIngest: begin fileID=\(fileID.rawValue)")
+        // Mark this file as "being operated on" for the whole operation (local
+        // conversion + agent run). `finish()` clears it when the agent ends.
+        launcher.ingestingFileID = fileID
         let stateMarkdown = store.currentStateSnapshot().renderStateFile()
         guard let file = store.ingestedFiles.first(where: { $0.id == fileID }),
               let bytes = store.ingestedSourceBytes(id: fileID)
-        else { return }
+        else {
+            launcher.ingestingFileID = nil
+            DebugLog.ingest("runIngest: ABORT — file or source bytes missing for \(fileID.rawValue)")
+            return
+        }
+        DebugLog.ingest("runIngest: file=\(file.filename) ext=\(file.ext) bytes=\(bytes.count)")
+
+        // If the source is a PDF, try to convert it to Markdown locally via
+        // docling before the agent ever sees it.  Skip if pdf2md isn't ready.
+        // Show a simple status line in the activity area — docling doesn't
+        // stream per-page progress, so we animate dots as proof of life.
+        var sourceBytes = bytes
+        var sourceExt = file.ext
+        if file.ext == "pdf" {
+            launcher.extractionLog = ""
+            DebugLog.extraction("checkReady: probing…")
+            if await PdfExtractionService.checkReady() {
+                DebugLog.extraction("checkReady: ready — converting \(file.filename)")
+                launcher.isExtracting = true
+                launcher.extractionPID = nil
+                launcher.extractionLog = ""
+                defer {
+                    launcher.isExtracting = false
+                    launcher.extractionPID = nil
+                }
+                do {
+                    let markdown = try await PdfExtractionService.convert(
+                        pdfData: bytes,
+                        filename: file.filename,
+                        onProgress: { line in
+                            Task { @MainActor in launcher.extractionLog.append(line) }
+                        },
+                        onStart: { pid in
+                            Task { @MainActor in
+                                launcher.extractionPID = pid
+                                launcher.extractionLog.append("Started pdf2md (pid \(pid)).\n")
+                            }
+                        })
+                    sourceBytes = markdown.data(using: .utf8) ?? bytes
+                    sourceExt = "md"
+                    DebugLog.extraction("convert: done — \(markdown.count) chars of markdown")
+                    launcher.extractionLog.append("PDF conversion done — \(markdown.count) chars extracted.\n")
+                } catch {
+                    // A cancelled conversion terminates the subprocess, which throws —
+                    // treat that as a user cancel and abort the ingest entirely.
+                    if Task.isCancelled {
+                        DebugLog.extraction("convert: CANCELLED — aborting ingest")
+                        launcher.extractionLog.append("PDF conversion cancelled.\n")
+                        launcher.ingestingFileID = nil
+                        return
+                    }
+                    let msg = error.localizedDescription
+                    DebugLog.extraction("convert: FAILED — \(msg)")
+                    launcher.extractionLog.append("PDF conversion: \(msg)\n")
+                }
+            } else {
+                DebugLog.extraction("checkReady: NOT ready — sending raw PDF to agent")
+                launcher.extractionLog = "PDF extraction not ready — ~2 GB deps need downloading first."
+            }
+        }
+        DebugLog.ingest("runIngest: handing off to agent (ext=\(sourceExt), bytes=\(sourceBytes.count))")
 
         await run(
             request: .ingest(
-                sourceBytes: bytes,
-                ext: file.ext,
+                sourceBytes: sourceBytes,
+                ext: sourceExt,
                 sourcePath: ingestSourcePath(for: file),
                 stateMarkdown: stateMarkdown),
             launcher: launcher,
             store: store,
             manager: manager,
             fileProvider: fileProvider)
+
+        // If the agent never actually started (preflight/staging failure, or no
+        // active wiki), no `finish()` will clear the marker — reconcile here.
+        if !launcher.isRunning && launcher.runningKind != .ingest {
+            launcher.ingestingFileID = nil
+        }
     }
 
     static func runQuery(

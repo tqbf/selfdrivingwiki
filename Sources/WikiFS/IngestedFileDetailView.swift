@@ -7,6 +7,8 @@ import WikiFSCore
 struct IngestedFileDetailView: View {
     let file: IngestedFileSummary
     let hasBeenIngested: Bool
+    /// True while THIS file's ingest is in flight (local conversion + agent run).
+    let isIngesting: Bool
     let isRunning: Bool
     let onOpen: () -> Void
     let onIngest: () -> Void
@@ -34,9 +36,10 @@ struct IngestedFileDetailView: View {
                 .foregroundStyle(.secondary)
 
                 HStack(spacing: 10) {
-                    Button("Ingest into Wiki", systemImage: "text.badge.plus", action: onIngest)
+                    Button(isIngesting ? "Ingesting…" : "Ingest into Wiki",
+                           systemImage: "text.badge.plus", action: onIngest)
                         .keyboardShortcut(.return, modifiers: .command)
-                        .disabled(isRunning)
+                        .disabled(isRunning || isIngesting)
                     Button("Open File", systemImage: "arrow.up.forward.app", action: onOpen)
                 }
             }
@@ -60,12 +63,21 @@ struct IngestedFileDetailView: View {
         file.filename.isEmpty ? "Untitled" : file.filename
     }
 
+    @ViewBuilder
     private var statusLabel: some View {
-        Label(
-            hasBeenIngested ? "Ingested" : "Ready to ingest",
-            systemImage: hasBeenIngested ? "checkmark.circle.fill" : "circle.dashed"
-        )
-        .foregroundStyle(hasBeenIngested ? .green : .secondary)
+        if isIngesting {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Ingesting…")
+            }
+            .foregroundStyle(.orange)
+        } else {
+            Label(
+                hasBeenIngested ? "Ingested" : "Ready to ingest",
+                systemImage: hasBeenIngested ? "checkmark.circle.fill" : "circle.dashed"
+            )
+            .foregroundStyle(hasBeenIngested ? .green : .secondary)
+        }
     }
 
     private var symbol: String {

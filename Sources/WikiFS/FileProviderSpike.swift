@@ -1,5 +1,5 @@
 import AppKit
-import FileProvider
+@preconcurrency import FileProvider
 import Observation
 import WikiFSCore
 
@@ -118,8 +118,14 @@ final class FileProviderSpike {
     /// pure policy helper. A failed `domains()` call reads as "not present" so the
     /// retry loop keeps trying.
     private func isDomainRegistered(id: String) async -> Bool {
-        let domainIDs = (try? await NSFileProviderManager.domains())?
-            .map(\.identifier.rawValue) ?? []
+        // NSFileProviderDomain is not Sendable, so calling domains() from a
+        // @MainActor context is a strict-concurrency error under Swift 6.
+        // Run the call in a detached task and extract only the Sendable
+        // raw-value strings before returning to the main actor.
+        let domainIDs = await Task.detached {
+            (try? await NSFileProviderManager.domains())?
+                .map(\.identifier.rawValue) ?? []
+        }.value
         return DomainRegistrationPolicy.isRegistered(domainIDs: domainIDs, wikiID: id)
     }
 
@@ -220,9 +226,15 @@ final class FileProviderSpike {
     /// by its `by-id` leaf identifier (built from the shared prefix so it can't
     /// drift), then hands it to `NSWorkspace`. URL asked at click time.
     func openIngestedFile(id: PageID) async {
-        guard let wikiID = activeWikiID else { return }
+        DebugLog.agent("openIngestedFile: id=\(id.rawValue) activeWiki=\(activeWikiID ?? "nil")")
+        guard let wikiID = activeWikiID else {
+            DebugLog.agent("openIngestedFile: ABORT — no active wiki")
+            status = "Can’t open file — no active wiki."
+            return
+        }
         let domain = domain(id: wikiID, displayName: wikiID)
         guard let manager = NSFileProviderManager(for: domain) else {
+            DebugLog.agent("openIngestedFile: ABORT — no NSFileProviderManager for domain \(wikiID)")
             status = "No manager for domain"
             return
         }
@@ -232,8 +244,14 @@ final class FileProviderSpike {
                 manager: manager,
                 itemIdentifier: identifier,
                 timeout: .seconds(5))
-            NSWorkspace.shared.open(url)
+            DebugLog.agent("openIngestedFile: resolved url=\(url.path)")
+            let opened = NSWorkspace.shared.open(url)
+            DebugLog.agent("openIngestedFile: NSWorkspace.open returned \(opened)")
+            if !opened {
+                status = "macOS couldn’t open \(url.lastPathComponent)."
+            }
         } catch {
+            DebugLog.agent("openIngestedFile: FAILED resolving URL — \(error.localizedDescription)")
             status = "open file failed: \(error.localizedDescription)"
         }
     }
