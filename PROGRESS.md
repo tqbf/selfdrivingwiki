@@ -2,6 +2,22 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-20 — Grey out Ingest/Extract buttons during any file ingest
+
+The "Ingest into Wiki" and "Extract Markdown" buttons in
+`IngestedFileDetailView` were only disabled when the agent was running or
+the same file was being ingested. During the PDF-conversion phase (before
+agent launch), both buttons were still active — a second ingest could be
+started concurrently.
+
+- **`IngestedFileDetailView`:** added `isAnyFileIngesting` parameter
+  (true when any ingest is in flight, not just this file's). Both buttons
+  now include it in their `.disabled()` guards.
+- **`WikiDetailView`:** plumbed `isAnyFileIngesting` from
+  `!launcher.ingestingFileIDs.isEmpty`.
+
+**Verified.** `swift build` clean. PR #28.
+
 ## 2026-06-20 — Fix transcript sidebar disappearing on tab switch
 
 The `AgentTranscriptSidebar` had Query-specific suppression that forced
