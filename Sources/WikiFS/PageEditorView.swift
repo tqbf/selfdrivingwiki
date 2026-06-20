@@ -6,6 +6,8 @@ import WikiFSCore
 /// existing debounce and edit-lock behavior.
 struct PageEditorView: View {
     @Bindable var store: WikiStoreModel
+    let onSave: () -> Void
+    let onCancel: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -27,6 +29,23 @@ struct PageEditorView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .frame(minHeight: PageEditorMetrics.editorMinHeight)
                 .onChange(of: store.draftBody) { store.bodyChanged() }
+
+            Divider().opacity(PageEditorMetrics.dividerOpacity)
+
+            HStack(spacing: 10) {
+                Button("Save Changes", systemImage: "checkmark.circle") {
+                    onSave()
+                }
+                .keyboardShortcut("s", modifiers: .command)
+
+                Button("Cancel", systemImage: "xmark.circle") {
+                    onCancel()
+                }
+                .keyboardShortcut(.escape, modifiers: [])
+            }
+            .padding(.horizontal, PageEditorMetrics.contentInset)
+            .padding(.vertical, PageEditorMetrics.sectionSpacing)
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .disabled(store.isAgentRunning)
     }

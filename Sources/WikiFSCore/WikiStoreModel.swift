@@ -344,7 +344,7 @@ public final class WikiStoreModel {
     private func loadDrafts(for newValue: WikiSelection?) {
         loadedSelection = newValue
         switch newValue {
-        case .query:
+        case .query, .lint:
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
@@ -807,6 +807,50 @@ public final class WikiStoreModel {
         ingestedFileStatus[file.id] ?? false
     }
 
+    // MARK: - Processed markdown versions (v8)
+
+    /// The latest (HEAD) processed markdown version for a file. For native
+    /// md/txt files without an existing version chain, lazily seeds v1 from
+    /// the source bytes (double-seed guard prevents duplicates).
+    public func processedMarkdownHead(for file: IngestedFileSummary) -> FileMarkdownVersion? {
+        if let head = try? store.processedMarkdownHead(fileID: file.id) {
+            return head
+        }
+        // Lazy seed: native md/txt → decode source bytes as v1.
+        guard file.ext == "md" || file.ext == "markdown" || file.ext == "txt" else {
+            return nil
+        }
+        guard let bytes = try? store.ingestedFileContent(id: file.id),
+              let text = String(data: bytes, encoding: .utf8) else { return nil }
+        return try? store.appendProcessedMarkdown(
+            fileID: file.id, content: text, origin: "extraction", note: nil)
+    }
+
+    /// True when at least one processed-markdown version exists for this file.
+    public func hasProcessedMarkdown(fileID: PageID) -> Bool {
+        (try? store.hasProcessedMarkdown(fileID: fileID)) ?? false
+    }
+
+    /// Save an edit as a new version in the chain. Only called when the text
+    /// genuinely differs from the current head — meaningful history, not
+    /// keystroke spam.
+    @discardableResult
+    public func saveProcessedMarkdown(for fileID: PageID, content: String) -> FileMarkdownVersion? {
+        try? store.appendProcessedMarkdown(
+            fileID: fileID, content: content, origin: "user", note: nil)
+    }
+
+    /// Seed the first processed-markdown version for a PDF from extraction
+    /// output. Double-seed guard: if a head already exists, returns it instead.
+    @discardableResult
+    public func seedPdfMarkdown(fileID: PageID, content: String) -> FileMarkdownVersion? {
+        if let head = try? store.processedMarkdownHead(fileID: fileID) {
+            return head
+        }
+        return try? store.appendProcessedMarkdown(
+            fileID: fileID, content: content, origin: "extraction", note: nil)
+    }
+
     // MARK: - Source-of-truth rebuild
 
     /// Rebuild the sidebar lists from the store — used by the Phase A change
@@ -900,7 +944,7 @@ public final class WikiStoreModel {
             pageIDs.contains(id)
         case .ingestedFile(let id):
             fileIDs.contains(id)
-        case .query, .systemPrompt, .changeLog:
+        case .query, .systemPrompt, .changeLog, .lint:
             true
         }
     }

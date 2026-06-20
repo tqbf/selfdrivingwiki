@@ -9,7 +9,7 @@ enum PageEditorMetrics {
     static let readableContentWidth: CGFloat = 760
 
     /// Padding around the article / editor content.
-    static let contentInset: CGFloat = 24
+    static let contentInset: CGFloat = 12
     /// Vertical gap between the title field, the editor, and the preview.
     static let sectionSpacing: CGFloat = 12
     /// Minimum height for the markdown editor before the preview takes over.

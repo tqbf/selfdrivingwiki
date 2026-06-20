@@ -27,6 +27,7 @@ extension WikiStoreModel {
         case .query: return "Query"
         case .systemPrompt: return "Instructions"
         case .changeLog: return "Activity"
+        case .lint: return "Lint"
         case .page(let id):
             return summaries.first { $0.id == id }?.title
                 .nonEmpty ?? "Untitled"
@@ -42,6 +43,7 @@ extension WikiStoreModel {
         case .query: return "bubble.left.and.text.bubble.right"
         case .systemPrompt: return "sparkles"
         case .changeLog: return "clock.arrow.circlepath"
+        case .lint: return "checkmark.shield"
         case .page: return "doc.text"
         case .ingestedFile(let id):
             guard let file = ingestedFiles.first(where: { $0.id == id }) else {

@@ -22,6 +22,7 @@ import WikiFSCore
 struct MarkdownPreview: View {
     @Bindable var store: WikiStoreModel
     let markdown: String
+    var contentInset: Bool = true
 
     var body: some View {
         let renderedBody = renderedMarkdown
@@ -39,8 +40,9 @@ struct MarkdownPreview: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
-            .padding(PageEditorMetrics.contentInset)
+            .frame(maxWidth: contentInset ? PageEditorMetrics.readableContentWidth : .infinity,
+                   alignment: .leading)
+            .padding(contentInset ? PageEditorMetrics.contentInset : 0)
         }
         // Intercept clicks on the private wiki:// scheme and drive the SAME
         // selection seam the sidebar uses (§3.1/§3.5: go through the model, never

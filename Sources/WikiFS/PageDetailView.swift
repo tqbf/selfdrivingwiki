@@ -16,22 +16,17 @@ struct PageDetailView: View {
             AgentRunBanner(isVisible: store.isAgentRunning)
 
             if isEditing {
-                PageEditorView(store: store)
+                PageEditorView(store: store,
+                    onSave: { toggleEditing() },
+                    onCancel: { isEditing = false })
             } else {
-                PageReaderView(store: store)
+                PageReaderView(store: store,
+                    updatedAt: pageUpdatedAt,
+                    mountPath: pageMountPath,
+                    onEdit: { isEditing = true })
             }
         }
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button(isEditing ? "Done Editing" : "Edit Page", systemImage: isEditing ? "checkmark" : "pencil") {
-                    toggleEditing()
-                }
-                .keyboardShortcut("e", modifiers: .command)
-                .disabled(store.isAgentRunning)
-                .help(isEditing ? "Return to the page reader" : "Edit this page manually")
-            }
-        }
         .onChange(of: store.selection) {
             isEditing = false
         }
@@ -40,6 +35,21 @@ struct PageDetailView: View {
                 isEditing = false
             }
         }
+    }
+
+    private var pageUpdatedAt: Date? {
+        guard let selection = store.selection,
+              case .page(let id) = selection else { return nil }
+        return store.summaries.first(where: { $0.id == id })?.updatedAt
+    }
+
+    private var pageMountPath: String? {
+        guard let selection = store.selection,
+              case .page(let id) = selection else { return nil }
+        guard let title = store.summaries.first(where: { $0.id == id })?.title,
+              let root = fileProvider.path else { return nil }
+        let leaf = FilenameEscaping.byTitleFilename(title: title, pageID: id.rawValue)
+        return "\(root)/pages/by-title/\(leaf)"
     }
 
     private func toggleEditing() {
