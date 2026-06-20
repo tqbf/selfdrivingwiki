@@ -54,18 +54,19 @@ struct SQLiteWikiStoreTests {
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))
         #expect(tables.isSuperset(of:
             ["pages", "attachments", "page_links", "ingested_files", "system_prompt",
-             "log", "wiki_index", "page_embeddings"]))
+             "log", "wiki_index", "page_embeddings", "file_markdown_versions"]))
 
         let indexes = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='index';"))
         #expect(indexes.contains("pages_slug_unique"))
         #expect(indexes.contains("ingested_files_created"))
 
-        // user_version guard: a fresh DB runs all migration steps → version 7
+        // user_version guard: a fresh DB runs all migration steps → version 8
         // (v4 `log`, v5 `wiki_index`, v6 `ingested_files.ingested_at`,
-        //  v7 `page_embeddings`); reopening must not re-run DDL (no-op bootstrap).
+        //  v7 `page_embeddings`, v8 `file_markdown_versions`); reopening must
+        // not re-run DDL (no-op bootstrap).
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "7")
+        #expect(userVersion == "8")
         let reopened = try SQLiteWikiStore(databaseURL: url)
         // If bootstrap weren't guarded, the CREATE TABLE would throw here.
         #expect((try? reopened.listPages(sortBy: .lastUpdated)) != nil)
@@ -234,7 +235,7 @@ struct SQLiteWikiStoreTests {
         defer { sqlite3_close(db) }
 
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "7")
+        #expect(userVersion == "8")
 
         let tables = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))

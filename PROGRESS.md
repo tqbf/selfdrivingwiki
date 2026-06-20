@@ -2,6 +2,35 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-20 — PR2: File browsing/editing + git-lite versioned processed markdown
+
+Implemented `plans/file-versioned-editing.md`. Added a `file_markdown_versions`
+append-only version chain (v7→v8 migration) so ingested files have editable processed
+markdown while source bytes stay immutable. The version store (`FileMarkdownVersion`
+model, 5 `WikiStore` methods, lazy seeding for native md/txt) is testable against a
+temp DB with table-absent fallbacks for pre-v8 read connections.
+
+Reworked `IngestedFileDetailView` to render markdown (MarkdownPreview) and PDFs
+(PDFKit NSViewRepresentable) inline, with a tabbed Markdown⇄PDF view when extraction
+output exists. Inline Save/Cancel buttons in the view (not toolbar) for all three
+editor surfaces: ingested files, pages, and system prompt. Removed the toolbar Edit
+buttons from `PageDetailView` and `SystemPromptDetailView` in favor of inline ones.
+`PageReaderView` now shows the last-updated date and a Copy Path button (only when
+the File Provider mount is available).
+
+Moved all sidebar toolbar buttons (ingest, Zotero, New Page, Reindex Search) to the
+main toolbar. Removed `OperationsView`; Query and Lint are now sidebar items (added
+`.lint` to `WikiSelection` with a new `LintView`). Moved the System section below
+Files. The empty-state view now shows Add-from-URL/Import/Zotero buttons
+horizontally.
+
+`AgentOperationRunner` now persists `PdfExtractionService` output as v1 (double-seed
+guard); standalone "Extract Markdown" action in the detail view.
+
+15 new `ProcessedMarkdownTests` (migration, version chain, revert, cascade, source
+immutability, seeding, fallback). Full `swift test` — 567 tests, 48 suites, 0
+failures.
+
 ## 2026-06-20 — `wikictl file` command family
 
 Implemented `plans/wikictl-file-reads.md`. Added `wikictl file list|cat|export` so the

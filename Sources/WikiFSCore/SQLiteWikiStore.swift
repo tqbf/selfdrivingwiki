@@ -275,6 +275,30 @@ public final class SQLiteWikiStore: WikiStore {
             try exec("PRAGMA user_version=7;")
             version = 7
         }
+
+        // v7 → v8: append-only version chain for processed markdown.
+        // Full-text snapshots (never deltas). ULID-sorted: MAX(id) == HEAD.
+        // ON DELETE CASCADE so removing a file cleans up its version chain.
+        // Migration is additive; no backfill — versions are seeded lazily.
+        if version < 8 {
+            try exec("""
+            CREATE TABLE file_markdown_versions (
+                id          TEXT PRIMARY KEY,
+                file_id     TEXT NOT NULL REFERENCES ingested_files(id) ON DELETE CASCADE,
+                parent_id   TEXT,
+                content     TEXT NOT NULL,
+                origin      TEXT NOT NULL,
+                note        TEXT,
+                created_at  REAL NOT NULL
+            );
+            """)
+            try exec("""
+            CREATE INDEX file_markdown_versions_file
+                ON file_markdown_versions(file_id, id);
+            """)
+            try exec("PRAGMA user_version=8;")
+            version = 8
+        }
     }
 
     // MARK: - vec extension loading
@@ -1183,5 +1207,110 @@ public final class SQLiteWikiStore: WikiStore {
             FileHandle.standardError.write(Data("SQLiteWikiStore.recomputeMissingEmbeddings: \(error)\n".utf8))
         }
         return count
+    }
+
+    // MARK: - Processed markdown versions (v8)
+
+    /// Read one `file_markdown_versions` row from the current statement position
+    /// (column order: id, file_id, parent_id, content, origin, note, created_at).
+    private func fileMarkdownVersion(from stmt: SQLiteStatement) -> FileMarkdownVersion {
+        let parentID: PageID? = sqlite3_column_type(stmt.handle, 2) == SQLITE_NULL
+            ? nil : PageID(rawValue: stmt.text(at: 2))
+        let note: String? = sqlite3_column_type(stmt.handle, 5) == SQLITE_NULL
+            ? nil : stmt.text(at: 5)
+        return FileMarkdownVersion(
+            id: PageID(rawValue: stmt.text(at: 0)),
+            fileID: PageID(rawValue: stmt.text(at: 1)),
+            parentID: parentID,
+            content: stmt.text(at: 3),
+            origin: stmt.text(at: 4),
+            note: note,
+            createdAt: Date(timeIntervalSince1970: stmt.double(at: 6))
+        )
+    }
+
+    public func processedMarkdownHead(fileID: PageID) throws -> FileMarkdownVersion? {
+        guard let stmt = try? statement("""
+        SELECT id, file_id, parent_id, content, origin, note, created_at
+        FROM file_markdown_versions WHERE file_id = ?1 ORDER BY id DESC LIMIT 1;
+        """) else { return nil }
+        defer { stmt.reset() }
+        try stmt.bind(fileID.rawValue, at: 1)
+        guard try stmt.step() else { return nil }
+        return fileMarkdownVersion(from: stmt)
+    }
+
+    public func hasProcessedMarkdown(fileID: PageID) throws -> Bool {
+        guard let stmt = try? statement("""
+        SELECT 1 FROM file_markdown_versions WHERE file_id = ?1 LIMIT 1;
+        """) else { return false }
+        defer { stmt.reset() }
+        try stmt.bind(fileID.rawValue, at: 1)
+        return try stmt.step()
+    }
+
+    public func processedMarkdownHistory(fileID: PageID) throws -> [FileMarkdownVersion] {
+        guard let stmt = try? statement("""
+        SELECT id, file_id, parent_id, content, origin, note, created_at
+        FROM file_markdown_versions WHERE file_id = ?1 ORDER BY id DESC;
+        """) else { return [] }
+        defer { stmt.reset() }
+        try stmt.bind(fileID.rawValue, at: 1)
+        var out: [FileMarkdownVersion] = []
+        while try stmt.step() {
+            out.append(fileMarkdownVersion(from: stmt))
+        }
+        return out
+    }
+
+    @discardableResult
+    public func appendProcessedMarkdown(fileID: PageID, content: String,
+                                        origin: String, note: String?) throws -> FileMarkdownVersion {
+        let id = PageID(rawValue: ULID.generate())
+        let parentID = try processedMarkdownHead(fileID: fileID)?.id
+        let now = Date()
+
+        let stmt = try statement("""
+        INSERT INTO file_markdown_versions
+          (id, file_id, parent_id, content, origin, note, created_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        try stmt.bind(fileID.rawValue, at: 2)
+        if let parentID { try stmt.bind(parentID.rawValue, at: 3) }
+        try stmt.bind(content, at: 4)
+        try stmt.bind(origin, at: 5)
+        if let note { try stmt.bind(note, at: 6) }
+        try stmt.bind(now.timeIntervalSince1970, at: 7)
+        _ = try stmt.step()
+
+        return FileMarkdownVersion(
+            id: id, fileID: fileID, parentID: parentID,
+            content: content, origin: origin, note: note, createdAt: now
+        )
+    }
+
+    @discardableResult
+    public func revertProcessedMarkdown(fileID: PageID, to versionID: PageID) throws -> FileMarkdownVersion {
+        // Read the target version's content — must exist and belong to fileID.
+        guard let stmt = try? statement("""
+        SELECT content FROM file_markdown_versions WHERE id = ?1 AND file_id = ?2;
+        """) else {
+            throw WikiStoreError.unexpected("file_markdown_versions table not found")
+        }
+        defer { stmt.reset() }
+        try stmt.bind(versionID.rawValue, at: 1)
+        try stmt.bind(fileID.rawValue, at: 2)
+        guard try stmt.step() else {
+            throw WikiStoreError.notFound(versionID)
+        }
+        let oldContent = stmt.text(at: 0)
+
+        // Append a new version whose content copies the target. History preserved.
+        return try appendProcessedMarkdown(
+            fileID: fileID, content: oldContent,
+            origin: "revert", note: "revert to \(versionID.rawValue)"
+        )
     }
 }

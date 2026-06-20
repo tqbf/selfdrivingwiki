@@ -1,17 +1,21 @@
 # Self Driving Wiki
 
-**What this is.** A native macOS SwiftUI wiki backed by SQLite, mirrored
-read-only onto the filesystem by a **File Provider extension** so the same
-content can be browsed by Unix tools and agents (`find`, `cat`, `grep`) under
-`~/Library/CloudStorage/Self Driving Wiki-<wiki name>`. You edit in the app; the
-mount reflects every change. It also ingests dropped files (verbatim bytes under
-`files/`) and projects a singleton agent system prompt as `CLAUDE.md` +
-`AGENTS.md` at the root. Runs locally only — free, local dev signing; no Developer
-ID / notarization.
+**What this is.** A native macOS SwiftUI wiki backed by SQLite. An optional
+**File Provider extension** mirrors content read-only onto the filesystem under
+`~/Library/CloudStorage/Self Driving Wiki-<wiki name>` so Unix tools and agents
+can browse it (`find`, `cat`, `grep`). When the extension is not available (e.g.
+unsigned dev builds outside `/Applications`), the app reads everything from
+SQLite directly. You edit in the app; the mount reflects every change when
+enabled. It ingests dropped files, stores them as verbatim BLOBs, and projects a
+singleton agent system prompt as `CLAUDE.md` + `AGENTS.md` at the root. Runs
+locally only — free, local dev signing; no Developer ID / notarization.
 
-**Core goal (non-negotiable).** This is a proof-of-concept of the macOS **File
-Provider API**. The extension is essential, not optional — do **not** replace it
-with a plain-folder export, even though that would dodge the signing requirement.
+**The File Provider extension is now optional.** The in-app experience —
+displaying pages, browsing ingested files, and running agent operations — reads
+from SQLite via `wikictl` (pages, raw files) and staged scratch directories
+(sources, wiki-state). The extension remains in the tree as an opt-in mount for
+Terminal and Finder browsing when signing is available, but it is no longer
+load-bearing for the app to function.
 
 **Where to find things.**
 

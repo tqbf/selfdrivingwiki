@@ -10,6 +10,10 @@ struct WikiDetailView: View {
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
     let runIngest: (PageID) -> Void
+    @Binding var showingAddFromURL: Bool
+    @Binding var showingImportMarkdown: Bool
+    @Binding var showingAddFromZotero: Bool
+    let isZoteroConfigured: Bool
 
     var body: some View {
         switch store.selection {
@@ -17,9 +21,22 @@ struct WikiDetailView: View {
             ContentUnavailableView {
                 Label("No Page Selected", systemImage: "doc.text")
             } description: {
-                Text("Select a page from the sidebar, or create a new one.")
+                Text("Select a page from the sidebar, create a new one, or add source material.")
             } actions: {
-                Button("New Page", systemImage: "plus") { store.newPage() }
+                VStack(spacing: 8) {
+                    Button("New Page", systemImage: "plus") { store.newPage() }
+                    Button("Add from URL…", systemImage: "link.badge.plus") {
+                        showingAddFromURL = true
+                    }
+                    Button("Import Markdown Folder…", systemImage: "doc.badge.plus") {
+                        showingImportMarkdown = true
+                    }
+                    if isZoteroConfigured {
+                        Button("Add from Zotero…", systemImage: "books.vertical") {
+                            showingAddFromZotero = true
+                        }
+                    }
+                }
             }
         case .query:
             QueryConversationView(
@@ -32,6 +49,12 @@ struct WikiDetailView: View {
             SystemPromptDetailView(store: store)
         case .changeLog:
             ChangeLogDetailView(store: store)
+        case .lint:
+            LintView(
+                launcher: launcher,
+                store: store,
+                manager: manager,
+                fileProvider: fileProvider)
         case .page:
             PageDetailView(
                 store: store,
@@ -45,9 +68,8 @@ struct WikiDetailView: View {
                     hasBeenIngested: store.hasIngestedFile(file),
                     isIngesting: launcher.ingestingFileIDs.contains(file.id),
                     isRunning: launcher.isRunning,
-                    fileProvider: fileProvider,
-                    onOpen: { Task { await fileProvider.openIngestedFile(id: file.id) } },
-                    runIngest: runIngest
+                    runIngest: runIngest,
+                    store: store
                 )
             } else {
                 ContentUnavailableView {

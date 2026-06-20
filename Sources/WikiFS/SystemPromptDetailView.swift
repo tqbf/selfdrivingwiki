@@ -16,14 +16,22 @@ struct SystemPromptDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             AgentRunBanner(isVisible: store.isAgentRunning)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("System Prompt")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                Text("The agent reads this each run. Projected read-only at the wiki root as **CLAUDE.md** and **AGENTS.md**.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("System Prompt")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                    Text("The agent reads this each run. Projected read-only at the wiki root as **CLAUDE.md** and **AGENTS.md**.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack(spacing: 10) {
+                    Button("Edit", systemImage: "pencil") { isEditing = true }
+                        .disabled(store.isAgentRunning)
+                        .help("Edit the system prompt source")
+                }
             }
             .padding(.horizontal, PageEditorMetrics.contentInset)
             .padding(.top, PageEditorMetrics.contentInset)
@@ -40,18 +48,6 @@ struct SystemPromptDetailView: View {
         // Read-only while the agent runs (decision #6); autosave paused in the model.
         .disabled(store.isAgentRunning)
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button(isEditing ? "Done Editing" : "Edit Instructions",
-                       systemImage: isEditing ? "checkmark" : "pencil") {
-                    toggleEditing()
-                }
-                .keyboardShortcut("e", modifiers: .command)
-                .disabled(store.isAgentRunning)
-                .help(isEditing ? "Return to the rendered instructions"
-                                : "Edit the system prompt source")
-            }
-        }
         .onChange(of: store.selection) {
             isEditing = false
         }
@@ -73,14 +69,34 @@ struct SystemPromptDetailView: View {
 
     /// Edit mode: the monospaced source editor, bound to the live draft buffer.
     /// Autosave fires via `.onChange` (not a `Binding(get:set:)`, per swiftui-pro).
+    /// Save/Cancel buttons live inline so they are visually part of the editor.
     private var editor: some View {
-        TextEditor(text: $store.draftSystemPrompt)
-            .font(.system(.body, design: .monospaced))
-            .scrollContentBackground(.hidden)
-            .padding(.horizontal, PageEditorMetrics.contentInset - 5)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .frame(minHeight: PageEditorMetrics.editorMinHeight)
-            .onChange(of: store.draftSystemPrompt) { store.systemPromptChanged() }
+        VStack(spacing: 0) {
+            TextEditor(text: $store.draftSystemPrompt)
+                .font(.system(.body, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, PageEditorMetrics.contentInset - 5)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minHeight: PageEditorMetrics.editorMinHeight)
+                .onChange(of: store.draftSystemPrompt) { store.systemPromptChanged() }
+
+            Divider().opacity(PageEditorMetrics.dividerOpacity)
+
+            HStack(spacing: 10) {
+                Button("Save Changes", systemImage: "checkmark.circle") {
+                    toggleEditing()
+                }
+                .keyboardShortcut("s", modifiers: .command)
+
+                Button("Cancel", systemImage: "xmark.circle") {
+                    isEditing = false
+                }
+                .keyboardShortcut(.escape, modifiers: [])
+            }
+            .padding(.horizontal, PageEditorMetrics.contentInset)
+            .padding(.vertical, PageEditorMetrics.sectionSpacing)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
     }
 
     private func toggleEditing() {
