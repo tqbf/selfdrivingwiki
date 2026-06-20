@@ -372,12 +372,18 @@ struct OperationCommandTests {
     #expect(prompt.contains("wikictl page get --title T"))
     #expect(prompt.contains("Markdown footnotes"))
     #expect(prompt.contains("FOLLOW THEM"))
-    #expect(prompt.contains("$WIKI_ROOT/files/by-name/"))
-    #expect(prompt.contains("$WIKI_ROOT/files/by-id/"))
-    #expect(prompt.contains("$WIKI_ROOT/indexes/files.jsonl"))
-    #expect(prompt.contains("Read` tool") || prompt.contains("Read tool"))
+    // The Query prompt now routes raw-file reads through wikictl, not the mount.
+    #expect(prompt.contains("wikictl file list"))
+    #expect(prompt.contains("wikictl file cat --id"))
+    #expect(prompt.contains("wikictl file export --id"))
+    #expect(prompt.contains("Read"))
     #expect(prompt.contains("pdftotext"))
-    #expect(prompt.contains("files/..."))
+    #expect(prompt.contains("strings"))
+    // Old mount paths should be gone.
+    #expect(!prompt.contains("$WIKI_ROOT/files/by-name/"))
+    #expect(!prompt.contains("$WIKI_ROOT/files/by-id/"))
+    #expect(!prompt.contains("$WIKI_ROOT/indexes/files.jsonl"))
+    #expect(!prompt.contains("files/..."))
   }
 
   // MARK: - Prompts: the curator digester-fan-out guardrail (large ingest only)

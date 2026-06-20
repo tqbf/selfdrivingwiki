@@ -37,8 +37,11 @@ func run() -> Int32 {
 
         let result = try execute(invocation.command, in: store)
 
-        if !result.output.isEmpty {
-            print(result.output)
+        switch result.payload {
+        case .text(let output):
+            if !output.isEmpty { print(output) }
+        case .bytes(let data):
+            FileHandle.standardOutput.write(data)
         }
         // Post the change notification ONLY after a committing write, so a read
         // never wakes the app's change bridge.
@@ -49,34 +52,47 @@ func run() -> Int32 {
     } catch let failure as PageCommand.Failure {
         FileHandle.standardError.write(Data("wikictl: \(failure)\n".utf8))
         return 1
+    } catch let failure as FileCommand.Failure {
+        FileHandle.standardError.write(Data("wikictl: \(failure)\n".utf8))
+        return 1
     } catch {
         FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
         return 1
     }
 }
 
-/// Execute a parsed `Command`, dispatching to `PageCommand` (the `page …` family)
-/// or `LogIndexCommand` (the Phase-B `log append` / `index set`). The deferred
-/// body read (`-` = stdin, else a file path) happens here — the only I/O the
-/// parser left for `main`.
-func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throws -> PageCommand.Result {
+/// Execute a parsed `Command`, dispatching to `PageCommand` (the `page …` family),
+/// `LogIndexCommand` (the Phase-B `log append` / `index set`), or `FileCommand`
+/// (the `file …` family for raw source reads). The deferred body read (`-` = stdin,
+/// else a file path) happens here — the only I/O the parser left for `main`.
+func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throws -> FileCommand.Result {
     switch command {
     case .list(let json):
-        return try PageCommand.run(.list(json: json), in: store)
+        let r = try PageCommand.run(.list(json: json), in: store)
+        return FileCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .get(let selector):
-        return try PageCommand.run(.get(selector), in: store)
+        let r = try PageCommand.run(.get(selector), in: store)
+        return FileCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .delete(let id):
-        return try PageCommand.run(.delete(id: id), in: store)
+        let r = try PageCommand.run(.delete(id: id), in: store)
+        return FileCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .upsert(let id, let title, let bodyFile):
         let body = try readBody(from: bodyFile)
-        return try PageCommand.run(.upsert(id: id, title: title, body: body), in: store)
+        let r = try PageCommand.run(.upsert(id: id, title: title, body: body), in: store)
+        return FileCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .logAppend(let kind, let title, let note, let source):
-        return try LogIndexCommand.run(.logAppend(kind: kind, title: title, note: note, source: source), in: store)
+        let r = try LogIndexCommand.run(.logAppend(kind: kind, title: title, note: note, source: source), in: store)
+        return FileCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .indexSet(let bodyFile):
         let body = try readBody(from: bodyFile)
-        return try LogIndexCommand.run(.indexSet(body: body), in: store)
+        let r = try LogIndexCommand.run(.indexSet(body: body), in: store)
+        return FileCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .search(let query, let limit):
-        return try PageCommand.run(.search(query: query, limit: limit), in: store)
+        let r = try PageCommand.run(.search(query: query, limit: limit), in: store)
+        return FileCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
+    case .file(let action):
+        return try FileCommand.run(action, in: store,
+                                   cwd: FileManager.default.currentDirectoryPath)
     }
 }
 

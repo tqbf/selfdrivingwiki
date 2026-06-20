@@ -48,6 +48,8 @@ public enum ArgumentParser {
         /// results (most relevant first). Falls back to LIKE title match when
         /// embeddings aren't available.
         case search(query: String, limit: Int)
+        /// File commands: list, read, export ingested source files from SQLite.
+        case file(FileCommand.Action)
     }
 
     public enum Failure: Error, Equatable, CustomStringConvertible {
@@ -77,6 +79,10 @@ public enum ArgumentParser {
       index set --body-file <path|->         rewrite the curated index.md body
       search --query X [--limit N]           semantic search (cosine similarity);
                                              falls back to LIKE title match
+      file list [--json]                     list ingested files (TSV, or JSON lines)
+      file cat  (--id X | --name N)          write raw file bytes to stdout
+      file export (--id X | --name N) [--out <path>]
+                                             materialize a file to disk, print its path
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -111,6 +117,8 @@ public enum ArgumentParser {
             command = try parseIndexCommand(Array(args.dropFirst()))
         case "search":
             command = try parseSearchCommand(Array(args.dropFirst()))
+        case "file":
+            command = try parseFileCommand(Array(args.dropFirst()))
         default:
             throw Failure.usage("unknown command \((args.first ?? "").debugDescription)")
         }
@@ -187,6 +195,27 @@ public enum ArgumentParser {
         return .search(query: query, limit: limit)
     }
 
+    private static func parseFileCommand(_ args: [String]) throws -> Command {
+        guard let sub = args.first else { throw Failure.usage("file: missing subcommand") }
+        let rest = Array(args.dropFirst())
+        let options = try Options(rest)
+
+        switch sub {
+        case "list":
+            return .file(.list(json: options.flag("--json")))
+
+        case "cat":
+            return .file(.cat(try options.requireFileSelector()))
+
+        case "export":
+            let selector = try options.requireFileSelector()
+            return .file(.export(selector, out: options.value("--out")))
+
+        default:
+            throw Failure.usage("file: unknown subcommand \(sub.debugDescription)")
+        }
+    }
+
     private static func parseIndexCommand(_ args: [String]) throws -> Command {
         guard let sub = args.first else { throw Failure.usage("index: missing subcommand") }
         guard sub == "set" else {
@@ -240,6 +269,20 @@ public enum ArgumentParser {
                 throw Failure.usage("pass exactly one of --id / --title, not both")
             case (nil, nil):
                 throw Failure.usage("pass one of --id / --title")
+            }
+        }
+
+        /// A `--id Y` or `--name N` file selector (exactly one required).
+        func requireFileSelector() throws -> FileCommand.Selector {
+            switch (values["--id"], values["--name"]) {
+            case (let id?, nil):
+                return .id(PageID(rawValue: id))
+            case (nil, let name?):
+                return .name(name)
+            case (.some, .some):
+                throw Failure.usage("pass exactly one of --id / --name, not both")
+            case (nil, nil):
+                throw Failure.usage("pass one of --id / --name")
             }
         }
     }

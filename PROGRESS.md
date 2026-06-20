@@ -2,6 +2,18 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-20 — `wikictl file` command family
+
+Implemented `plans/wikictl-file-reads.md`. Added `wikictl file list|cat|export` so the
+agent reads raw ingested files from SQLite instead of the File Provider mount during
+Query. `cat` writes raw bytes via `FileHandle` (binary-safe); `--json` list output is
+byte-identical to `indexes/files.jsonl`. Name resolution rejects ambiguity by listing
+the matching ids. The Query and QueryConversation prompts now route raw-file reads
+through `wikictl file` instead of `$WIKI_ROOT/files/...`.
+
+19 new parser + execution tests in `WikiCtlCommandTests`; updated
+`OperationCommandTests` prompt assertions. Full `swift test` — 552 tests, 0 failures.
+
 ## 2026-06-19 — Tab system rebuild: ID-based active tab + right-click context menu
 
 Rebuilt the multi-tab system from scratch (plan:

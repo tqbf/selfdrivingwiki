@@ -287,13 +287,12 @@ extension WikiOperation {
     To answer, pull wiki pages from SQLite with `wikictl page get --title T` (or \
     `--id I`) so you see fresh authoritative content. If a page contains Markdown \
     footnotes (`[^id]: ...`) that cite a raw source, FOLLOW THEM: resolve the source \
-    filename/path using `$WIKI_ROOT/files/by-name/`, `$WIKI_ROOT/files/by-id/`, or \
-    `$WIKI_ROOT/indexes/files.jsonl`, then read the raw file from the mount (use the \
-    `Read` tool or shell commands such as `cat`, `python`, `pdftotext`, or `strings` \
-    as appropriate for text/PDF/binary files). Cite the page titles and any \
-    `files/...` paths or footnote source locations your answer draws on. If you file \
-    a useful answer back as a page, write it via `wikictl page upsert` and log it \
-    with `wikictl log append --kind query`.
+    with `wikictl file list` (or `--json`), then read it — for text use \
+    `wikictl file cat --id <id>`; for a PDF or other binary run \
+    `wikictl file export --id <id>` and run `pdftotext` / `Read` / `strings` on the \
+    path it prints. Cite the page titles and any source footnote locations your \
+    answer draws on. If you file a useful answer back as a page, write it via \
+    `wikictl page upsert` and log it with `wikictl log append --kind query`.
 
     WIKI_ROOT (resolved, read-only mount — reference only): \(wikiRoot)
     Question: \(question)
@@ -323,10 +322,11 @@ extension WikiOperation {
 
     When answering, use the Query workflow from your instructions. Pull fresh pages \
     with `wikictl page get --title T` (or `--id I`) as needed. If a page contains \
-    Markdown footnotes (`[^id]: ...`) that cite a raw source, follow them through \
-    `$WIKI_ROOT/files/by-name/`, `$WIKI_ROOT/files/by-id/`, or \
-    `$WIKI_ROOT/indexes/files.jsonl`, then read the raw file from the mount with the \
-    Read tool or shell tools such as `cat`, `python`, `pdftotext`, or `strings`.
+    Markdown footnotes (`[^id]: ...`) that cite a raw source, resolve it with \
+    `wikictl file list` (or `--json`), then read it — for text use \
+    `wikictl file cat --id <id>`; for a PDF or other binary run \
+    `wikictl file export --id <id>` and run `pdftotext` / `Read` / `strings` on \
+    the path it prints.
 
     If the user asks you to update the wiki, write via `wikictl page upsert`, update \
     `index.md` if the catalog should change, and append `wikictl log append --kind \
