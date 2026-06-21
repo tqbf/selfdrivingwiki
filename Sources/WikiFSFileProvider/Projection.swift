@@ -629,7 +629,10 @@ struct Projection {
                 mimeType: row.mime, byteSize: row.byteSize,
                 createdAt: row.createdAt, updatedAt: row.updatedAt, version: row.version)
             let verbatimNode = Self.sourceNode(for: id, file: summary)
-            guard let head = heads[row.id] else { return [verbatimNode] }
+            // Sibling eligibility: has a chain AND is NOT markdown-native.
+            // Markdown-native sources don't get a sibling — the verbatim .md is the content.
+            guard let head = heads[row.id],
+                  let mime = row.mime, !mime.hasPrefix("text/") else { return [verbatimNode] }
             let markdownID = byName
                 ? Identity.sourceMarkdownByName(row.id)
                 : Identity.sourceMarkdownByID(row.id)

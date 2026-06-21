@@ -18,19 +18,23 @@ It supersedes the Phase C portion of `sources-redesign.md` wherever they conflic
 - **Plan 2** (`phase-b-source-wikilinks.md`) — the rename and `source_markdown_versions`
   table are in place (Phase A/B merged). Phase C builds on those names.
 
-## The model (from design intent — load-bearing)
+## The model (corrected — 2026-06-21)
 
-1. **Only PDF sources have a processing chain.** The `source_markdown_versions` table holds
-   the git-lite history of a PDF→markdown *conversion* and the user's edits to it. Markdown
-   sources are verbatim-only — there is no "processed markdown" for a file that is already
-   markdown.
-2. **The chain is internal history; everyone else sees only HEAD.** The File Provider, the
-   agent, and the CLI see the latest version (`MAX(id)`). The version history powers revert
-   (shipped: `revertProcessedMarkdown`) and compare (future UI feature, out of scope here).
-3. **Content type drives behavior, never the filename extension.** `mime_type` is the
-   behavioral authority; `ext` is a display/filename hint only. This is the plan's own
-   "Content-Type Over Extension" principle (`sources-redesign.md:419-475`) — and it must
-   hold at the *source* of the data, not just at the branch sites.
+1. **Every source has a processing chain.** The `source_markdown_versions` table holds the
+   git-lite history of all revisions. Markdown-native sources self-seed v1 from verbatim
+   bytes (origin `"source"`) — the original content is always available as the baseline.
+   PDFs are seeded from extraction output (origin `"extraction"`). Edits append `"user"`
+   versions. `headVersion` is never nil.
+2. **The chain is internal history; the UI and agent see only HEAD.** The File Provider, the
+   agent, the CLI, and the in-app preview all see the latest version (`MAX(id)`). The
+   version history powers revert (shipped: `revertProcessedMarkdown`) and compare (future).
+3. **The `.md` sibling in the File Provider is a PDF-only concept.** It projects the
+   extraction output alongside the verbatim PDF. For markdown-native sources, the verbatim
+   file *is* the content — there is no sibling. No collision: PDF verbatim is `<id>.pdf`,
+   sibling is `<id>.md`; markdown verbatim is `<id>.md`, no sibling.
+4. **Content type drives behavior, never the filename extension.** `mime_type` is the
+   behavioral authority; `ext` is a display/filename hint only. This applies to the seed
+   (MIME-keyed, not ext-keyed) and to the sibling eligibility gate.
 
 ## Decisions (locked)
 
@@ -41,18 +45,19 @@ These overturn or sharpen the parent design.
    `addSource` sniff the bytes and `WikiFSItem.contentType` MIME-first. Phase C's "only PDFs
    have chains" model (Decision 2) and the sibling eligibility (Decision 4) are only
    trustworthy once `mime_type` is content-derived, so **land that plan first**.
-2. **Remove the markdown lazy-seed.** `WikiStoreModel.processedMarkdownHead(for:)`
-   (`:865-877`) seeds a v1 from a markdown source's own verbatim bytes. That contradicts the
-   model (no chain for markdown) and is the one ext-check bug that, under the parent
-   design's projection rule, would project a colliding `<id>.md` sibling next to the
-   verbatim `<id>.md`. Removing it makes "only PDFs have chains" true by construction.
+2. **Restore the markdown seed, MIME-keyed.** `WikiStoreModel.processedMarkdownHead(for:)`
+   self-seeds v1 from verbatim bytes for markdown-native sources (`mimeType.hasPrefix("text/")`,
+   not `file.ext`). Origin is `"source"` (distinct from `"extraction"` and `"user"`).
+   Double-seed guard prevents duplicates. Every source has a chain; `headVersion` is
+   never nil.
 3. **The change bridge must see chain edits.** Fold `source_markdown_versions` into
    `changeToken()` and version the sibling node off the HEAD row, so extraction / edit /
    revert refresh the mount. The parent design's "change bridge signals → File Provider
    refreshes the `.md` sibling" (`sources-redesign.md:206`) is false without this.
-4. **Eligibility for the projected sibling is `hasProcessedMarkdown`** (after Decision 2,
-   only PDFs can satisfy it). Project the sibling in **both** `by-id` and `by-name`, with
-   proper identity prefixes (the parent design specified only the by-id prefix).
+4. **Eligibility for the projected sibling: has a chain AND is NOT markdown-native.**
+   Every source has a chain (Decision 2), but the `.md` sibling is only for sources whose
+   verbatim bytes aren't already markdown — i.e. PDFs with extraction output. Markdown-native
+   sources don't get a sibling (the verbatim file is the content).
 5. **The sibling serves HEAD only**, as `text/markdown`, size and version derived from the
    HEAD version row — never from the `sources` row.
 
@@ -66,10 +71,9 @@ the extension (`SQLiteWikiStore.swift:861`), MIME-first `WikiFSItem.contentType`
 guard against new extension checks — is owned by
 [`content-type-over-extension.md`](content-type-over-extension.md). **Land it first.**
 
-The one extension check Phase C *does* own is the markdown lazy-seed
-(`WikiStoreModel.swift:870`), removed in §4 for model reasons — it's an extension check, but
-its removal is about the chain model (no chains for markdown), not about MIME-vs-ext, so it
-stays here. The other surviving checks (the stale `AgentOperationRunner.swift:130` comment,
+The one extension check Phase C *does* own is the markdown seed. The old `file.ext` check
+is replaced with a MIME-keyed `hasPrefix("text/")` gate (§4) — same seed behavior, correct
+authority. The other surviving checks (the stale `AgentOperationRunner.swift:130` comment,
 `ZoteroClient.swift:284`) belong to the content-type plan.
 
 ---
@@ -197,9 +201,9 @@ private func sourceNodes(byName: Bool) -> [ProjectedNode] {
 }
 ```
 
-Eligibility is simply "has a HEAD" (after Decision 2, only PDFs can). `heads` is keyed by
-source id; the verbatim node is always emitted, so the original bytes remain reachable
-(satisfying `sources-redesign.md:185`).
+Eligibility: has a HEAD AND is NOT markdown-native. The sibling is only for PDFs with
+extraction output — markdown-native sources never project a sibling (the verbatim `<id>.md`
+is the content). `heads` is keyed by source id; the verbatim node is always emitted.
 
 ### 3.4 `contents(for:)` serves HEAD; contentType is explicit
 
@@ -232,24 +236,30 @@ public func processedMarkdownHeadsBySource() throws -> [String: SourceMarkdownVe
 
 ---
 
-## 4. Delete the markdown lazy-seed (Decision 2, detail)
+## 4. Restore the markdown seed, MIME-keyed (Decision 2, corrected)
 
-`WikiStoreModel.processedMarkdownHead(for:)` (`:865-877`) becomes:
+`WikiStoreModel.processedMarkdownHead(for:)` self-seeds v1 from verbatim bytes for
+markdown-native sources, keyed on `mimeType.hasPrefix("text/")` instead of the old
+`file.ext` check:
 
 ```swift
 public func processedMarkdownHead(for file: SourceSummary) -> SourceMarkdownVersion? {
-    try? store.processedMarkdownHead(sourceID: file.id)
+    if let head = try? store.processedMarkdownHead(sourceID: file.id) {
+        return head
+    }
+    // Seed v1 for markdown-native sources (MIME-keyed).
+    guard let mime = file.mimeType, mime.hasPrefix("text/") else { return nil }
+    guard let bytes = try? store.sourceContent(id: file.id),
+          let text = String(data: bytes, encoding: .utf8) else { return nil }
+    return try? store.appendProcessedMarkdown(
+        sourceID: file.id, content: text, origin: "source", note: nil)
 }
 ```
 
-No seeding branch. A markdown source now has no chain (matching the model); a PDF source
-gets its chain from extraction (`seedPdfMarkdown`, `:894-903`, origin `"extraction"`).
-`saveProcessedMarkdown` (`:886-891`, origin `"user"`) still appends user edits to a PDF's
-existing chain. **Collision is impossible by construction**: PDF verbatim is `<id>.pdf`,
-sibling is `<id>.md`.
-
-> If a future extraction target is itself markdown-ext, revisit the sibling filename then.
-> Do not pre-engineer a disambiguator now.
+Origin `"source"` distinguishes self-seeds from extraction (`"extraction"`) and user
+edits (`"user"`). Double-seed guard: if a head already exists, it returns immediately.
+`seedPdfMarkdown` is unchanged — PDFs still get their chain from extraction output.
+`headVersion` is never nil.
 
 ---
 
@@ -280,9 +290,10 @@ how other commands read `--file <path>` into a string). The app's in-app editor
 
 ## 6. Index + agent prompt (locked)
 
-- **`sources.jsonl`** (`IndexGenerators.swift:142-`): add a `has_markdown` boolean so the
-  agent can discover which sources have a `.md` sibling without `ls`-ing. Additive; update
-  `IndexGeneratorTests`. (After Decision 2, `has_markdown` is true only for extracted PDFs.)
+- **`sources.jsonl`** (`IndexGenerators.swift:142-`): add a `has_markdown` boolean. After
+  the self-seed (Decision 2 corrected), this is true for EVERY source. The agent can use
+  `mime` (already in the JSONL) to distinguish PDFs (have a `.md` sibling from extraction)
+  from markdown-native sources (verbatim `.md` is the content, no sibling needed).
 - **`SystemPrompt`** (`SystemPrompt.swift`): document the `.md`-sibling convention — for a
   source with processed markdown, a `<id>.md` sibling holds the latest conversion/edit and
   is the one to `Read` in preference to the raw PDF. One line in the prompt's sources
@@ -298,12 +309,13 @@ how other commands read `--file <path>` into a string). The app's in-app editor
   - `addSource` sets `mime_type` from bytes (sniff), e.g. a PDF fed with a `.txt` filename
     still stores `application/pdf`.
   - `processedMarkdownHeadsBySource` returns the right HEAD per source.
-- **`WikiStoreModelTests`** (or equivalent): `processedMarkdownHead(for:)` for a `.md`
-  source returns nil and creates **no** chain (regression test for the lazy-seed removal).
-- **Projection** (File Provider test target): a PDF source with a chain projects TWO nodes
-  in `by-id` and `by-name` (`<id>.pdf` + `<id>.md`); a PDF without a chain projects one; a
-  `.md` source projects one (no sibling). `contents(for: <md sibling id>)` serves the HEAD
-  text; editing the chain changes the node's `contentVersion`.
+- **`WikiStoreModelTests`**: `processedMarkdownHead(for:)` for a markdown-native source
+  self-seeds v1 from verbatim bytes (origin `"source"`). Double-seed guard prevents
+  duplicate rows. Binary (non-text) sources return nil and create no chain.
+- **Projection** (File Provider test target): a PDF source projects TWO nodes in `by-id`
+  and `by-name` (`<id>.pdf` + `<id>.md` sibling); a markdown-native source projects ONE
+  node (the verbatim `<id>.md`, no sibling). `contents(for: <md sibling id>)` serves the
+  HEAD text; editing the chain changes the node's `contentVersion`.
 - **`SourceCommandTests`**: `edit-markdown` appends a `"user"` version; refuses when no
   chain exists.
 
@@ -326,8 +338,8 @@ how other commands read `--file <path>` into a string). The app's in-app editor
 - **Phase D** display-name editing — when it lands, the by-name sibling switches from
   `filename` to `display_name` for its stem (one-line change in §3.2).
 - A backfill migration to re-sniff existing rows' `mime_type` (§1.2 note) — optional.
-- Generalizing extraction beyond PDF — the design leaves room (eligibility keys on
-  `hasProcessedMarkdown`, not on `ext`/`mime`), but only PDFs produce chains today.
+- Generalizing extraction beyond PDF — the design leaves room. Every source already has a
+  chain; the sibling eligibility gate (§3.3) determines whether a `.md` sibling is projected.
 
 ## Open decisions (all locked)
 
