@@ -66,22 +66,7 @@ serves both link kinds.
   running `wikictl file` from its prompt instructions and getting "unknown
   command". Three commits pushed to the PR to stamp this out.
 
-**Tests.** `swift test` — 635 tests, 50 suites, 0 failures (+39 from Phase A's
-baseline of 596):
-
-- `WikiLinkParserTests` (+11): `source:` prefix, alias preservation, whitespace
-  normalization, empty-prefix skip, `page:` escape, dedup across kinds, `classify`
-  edge cases.
-- `WikiLinkMarkdownTests` (+10): source host on resolve/missing, alias display,
-  `resolvedKind(from:)` / `target(from:)` round-trip, mixed page+source rendering,
-  `[[source:]]` literal emission, code-span and fenced-block protection.
-- `SQLiteWikiStoreTests` (+7): `resolveSourceByName` (display name hit, filename
-  fallback, case-insensitive, nil on unknown), `replaceLinks` mixed+atomic,
-  case-insensitive title resolution.
-- `IndexGeneratorTests` (+3): `linksJSONL` `type` field, byte stability,
-  manifest advertises source paths.
-- `WikiLinkNavigationTests` (+3): `selectSource(byDisplayName:)` navigation,
-  no-op on missing, tab reuse.
+**Tests.** `swift test` — 635 tests, 50 suites, 0 failures.
 
 On branch `feature/phase-b-source-wikilinks`. PR #33.
 
