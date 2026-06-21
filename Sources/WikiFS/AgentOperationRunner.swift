@@ -17,7 +17,7 @@ enum AgentOperationRunner {
         fileProvider: FileProviderSpike
     ) async {
         await runMultiIngest(
-            fileIDs: [sourceID],
+            sourceIDs: [sourceID],
             launcher: launcher,
             store: store,
             manager: manager,
@@ -28,14 +28,14 @@ enum AgentOperationRunner {
     /// as `source-1.<ext>`, `source-2.<ext>`, … — the agent reads them all,
     /// cross-references, and writes pages/index/log in one pass.
     static func runMultiIngest(
-        fileIDs: [PageID],
+        sourceIDs: [PageID],
         launcher: AgentLauncher,
         store: WikiStoreModel,
         manager: WikiManager,
         fileProvider: FileProviderSpike
     ) async {
-        guard !fileIDs.isEmpty else { return }
-        DebugLog.ingest("runMultiIngest: begin count=\(fileIDs.count)")
+        guard !sourceIDs.isEmpty else { return }
+        DebugLog.ingest("runMultiIngest: begin count=\(sourceIDs.count)")
 
         // NOTE: `ingestingSourceIDs` (the agent-phase flag) is NOT set here. It is
         // assigned at spawn commit inside `AgentLauncher.run` (around `onLock`),
@@ -45,27 +45,27 @@ enum AgentOperationRunner {
         let stateMarkdown = store.currentStateSnapshot().renderStateFile()
 
         var sources: [OperationRequest.StagedSource] = []
-        for fileID in fileIDs {
-            guard let file = store.sources.first(where: { $0.id == fileID }),
-                  let bytes = store.sourceBytes(id: fileID)
+        for sourceID in sourceIDs {
+            guard let source = store.sources.first(where: { $0.id == sourceID }),
+                  let bytes = store.sourceBytes(id: sourceID)
             else {
-                DebugLog.ingest("runMultiIngest: skipping \(fileID.rawValue) — file or bytes missing")
+                DebugLog.ingest("runMultiIngest: skipping \(sourceID.rawValue) — source or bytes missing")
                 continue
             }
-            DebugLog.ingest("runMultiIngest: file=\(file.filename) ext=\(file.ext) bytes=\(bytes.count)")
+            DebugLog.ingest("runMultiIngest: source=\(source.filename) ext=\(source.ext) bytes=\(bytes.count)")
 
             var sourceBytes = bytes
-            var sourceExt = file.ext
+            var sourceExt = source.ext
 
             // PDF → Markdown: if markdown was already extracted (via the standalone
             // "Extract Markdown" button or a prior ingest), reuse it — don't re-run
             // pdf2md. Only extract when no processed markdown exists yet.
-            if file.mimeType == "application/pdf" {
-                if let head = store.processedMarkdownHead(for: file) {
+            if source.mimeType == "application/pdf" {
+                if let head = store.processedMarkdownHead(for: source) {
                     // Already extracted — use existing markdown, skip pdf2md entirely.
                     sourceBytes = head.content.data(using: .utf8) ?? bytes
                     sourceExt = "md"
-                    DebugLog.extraction("runMultiIngest: reusing existing markdown for \(file.filename) — \(head.content.count) chars")
+                    DebugLog.extraction("runMultiIngest: reusing existing markdown for \(source.filename) — \(head.content.count) chars")
                 } else {
                 let acquired = await launcher.awaitExtractionSlot()
                 guard acquired, !Task.isCancelled else {
@@ -74,14 +74,14 @@ enum AgentOperationRunner {
                     if acquired { launcher.releaseExtractionSlot() }
                     return
                 }
-                launcher.extractingSourceIDs.insert(file.id)
+                launcher.extractingSourceIDs.insert(source.id)
                 defer {
-                    launcher.extractingSourceIDs.remove(file.id)
+                    launcher.extractingSourceIDs.remove(source.id)
                     launcher.releaseExtractionSlot()
                 }
                 launcher.extractionLog = ""
                 if await PdfExtractionService.checkReady() {
-                    DebugLog.extraction("checkReady: ready — converting \(file.filename)")
+                    DebugLog.extraction("checkReady: ready — converting \(source.filename)")
                     launcher.isExtracting = true
                     launcher.extractionPID = nil
                     launcher.extractionLog = ""
@@ -92,7 +92,7 @@ enum AgentOperationRunner {
                     do {
                         let markdown = try await PdfExtractionService.convert(
                             pdfData: bytes,
-                            filename: file.filename,
+                            filename: source.filename,
                             onProgress: { line in
                                 Task { @MainActor in launcher.extractionLog.append(line) }
                             },
@@ -108,7 +108,7 @@ enum AgentOperationRunner {
                         launcher.extractionLog.append("PDF conversion done — \(markdown.count) chars extracted.\n")
                         // Persist extracted markdown as v1 in the version chain.
                         // Double-seed guard: if a head already exists, reuse it.
-                        store.seedPdfMarkdown(for: file.id, content: markdown)
+                        store.seedPdfMarkdown(for: source.id, content: markdown)
                     } catch {
                         if Task.isCancelled {
                             DebugLog.extraction("convert: CANCELLED")
@@ -127,12 +127,12 @@ enum AgentOperationRunner {
                     launcher.extractionLog = "PDF extraction not ready — sending raw PDF to agent."
                 }
                 } // end else (no existing markdown → extract)
-            } // end if file.ext == "pdf"
+            } // end if source.ext == "pdf"
 
             sources.append(OperationRequest.StagedSource(
                 bytes: sourceBytes,
                 ext: sourceExt,
-                displayPath: ingestSourcePath(for: file)))
+                displayPath: ingestSourcePath(for: source)))
         }
 
         guard !sources.isEmpty else {
@@ -150,7 +150,7 @@ enum AgentOperationRunner {
             store: store,
             manager: manager,
             fileProvider: fileProvider,
-            ingestingSourceIDs: Set(fileIDs))
+            ingestingSourceIDs: Set(sourceIDs))
 
         // If the ingest Task was cancelled while queued for the spawn slot (behind a
         // running query), `launcher.run` returned without spawning and never set

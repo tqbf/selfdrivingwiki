@@ -13,7 +13,7 @@ struct SourceDetailView: View {
     /// `true` when any file (not necessarily this one) is mid-ingest — covers the
     /// PDF-conversion phase before the agent process starts, when `isRunning` is
     /// still `false`.
-    let isAnyFileIngesting: Bool
+    let isAnySourceIngesting: Bool
     /// `true` when THIS file is mid-extraction via the ingest path (pdf2md running
     /// during an ingest of this file, before the agent spawns). Disables the
     /// standalone "Extract Markdown" button for this file only — pdf2md is safe to
@@ -163,7 +163,7 @@ struct SourceDetailView: View {
                         runIngest(file.id)
                     }
                         .keyboardShortcut(.return, modifiers: .command)
-                        .disabled(isRunning || isIngesting || isAnyFileIngesting
+                        .disabled(isRunning || isIngesting || isAnySourceIngesting
                                   || isThisFileExtracting)
                     if isPDF, !hasMarkdown {
                         Button(isExtracting ? "Extracting…" : "Extract Markdown",

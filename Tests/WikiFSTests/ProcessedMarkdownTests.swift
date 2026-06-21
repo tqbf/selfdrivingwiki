@@ -17,7 +17,7 @@ struct ProcessedMarkdownTests {
 
     /// Create an ingested file row so FK constraints are satisfied for version tests.
     @discardableResult
-    private func seedIngestedFile(in store: SQLiteWikiStore, filename: String = "test.txt",
+    private func seedSource(in store: SQLiteWikiStore, filename: String = "test.txt",
                                   data: Data = Data("hello".utf8)) throws -> SourceSummary {
         try store.addSource(filename: filename, data: data)
     }
@@ -127,7 +127,7 @@ struct ProcessedMarkdownTests {
 
     @Test func v1HasNullParentID() throws {
         let store = try tempStore()
-        let file = try seedIngestedFile(in: store)
+        let file = try seedSource(in: store)
         let v1 = try store.appendProcessedMarkdown(
             sourceID: file.id, content: "first", origin: "extraction", note: nil)
         #expect(v1.parentID == nil)
@@ -137,7 +137,7 @@ struct ProcessedMarkdownTests {
 
     @Test func v2ParentIsV1() throws {
         let store = try tempStore()
-        let file = try seedIngestedFile(in: store)
+        let file = try seedSource(in: store)
         let v1 = try store.appendProcessedMarkdown(
             sourceID: file.id, content: "one", origin: "extraction", note: nil)
         let v2 = try store.appendProcessedMarkdown(
@@ -147,7 +147,7 @@ struct ProcessedMarkdownTests {
 
     @Test func headIsLatestVersion() throws {
         let store = try tempStore()
-        let file = try seedIngestedFile(in: store)
+        let file = try seedSource(in: store)
         _ = try store.appendProcessedMarkdown(
             sourceID: file.id, content: "v1", origin: "extraction", note: nil)
         // Tiny sleep guarantees the next ULID has a strictly later timestamp
@@ -162,7 +162,7 @@ struct ProcessedMarkdownTests {
 
     @Test func processedMarkdownHistoryNewestFirst() throws {
         let store = try tempStore()
-        let file = try seedIngestedFile(in: store)
+        let file = try seedSource(in: store)
         let v1 = try store.appendProcessedMarkdown(
             sourceID: file.id, content: "first", origin: "extraction", note: nil)
         usleep(2000)
@@ -176,7 +176,7 @@ struct ProcessedMarkdownTests {
 
     @Test func hasProcessedMarkdownReflectsExistence() throws {
         let store = try tempStore()
-        let file = try seedIngestedFile(in: store)
+        let file = try seedSource(in: store)
         #expect(try store.hasProcessedMarkdown(sourceID: file.id) == false)
         _ = try store.appendProcessedMarkdown(
             sourceID: file.id, content: "x", origin: "extraction", note: nil)
@@ -187,7 +187,7 @@ struct ProcessedMarkdownTests {
 
     @Test func revertAppendsNewVersionWithOldContent() throws {
         let store = try tempStore()
-        let file = try seedIngestedFile(in: store)
+        let file = try seedSource(in: store)
         let v1 = try store.appendProcessedMarkdown(
             sourceID: file.id, content: "original", origin: "extraction", note: nil)
         usleep(2000)
@@ -205,7 +205,7 @@ struct ProcessedMarkdownTests {
 
     @Test func headAfterRevertIsNewest() throws {
         let store = try tempStore()
-        let file = try seedIngestedFile(in: store)
+        let file = try seedSource(in: store)
         _ = try store.appendProcessedMarkdown(
             sourceID: file.id, content: "v1", origin: "extraction", note: nil)
         usleep(2000)
@@ -247,7 +247,7 @@ struct ProcessedMarkdownTests {
 
     // MARK: - Seeding
 
-    @Test func nativeMdStoredInIngestedFilesDoesNotAutoSeed() throws {
+    @Test func nativeMdStoredInSourcesDoesNotAutoSeed() throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "notes.md", data: Data("# Notes\ncontent".utf8))
         let head = try store.processedMarkdownHead(sourceID: ingested.id)
@@ -257,7 +257,7 @@ struct ProcessedMarkdownTests {
 
     @Test func appendIsNotIdempotentAppendsAgain() throws {
         let store = try tempStore()
-        let file = try seedIngestedFile(in: store)
+        let file = try seedSource(in: store)
         let v1 = try store.appendProcessedMarkdown(
             sourceID: file.id, content: "first seed", origin: "extraction", note: nil)
         usleep(2000)

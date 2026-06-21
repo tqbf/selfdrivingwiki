@@ -41,7 +41,7 @@ final class AgentLauncher {
     /// The ingested-file ids whose **agent run** is in flight — set only once the
     /// claude spawn is actually committed (slot acquired, around `onLock`), and
     /// cleared in `finish()`. Drives the per-file "Ingesting…" row label and the
-    /// cross-file `isAnyFileIngesting` Ingest-button greyout. This is the
+    /// cross-file `isAnySourceIngesting` Ingest-button greyout. This is the
     /// **agent phase** flag; it is NOT set during the pdf2md extraction phase that
     /// precedes the spawn (see `extractingSourceIDs`), so a pure extraction no longer
     /// mislabels a row as "Ingesting…" or greys out another file's Ingest button.

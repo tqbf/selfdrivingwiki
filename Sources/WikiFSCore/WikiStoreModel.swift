@@ -629,8 +629,8 @@ public final class WikiStoreModel {
             }
         }
         reloadSources()
-        if let fileID = lastSourceID {
-            openTab(.source(fileID))
+        if let sourceID = lastSourceID {
+            openTab(.source(sourceID))
             onPageDidChange?()
         }
     }
@@ -761,8 +761,8 @@ public final class WikiStoreModel {
         }
 
         reloadSources()
-        if let fileID = firstSourceID {
-            openTab(.source(fileID))
+        if let sourceID = firstSourceID {
+            openTab(.source(sourceID))
         }
         onPageDidChange?()
         return (imported: imported, errors: errorMessages)
@@ -958,21 +958,21 @@ public final class WikiStoreModel {
 
     private func pruneHistoryToCurrentStore() {
         let pageIDs = Set(summaries.map(\.id))
-        let fileIDs = Set(sources.map(\.id))
-        backStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, fileIDs: fileIDs) }
-        forwardStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, fileIDs: fileIDs) }
+        let sourceIDs = Set(sources.map(\.id))
+        backStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, sourceIDs: sourceIDs) }
+        forwardStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, sourceIDs: sourceIDs) }
     }
 
     private func isAvailableHistorySelection(
         _ value: WikiSelection,
         pageIDs: Set<PageID>,
-        fileIDs: Set<PageID>
+        sourceIDs: Set<PageID>
     ) -> Bool {
         switch value {
         case .page(let id):
             pageIDs.contains(id)
         case .source(let id):
-            fileIDs.contains(id)
+            sourceIDs.contains(id)
         case .query, .systemPrompt, .changeLog, .lint:
             true
         }

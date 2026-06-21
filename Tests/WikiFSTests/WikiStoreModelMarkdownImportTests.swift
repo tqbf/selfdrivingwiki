@@ -40,7 +40,7 @@ struct WikiStoreModelMarkdownImportTests {
         return root
     }
 
-    @Test func importsAllDotMDFilesIntoIngestedFiles() async throws {
+    @Test func importsAllDotMDFilesIntoSources() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
         let dir = try tempMarkdownDir(files: [

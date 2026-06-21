@@ -12,30 +12,30 @@ import WikiFSCore
 /// phase). Both are always-mounted (no insert/remove transitions); the icon
 /// simply swaps between spinner and the ready/ingested glyph.
 struct SourceRow: View {
-    let file: SourceSummary
+    let source: SourceSummary
     let hasBeenIngested: Bool
-    /// True while the agent run for this file is in flight (the agent phase —
+    /// True while the agent run for this source is in flight (the agent phase —
     /// set at spawn commit, not during the preceding pdf2md extraction).
     var isIngesting: Bool = false
-    /// True while a pdf2md conversion for this file is in flight (the extraction
+    /// True while a pdf2md conversion for this source is in flight (the extraction
     /// phase — either the ingest-path conversion or a standalone extract).
     var isExtracting: Bool = false
-    /// True when this file is part of the List's multi-selection.
+    /// True when this source is part of the List's multi-selection.
     var isSelected: Bool = false
     let onOpen: () -> Void
     let onRemove: () -> Void
-    /// Ingest all currently-selected files (shown in context menu when this
-    /// file is part of a multi-file selection).
+    /// Ingest all currently-selected sources (shown in context menu when this
+    /// source is part of a multi-source selection).
     var onIngestSelected: (() -> Void)? = nil
 
-    /// The trailing status the row shows for a file, mirroring the two phases in
+    /// The trailing status the row shows for a source, mirroring the two phases in
     /// `AgentLauncher`. Extracted as a pure static function so the precedence
     /// (extraction phase > agent phase > ready/ingested) is unit-testable
     /// without driving launcher state. The View calls this with its row state.
     enum RowStatus: Equatable, Sendable {
         /// pdf2md conversion in flight (extraction phase).
         case extracting
-        /// Agent run committed for this file (agent phase).
+        /// Agent run committed for this source (agent phase).
         case ingesting
         /// Already ingested, idle.
         case ingested
@@ -60,12 +60,12 @@ struct SourceRow: View {
             hasBeenIngested: hasBeenIngested)
         Label {
             HStack(spacing: 8) {
-                Text(file.filename.isEmpty ? "Untitled" : file.filename)
+                Text(source.filename.isEmpty ? "Untitled" : source.filename)
                     .font(.body)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 8)
-                Text(Self.sizeFormatter.string(fromByteCount: Int64(file.byteSize)))
+                Text(Self.sizeFormatter.string(fromByteCount: Int64(source.byteSize)))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 switch status {
@@ -75,7 +75,7 @@ struct SourceRow: View {
                         .controlSize(.small)
                         .help("Extracting…")
                 case .ingesting:
-                    // Agent phase: claude run committed for this file.
+                    // Agent phase: claude run committed for this source.
                     ProgressView()
                         .controlSize(.small)
                         .help("Ingesting…")
@@ -89,7 +89,7 @@ struct SourceRow: View {
                 }
             }
         } icon: {
-            Image(systemName: Self.symbol(for: file))
+            Image(systemName: Self.symbol(for: source))
         }
         .contentShape(Rectangle())
         .contextMenu {

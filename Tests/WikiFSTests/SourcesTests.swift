@@ -7,7 +7,7 @@ import Testing
 /// Phase 5 file-ingestion tests: ingest/list/get/delete, byte-identical content
 /// round-trip, ext/mime derivation, the soft size cap, the stepwise v1→2
 /// migration (pages preserved), and distinct ULIDs for duplicate drops.
-struct IngestedFilesTests {
+struct SourcesTests {
 
     private func tempDatabaseURL() -> URL {
         let dir = FileManager.default.temporaryDirectory

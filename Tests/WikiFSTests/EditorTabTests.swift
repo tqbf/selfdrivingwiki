@@ -712,7 +712,7 @@ struct EditorTabTests {
         #expect(model.tabTitle(for: .changeLog) == "Activity")
     }
 
-    @Test func tabTitleForIngestedFile() throws {
+    @Test func tabTitleForSource() throws {
         let (model, store) = try tempModel()
         let f1 = try store.addSource(filename: "report.pdf", data: Data("pdf".utf8))
         model.reloadFromStore()

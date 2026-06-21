@@ -42,7 +42,7 @@ struct WikiStoreModelZoteroIngestTests {
             title: title, creatorSummary: "Ito, K.", date: "2016")
     }
 
-    @Test func localAttachmentLandsInIngestedFilesList() async throws {
+    @Test func localAttachmentLandsInSourcesList() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
         var didSignal = false

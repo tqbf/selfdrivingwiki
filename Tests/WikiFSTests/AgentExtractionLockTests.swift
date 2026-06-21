@@ -249,9 +249,9 @@ struct AgentExtractionLockTests {
         launcher.extractingSourceIDs.insert(idA)
 
         // The cross-file Ingest greyout predicate is `!ingestingSourceIDs.isEmpty`
-        // (see WikiDetailView.isAnyFileIngesting). During A's extraction it is OFF.
-        let isAnyFileIngesting = !launcher.ingestingSourceIDs.isEmpty
-        #expect(!isAnyFileIngesting)
+        // (see WikiDetailView.isAnySourceIngesting). During A's extraction it is OFF.
+        let isAnySourceIngesting = !launcher.ingestingSourceIDs.isEmpty
+        #expect(!isAnySourceIngesting)
         // B's id is not in the extraction set, so B's row is neither extracting
         // nor ingesting — free to ingest.
         #expect(!launcher.extractingSourceIDs.contains(idB))

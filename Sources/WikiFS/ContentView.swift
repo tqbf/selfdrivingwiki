@@ -123,7 +123,7 @@ struct ContentView: View {
     /// agent-phase ingest (the extraction phase precedes the agent process).
     /// Drives the toolbar glow. Both phase flags are included so the glow stays
     /// on during a pure extraction; the cross-file Ingest greyout is NOT driven
-    /// here (that is `isAnyFileIngesting` = `!ingestingSourceIDs.isEmpty` only).
+    /// here (that is `isAnySourceIngesting` = `!ingestingSourceIDs.isEmpty` only).
     private var agentBusy: Bool {
         agentLauncher.isRunning
             || !agentLauncher.ingestingSourceIDs.isEmpty
@@ -174,12 +174,12 @@ struct ContentView: View {
         agentLauncher.ingestTask = task
     }
 
-    private func batchIngest(fileIDs: [PageID]) {
-        DebugLog.ingest("ContentView.batchIngest: user pressed Ingest \(fileIDs.count) files")
+    private func batchIngest(sourceIDs: [PageID]) {
+        DebugLog.ingest("ContentView.batchIngest: user pressed Ingest \(sourceIDs.count) sources")
         let task = Task {
             defer { agentLauncher.ingestTask = nil }
             await AgentOperationRunner.runMultiIngest(
-                fileIDs: fileIDs,
+                sourceIDs: sourceIDs,
                 launcher: agentLauncher,
                 store: store,
                 manager: manager,
