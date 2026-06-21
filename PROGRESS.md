@@ -88,50 +88,19 @@ baseline of 601):
 
 On branch `feature/phase-b-source-wikilinks`. PR #33.
 
-## 2026-06-21 — Phase A: rename "ingested file" → "source" throughout (PR #31, #32)
+## 2026-06-21 — Phase A: rename "ingested file" → "source" throughout (PR #31)
 
-Full rename across database, types, UI, CLI, File Provider, and agent prompts.
+Full rename across database, types, UI, CLI, File Provider, and agent prompts. v10
+migration renames `ingested_files` → `sources` and `file_markdown_versions` →
+`source_markdown_versions`; adds `display_name` column (backfilled from `filename`);
+creates `source_links` table. All Swift types renamed (`IngestedFileSummary` →
+`SourceSummary`, etc.), all views renamed (`IngestedFileDetailView` →
+`SourceDetailView`, `IngestedFileRow` → `SourceRow`, `FilesSectionView` →
+`SourcesSectionView`), CLI renamed (`wikictl file` → `wikictl source`), mount paths
+renamed (`files/` → `sources/`), agent prompts updated. Six extension-check bugs
+fixed (use `mimeType` instead of `ext` for behavioral decisions). 596 tests green.
 
-**Migration:** v10 renames `ingested_files` → `sources` and `file_markdown_versions`
-→ `source_markdown_versions`; adds `display_name` column (backfilled from
-`filename`); creates `source_links` table (for future `[[source:…]]` links).
-
-**Type/UI/CLI renames:** `IngestedFileSummary` → `SourceSummary`, `FileMarkdownVersion`
-→ `SourceMarkdownVersion`, `IngestedFileDetailView` → `SourceDetailView`,
-`IngestedFileRow` → `SourceRow`, `FilesSectionView` → `SourcesSectionView`,
-`wikictl file` → `wikictl source`, `WikiSelection.ingestedFile` → `.source`, etc.
-Mount paths: `files/` → `sources/`, `indexes/files.jsonl` → `indexes/sources.jsonl`.
-Agent prompts (system prompt, operation prompts, TREE.md) all updated.
-
-**Extension-check bugs fixed (6 sites):** `isPDF`, `isMarkdownNative`, `symbol`, and
-the PDF extraction gate in `AgentOperationRunner` now use `mimeType` (content-sniffed)
-instead of `ext` (filename-derived), so a PDF without a `.pdf` extension still gets
-PDF viewer, extraction, and correct icons.
-
-**Variable renames:** `ingestingFileIDs` → `ingestingSourceIDs`, `extractingFileIDs`
-→ `extractingSourceIDs`, `selectedFileIDs` → `selectedSourceIDs`, `fileFilter` →
-`sourceFilter`, `isFilesExpanded` → `isSourcesExpanded`, `isAnyFileIngesting` →
-`isAnySourceIngesting`, `openIngestedFile` → `openSource`. View parameters and local
-variables updated throughout.
-
-**Follow-up bug fixes (PR #32):** two shipped bugs caught by Phase B review and fixed
-before Phase B landed:
-
-- **`source_links` missing `ON DELETE CASCADE`:** latent until Phase B populates the
-  table. v10→v11 migration rebuilds `source_links` with the cascade via
-  rename→create→copy→drop (data-preserving, idempotent).
-- **File Provider projected `files.jsonl` / `files/`:** the Phase A rename updated
-  enum cases but missed display strings in `Projection.swift`. The on-disk tree still
-  showed `indexes/files.jsonl` and a top-level `files/` folder, contradicting
-  `manifest.json`. Fixed to `sources.jsonl` / `sources`.
-
-**Tests.** `swift test` — 601 tests, 50 suites, 0 failures (+5 for bug fixes):
-`deleteSourceCascadesToSourceLinksAfterV11Migration`,
-`freshDBReachesUserVersion11`, `v11SourceLinksHasDeleteCascade`,
-`sourcesJSONLPathIsCorrect`, `manifestAdvertisesSourcePaths`.
-All `user_version` assertions bumped from 9→10→11 across the two PRs.
-
-Branches `feature/sources-redesign` (PR #31) → `fix-source-bugs` (PR #32).
+Branches `feature/sources-redesign` (PR #31) → `feature/phase-b-source-wikilinks` (PR #33).
 
 ## 2026-06-21 — Phase B review + two follow-up plans
 
