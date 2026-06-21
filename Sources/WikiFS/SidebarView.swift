@@ -13,8 +13,12 @@ struct SidebarView: View {
     let fileProvider: FileProviderSpike
     /// Callback when the user clicks "Ingest N Files" in batch mode.
     var onBatchIngest: (([PageID]) -> Void)? = nil
-    /// Files currently being ingested — shows a spinner on those rows.
+    /// Files whose agent run is in flight (agent phase) — shows the
+    /// "Ingesting…" spinner on those rows.
     var ingestingFileIDs: Set<PageID> = []
+    /// Files whose pdf2md conversion is in flight (extraction phase) — shows the
+    /// "Extracting…" spinner on those rows. Independent of `ingestingFileIDs`.
+    var extractingFileIDs: Set<PageID> = []
 
     @State private var renameTarget: WikiPageSummary?
     @State private var renameText: String = ""
@@ -60,7 +64,9 @@ struct SidebarView: View {
             pagesSection()
             if !store.ingestedFiles.isEmpty {
                 FilesSectionView(store: store, fileProvider: fileProvider,
-                    ingestingFileIDs: ingestingFileIDs, onBatchIngest: onBatchIngest,
+                    ingestingFileIDs: ingestingFileIDs,
+                    extractingFileIDs: extractingFileIDs,
+                    onBatchIngest: onBatchIngest,
                     listSelection: $listSelection, activeSection: $activeSection)
             }
             systemSection()

@@ -69,7 +69,14 @@ struct WikiDetailView: View {
                     isIngesting: launcher.ingestingFileIDs.contains(file.id),
                     isRunning: launcher.isRunning,
                     isAnyFileIngesting: !launcher.ingestingFileIDs.isEmpty,
+                    // This file is mid-extraction via EITHER path (the ingest-path
+                    // pdf2md step or the standalone runExtraction) — both insert
+                    // into `extractingFileIDs`, so this is now extraction-phase
+                    // driven rather than the old `isExtracting &&
+                    // ingestingFileIDs.contains` overload.
+                    isThisFileExtracting: launcher.extractingFileIDs.contains(file.id),
                     runIngest: runIngest,
+                    launcher: launcher,
                     store: store
                 )
             } else {

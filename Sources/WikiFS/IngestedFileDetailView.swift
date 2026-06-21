@@ -14,14 +14,23 @@ struct IngestedFileDetailView: View {
     /// PDF-conversion phase before the agent process starts, when `isRunning` is
     /// still `false`.
     let isAnyFileIngesting: Bool
+    /// `true` when THIS file is mid-extraction via the ingest path (pdf2md running
+    /// during an ingest of this file, before the agent spawns). Disables the
+    /// standalone "Extract Markdown" button for this file only — pdf2md is safe to
+    /// overlap with a claude run, so a query/ingest agent run does NOT disable it.
+    let isThisFileExtracting: Bool
     let runIngest: (PageID) -> Void
+    /// Shared launcher — used by the standalone `runExtraction` to take the
+    /// extraction slot (so a standalone extract and an ingest-path extract serialize
+    /// against each other) and to mirror this file's id into `extractingFileIDs`
+    /// so the sidebar row labels it "Extracting…".
+    let launcher: AgentLauncher
     @Bindable var store: WikiStoreModel
 
     @State private var headVersion: FileMarkdownVersion?
     @State private var isEditing = false
     @State private var editBuffer = ""
     @State private var isExtracting = false
-    @State private var extractionLog = ""
     @State private var selectedTab = FileContentTab.markdown
 
     private enum FileContentTab: String, CaseIterable {
@@ -86,11 +95,17 @@ struct IngestedFileDetailView: View {
         .background(Color(nsColor: .textBackgroundColor))
         .onAppear { headVersion = store.processedMarkdownHead(for: file) }
         .onChange(of: file.id) {
+            // Navigating between ingested files REUSES this view instance (same
+            // type/position), so SwiftUI preserves `@State` across the switch.
+            // Reset every per-file @State here — including `isExtracting`, which
+            // otherwise leaks A's "Extracting…" flag onto B's header. The header
+            // spinner is additionally driven off the per-file `isThisFileExtracting`
+            // launcher flag below, so it can never survive a navigation.
             flushEditIfDirty()
             isEditing = false
+            isExtracting = false
             headVersion = nil
             selectedTab = .markdown
-            extractionLog = ""
         }
         .task(id: file.id) { headVersion = store.processedMarkdownHead(for: file) }
         .onChange(of: store.selection) { flushEditIfDirty(); isEditing = false }
@@ -147,13 +162,24 @@ struct IngestedFileDetailView: View {
                         runIngest(file.id)
                     }
                         .keyboardShortcut(.return, modifiers: .command)
-                        .disabled(isRunning || isIngesting || isAnyFileIngesting)
+                        .disabled(isRunning || isIngesting || isAnyFileIngesting
+                                  || isThisFileExtracting)
                     if isPDF, !hasMarkdown {
                         Button(isExtracting ? "Extracting…" : "Extract Markdown",
                                systemImage: "doc.plaintext") {
-                            Task { await runExtraction() }
+                            let task = Task {
+                                defer { launcher.extractTask = nil }
+                                await runExtraction()
+                            }
+                            launcher.extractTask = task
                         }
-                        .disabled(isExtracting || isRunning || isAnyFileIngesting)
+                        .disabled(isExtracting
+                                  || isThisFileExtracting
+                                  // Another file currently holds the extraction
+                                  // slot — this extract would await it, so show
+                                  // it as busy rather than letting the tap hang.
+                                  || (launcher.isExtractionSlotBusy
+                                      && !launcher.extractingFileIDs.contains(file.id)))
                     }
                     if isMarkdownEditable {
                         Button("Edit", systemImage: "pencil") {
@@ -166,18 +192,13 @@ struct IngestedFileDetailView: View {
                 }
             }
 
-            if isExtracting {
+            if isThisFileExtracting {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text(extractionLog.isEmpty ? "Extracting…" : extractionLog)
+                    Text("Extracting…")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-            } else if !extractionLog.isEmpty {
-                Text(extractionLog)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
             }
 
         }
@@ -341,27 +362,61 @@ struct IngestedFileDetailView: View {
     // MARK: Extract button
 
 
+    /// Extraction progress is shown in the transcript sidebar's PDF Conversion
+    /// box — the detail view keeps only a minimal Extracting… spinner in the
+    /// header. All log output writes to `launcher.extractionLog`.
     private func runExtraction() async {
         isExtracting = true
-        extractionLog = ""
-        defer { isExtracting = false }
+        launcher.isExtracting = true
+        launcher.extractionPID = nil
+        launcher.extractionLog = ""
+        defer {
+            isExtracting = false
+            launcher.isExtracting = false
+            launcher.extractionPID = nil
+        }
+        let acquired = await launcher.awaitExtractionSlot()
+        guard acquired, !Task.isCancelled else {
+            if acquired { launcher.releaseExtractionSlot() }
+            launcher.extractionLog = "Extraction cancelled."
+            return
+        }
+        launcher.extractingFileIDs.insert(file.id)
+        defer {
+            launcher.extractingFileIDs.remove(file.id)
+            launcher.releaseExtractionSlot()
+        }
         guard await PdfExtractionService.checkReady() else {
-            extractionLog = "PDF extraction not available — pdf2md is not ready."
+            launcher.extractionLog = "PDF extraction not available — pdf2md is not ready."
             return
         }
         guard let data = store.ingestedSourceBytes(id: file.id) else {
-            extractionLog = "Could not read source bytes."
+            launcher.extractionLog = "Could not read source bytes."
             return
         }
         do {
             let markdown = try await PdfExtractionService.convert(
-                pdfData: data, filename: file.filename)
+                pdfData: data,
+                filename: file.filename,
+                onProgress: { line in
+                    Task { @MainActor in launcher.extractionLog.append(line) }
+                },
+                onStart: { pid in
+                    Task { @MainActor in
+                        launcher.extractionPID = pid
+                        launcher.extractionLog.append("Started pdf2md (pid \(pid)).\n")
+                    }
+                })
             if let version = store.seedPdfMarkdown(fileID: file.id, content: markdown) {
                 headVersion = version
-                extractionLog = "Markdown extracted — \(markdown.count) chars."
+                launcher.extractionLog = "Markdown extracted — \(markdown.count) chars."
             }
         } catch {
-            extractionLog = "Extraction failed: \(error.localizedDescription)"
+            if Task.isCancelled {
+                launcher.extractionLog = "Extraction cancelled."
+            } else {
+                launcher.extractionLog = "Extraction failed: \(error.localizedDescription)"
+            }
         }
     }
 

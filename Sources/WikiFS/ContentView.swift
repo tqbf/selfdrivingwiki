@@ -24,7 +24,8 @@ struct ContentView: View {
         NavigationSplitView {
             SidebarView(store: store, manager: manager, fileProvider: fileProvider,
                         onBatchIngest: batchIngest,
-                        ingestingFileIDs: agentLauncher.ingestingFileIDs)
+                        ingestingFileIDs: agentLauncher.ingestingFileIDs,
+                        extractingFileIDs: agentLauncher.extractingFileIDs)
         } detail: {
             VStack(spacing: 0) {
                 TabBarView(store: store)
@@ -107,18 +108,26 @@ struct ContentView: View {
         }
         // Auto-open the transcript the moment an ingest starts — even during the
         // PDF-conversion phase, before the agent process spawns — so the
-        // conversion box is visible.
+        // conversion box is visible. The extraction phase now lives in
+        // `extractingFileIDs` (distinct from the agent-phase `ingestingFileIDs`),
+        // so observe both: a pure extraction should also surface the transcript.
         .onChange(of: agentLauncher.ingestingFileIDs) { _, newValue in
-            if !newValue.isEmpty {
-                isTranscriptExpanded = true
-            }
+            if !newValue.isEmpty { isTranscriptExpanded = true }
+        }
+        .onChange(of: agentLauncher.extractingFileIDs) { _, newValue in
+            if !newValue.isEmpty { isTranscriptExpanded = true }
         }
     }
 
-    /// The agent is doing work — running, or in the local PDF-conversion phase of
-    /// an ingest (which precedes the agent process). Drives the toolbar glow.
+    /// The agent is doing work — running, or in a local pdf2md extraction / an
+    /// agent-phase ingest (the extraction phase precedes the agent process).
+    /// Drives the toolbar glow. Both phase flags are included so the glow stays
+    /// on during a pure extraction; the cross-file Ingest greyout is NOT driven
+    /// here (that is `isAnyFileIngesting` = `!ingestingFileIDs.isEmpty` only).
     private var agentBusy: Bool {
-        agentLauncher.isRunning || !agentLauncher.ingestingFileIDs.isEmpty
+        agentLauncher.isRunning
+            || !agentLauncher.ingestingFileIDs.isEmpty
+            || !agentLauncher.extractingFileIDs.isEmpty
     }
 
     private var zoteroContainerDirectory: URL {
@@ -133,6 +142,7 @@ struct ContentView: View {
     private var canShowTranscript: Bool {
         agentLauncher.isRunning
             || !agentLauncher.ingestingFileIDs.isEmpty
+            || !agentLauncher.extractingFileIDs.isEmpty
             || !agentLauncher.events.isEmpty
             || agentLauncher.preflightError != nil
             || !agentLauncher.stderr.isEmpty
@@ -249,7 +259,12 @@ struct ContentView: View {
             Button("Toggle Transcript", systemImage: "sidebar.trailing") {
                 toggleTranscript()
             }
-            .disabled(!canShowTranscript)
+            // The panel can ALWAYS be closed when it's open — `canShowTranscript`
+            // only gates OPENING it when closed. Without this, a panel that
+            // auto-expanded during a now-finished extract (no run, no events, no
+            // stderr left) leaves `canShowTranscript == false`, disabling the only
+            // close affordance and stranding the sidebar open.
+            .disabled(!isTranscriptExpanded && !canShowTranscript)
             .foregroundStyle(agentBusy ? Color.orange : Color.primary)
             .symbolEffect(.pulse, isActive: agentBusy)
             .help(isTranscriptExpanded ? "Hide agent transcript" : "Show agent transcript")

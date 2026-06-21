@@ -14,28 +14,36 @@ struct QueryConversationView: View {
     @State private var showsInternals = false
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            content
-            if showsDebugControls {
-                controls
-                    .padding(.top, QueryConversationMetrics.debugTopInset)
-                    .padding(.trailing, QueryConversationMetrics.contentInset)
+        VStack(spacing: 0) {
+            AgentRunBanner(isVisible: store.isAgentRunning)
+            ZStack(alignment: .topTrailing) {
+                content
+                if showsDebugControls {
+                    controls
+                        .padding(.top, QueryConversationMetrics.debugTopInset)
+                        .padding(.trailing, QueryConversationMetrics.contentInset)
+                }
             }
+            .frame(minWidth: PageEditorMetrics.detailMinWidth)
+            .background(Color(nsColor: .textBackgroundColor))
         }
-        .frame(minWidth: PageEditorMetrics.detailMinWidth)
-        .background(Color(nsColor: .textBackgroundColor))
+        .onChange(of: launcher.isRunning) { _, isRunning in
+            // Belt-and-suspenders: clear the internals toggle when a run ends so a
+            // later ingest/lint run doesn't inherit it and strand the view on
+            // `AgentActivityView`. (AC.1)
+            if !isRunning { showsInternals = false }
+        }
     }
 
     private var controls: some View {
+        // Only shown during an active query run (gated by `showsDebugControls`).
         HStack(spacing: 8) {
-            if launcher.isRunning {
-                ProgressView()
-                    .controlSize(.small)
-                Button("Stop", systemImage: "stop.fill") {
-                    launcher.stop()
-                }
-                .tint(.red)
+            ProgressView()
+                .controlSize(.small)
+            Button("Stop", systemImage: "stop.fill") {
+                launcher.stop()
             }
+            .tint(.red)
             Menu {
                 Toggle("Show internals", isOn: $showsInternals)
                 if let status = launcher.exitStatus {
@@ -56,15 +64,15 @@ struct QueryConversationView: View {
     }
 
     private var showsDebugControls: Bool {
-        launcher.isRunning
-            || !launcher.events.isEmpty
-            || launcher.logFileURL != nil
-            || launcher.preflightError != nil
+        AgentLauncher.showsQueryDebugControls(
+            isRunning: launcher.isRunning, runningKind: launcher.runningKind)
     }
 
     @ViewBuilder
     private var content: some View {
-        if showsInternals {
+        // The internals view only shows during an active query run; when idle the
+        // view always returns to the conversation/empty state (AC.1).
+        if showsInternals && launcher.isRunning && launcher.runningKind == .query {
             AgentActivityView(launcher: launcher, showsResultEvents: false, showsInternals: true)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(QueryConversationMetrics.contentInset)

@@ -2,6 +2,7 @@ import Foundation
 import SQLite3
 import Testing
 @testable import WikiFSCore
+@testable import WikiFS
 
 /// Tests for the v8 `file_markdown_versions` store API: version chain,
 /// revert, cascade, source immutability, seeding, and pre-migration fallback.
@@ -280,5 +281,59 @@ struct ProcessedMarkdownTests {
         #expect(try store.processedMarkdownHead(fileID: arbitraryID) == nil)
         #expect(try store.hasProcessedMarkdown(fileID: arbitraryID) == false)
         #expect(try store.processedMarkdownHistory(fileID: arbitraryID).isEmpty)
+    }
+
+    // MARK: - Model-level: PDF extraction reuse during ingest
+
+    /// For a PDF file, `processedMarkdownHead` returns nil before any markdown is
+    /// extracted. `seedPdfMarkdown` creates the first version. This is the
+    /// predicate `AgentOperationRunner.runMultiIngest` uses to decide whether to
+    /// skip pdf2md — if a head exists, the runner reuses existing markdown instead
+    /// of re-extracting.
+    @Test @MainActor func pdfHeadNilBeforeExtraction() throws {
+        let store = try tempStore()
+        let pdf = try store.ingestFile(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
+        let model = WikiStoreModel(store: store)
+        // Before extraction: no head.
+        #expect(model.processedMarkdownHead(for: pdf) == nil)
+    }
+
+    @Test @MainActor func seedPdfMarkdownCreatesHead() throws {
+        let store = try tempStore()
+        let pdf = try store.ingestFile(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
+        let model = WikiStoreModel(store: store)
+
+        // Simulate extraction output: seed the markdown.
+        let seeded = model.seedPdfMarkdown(fileID: pdf.id, content: "# Extracted\ncontent")
+        #expect(seeded != nil)
+        #expect(seeded?.content == "# Extracted\ncontent")
+
+        // Now the head exists — the runner would skip pdf2md.
+        let head = model.processedMarkdownHead(for: pdf)
+        #expect(head?.content == "# Extracted\ncontent")
+    }
+
+    @Test @MainActor func seedPdfMarkdownDoubleSeedReturnsExisting() throws {
+        let store = try tempStore()
+        let pdf = try store.ingestFile(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
+        let model = WikiStoreModel(store: store)
+
+        // First seed.
+        let v1 = model.seedPdfMarkdown(fileID: pdf.id, content: "first extract")
+        #expect(v1 != nil)
+        #expect(v1?.content == "first extract")
+
+        // Second seed: double-seed guard returns the existing head, does NOT
+        // append a duplicate version.
+        usleep(2000)
+        let v2 = model.seedPdfMarkdown(fileID: pdf.id, content: "should be ignored")
+        #expect(v2 != nil)
+        #expect(v2?.id == v1?.id)
+        #expect(v2?.content == "first extract")
+
+        // Head is still the first extract, unchanged.
+        let head = model.processedMarkdownHead(for: pdf)
+        #expect(head?.id == v1?.id)
+        #expect(head?.content == "first extract")
     }
 }

@@ -37,8 +37,11 @@ enum AgentOperationRunner {
         guard !fileIDs.isEmpty else { return }
         DebugLog.ingest("runMultiIngest: begin count=\(fileIDs.count)")
 
-        // Mark all files as "being ingested" for the UI spinner in the rows.
-        launcher.ingestingFileIDs = Set(fileIDs)
+        // NOTE: `ingestingFileIDs` (the agent-phase flag) is NOT set here. It is
+        // assigned at spawn commit inside `AgentLauncher.run` (around `onLock`),
+        // so a pure extraction or a queued ingest never mislabels rows as
+        // "Ingesting…" or greys out a peer's Ingest button. The extraction-phase
+        // flag (`extractingFileIDs`) is set around the pdf2md block below.
         let stateMarkdown = store.currentStateSnapshot().renderStateFile()
 
         var sources: [OperationRequest.StagedSource] = []
@@ -54,8 +57,28 @@ enum AgentOperationRunner {
             var sourceBytes = bytes
             var sourceExt = file.ext
 
-            // PDF → Markdown conversion (same path as single-file ingest).
+            // PDF → Markdown: if markdown was already extracted (via the standalone
+            // "Extract Markdown" button or a prior ingest), reuse it — don't re-run
+            // pdf2md. Only extract when no processed markdown exists yet.
             if file.ext == "pdf" {
+                if let head = store.processedMarkdownHead(for: file) {
+                    // Already extracted — use existing markdown, skip pdf2md entirely.
+                    sourceBytes = head.content.data(using: .utf8) ?? bytes
+                    sourceExt = "md"
+                    DebugLog.extraction("runMultiIngest: reusing existing markdown for \(file.filename) — \(head.content.count) chars")
+                } else {
+                let acquired = await launcher.awaitExtractionSlot()
+                guard acquired, !Task.isCancelled else {
+                    // Cancelled while queued for the extraction slot (or never
+                    // acquired) — own nothing, just bail this ingest.
+                    if acquired { launcher.releaseExtractionSlot() }
+                    return
+                }
+                launcher.extractingFileIDs.insert(file.id)
+                defer {
+                    launcher.extractingFileIDs.remove(file.id)
+                    launcher.releaseExtractionSlot()
+                }
                 launcher.extractionLog = ""
                 if await PdfExtractionService.checkReady() {
                     DebugLog.extraction("checkReady: ready — converting \(file.filename)")
@@ -89,7 +112,12 @@ enum AgentOperationRunner {
                     } catch {
                         if Task.isCancelled {
                             DebugLog.extraction("convert: CANCELLED")
-                            launcher.ingestingFileIDs = []
+                            // The `defer` above removes this file's id and releases
+                            // the slot; also clear the whole set as a belt-and-
+                            // suspenders (the slot serializes, so it holds at most
+                            // this one id) to preserve the old cancel-clears-state
+                            // behavior.
+                            launcher.extractingFileIDs = []
                             return
                         }
                         DebugLog.extraction("convert: FAILED — \(error.localizedDescription)")
@@ -98,7 +126,8 @@ enum AgentOperationRunner {
                 } else {
                     launcher.extractionLog = "PDF extraction not ready — sending raw PDF to agent."
                 }
-            }
+                } // end else (no existing markdown → extract)
+            } // end if file.ext == "pdf"
 
             sources.append(OperationRequest.StagedSource(
                 bytes: sourceBytes,
@@ -107,7 +136,9 @@ enum AgentOperationRunner {
         }
 
         guard !sources.isEmpty else {
-            launcher.ingestingFileIDs = []
+            // No spawn will commit, so the agent-phase flag stays empty. The
+            // extraction-phase flag was already cleared per-iteration by the
+            // `defer` above. Nothing to clear here but keep the abort log.
             DebugLog.ingest("runMultiIngest: ABORT — no valid sources after filtering")
             return
         }
@@ -118,7 +149,19 @@ enum AgentOperationRunner {
             launcher: launcher,
             store: store,
             manager: manager,
-            fileProvider: fileProvider)
+            fileProvider: fileProvider,
+            ingestingFileIDs: Set(fileIDs))
+
+        // If the ingest Task was cancelled while queued for the spawn slot (behind a
+        // running query), `launcher.run` returned without spawning and never set
+        // `ingestingFileIDs` (it's assigned at spawn commit). Clear whichever phase
+        // flags might be set as a belt-and-suspenders so the file row never hangs.
+        // Already-extracted markdown was seeded before this call and is preserved.
+        if Task.isCancelled {
+            launcher.ingestingFileIDs = []
+            launcher.extractingFileIDs = []
+            return
+        }
 
         if !launcher.isRunning && launcher.runningKind != .ingest {
             launcher.ingestingFileIDs = []
@@ -158,7 +201,7 @@ enum AgentOperationRunner {
         await fileProvider.signalChange()
         guard let root = fileProvider.path else { return }
 
-        launcher.startInteractiveQuery(
+        await launcher.startInteractiveQuery(
             firstMessage: trimmed,
             stateMarkdown: store.currentStateSnapshot().renderStateFile(),
             wikiID: wikiID,
@@ -189,7 +232,8 @@ enum AgentOperationRunner {
         launcher: AgentLauncher,
         store: WikiStoreModel,
         manager: WikiManager,
-        fileProvider: FileProviderSpike
+        fileProvider: FileProviderSpike,
+        ingestingFileIDs: Set<PageID> = []
     ) async {
         guard let wikiID = manager.activeWikiID else { return }
 
@@ -211,12 +255,13 @@ enum AgentOperationRunner {
             return
         }
 
-        launcher.run(
+        await launcher.run(
             request: request,
             wikiID: wikiID,
             wikiRoot: root,
             systemPrompt: store.currentSystemPromptBody(),
             wikictlDirectory: HelpersLocation.wikictlDirectory,
+            ingestingFileIDs: ingestingFileIDs,
             onLock: { store.beginAgentRun() },
             onUnlock: { store.endAgentRun() }
         )

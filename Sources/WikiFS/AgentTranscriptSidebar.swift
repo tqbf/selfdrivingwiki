@@ -33,10 +33,12 @@ struct AgentTranscriptSidebar: View {
         }
     }
 
-    /// Show the local pdf2md conversion box only while THIS ingest is converting a
-    /// PDF (or has just finished) — not for Markdown ingests, queries, or lints.
+    /// Show the local pdf2md conversion box only while a pdf2md conversion is in
+    /// flight (or has just finished) — not for Markdown ingests, queries, or
+    /// lints. Driven by the extraction-phase flag `extractingFileIDs` (the
+    /// agent-phase `ingestingFileIDs` no longer covers the extraction phase).
     private var showsConversion: Bool {
-        !launcher.ingestingFileIDs.isEmpty
+        !launcher.extractingFileIDs.isEmpty
             && (launcher.isExtracting || !launcher.extractionLog.isEmpty)
     }
 
@@ -114,6 +116,13 @@ struct AgentTranscriptSidebar: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    Button("Stop Conversion", systemImage: "stop.fill") {
+                        launcher.stopExtraction()
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.red)
+                    .help("Stop PDF conversion")
                 }
             }
             ScrollViewReader { proxy in
@@ -145,6 +154,16 @@ struct AgentTranscriptSidebar: View {
                     .font(.subheadline)
                     .fontWeight(.medium)
                 Spacer()
+                if agentBusy {
+                    ProgressView().controlSize(.small)
+                    Button("Stop Agent", systemImage: "stop.fill") {
+                        launcher.stopAgent()
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.red)
+                    .help("Stop the agent run")
+                }
                 Toggle("Show internals", isOn: $showsInternals)
                     .toggleStyle(.checkbox)
                     .font(.caption)
@@ -152,6 +171,10 @@ struct AgentTranscriptSidebar: View {
             }
             AgentActivityView(launcher: launcher, showsInternals: showsInternals)
         }
+    }
+
+    private var agentBusy: Bool {
+        launcher.isRunning || !launcher.ingestingFileIDs.isEmpty
     }
 
     private static let conversionBottom = "pdf-conversion-bottom"
@@ -164,28 +187,10 @@ struct AgentTranscriptSidebar: View {
                 Label("Transcript", systemImage: "text.bubble")
                     .font(.headline)
                 Spacer()
-                if isBusy {
-                    ProgressView()
-                        .controlSize(.small)
-                    Button("Stop Run", systemImage: "stop.fill") {
-                        launcher.stop()
-                    }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.red)
-                    .help("Stop the agent or cancel the PDF conversion")
-                }
             }
         }
         .padding(.horizontal, AgentTranscriptMetrics.padding)
         .padding(.vertical, 10)
-    }
-
-    /// Busy = the agent is running OR an ingest is mid-flight (e.g. the PDF
-    /// conversion phase, before the agent process spawns). The Stop button stops
-    /// whichever is active.
-    private var isBusy: Bool {
-        launcher.isRunning || !launcher.ingestingFileIDs.isEmpty
     }
 }
 

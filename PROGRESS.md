@@ -2,6 +2,109 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-20 — Standalone Extract Markdown fixes + Stop-button overhaul
+
+The standalone "Extract Markdown" button in `IngestedFileDetailView` had two bugs
+from its divergence with the ingest-path extraction in `AgentOperationRunner`:
+
+1. **Sidebar PDF Conversion box never appeared.** `runExtraction()` used its own local
+   `@State` variables (`isExtracting`, `extractionLog`), but
+   `AgentTranscriptSidebar.showsConversion` checked `launcher.isExtracting` and
+   `launcher.extractionLog` — which were never set by the standalone path. The sidebar
+   auto-expanded (because `extractingFileIDs` was inserted), but showed only an empty
+   Agent Activity section.
+2. **Stop button was a no-op.** The extraction `Task` was created inline
+   (`Task { await runExtraction() }`) and never stored. `AgentLauncher.stop()` cancelled
+   only `ingestTask` and `process`, both `nil` during standalone extraction.
+
+Additional improvements found during the fix pass:
+
+4. **Ingest button stayed active during extraction.** The "Ingest into Wiki" button was
+   not disabled while the same file was mid-extraction, risking a double operation.
+5. **Ingest-path always re-extracted PDFs.** `runMultiIngest` ran pdf2md for every PDF
+   even when markdown had already been extracted via the standalone button — wasting a
+   heavy conversion and taking the extraction slot unnecessarily.
+6. **Single Stop button conflated two independent operations.** The sidebar had one
+   shared Stop button that called `launcher.stop()` (kill everything). Two distinct
+   buttons now match the two independent locks: Stop Conversion (extraction slot only)
+   and Stop Agent (spawn slot only).
+
+**Changes:**
+
+- **`IngestedFileDetailView.runExtraction()`** now sets `launcher.isExtracting`,
+  `launcher.extractionPID`, and `launcher.extractionLog` (with `onProgress`/`onStart`
+  callbacks to `PdfExtractionService.convert`) so the sidebar's PDF Conversion box
+  renders with live progress. The local `@State extractionLog` is removed — all log
+  output goes to `launcher.extractionLog`; the detail view header keeps only a minimal
+  "Extracting…" spinner driven by `isThisFileExtracting`.
+- **`extractTask`** added to `AgentLauncher` (mirrors `ingestTask` for the standalone
+  path). Stored/cleared by the Extract button action; cancelled by `stopExtraction()`.
+  `PdfExtractionService.run()`'s `onCancel` handler terminates the pdf2md subprocess.
+- **Ingest button disabled during extraction** — `|| isThisFileExtracting` added to the
+  `.disabled()` guard in `IngestedFileDetailView`.
+- **`AgentOperationRunner.runMultiIngest`** now checks `store.processedMarkdownHead(for:
+  file)` before running pdf2md. If markdown was already extracted (via the standalone
+  button or a prior ingest), it reuses the existing content and skips extraction
+  entirely — no extraction slot taken, no subprocess spawned.
+- **`AgentLauncher` split into three stop methods:**
+  - `stopExtraction()` — cancels `extractTask` (or `ingestTask` during ingest-path
+    extraction phase), clears `isExtracting` / `extractionPID` / `extractingFileIDs` /
+    `extractionLog`. Never touches the agent process.
+  - `stopAgent()` — cancels `ingestTask`, terminates the claude process, calls
+    `finish()`. Never touches extraction flags.
+  - `stop()` — convenience that calls both (preserved for surfaces that still want a
+    kill-everything affordance).
+- **`AgentTranscriptSidebar`** header simplified to just the "Transcript" label. The
+  PDF Conversion box now has its own red Stop button (visible when
+  `launcher.isExtracting`). The Agent Activity section has its own red Stop button
+  (visible when `launcher.isRunning` or `!launcher.ingestingFileIDs.isEmpty`).
+
+**Tests.** `swift test` — 596 tests, 50 suites, 0 failures (+10 from the prior
+baseline of 586):
+- `AgentExtractionLockTests` (+7: `stopCancelsExtractTask`,
+  `stopWithNoExtractTaskIsNoOp`, `isExtractingFlagExposedByLauncher`,
+  `stopExtractionCancelsExtractTask`, `stopExtractionClearsExtractionFlags`,
+  `stopExtractionWithNoTaskIsSafe`, `stopAgentDoesNotClearExtractionFlags`)
+- `ProcessedMarkdownTests` (+3: `pdfHeadNilBeforeExtraction`,
+  `seedPdfMarkdownCreatesHead`, `seedPdfMarkdownDoubleSeedReturnsExisting`)
+
+## 2026-06-20 — Serialized claude spawn slot + separate extraction lock
+
+The shared `AgentLauncher` silently dropped a second run (`guard !isRunning`), and
+one `ingestingFileIDs` set fused the pdf2md extraction phase with the agent-
+ingestion phase — so a pure extraction mislabeled rows "Ingesting…" and greyed out
+other files' Ingest buttons even though the slot was free. Two independent locks now
+replace the single `isRunning` guard; the phase flags are split. See
+`plans/extraction-vs-ingestion-lock.md` (Option B).
+
+- **Spawn slot (`AgentLauncher`):** all `claude -p` spawns (ingest/query/lint)
+  serialize through a FIFO, cancellation-aware slot (`awaitSpawnSlot` /
+  `releaseSpawnSlot`); the silent-drop guard is gone, so a queued run waits and
+  runs after the current one. `run`/`startInteractiveQuery` are `async`; preflight
+  and staging run after the slot is acquired so every early-return releases it.
+- **Separate extraction lock:** pdf2md conversions serialize on a *distinct*
+  `awaitExtractionSlot`/`releaseExtractionSlot` (same shape, independent state) that
+  never touches the spawn slot or the edit lock — so a query runs during an
+  extraction and editing stays unlocked while a PDF converts. Both the ingest-path
+  conversion and the standalone `Extract Markdown` action take it.
+- **Phase-flag split:** `ingestingFileIDs` (set only at agent-spawn commit via a new
+  `run` param, cleared in `finish()`) is now distinct from `extractingFileIDs`
+  (pdf2md phase). `runMultiIngest` no longer pre-sets `ingestingFileIDs`. Rows show
+  "Extracting…" vs "Ingesting…" (pure `rowStatus` predicate); the cross-file Ingest
+  greyout (`isAnyFileIngesting = !ingestingFileIDs.isEmpty`) is now extraction-free.
+- **Query page:** mounts the orange `AgentRunBanner` and scopes its debug cluster to
+  active query runs only (`showsQueryDebugControls`); resets to the conversation
+  when idle. The toolbar glow / transcript auto-open now key off `extractingFileIDs`
+  so a pure extraction still surfaces the transcript.
+
+**Cancellation.** A file is marked ingested only by the agent's `wikictl log append
+--kind ingest`; an ingest interrupted before the agent spawns marks nothing
+(`hasBeenIngested` stays `false`), and extracted markdown seeded before the agent
+run survives a later cancel.
+
+**Verified.** `swift build` clean (no warnings). `swift test` — 586 tests, 50
+suites, 0 failures (+10 `AgentExtractionLockTests`, +6 `AgentSpawnSlotTests`).
+
 ## 2026-06-20 — Grey out Ingest/Extract buttons during any file ingest
 
 The "Ingest into Wiki" and "Extract Markdown" buttons in

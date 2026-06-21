@@ -49,6 +49,7 @@ load-bearing for the app to function.
 | [`plans/pdf-extraction.md`](plans/pdf-extraction.md) | Add docling + granite-docling pipeline. A `pdf2md` CLI converts PDFs to markdown at ingest time; extracted markdown stored as a sibling `ingested_files` row, projected on the mount. Agent prefers `.md` siblings, falls back to `Read` on the original. |
 | [`plans/semantic-search.md`](plans/semantic-search.md) | Semantic (meaning-based) search over pages using sqlite-vec + Apple NLEmbedding. Embedding at save time, cosine-similarity ranking inside SQLite, search bar in the sidebar, `wikictl search` for the agent. v7 migration. |
 | [`plans/markdown-folder-import.md`](plans/markdown-folder-import.md) | Import an entire folder of Markdown files (Obsidian vault, LogSeq graph, or any `.md` directory) as source material. Recursive walk, .md filter, filename dedup; lands files in `ingested_files` for the agent to curate via Ingest. |
+| [`plans/extraction-vs-ingestion-lock.md`](plans/extraction-vs-ingestion-lock.md) | **Current direction:** treat markdown *extraction* (pdf2md) and agent *ingestion* (the `claude -p` run) as two phases. Extraction must never lock queries, edits, or another file's ingest. Split the overloaded `ingestingFileIDs` into `extractingFileIDs` (pdf2md phase) + `ingestingFileIDs` (agent-spawn phase), plus an optional separate extraction lock to serialize pdf2md without touching the spawn slot. |
 | [`plans/wikictl-file-reads.md`](plans/wikictl-file-reads.md) | A `wikictl file` command family (`list` / `cat` / `export`) so the agent reads raw ingested files from SQLite instead of the File Provider mount during Query. First concrete step of the provider-decouple effort; rewrites the Query prompt off `$WIKI_ROOT/files/...`. |
 | [`plans/tab-context-menu-rebuild.md`](plans/tab-context-menu-rebuild.md) | Multi-tab editor space — design of record. `activeTabID: UUID?` source of truth (no index arithmetic), one-intent-per-method tab ops, tab reuse, native SwiftUI `.contextMenu` (Close / Close Others / Close Tabs After / Close All), opacity-fade close button, responsive shrink-to-fit strip with overflow menu. 43 `EditorTabTests` + 7 `TabBarLayoutTests`. |
 | [`SWIFTUI-RULES.md`](SWIFTUI-RULES.md) | Hard-won SwiftUI/macOS rules. Apply when writing or reviewing any view. |
@@ -102,6 +103,16 @@ handoff). 341 tests green; clean signed bundle (app + appex + `wikictl`).**
   `pdf2md` as a subprocess with continuous pipe draining; `PdfExtractionView` shows
   readiness, download progress, and live conversion log during ingest. 22 Swift tests
   + 67 Python tests. (PR #11.)
+- **Serialized claude spawn slot** — the single shared `AgentLauncher` now serializes
+  all `claude -p` spawns (ingest / query / lint) through a FIFO, cancellation-aware
+  spawn slot (`awaitSpawnSlot` / `releaseSpawnSlot`). Two claude runs never overlap;
+  a `pdf2md` extraction may overlap a claude query run (it does NOT take the slot).
+  The old silent-drop `guard !isRunning` is gone — a query started during an ingest's
+  extraction now runs, and the ingest agent waits for the slot and runs afterward. The
+  edit lock (`store.isAgentRunning`) is unchanged in meaning: locked only while a
+  claude process runs, unlocked during extraction. The Query page mounts the orange
+  `AgentRunBanner` and scopes its debug cluster to active query runs only. 6 new
+  `AgentSpawnSlotTests`.
 
 **Phase summary (newest first; see `PROGRESS.md` for each gate's evidence):**
 - **Phase D — the schema** ✅ real maintainer `CLAUDE.md` schema (layout,

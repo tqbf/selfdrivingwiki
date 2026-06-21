@@ -6,7 +6,11 @@ import WikiFSCore
 struct FilesSectionView: View {
     @Bindable var store: WikiStoreModel
     let fileProvider: FileProviderSpike
+    /// Files whose agent run is in flight (agent phase) — "Ingesting…" spinner.
     var ingestingFileIDs: Set<PageID> = []
+    /// Files whose pdf2md conversion is in flight (extraction phase) —
+    /// "Extracting…" spinner. Independent of `ingestingFileIDs`.
+    var extractingFileIDs: Set<PageID> = []
     var onBatchIngest: (([PageID]) -> Void)? = nil
 
     @State private var fileFilter: FileFilter = .all
@@ -75,6 +79,7 @@ struct FilesSectionView: View {
             file: file,
             hasBeenIngested: store.hasIngestedFile(file),
             isIngesting: ingestingFileIDs.contains(file.id),
+            isExtracting: extractingFileIDs.contains(file.id),
             isSelected: ids.contains(file.id),
             onOpen: { Task { await fileProvider.openIngestedFile(id: file.id) } },
             onRemove: { store.deleteIngestedFile(file.id) },
