@@ -147,9 +147,9 @@ struct SystemPromptTests {
     @Test func changeTokenAdvancesOnSystemPromptEdit() throws {
         let store = try tempStore()
         // No pages, no sources: only the system-prompt version moves.
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1")
+        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0")
         try store.updateSystemPrompt(body: "edited")
-        #expect(try store.changeToken() == "0:0:0:0:2:0:1")
+        #expect(try store.changeToken() == "0:0:0:0:2:0:1:0")
     }
 
     // MARK: - UPSERT recreates a missing singleton row (defensive)

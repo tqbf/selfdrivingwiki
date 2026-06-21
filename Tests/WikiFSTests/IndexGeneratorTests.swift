@@ -114,9 +114,11 @@ struct IndexGeneratorTests {
     @Test func sourcesJSONLEachLineValidWithCorrectCount() throws {
         let files = [
             IndexGenerators.SourceIndexRow(id: "F1", filename: "Report.pdf", ext: "pdf",
-                                    mime: "application/pdf", byteSize: 1024),
+                                    mime: "application/pdf", byteSize: 1024,
+                                    hasMarkdown: false),
             IndexGenerators.SourceIndexRow(id: "F2", filename: "notes", ext: "",
-                                    mime: nil, byteSize: 0),
+                                    mime: nil, byteSize: 0,
+                                    hasMarkdown: false),
         ]
         let data = IndexGenerators.sourcesJSONL(sources: files)
         let text = String(decoding: data, as: UTF8.self)
@@ -131,19 +133,73 @@ struct IndexGeneratorTests {
         #expect(first?["path"] as? String == "sources/by-id/F1.pdf")
         #expect(first?["size"] as? Int == 1024)
         #expect(first?["mime"] as? String == "application/pdf")
+        #expect(first?["has_markdown"] as? Bool == false)
 
         // Extension-less + nil mime: path omits the dot; mime is JSON null.
         let second = try JSONSerialization.jsonObject(with: Data(lines[1].utf8)) as? [String: Any]
         #expect(second?["path"] as? String == "sources/by-id/F2")
         #expect(second?["size"] as? Int == 0)
         #expect(second?["mime"] is NSNull)
+        #expect(second?["has_markdown"] as? Bool == false)
+    }
+
+    @Test func sourcesJSONLIncludesHasMarkdown() throws {
+        let files = [
+            IndexGenerators.SourceIndexRow(id: "F1", filename: "a.pdf", ext: "pdf",
+                                    mime: "application/pdf", byteSize: 100,
+                                    hasMarkdown: true),
+            IndexGenerators.SourceIndexRow(id: "F2", filename: "b.txt", ext: "txt",
+                                    mime: "text/plain", byteSize: 50,
+                                    hasMarkdown: false),
+        ]
+        let data = IndexGenerators.sourcesJSONL(sources: files)
+        let lines = String(decoding: data, as: UTF8.self).split(separator: "\n")
+
+        let first = try JSONSerialization.jsonObject(with: Data(lines[0].utf8)) as? [String: Any]
+        #expect(first?["has_markdown"] as? Bool == true)
+
+        let second = try JSONSerialization.jsonObject(with: Data(lines[1].utf8)) as? [String: Any]
+        #expect(second?["has_markdown"] as? Bool == false)
     }
 
     @Test func sourcesJSONLIsByteStable() {
         let files = [IndexGenerators.SourceIndexRow(id: "F1", filename: "x.txt", ext: "txt",
-                                             mime: "text/plain", byteSize: 5)]
+                                             mime: "text/plain", byteSize: 5,
+                                             hasMarkdown: false)]
         #expect(IndexGenerators.sourcesJSONL(sources: files)
                 == IndexGenerators.sourcesJSONL(sources: files))
+    }
+
+    // MARK: - sources.jsonl has_markdown with/without chain (integration with the store)
+
+    @Test func sourcesJSONLHasMarkdownTrueWhenChainExists() throws {
+        let store = try tempStore()
+        // Add a source and append a processed-markdown version to create a chain.
+        let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
+        try store.appendProcessedMarkdown(
+            sourceID: ingested.id, content: "v1", origin: "extraction", note: nil)
+        let sources = try store.listAllSourcesOrderedByID()
+        #expect(sources.count == 1)
+        #expect(sources[0].hasMarkdown == true)
+
+        let data = IndexGenerators.sourcesJSONL(sources: sources)
+        let lines = String(decoding: data, as: UTF8.self).split(separator: "\n")
+        let obj = try JSONSerialization.jsonObject(with: Data(lines[0].utf8)) as? [String: Any]
+        #expect(obj?["has_markdown"] as? Bool == true)
+    }
+
+    @Test func sourcesJSONLHasMarkdownFalseWhenNoChain() throws {
+        let store = try tempStore()
+        // Add a source without any processed-markdown version.
+        let ingested = try store.addSource(filename: "plain.pdf", data: Data("%PDF".utf8))
+        let sources = try store.listAllSourcesOrderedByID()
+        #expect(sources.count == 1)
+        #expect(sources[0].hasMarkdown == false)
+
+        let data = IndexGenerators.sourcesJSONL(sources: sources)
+        let lines = String(decoding: data, as: UTF8.self).split(separator: "\n")
+        let obj = try JSONSerialization.jsonObject(with: Data(lines[0].utf8)) as? [String: Any]
+        #expect(obj?["has_markdown"] as? Bool == false)
     }
 
     // MARK: - Determinism
@@ -156,6 +212,11 @@ struct IndexGeneratorTests {
         #expect(IndexGenerators.pagesJSONL(pages: pages) == IndexGenerators.pagesJSONL(pages: pages))
         let links = [IndexGenerators.LinkRow(from: "A", to: "B", linkText: "x")]
         #expect(IndexGenerators.linksJSONL(links: links) == IndexGenerators.linksJSONL(links: links))
+        let sources = [IndexGenerators.SourceIndexRow(id: "S1", filename: "r.pdf", ext: "pdf",
+                                               mime: "application/pdf", byteSize: 100,
+                                               hasMarkdown: true)]
+        #expect(IndexGenerators.sourcesJSONL(sources: sources)
+                == IndexGenerators.sourcesJSONL(sources: sources))
     }
 
     // MARK: - Counts match a seeded DB (integration with the store)

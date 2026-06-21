@@ -235,4 +235,48 @@ struct WikiStoreModelMarkdownImportTests {
         let result = await model.importFromMarkdownFolder(directory: dir)
         #expect(result.imported == 2)
     }
+
+    // MARK: - Self-seed (MIME-keyed)
+
+    /// processedMarkdownHead(for:) on a markdown-native source self-seeds v1 from
+    /// the verbatim bytes (origin "source"). Every source has a chain: PDFs are
+    /// seeded from extraction, markdown-native sources self-seed. The seed means
+    /// headVersion is never nil — the original content is always available as v1.
+    @Test func processedMarkdownHeadOnMdSourceSelfSeedsV1() throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+
+        model.addSource(filename: "note.md", data: Data("# Hello".utf8))
+        #expect(model.sources.count == 1)
+        let source = model.sources[0]
+
+        // Self-seeds: the verbatim bytes become v1 (origin "source").
+        let head = model.processedMarkdownHead(for: source)
+        #expect(head != nil)
+        #expect(head?.content == "# Hello")
+        #expect(head?.origin == "source")
+
+        // Chain row was created.
+        #expect(try store.hasProcessedMarkdown(sourceID: source.id))
+        #expect(try store.processedMarkdownHistory(sourceID: source.id).count == 1)
+
+        // Second call returns the same head — no double-seed.
+        let head2 = model.processedMarkdownHead(for: source)
+        #expect(head2?.id == head?.id)
+        #expect(try store.processedMarkdownHistory(sourceID: source.id).count == 1)
+    }
+
+    /// Binary sources (non-text MIME) do NOT self-seed — only markdown-native
+    /// sources get a chain from their verbatim bytes.
+    @Test func processedMarkdownHeadOnBinarySourceReturnsNil() throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+
+        model.addSource(filename: "data.bin", data: Data([0x00, 0x01, 0x02]))
+        #expect(model.sources.count == 1)
+        let source = model.sources[0]
+
+        #expect(model.processedMarkdownHead(for: source) == nil)
+        #expect(try !store.hasProcessedMarkdown(sourceID: source.id))
+    }
 }

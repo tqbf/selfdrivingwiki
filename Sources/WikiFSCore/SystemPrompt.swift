@@ -105,6 +105,9 @@ public struct SystemPrompt: Equatable, Sendable {
     Raw files under `sources/` may be PDFs or images, not just text. Use the `Read`
     tool on them directly — it handles text, images, and PDFs. For a PDF, read the
     text first; if it references figures you need, view those images separately.
+    `sources.jsonl` includes a `has_markdown` flag — sources with processed markdown
+    have a `<id>.md` sibling in `sources/by-id/` holding the latest conversion or
+    edit; prefer it over the raw PDF when reading.
 
     ## Workflows
 

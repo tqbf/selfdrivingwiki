@@ -283,6 +283,48 @@ struct ProcessedMarkdownTests {
         #expect(try store.processedMarkdownHistory(sourceID: arbitraryID).isEmpty)
     }
 
+    // MARK: - Bulk head lookup (processedMarkdownHeadsBySource)
+
+    @Test func processedMarkdownHeadsBySourceReturnsHeadsBySourceID() throws {
+        let store = try tempStore()
+        let fileA = try seedSource(in: store, filename: "alpha.txt")
+        let fileB = try seedSource(in: store, filename: "beta.txt")
+        let fileC = try seedSource(in: store, filename: "gamma.txt") // no head
+        let headA = try store.appendProcessedMarkdown(
+            sourceID: fileA.id, content: "alpha head", origin: "extraction", note: nil)
+        usleep(2000)
+        let headB = try store.appendProcessedMarkdown(
+            sourceID: fileB.id, content: "beta head", origin: "extraction", note: nil)
+        let heads = try store.processedMarkdownHeadsBySource()
+        #expect(heads.count == 2) // fileC has no head
+        #expect(heads[fileA.id.rawValue]?.content == "alpha head")
+        #expect(heads[fileB.id.rawValue]?.content == "beta head")
+        #expect(heads[fileC.id.rawValue] == nil)
+        #expect(heads[fileA.id.rawValue]?.id == headA.id)
+        #expect(heads[fileB.id.rawValue]?.id == headB.id)
+    }
+
+    @Test func processedMarkdownHeadsBySourceReturnsLatestPerSource() throws {
+        let store = try tempStore()
+        let file = try seedSource(in: store)
+        _ = try store.appendProcessedMarkdown(
+            sourceID: file.id, content: "v1", origin: "extraction", note: nil)
+        usleep(2000)
+        let v2 = try store.appendProcessedMarkdown(
+            sourceID: file.id, content: "v2", origin: "user", note: nil)
+        let heads = try store.processedMarkdownHeadsBySource()
+        #expect(heads.count == 1)
+        #expect(heads[file.id.rawValue]?.content == "v2")
+        #expect(heads[file.id.rawValue]?.id == v2.id)
+    }
+
+    @Test func processedMarkdownHeadsBySourceReturnsEmptyForPreV8DB() throws {
+        let url = try tempV7DatabaseURL()
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let heads = try store.processedMarkdownHeadsBySource()
+        #expect(heads.isEmpty)
+    }
+
     // MARK: - Model-level: PDF extraction reuse during ingest
 
     /// For a PDF file, `processedMarkdownHead` returns nil before any markdown is

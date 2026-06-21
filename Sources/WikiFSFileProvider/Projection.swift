@@ -75,6 +75,8 @@ struct Projection {
         // it in the default app), so the two sides build the identical identifier.
         static let sourceByIDPrefix = WikiFSContainerID.sourceByIDPrefix
         static let sourceByNamePrefix = "source-by-name:"
+        static let sourceMarkdownByIDPrefix = "source-markdown-by-id:"
+        static let sourceMarkdownByNamePrefix = "source-markdown-by-name:"
 
         static func pageByID(_ ulid: String) -> NSFileProviderItemIdentifier {
             NSFileProviderItemIdentifier(byIDPrefix + ulid)
@@ -90,6 +92,14 @@ struct Projection {
 
         static func sourceByName(_ ulid: String) -> NSFileProviderItemIdentifier {
             NSFileProviderItemIdentifier(sourceByNamePrefix + ulid)
+        }
+
+        static func sourceMarkdownByID(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(sourceMarkdownByIDPrefix + ulid)
+        }
+
+        static func sourceMarkdownByName(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(sourceMarkdownByNamePrefix + ulid)
         }
 
         /// Extract the embedded ULID from a `page-by-id:` / `page-by-title:`
@@ -108,6 +118,16 @@ struct Projection {
             let raw = id.rawValue
             if raw.hasPrefix(sourceByIDPrefix) { return String(raw.dropFirst(sourceByIDPrefix.count)) }
             if raw.hasPrefix(sourceByNamePrefix) { return String(raw.dropFirst(sourceByNamePrefix.count)) }
+            return nil
+        }
+
+        /// Extract the embedded ULID from a `source-markdown-by-id:` /
+        /// `source-markdown-by-name:` identifier, or nil if it isn't a processed
+        /// markdown head identifier.
+        static func sourceMarkdownULID(from id: NSFileProviderItemIdentifier) -> String? {
+            let raw = id.rawValue
+            if raw.hasPrefix(sourceMarkdownByIDPrefix) { return String(raw.dropFirst(sourceMarkdownByIDPrefix.count)) }
+            if raw.hasPrefix(sourceMarkdownByNamePrefix) { return String(raw.dropFirst(sourceMarkdownByNamePrefix.count)) }
             return nil
         }
     }
@@ -416,6 +436,17 @@ struct Projection {
         default:
             break
         }
+        // Processed markdown head (source-markdown-by-id: / source-markdown-by-name:).
+        // Must come before the verbatim-source check below so the two identifier
+        // families don't collide.
+        if let ulid = Identity.sourceMarkdownULID(from: id) {
+            guard let store = openReadStore(),
+                  let file = try? store.getSource(id: PageID(rawValue: ulid)),
+                  let head = try? store.processedMarkdownHead(sourceID: PageID(rawValue: ulid)) else {
+                return nil
+            }
+            return Self.sourceMarkdownNode(for: id, source: file, head: head)
+        }
         // Ingested-file leaf (file-by-id: / file-by-name:). Resolve the embedded
         // ULID and look up the summary; resilient to a missing table (the read
         // throws → nil → the node simply isn't found, never an enumeration error).
@@ -432,6 +463,32 @@ struct Projection {
             return nil
         }
         return Self.pageFileNode(for: id, page: page)
+    }
+
+    /// Build a file node for a processed markdown head (the `.md` sibling of a
+    /// verbatim source, projected under both `by-id` and `by-name` views).
+    /// Always has `ingestedExt:"md"`; versioned by the head's ULID so any
+    /// edit/revert bumps the item version and invalidates the daemon's cache.
+    static func sourceMarkdownNode(
+        for id: NSFileProviderItemIdentifier,
+        source: SourceSummary,
+        head: SourceMarkdownVersion
+    ) -> ProjectedNode {
+        let raw = id.rawValue
+        let isByName = raw.hasPrefix(Identity.sourceMarkdownByNamePrefix)
+        let name = isByName
+            ? FilenameEscaping.byNameSourceFilename(
+                filename: source.filename, ext: "md", sourceID: source.id.rawValue)
+            : FilenameEscaping.byIDSourceFilename(sourceID: source.id.rawValue, ext: "md")
+        let parent = isByName ? Identity.sourcesByName : Identity.sourcesByID
+        return .file(
+            id: id, parent: parent, name: name, size: head.content.utf8.count,
+            version: Data(head.id.rawValue.utf8),
+            metadataVersion: Data(head.id.rawValue.utf8),
+            created: head.createdAt, modified: head.createdAt,
+            ingestedExt: "md",
+            mimeType: "text/markdown"
+        )
     }
 
     /// Build a file node for an ingested-file row, under whichever view `id`
@@ -557,16 +614,29 @@ struct Projection {
     /// All ingested-file rows projected as file nodes under the given view,
     /// ordered by id (ULID == ingest order). Resilient to the table not existing
     /// yet (pre-migration) → empty, so enumeration never errors.
+    /// When a source has a processed markdown head (from `source_markdown_versions`),
+    /// emits BOTH the verbatim source node AND a `.md` sibling — the processed
+    /// markdown version — under both `by-id` and `by-name` views. Single bulk
+    /// head query avoids N+1 across the source list.
     private func sourceNodes(byName: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
               let files = try? store.listAllSourcesOrderedByID() else { return [] }
-        return files.map { row in
+        let heads = (try? store.processedMarkdownHeadsBySource()) ?? [:]
+        return files.flatMap { row in
             let id = byName ? Identity.sourceByName(row.id) : Identity.sourceByID(row.id)
             let summary = SourceSummary(
                 id: PageID(rawValue: row.id), filename: row.filename, ext: row.ext,
                 mimeType: row.mime, byteSize: row.byteSize,
                 createdAt: row.createdAt, updatedAt: row.updatedAt, version: row.version)
-            return Self.sourceNode(for: id, file: summary)
+            let verbatimNode = Self.sourceNode(for: id, file: summary)
+            // Sibling eligibility: has a chain AND is NOT markdown-native.
+            // Markdown-native sources don't get a sibling — the verbatim .md is the content.
+            guard let head = heads[row.id],
+                  let mime = row.mime, !mime.hasPrefix("text/") else { return [verbatimNode] }
+            let markdownID = byName
+                ? Identity.sourceMarkdownByName(row.id)
+                : Identity.sourceMarkdownByID(row.id)
+            return [verbatimNode, Self.sourceMarkdownNode(for: markdownID, source: summary, head: head)]
         }
     }
 
@@ -597,6 +667,16 @@ struct Projection {
         if id == Identity.manifest || id == Identity.indexPagesJSONL
             || id == Identity.indexLinksJSONL || id == Identity.indexSourcesJSONL {
             return indexData(for: id)
+        }
+        // Processed markdown head: serve the head content from
+        // `source_markdown_versions`. Must come before the verbatim-source check
+        // so the two identifier families don't collide.
+        if let sourceULID = Identity.sourceMarkdownULID(from: id) {
+            guard let store = openReadStore(),
+                  let head = try? store.processedMarkdownHead(sourceID: PageID(rawValue: sourceULID)) else {
+                return nil
+            }
+            return Data(head.content.utf8)
         }
         // Ingested sources: serve the verbatim bytes from SQLite (raw, no
         // conversion). Resilient to a missing row/table → nil (noSuchItem).

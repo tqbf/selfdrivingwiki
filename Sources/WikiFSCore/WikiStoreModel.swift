@@ -860,21 +860,20 @@ public final class WikiStoreModel {
 
     // MARK: - Processed markdown versions (v8)
 
-    /// The latest (HEAD) processed markdown version for a file. For native
-    /// md/txt files without an existing version chain, lazily seeds v1 from
-    /// the source bytes (double-seed guard prevents duplicates).
+    /// The latest (HEAD) processed markdown version for a file. Every source has a
+    /// chain: PDFs are seeded from extraction, markdown-native sources self-seed
+    /// v1 from their verbatim bytes (origin `"source"`). After seeding, new
+    /// versions are appended by edits (`"user"`) or re-extraction (`"extraction"`).
     public func processedMarkdownHead(for file: SourceSummary) -> SourceMarkdownVersion? {
         if let head = try? store.processedMarkdownHead(sourceID: file.id) {
             return head
         }
-        // Lazy seed: native md/txt → decode source bytes as v1.
-        guard file.ext == "md" || file.ext == "markdown" || file.ext == "txt" else {
-            return nil
-        }
+        // Seed v1 from verbatim bytes for markdown-native sources (MIME-keyed).
+        guard let mime = file.mimeType, mime.hasPrefix("text/") else { return nil }
         guard let bytes = try? store.sourceContent(id: file.id),
               let text = String(data: bytes, encoding: .utf8) else { return nil }
         return try? store.appendProcessedMarkdown(
-            sourceID: file.id, content: text, origin: "extraction", note: nil)
+            sourceID: file.id, content: text, origin: "source", note: nil)
     }
 
     /// True when at least one processed-markdown version exists for this source.

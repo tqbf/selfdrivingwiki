@@ -50,6 +50,11 @@ public enum ArgumentParser {
         case search(query: String, limit: Int)
         /// Source commands: list, read, export sources from SQLite.
         case source(SourceCommand.Action)
+        /// Edit processed markdown for a source. When `isFile` is true,
+        /// `contentOrFile` is a file path (or `-` for stdin); when false it is
+        /// the literal markdown content. `main` resolves the file in the former
+        /// case before appending.
+        case sourceEditMarkdown(SourceCommand.Selector, contentOrFile: String, isFile: Bool)
     }
 
     public enum Failure: Error, Equatable, CustomStringConvertible {
@@ -83,6 +88,8 @@ public enum ArgumentParser {
       source cat  (--id X | --name N)         write raw source bytes to stdout
       source export (--id X | --name N) [--out <path>]
                                               materialize a source to disk, print its path
+      source edit-markdown (--id X | --name N) (--content <md> | --file <path|->)
+                                              replace the processed-markdown HEAD
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -211,8 +218,29 @@ public enum ArgumentParser {
             let selector = try options.requireSourceSelector()
             return .source(.export(selector, out: options.value("--out")))
 
+        case "edit-markdown":
+            return try parseSourceEditMarkdown(options)
+
         default:
             throw Failure.usage("source: unknown subcommand \(sub.debugDescription)")
+        }
+    }
+
+    private static func parseSourceEditMarkdown(_ options: Options) throws -> Command {
+        let selector = try options.requireSourceSelector()
+
+        let contentValue = options.value("--content")
+        let fileValue = options.value("--file")
+
+        switch (contentValue, fileValue) {
+        case (.some, .some):
+            throw Failure.usage("source edit-markdown: pass exactly one of --content / --file, not both")
+        case (.none, .none):
+            throw Failure.usage("source edit-markdown: pass --content <text> or --file <path>")
+        case (let content?, nil):
+            return .sourceEditMarkdown(selector, contentOrFile: content, isFile: false)
+        case (nil, let file?):
+            return .sourceEditMarkdown(selector, contentOrFile: file, isFile: true)
         }
     }
 

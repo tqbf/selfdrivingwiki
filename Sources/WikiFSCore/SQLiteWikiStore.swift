@@ -564,14 +564,15 @@ public final class SQLiteWikiStore: WikiStore {
     public func changeToken() throws -> String {
         let pages = try statement("SELECT COUNT(*), COALESCE(SUM(version), 0) FROM pages;")
         defer { pages.reset() }
-        guard try pages.step() else { return "0:0:0:0:0:0:0" }
+        guard try pages.step() else { return "0:0:0:0:0:0:0:0" }
         let pCount = pages.int(at: 0)
         let pSum = pages.int(at: 1)
         let (fCount, fSum) = sourceCountSum()
         let spVersion = systemPromptVersion()
         let logCount = logRowCount()
         let idxVersion = wikiIndexVersion()
-        return "\(pCount):\(pSum):\(fCount):\(fSum):\(spVersion):\(logCount):\(idxVersion)"
+        let smvCount = sourceMarkdownVersionCount()
+        return "\(pCount):\(pSum):\(fCount):\(fSum):\(spVersion):\(logCount):\(idxVersion):\(smvCount)"
     }
 
     /// COUNT/SUM(version) over `sources`, resilient to the table not
@@ -618,6 +619,17 @@ public final class SQLiteWikiStore: WikiStore {
             "SELECT COALESCE(version, 0) FROM wiki_index WHERE id = 1;") else {
             return 0
         }
+        defer { stmt.reset() }
+        guard (try? stmt.step()) == true else { return 0 }
+        return stmt.int(at: 0)
+    }
+
+    /// The `source_markdown_versions` table's row COUNT, resilient to the table
+    /// not existing yet (a read connection opened against a pre-v8 DB). On any
+    /// failure returns `0` so `changeToken()` still answers.
+    private func sourceMarkdownVersionCount() -> Int64 {
+        guard let stmt = try? statement(
+            "SELECT COUNT(*) FROM source_markdown_versions;") else { return 0 }
         defer { stmt.reset() }
         guard (try? stmt.step()) == true else { return 0 }
         return stmt.int(at: 0)
@@ -963,8 +975,10 @@ public final class SQLiteWikiStore: WikiStore {
     /// Read-side projection helper (like `listAllPagesOrderedByID`).
     public func listAllSourcesOrderedByID() throws -> [IndexGenerators.SourceIndexRow] {
         let stmt = try statement("""
-        SELECT id, filename, ext, mime_type, byte_size, created_at, updated_at, version, display_name
-        FROM sources ORDER BY id ASC;
+        SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size,
+               s.created_at, s.updated_at, s.version, s.display_name,
+               (SELECT 1 FROM source_markdown_versions WHERE file_id = s.id LIMIT 1) IS NOT NULL AS has_markdown
+        FROM sources s ORDER BY s.id ASC;
         """)
         defer { stmt.reset() }
         var out: [IndexGenerators.SourceIndexRow] = []
@@ -982,7 +996,8 @@ public final class SQLiteWikiStore: WikiStore {
                 createdAt: Date(timeIntervalSince1970: stmt.double(at: 5)),
                 updatedAt: Date(timeIntervalSince1970: stmt.double(at: 6)),
                 version: Int(stmt.int(at: 7)),
-                displayName: displayName
+                displayName: displayName,
+                hasMarkdown: stmt.int(at: 9) != 0
             ))
         }
         return out
@@ -1410,6 +1425,25 @@ public final class SQLiteWikiStore: WikiStore {
             out.append(sourceMarkdownVersion(from: stmt))
         }
         return out
+    }
+
+    /// All processed markdown heads keyed by sourceID. Returns empty dict when
+    /// the table doesn't exist yet (pre-migration read connection) so the caller
+    /// never errors — the sources list simply has no markdown siblings.
+    /// Single GROUP BY query avoids N+1 across the full source enumeration.
+    public func processedMarkdownHeadsBySource() throws -> [String: SourceMarkdownVersion] {
+        guard let stmt = try? statement("""
+        SELECT id, file_id, parent_id, content, origin, note, created_at
+        FROM source_markdown_versions
+        WHERE id IN (SELECT MAX(id) FROM source_markdown_versions GROUP BY file_id);
+        """) else { return [:] }
+        defer { stmt.reset() }
+        var result: [String: SourceMarkdownVersion] = [:]
+        while try stmt.step() {
+            let version = sourceMarkdownVersion(from: stmt)
+            result[version.sourceID.rawValue] = version
+        }
+        return result
     }
 
     @discardableResult

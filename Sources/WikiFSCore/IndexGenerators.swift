@@ -36,8 +36,8 @@ public enum IndexGenerators {
     /// A single source row (no content), as read for `sources.jsonl` and for
     /// the projection's `sources/` enumeration. Carries the stable
     /// version/timestamps too so the File Provider can derive stable item
-    /// versions during enumeration (only `id/name/path/size/mime` reach the
-    /// JSONL — the rest are projection-only).
+    /// versions during enumeration (only `id/name/path/size/mime/has_markdown`
+    /// reach the JSONL — the rest are projection-only).
     public struct SourceIndexRow: Equatable, Sendable {
         public let id: String
         public let filename: String
@@ -48,6 +48,7 @@ public enum IndexGenerators {
         public let updatedAt: Date
         public let version: Int
         public let displayName: String?
+        public let hasMarkdown: Bool
 
         public init(
             id: String,
@@ -58,7 +59,8 @@ public enum IndexGenerators {
             createdAt: Date = Date(timeIntervalSince1970: 0),
             updatedAt: Date = Date(timeIntervalSince1970: 0),
             version: Int = 1,
-            displayName: String? = nil
+            displayName: String? = nil,
+            hasMarkdown: Bool = false
         ) {
             self.id = id
             self.filename = filename
@@ -69,6 +71,7 @@ public enum IndexGenerators {
             self.updatedAt = updatedAt
             self.version = version
             self.displayName = displayName
+            self.hasMarkdown = hasMarkdown
         }
     }
 
@@ -140,9 +143,11 @@ public enum IndexGenerators {
 
     /// `indexes/sources.jsonl` — one JSON object per line, one line per source,
     /// ordered as given (the caller passes sources ordered by id == ingest
-    /// order). Keys in fixed order: id, name, path, size, mime. `path` points at
-    /// the canonical `sources/by-id/<id>.<ext>` location (no dot when extension-
-    /// less); `mime` is JSON `null` when unknown.
+    /// order). Keys in fixed order: id, name, path, size, mime, has_markdown.
+    /// `path` points at the canonical `sources/by-id/<id>.<ext>` location (no
+    /// dot when extension-less); `mime` is JSON `null` when unknown;
+    /// `has_markdown` is `true` when at least one processed-markdown version
+    /// exists (from `source_markdown_versions`).
     public static func sourcesJSONL(sources: [SourceIndexRow]) -> Data {
         var out = ""
         for source in sources {
@@ -154,7 +159,8 @@ public enum IndexGenerators {
             let path = jsonString(relPath)
             let size = String(source.byteSize)
             let mime = source.mime.map { jsonString($0) } ?? "null"
-            out += "{\"id\":\(id),\"name\":\(name),\"path\":\(path),\"size\":\(size),\"mime\":\(mime)}\n"
+            let hasMarkdown = source.hasMarkdown ? "true" : "false"
+            out += "{\"id\":\(id),\"name\":\(name),\"path\":\(path),\"size\":\(size),\"mime\":\(mime),\"has_markdown\":\(hasMarkdown)}\n"
         }
         return Data(out.utf8)
     }

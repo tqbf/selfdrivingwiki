@@ -93,6 +93,16 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
     case .source(let action):
         return try SourceCommand.run(action, in: store,
                                    cwd: FileManager.default.currentDirectoryPath)
+    case .sourceEditMarkdown(let selector, let contentOrFile, let isFile):
+        let content: String
+        if isFile {
+            content = try readBody(from: contentOrFile)
+        } else {
+            content = contentOrFile
+        }
+        return try SourceCommand.run(
+            .editMarkdown(selector, content: content), in: store,
+            cwd: FileManager.default.currentDirectoryPath)
     }
 }
 

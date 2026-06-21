@@ -39,6 +39,7 @@ public enum SourceCommand {
         case list(json: Bool)
         case cat(Selector)
         case export(Selector, out: String?)
+        case editMarkdown(Selector, content: String)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -62,6 +63,8 @@ public enum SourceCommand {
             return try cat(selector, in: store)
         case .export(let selector, let out):
             return try export(selector, out: out, in: store, cwd: cwd)
+        case .editMarkdown(let selector, let content):
+            return try editMarkdown(selector, content: content, in: store)
         }
     }
 
@@ -168,5 +171,19 @@ public enum SourceCommand {
                 )
             }
         }
+    }
+
+    // MARK: - edit-markdown
+
+    /// Replace the processed-markdown HEAD for a source. Errors when no markdown
+    /// chain exists yet (extract first). Commits — the caller posts the Darwin
+    /// notification on `didCommit`.
+    private static func editMarkdown(_ selector: Selector, content: String, in store: WikiStore) throws -> Result {
+        let id = try resolve(selector, in: store)
+        guard try store.hasProcessedMarkdown(sourceID: id) else {
+            throw Failure.message("no processed markdown for this source")
+        }
+        try store.appendProcessedMarkdown(sourceID: id, content: content, origin: "user", note: nil)
+        return Result(payload: .text(""), didCommit: true)
     }
 }

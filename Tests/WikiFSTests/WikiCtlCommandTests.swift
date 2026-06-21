@@ -332,6 +332,7 @@ struct WikiCtlCommandTests {
             #expect(obj?["size"] != nil)
             // mime key always present (null for unknown types)
             #expect(obj?.keys.contains("mime") ?? false)
+            #expect(obj?.keys.contains("has_markdown") ?? false)
         }
     }
 
@@ -424,6 +425,121 @@ struct WikiCtlCommandTests {
         #expect(throws: SourceCommand.Failure.self) {
             try SourceCommand.run(.cat(.name("same.txt")), in: store, cwd: "/tmp")
         }
+    }
+
+    // MARK: - edit-markdown parsing
+
+    @Test func parsesEditMarkdownWithContent() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "source", "edit-markdown", "--id", "01ABC", "--content", "new body"], env: noEnv)
+        #expect(invocation.command == .sourceEditMarkdown(.id(PageID(rawValue: "01ABC")), contentOrFile: "new body", isFile: false))
+    }
+
+    @Test func parsesEditMarkdownWithFile() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "source", "edit-markdown", "--id", "01ABC", "--file", "edit.md"], env: noEnv)
+        #expect(invocation.command == .sourceEditMarkdown(.id(PageID(rawValue: "01ABC")), contentOrFile: "edit.md", isFile: true))
+    }
+
+    @Test func parsesEditMarkdownByName() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "source", "edit-markdown", "--name", "report.md", "--content", "updated"], env: noEnv)
+        #expect(invocation.command == .sourceEditMarkdown(.name("report.md"), contentOrFile: "updated", isFile: false))
+    }
+
+    @Test func editMarkdownRejectsBothContentAndFile() {
+        #expect(throws: ArgumentParser.Failure.self) {
+            try ArgumentParser.parse(
+                ["--wiki", "W", "source", "edit-markdown", "--id", "x", "--content", "a", "--file", "b.md"],
+                env: noEnv)
+        }
+    }
+
+    @Test func editMarkdownRequiresContentOrFile() {
+        #expect(throws: ArgumentParser.Failure.self) {
+            try ArgumentParser.parse(
+                ["--wiki", "W", "source", "edit-markdown", "--id", "x"], env: noEnv)
+        }
+    }
+
+    @Test func editMarkdownRequiresSelector() {
+        #expect(throws: ArgumentParser.Failure.self) {
+            try ArgumentParser.parse(
+                ["--wiki", "W", "source", "edit-markdown", "--content", "x"], env: noEnv)
+        }
+    }
+
+    // MARK: - edit-markdown dispatch
+
+    @Test func editMarkdownAppendsUserVersion() throws {
+        let store = try tempStore()
+        let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
+        // Append first version (extraction).
+        _ = try store.appendProcessedMarkdown(
+            sourceID: ingested.id, content: "original", origin: "extraction", note: nil)
+        // Small delay ensures the next ULID is strictly later.
+        usleep(2000)
+        // Run edit-markdown which appends a "user" version.
+        let result = try SourceCommand.run(
+            .editMarkdown(.id(ingested.id), content: "edited"), in: store, cwd: "/tmp")
+        #expect(result.didCommit)
+
+        // Verify the chain has 2 versions.
+        let history = try store.processedMarkdownHistory(sourceID: ingested.id)
+        #expect(history.count == 2)
+
+        // Head (first, newest) is the user-edited version.
+        #expect(history[0].content == "edited")
+        #expect(history[0].origin == "user")
+        #expect(history[0].parentID == history[1].id)
+
+        // Second is the extraction baseline.
+        #expect(history[1].content == "original")
+        #expect(history[1].origin == "extraction")
+        #expect(history[1].parentID == nil)
+    }
+
+    @Test func editMarkdownCommitsAndAppends() throws {
+        let store = try tempStore()
+        let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
+        _ = try store.appendProcessedMarkdown(
+            sourceID: ingested.id, content: "original", origin: "extraction", note: nil)
+        // Small delay ensures the next ULID is strictly later.
+        usleep(2000)
+        let result = try SourceCommand.run(
+            .editMarkdown(.id(ingested.id), content: "edited"), in: store, cwd: "/tmp")
+        #expect(result.didCommit)
+        let head = try store.processedMarkdownHead(sourceID: ingested.id)
+        #expect(head?.content == "edited")
+        #expect(head?.origin == "user")
+    }
+
+    @Test func editMarkdownFailsWhenNoChainExists() throws {
+        let store = try tempStore()
+        let ingested = try store.addSource(filename: "doc.pdf", data: Data("%PDF".utf8))
+        do {
+            try SourceCommand.run(
+                .editMarkdown(.id(ingested.id), content: "edited"), in: store, cwd: "/tmp")
+            Issue.record("expected SourceCommand.Failure")
+        } catch let error as SourceCommand.Failure {
+            #expect(error.description == "no processed markdown for this source")
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test func editMarkdownByNameResolvesAndCommits() throws {
+        let store = try tempStore()
+        let ingested = try store.addSource(filename: "unique.md", data: Data("hello".utf8))
+        _ = try store.appendProcessedMarkdown(
+            sourceID: ingested.id, content: "v1", origin: "extraction", note: nil)
+        // Small delay ensures the next ULID is strictly later.
+        usleep(2000)
+        let result = try SourceCommand.run(
+            .editMarkdown(.name("unique.md"), content: "v2"), in: store, cwd: "/tmp")
+        #expect(result.didCommit)
+        let head = try store.processedMarkdownHead(sourceID: ingested.id)
+        #expect(head?.content == "v2")
     }
 
     // MARK: - Darwin notification naming
