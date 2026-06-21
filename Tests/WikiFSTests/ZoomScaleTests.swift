@@ -118,4 +118,58 @@ struct ZoomScaleTests {
                     "round-trip failed for \(start): got \(roundTripped)")
         }
     }
+
+    // MARK: - Scroll accumulation
+
+    @Test func scrollBelowThresholdTakesNoStepAndCarriesRemainder() {
+        let t = ZoomScale.scrollStepThreshold
+        let (steps, remainder) = ZoomScale.scrollSteps(accumulated: t - 1, threshold: t)
+        #expect(steps == 0)
+        #expect(isClose(remainder, t - 1))
+    }
+
+    @Test func scrollPositiveDeltaZoomsIn() {
+        let t = ZoomScale.scrollStepThreshold
+        let (steps, remainder) = ZoomScale.scrollSteps(accumulated: t + 3, threshold: t)
+        #expect(steps == 1)
+        #expect(isClose(remainder, 3))
+    }
+
+    @Test func scrollNegativeDeltaZoomsOut() {
+        let t = ZoomScale.scrollStepThreshold
+        let (steps, remainder) = ZoomScale.scrollSteps(accumulated: -(t + 3), threshold: t)
+        #expect(steps == -1)
+        #expect(isClose(remainder, -3))
+    }
+
+    @Test func scrollMultipleThresholdsTakeMultipleSteps() {
+        let t = ZoomScale.scrollStepThreshold
+        let (steps, remainder) = ZoomScale.scrollSteps(accumulated: 2 * t + 5, threshold: t)
+        #expect(steps == 2)
+        #expect(isClose(remainder, 5))
+    }
+
+    /// The remainder must always be smaller in magnitude than the threshold, and
+    /// `steps * threshold + remainder` must reconstruct the input exactly — so a
+    /// stream of events neither loses nor double-counts momentum.
+    @Test func scrollRemainderReconstructsInput() {
+        let t = ZoomScale.scrollStepThreshold
+        let inputs: [CGFloat] = [0, 5, -5, t, -t, 2 * t + 1, -3 * t - 7, 100, -100]
+        for input in inputs {
+            let (steps, remainder) = ZoomScale.scrollSteps(accumulated: input, threshold: t)
+            #expect(abs(remainder) < t)
+            #expect(isClose(CGFloat(steps) * t + remainder, input))
+        }
+    }
+
+    @Test func scrollNonFiniteOrNonPositiveThresholdYieldsNoStep() {
+        for bad: CGFloat in [.nan, .infinity, -.infinity] {
+            let (steps, remainder) = ZoomScale.scrollSteps(accumulated: bad)
+            #expect(steps == 0)
+            #expect(remainder == 0)
+        }
+        let (steps, remainder) = ZoomScale.scrollSteps(accumulated: 50, threshold: 0)
+        #expect(steps == 0)
+        #expect(remainder == 0)
+    }
 }

@@ -56,4 +56,27 @@ public enum ZoomScale {
     public static func zoomedOut(_ current: CGFloat) -> CGFloat {
         clamped(current / stepFactor)
     }
+
+    // MARK: - Scroll accumulation
+
+    /// Distance a Cmd+scroll gesture must accumulate before it advances one zoom
+    /// step. Cmd+scroll (especially on a trackpad) streams many tiny deltas; a
+    /// threshold keeps a single flick from rocketing across the whole range.
+    public static let scrollStepThreshold: CGFloat = 12
+
+    /// Splits an accumulated scroll-wheel delta into a whole number of zoom steps
+    /// plus the leftover remainder to carry into the next event.
+    ///
+    /// A positive delta zooms in, negative zooms out. Only whole multiples of
+    /// `threshold` are consumed; the sub-threshold remainder is returned so
+    /// momentum is neither lost nor double-counted across events. Non-finite
+    /// input or a non-positive threshold yields no step and drops the remainder.
+    public static func scrollSteps(
+        accumulated: CGFloat,
+        threshold: CGFloat = scrollStepThreshold
+    ) -> (steps: Int, remainder: CGFloat) {
+        guard threshold > 0, accumulated.isFinite else { return (0, 0) }
+        let whole = (accumulated / threshold).rounded(.towardZero)
+        return (Int(whole), accumulated - whole * threshold)
+    }
 }

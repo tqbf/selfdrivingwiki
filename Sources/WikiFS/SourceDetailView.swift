@@ -332,10 +332,12 @@ struct SourceDetailView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(PageEditorMetrics.contentInset)
                 .zoomShortcuts($editorZoom)
+                .zoomScroll($editorZoom)
         } else if let head = headVersion {
             MarkdownPreview(store: store, markdown: head.content,
                             currentSelection: store.selection)
                 .zoomShortcuts($readerZoom)
+                .zoomScroll($readerZoom)
         } else {
             ContentUnavailableView {
                 Label("No Processed Markdown", systemImage: "doc.plaintext")

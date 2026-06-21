@@ -78,6 +78,7 @@ struct PageDetailView: View {
                     .frame(minHeight: PageEditorMetrics.editorMinHeight)
                     .onChange(of: store.draftBody) { store.bodyChanged() }
                     .zoomShortcuts($editorZoom)
+                    .zoomScroll($editorZoom)
             } else {
                 MarkdownPreview(store: store, markdown: readerMarkdown,
                                 currentSelection: store.selection,
@@ -85,6 +86,7 @@ struct PageDetailView: View {
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: PageEditorMetrics.previewMinHeight)
                     .zoomShortcuts($readerZoom)
+                    .zoomScroll($readerZoom)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
