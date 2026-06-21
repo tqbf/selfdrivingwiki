@@ -37,7 +37,7 @@ struct SidebarView: View {
     /// Tracks which section was last clicked, so Cmd+A selects only that section.
     @State private var activeSection: ActiveSection = .pages
 
-    enum ActiveSection { case pages, files }
+    enum ActiveSection { case pages, sources }
 
     var body: some View {
         listContent
@@ -62,7 +62,7 @@ struct SidebarView: View {
             WikiSwitcher(manager: manager).listRowSeparator(.hidden)
             toolsSection()
             pagesSection()
-            if !store.ingestedFiles.isEmpty {
+            if !store.sources.isEmpty {
                 FilesSectionView(store: store, fileProvider: fileProvider,
                     ingestingFileIDs: ingestingFileIDs,
                     extractingFileIDs: extractingFileIDs,
@@ -173,7 +173,7 @@ struct SidebarView: View {
     private func selectionDidChange(_ newValue: Set<WikiSelection>) {
         // Cmd+A selects everything — filter to the active section only.
         let hasPage = newValue.contains(where: { if case .page = $0 { true } else { false } })
-        let hasFile = newValue.contains(where: { if case .ingestedFile = $0 { true } else { false } })
+        let hasFile = newValue.contains(where: { if case .source = $0 { true } else { false } })
         if hasPage && hasFile {
             handleSelectAll()
             return
@@ -183,7 +183,7 @@ struct SidebarView: View {
         if newValue.count == 1, let first = newValue.first {
             switch first {
             case .page: activeSection = .pages
-            case .ingestedFile: activeSection = .files
+            case .source: activeSection = .sources
             default: break
             }
             // The `listSelection` set is also written programmatically by the
@@ -206,8 +206,8 @@ struct SidebarView: View {
 
     private func handleSelectAll() {
         switch activeSection {
-        case .files:
-            listSelection = Set(store.ingestedFiles.map { WikiSelection.ingestedFile($0.id) })
+        case .sources:
+            listSelection = Set(store.sources.map { WikiSelection.source($0.id) })
         case .pages:
             listSelection = Set(store.summaries.map { WikiSelection.page($0.id) })
         }

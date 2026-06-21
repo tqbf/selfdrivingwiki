@@ -10,14 +10,14 @@ enum AgentOperationRunner {
     /// Ingest a single file via the existing detail-view path. Builds a
     /// single-element `[StagedSource]` and delegates to `runIngestSources`.
     static func runIngest(
-        fileID: PageID,
+        sourceID: PageID,
         launcher: AgentLauncher,
         store: WikiStoreModel,
         manager: WikiManager,
         fileProvider: FileProviderSpike
     ) async {
         await runMultiIngest(
-            fileIDs: [fileID],
+            fileIDs: [sourceID],
             launcher: launcher,
             store: store,
             manager: manager,
@@ -46,8 +46,8 @@ enum AgentOperationRunner {
 
         var sources: [OperationRequest.StagedSource] = []
         for fileID in fileIDs {
-            guard let file = store.ingestedFiles.first(where: { $0.id == fileID }),
-                  let bytes = store.ingestedSourceBytes(id: fileID)
+            guard let file = store.sources.first(where: { $0.id == fileID }),
+                  let bytes = store.sourceBytes(id: fileID)
             else {
                 DebugLog.ingest("runMultiIngest: skipping \(fileID.rawValue) — file or bytes missing")
                 continue
@@ -60,7 +60,7 @@ enum AgentOperationRunner {
             // PDF → Markdown: if markdown was already extracted (via the standalone
             // "Extract Markdown" button or a prior ingest), reuse it — don't re-run
             // pdf2md. Only extract when no processed markdown exists yet.
-            if file.ext == "pdf" {
+            if file.mimeType == "application/pdf" {
                 if let head = store.processedMarkdownHead(for: file) {
                     // Already extracted — use existing markdown, skip pdf2md entirely.
                     sourceBytes = head.content.data(using: .utf8) ?? bytes
@@ -108,7 +108,7 @@ enum AgentOperationRunner {
                         launcher.extractionLog.append("PDF conversion done — \(markdown.count) chars extracted.\n")
                         // Persist extracted markdown as v1 in the version chain.
                         // Double-seed guard: if a head already exists, reuse it.
-                        store.seedPdfMarkdown(fileID: file.id, content: markdown)
+                        store.seedPdfMarkdown(for: file.id, content: markdown)
                     } catch {
                         if Task.isCancelled {
                             DebugLog.extraction("convert: CANCELLED")
@@ -267,8 +267,8 @@ enum AgentOperationRunner {
         )
     }
 
-    private static func ingestSourcePath(for file: IngestedFileSummary) -> String {
-        let leaf = FilenameEscaping.byIDIngestedFilename(fileID: file.id.rawValue, ext: file.ext)
+    private static func ingestSourcePath(for file: SourceSummary) -> String {
+        let leaf = FilenameEscaping.byIDSourceFilename(sourceID: file.id.rawValue, ext: file.ext)
         return "files/by-id/\(leaf)"
     }
 }

@@ -75,7 +75,7 @@ public enum ArgumentParser {
       page delete --id Y                     delete a page
       log append --kind ingest|query|lint --title X [--note N] [--source <file-id>]
                                              append one dated row to log.md;
-                                             --source stamps that file "Ingested"
+                                             --source stamps that file "Processed"
       index set --body-file <path|->         rewrite the curated index.md body
       search --query X [--limit N]           semantic search (cosine similarity);
                                              falls back to LIKE title match

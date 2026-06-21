@@ -20,20 +20,20 @@ struct FilesSectionView: View {
     enum FileFilter: String, CaseIterable {
         case all = "All"
         case ready = "Ready"
-        case ingested = "Ingested"
+        case ingested = "Processed"
     }
 
-    private var filteredFiles: [IngestedFileSummary] {
+    private var filteredFiles: [SourceSummary] {
         switch fileFilter {
-        case .all: return store.ingestedFiles
-        case .ready: return store.ingestedFiles.filter { !store.hasIngestedFile($0) }
-        case .ingested: return store.ingestedFiles.filter { store.hasIngestedFile($0) }
+        case .all: return store.sources
+        case .ready: return store.sources.filter { !store.isSourceIngested($0) }
+        case .ingested: return store.sources.filter { store.isSourceIngested($0) }
         }
     }
 
     private var selectedFileIDs: Set<PageID> {
         Set(listSelection.compactMap { sel in
-            if case .ingestedFile(let id) = sel { return id }
+            if case .source(let id) = sel { return id }
             return nil
         })
     }
@@ -70,21 +70,21 @@ struct FilesSectionView: View {
         }
     }
 
-    private func fileRow(_ file: IngestedFileSummary) -> some View {
+    private func fileRow(_ file: SourceSummary) -> some View {
         let ids = selectedFileIDs
         let ingestAction: (() -> Void)? = ids.isEmpty ? nil : {
             onBatchIngest?(Array(ids))
         }
         return IngestedFileRow(
             file: file,
-            hasBeenIngested: store.hasIngestedFile(file),
+            hasBeenIngested: store.isSourceIngested(file),
             isIngesting: ingestingFileIDs.contains(file.id),
             isExtracting: extractingFileIDs.contains(file.id),
             isSelected: ids.contains(file.id),
             onOpen: { Task { await fileProvider.openIngestedFile(id: file.id) } },
-            onRemove: { store.deleteIngestedFile(file.id) },
+            onRemove: { store.deleteSource(file.id) },
             onIngestSelected: ingestAction
         )
-        .tag(WikiSelection.ingestedFile(file.id))
+        .tag(WikiSelection.source(file.id))
     }
 }

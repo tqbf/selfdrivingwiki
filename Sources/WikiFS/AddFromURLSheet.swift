@@ -139,7 +139,7 @@ struct AddFromURLSheet: View {
         Task {
             do {
                 _ = try await store.ingestURL(input)
-                dismiss()  // success: the new file is already in store.ingestedFiles
+                dismiss()  // success: the new file is already in store.sources
             } catch {
                 let message = (error as? URLIngestService.IngestError)?.errorDescription
                     ?? error.localizedDescription

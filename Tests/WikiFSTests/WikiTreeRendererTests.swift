@@ -10,7 +10,7 @@ import Testing
 struct WikiTreeRendererTests {
 
     @Test func rendersTheFixedLayoutAndCheatsheet() {
-        let body = WikiTreeRenderer.render(pageCount: 3, fileCount: 2)
+        let body = WikiTreeRenderer.render(pageCount: 3, sourceCount: 2)
         // The full projection layout the agent needs to navigate.
         #expect(body.contains("index.md"))
         #expect(body.contains("log.md"))
@@ -20,8 +20,8 @@ struct WikiTreeRendererTests {
         #expect(body.contains("CLAUDE.md"))
         #expect(body.contains("pages/by-title/"))
         #expect(body.contains("pages/by-id/"))
-        #expect(body.contains("files/by-name/"))
-        #expect(body.contains("files/by-id/"))
+        #expect(body.contains("sources/by-name/"))
+        #expect(body.contains("sources/by-id/"))
         #expect(body.contains("indexes/"))
         // The wikictl cheatsheet, including the exact stdin-piped upsert form.
         #expect(body.contains("printf '%s' \"<body>\" | wikictl page upsert --title T --body-file -"))
@@ -34,22 +34,22 @@ struct WikiTreeRendererTests {
     }
 
     @Test func foldsInTheLiveCounts() {
-        let body = WikiTreeRenderer.render(pageCount: 7, fileCount: 4)
+        let body = WikiTreeRenderer.render(pageCount: 7, sourceCount: 4)
         #expect(body.contains("7 pages"))
-        #expect(body.contains("4 ingested files"))
+        #expect(body.contains("4 sources"))
     }
 
     @Test func singularizesCountsOfOne() {
-        let body = WikiTreeRenderer.render(pageCount: 1, fileCount: 1)
+        let body = WikiTreeRenderer.render(pageCount: 1, sourceCount: 1)
         #expect(body.contains("1 page,"))
-        #expect(body.contains("1 ingested file."))
+        #expect(body.contains("1 source."))
         #expect(!body.contains("1 pages"))
-        #expect(!body.contains("1 ingested files"))
+        #expect(!body.contains("1 sources"))
     }
 
     @Test func isDeterministicForFixedCounts() {
         // Same counts → byte-identical body (no timestamps / nondeterminism).
-        #expect(WikiTreeRenderer.render(pageCount: 5, fileCount: 9)
-            == WikiTreeRenderer.render(pageCount: 5, fileCount: 9))
+        #expect(WikiTreeRenderer.render(pageCount: 5, sourceCount: 9)
+            == WikiTreeRenderer.render(pageCount: 5, sourceCount: 9))
     }
 }

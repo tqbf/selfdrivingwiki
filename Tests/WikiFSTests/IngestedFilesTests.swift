@@ -25,24 +25,24 @@ struct IngestedFilesTests {
     @Test func ingestInsertsRowWithByteSizeMatchingData() throws {
         let store = try tempStore()
         let bytes = Data((0..<512).map { UInt8($0 % 256) })
-        let summary = try store.ingestFile(filename: "blob.bin", data: bytes)
+        let summary = try store.addSource(filename: "blob.bin", data: bytes)
         #expect(summary.byteSize == bytes.count)
         #expect(summary.filename == "blob.bin")
         #expect(summary.version == 1)
 
         // byte_size column == length(content) in SQLite.
-        let row = try store.getIngestedFile(id: summary.id)
+        let row = try store.getSource(id: summary.id)
         #expect(row.byteSize == bytes.count)
-        #expect(try store.ingestedFileContent(id: summary.id).count == bytes.count)
+        #expect(try store.sourceContent(id: summary.id).count == bytes.count)
     }
 
     @Test func extAndMimeDerivedFromFilename() throws {
         let store = try tempStore()
-        let pdf = try store.ingestFile(filename: "Report.PDF", data: Data("%PDF".utf8))
+        let pdf = try store.addSource(filename: "Report.PDF", data: Data("%PDF".utf8))
         #expect(pdf.ext == "pdf")  // lowercased
         #expect(pdf.mimeType == "application/pdf")
 
-        let noExt = try store.ingestFile(filename: "README", data: Data("x".utf8))
+        let noExt = try store.addSource(filename: "README", data: Data("x".utf8))
         #expect(noExt.ext == "")
         #expect(noExt.mimeType == nil)
     }
@@ -53,17 +53,17 @@ struct IngestedFilesTests {
     /// columns stay NULL and round-trip as nil through the read path.
     @Test func ingestWithoutZoteroProvenanceRoundTripsNil() throws {
         let store = try tempStore()
-        let summary = try store.ingestFile(
+        let summary = try store.addSource(
             filename: "drop.pdf", data: Data("%PDF".utf8),
             zoteroItemKey: nil, zoteroItemTitle: nil)
         #expect(summary.zoteroItemKey == nil)
         #expect(summary.zoteroItemTitle == nil)
 
-        let readBack = try store.getIngestedFile(id: summary.id)
+        let readBack = try store.getSource(id: summary.id)
         #expect(readBack.zoteroItemKey == nil)
         #expect(readBack.zoteroItemTitle == nil)
 
-        let listed = try store.listIngestedFiles()
+        let listed = try store.listSources()
         #expect(listed.first?.zoteroItemKey == nil)
         #expect(listed.first?.zoteroItemTitle == nil)
     }
@@ -71,13 +71,13 @@ struct IngestedFilesTests {
     /// The Zotero seam writes the item key + title and they survive a read-back.
     @Test func ingestWithZoteroProvenanceRoundTripsKeyAndTitle() throws {
         let store = try tempStore()
-        let summary = try store.ingestFile(
+        let summary = try store.addSource(
             filename: "paper.pdf", data: Data("%PDF".utf8),
             zoteroItemKey: "ABC123", zoteroItemTitle: "A Study in Scarlet")
         #expect(summary.zoteroItemKey == "ABC123")
         #expect(summary.zoteroItemTitle == "A Study in Scarlet")
 
-        let readBack = try store.getIngestedFile(id: summary.id)
+        let readBack = try store.getSource(id: summary.id)
         #expect(readBack.zoteroItemKey == "ABC123")
         #expect(readBack.zoteroItemTitle == "A Study in Scarlet")
     }
@@ -89,18 +89,18 @@ struct IngestedFilesTests {
         // Include non-text bytes + a NUL to prove this is raw, not text handling.
         var original = Data("header\u{0}".utf8)
         original.append(contentsOf: (0..<300).map { UInt8(($0 * 7) % 256) })
-        let summary = try store.ingestFile(filename: "data.bin", data: original)
+        let summary = try store.addSource(filename: "data.bin", data: original)
 
-        let fetched = try store.ingestedFileContent(id: summary.id)
+        let fetched = try store.sourceContent(id: summary.id)
         #expect(fetched == original)
         #expect(SHA256.hash(data: fetched) == SHA256.hash(data: original))
     }
 
     @Test func zeroByteFileIsAllowedWithSizeZero() throws {
         let store = try tempStore()
-        let summary = try store.ingestFile(filename: "empty.txt", data: Data())
+        let summary = try store.addSource(filename: "empty.txt", data: Data())
         #expect(summary.byteSize == 0)
-        #expect(try store.ingestedFileContent(id: summary.id) == Data())
+        #expect(try store.sourceContent(id: summary.id) == Data())
     }
 
     // MARK: - Soft cap
@@ -110,20 +110,20 @@ struct IngestedFilesTests {
         // One byte past the cap. (Allocating exactly cap+1 of zeros is cheap.)
         let huge = Data(count: SQLiteWikiStore.ingestByteCap + 1)
         #expect(throws: (any Error).self) {
-            _ = try store.ingestFile(filename: "huge.bin", data: huge)
+            _ = try store.addSource(filename: "huge.bin", data: huge)
         }
-        #expect(try store.listIngestedFiles().isEmpty)
+        #expect(try store.listSources().isEmpty)
     }
 
     // MARK: - Delete
 
     @Test func deleteRemovesRow() throws {
         let store = try tempStore()
-        let summary = try store.ingestFile(filename: "x.txt", data: Data("x".utf8))
-        try store.deleteIngestedFile(id: summary.id)
-        #expect(try store.listIngestedFiles().isEmpty)
+        let summary = try store.addSource(filename: "x.txt", data: Data("x".utf8))
+        try store.deleteSource(id: summary.id)
+        #expect(try store.listSources().isEmpty)
         #expect(throws: (any Error).self) {
-            _ = try store.getIngestedFile(id: summary.id)
+            _ = try store.getSource(id: summary.id)
         }
     }
 
@@ -131,19 +131,19 @@ struct IngestedFilesTests {
 
     @Test func duplicateDropsGetDistinctIDs() throws {
         let store = try tempStore()
-        let a = try store.ingestFile(filename: "same.txt", data: Data("same".utf8))
-        let b = try store.ingestFile(filename: "same.txt", data: Data("same".utf8))
+        let a = try store.addSource(filename: "same.txt", data: Data("same".utf8))
+        let b = try store.addSource(filename: "same.txt", data: Data("same".utf8))
         #expect(a.id != b.id)
-        #expect(try store.listIngestedFiles().count == 2)
+        #expect(try store.listSources().count == 2)
     }
 
     // MARK: - Ordering (most-recent-first for the UI list)
 
     @Test func listIsMostRecentFirst() throws {
         let store = try tempStore()
-        let first = try store.ingestFile(filename: "1.txt", data: Data("1".utf8))
-        let second = try store.ingestFile(filename: "2.txt", data: Data("2".utf8))
-        let list = try store.listIngestedFiles()
+        let first = try store.addSource(filename: "1.txt", data: Data("1".utf8))
+        let second = try store.addSource(filename: "2.txt", data: Data("2".utf8))
+        let list = try store.listSources()
         // created_at DESC, id DESC: the later (larger ULID) sorts first.
         #expect(list.first?.id == second.id)
         #expect(list.last?.id == first.id)
@@ -152,18 +152,18 @@ struct IngestedFilesTests {
     @MainActor
     @Test func modelTracksWhetherFileHasBeenAgentIngested() throws {
         let store = try tempStore()
-        let raw = try store.ingestFile(filename: "source.pdf", data: Data("%PDF".utf8))
-        let untouched = try store.ingestFile(filename: "notes.txt", data: Data("notes".utf8))
+        let raw = try store.addSource(filename: "source.pdf", data: Data("%PDF".utf8))
+        let untouched = try store.addSource(filename: "notes.txt", data: Data("notes".utf8))
 
         let model = WikiStoreModel(store: store)
-        #expect(model.hasIngestedFile(raw) == false)
-        #expect(model.hasIngestedFile(untouched) == false)
+        #expect(model.isSourceIngested(raw) == false)
+        #expect(model.isSourceIngested(untouched) == false)
 
         try store.appendLog(kind: .ingest, title: "files/by-id/\(raw.id.rawValue).pdf", note: nil)
         model.reloadFromStore()
 
-        #expect(model.hasIngestedFile(raw) == true)
-        #expect(model.hasIngestedFile(untouched) == false)
+        #expect(model.isSourceIngested(raw) == true)
+        #expect(model.isSourceIngested(untouched) == false)
     }
 
     // MARK: - Stepwise migration (v1 DB with pages → v2, pages intact)
@@ -172,7 +172,7 @@ struct IngestedFilesTests {
         let url = tempDatabaseURL()
 
         // Build a v1-shaped DB by hand: pages + slug index + user_version=1,
-        // WITHOUT ingested_files. Seed one page.
+        // WITHOUT sources. Seed one page.
         var raw: OpaquePointer?
         #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
         let v1SQL = """
@@ -191,8 +191,8 @@ struct IngestedFilesTests {
         // Open via the store → runs the v1→2 step (and the later v2→3 step).
         let store = try SQLiteWikiStore(databaseURL: url)
 
-        // ingested_files now exists and is usable.
-        let summary = try store.ingestFile(filename: "after.txt", data: Data("after".utf8))
+        // sources now exists and is usable.
+        let summary = try store.addSource(filename: "after.txt", data: Data("after".utf8))
         #expect(summary.byteSize == 5)
 
         // The pre-existing page is intact.
@@ -209,7 +209,7 @@ struct IngestedFilesTests {
         #expect(sqlite3_prepare_v2(check, "PRAGMA user_version;", -1, &stmt, nil) == SQLITE_OK)
         defer { sqlite3_finalize(stmt) }
         #expect(sqlite3_step(stmt) == SQLITE_ROW)
-        #expect(sqlite3_column_int(stmt, 0) == 9)
+        #expect(sqlite3_column_int(stmt, 0) == 10)
         _ = store
     }
 }

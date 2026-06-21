@@ -239,7 +239,7 @@ final class FileProviderSpike {
             status = "No manager for domain"
             return
         }
-        let identifier = NSFileProviderItemIdentifier(WikiFSContainerID.fileByID(id.rawValue))
+        let identifier = NSFileProviderItemIdentifier(WikiFSContainerID.sourceByID(id.rawValue))
         do {
             let url = try await userVisibleURL(
                 manager: manager,
@@ -278,9 +278,9 @@ final class FileProviderSpike {
             NSFileProviderItemIdentifier(WikiFSContainerID.pagesByID),
             .rootContainer,
             NSFileProviderItemIdentifier(WikiFSContainerID.indexes),
-            NSFileProviderItemIdentifier(WikiFSContainerID.files),
-            NSFileProviderItemIdentifier(WikiFSContainerID.filesByID),
-            NSFileProviderItemIdentifier(WikiFSContainerID.filesByName),
+            NSFileProviderItemIdentifier(WikiFSContainerID.sources),
+            NSFileProviderItemIdentifier(WikiFSContainerID.sourcesByID),
+            NSFileProviderItemIdentifier(WikiFSContainerID.sourcesByName),
             .workingSet,
         ]
         for container in containers {

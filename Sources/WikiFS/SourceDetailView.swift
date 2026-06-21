@@ -6,7 +6,7 @@ import WikiFSCore
 /// output exists). Cmd-E flips between reader and editor for processed markdown;
 /// source bytes are never modified.
 struct IngestedFileDetailView: View {
-    let file: IngestedFileSummary
+    let file: SourceSummary
     let hasBeenIngested: Bool
     let isIngesting: Bool
     let isRunning: Bool
@@ -27,7 +27,7 @@ struct IngestedFileDetailView: View {
     let launcher: AgentLauncher
     @Bindable var store: WikiStoreModel
 
-    @State private var headVersion: FileMarkdownVersion?
+    @State private var headVersion: SourceMarkdownVersion?
     @State private var isEditing = false
     @State private var editBuffer = ""
     @State private var isExtracting = false
@@ -42,10 +42,11 @@ struct IngestedFileDetailView: View {
     // MARK: - Computed
 
     private var isMarkdownNative: Bool {
-        file.ext == "md" || file.ext == "markdown" || file.ext == "txt"
+        if let mime = file.mimeType { return mime.hasPrefix("text/") }
+        return false
     }
 
-    private var isPDF: Bool { file.ext == "pdf" }
+    private var isPDF: Bool { file.mimeType == "application/pdf" }
 
     private var hasMarkdown: Bool { headVersion != nil }
 
@@ -347,7 +348,7 @@ struct IngestedFileDetailView: View {
 
     private var pdfView: some View {
         Group {
-            if let data = store.ingestedSourceBytes(id: file.id) {
+            if let data = store.sourceBytes(id: file.id) {
                 PDFViewWrapper(data: data)
             } else {
                 ContentUnavailableView {
@@ -390,7 +391,7 @@ struct IngestedFileDetailView: View {
             launcher.extractionLog = "PDF extraction not available — pdf2md is not ready."
             return
         }
-        guard let data = store.ingestedSourceBytes(id: file.id) else {
+        guard let data = store.sourceBytes(id: file.id) else {
             launcher.extractionLog = "Could not read source bytes."
             return
         }
@@ -407,7 +408,7 @@ struct IngestedFileDetailView: View {
                         launcher.extractionLog.append("Started pdf2md (pid \(pid)).\n")
                     }
                 })
-            if let version = store.seedPdfMarkdown(fileID: file.id, content: markdown) {
+            if let version = store.seedPdfMarkdown(for: file.id, content: markdown) {
                 headVersion = version
                 launcher.extractionLog = "Markdown extracted — \(markdown.count) chars."
             }
@@ -469,7 +470,7 @@ struct IngestedFileDetailView: View {
             .foregroundStyle(.orange)
         } else {
             Label(
-                hasBeenIngested ? "Ingested" : "Ready to ingest",
+                hasBeenIngested ? "Processed" : "Ready to ingest",
                 systemImage: hasBeenIngested ? "checkmark.circle.fill" : "circle.dashed"
             )
             .foregroundStyle(hasBeenIngested ? .green : .secondary)
@@ -477,11 +478,9 @@ struct IngestedFileDetailView: View {
     }
 
     private var symbol: String {
-        switch file.ext {
-        case "pdf": "doc.richtext"
-        case "txt", "md", "markdown": "doc.plaintext"
-        default: "doc"
-        }
+        if file.mimeType == "application/pdf" { return "doc.richtext" }
+        if let mime = file.mimeType, mime.hasPrefix("text/") { return "doc.plaintext" }
+        return "doc"
     }
 
     private static let sizeFormatter: ByteCountFormatter = {

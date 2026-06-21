@@ -282,8 +282,8 @@ struct WikiCtlCommandTests {
 
     @Test func fileListTSV() throws {
         let store = try tempStore()
-        _ = try store.ingestFile(filename: "alpha.txt", data: Data("hello".utf8))
-        _ = try store.ingestFile(filename: "beta.pdf", data: Data([0x00, 0xFF, 0x42]))
+        _ = try store.addSource(filename: "alpha.txt", data: Data("hello".utf8))
+        _ = try store.addSource(filename: "beta.pdf", data: Data([0x00, 0xFF, 0x42]))
         let result = try FileCommand.run(.list(json: false), in: store, cwd: "/tmp")
         #expect(!result.didCommit)
         guard case .text(let output) = result.payload else {
@@ -304,23 +304,23 @@ struct WikiCtlCommandTests {
 
     @Test func fileListJSONMatchesFilesJSONL() throws {
         let store = try tempStore()
-        _ = try store.ingestFile(filename: "one.txt", data: Data("aaa".utf8))
-        _ = try store.ingestFile(filename: "two.bin", data: Data([0x00, 0x01]))
+        _ = try store.addSource(filename: "one.txt", data: Data("aaa".utf8))
+        _ = try store.addSource(filename: "two.bin", data: Data([0x00, 0x01]))
         let result = try FileCommand.run(.list(json: true), in: store, cwd: "/tmp")
         guard case .text(let output) = result.payload else {
             #expect(Bool(false), "expected .text payload"); return
         }
 
         // Build the expected JSONL the same way the command does.
-        let summaries = try store.listIngestedFiles().sorted { $0.id.rawValue < $1.id.rawValue }
+        let summaries = try store.listSources().sorted { $0.id.rawValue < $1.id.rawValue }
         let rows = summaries.map { s in
-            IndexGenerators.FileRow(
+            IndexGenerators.SourceIndexRow(
                 id: s.id.rawValue, filename: s.filename, ext: s.ext,
                 mime: s.mimeType, byteSize: s.byteSize,
                 createdAt: s.createdAt, updatedAt: s.updatedAt, version: s.version
             )
         }
-        let expected = String(decoding: IndexGenerators.filesJSONL(files: rows), as: UTF8.self)
+        let expected = String(decoding: IndexGenerators.sourcesJSONL(sources: rows), as: UTF8.self)
         #expect(output == expected)
 
         // Verify each line is valid JSON with the expected keys.
@@ -339,7 +339,7 @@ struct WikiCtlCommandTests {
         let store = try tempStore()
         // Binary fixture with non-UTF-8 bytes to prove the byte path works.
         let binary = Data([0x00, 0xFF, 0x89, 0x50, 0x4E, 0x47]) // includes PNG magic
-        let ingested = try store.ingestFile(filename: "icon.png", data: binary)
+        let ingested = try store.addSource(filename: "icon.png", data: binary)
         let result = try FileCommand.run(.cat(.id(ingested.id)), in: store, cwd: "/tmp")
         #expect(!result.didCommit)
         #expect(result.payload == .bytes(binary))
@@ -360,7 +360,7 @@ struct WikiCtlCommandTests {
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
         let data = Data("pdf content".utf8)
-        let ingested = try store.ingestFile(filename: "doc.pdf", data: data)
+        let ingested = try store.addSource(filename: "doc.pdf", data: data)
         let result = try FileCommand.run(.export(.id(ingested.id), out: nil), in: store, cwd: tmpDir.path)
         #expect(!result.didCommit)
         guard case .text(let path) = result.payload else {
@@ -382,7 +382,7 @@ struct WikiCtlCommandTests {
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
         let data = Data("hello".utf8)
-        let ingested = try store.ingestFile(filename: "notes.txt", data: data)
+        let ingested = try store.addSource(filename: "notes.txt", data: data)
         let customPath = tmpDir.appendingPathComponent("custom-out.txt").path
         let result = try FileCommand.run(
             .export(.id(ingested.id), out: customPath), in: store, cwd: tmpDir.path)
@@ -404,7 +404,7 @@ struct WikiCtlCommandTests {
 
     @Test func fileNameResolutionResolvesUnambiguous() throws {
         let store = try tempStore()
-        let ingested = try store.ingestFile(filename: "unique.md", data: Data("text".utf8))
+        let ingested = try store.addSource(filename: "unique.md", data: Data("text".utf8))
         let result = try FileCommand.run(.cat(.name("unique.md")), in: store, cwd: "/tmp")
         #expect(result.payload == .bytes(Data("text".utf8)))
         _ = ingested
@@ -419,8 +419,8 @@ struct WikiCtlCommandTests {
 
     @Test func fileNameResolutionFailsWhenAmbiguous() throws {
         let store = try tempStore()
-        _ = try store.ingestFile(filename: "same.txt", data: Data("v1".utf8))
-        _ = try store.ingestFile(filename: "same.txt", data: Data("v2".utf8))
+        _ = try store.addSource(filename: "same.txt", data: Data("v1".utf8))
+        _ = try store.addSource(filename: "same.txt", data: Data("v2".utf8))
         #expect(throws: FileCommand.Failure.self) {
             try FileCommand.run(.cat(.name("same.txt")), in: store, cwd: "/tmp")
         }

@@ -12,7 +12,7 @@ import WikiFSCore
 /// phase). Both are always-mounted (no insert/remove transitions); the icon
 /// simply swaps between spinner and the ready/ingested glyph.
 struct IngestedFileRow: View {
-    let file: IngestedFileSummary
+    let file: SourceSummary
     let hasBeenIngested: Bool
     /// True while the agent run for this file is in flight (the agent phase —
     /// set at spawn commit, not during the preceding pdf2md extraction).
@@ -89,7 +89,7 @@ struct IngestedFileRow: View {
                 }
             }
         } icon: {
-            Image(systemName: Self.symbol(forExtension: file.ext))
+            Image(systemName: Self.symbol(for: file))
         }
         .contentShape(Rectangle())
         .contextMenu {
@@ -105,14 +105,12 @@ struct IngestedFileRow: View {
         }
     }
 
-    /// An SF Symbol chosen by extension: rich-text doc for PDFs, plain-text doc
-    /// for txt/markdown, generic doc otherwise.
-    private static func symbol(forExtension ext: String) -> String {
-        switch ext {
-        case "pdf": return "doc.richtext"
-        case "txt", "md", "markdown": return "doc.plaintext"
-        default: return "doc"
-        }
+    /// An SF Symbol chosen by MIME type: rich-text doc for PDFs, plain-text doc
+    /// for text/*, generic doc otherwise.
+    private static func symbol(for source: SourceSummary) -> String {
+        if source.mimeType == "application/pdf" { return "doc.richtext" }
+        if let mime = source.mimeType, mime.hasPrefix("text/") { return "doc.plaintext" }
+        return "doc"
     }
 
     private static let sizeFormatter: ByteCountFormatter = {

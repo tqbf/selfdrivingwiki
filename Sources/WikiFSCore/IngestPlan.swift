@@ -46,7 +46,7 @@ public enum IngestPlan: Equatable, Sendable {
   public static let tinySourceByteThreshold = 4096
 
   /// Pick the mode from the raw source size. The app passes the source's byte size
-  /// (from `IngestedFileSummary.byteSize` / the staged bytes); the decision is a
+  /// (from `SourceSummary.byteSize` / the staged bytes); the decision is a
   /// pure function of that size and the threshold.
   public static func decide(sourceByteSize: Int) -> IngestPlan {
     sourceByteSize < tinySourceByteThreshold ? .singleOpus : .opusCurator

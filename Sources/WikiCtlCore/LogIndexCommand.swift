@@ -24,7 +24,7 @@ public enum LogIndexCommand {
             let entry = try store.appendLog(kind: kind, title: title, note: note)
             // On a successful ingest the agent passes --source <file-id>; stamp it
             // so the UI shows the file as Ingested without guessing from the title.
-            if let source { try store.markIngestedFile(id: source) }
+            if let source { try store.markSourceIngested(id: source) }
             return PageCommand.Result(output: entry.id.rawValue, didCommit: true)
         case .indexSet(let body):
             try store.updateWikiIndex(body: body)

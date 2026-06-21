@@ -61,11 +61,11 @@ struct WikiDetailView: View {
                 launcher: launcher,
                 manager: manager,
                 fileProvider: fileProvider)
-        case .ingestedFile(let id):
-            if let file = store.ingestedFiles.first(where: { $0.id == id }) {
+        case .source(let id):
+            if let file = store.sources.first(where: { $0.id == id }) {
                 IngestedFileDetailView(
                     file: file,
-                    hasBeenIngested: store.hasIngestedFile(file),
+                    hasBeenIngested: store.isSourceIngested(file),
                     isIngesting: launcher.ingestingFileIDs.contains(file.id),
                     isRunning: launcher.isRunning,
                     isAnyFileIngesting: !launcher.ingestingFileIDs.isEmpty,

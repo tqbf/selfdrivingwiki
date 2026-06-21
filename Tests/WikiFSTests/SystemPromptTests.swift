@@ -146,7 +146,7 @@ struct SystemPromptTests {
 
     @Test func changeTokenAdvancesOnSystemPromptEdit() throws {
         let store = try tempStore()
-        // No pages, no files: only the system-prompt version moves.
+        // No pages, no sources: only the system-prompt version moves.
         #expect(try store.changeToken() == "0:0:0:0:1:0:1")
         try store.updateSystemPrompt(body: "edited")
         #expect(try store.changeToken() == "0:0:0:0:2:0:1")
@@ -179,7 +179,7 @@ struct SystemPromptTests {
     @Test func migratesV2DatabaseToV3PreservingData() throws {
         let url = tempDatabaseURL()
 
-        // Build a v2-shaped DB by hand: pages + slug index + ingested_files +
+        // Build a v2-shaped DB by hand: pages + slug index + sources +
         // user_version=2, WITHOUT system_prompt. Seed one page and one file.
         var raw: OpaquePointer?
         #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
@@ -216,9 +216,9 @@ struct SystemPromptTests {
         // Pre-existing page + ingested file are intact.
         let page = try store.getPage(id: PageID(rawValue: "01PRESERVEDPAGE0000000000"))
         #expect(page.title == "Kept")
-        let file = try store.getIngestedFile(id: PageID(rawValue: "01PRESERVEDFILE0000000000"))
+        let file = try store.getSource(id: PageID(rawValue: "01PRESERVEDFILE0000000000"))
         #expect(file.filename == "keep.txt")
-        #expect(try store.ingestedFileContent(id: file.id) == Data("keep".utf8))
+        #expect(try store.sourceContent(id: file.id) == Data("keep".utf8))
 
         // user_version advances through every migration step to head (v9).
         var check: OpaquePointer?
@@ -228,7 +228,7 @@ struct SystemPromptTests {
         #expect(sqlite3_prepare_v2(check, "PRAGMA user_version;", -1, &stmt, nil) == SQLITE_OK)
         defer { sqlite3_finalize(stmt) }
         #expect(sqlite3_step(stmt) == SQLITE_ROW)
-        #expect(sqlite3_column_int(stmt, 0) == 9)
+        #expect(sqlite3_column_int(stmt, 0) == 10)
         _ = store
     }
 }

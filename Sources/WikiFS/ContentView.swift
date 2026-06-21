@@ -160,12 +160,12 @@ struct ContentView: View {
         store.navigateForward()
     }
 
-    private func runIngest(fileID: PageID) {
-        DebugLog.ingest("ContentView.runIngest: user pressed Ingest (fileID=\(fileID.rawValue))")
+    private func runIngest(sourceID: PageID) {
+        DebugLog.ingest("ContentView.runIngest: user pressed Ingest (sourceID=\(sourceID.rawValue))")
         let task = Task {
             defer { agentLauncher.ingestTask = nil }
             await AgentOperationRunner.runIngest(
-                fileID: fileID,
+                sourceID: sourceID,
                 launcher: agentLauncher,
                 store: store,
                 manager: manager,

@@ -1,15 +1,15 @@
 import Foundation
 
-/// Metadata for one ingested file — the verbatim bytes dragged into the app and
-/// stored in the `ingested_files` table (NOT a wiki page). The raw `content`
+/// Metadata for one source — the verbatim bytes ingested into the app and
+/// stored in the `sources` table (NOT a wiki page). The raw `content`
 /// BLOB is deliberately NOT part of this summary: it is fetched on demand via
-/// `SQLiteWikiStore.ingestedFileContent(id:)` so the list and the projection's
+/// `SQLiteWikiStore.sourceContent(id:)` so the list and the projection's
 /// `getattr`/enumeration never hold large blobs in memory.
 ///
-/// `id` reuses `PageID` (a ULID-string wrapper) since the ingest id is also a
+/// `id` reuses `PageID` (a ULID-string wrapper) since the source id is also a
 /// ULID — sortable, so the raw value orders by ingest time. Identifiable +
 /// Hashable so it drives a SwiftUI `List`/`ForEach` directly.
-public struct IngestedFileSummary: Identifiable, Hashable, Sendable {
+public struct SourceSummary: Identifiable, Hashable, Sendable {
     public let id: PageID
     public let filename: String
     /// Lowercased extension with no leading dot (`""` when the name has none).
@@ -21,13 +21,18 @@ public struct IngestedFileSummary: Identifiable, Hashable, Sendable {
     public let updatedAt: Date
     public let version: Int
 
-    /// The Zotero library item this file was ingested from — set ONLY via the
+    /// The Zotero library item this source was ingested from — set ONLY via the
     /// Zotero ingest seam (`ingestFromZotero`). `nil` for drag-drop, URL, and
     /// Markdown-folder imports (no Zotero provenance). `key` is the item key
     /// needed to build a "View in Zotero" link; `title` is the item's display
     /// title captured at ingest time (the item could be renamed/deleted later).
     public let zoteroItemKey: String?
     public let zoteroItemTitle: String?
+
+    /// User-editable display name for this source. Defaults to the original
+    /// filename at ingest time. Used for `[[source:display-name]]` link
+    /// resolution and sidebar/file-provider presentation.
+    public let displayName: String?
 
     public init(
         id: PageID,
@@ -39,7 +44,8 @@ public struct IngestedFileSummary: Identifiable, Hashable, Sendable {
         updatedAt: Date,
         version: Int,
         zoteroItemKey: String? = nil,
-        zoteroItemTitle: String? = nil
+        zoteroItemTitle: String? = nil,
+        displayName: String? = nil
     ) {
         self.id = id
         self.filename = filename
@@ -51,5 +57,6 @@ public struct IngestedFileSummary: Identifiable, Hashable, Sendable {
         self.version = version
         self.zoteroItemKey = zoteroItemKey
         self.zoteroItemTitle = zoteroItemTitle
+        self.displayName = displayName
     }
 }

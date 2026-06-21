@@ -68,12 +68,12 @@ public enum FileCommand {
     // MARK: - list
 
     private static func list(in store: WikiStore, json: Bool) throws -> Result {
-        let summaries = try store.listIngestedFiles()
+        let summaries = try store.listSources()
         if json {
             // Sort by id (ULID = ingest order) to match indexes/files.jsonl.
             let sorted = summaries.sorted { $0.id.rawValue < $1.id.rawValue }
             let rows = sorted.map { summary in
-                IndexGenerators.FileRow(
+                IndexGenerators.SourceIndexRow(
                     id: summary.id.rawValue,
                     filename: summary.filename,
                     ext: summary.ext,
@@ -84,7 +84,7 @@ public enum FileCommand {
                     version: summary.version
                 )
             }
-            let data = IndexGenerators.filesJSONL(files: rows)
+            let data = IndexGenerators.sourcesJSONL(sources: rows)
             return Result(
                 payload: .text(String(decoding: data, as: UTF8.self)),
                 didCommit: false
@@ -107,7 +107,7 @@ public enum FileCommand {
         let id = try resolve(selector, in: store)
         let data: Data
         do {
-            data = try store.ingestedFileContent(id: id)
+            data = try store.sourceContent(id: id)
         } catch {
             throw Failure.message("file not found: \(id.rawValue)")
         }
@@ -125,7 +125,7 @@ public enum FileCommand {
         let id = try resolve(selector, in: store)
         let data: Data
         do {
-            data = try store.ingestedFileContent(id: id)
+            data = try store.sourceContent(id: id)
         } catch {
             throw Failure.message("file not found: \(id.rawValue)")
         }
@@ -135,7 +135,7 @@ public enum FileCommand {
             path = out
         } else {
             // Derive ext from the file's stored metadata to build the default name.
-            let summaries = try store.listIngestedFiles()
+            let summaries = try store.listSources()
             let ext = summaries.first(where: { $0.id == id })?.ext ?? ""
             let leaf = ext.isEmpty
                 ? "file-\(id.rawValue)"
@@ -154,7 +154,7 @@ public enum FileCommand {
         case .id(let id):
             return id
         case .name(let name):
-            let summaries = try store.listIngestedFiles()
+            let summaries = try store.listSources()
             let matches = summaries.filter { $0.filename == name }
             switch matches.count {
             case 0:

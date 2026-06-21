@@ -1,18 +1,18 @@
 import Foundation
 
-/// One version in the append-only, git-lite version chain for a file's
+/// One version in the append-only, git-lite version chain for a source's
 /// processed markdown. Each version is a FULL-TEXT snapshot (never a delta).
 /// ULID-sorted: MAX(id) is always the HEAD. The original source bytes in
-/// `ingested_files.content` are immutable — this chain holds the editable
+/// `sources.content` are immutable — this chain holds the editable
 /// processed markdown.
 ///
 /// `parentID` is nil for v1 (the seeding/extraction baseline) and points to
 /// the previous version for every subsequent edit/revert.
-public struct FileMarkdownVersion: Identifiable, Hashable, Sendable {
-    /// ULID — sorts chronologically, so MAX(id) for a given file is the head.
+public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
+    /// ULID — sorts chronologically, so MAX(id) for a given source is the head.
     public let id: PageID
-    /// The ingested file this version belongs to.
-    public let fileID: PageID
+    /// The source this version belongs to.
+    public let sourceID: PageID
     /// Previous version's id; nil for v1 (the lineage root).
     public let parentID: PageID?
     /// Full markdown text of this version.
@@ -26,7 +26,7 @@ public struct FileMarkdownVersion: Identifiable, Hashable, Sendable {
 
     public init(
         id: PageID,
-        fileID: PageID,
+        sourceID: PageID,
         parentID: PageID?,
         content: String,
         origin: String,
@@ -34,7 +34,7 @@ public struct FileMarkdownVersion: Identifiable, Hashable, Sendable {
         createdAt: Date
     ) {
         self.id = id
-        self.fileID = fileID
+        self.sourceID = sourceID
         self.parentID = parentID
         self.content = content
         self.origin = origin

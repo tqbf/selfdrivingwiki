@@ -18,11 +18,11 @@ struct ProcessedMarkdownTests {
     /// Create an ingested file row so FK constraints are satisfied for version tests.
     @discardableResult
     private func seedIngestedFile(in store: SQLiteWikiStore, filename: String = "test.txt",
-                                  data: Data = Data("hello".utf8)) throws -> IngestedFileSummary {
-        try store.ingestFile(filename: filename, data: data)
+                                  data: Data = Data("hello".utf8)) throws -> SourceSummary {
+        try store.addSource(filename: filename, data: data)
     }
 
-    /// Build a v7 DB by hand (pages + ingested_files + system_prompt + log +
+    /// Build a v7 DB by hand (pages + sources + system_prompt + log +
     /// wiki_index + page_embeddings), then open it with SQLiteWikiStore — the
     /// store runs the v7→v8 migration step. Used to verify stepwise upgrade.
     private func tempV7DatabaseURL() throws -> URL {
@@ -87,7 +87,7 @@ struct ProcessedMarkdownTests {
 
     @Test func freshDBHasV8Schema() throws {
         let store = try tempStore()
-        #expect(store.pragmaValue("user_version") == "9")
+        #expect(store.pragmaValue("user_version") == "10")
     }
 
     @Test func v7DBUpgradesToV8PreservingData() throws {
@@ -103,9 +103,9 @@ struct ProcessedMarkdownTests {
 
         // Opening runs v7→v8→v9 migration.
         let store = try SQLiteWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "9")
+        #expect(store.pragmaValue("user_version") == "10")
         // Pre-existing file is intact.
-        let content = try store.ingestedFileContent(
+        let content = try store.sourceContent(
             id: PageID(rawValue: "01J00000000000000000000000"))
         #expect(content == Data("hello".utf8))
     }
@@ -114,12 +114,12 @@ struct ProcessedMarkdownTests {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-pm-reopen-\(UUID().uuidString).sqlite")
         let store = try SQLiteWikiStore(databaseURL: url)
-        let file = try store.ingestFile(filename: "test.md", data: Data("hello".utf8))
+        let file = try store.addSource(filename: "test.md", data: Data("hello".utf8))
         _ = try store.appendProcessedMarkdown(
-            fileID: file.id, content: "v1", origin: "extraction", note: nil)
+            sourceID: file.id, content: "v1", origin: "extraction", note: nil)
         // Reopen — must not fail from duplicate DDL.
         let reopened = try SQLiteWikiStore(databaseURL: url)
-        let head = try reopened.processedMarkdownHead(fileID: file.id)
+        let head = try reopened.processedMarkdownHead(sourceID: file.id)
         #expect(head?.content == "v1")
     }
 
@@ -129,7 +129,7 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let file = try seedIngestedFile(in: store)
         let v1 = try store.appendProcessedMarkdown(
-            fileID: file.id, content: "first", origin: "extraction", note: nil)
+            sourceID: file.id, content: "first", origin: "extraction", note: nil)
         #expect(v1.parentID == nil)
         #expect(v1.origin == "extraction")
         #expect(v1.content == "first")
@@ -139,9 +139,9 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let file = try seedIngestedFile(in: store)
         let v1 = try store.appendProcessedMarkdown(
-            fileID: file.id, content: "one", origin: "extraction", note: nil)
+            sourceID: file.id, content: "one", origin: "extraction", note: nil)
         let v2 = try store.appendProcessedMarkdown(
-            fileID: file.id, content: "two", origin: "user", note: nil)
+            sourceID: file.id, content: "two", origin: "user", note: nil)
         #expect(v2.parentID == v1.id)
     }
 
@@ -149,13 +149,13 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let file = try seedIngestedFile(in: store)
         _ = try store.appendProcessedMarkdown(
-            fileID: file.id, content: "v1", origin: "extraction", note: nil)
+            sourceID: file.id, content: "v1", origin: "extraction", note: nil)
         // Tiny sleep guarantees the next ULID has a strictly later timestamp
         // so ORDER BY id DESC picks it up correctly.
         usleep(2000)
         let v2 = try store.appendProcessedMarkdown(
-            fileID: file.id, content: "v2", origin: "user", note: nil)
-        let head = try store.processedMarkdownHead(fileID: file.id)
+            sourceID: file.id, content: "v2", origin: "user", note: nil)
+        let head = try store.processedMarkdownHead(sourceID: file.id)
         #expect(head?.id == v2.id)
         #expect(head?.content == "v2")
     }
@@ -164,11 +164,11 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let file = try seedIngestedFile(in: store)
         let v1 = try store.appendProcessedMarkdown(
-            fileID: file.id, content: "first", origin: "extraction", note: nil)
+            sourceID: file.id, content: "first", origin: "extraction", note: nil)
         usleep(2000)
         let v2 = try store.appendProcessedMarkdown(
-            fileID: file.id, content: "second", origin: "user", note: nil)
-        let history = try store.processedMarkdownHistory(fileID: file.id)
+            sourceID: file.id, content: "second", origin: "user", note: nil)
+        let history = try store.processedMarkdownHistory(sourceID: file.id)
         #expect(history.count == 2)
         #expect(history[0].id == v2.id)  // newest first
         #expect(history[1].id == v1.id)
@@ -177,10 +177,10 @@ struct ProcessedMarkdownTests {
     @Test func hasProcessedMarkdownReflectsExistence() throws {
         let store = try tempStore()
         let file = try seedIngestedFile(in: store)
-        #expect(try store.hasProcessedMarkdown(fileID: file.id) == false)
+        #expect(try store.hasProcessedMarkdown(sourceID: file.id) == false)
         _ = try store.appendProcessedMarkdown(
-            fileID: file.id, content: "x", origin: "extraction", note: nil)
-        #expect(try store.hasProcessedMarkdown(fileID: file.id) == true)
+            sourceID: file.id, content: "x", origin: "extraction", note: nil)
+        #expect(try store.hasProcessedMarkdown(sourceID: file.id) == true)
     }
 
     // MARK: - Revert
@@ -189,17 +189,17 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let file = try seedIngestedFile(in: store)
         let v1 = try store.appendProcessedMarkdown(
-            fileID: file.id, content: "original", origin: "extraction", note: nil)
+            sourceID: file.id, content: "original", origin: "extraction", note: nil)
         usleep(2000)
         _ = try store.appendProcessedMarkdown(
-            fileID: file.id, content: "edit", origin: "user", note: nil)
+            sourceID: file.id, content: "edit", origin: "user", note: nil)
         usleep(2000)
-        let v3 = try store.revertProcessedMarkdown(fileID: file.id, to: v1.id)
+        let v3 = try store.revertProcessedMarkdown(sourceID: file.id, to: v1.id)
         #expect(v3.content == "original")
         #expect(v3.origin == "revert")
         #expect(v3.parentID != nil)  // parent is the previous head
         // v1 is untouched
-        let history = try store.processedMarkdownHistory(fileID: file.id)
+        let history = try store.processedMarkdownHistory(sourceID: file.id)
         #expect(history[2].content == "original")  // v1 still there
     }
 
@@ -207,28 +207,28 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let file = try seedIngestedFile(in: store)
         _ = try store.appendProcessedMarkdown(
-            fileID: file.id, content: "v1", origin: "extraction", note: nil)
+            sourceID: file.id, content: "v1", origin: "extraction", note: nil)
         usleep(2000)
         _ = try store.appendProcessedMarkdown(
-            fileID: file.id, content: "v2", origin: "user", note: nil)
-        let v1 = try store.processedMarkdownHistory(fileID: file.id).last!
+            sourceID: file.id, content: "v2", origin: "user", note: nil)
+        let v1 = try store.processedMarkdownHistory(sourceID: file.id).last!
         usleep(2000)
-        let reverted = try store.revertProcessedMarkdown(fileID: file.id, to: v1.id)
-        let head = try store.processedMarkdownHead(fileID: file.id)
+        let reverted = try store.revertProcessedMarkdown(sourceID: file.id, to: v1.id)
+        let head = try store.processedMarkdownHead(sourceID: file.id)
         #expect(head?.id == reverted.id)
     }
 
     // MARK: - Cascade
 
-    @Test func deleteIngestedFileRemovesVersions() throws {
+    @Test func deleteSourceRemovesVersions() throws {
         let store = try tempStore()
-        let ingested = try store.ingestFile(filename: "doc.md", data: Data("hello".utf8))
+        let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
         _ = try store.appendProcessedMarkdown(
-            fileID: ingested.id, content: "v1", origin: "extraction", note: nil)
+            sourceID: ingested.id, content: "v1", origin: "extraction", note: nil)
         _ = try store.appendProcessedMarkdown(
-            fileID: ingested.id, content: "v2", origin: "user", note: nil)
-        try store.deleteIngestedFile(id: ingested.id)
-        #expect(try store.hasProcessedMarkdown(fileID: ingested.id) == false)
+            sourceID: ingested.id, content: "v2", origin: "user", note: nil)
+        try store.deleteSource(id: ingested.id)
+        #expect(try store.hasProcessedMarkdown(sourceID: ingested.id) == false)
     }
 
     // MARK: - Source immutability
@@ -236,12 +236,12 @@ struct ProcessedMarkdownTests {
     @Test func sourceBytesUnchangedAfterEdits() throws {
         let store = try tempStore()
         let original = Data([0x00, 0xFF, 0x42])
-        let ingested = try store.ingestFile(filename: "data.bin", data: original)
+        let ingested = try store.addSource(filename: "data.bin", data: original)
         _ = try store.appendProcessedMarkdown(
-            fileID: ingested.id, content: "edit 1", origin: "user", note: nil)
+            sourceID: ingested.id, content: "edit 1", origin: "user", note: nil)
         _ = try store.appendProcessedMarkdown(
-            fileID: ingested.id, content: "edit 2", origin: "user", note: nil)
-        let content = try store.ingestedFileContent(id: ingested.id)
+            sourceID: ingested.id, content: "edit 2", origin: "user", note: nil)
+        let content = try store.sourceContent(id: ingested.id)
         #expect(content == original)
     }
 
@@ -249,8 +249,8 @@ struct ProcessedMarkdownTests {
 
     @Test func nativeMdStoredInIngestedFilesDoesNotAutoSeed() throws {
         let store = try tempStore()
-        let ingested = try store.ingestFile(filename: "notes.md", data: Data("# Notes\ncontent".utf8))
-        let head = try store.processedMarkdownHead(fileID: ingested.id)
+        let ingested = try store.addSource(filename: "notes.md", data: Data("# Notes\ncontent".utf8))
+        let head = try store.processedMarkdownHead(sourceID: ingested.id)
         // No version yet — lazy seed happens at WikiStoreModel layer, not store.
         #expect(head == nil)
     }
@@ -259,11 +259,11 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let file = try seedIngestedFile(in: store)
         let v1 = try store.appendProcessedMarkdown(
-            fileID: file.id, content: "first seed", origin: "extraction", note: nil)
+            sourceID: file.id, content: "first seed", origin: "extraction", note: nil)
         usleep(2000)
         _ = try store.appendProcessedMarkdown(
-            fileID: file.id, content: "second seed", origin: "extraction", note: nil)
-        let history = try store.processedMarkdownHistory(fileID: file.id)
+            sourceID: file.id, content: "second seed", origin: "extraction", note: nil)
+        let history = try store.processedMarkdownHistory(sourceID: file.id)
         // Two versions: the second call appended v2 (parent = v1).
         // The "double-seed guard" is at the caller level (WikiStoreModel).
         #expect(history.count == 2)
@@ -278,9 +278,9 @@ struct ProcessedMarkdownTests {
         let arbitraryID = PageID(rawValue: "01J00000000000000000000000")
         // Read seams must return safe defaults (nil / false / []) without
         // crashing even though file_markdown_versions doesn't exist.
-        #expect(try store.processedMarkdownHead(fileID: arbitraryID) == nil)
-        #expect(try store.hasProcessedMarkdown(fileID: arbitraryID) == false)
-        #expect(try store.processedMarkdownHistory(fileID: arbitraryID).isEmpty)
+        #expect(try store.processedMarkdownHead(sourceID: arbitraryID) == nil)
+        #expect(try store.hasProcessedMarkdown(sourceID: arbitraryID) == false)
+        #expect(try store.processedMarkdownHistory(sourceID: arbitraryID).isEmpty)
     }
 
     // MARK: - Model-level: PDF extraction reuse during ingest
@@ -292,7 +292,7 @@ struct ProcessedMarkdownTests {
     /// of re-extracting.
     @Test @MainActor func pdfHeadNilBeforeExtraction() throws {
         let store = try tempStore()
-        let pdf = try store.ingestFile(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
+        let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
         let model = WikiStoreModel(store: store)
         // Before extraction: no head.
         #expect(model.processedMarkdownHead(for: pdf) == nil)
@@ -300,11 +300,11 @@ struct ProcessedMarkdownTests {
 
     @Test @MainActor func seedPdfMarkdownCreatesHead() throws {
         let store = try tempStore()
-        let pdf = try store.ingestFile(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
+        let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
         let model = WikiStoreModel(store: store)
 
         // Simulate extraction output: seed the markdown.
-        let seeded = model.seedPdfMarkdown(fileID: pdf.id, content: "# Extracted\ncontent")
+        let seeded = model.seedPdfMarkdown(for: pdf.id, content: "# Extracted\ncontent")
         #expect(seeded != nil)
         #expect(seeded?.content == "# Extracted\ncontent")
 
@@ -315,18 +315,18 @@ struct ProcessedMarkdownTests {
 
     @Test @MainActor func seedPdfMarkdownDoubleSeedReturnsExisting() throws {
         let store = try tempStore()
-        let pdf = try store.ingestFile(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
+        let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
         let model = WikiStoreModel(store: store)
 
         // First seed.
-        let v1 = model.seedPdfMarkdown(fileID: pdf.id, content: "first extract")
+        let v1 = model.seedPdfMarkdown(for: pdf.id, content: "first extract")
         #expect(v1 != nil)
         #expect(v1?.content == "first extract")
 
         // Second seed: double-seed guard returns the existing head, does NOT
         // append a duplicate version.
         usleep(2000)
-        let v2 = model.seedPdfMarkdown(fileID: pdf.id, content: "should be ignored")
+        let v2 = model.seedPdfMarkdown(for: pdf.id, content: "should be ignored")
         #expect(v2 != nil)
         #expect(v2?.id == v1?.id)
         #expect(v2?.content == "first extract")
