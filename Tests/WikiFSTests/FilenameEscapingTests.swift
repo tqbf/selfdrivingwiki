@@ -67,38 +67,38 @@ struct FilenameEscapingTests {
 
     // MARK: - Ingested files (Phase 5)
 
-    @Test func byIDIngestedFilenamePreservesExtension() {
+    @Test func byIDSourceFilenamePreservesExtension() {
         #expect(
-            FilenameEscaping.byIDIngestedFilename(
-                fileID: "01KV6EAH410NWC9K9ZM44DNMXT", ext: "pdf")
+            FilenameEscaping.byIDSourceFilename(
+                sourceID: "01KV6EAH410NWC9K9ZM44DNMXT", ext: "pdf")
                 == "01KV6EAH410NWC9K9ZM44DNMXT.pdf")
     }
 
-    @Test func byIDIngestedFilenameOmitsDotWhenNoExtension() {
+    @Test func byIDSourceFilenameOmitsDotWhenNoExtension() {
         #expect(
-            FilenameEscaping.byIDIngestedFilename(
-                fileID: "01KV6EAH410NWC9K9ZM44DNMXT", ext: "")
+            FilenameEscaping.byIDSourceFilename(
+                sourceID: "01KV6EAH410NWC9K9ZM44DNMXT", ext: "")
                 == "01KV6EAH410NWC9K9ZM44DNMXT")
     }
 
-    @Test func byNameIngestedFilenameEscapesStemAddsShortIDPreservesExt() {
+    @Test func byNameSourceFilenameEscapesStemAddsShortIDPreservesExt() {
         #expect(
-            FilenameEscaping.byNameIngestedFilename(
+            FilenameEscaping.byNameSourceFilename(
                 filename: "Trip Report.pdf", ext: "pdf",
-                fileID: "01JABCDEFGHJKMNPQRSTVWXYZ0")
+                sourceID: "01JABCDEFGHJKMNPQRSTVWXYZ0")
                 == "Trip Report--01JABCDE.pdf")
         // Stem with a path-hostile char is escaped; original ext preserved.
         #expect(
-            FilenameEscaping.byNameIngestedFilename(
-                filename: "a/b.txt", ext: "txt", fileID: "01JABCDEFGHJKMNPQRSTVWXYZ0")
+            FilenameEscaping.byNameSourceFilename(
+                filename: "a/b.txt", ext: "txt", sourceID: "01JABCDEFGHJKMNPQRSTVWXYZ0")
                 == "a-b--01JABCDE.txt")
     }
 
-    @Test func byNameIngestedFilenameEmptyStemBecomesUntitled() {
+    @Test func byNameSourceFilenameEmptyStemBecomesUntitled() {
         // Extension-less, weird name: stem escapes to "untitled", no dot appended.
         #expect(
-            FilenameEscaping.byNameIngestedFilename(
-                filename: "", ext: "", fileID: "01JABCDEFGHJKMNPQRSTVWXYZ0")
+            FilenameEscaping.byNameSourceFilename(
+                filename: "", ext: "", sourceID: "01JABCDEFGHJKMNPQRSTVWXYZ0")
                 == "untitled--01JABCDE")
     }
 }

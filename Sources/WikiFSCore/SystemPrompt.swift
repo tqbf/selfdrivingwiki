@@ -45,14 +45,14 @@ public struct SystemPrompt: Equatable, Sendable {
 
     - `pages/by-title/`, `pages/by-id/` — the wiki pages you author (one file per
       page, addressed by title and by ULID).
-    - `files/by-name/`, `files/by-id/` — raw ingested sources, IMMUTABLE and
-      verbatim (the bytes the user dropped). Cite a source by its `files/…` path.
+    - `sources/by-name/`, `sources/by-id/` — raw sources, IMMUTABLE and
+      verbatim (the bytes the user added). Cite a source by its `sources/…` path.
     - `index.md` — the curated catalog you maintain (rewritten wholesale on ingest).
     - `log.md` — the append-only chronological log of ingests/queries/lints.
     - `WIKI-STRUCTURE.md` — an orientation map of this layout plus live page/file counts.
     - `TREE.md` — legacy alias for `WIKI-STRUCTURE.md`.
     - `indexes/*.jsonl` — machine-readable indexes (`pages.jsonl`, `links.jsonl`,
-      `files.jsonl`) for cheap programmatic navigation.
+      `sources.jsonl`) for cheap programmatic navigation.
     - `manifest.json` — the generated wiki manifest.
     - `CLAUDE.md` / `AGENTS.md` — this document (identical bytes).
 
@@ -64,13 +64,13 @@ public struct SystemPrompt: Equatable, Sendable {
       body, or `[[Target|alias]]` to show different link text. Link entities and
       concepts to their own pages so the graph stays connected.
     - **Summarize, don't discard.** Condense long or messy sources into pages, but
-      the raw source under `files/` is the system of record — cite it, never
+      the raw source under `sources/` is the system of record — cite it, never
       replace it.
     - **Entity pages** describe one thing (a person, place, organization, system):
       what it is, key facts, and links to related pages.
     - **Concept pages** explain one idea or process: a definition, how it works,
       and links to the entities and concepts it touches.
-    - **Cite sources** by their `files/…` path so a claim can be traced back to the
+    - **Cite sources** by their `sources/…` path so a claim can be traced back to the
       bytes it came from.
 
     ## Tooling — write via `wikictl`, never the filesystem
@@ -97,7 +97,7 @@ public struct SystemPrompt: Equatable, Sendable {
 
     ## Sources
 
-    Raw files under `files/` may be PDFs or images, not just text. Use the `Read`
+    Raw files under `sources/` may be PDFs or images, not just text. Use the `Read`
     tool on them directly — it handles text, images, and PDFs. For a PDF, read the
     text first; if it references figures you need, view those images separately.
 
@@ -106,7 +106,7 @@ public struct SystemPrompt: Equatable, Sendable {
     **Ingest** — bring one raw source into the wiki:
     1. Read the source (`Read` for PDFs/images, `cat` for text).
     2. Write at least one summary page capturing its key content via
-       `wikictl page upsert`; cite the source by its `files/…` path.
+       `wikictl page upsert`; cite the source by its `sources/…` path.
     3. Create or update the entity/concept pages it mentions, cross-linking with
        `[[wiki links]]`.
     4. Rewrite `index.md` via `wikictl index set` so the catalog lists the pages
@@ -120,7 +120,7 @@ public struct SystemPrompt: Equatable, Sendable {
        search across page bodies. If that misses, fall back to `wikictl page list`,
        then `wikictl page get`; `grep`/`cat` over `index.md`, `log.md`, and
        `WIKI-STRUCTURE.md`.
-    2. Answer concisely, CITING the page titles or `files/…` paths you drew on. If
+    2. Answer concisely, CITING the page titles or `sources/…` paths you drew on. If
        the wiki lacks the information, say so plainly rather than guessing.
     3. Optionally file a useful answer back as a page via `wikictl page upsert`,
        then `wikictl log append --kind query --title "<the question>"`.

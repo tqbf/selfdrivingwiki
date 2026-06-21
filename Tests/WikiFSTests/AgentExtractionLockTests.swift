@@ -8,7 +8,7 @@ import WikiFSCore
 /// `releaseExtractionSlot` wakes the next live waiter FIFO. Critically, the
 /// extraction lock is INDEPENDENT of the claude spawn slot — holding one never
 /// blocks the other — and of the edit lock. Also covers the two-flag phase
-/// split (`extractingFileIDs` vs `ingestingFileIDs`) and the row's
+/// split (`extractingSourceIDs` vs `ingestingSourceIDs`) and the row's
 /// Extracting-vs-Ingesting label predicate.
 ///
 /// These exercise the slot seams (`awaitExtractionSlot` / `releaseExtractionSlot`
@@ -174,8 +174,8 @@ struct AgentExtractionLockTests {
 
     // MARK: - Phase flags: extraction phase vs agent phase
 
-    /// The extraction phase sets `extractingFileIDs` (NOT `ingestingFileIDs`),
-    /// and `ingestingFileIDs` stays empty until the agent spawn commits. Driven
+    /// The extraction phase sets `extractingSourceIDs` (NOT `ingestingSourceIDs`),
+    /// and `ingestingSourceIDs` stays empty until the agent spawn commits. Driven
     /// via the slot seams + direct flag assignment mirroring what
     /// `runMultiIngest` does around the pdf2md block (acquire slot → insert id →
     /// release slot), without running a real pdf2md. Asserts the overload fix:
@@ -187,24 +187,24 @@ struct AgentExtractionLockTests {
         // Extraction phase: acquire the extraction slot and record the file.
         let acquired = await launcher.awaitExtractionSlot()
         #expect(acquired)
-        launcher.extractingFileIDs.insert(id)
-        #expect(launcher.extractingFileIDs.contains(id))
+        launcher.extractingSourceIDs.insert(id)
+        #expect(launcher.extractingSourceIDs.contains(id))
         // The agent-phase flag is NOT set during extraction — this is the bug fix.
-        #expect(launcher.ingestingFileIDs.isEmpty)
-        // The cross-file Ingest greyout (driven off `ingestingFileIDs`) is OFF.
-        #expect(!launcher.ingestingFileIDs.contains(id))
+        #expect(launcher.ingestingSourceIDs.isEmpty)
+        // The cross-file Ingest greyout (driven off `ingestingSourceIDs`) is OFF.
+        #expect(!launcher.ingestingSourceIDs.contains(id))
         // The extraction lock does not touch the spawn slot or edit lock.
         #expect(!launcher.isRunning)
 
         // Extraction ends: clear the extraction-phase flag + release the slot.
-        launcher.extractingFileIDs.remove(id)
+        launcher.extractingSourceIDs.remove(id)
         launcher.releaseExtractionSlot()
-        #expect(launcher.extractingFileIDs.isEmpty)
-        #expect(launcher.ingestingFileIDs.isEmpty)
+        #expect(launcher.extractingSourceIDs.isEmpty)
+        #expect(launcher.ingestingSourceIDs.isEmpty)
         #expect(!launcher.isExtractionSlotBusy)
     }
 
-    /// The agent phase sets `ingestingFileIDs` only at spawn commit (i.e. once
+    /// The agent phase sets `ingestingSourceIDs` only at spawn commit (i.e. once
     /// the spawn slot is acquired), and the cross-file Ingest greyout activates
     /// only then. Acquire the spawn slot (simulating spawn commit) and assign the
     /// agent-phase flag, mirroring what `AgentLauncher.run` does around `onLock`.
@@ -214,30 +214,30 @@ struct AgentExtractionLockTests {
         let idB = PageID(rawValue: "01AGENTPHASEB00000")
 
         // Before spawn commit: neither phase flag set (no extraction running).
-        #expect(launcher.extractingFileIDs.isEmpty)
-        #expect(launcher.ingestingFileIDs.isEmpty)
+        #expect(launcher.extractingSourceIDs.isEmpty)
+        #expect(launcher.ingestingSourceIDs.isEmpty)
 
         // Spawn commit: acquire the spawn slot, then assign the agent-phase flag.
         let acquired = await launcher.awaitSpawnSlot()
         #expect(acquired)
-        launcher.ingestingFileIDs = [idA, idB]
-        #expect(launcher.ingestingFileIDs.contains(idA))
+        launcher.ingestingSourceIDs = [idA, idB]
+        #expect(launcher.ingestingSourceIDs.contains(idA))
         // The extraction-phase flag is NOT set by the agent phase.
-        #expect(launcher.extractingFileIDs.isEmpty)
+        #expect(launcher.extractingSourceIDs.isEmpty)
         // The cross-file Ingest greyout is now active for any other file.
-        #expect(!launcher.ingestingFileIDs.isEmpty)
+        #expect(!launcher.ingestingSourceIDs.isEmpty)
 
         // finish() clears the agent-phase flag and releases the spawn slot.
         // Simulate via the public seam: clear + release (finish is private).
-        launcher.ingestingFileIDs = []
+        launcher.ingestingSourceIDs = []
         launcher.releaseSpawnSlot()
-        #expect(launcher.ingestingFileIDs.isEmpty)
+        #expect(launcher.ingestingSourceIDs.isEmpty)
         #expect(!launcher.isRunning)
     }
 
     /// While file A is in the EXTRACTION phase, file B's Ingest is not greyed
-    /// out (the cross-file greyout keys off `ingestingFileIDs`, not
-    /// `extractingFileIDs`), and B may start its own extraction (serialized on
+    /// out (the cross-file greyout keys off `ingestingSourceIDs`, not
+    /// `extractingSourceIDs`), and B may start its own extraction (serialized on
     /// the extraction slot). This is the core user-facing invariant.
     @Test func pureExtractionDoesNotGreyOutPeerIngest() async {
         let launcher = makeLauncher()
@@ -246,29 +246,29 @@ struct AgentExtractionLockTests {
 
         // A is mid-extraction.
         _ = await launcher.awaitExtractionSlot()
-        launcher.extractingFileIDs.insert(idA)
+        launcher.extractingSourceIDs.insert(idA)
 
-        // The cross-file Ingest greyout predicate is `!ingestingFileIDs.isEmpty`
-        // (see WikiDetailView.isAnyFileIngesting). During A's extraction it is OFF.
-        let isAnyFileIngesting = !launcher.ingestingFileIDs.isEmpty
-        #expect(!isAnyFileIngesting)
+        // The cross-file Ingest greyout predicate is `!ingestingSourceIDs.isEmpty`
+        // (see WikiDetailView.isAnySourceIngesting). During A's extraction it is OFF.
+        let isAnySourceIngesting = !launcher.ingestingSourceIDs.isEmpty
+        #expect(!isAnySourceIngesting)
         // B's id is not in the extraction set, so B's row is neither extracting
         // nor ingesting — free to ingest.
-        #expect(!launcher.extractingFileIDs.contains(idB))
-        #expect(!launcher.ingestingFileIDs.contains(idB))
+        #expect(!launcher.extractingSourceIDs.contains(idB))
+        #expect(!launcher.ingestingSourceIDs.contains(idB))
 
-        launcher.extractingFileIDs.remove(idA)
+        launcher.extractingSourceIDs.remove(idA)
         launcher.releaseExtractionSlot()
     }
 
     // MARK: - Row label predicate (Extracting… vs Ingesting…)
 
-    /// `IngestedFileRow.rowStatus` is the pure predicate backing the row's
+    /// `SourceRow.rowStatus` is the pure predicate backing the row's
     /// trailing status icon. Extraction phase beats agent phase beats the idle
     /// glyphs — a pure extraction shows "Extracting…", never "Ingesting…".
     @Test func rowStatusPrecedence() {
-        func s(_ e: Bool, _ i: Bool, _ ingested: Bool) -> IngestedFileRow.RowStatus {
-            IngestedFileRow.rowStatus(isExtracting: e, isIngesting: i, hasBeenIngested: ingested)
+        func s(_ e: Bool, _ i: Bool, _ ingested: Bool) -> SourceRow.RowStatus {
+            SourceRow.rowStatus(isExtracting: e, isIngesting: i, hasBeenIngested: ingested)
         }
         // Idle states.
         #expect(s(false, false, false) == .ready)
@@ -325,7 +325,7 @@ struct AgentExtractionLockTests {
     /// so `AgentTranscriptSidebar.showsConversion` renders the PDF Conversion box.
     /// The flag is managed by the caller (both the ingest path in
     /// `AgentOperationRunner.runMultiIngest` and the standalone path in
-    /// `IngestedFileDetailView.runExtraction`), not by the slot itself — but the
+    /// `SourceDetailView.runExtraction`), not by the slot itself — but the
     /// launcher must carry and expose it.
     @Test func isExtractingFlagExposedByLauncher() async {
         let launcher = makeLauncher()
@@ -366,24 +366,24 @@ struct AgentExtractionLockTests {
         launcher.isExtracting = true
         launcher.extractionPID = 12345
         launcher.extractionLog = "converting…"
-        launcher.extractingFileIDs = [PageID(rawValue: "01STOPEXTRACT00")]
+        launcher.extractingSourceIDs = [PageID(rawValue: "01STOPEXTRACT00")]
 
         launcher.stopExtraction()
         #expect(!launcher.isExtracting)
         #expect(launcher.extractionPID == nil)
         #expect(launcher.extractionLog.isEmpty)
-        #expect(launcher.extractingFileIDs.isEmpty)
+        #expect(launcher.extractingSourceIDs.isEmpty)
     }
 
     /// `stopExtraction()` without a stored Task is safe — clears flags, no crash.
     @Test func stopExtractionWithNoTaskIsSafe() async {
         let launcher = makeLauncher()
         launcher.isExtracting = true
-        launcher.extractingFileIDs = [PageID(rawValue: "01NOOPEXTRACT00")]
+        launcher.extractingSourceIDs = [PageID(rawValue: "01NOOPEXTRACT00")]
 
         launcher.stopExtraction()
         #expect(!launcher.isExtracting)
-        #expect(launcher.extractingFileIDs.isEmpty)
+        #expect(launcher.extractingSourceIDs.isEmpty)
     }
 
     /// `stopAgent()` does NOT clear extraction-phase flags — the two are
@@ -394,7 +394,7 @@ struct AgentExtractionLockTests {
         launcher.isExtracting = true
         launcher.extractionPID = 99999
         launcher.extractionLog = "still converting…"
-        launcher.extractingFileIDs = [extractionID]
+        launcher.extractingSourceIDs = [extractionID]
 
         // Simulate an agent run in progress.
         _ = await launcher.awaitSpawnSlot()
@@ -407,6 +407,6 @@ struct AgentExtractionLockTests {
         #expect(launcher.isExtracting)
         #expect(launcher.extractionPID == 99999)
         #expect(launcher.extractionLog == "still converting…")
-        #expect(launcher.extractingFileIDs.contains(extractionID))
+        #expect(launcher.extractingSourceIDs.contains(extractionID))
     }
 }

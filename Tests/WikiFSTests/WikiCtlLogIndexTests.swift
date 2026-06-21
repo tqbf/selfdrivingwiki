@@ -104,23 +104,23 @@ struct WikiCtlLogIndexTests {
 
     @Test func logAppendWithSourceMarksFileIngested() throws {
         let store = try tempStore()
-        let file = try store.ingestFile(filename: "paper.pdf", data: Data("%PDF".utf8))
-        #expect(try store.markedIngestedFileIDs().isEmpty)
+        let file = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
+        #expect(try store.markedSourceIDs().isEmpty)
 
         _ = try LogIndexCommand.run(
             .logAppend(kind: .ingest, title: "Anything", note: nil, source: file.id), in: store)
 
-        #expect(try store.markedIngestedFileIDs() == [file.id.rawValue])
+        #expect(try store.markedSourceIDs() == [file.id.rawValue])
     }
 
     @Test func logAppendWithoutSourceLeavesFileUnmarked() throws {
         let store = try tempStore()
-        let file = try store.ingestFile(filename: "paper.pdf", data: Data("%PDF".utf8))
+        let file = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
 
         _ = try LogIndexCommand.run(
             .logAppend(kind: .ingest, title: "Ingested paper.pdf", note: nil, source: nil), in: store)
 
-        #expect(try store.markedIngestedFileIDs().isEmpty)
+        #expect(try store.markedSourceIDs().isEmpty)
         _ = file
     }
 

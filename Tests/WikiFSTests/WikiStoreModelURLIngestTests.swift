@@ -3,7 +3,7 @@ import Testing
 @testable import WikiFSCore
 
 /// Verifies `WikiStoreModel.ingestURL` lands a fetched resource through the SAME
-/// store path as drag-ingest, so it appears under `ingestedFiles` immediately and
+/// store path as drag-ingest, so it appears under `sources` immediately and
 /// is byte-correct. Uses a fake fetcher — no real network.
 @MainActor
 struct WikiStoreModelURLIngestTests {
@@ -35,14 +35,14 @@ struct WikiStoreModelURLIngestTests {
 
         #expect(outcome.kind == .htmlConverted)
         #expect(outcome.filename == "My Doc.md")
-        #expect(model.ingestedFiles.count == 1)
-        #expect(model.ingestedFiles.first?.filename == "My Doc.md")
-        #expect(model.ingestedFiles.first?.ext == "md")
+        #expect(model.sources.count == 1)
+        #expect(model.sources.first?.filename == "My Doc.md")
+        #expect(model.sources.first?.ext == "md")
         #expect(didSignal)
 
         // Content is the converted markdown.
-        let id = model.ingestedFiles.first!.id
-        let bytes = try store.ingestedFileContent(id: id)
+        let id = model.sources.first!.id
+        let bytes = try store.sourceContent(id: id)
         #expect(String(data: bytes, encoding: .utf8) == "# Heading\n\nBody.")
     }
 
@@ -57,9 +57,9 @@ struct WikiStoreModelURLIngestTests {
 
         let outcome = try await model.ingestURL("https://example.com/files/paper.pdf", fetcher: fetcher)
         #expect(outcome.kind == .pdf)
-        #expect(model.ingestedFiles.first?.filename == "paper.pdf")
-        let id = model.ingestedFiles.first!.id
-        #expect(try store.ingestedFileContent(id: id) == pdf)  // byte-identical
+        #expect(model.sources.first?.filename == "paper.pdf")
+        let id = model.sources.first!.id
+        #expect(try store.sourceContent(id: id) == pdf)  // byte-identical
     }
 
     @Test func errorLeavesListUnchanged() async throws {
@@ -71,6 +71,6 @@ struct WikiStoreModelURLIngestTests {
         await #expect(throws: URLIngestService.IngestError.empty) {
             try await model.ingestURL("https://example.com", fetcher: fetcher)
         }
-        #expect(model.ingestedFiles.isEmpty)
+        #expect(model.sources.isEmpty)
     }
 }

@@ -23,7 +23,7 @@ struct IndexGeneratorTests {
 
     @Test func manifestIsValidJSONWithCorrectCount() throws {
         let pages = [page("A", "Home", updatedAt: 1), page("B", "Other", updatedAt: 2)]
-        let data = IndexGenerators.manifest(pages: pages, fileCount: 3,
+        let data = IndexGenerators.manifest(pages: pages, sourceCount: 3,
                                             generatedAt: Date(timeIntervalSince1970: 0))
         let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         #expect(obj?["name"] as? String == "Self Driving Wiki")
@@ -33,12 +33,12 @@ struct IndexGeneratorTests {
         let paths = obj?["paths"] as? [String: Any]
         #expect(paths?["page_index"] as? String == "indexes/pages.jsonl")
         #expect(paths?["link_index"] as? String == "indexes/links.jsonl")
-        #expect(paths?["files_by_id"] as? String == "files/by-id")
-        #expect(paths?["file_index"] as? String == "indexes/files.jsonl")
+        #expect(paths?["sources_by_id"] as? String == "sources/by-id")
+        #expect(paths?["source_index"] as? String == "indexes/sources.jsonl")
     }
 
     @Test func manifestGeneratedAtIsISO8601UTC() throws {
-        let data = IndexGenerators.manifest(pages: [], fileCount: 0,
+        let data = IndexGenerators.manifest(pages: [], sourceCount: 0,
                                             generatedAt: Date(timeIntervalSince1970: 0))
         let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         #expect(obj?["generated_at"] as? String == "1970-01-01T00:00:00Z")
@@ -85,16 +85,16 @@ struct IndexGeneratorTests {
         #expect(first?["link_text"] as? String == "File Provider")
     }
 
-    // MARK: - files.jsonl (Phase 5)
+    // MARK: - sources.jsonl (Phase 5)
 
-    @Test func filesJSONLEachLineValidWithCorrectCount() throws {
+    @Test func sourcesJSONLEachLineValidWithCorrectCount() throws {
         let files = [
-            IndexGenerators.FileRow(id: "F1", filename: "Report.pdf", ext: "pdf",
+            IndexGenerators.SourceIndexRow(id: "F1", filename: "Report.pdf", ext: "pdf",
                                     mime: "application/pdf", byteSize: 1024),
-            IndexGenerators.FileRow(id: "F2", filename: "notes", ext: "",
+            IndexGenerators.SourceIndexRow(id: "F2", filename: "notes", ext: "",
                                     mime: nil, byteSize: 0),
         ]
-        let data = IndexGenerators.filesJSONL(files: files)
+        let data = IndexGenerators.sourcesJSONL(sources: files)
         let text = String(decoding: data, as: UTF8.self)
         #expect(text.hasSuffix("\n"))
 
@@ -104,22 +104,22 @@ struct IndexGeneratorTests {
         let first = try JSONSerialization.jsonObject(with: Data(lines[0].utf8)) as? [String: Any]
         #expect(first?["id"] as? String == "F1")
         #expect(first?["name"] as? String == "Report.pdf")
-        #expect(first?["path"] as? String == "files/by-id/F1.pdf")
+        #expect(first?["path"] as? String == "sources/by-id/F1.pdf")
         #expect(first?["size"] as? Int == 1024)
         #expect(first?["mime"] as? String == "application/pdf")
 
         // Extension-less + nil mime: path omits the dot; mime is JSON null.
         let second = try JSONSerialization.jsonObject(with: Data(lines[1].utf8)) as? [String: Any]
-        #expect(second?["path"] as? String == "files/by-id/F2")
+        #expect(second?["path"] as? String == "sources/by-id/F2")
         #expect(second?["size"] as? Int == 0)
         #expect(second?["mime"] is NSNull)
     }
 
-    @Test func filesJSONLIsByteStable() {
-        let files = [IndexGenerators.FileRow(id: "F1", filename: "x.txt", ext: "txt",
+    @Test func sourcesJSONLIsByteStable() {
+        let files = [IndexGenerators.SourceIndexRow(id: "F1", filename: "x.txt", ext: "txt",
                                              mime: "text/plain", byteSize: 5)]
-        #expect(IndexGenerators.filesJSONL(files: files)
-                == IndexGenerators.filesJSONL(files: files))
+        #expect(IndexGenerators.sourcesJSONL(sources: files)
+                == IndexGenerators.sourcesJSONL(sources: files))
     }
 
     // MARK: - Determinism
@@ -127,8 +127,8 @@ struct IndexGeneratorTests {
     @Test func bytesAreDeterministicForFixedInput() {
         let pages = [page("A", "Home", updatedAt: 1), page("B", "Other", updatedAt: 2)]
         let date = Date(timeIntervalSince1970: 12345)
-        #expect(IndexGenerators.manifest(pages: pages, fileCount: 1, generatedAt: date)
-                == IndexGenerators.manifest(pages: pages, fileCount: 1, generatedAt: date))
+        #expect(IndexGenerators.manifest(pages: pages, sourceCount: 1, generatedAt: date)
+                == IndexGenerators.manifest(pages: pages, sourceCount: 1, generatedAt: date))
         #expect(IndexGenerators.pagesJSONL(pages: pages) == IndexGenerators.pagesJSONL(pages: pages))
         let links = [IndexGenerators.LinkRow(from: "A", to: "B", linkText: "x")]
         #expect(IndexGenerators.linksJSONL(links: links) == IndexGenerators.linksJSONL(links: links))
@@ -146,7 +146,7 @@ struct IndexGeneratorTests {
         let links = try store.listAllLinks()
 
         let manifest = try JSONSerialization.jsonObject(
-            with: IndexGenerators.manifest(pages: pages, fileCount: 0, generatedAt: Date())) as? [String: Any]
+            with: IndexGenerators.manifest(pages: pages, sourceCount: 0, generatedAt: Date())) as? [String: Any]
         #expect(manifest?["page_count"] as? Int == 2)
 
         let pagesLines = String(decoding: IndexGenerators.pagesJSONL(pages: pages), as: UTF8.self)

@@ -3,7 +3,7 @@ import Testing
 @testable import WikiFSCore
 
 /// Verifies `WikiStoreModel.importFromMarkdownFolder` lands every `.md` file from a
-/// real temp directory into `ingested_files`, byte-identical, and correctly reports
+/// real temp directory into `sources`, byte-identical, and correctly reports
 /// errors. Uses a real `SQLiteWikiStore` + real temp directory fixtures — no external
 /// dependencies.
 @MainActor
@@ -40,7 +40,7 @@ struct WikiStoreModelMarkdownImportTests {
         return root
     }
 
-    @Test func importsAllDotMDFilesIntoIngestedFiles() async throws {
+    @Test func importsAllDotMDFilesIntoSources() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
         let dir = try tempMarkdownDir(files: [
@@ -52,7 +52,7 @@ struct WikiStoreModelMarkdownImportTests {
         let result = await model.importFromMarkdownFolder(directory: dir)
         #expect(result.imported == 3)
         #expect(result.errors.isEmpty)
-        #expect(model.ingestedFiles.count == 3)
+        #expect(model.sources.count == 3)
     }
 
     @Test func filenamesMatchAfterImport() async throws {
@@ -64,7 +64,7 @@ struct WikiStoreModelMarkdownImportTests {
         ])
 
         _ = await model.importFromMarkdownFolder(directory: dir)
-        let filenames = Set(model.ingestedFiles.map(\.filename))
+        let filenames = Set(model.sources.map(\.filename))
         #expect(filenames == ["My Note.md", "Project Plan.md"])
     }
 
@@ -75,9 +75,9 @@ struct WikiStoreModelMarkdownImportTests {
         let dir = try tempMarkdownDir(files: ["note.md": body])
 
         _ = await model.importFromMarkdownFolder(directory: dir)
-        #expect(model.ingestedFiles.count == 1)
-        let id = model.ingestedFiles.first!.id
-        let storedContent = try store.ingestedFileContent(id: id)
+        #expect(model.sources.count == 1)
+        let id = model.sources.first!.id
+        let storedContent = try store.sourceContent(id: id)
         #expect(storedContent == Data(body.utf8))
     }
 
@@ -93,8 +93,8 @@ struct WikiStoreModelMarkdownImportTests {
 
         let result = await model.importFromMarkdownFolder(directory: dir)
         #expect(result.imported == 1)
-        #expect(model.ingestedFiles.count == 1)
-        #expect(model.ingestedFiles.first?.filename == "note.md")
+        #expect(model.sources.count == 1)
+        #expect(model.sources.first?.filename == "note.md")
     }
 
     @Test func signalsOnPageDidChange() async throws {
@@ -116,7 +116,7 @@ struct WikiStoreModelMarkdownImportTests {
         let result = await model.importFromMarkdownFolder(directory: dir)
         #expect(result.imported == 0)
         #expect(result.errors.isEmpty)
-        #expect(model.ingestedFiles.isEmpty)
+        #expect(model.sources.isEmpty)
     }
 
     @Test func handlesDirectoryWithOnlyNonMarkdown() async throws {
@@ -129,7 +129,7 @@ struct WikiStoreModelMarkdownImportTests {
 
         let result = await model.importFromMarkdownFolder(directory: dir)
         #expect(result.imported == 0)
-        #expect(model.ingestedFiles.isEmpty)
+        #expect(model.sources.isEmpty)
     }
 
     @Test func deduplicatesFilenamesFromDifferentSubdirectories() async throws {
@@ -144,7 +144,7 @@ struct WikiStoreModelMarkdownImportTests {
         let result = await model.importFromMarkdownFolder(directory: dir)
         #expect(result.imported == 3)
         #expect(result.errors.isEmpty)
-        let filenames = Set(model.ingestedFiles.map(\.filename))
+        let filenames = Set(model.sources.map(\.filename))
         #expect(filenames.count == 3)
         #expect(filenames.contains("Note.md"))
         #expect(filenames.contains("Note-1.md"))
@@ -172,9 +172,9 @@ struct WikiStoreModelMarkdownImportTests {
         let dir = try tempMarkdownDir(files: ["ObsidianNote.md": body])
 
         _ = await model.importFromMarkdownFolder(directory: dir)
-        #expect(model.ingestedFiles.count == 1)
-        let id = model.ingestedFiles.first!.id
-        let stored = try store.ingestedFileContent(id: id)
+        #expect(model.sources.count == 1)
+        let id = model.sources.first!.id
+        let stored = try store.sourceContent(id: id)
         let storedString = String(data: stored, encoding: .utf8)!
         #expect(storedString.contains("---"))
         #expect(storedString.contains("title: My Note"))
@@ -204,7 +204,7 @@ struct WikiStoreModelMarkdownImportTests {
 
         let result = await model.importFromMarkdownFolder(directory: root)
         #expect(result.imported == 1)
-        #expect(model.ingestedFiles.first?.filename == "visible.md")
+        #expect(model.sources.first?.filename == "visible.md")
     }
 
     @Test func importToExistingStoreDoesNotClobberExistingFiles() async throws {
@@ -215,13 +215,13 @@ struct WikiStoreModelMarkdownImportTests {
         let dir1 = try tempMarkdownDir(files: ["one.md": "# One"])
         let r1 = await model.importFromMarkdownFolder(directory: dir1)
         #expect(r1.imported == 1)
-        let countAfterFirst = model.ingestedFiles.count
+        let countAfterFirst = model.sources.count
 
         // Second import
         let dir2 = try tempMarkdownDir(files: ["two.md": "# Two"])
         let r2 = await model.importFromMarkdownFolder(directory: dir2)
         #expect(r2.imported == 1)
-        #expect(model.ingestedFiles.count == countAfterFirst + 1)
+        #expect(model.sources.count == countAfterFirst + 1)
     }
 
     @Test func dotMarkdownExtensionIsAlsoImported() async throws {

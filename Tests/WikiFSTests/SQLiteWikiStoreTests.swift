@@ -53,8 +53,8 @@ struct SQLiteWikiStoreTests {
         let tables = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))
         #expect(tables.isSuperset(of:
-            ["pages", "attachments", "page_links", "ingested_files", "system_prompt",
-             "log", "wiki_index", "page_embeddings", "file_markdown_versions"]))
+            ["pages", "attachments", "page_links", "sources", "system_prompt",
+             "log", "wiki_index", "page_embeddings", "source_markdown_versions"]))
 
         let indexes = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='index';"))
@@ -62,12 +62,12 @@ struct SQLiteWikiStoreTests {
         #expect(indexes.contains("ingested_files_created"))
 
         // user_version guard: a fresh DB runs all migration steps → version 9
-        // (v4 `log`, v5 `wiki_index`, v6 `ingested_files.ingested_at`,
+        // (v4 `log`, v5 `wiki_index`, v6 `sources.ingested_at`,
         //  v7 `page_embeddings`, v8 `file_markdown_versions`,
-        //  v9 `ingested_files.zotero_item_key`/`zotero_item_title`); reopening
+        //  v9 `sources.zotero_item_key`/`zotero_item_title`); reopening
         // must not re-run DDL (no-op bootstrap).
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "9")
+        #expect(userVersion == "10")
         let reopened = try SQLiteWikiStore(databaseURL: url)
         // If bootstrap weren't guarded, the CREATE TABLE would throw here.
         #expect((try? reopened.listPages(sortBy: .lastUpdated)) != nil)
@@ -186,15 +186,15 @@ struct SQLiteWikiStoreTests {
         #expect(try store.changeToken() == "0:0:0:0:1:0:1")
 
         // Ingest bumps the file COUNT and SUM (version 1).
-        let f = try store.ingestFile(filename: "a.txt", data: Data("hi".utf8))
+        let f = try store.addSource(filename: "a.txt", data: Data("hi".utf8))
         #expect(try store.changeToken() == "0:0:1:1:1:0:1")
 
         // A second file.
-        _ = try store.ingestFile(filename: "b.txt", data: Data("yo".utf8))
+        _ = try store.addSource(filename: "b.txt", data: Data("yo".utf8))
         #expect(try store.changeToken() == "0:0:2:2:1:0:1")
 
         // Delete the first → file COUNT and SUM drop.
-        try store.deleteIngestedFile(id: f.id)
+        try store.deleteSource(id: f.id)
         #expect(try store.changeToken() == "0:0:1:1:1:0:1")
     }
 
@@ -236,7 +236,7 @@ struct SQLiteWikiStoreTests {
         defer { sqlite3_close(db) }
 
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "9")
+        #expect(userVersion == "10")
 
         let tables = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))

@@ -41,27 +41,27 @@ final class AgentLauncher {
     /// The ingested-file ids whose **agent run** is in flight — set only once the
     /// claude spawn is actually committed (slot acquired, around `onLock`), and
     /// cleared in `finish()`. Drives the per-file "Ingesting…" row label and the
-    /// cross-file `isAnyFileIngesting` Ingest-button greyout. This is the
+    /// cross-file `isAnySourceIngesting` Ingest-button greyout. This is the
     /// **agent phase** flag; it is NOT set during the pdf2md extraction phase that
-    /// precedes the spawn (see `extractingFileIDs`), so a pure extraction no longer
+    /// precedes the spawn (see `extractingSourceIDs`), so a pure extraction no longer
     /// mislabels a row as "Ingesting…" or greys out another file's Ingest button.
-    var ingestingFileIDs: Set<PageID> = []
+    var ingestingSourceIDs: Set<PageID> = []
     /// The ingested-file ids whose **pdf2md conversion** is in flight — set around
     /// the pdf2md block of EITHER extraction path (the ingest-path conversion in
     /// `AgentOperationRunner.runMultiIngest`, and the standalone
-    /// `IngestedFileDetailView.runExtraction`), and cleared when the conversion
+    /// `SourceDetailView.runExtraction`), and cleared when the conversion
     /// ends (success or failure). Drives the per-file "Extracting…" row label and
     /// the standalone Extract button's per-file disable. This is the **extraction
     /// phase** flag; it never feeds the cross-file Ingest greyout (that is
-    /// `ingestingFileIDs` only) and never touches the spawn slot or edit lock.
-    var extractingFileIDs: Set<PageID> = []
+    /// `ingestingSourceIDs` only) and never touches the spawn slot or edit lock.
+    var extractingSourceIDs: Set<PageID> = []
     /// The in-flight ingest operation Task (set by `IngestSheetView`). Cancelling
     /// it aborts a running `pdf2md` conversion (via its task-cancellation handler).
     /// Held here so `stop()` — driven from the transcript sidebar too — can cancel
     /// the conversion phase, not just the agent process. Self-clears when done.
     @ObservationIgnored var ingestTask: Task<Void, Never>?
     /// The in-flight standalone extraction Task (set by the Extract Markdown button
-    /// in `IngestedFileDetailView`). Mirror of `ingestTask` for the standalone
+    /// in `SourceDetailView`). Mirror of `ingestTask` for the standalone
     /// extract path — cancelled by `stop()` so the pdf2md subprocess is terminated
     /// via `PdfExtractionService`'s `onCancel` handler. Self-clears when done.
     @ObservationIgnored var extractTask: Task<Void, Never>?
@@ -143,8 +143,8 @@ final class AgentLauncher {
     ///    `claude` query run starting during an extraction still runs immediately —
     ///    it takes the spawn slot, which the extraction lock never holds.
     ///
-    /// The phase flags `extractingFileIDs` (extraction phase) and
-    /// `ingestingFileIDs` (agent phase, set at spawn commit) are the UI-facing
+    /// The phase flags `extractingSourceIDs` (extraction phase) and
+    /// `ingestingSourceIDs` (agent phase, set at spawn commit) are the UI-facing
     /// projection of which lock/phase a file is in; they are kept separate so a
     /// pure extraction is never labeled "Ingesting…" and never greys out a peer's
     /// Ingest button.
@@ -352,8 +352,8 @@ final class AgentLauncher {
     /// - `onLock`/`onUnlock` are the edit-lock callbacks: `onLock` fires before the
     ///   spawn, `onUnlock` from the `terminationHandler` (so a killed agent still
     ///   releases). Both run on the main actor.
-    /// - `ingestingFileIDs` is the **agent phase** flag for THIS run: the ids whose
-    ///   ingest is now committing. The launcher assigns it to `self.ingestingFileIDs`
+    /// - `ingestingSourceIDs` is the **agent phase** flag for THIS run: the ids whose
+    ///   ingest is now committing. The launcher assigns it to `self.ingestingSourceIDs`
     ///   at spawn commit (around `onLock`) — NOT while queued for the slot — so a
     ///   pure extraction or a queued ingest never sets it. Empty for query/lint
     ///   runs (the default), which keeps the flag clear and the cross-file Ingest
@@ -364,7 +364,7 @@ final class AgentLauncher {
         wikiRoot: String,
         systemPrompt: String,
         wikictlDirectory: String,
-        ingestingFileIDs: Set<PageID> = [],
+        ingestingSourceIDs: Set<PageID> = [],
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void
     ) async {
@@ -435,12 +435,12 @@ final class AgentLauncher {
         lastActivityAt = now
         openLogFiles(in: scratch)
         // SPAWN COMMIT: the agent phase now begins. Assign the agent-phase flag
-        // (`ingestingFileIDs`) here — NOT while queued for the slot — so the
+        // (`ingestingSourceIDs`) here — NOT while queued for the slot — so the
         // "Ingesting…" label and the cross-file Ingest greyout activate only once
         // the spawn is actually committed. For query/lint this is empty (default),
-        // which clears any stale flag. See `extractingFileIDs` for the separate
+        // which clears any stale flag. See `extractingSourceIDs` for the separate
         // extraction-phase flag, which the runner manages around the pdf2md block.
-        self.ingestingFileIDs = ingestingFileIDs
+        self.ingestingSourceIDs = ingestingSourceIDs
         onLock()
 
         let process = Process()
@@ -598,7 +598,7 @@ final class AgentLauncher {
         openLogFiles(in: scratch)
         // SPAWN COMMIT: a query conversation never ingests, so the agent-phase flag
         // is empty — clearing any stale value (mirrors `run`'s spawn-commit).
-        self.ingestingFileIDs = []
+        self.ingestingSourceIDs = []
         onLock()
 
         let process = Process()
@@ -692,10 +692,10 @@ final class AgentLauncher {
         }
         // If extraction is somehow busy without a task (shouldn't happen), clear
         // flags anyway so the UI doesn't hang.
-        if !isExtracting && extractingFileIDs.isEmpty { return }
+        if !isExtracting && extractingSourceIDs.isEmpty { return }
         isExtracting = false
         extractionPID = nil
-        extractingFileIDs = []
+        extractingSourceIDs = []
         extractionLog = ""
     }
 
@@ -791,7 +791,7 @@ final class AgentLauncher {
         process = nil
         inputHandle = nil
         currentProcessID = nil
-        ingestingFileIDs = []
+        ingestingSourceIDs = []
         lastActivityAt = Date()
         // Release the spawn slot, handing it to the next live waiter (FIFO) or freeing
         // it. Replaces the old `isRunning = false`. The guard at the top of `finish`

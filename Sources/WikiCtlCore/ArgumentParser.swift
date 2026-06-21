@@ -48,8 +48,8 @@ public enum ArgumentParser {
         /// results (most relevant first). Falls back to LIKE title match when
         /// embeddings aren't available.
         case search(query: String, limit: Int)
-        /// File commands: list, read, export ingested source files from SQLite.
-        case file(FileCommand.Action)
+        /// Source commands: list, read, export sources from SQLite.
+        case source(SourceCommand.Action)
     }
 
     public enum Failure: Error, Equatable, CustomStringConvertible {
@@ -75,7 +75,7 @@ public enum ArgumentParser {
       page delete --id Y                     delete a page
       log append --kind ingest|query|lint --title X [--note N] [--source <file-id>]
                                              append one dated row to log.md;
-                                             --source stamps that file "Ingested"
+                                             --source stamps that file "Processed"
       index set --body-file <path|->         rewrite the curated index.md body
       search --query X [--limit N]           semantic search (cosine similarity);
                                              falls back to LIKE title match
@@ -117,8 +117,8 @@ public enum ArgumentParser {
             command = try parseIndexCommand(Array(args.dropFirst()))
         case "search":
             command = try parseSearchCommand(Array(args.dropFirst()))
-        case "file":
-            command = try parseFileCommand(Array(args.dropFirst()))
+        case "source":
+            command = try parseSourceCommand(Array(args.dropFirst()))
         default:
             throw Failure.usage("unknown command \((args.first ?? "").debugDescription)")
         }
@@ -195,24 +195,24 @@ public enum ArgumentParser {
         return .search(query: query, limit: limit)
     }
 
-    private static func parseFileCommand(_ args: [String]) throws -> Command {
-        guard let sub = args.first else { throw Failure.usage("file: missing subcommand") }
+    private static func parseSourceCommand(_ args: [String]) throws -> Command {
+        guard let sub = args.first else { throw Failure.usage("source: missing subcommand") }
         let rest = Array(args.dropFirst())
         let options = try Options(rest)
 
         switch sub {
         case "list":
-            return .file(.list(json: options.flag("--json")))
+            return .source(.list(json: options.flag("--json")))
 
         case "cat":
-            return .file(.cat(try options.requireFileSelector()))
+            return .source(.cat(try options.requireSourceSelector()))
 
         case "export":
-            let selector = try options.requireFileSelector()
-            return .file(.export(selector, out: options.value("--out")))
+            let selector = try options.requireSourceSelector()
+            return .source(.export(selector, out: options.value("--out")))
 
         default:
-            throw Failure.usage("file: unknown subcommand \(sub.debugDescription)")
+            throw Failure.usage("source: unknown subcommand \(sub.debugDescription)")
         }
     }
 
@@ -273,7 +273,7 @@ public enum ArgumentParser {
         }
 
         /// A `--id Y` or `--name N` file selector (exactly one required).
-        func requireFileSelector() throws -> FileCommand.Selector {
+        func requireSourceSelector() throws -> SourceCommand.Selector {
             switch (values["--id"], values["--name"]) {
             case (let id?, nil):
                 return .id(PageID(rawValue: id))

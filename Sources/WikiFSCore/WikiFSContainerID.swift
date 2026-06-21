@@ -21,15 +21,15 @@ public enum WikiFSContainerID {
     public static let indexPagesJSONL = "index-pages-jsonl"
     public static let indexLinksJSONL = "index-links-jsonl"
 
-    // Ingested files (Phase 5). A brand-new top-level `files/` tree with `by-id`
-    // and `by-name` views serving verbatim dropped-file bytes read-only. The
-    // app's `signalChange()` signals these (plus the files.jsonl index) so an
-    // ingest OR a removal refreshes the projection. `indexFilesJSONL` lives under
-    // the existing `indexes` folder.
-    public static let files = "files"
-    public static let filesByID = "files-by-id"
-    public static let filesByName = "files-by-name"
-    public static let indexFilesJSONL = "index-files-jsonl"
+    // Sources (Phase 5, renamed v10). A brand-new top-level `sources/` tree with
+    // `by-id` and `by-name` views serving verbatim source bytes read-only. The
+    // app's `signalChange()` signals these (plus the sources.jsonl index) so an
+    // ingest OR a removal refreshes the projection. `indexSourcesJSONL` lives
+    // under the existing `indexes` folder.
+    public static let sources = "sources"
+    public static let sourcesByID = "sources-by-id"
+    public static let sourcesByName = "sources-by-name"
+    public static let indexSourcesJSONL = "index-sources-jsonl"
 
     // System prompt (v3). The user-editable singleton document projected
     // read-only at the wiki ROOT under TWO names with identical bytes:
@@ -55,14 +55,14 @@ public enum WikiFSContainerID {
     public static let treeMD = "tree-md"
     public static let wikiStructureMD = "wiki-structure-md"
 
-    /// Prefix for a single ingested file's `by-id` LEAF identifier (carries the
+    /// Prefix for a single source's `by-id` LEAF identifier (carries the
     /// full ULID, never the filename — INITIAL §6). Shared so the extension's
-    /// `Projection.Identity.fileByID(_:)` and the app's "open this file"
+    /// `Projection.Identity.sourceByID(_:)` and the app's "open this source"
     /// resolution build the EXACT same identifier and can't drift.
-    public static let fileByIDPrefix = "file-by-id:"
+    public static let sourceByIDPrefix = "source-by-id:"
 
-    /// Build the `by-id` leaf identifier string for an ingested file's ULID.
-    public static func fileByID(_ ulid: String) -> String {
-        fileByIDPrefix + ulid
+    /// Build the `by-id` leaf identifier string for a source's ULID.
+    public static func sourceByID(_ ulid: String) -> String {
+        sourceByIDPrefix + ulid
     }
 }

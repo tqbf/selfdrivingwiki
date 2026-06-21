@@ -600,18 +600,18 @@ struct EditorTabTests {
 
     // MARK: - Delete ingested file closes affected tab
 
-    @Test func deleteIngestedFile_closesAffectedTab() throws {
+    @Test func deleteSource_closesAffectedTab() throws {
         let (model, store) = try tempModel()
         let a = try store.createPage(title: "A")
-        let f1 = try store.ingestFile(filename: "doc.pdf", data: Data("pdf".utf8))
+        let f1 = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
         model.reloadFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
-        model.openTab(.ingestedFile(f1.id))
+        model.openTab(.source(f1.id))
         #expect(model.tabs.count == 2)
 
-        model.deleteIngestedFile(f1.id)
+        model.deleteSource(f1.id)
         #expect(model.tabs.count == 1)
         #expect(model.tabs[0].selection == .page(a.id))
     }
@@ -712,11 +712,11 @@ struct EditorTabTests {
         #expect(model.tabTitle(for: .changeLog) == "Activity")
     }
 
-    @Test func tabTitleForIngestedFile() throws {
+    @Test func tabTitleForSource() throws {
         let (model, store) = try tempModel()
-        let f1 = try store.ingestFile(filename: "report.pdf", data: Data("pdf".utf8))
+        let f1 = try store.addSource(filename: "report.pdf", data: Data("pdf".utf8))
         model.reloadFromStore()
-        #expect(model.tabTitle(for: .ingestedFile(f1.id)) == "report.pdf")
+        #expect(model.tabTitle(for: .source(f1.id)) == "report.pdf")
     }
 
     // MARK: - tabIcon helper

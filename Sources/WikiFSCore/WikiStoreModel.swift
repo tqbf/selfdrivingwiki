@@ -61,14 +61,14 @@ public final class WikiStoreModel {
     }
 
     /// The removable list of ingested files (Phase 5). Like `summaries`, this is
-    /// ALWAYS rebuilt from `store.listIngestedFiles()` after a change, never
+    /// ALWAYS rebuilt from `store.listSources()` after a change, never
     /// incrementally patched (§3.1). Most-recent-first.
-    public private(set) var ingestedFiles: [IngestedFileSummary] = []
+    public private(set) var sources: [SourceSummary] = []
     /// Best-effort UI status for whether a raw source has already been processed
     /// by an agent Ingest run. The source of truth is the append-only log; agents
     /// can choose their log title, so matching accepts the filename, id, by-id
     /// projection leaf, or path in either the log title or note.
-    private var ingestedFileStatus: [PageID: Bool] = [:]
+    private var sourceIngestedStatus: [PageID: Bool] = [:]
 
     /// Invoked on the main actor after any successful persisted mutation
     /// (save / new / rename / delete). The app wires this to the File Provider
@@ -124,7 +124,7 @@ public final class WikiStoreModel {
     public init(store: WikiStore) {
         self.store = store
         reloadSummaries()
-        reloadIngestedFiles()
+        reloadSources()
         // Preload the system-prompt draft so its editor has content immediately;
         // selecting it later reloads fresh from the store.
         draftSystemPrompt = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
@@ -366,7 +366,7 @@ public final class WikiStoreModel {
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
-        case .ingestedFile:
+        case .source:
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
@@ -599,9 +599,9 @@ public final class WikiStoreModel {
     /// (big files shouldn't stall the UI), then hop back to the main actor to
     /// store + reload. Per-file failures are logged and skipped so one bad drop
     /// doesn't abort the batch. `onPageDidChange?()` fires ONCE at the end so the
-    /// daemon re-enumerates the `files/` tree exactly once for the whole batch.
+    /// daemon re-enumerates the `sources/` tree exactly once for the whole batch.
     public func ingest(fileURLs: [URL]) async {
-        var lastIngestedFileID: PageID?
+        var lastSourceID: PageID?
         for url in fileURLs {
             // Skip directories — only flat files are ingested.
             let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
@@ -621,16 +621,16 @@ public final class WikiStoreModel {
                 continue
             }
             do {
-                let summary = try store.ingestFile(
+                let summary = try store.addSource(
                     filename: filename, data: data, zoteroItemKey: nil, zoteroItemTitle: nil)
-                lastIngestedFileID = summary.id
+                lastSourceID = summary.id
             } catch {
                 print("WikiStoreModel.ingest store failed for \(filename): \(error)")
             }
         }
-        reloadIngestedFiles()
-        if let fileID = lastIngestedFileID {
-            openTab(.ingestedFile(fileID))
+        reloadSources()
+        if let sourceID = lastSourceID {
+            openTab(.source(sourceID))
             onPageDidChange?()
         }
     }
@@ -639,7 +639,7 @@ public final class WikiStoreModel {
     /// text / binary verbatim), and land it as an ingested file — exactly like a
     /// drag-dropped file, so the existing "Ingest into wiki" `claude -p` operation
     /// can summarize it afterward. Lands through the SAME `store.ingestFile` path as
-    /// drag-ingest, so it appears under Files + `files/by-{id,name}` immediately and
+    /// drag-ingest, so it appears under Sources + `sources/by-{id,name}` immediately and
     /// is pickable in Operations → Ingest. Returns the outcome on success; throws a
     /// user-readable `URLIngestService.IngestError` on a bad URL, non-2xx, empty
     /// body, or store failure (the caller surfaces it in the sheet). The store write
@@ -664,10 +664,10 @@ public final class WikiStoreModel {
         // Pure dispatch decides the filename + bytes; we store directly on the main
         // actor (no @Sendable store closure crossing the actor boundary).
         let plan = URLIngestService.plan(for: response)
-        let summary = try store.ingestFile(
+        let summary = try store.addSource(
             filename: plan.filename, data: plan.data, zoteroItemKey: nil, zoteroItemTitle: nil)
-        reloadIngestedFiles()
-        openTab(.ingestedFile(summary.id))
+        reloadSources()
+        openTab(.source(summary.id))
         onPageDidChange?()
         return URLIngestService.IngestOutcome(
             filename: plan.filename, byteSize: plan.data.count, kind: plan.kind)
@@ -675,14 +675,14 @@ public final class WikiStoreModel {
 
     /// Synchronous ingest seam used by tests/verifiers (no drag gesture). Stores
     /// the bytes, rebuilds the list, and signals the daemon.
-    public func ingestFile(filename: String, data: Data) {
+    public func addSource(filename: String, data: Data) {
         do {
-            _ = try store.ingestFile(
+            _ = try store.addSource(
                 filename: filename, data: data, zoteroItemKey: nil, zoteroItemTitle: nil)
-            reloadIngestedFiles()
+            reloadSources()
             onPageDidChange?()
         } catch {
-            print("WikiStoreModel.ingestFile failed: \(error)")
+            print("WikiStoreModel.addSource failed: \(error)")
         }
     }
 
@@ -691,7 +691,7 @@ public final class WikiStoreModel {
     /// parent item's key + title into the row as provenance so the detail view
     /// can show "From Zotero" and link back. We already know the filename and
     /// bytes from Zotero's metadata, so this goes straight to the
-    /// `ingestFile(filename:data:)` seam rather than `URLIngestService`'s
+    /// `addSource(filename:data:)` seam rather than `URLIngestService`'s
     /// content-type dispatch (that dispatch exists for the unknown-bytes-from-a-
     /// URL case, which doesn't apply here). No network fallback in v1: an
     /// attachment that isn't synced to `~/Zotero/storage` yet throws
@@ -709,11 +709,11 @@ public final class WikiStoreModel {
                 try Data(contentsOf: path)
             }.value
             do {
-                let summary = try store.ingestFile(
+                let summary = try store.addSource(
                     filename: path.lastPathComponent, data: data,
                     zoteroItemKey: parentItem.key, zoteroItemTitle: parentItem.title)
-                reloadIngestedFiles()
-                openTab(.ingestedFile(summary.id))
+                reloadSources()
+                openTab(.source(summary.id))
                 onPageDidChange?()
             } catch {
                 print("WikiStoreModel.ingestFromZotero failed: \(error)")
@@ -729,7 +729,7 @@ public final class WikiStoreModel {
     /// any folder of Markdown notes. Hidden files/directories are skipped.
     /// Duplicate filenames get a disambiguating suffix (`Note.md`, `Note-1.md`, …).
     ///
-    /// All files land via the shared `store.ingestFile(filename:data:)` seam —
+    /// All files land via the shared `store.addSource(filename:data:)` seam —
     /// exactly the same path as drag-drop, URL fetch, and Zotero ingest.
     ///
     /// - Returns: `(imported: count, errors: [localized messages])`.
@@ -744,12 +744,12 @@ public final class WikiStoreModel {
         var imported = 0
         var errorMessages: [String] = []
 
-        var firstIngestedFileID: PageID?
+        var firstSourceID: PageID?
         for file in result.files {
             do {
-                let summary = try store.ingestFile(
+                let summary = try store.addSource(
                     filename: file.filename, data: file.data, zoteroItemKey: nil, zoteroItemTitle: nil)
-                if firstIngestedFileID == nil { firstIngestedFileID = summary.id }
+                if firstSourceID == nil { firstSourceID = summary.id }
                 imported += 1
             } catch {
                 errorMessages.append("\(file.filename): \(error.localizedDescription)")
@@ -760,28 +760,28 @@ public final class WikiStoreModel {
                 ?? "\(walkError.path): unknown error")
         }
 
-        reloadIngestedFiles()
-        if let fileID = firstIngestedFileID {
-            openTab(.ingestedFile(fileID))
+        reloadSources()
+        if let sourceID = firstSourceID {
+            openTab(.source(sourceID))
         }
         onPageDidChange?()
         return (imported: imported, errors: errorMessages)
     }
 
     /// Remove an ingested file from the list and the store, then signal so the
-    /// `files/` tree drops it.
-    public func deleteIngestedFile(_ id: PageID) {
+    /// `sources/` tree drops it.
+    public func deleteSource(_ id: PageID) {
         do {
-            try store.deleteIngestedFile(id: id)
-            removeFromHistory(.ingestedFile(id))
+            try store.deleteSource(id: id)
+            removeFromHistory(.source(id))
             // Close any tab showing this deleted file.
-            if let tab = tabs.first(where: { $0.selection == .ingestedFile(id) }) {
+            if let tab = tabs.first(where: { $0.selection == .source(id) }) {
                 closeTab(id: tab.id)
             }
-            reloadIngestedFiles()
+            reloadSources()
             onPageDidChange?()
         } catch {
-            print("WikiStoreModel.deleteIngestedFile failed: \(error)")
+            print("WikiStoreModel.deleteSource failed: \(error)")
         }
     }
 
@@ -828,12 +828,12 @@ public final class WikiStoreModel {
     /// than reading from the ~5s-laggy read-only mount. `nil` if the read fails;
     /// the caller surfaces that as a preflight error instead of launching a run that
     /// would fall back to probing the mount.
-    public func ingestedSourceBytes(id: PageID) -> Data? {
-        try? store.ingestedFileContent(id: id)
+    public func sourceBytes(id: PageID) -> Data? {
+        try? store.sourceContent(id: id)
     }
 
-    public func hasIngestedFile(_ file: IngestedFileSummary) -> Bool {
-        ingestedFileStatus[file.id] ?? false
+    public func isSourceIngested(_ file: SourceSummary) -> Bool {
+        sourceIngestedStatus[file.id] ?? false
     }
 
     // MARK: - Processed markdown versions (v8)
@@ -841,43 +841,43 @@ public final class WikiStoreModel {
     /// The latest (HEAD) processed markdown version for a file. For native
     /// md/txt files without an existing version chain, lazily seeds v1 from
     /// the source bytes (double-seed guard prevents duplicates).
-    public func processedMarkdownHead(for file: IngestedFileSummary) -> FileMarkdownVersion? {
-        if let head = try? store.processedMarkdownHead(fileID: file.id) {
+    public func processedMarkdownHead(for file: SourceSummary) -> SourceMarkdownVersion? {
+        if let head = try? store.processedMarkdownHead(sourceID: file.id) {
             return head
         }
         // Lazy seed: native md/txt → decode source bytes as v1.
         guard file.ext == "md" || file.ext == "markdown" || file.ext == "txt" else {
             return nil
         }
-        guard let bytes = try? store.ingestedFileContent(id: file.id),
+        guard let bytes = try? store.sourceContent(id: file.id),
               let text = String(data: bytes, encoding: .utf8) else { return nil }
         return try? store.appendProcessedMarkdown(
-            fileID: file.id, content: text, origin: "extraction", note: nil)
+            sourceID: file.id, content: text, origin: "extraction", note: nil)
     }
 
-    /// True when at least one processed-markdown version exists for this file.
-    public func hasProcessedMarkdown(fileID: PageID) -> Bool {
-        (try? store.hasProcessedMarkdown(fileID: fileID)) ?? false
+    /// True when at least one processed-markdown version exists for this source.
+    public func hasProcessedMarkdown(for sourceID: PageID) -> Bool {
+        (try? store.hasProcessedMarkdown(sourceID: sourceID)) ?? false
     }
 
     /// Save an edit as a new version in the chain. Only called when the text
     /// genuinely differs from the current head — meaningful history, not
     /// keystroke spam.
     @discardableResult
-    public func saveProcessedMarkdown(for fileID: PageID, content: String) -> FileMarkdownVersion? {
+    public func saveProcessedMarkdown(for sourceID: PageID, content: String) -> SourceMarkdownVersion? {
         try? store.appendProcessedMarkdown(
-            fileID: fileID, content: content, origin: "user", note: nil)
+            sourceID: sourceID, content: content, origin: "user", note: nil)
     }
 
     /// Seed the first processed-markdown version for a PDF from extraction
     /// output. Double-seed guard: if a head already exists, returns it instead.
     @discardableResult
-    public func seedPdfMarkdown(fileID: PageID, content: String) -> FileMarkdownVersion? {
-        if let head = try? store.processedMarkdownHead(fileID: fileID) {
+    public func seedPdfMarkdown(for sourceID: PageID, content: String) -> SourceMarkdownVersion? {
+        if let head = try? store.processedMarkdownHead(sourceID: sourceID) {
             return head
         }
         return try? store.appendProcessedMarkdown(
-            fileID: fileID, content: content, origin: "extraction", note: nil)
+            sourceID: sourceID, content: content, origin: "extraction", note: nil)
     }
 
     // MARK: - Source-of-truth rebuild
@@ -889,7 +889,7 @@ public final class WikiStoreModel {
     /// editing draft is untouched — only the list projections refresh.
     public func reloadFromStore() {
         reloadSummaries()
-        reloadIngestedFiles()
+        reloadSources()
         pruneHistoryToCurrentStore()
     }
 
@@ -926,11 +926,11 @@ public final class WikiStoreModel {
         }
     }
 
-    private func reloadIngestedFiles() {
-        ingestedFiles = (try? store.listIngestedFiles()) ?? []
+    private func reloadSources() {
+        sources = (try? store.listSources()) ?? []
         // Authoritative source: the flag the agent stamps via
         // `wikictl log append --kind ingest --source <id>` on success.
-        let markedIDs = (try? store.markedIngestedFileIDs()) ?? []
+        let markedIDs = (try? store.markedSourceIDs()) ?? []
         // Legacy fallback: wikis ingested before the flag existed only have the
         // free-text log entry, so keep the old best-effort title/path match too.
         let entries = (try? store.recentLogEntries(limit: 10_000)) ?? []
@@ -938,15 +938,15 @@ public final class WikiStoreModel {
             .filter { $0.kind == .ingest }
             .map { "\($0.title) \($0.note ?? "")".lowercased() }
 
-        ingestedFileStatus = Dictionary(uniqueKeysWithValues: ingestedFiles.map { file in
+        sourceIngestedStatus = Dictionary(uniqueKeysWithValues: sources.map { file in
             if markedIDs.contains(file.id.rawValue) {
                 return (file.id, true)
             }
             let filename = file.filename.lowercased()
             let byIDLeaf = FilenameEscaping
-                .byIDIngestedFilename(fileID: file.id.rawValue, ext: file.ext)
+                .byIDSourceFilename(sourceID: file.id.rawValue, ext: file.ext)
                 .lowercased()
-            let path = "files/by-id/\(byIDLeaf)"
+            let path = "sources/by-id/\(byIDLeaf)"
             let matchers = [filename, file.id.rawValue.lowercased(), byIDLeaf, path]
                 .filter { !$0.isEmpty }
             let hasLogEntry = ingestTexts.contains { text in
@@ -958,21 +958,21 @@ public final class WikiStoreModel {
 
     private func pruneHistoryToCurrentStore() {
         let pageIDs = Set(summaries.map(\.id))
-        let fileIDs = Set(ingestedFiles.map(\.id))
-        backStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, fileIDs: fileIDs) }
-        forwardStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, fileIDs: fileIDs) }
+        let sourceIDs = Set(sources.map(\.id))
+        backStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, sourceIDs: sourceIDs) }
+        forwardStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, sourceIDs: sourceIDs) }
     }
 
     private func isAvailableHistorySelection(
         _ value: WikiSelection,
         pageIDs: Set<PageID>,
-        fileIDs: Set<PageID>
+        sourceIDs: Set<PageID>
     ) -> Bool {
         switch value {
         case .page(let id):
             pageIDs.contains(id)
-        case .ingestedFile(let id):
-            fileIDs.contains(id)
+        case .source(let id):
+            sourceIDs.contains(id)
         case .query, .systemPrompt, .changeLog, .lint:
             true
         }

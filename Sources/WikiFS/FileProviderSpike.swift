@@ -225,34 +225,34 @@ final class FileProviderSpike {
     /// ACTIVE wiki's domain. Resolves the file's user-visible URL from the daemon
     /// by its `by-id` leaf identifier (built from the shared prefix so it can't
     /// drift), then hands it to `NSWorkspace`. URL asked at click time.
-    func openIngestedFile(id: PageID) async {
-        DebugLog.agent("openIngestedFile: id=\(id.rawValue) activeWiki=\(activeWikiID ?? "nil")")
+    func openSource(id: PageID) async {
+        DebugLog.agent("openSource: id=\(id.rawValue) activeWiki=\(activeWikiID ?? "nil")")
         status = ""   // clear any stale error from a prior attempt
         guard let wikiID = activeWikiID else {
-            DebugLog.agent("openIngestedFile: ABORT — no active wiki")
+            DebugLog.agent("openSource: ABORT — no active wiki")
             status = "Can’t open file — no active wiki."
             return
         }
         let domain = domain(id: wikiID, displayName: wikiID)
         guard let manager = NSFileProviderManager(for: domain) else {
-            DebugLog.agent("openIngestedFile: ABORT — no NSFileProviderManager for domain \(wikiID)")
+            DebugLog.agent("openSource: ABORT — no NSFileProviderManager for domain \(wikiID)")
             status = "No manager for domain"
             return
         }
-        let identifier = NSFileProviderItemIdentifier(WikiFSContainerID.fileByID(id.rawValue))
+        let identifier = NSFileProviderItemIdentifier(WikiFSContainerID.sourceByID(id.rawValue))
         do {
             let url = try await userVisibleURL(
                 manager: manager,
                 itemIdentifier: identifier,
                 timeout: .seconds(5))
-            DebugLog.agent("openIngestedFile: resolved url=\(url.path)")
+            DebugLog.agent("openSource: resolved url=\(url.path)")
             let opened = NSWorkspace.shared.open(url)
-            DebugLog.agent("openIngestedFile: NSWorkspace.open returned \(opened)")
+            DebugLog.agent("openSource: NSWorkspace.open returned \(opened)")
             if !opened {
                 status = "macOS couldn’t open \(url.lastPathComponent)."
             }
         } catch {
-            DebugLog.agent("openIngestedFile: FAILED resolving URL — \(error.localizedDescription)")
+            DebugLog.agent("openSource: FAILED resolving URL — \(error.localizedDescription)")
             status = "open file failed: \(error.localizedDescription)"
         }
     }
@@ -278,9 +278,9 @@ final class FileProviderSpike {
             NSFileProviderItemIdentifier(WikiFSContainerID.pagesByID),
             .rootContainer,
             NSFileProviderItemIdentifier(WikiFSContainerID.indexes),
-            NSFileProviderItemIdentifier(WikiFSContainerID.files),
-            NSFileProviderItemIdentifier(WikiFSContainerID.filesByID),
-            NSFileProviderItemIdentifier(WikiFSContainerID.filesByName),
+            NSFileProviderItemIdentifier(WikiFSContainerID.sources),
+            NSFileProviderItemIdentifier(WikiFSContainerID.sourcesByID),
+            NSFileProviderItemIdentifier(WikiFSContainerID.sourcesByName),
             .workingSet,
         ]
         for container in containers {

@@ -20,7 +20,7 @@ public struct EditorTab: Hashable, Sendable, Identifiable {
 
 extension WikiStoreModel {
     /// Display title for a `WikiSelection`, used as the tab bar label.
-    /// Reads from the live `summaries` / `ingestedFiles` arrays (rebuild from store
+    /// Reads from the live `summaries` / `sources` arrays (rebuild from store
     /// after mutations, per SWIFTUI-RULES §3.1).
     public func tabTitle(for selection: WikiSelection) -> String {
         switch selection {
@@ -31,9 +31,9 @@ extension WikiStoreModel {
         case .page(let id):
             return summaries.first { $0.id == id }?.title
                 .nonEmpty ?? "Untitled"
-        case .ingestedFile(let id):
-            return ingestedFiles.first { $0.id == id }?.filename
-                .nonEmpty ?? "File"
+        case .source(let id):
+            return sources.first { $0.id == id }?.filename
+                .nonEmpty ?? "Source"
         }
     }
 
@@ -45,15 +45,13 @@ extension WikiStoreModel {
         case .changeLog: return "clock.arrow.circlepath"
         case .lint: return "checkmark.shield"
         case .page: return "doc.text"
-        case .ingestedFile(let id):
-            guard let file = ingestedFiles.first(where: { $0.id == id }) else {
+        case .source(let id):
+            guard let source = sources.first(where: { $0.id == id }) else {
                 return "doc"
             }
-            switch file.ext.lowercased() {
-            case "pdf": return "doc.richtext"
-            case "txt", "md", "markdown": return "doc.plaintext"
-            default: return "doc"
-            }
+            if source.mimeType == "application/pdf" { return "doc.richtext" }
+            if let mime = source.mimeType, mime.hasPrefix("text/") { return "doc.plaintext" }
+            return "doc"
         }
     }
 }

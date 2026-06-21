@@ -30,12 +30,12 @@ public enum IndexGenerators {
         }
     }
 
-    /// A single ingested-file row (no content), as read for `files.jsonl` and for
-    /// the projection's `files/` enumeration. Carries the stable
+    /// A single source row (no content), as read for `sources.jsonl` and for
+    /// the projection's `sources/` enumeration. Carries the stable
     /// version/timestamps too so the File Provider can derive stable item
     /// versions during enumeration (only `id/name/path/size/mime` reach the
     /// JSONL — the rest are projection-only).
-    public struct FileRow: Equatable, Sendable {
+    public struct SourceIndexRow: Equatable, Sendable {
         public let id: String
         public let filename: String
         public let ext: String
@@ -44,6 +44,7 @@ public enum IndexGenerators {
         public let createdAt: Date
         public let updatedAt: Date
         public let version: Int
+        public let displayName: String?
 
         public init(
             id: String,
@@ -53,7 +54,8 @@ public enum IndexGenerators {
             byteSize: Int,
             createdAt: Date = Date(timeIntervalSince1970: 0),
             updatedAt: Date = Date(timeIntervalSince1970: 0),
-            version: Int = 1
+            version: Int = 1,
+            displayName: String? = nil
         ) {
             self.id = id
             self.filename = filename
@@ -63,6 +65,7 @@ public enum IndexGenerators {
             self.createdAt = createdAt
             self.updatedAt = updatedAt
             self.version = version
+            self.displayName = displayName
         }
     }
 
@@ -71,15 +74,15 @@ public enum IndexGenerators {
     public static let pagesByTitlePath = "pages/by-title"
     public static let pageIndexPath = "indexes/pages.jsonl"
     public static let linkIndexPath = "indexes/links.jsonl"
-    public static let filesByIDPath = "files/by-id"
-    public static let fileIndexPath = "indexes/files.jsonl"
+    public static let sourcesByIDPath = "sources/by-id"
+    public static let sourceIndexPath = "indexes/sources.jsonl"
 
     /// `manifest.json` — a machine-readable summary of the projection. `pages`
-    /// is the page list (used for `page_count`); `fileCount` is the ingested-file
+    /// is the page list (used for `page_count`); `sourceCount` is the source
     /// count; `generatedAt` is stamped into `generated_at` as ISO-8601 UTC.
     /// Hand-built with a fixed key order so the byte count is stable for a given
-    /// (page_count, file_count, generatedAt).
-    public static func manifest(pages: [WikiPage], fileCount: Int, generatedAt: Date) -> Data {
+    /// (page_count, source_count, generatedAt).
+    public static func manifest(pages: [WikiPage], sourceCount: Int, generatedAt: Date) -> Data {
         let iso = iso8601(generatedAt)
         let json = """
         {
@@ -87,14 +90,14 @@ public enum IndexGenerators {
           "version": 1,
           "generated_at": "\(iso)",
           "page_count": \(pages.count),
-          "file_count": \(fileCount),
+          "file_count": \(sourceCount),
           "paths": {
             "pages_by_id": "\(pagesByIDPath)",
             "pages_by_title": "\(pagesByTitlePath)",
             "page_index": "\(pageIndexPath)",
             "link_index": "\(linkIndexPath)",
-            "files_by_id": "\(filesByIDPath)",
-            "file_index": "\(fileIndexPath)"
+            "sources_by_id": "\(sourcesByIDPath)",
+            "source_index": "\(sourceIndexPath)"
           }
         }
 
@@ -131,22 +134,22 @@ public enum IndexGenerators {
         return Data(out.utf8)
     }
 
-    /// `indexes/files.jsonl` — one JSON object per line, one line per ingested
-    /// file, ordered as given (the caller passes files ordered by id == ingest
+    /// `indexes/sources.jsonl` — one JSON object per line, one line per source,
+    /// ordered as given (the caller passes sources ordered by id == ingest
     /// order). Keys in fixed order: id, name, path, size, mime. `path` points at
-    /// the canonical `files/by-id/<id>.<ext>` location (no dot when extension-
+    /// the canonical `sources/by-id/<id>.<ext>` location (no dot when extension-
     /// less); `mime` is JSON `null` when unknown.
-    public static func filesJSONL(files: [FileRow]) -> Data {
+    public static func sourcesJSONL(sources: [SourceIndexRow]) -> Data {
         var out = ""
-        for file in files {
-            let id = jsonString(file.id)
-            let name = jsonString(file.filename)
-            let relPath = file.ext.isEmpty
-                ? "\(filesByIDPath)/\(file.id)"
-                : "\(filesByIDPath)/\(file.id).\(file.ext)"
+        for source in sources {
+            let id = jsonString(source.id)
+            let name = jsonString(source.filename)
+            let relPath = source.ext.isEmpty
+                ? "\(sourcesByIDPath)/\(source.id)"
+                : "\(sourcesByIDPath)/\(source.id).\(source.ext)"
             let path = jsonString(relPath)
-            let size = String(file.byteSize)
-            let mime = file.mime.map { jsonString($0) } ?? "null"
+            let size = String(source.byteSize)
+            let mime = source.mime.map { jsonString($0) } ?? "null"
             out += "{\"id\":\(id),\"name\":\(name),\"path\":\(path),\"size\":\(size),\"mime\":\(mime)}\n"
         }
         return Data(out.utf8)

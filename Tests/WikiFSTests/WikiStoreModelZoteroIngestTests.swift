@@ -42,7 +42,7 @@ struct WikiStoreModelZoteroIngestTests {
             title: title, creatorSummary: "Ito, K.", date: "2016")
     }
 
-    @Test func localAttachmentLandsInIngestedFilesList() async throws {
+    @Test func localAttachmentLandsInSourcesList() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
         var didSignal = false
@@ -57,12 +57,12 @@ struct WikiStoreModelZoteroIngestTests {
             attachment(key: "DJLXA7DG", filename: "report.pdf"),
             parentItem: parentItem(), zoteroDir: zoteroDir)
 
-        #expect(model.ingestedFiles.count == 1)
-        #expect(model.ingestedFiles.first?.filename == "report.pdf")
+        #expect(model.sources.count == 1)
+        #expect(model.sources.first?.filename == "report.pdf")
         #expect(didSignal)
 
-        let id = model.ingestedFiles.first!.id
-        #expect(try store.ingestedFileContent(id: id) == pdf)  // byte-identical
+        let id = model.sources.first!.id
+        #expect(try store.sourceContent(id: id) == pdf)  // byte-identical
     }
 
     /// The Zotero ingest seam threads the parent item's key + title into the
@@ -77,13 +77,13 @@ struct WikiStoreModelZoteroIngestTests {
             attachment(key: "DJLXA7DG", filename: "report.pdf"),
             parentItem: parentItem(key: "PARENT1", title: "The Road Not Taken"), zoteroDir: zoteroDir)
 
-        #expect(model.ingestedFiles.count == 1)
-        let summary = model.ingestedFiles.first!
+        #expect(model.sources.count == 1)
+        let summary = model.sources.first!
         #expect(summary.zoteroItemKey == "PARENT1")
         #expect(summary.zoteroItemTitle == "The Road Not Taken")
 
         // The stored row round-trips the provenance too (read-back path).
-        let readBack = try store.getIngestedFile(id: summary.id)
+        let readBack = try store.getSource(id: summary.id)
         #expect(readBack.zoteroItemKey == "PARENT1")
         #expect(readBack.zoteroItemTitle == "The Road Not Taken")
     }
@@ -98,7 +98,7 @@ struct WikiStoreModelZoteroIngestTests {
                 attachment(key: "MISSING1", filename: "ghost.pdf"),
                 parentItem: parentItem(), zoteroDir: zoteroDir)
         }
-        #expect(model.ingestedFiles.isEmpty)
+        #expect(model.sources.isEmpty)
     }
 
     @Test func linkedModeThrowsUnavailableEvenIfFileHappensToExist() async throws {
@@ -113,7 +113,7 @@ struct WikiStoreModelZoteroIngestTests {
                 attachment(key: "L1", linkMode: "linked_file", filename: "stray.pdf"),
                 parentItem: parentItem(), zoteroDir: zoteroDir)
         }
-        #expect(model.ingestedFiles.isEmpty)
+        #expect(model.sources.isEmpty)
     }
 
     @Test func ingestingTwoAttachmentsAddsBothToList() async throws {
@@ -130,8 +130,8 @@ struct WikiStoreModelZoteroIngestTests {
         try await model.ingestFromZotero(
             attachment(key: "K1", filename: "notes.md"), parentItem: parentItem(), zoteroDir: zoteroDir)
 
-        #expect(model.ingestedFiles.count == 2)
-        let filenames = Set(model.ingestedFiles.map(\.filename))
+        #expect(model.sources.count == 2)
+        let filenames = Set(model.sources.map(\.filename))
         #expect(filenames == ["paper.pdf", "notes.md"])
     }
 

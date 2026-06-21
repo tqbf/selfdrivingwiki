@@ -10,17 +10,17 @@ import Foundation
 /// doing exactly that; this map, plus the in-prompt layout, removes the need.
 ///
 /// The layout is FIXED (the projection's tree never changes shape per wiki), so
-/// the body is **static per wiki** EXCEPT two cheap live counts (pages, files)
+/// the body is **static per wiki** EXCEPT two cheap live counts (pages, sources)
 /// folded in at the top. That keeps it deterministic and simple. Because the
-/// counts move with the same `pageCount`/`fileCount` folds the whole-database
+/// counts move with the same `pageCount`/`sourceCount` folds the whole-database
 /// `changeToken()` already tracks, the projection versions `TREE.md` by the change
 /// token (exactly like `log.md`) so an ingest that adds a page refreshes the
 /// counts — see `Projection.treeNode(for:)`.
 public enum WikiTreeRenderer {
 
-    /// Render the `TREE.md` body for a wiki with `pageCount` pages and `fileCount`
-    /// ingested files. Deterministic: same counts → identical bytes.
-    public static func render(pageCount: Int, fileCount: Int) -> String {
+    /// Render the `TREE.md` body for a wiki with `pageCount` pages and `sourceCount`
+    /// sources. Deterministic: same counts → identical bytes.
+    public static func render(pageCount: Int, sourceCount: Int) -> String {
         """
         # Wiki Layout (WIKI-STRUCTURE.md)
 
@@ -30,7 +30,7 @@ public enum WikiTreeRenderer {
         variable, so never pass `--wiki`.
 
         Current contents: \(pageCount) page\(pageCount == 1 ? "" : "s"), \
-        \(fileCount) ingested file\(fileCount == 1 ? "" : "s").
+        \(sourceCount) source\(sourceCount == 1 ? "" : "s").
 
         ## Layout
 
@@ -39,14 +39,14 @@ public enum WikiTreeRenderer {
         - `WIKI-STRUCTURE.md` — this orientation map.
         - `TREE.md`           — legacy alias for `WIKI-STRUCTURE.md`.
         - `CLAUDE.md` / `AGENTS.md` — the agent system prompt (identical bytes).
-        - `manifest.json`     — generated wiki manifest (page/file counts, generated_at).
+        - `manifest.json`     — generated wiki manifest (page/source counts, generated_at).
         - `pages/by-title/`   — one file per wiki page, named by title.
         - `pages/by-id/`      — the same pages, named by ULID.
-        - `files/by-name/`    — raw immutable ingested sources, named by original filename.
-        - `files/by-id/`      — the same raw sources, named by ULID.
-        - `indexes/pages.jsonl` — machine index of every page (id, title, path).
-        - `indexes/links.jsonl` — machine index of the [[wiki-link]] graph.
-        - `indexes/files.jsonl` — machine index of every ingested file.
+        - `sources/by-name/`  — raw immutable sources, named by original filename.
+        - `sources/by-id/`    — the same sources, named by ULID.
+        - `indexes/pages.jsonl`   — machine index of every page (id, title, path).
+        - `indexes/links.jsonl`   — machine index of the [[wiki-link]] graph.
+        - `indexes/sources.jsonl` — machine index of every source.
 
         ## wikictl cheatsheet
 

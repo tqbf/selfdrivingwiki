@@ -139,8 +139,8 @@ extension WikiOperation {
     }
   }
 
-  /// Recover the ingested-file id from its `files/by-id/<id>[.ext]` source path —
-  /// the leaf stem IS the id (`FilenameEscaping.byIDIngestedFilename`). The agent
+  /// Recover the source id from its `sources/by-id/<id>[.ext]` path —
+  /// the leaf stem IS the id (`FilenameEscaping.byIDSourceFilename`). The agent
   /// echoes it back via `wikictl log append --kind ingest --source <id>`.
   static func sourceID(fromPath path: String) -> String {
     let leaf = (path as NSString).lastPathComponent

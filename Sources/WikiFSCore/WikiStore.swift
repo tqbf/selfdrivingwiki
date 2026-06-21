@@ -43,8 +43,8 @@ public protocol WikiStore {
     // MARK: - Ingested files (Phase 5)
     //
     // Only the three methods `WikiStoreModel` actually calls live on the
-    // protocol. The read-projection helpers (listAllIngestedFilesOrderedByID,
-    // getIngestedFile, ingestedFileContent) stay concrete on `SQLiteWikiStore` —
+    // protocol. The read-projection helpers (listAllSourcesOrderedByID,
+    // getSource, sourceContent) stay concrete on `SQLiteWikiStore` —
     // the File Provider extension uses the concrete read store, exactly as it
     // does for `listAllPagesOrderedByID` / `listAllLinks`.
 
@@ -54,56 +54,56 @@ public protocol WikiStore {
     /// file was ingested from a Zotero library item; they default to `nil` so
     /// drag-drop / URL / folder-import callers are unchanged.
     @discardableResult
-    func ingestFile(
+    func addSource(
         filename: String,
         data: Data,
         zoteroItemKey: String?,
         zoteroItemTitle: String?
-    ) throws -> IngestedFileSummary
+    ) throws -> SourceSummary
 
-    /// Ingested-file summaries (no content blob), most-recent-first.
-    func listIngestedFiles() throws -> [IngestedFileSummary]
+    /// Source summaries (no content blob), most-recent-first.
+    func listSources() throws -> [SourceSummary]
 
-    /// The verbatim content bytes for one ingested file, fetched on demand. On the
+    /// The verbatim content bytes for one source, fetched on demand. On the
     /// protocol so `WikiStoreModel` can STAGE the source into the agent's scratch
     /// dir (reading from SQLite, not the laggy mount) without downcasting. Throws
     /// `.notFound` if absent.
-    func ingestedFileContent(id: PageID) throws -> Data
+    func sourceContent(id: PageID) throws -> Data
 
-    /// Remove an ingested file by id.
-    func deleteIngestedFile(id: PageID) throws
+    /// Remove a source by id.
+    func deleteSource(id: PageID) throws
 
-    /// Stamp an ingested file as summarized-into-the-wiki. The agent calls this on
+    /// Stamp a source as summarized-into-the-wiki. The agent calls this on
     /// successful completion via `wikictl log append --kind ingest --source <id>`;
-    /// the UI reads it as the authoritative "Ingested" status.
-    func markIngestedFile(id: PageID) throws
+    /// the UI reads it as the authoritative "Processed" status.
+    func markSourceIngested(id: PageID) throws
 
-    /// IDs of ingested files the agent has marked ingested — the deterministic
-    /// source of truth for the "Ingested" badge (no fuzzy log-title matching).
-    func markedIngestedFileIDs() throws -> Set<String>
+    /// IDs of sources the agent has marked ingested — the deterministic
+    /// source of truth for the "Processed" badge (no fuzzy log-title matching).
+    func markedSourceIDs() throws -> Set<String>
 
-    // MARK: - Processed markdown versions (v8)
+    // MARK: - Processed markdown versions (v8, renamed v10)
 
-    /// The latest (HEAD) version of the processed markdown for a file, or nil
+    /// The latest (HEAD) version of the processed markdown for a source, or nil
     /// when no version exists yet (not yet seeded/extracted).
-    func processedMarkdownHead(fileID: PageID) throws -> FileMarkdownVersion?
+    func processedMarkdownHead(sourceID: PageID) throws -> SourceMarkdownVersion?
 
-    /// True when at least one processed-markdown version exists for this file.
-    func hasProcessedMarkdown(fileID: PageID) throws -> Bool
+    /// True when at least one processed-markdown version exists for this source.
+    func hasProcessedMarkdown(sourceID: PageID) throws -> Bool
 
-    /// All versions for a file, newest first (HEAD → v1). Empty if none.
-    func processedMarkdownHistory(fileID: PageID) throws -> [FileMarkdownVersion]
+    /// All versions for a source, newest first (HEAD → v1). Empty if none.
+    func processedMarkdownHistory(sourceID: PageID) throws -> [SourceMarkdownVersion]
 
     /// Append a new full-text markdown version to the chain. Reads the current
     /// head to set `parentID`. Returns the new version.
     @discardableResult
-    func appendProcessedMarkdown(fileID: PageID, content: String,
-                                 origin: String, note: String?) throws -> FileMarkdownVersion
+    func appendProcessedMarkdown(sourceID: PageID, content: String,
+                                 origin: String, note: String?) throws -> SourceMarkdownVersion
 
     /// Revert to an older version by appending a NEW version whose content
     /// copies the target. History is preserved; HEAD = the new revert version.
     @discardableResult
-    func revertProcessedMarkdown(fileID: PageID, to versionID: PageID) throws -> FileMarkdownVersion
+    func revertProcessedMarkdown(sourceID: PageID, to versionID: PageID) throws -> SourceMarkdownVersion
 
     // MARK: - System prompt (singleton document, v3)
 
@@ -121,7 +121,7 @@ public protocol WikiStore {
     // against `WikiStore` (testable against any conforming store), mirroring how
     // the `page` commands do. The `log.md` read-projection helper
     // (`listAllLogEntriesOrderedByID`) stays concrete on `SQLiteWikiStore`, exactly
-    // like `listAllPagesOrderedByID` / `listAllIngestedFilesOrderedByID`.
+    // like `listAllPagesOrderedByID` / `listAllSourcesOrderedByID`.
 
     /// Append one row to the append-only chronological log, returning the inserted
     /// entry (so the caller can echo its id).

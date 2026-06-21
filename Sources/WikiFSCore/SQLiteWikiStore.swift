@@ -153,7 +153,7 @@ public final class SQLiteWikiStore: WikiStore {
         // Step 1 → 2 (Phase 5): the `ingested_files` table holds verbatim dropped
         // files — raw bytes + metadata, a NEW object kind, NOT tied to a page
         // (so it does NOT reuse `attachments`, which has a `page_id` FK). Stored
-        // and served byte-for-byte; surfaced read-only under the `files/` tree.
+        // and served byte-for-byte; surfaced read-only under the `sources/` tree.
         if version < 2 {
             try exec("""
             CREATE TABLE ingested_files (
@@ -252,7 +252,7 @@ public final class SQLiteWikiStore: WikiStore {
         // Step 5 → 6: record WHICH ingested files the agent has actually
         // summarized into the wiki. `ingested_at` stays NULL until the agent
         // finishes an ingest and stamps it via `wikictl log append --kind ingest
-        // --source <id>`. The UI's "Ingested" badge reads this deterministic flag
+        // --source <id>`. The UI's "Processed" badge reads this deterministic flag
         // instead of fuzzy-matching the agent's free-text log titles (which the
         // agent is free to phrase however it likes, so the match silently failed).
         if version < 6 {
@@ -310,6 +310,30 @@ public final class SQLiteWikiStore: WikiStore {
             try exec("ALTER TABLE ingested_files ADD COLUMN zotero_item_title TEXT;")
             try exec("PRAGMA user_version=9;")
             version = 9
+        }
+
+        // v9 → v10: rename "ingested file" → "source" throughout. The main table
+        // becomes `sources`; the processed-markdown version chain becomes
+        // `source_markdown_versions`. A new `display_name` column defaults to the
+        // original filename. `source_links` records [[source:…]] references from
+        // wiki pages (mirrors `page_links` but FKs to `sources(id)`).
+        // SQLite's ALTER TABLE RENAME TO automatically updates FK references in
+        // `source_markdown_versions.file_id` to point to `sources(id)`.
+        if version < 10 {
+            try exec("ALTER TABLE ingested_files RENAME TO sources;")
+            try exec("ALTER TABLE sources ADD COLUMN display_name TEXT;")
+            try exec("UPDATE sources SET display_name = filename;")
+            try exec("ALTER TABLE file_markdown_versions RENAME TO source_markdown_versions;")
+            try exec("""
+            CREATE TABLE source_links (
+                from_page_id TEXT NOT NULL REFERENCES pages(id),
+                to_source_id TEXT NOT NULL REFERENCES sources(id),
+                link_text    TEXT NOT NULL,
+                PRIMARY KEY (from_page_id, to_source_id)
+            );
+            """)
+            try exec("PRAGMA user_version=10;")
+            version = 10
         }
     }
 
@@ -489,12 +513,12 @@ public final class SQLiteWikiStore: WikiStore {
     /// `update` bumps SUM by 1, and every `create`/`delete` changes COUNT and
     /// SUM — so the token differs on every create, update, or delete of any page.
     ///
-    /// Phase 5: the token ALSO folds in `ingested_files`
-    /// (`"\(pCount):\(pSum):\(fCount):\(fSum)"`). Without this, ingesting or
-    /// removing a file would NOT advance the anchor and the `files/` tree would
+    /// Phase 5 / v10: the token ALSO folds in `sources`
+    /// (`"\(pCount):\(pSum):\(fCount):\(fSum)"`). Without this, adding or
+    /// removing a source would NOT advance the anchor and the `sources/` tree would
     /// never refresh. The enumerator treats the anchor as opaque (any non-equal
     /// parseable string forces a re-emit), so the wider format needs no
-    /// enumerator change. `ingested_files` may not exist yet on a not-yet-migrated
+    /// enumerator change. `sources` may not exist yet on a not-yet-migrated
     /// read connection, so its part falls back to `0:0`.
     ///
     /// System prompt (v3): the token ALSO appends the singleton `system_prompt`
@@ -518,19 +542,19 @@ public final class SQLiteWikiStore: WikiStore {
         guard try pages.step() else { return "0:0:0:0:0:0:0" }
         let pCount = pages.int(at: 0)
         let pSum = pages.int(at: 1)
-        let (fCount, fSum) = ingestedFileCountSum()
+        let (fCount, fSum) = sourceCountSum()
         let spVersion = systemPromptVersion()
         let logCount = logRowCount()
         let idxVersion = wikiIndexVersion()
         return "\(pCount):\(pSum):\(fCount):\(fSum):\(spVersion):\(logCount):\(idxVersion)"
     }
 
-    /// COUNT/SUM(version) over `ingested_files`, resilient to the table not
+    /// COUNT/SUM(version) over `sources`, resilient to the table not
     /// existing yet (a read connection opened against a pre-migration DB). On any
     /// failure returns `(0, 0)` so `changeToken()` still answers.
-    private func ingestedFileCountSum() -> (Int64, Int64) {
+    private func sourceCountSum() -> (Int64, Int64) {
         guard let stmt = try? statement(
-            "SELECT COUNT(*), COALESCE(SUM(version), 0) FROM ingested_files;") else {
+            "SELECT COUNT(*), COALESCE(SUM(version), 0) FROM sources;") else {
             return (0, 0)
         }
         defer { stmt.reset() }
@@ -731,22 +755,22 @@ public final class SQLiteWikiStore: WikiStore {
     /// blow up memory on read. 100 MB is generous for notes/PDFs/markdown.
     public static let ingestByteCap = 100 * 1024 * 1024
 
-    /// Ingest a file's verbatim bytes + metadata as a NEW `ingested_files` row.
+    /// Add a source's verbatim bytes + metadata as a NEW `sources` row.
     /// `ext` is the lowercased extension (no dot, `""` if none); `mime_type` is
     /// the best-effort UTI→MIME for that extension. `byte_size` mirrors
     /// `length(content)`. The id is a fresh ULID (sortable == ingest order).
     /// Throws if `data` exceeds `ingestByteCap`. The optional Zotero provenance
     /// is written to `zotero_item_key`/`zotero_item_title` (NULL when nil).
     @discardableResult
-    public func ingestFile(
+    public func addSource(
         filename: String,
         data: Data,
         zoteroItemKey: String? = nil,
         zoteroItemTitle: String? = nil
-    ) throws -> IngestedFileSummary {
+    ) throws -> SourceSummary {
         guard data.count <= Self.ingestByteCap else {
             throw WikiStoreError.unexpected(
-                "ingested file \(data.count) bytes exceeds cap \(Self.ingestByteCap)")
+                "source \(data.count) bytes exceeds cap \(Self.ingestByteCap)")
         }
         let id = PageID(rawValue: ULID.generate())
         let ext = (filename as NSString).pathExtension.lowercased()
@@ -754,10 +778,10 @@ public final class SQLiteWikiStore: WikiStore {
         let now = Date()
 
         let stmt = try statement("""
-        INSERT INTO ingested_files
+        INSERT INTO sources
           (id, filename, ext, mime_type, byte_size, content, created_at, updated_at, version,
-           zotero_item_key, zotero_item_title)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, 1, ?8, ?9);
+           zotero_item_key, zotero_item_title, display_name)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, 1, ?8, ?9, ?2);
         """)
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
@@ -771,95 +795,97 @@ public final class SQLiteWikiStore: WikiStore {
         if let zoteroItemTitle { try stmt.bind(zoteroItemTitle, at: 9) }  // else leave NULL
         _ = try stmt.step()
 
-        return IngestedFileSummary(
+        return SourceSummary(
             id: id, filename: filename, ext: ext, mimeType: mime,
             byteSize: data.count, createdAt: now, updatedAt: now, version: 1,
             zoteroItemKey: zoteroItemKey, zoteroItemTitle: zoteroItemTitle
         )
     }
 
-    /// All ingested-file summaries (NO content blob), most-recent-first for the
+    /// All source summaries (NO content blob), most-recent-first for the
     /// management list. `id` is a ULID so `created_at DESC` orders by ingest.
-    public func listIngestedFiles() throws -> [IngestedFileSummary] {
+    public func listSources() throws -> [SourceSummary] {
         let stmt = try statement("""
         SELECT id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
-               zotero_item_key, zotero_item_title
-        FROM ingested_files ORDER BY created_at DESC, id DESC;
+               zotero_item_key, zotero_item_title, display_name
+        FROM sources ORDER BY created_at DESC, id DESC;
         """)
         defer { stmt.reset() }
-        var out: [IngestedFileSummary] = []
+        var out: [SourceSummary] = []
         while try stmt.step() {
-            out.append(ingestedSummary(from: stmt))
+            out.append(sourceSummary(from: stmt))
         }
         return out
     }
 
-    /// One ingested-file summary (NO content blob). Throws `.notFound` if absent.
-    public func getIngestedFile(id: PageID) throws -> IngestedFileSummary {
+    /// One source summary (NO content blob). Throws `.notFound` if absent.
+    public func getSource(id: PageID) throws -> SourceSummary {
         let stmt = try statement("""
         SELECT id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
-               zotero_item_key, zotero_item_title
-        FROM ingested_files WHERE id = ?1;
+               zotero_item_key, zotero_item_title, display_name
+        FROM sources WHERE id = ?1;
         """)
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         guard try stmt.step() else { throw WikiStoreError.notFound(id) }
-        return ingestedSummary(from: stmt)
+        return sourceSummary(from: stmt)
     }
 
-    /// The verbatim content bytes for one ingested file, fetched on demand (never
+    /// The verbatim content bytes for one source, fetched on demand (never
     /// held in the summary list). Throws `.notFound` if absent.
-    public func ingestedFileContent(id: PageID) throws -> Data {
-        let stmt = try statement("SELECT content FROM ingested_files WHERE id = ?1;")
+    public func sourceContent(id: PageID) throws -> Data {
+        let stmt = try statement("SELECT content FROM sources WHERE id = ?1;")
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         guard try stmt.step() else { throw WikiStoreError.notFound(id) }
         return stmt.blob(at: 0)
     }
 
-    public func deleteIngestedFile(id: PageID) throws {
-        let stmt = try statement("DELETE FROM ingested_files WHERE id = ?1;")
+    public func deleteSource(id: PageID) throws {
+        let stmt = try statement("DELETE FROM sources WHERE id = ?1;")
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         _ = try stmt.step()
     }
 
-    /// Stamp an ingested file as summarized-into-the-wiki. Idempotent and a no-op
+    /// Stamp a source as summarized-into-the-wiki. Idempotent and a no-op
     /// for an unknown id. Called from `wikictl log append --kind ingest --source`.
-    public func markIngestedFile(id: PageID) throws {
+    public func markSourceIngested(id: PageID) throws {
         let stmt = try statement(
-            "UPDATE ingested_files SET ingested_at = ?2 WHERE id = ?1;")
+            "UPDATE sources SET ingested_at = ?2 WHERE id = ?1;")
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         try stmt.bind(Date().timeIntervalSince1970, at: 2)
         _ = try stmt.step()
     }
 
-    /// IDs of ingested files the agent has marked ingested — the authoritative
-    /// status the UI's "Ingested" badge reads.
-    public func markedIngestedFileIDs() throws -> Set<String> {
+    /// IDs of sources the agent has marked ingested — the authoritative
+    /// status the UI's "Processed" badge reads.
+    public func markedSourceIDs() throws -> Set<String> {
         let stmt = try statement(
-            "SELECT id FROM ingested_files WHERE ingested_at IS NOT NULL;")
+            "SELECT id FROM sources WHERE ingested_at IS NOT NULL;")
         defer { stmt.reset() }
         var ids: Set<String> = []
         while try stmt.step() { ids.insert(stmt.text(at: 0)) }
         return ids
     }
 
-    /// All ingested files as `IndexGenerators.FileRow`s, ordered by id (ULID ==
-    /// ingest order) for the deterministic `indexes/files.jsonl` generator.
+    /// All sources as `IndexGenerators.SourceIndexRow`s, ordered by id (ULID ==
+    /// ingest order) for the deterministic `indexes/sources.jsonl` generator.
     /// Read-side projection helper (like `listAllPagesOrderedByID`).
-    public func listAllIngestedFilesOrderedByID() throws -> [IndexGenerators.FileRow] {
+    public func listAllSourcesOrderedByID() throws -> [IndexGenerators.SourceIndexRow] {
         let stmt = try statement("""
-        SELECT id, filename, ext, mime_type, byte_size, created_at, updated_at, version
-        FROM ingested_files ORDER BY id ASC;
+        SELECT id, filename, ext, mime_type, byte_size, created_at, updated_at, version, display_name
+        FROM sources ORDER BY id ASC;
         """)
         defer { stmt.reset() }
-        var out: [IndexGenerators.FileRow] = []
+        var out: [IndexGenerators.SourceIndexRow] = []
         while try stmt.step() {
             let mime = sqlite3_column_type(stmt.handle, 3) == SQLITE_NULL
                 ? nil : stmt.text(at: 3)
-            out.append(IndexGenerators.FileRow(
+            let displayName = sqlite3_column_type(stmt.handle, 8) == SQLITE_NULL
+                ? nil : stmt.text(at: 8)
+            out.append(IndexGenerators.SourceIndexRow(
                 id: stmt.text(at: 0),
                 filename: stmt.text(at: 1),
                 ext: stmt.text(at: 2),
@@ -867,24 +893,27 @@ public final class SQLiteWikiStore: WikiStore {
                 byteSize: Int(stmt.int(at: 4)),
                 createdAt: Date(timeIntervalSince1970: stmt.double(at: 5)),
                 updatedAt: Date(timeIntervalSince1970: stmt.double(at: 6)),
-                version: Int(stmt.int(at: 7))
+                version: Int(stmt.int(at: 7)),
+                displayName: displayName
             ))
         }
         return out
     }
 
-    /// Map the current row of an `ingested_files` SELECT (column order: id,
+    /// Map the current row of a `sources` SELECT (column order: id,
     /// filename, ext, mime_type, byte_size, created_at, updated_at, version,
-    /// zotero_item_key, zotero_item_title) to a summary. `mime_type` and the two
-    /// Zotero columns are read as NULL→nil via the column type.
-    private func ingestedSummary(from stmt: SQLiteStatement) -> IngestedFileSummary {
+    /// zotero_item_key, zotero_item_title, display_name) to a summary.
+    /// `mime_type` and the two Zotero columns are read as NULL→nil via the column type.
+    private func sourceSummary(from stmt: SQLiteStatement) -> SourceSummary {
         let mime = sqlite3_column_type(stmt.handle, 3) == SQLITE_NULL
             ? nil : stmt.text(at: 3)
         let zoteroItemKey = sqlite3_column_type(stmt.handle, 8) == SQLITE_NULL
             ? nil : stmt.text(at: 8)
         let zoteroItemTitle = sqlite3_column_type(stmt.handle, 9) == SQLITE_NULL
             ? nil : stmt.text(at: 9)
-        return IngestedFileSummary(
+        let displayName = sqlite3_column_type(stmt.handle, 10) == SQLITE_NULL
+            ? nil : stmt.text(at: 10)
+        return SourceSummary(
             id: PageID(rawValue: stmt.text(at: 0)),
             filename: stmt.text(at: 1),
             ext: stmt.text(at: 2),
@@ -894,7 +923,8 @@ public final class SQLiteWikiStore: WikiStore {
             updatedAt: Date(timeIntervalSince1970: stmt.double(at: 6)),
             version: Int(stmt.int(at: 7)),
             zoteroItemKey: zoteroItemKey,
-            zoteroItemTitle: zoteroItemTitle
+            zoteroItemTitle: zoteroItemTitle,
+            displayName: displayName
         )
     }
 
@@ -1240,18 +1270,18 @@ public final class SQLiteWikiStore: WikiStore {
         return count
     }
 
-    // MARK: - Processed markdown versions (v8)
+    // MARK: - Processed markdown versions (v8, renamed v10)
 
-    /// Read one `file_markdown_versions` row from the current statement position
+    /// Read one `source_markdown_versions` row from the current statement position
     /// (column order: id, file_id, parent_id, content, origin, note, created_at).
-    private func fileMarkdownVersion(from stmt: SQLiteStatement) -> FileMarkdownVersion {
+    private func sourceMarkdownVersion(from stmt: SQLiteStatement) -> SourceMarkdownVersion {
         let parentID: PageID? = sqlite3_column_type(stmt.handle, 2) == SQLITE_NULL
             ? nil : PageID(rawValue: stmt.text(at: 2))
         let note: String? = sqlite3_column_type(stmt.handle, 5) == SQLITE_NULL
             ? nil : stmt.text(at: 5)
-        return FileMarkdownVersion(
+        return SourceMarkdownVersion(
             id: PageID(rawValue: stmt.text(at: 0)),
-            fileID: PageID(rawValue: stmt.text(at: 1)),
+            sourceID: PageID(rawValue: stmt.text(at: 1)),
             parentID: parentID,
             content: stmt.text(at: 3),
             origin: stmt.text(at: 4),
@@ -1260,55 +1290,55 @@ public final class SQLiteWikiStore: WikiStore {
         )
     }
 
-    public func processedMarkdownHead(fileID: PageID) throws -> FileMarkdownVersion? {
+    public func processedMarkdownHead(sourceID: PageID) throws -> SourceMarkdownVersion? {
         guard let stmt = try? statement("""
         SELECT id, file_id, parent_id, content, origin, note, created_at
-        FROM file_markdown_versions WHERE file_id = ?1 ORDER BY id DESC LIMIT 1;
+        FROM source_markdown_versions WHERE file_id = ?1 ORDER BY id DESC LIMIT 1;
         """) else { return nil }
         defer { stmt.reset() }
-        try stmt.bind(fileID.rawValue, at: 1)
+        try stmt.bind(sourceID.rawValue, at: 1)
         guard try stmt.step() else { return nil }
-        return fileMarkdownVersion(from: stmt)
+        return sourceMarkdownVersion(from: stmt)
     }
 
-    public func hasProcessedMarkdown(fileID: PageID) throws -> Bool {
+    public func hasProcessedMarkdown(sourceID: PageID) throws -> Bool {
         guard let stmt = try? statement("""
-        SELECT 1 FROM file_markdown_versions WHERE file_id = ?1 LIMIT 1;
+        SELECT 1 FROM source_markdown_versions WHERE file_id = ?1 LIMIT 1;
         """) else { return false }
         defer { stmt.reset() }
-        try stmt.bind(fileID.rawValue, at: 1)
+        try stmt.bind(sourceID.rawValue, at: 1)
         return try stmt.step()
     }
 
-    public func processedMarkdownHistory(fileID: PageID) throws -> [FileMarkdownVersion] {
+    public func processedMarkdownHistory(sourceID: PageID) throws -> [SourceMarkdownVersion] {
         guard let stmt = try? statement("""
         SELECT id, file_id, parent_id, content, origin, note, created_at
-        FROM file_markdown_versions WHERE file_id = ?1 ORDER BY id DESC;
+        FROM source_markdown_versions WHERE file_id = ?1 ORDER BY id DESC;
         """) else { return [] }
         defer { stmt.reset() }
-        try stmt.bind(fileID.rawValue, at: 1)
-        var out: [FileMarkdownVersion] = []
+        try stmt.bind(sourceID.rawValue, at: 1)
+        var out: [SourceMarkdownVersion] = []
         while try stmt.step() {
-            out.append(fileMarkdownVersion(from: stmt))
+            out.append(sourceMarkdownVersion(from: stmt))
         }
         return out
     }
 
     @discardableResult
-    public func appendProcessedMarkdown(fileID: PageID, content: String,
-                                        origin: String, note: String?) throws -> FileMarkdownVersion {
+    public func appendProcessedMarkdown(sourceID: PageID, content: String,
+                                        origin: String, note: String?) throws -> SourceMarkdownVersion {
         let id = PageID(rawValue: ULID.generate())
-        let parentID = try processedMarkdownHead(fileID: fileID)?.id
+        let parentID = try processedMarkdownHead(sourceID: sourceID)?.id
         let now = Date()
 
         let stmt = try statement("""
-        INSERT INTO file_markdown_versions
+        INSERT INTO source_markdown_versions
           (id, file_id, parent_id, content, origin, note, created_at)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);
         """)
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
-        try stmt.bind(fileID.rawValue, at: 2)
+        try stmt.bind(sourceID.rawValue, at: 2)
         if let parentID { try stmt.bind(parentID.rawValue, at: 3) }
         try stmt.bind(content, at: 4)
         try stmt.bind(origin, at: 5)
@@ -1316,23 +1346,23 @@ public final class SQLiteWikiStore: WikiStore {
         try stmt.bind(now.timeIntervalSince1970, at: 7)
         _ = try stmt.step()
 
-        return FileMarkdownVersion(
-            id: id, fileID: fileID, parentID: parentID,
+        return SourceMarkdownVersion(
+            id: id, sourceID: sourceID, parentID: parentID,
             content: content, origin: origin, note: note, createdAt: now
         )
     }
 
     @discardableResult
-    public func revertProcessedMarkdown(fileID: PageID, to versionID: PageID) throws -> FileMarkdownVersion {
-        // Read the target version's content — must exist and belong to fileID.
+    public func revertProcessedMarkdown(sourceID: PageID, to versionID: PageID) throws -> SourceMarkdownVersion {
+        // Read the target version's content — must exist and belong to sourceID.
         guard let stmt = try? statement("""
-        SELECT content FROM file_markdown_versions WHERE id = ?1 AND file_id = ?2;
+        SELECT content FROM source_markdown_versions WHERE id = ?1 AND file_id = ?2;
         """) else {
-            throw WikiStoreError.unexpected("file_markdown_versions table not found")
+            throw WikiStoreError.unexpected("source_markdown_versions table not found")
         }
         defer { stmt.reset() }
         try stmt.bind(versionID.rawValue, at: 1)
-        try stmt.bind(fileID.rawValue, at: 2)
+        try stmt.bind(sourceID.rawValue, at: 2)
         guard try stmt.step() else {
             throw WikiStoreError.notFound(versionID)
         }
@@ -1340,7 +1370,7 @@ public final class SQLiteWikiStore: WikiStore {
 
         // Append a new version whose content copies the target. History preserved.
         return try appendProcessedMarkdown(
-            fileID: fileID, content: oldContent,
+            sourceID: sourceID, content: oldContent,
             origin: "revert", note: "revert to \(versionID.rawValue)"
         )
     }

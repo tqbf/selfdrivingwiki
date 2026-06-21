@@ -12,6 +12,6 @@ public enum WikiSelection: Hashable, Sendable {
     case lint
     /// A wiki page, by id.
     case page(PageID)
-    /// A raw source file stored in the wiki, by id.
-    case ingestedFile(PageID)
+    /// A raw source stored in the wiki, by id.
+    case source(PageID)
 }

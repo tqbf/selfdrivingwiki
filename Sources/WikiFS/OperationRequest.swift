@@ -16,7 +16,7 @@ enum OperationRequest {
   struct StagedSource: Equatable, Sendable {
     let bytes: Data
     let ext: String         // lowercased, e.g. "md", "pdf"
-    let displayPath: String  // mount-relative, e.g. "files/by-id/<ulid>.md"
+    let displayPath: String  // mount-relative, e.g. "sources/by-id/<ulid>.md"
 
     init(bytes: Data, ext: String, displayPath: String) {
       self.bytes = bytes

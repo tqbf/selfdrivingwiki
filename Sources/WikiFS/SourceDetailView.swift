@@ -5,15 +5,15 @@ import WikiFSCore
 /// content (markdown render, inline PDF, or tabbed Markdown⇄PDF when extraction
 /// output exists). Cmd-E flips between reader and editor for processed markdown;
 /// source bytes are never modified.
-struct IngestedFileDetailView: View {
-    let file: IngestedFileSummary
+struct SourceDetailView: View {
+    let file: SourceSummary
     let hasBeenIngested: Bool
     let isIngesting: Bool
     let isRunning: Bool
     /// `true` when any file (not necessarily this one) is mid-ingest — covers the
     /// PDF-conversion phase before the agent process starts, when `isRunning` is
     /// still `false`.
-    let isAnyFileIngesting: Bool
+    let isAnySourceIngesting: Bool
     /// `true` when THIS file is mid-extraction via the ingest path (pdf2md running
     /// during an ingest of this file, before the agent spawns). Disables the
     /// standalone "Extract Markdown" button for this file only — pdf2md is safe to
@@ -22,12 +22,12 @@ struct IngestedFileDetailView: View {
     let runIngest: (PageID) -> Void
     /// Shared launcher — used by the standalone `runExtraction` to take the
     /// extraction slot (so a standalone extract and an ingest-path extract serialize
-    /// against each other) and to mirror this file's id into `extractingFileIDs`
+    /// against each other) and to mirror this file's id into `extractingSourceIDs`
     /// so the sidebar row labels it "Extracting…".
     let launcher: AgentLauncher
     @Bindable var store: WikiStoreModel
 
-    @State private var headVersion: FileMarkdownVersion?
+    @State private var headVersion: SourceMarkdownVersion?
     @State private var isEditing = false
     @State private var editBuffer = ""
     @State private var isExtracting = false
@@ -42,10 +42,11 @@ struct IngestedFileDetailView: View {
     // MARK: - Computed
 
     private var isMarkdownNative: Bool {
-        file.ext == "md" || file.ext == "markdown" || file.ext == "txt"
+        if let mime = file.mimeType { return mime.hasPrefix("text/") }
+        return false
     }
 
-    private var isPDF: Bool { file.ext == "pdf" }
+    private var isPDF: Bool { file.mimeType == "application/pdf" }
 
     private var hasMarkdown: Bool { headVersion != nil }
 
@@ -158,11 +159,11 @@ struct IngestedFileDetailView: View {
                 } else {
                     Button(isIngesting ? "Ingesting…" : "Ingest into Wiki",
                            systemImage: "text.badge.plus") {
-                        DebugLog.ingest("IngestedFileDetailView: Ingest tapped — id=\(file.id.rawValue)")
+                        DebugLog.ingest("SourceDetailView: Ingest tapped — id=\(file.id.rawValue)")
                         runIngest(file.id)
                     }
                         .keyboardShortcut(.return, modifiers: .command)
-                        .disabled(isRunning || isIngesting || isAnyFileIngesting
+                        .disabled(isRunning || isIngesting || isAnySourceIngesting
                                   || isThisFileExtracting)
                     if isPDF, !hasMarkdown {
                         Button(isExtracting ? "Extracting…" : "Extract Markdown",
@@ -179,7 +180,7 @@ struct IngestedFileDetailView: View {
                                   // slot — this extract would await it, so show
                                   // it as busy rather than letting the tap hang.
                                   || (launcher.isExtractionSlotBusy
-                                      && !launcher.extractingFileIDs.contains(file.id)))
+                                      && !launcher.extractingSourceIDs.contains(file.id)))
                     }
                     if isMarkdownEditable {
                         Button("Edit", systemImage: "pencil") {
@@ -347,7 +348,7 @@ struct IngestedFileDetailView: View {
 
     private var pdfView: some View {
         Group {
-            if let data = store.ingestedSourceBytes(id: file.id) {
+            if let data = store.sourceBytes(id: file.id) {
                 PDFViewWrapper(data: data)
             } else {
                 ContentUnavailableView {
@@ -381,16 +382,16 @@ struct IngestedFileDetailView: View {
             launcher.extractionLog = "Extraction cancelled."
             return
         }
-        launcher.extractingFileIDs.insert(file.id)
+        launcher.extractingSourceIDs.insert(file.id)
         defer {
-            launcher.extractingFileIDs.remove(file.id)
+            launcher.extractingSourceIDs.remove(file.id)
             launcher.releaseExtractionSlot()
         }
         guard await PdfExtractionService.checkReady() else {
             launcher.extractionLog = "PDF extraction not available — pdf2md is not ready."
             return
         }
-        guard let data = store.ingestedSourceBytes(id: file.id) else {
+        guard let data = store.sourceBytes(id: file.id) else {
             launcher.extractionLog = "Could not read source bytes."
             return
         }
@@ -407,7 +408,7 @@ struct IngestedFileDetailView: View {
                         launcher.extractionLog.append("Started pdf2md (pid \(pid)).\n")
                     }
                 })
-            if let version = store.seedPdfMarkdown(fileID: file.id, content: markdown) {
+            if let version = store.seedPdfMarkdown(for: file.id, content: markdown) {
                 headVersion = version
                 launcher.extractionLog = "Markdown extracted — \(markdown.count) chars."
             }
@@ -469,7 +470,7 @@ struct IngestedFileDetailView: View {
             .foregroundStyle(.orange)
         } else {
             Label(
-                hasBeenIngested ? "Ingested" : "Ready to ingest",
+                hasBeenIngested ? "Processed" : "Ready to ingest",
                 systemImage: hasBeenIngested ? "checkmark.circle.fill" : "circle.dashed"
             )
             .foregroundStyle(hasBeenIngested ? .green : .secondary)
@@ -477,11 +478,9 @@ struct IngestedFileDetailView: View {
     }
 
     private var symbol: String {
-        switch file.ext {
-        case "pdf": "doc.richtext"
-        case "txt", "md", "markdown": "doc.plaintext"
-        default: "doc"
-        }
+        if file.mimeType == "application/pdf" { return "doc.richtext" }
+        if let mime = file.mimeType, mime.hasPrefix("text/") { return "doc.plaintext" }
+        return "doc"
     }
 
     private static let sizeFormatter: ByteCountFormatter = {

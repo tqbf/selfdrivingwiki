@@ -143,7 +143,7 @@ struct AgentSpawnSlotTests {
     /// `store.isAgentRunning` is the edit lock. It is `true` only while a claude
     /// process is running (driven by `onLock`/`onUnlock`). Extraction
     /// (`isExtracting`) does NOT lock editing. This mirrors the
-    /// `IngestedFileDetailView`/`PageDetailView` banner binding
+    /// `SourceDetailView`/`PageDetailView` banner binding
     /// (`store.isAgentRunning`), so the query page shows the orange banner during an
     /// agent run but NOT during extraction (AC.2 vs AC.3). Drives `isRunning` via the
     /// slot seam so the test exercises the real flag, not a mock.

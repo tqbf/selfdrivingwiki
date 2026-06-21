@@ -61,20 +61,20 @@ struct WikiDetailView: View {
                 launcher: launcher,
                 manager: manager,
                 fileProvider: fileProvider)
-        case .ingestedFile(let id):
-            if let file = store.ingestedFiles.first(where: { $0.id == id }) {
-                IngestedFileDetailView(
+        case .source(let id):
+            if let file = store.sources.first(where: { $0.id == id }) {
+                SourceDetailView(
                     file: file,
-                    hasBeenIngested: store.hasIngestedFile(file),
-                    isIngesting: launcher.ingestingFileIDs.contains(file.id),
+                    hasBeenIngested: store.isSourceIngested(file),
+                    isIngesting: launcher.ingestingSourceIDs.contains(file.id),
                     isRunning: launcher.isRunning,
-                    isAnyFileIngesting: !launcher.ingestingFileIDs.isEmpty,
+                    isAnySourceIngesting: !launcher.ingestingSourceIDs.isEmpty,
                     // This file is mid-extraction via EITHER path (the ingest-path
                     // pdf2md step or the standalone runExtraction) — both insert
-                    // into `extractingFileIDs`, so this is now extraction-phase
+                    // into `extractingSourceIDs`, so this is now extraction-phase
                     // driven rather than the old `isExtracting &&
-                    // ingestingFileIDs.contains` overload.
-                    isThisFileExtracting: launcher.extractingFileIDs.contains(file.id),
+                    // ingestingSourceIDs.contains` overload.
+                    isThisFileExtracting: launcher.extractingSourceIDs.contains(file.id),
                     runIngest: runIngest,
                     launcher: launcher,
                     store: store

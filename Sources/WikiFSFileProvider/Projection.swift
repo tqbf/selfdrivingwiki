@@ -45,12 +45,12 @@ struct Projection {
         static let indexPagesJSONL = NSFileProviderItemIdentifier(WikiFSContainerID.indexPagesJSONL)
         static let indexLinksJSONL = NSFileProviderItemIdentifier(WikiFSContainerID.indexLinksJSONL)
 
-        // Ingested files (Phase 5): a new top-level `files/` tree with `by-id` and
-        // `by-name` views, plus `indexes/files.jsonl`.
-        static let files = NSFileProviderItemIdentifier(WikiFSContainerID.files)
-        static let filesByID = NSFileProviderItemIdentifier(WikiFSContainerID.filesByID)
-        static let filesByName = NSFileProviderItemIdentifier(WikiFSContainerID.filesByName)
-        static let indexFilesJSONL = NSFileProviderItemIdentifier(WikiFSContainerID.indexFilesJSONL)
+        // Sources (Phase 5, renamed v10): a top-level `sources/` tree with `by-id`
+        // and `by-name` views, plus `indexes/sources.jsonl`.
+        static let sources = NSFileProviderItemIdentifier(WikiFSContainerID.sources)
+        static let sourcesByID = NSFileProviderItemIdentifier(WikiFSContainerID.sourcesByID)
+        static let sourcesByName = NSFileProviderItemIdentifier(WikiFSContainerID.sourcesByName)
+        static let indexSourcesJSONL = NSFileProviderItemIdentifier(WikiFSContainerID.indexSourcesJSONL)
 
         // System prompt (v3): the same singleton document under two root-level
         // names (identical bytes) — `CLAUDE.md` and `AGENTS.md`.
@@ -73,8 +73,8 @@ struct Projection {
         static let byTitlePrefix = "page-by-title:"
         // Shared with the app (which resolves a per-file user-visible URL to open
         // it in the default app), so the two sides build the identical identifier.
-        static let fileByIDPrefix = WikiFSContainerID.fileByIDPrefix
-        static let fileByNamePrefix = "file-by-name:"
+        static let sourceByIDPrefix = WikiFSContainerID.sourceByIDPrefix
+        static let sourceByNamePrefix = "source-by-name:"
 
         static func pageByID(_ ulid: String) -> NSFileProviderItemIdentifier {
             NSFileProviderItemIdentifier(byIDPrefix + ulid)
@@ -84,12 +84,12 @@ struct Projection {
             NSFileProviderItemIdentifier(byTitlePrefix + ulid)
         }
 
-        static func fileByID(_ ulid: String) -> NSFileProviderItemIdentifier {
-            NSFileProviderItemIdentifier(fileByIDPrefix + ulid)
+        static func sourceByID(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(sourceByIDPrefix + ulid)
         }
 
-        static func fileByName(_ ulid: String) -> NSFileProviderItemIdentifier {
-            NSFileProviderItemIdentifier(fileByNamePrefix + ulid)
+        static func sourceByName(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(sourceByNamePrefix + ulid)
         }
 
         /// Extract the embedded ULID from a `page-by-id:` / `page-by-title:`
@@ -106,8 +106,8 @@ struct Projection {
         /// ULID is in the identifier — never the filename (INITIAL §6).
         static func fileULID(from id: NSFileProviderItemIdentifier) -> String? {
             let raw = id.rawValue
-            if raw.hasPrefix(fileByIDPrefix) { return String(raw.dropFirst(fileByIDPrefix.count)) }
-            if raw.hasPrefix(fileByNamePrefix) { return String(raw.dropFirst(fileByNamePrefix.count)) }
+            if raw.hasPrefix(sourceByIDPrefix) { return String(raw.dropFirst(sourceByIDPrefix.count)) }
+            if raw.hasPrefix(sourceByNamePrefix) { return String(raw.dropFirst(sourceByNamePrefix.count)) }
             return nil
         }
     }
@@ -130,12 +130,12 @@ struct Projection {
     - `TREE.md` (legacy alias for `WIKI-STRUCTURE.md`)
     - `pages/by-id/`
     - `pages/by-title/`
-    - `files/by-id/`
-    - `files/by-name/`
+    - `sources/by-id/`
+    - `sources/by-name/`
     - `manifest.json`
     - `indexes/pages.jsonl`
     - `indexes/links.jsonl`
-    - `indexes/files.jsonl`
+    - `indexes/sources.jsonl`
 
     """.utf8)
 
@@ -200,19 +200,19 @@ struct Projection {
             guard let pages = try? store.listAllPagesOrderedByID() else { return nil }
             // file_count must be resilient to a pre-migration `ingested_files`:
             // a `nil` read → 0, so the manifest still generates.
-            let fileCount = (try? store.listAllIngestedFilesOrderedByID())?.count ?? 0
-            return IndexGenerators.manifest(pages: pages, fileCount: fileCount, generatedAt: Date())
+            let sourceCount = (try? store.listAllSourcesOrderedByID())?.count ?? 0
+            return IndexGenerators.manifest(pages: pages, sourceCount: sourceCount, generatedAt: Date())
         case Identity.indexPagesJSONL:
             guard let pages = try? store.listAllPagesOrderedByID() else { return nil }
             return IndexGenerators.pagesJSONL(pages: pages)
         case Identity.indexLinksJSONL:
             guard let links = try? store.listAllLinks() else { return nil }
             return IndexGenerators.linksJSONL(links: links)
-        case Identity.indexFilesJSONL:
+        case Identity.indexSourcesJSONL:
             // Resilient to the table not existing yet → empty index, never nil,
             // so enumeration of `indexes/` never errors pre-migration.
-            let files = (try? store.listAllIngestedFilesOrderedByID()) ?? []
-            return IndexGenerators.filesJSONL(files: files)
+            let files = (try? store.listAllSourcesOrderedByID()) ?? []
+            return IndexGenerators.sourcesJSONL(sources: files)
         default:
             return nil
         }
@@ -336,8 +336,8 @@ struct Projection {
     private func treeBody() -> Data {
         let store = openReadStore()
         let pageCount = (try? store?.listAllPagesOrderedByID())??.count ?? 0
-        let fileCount = (try? store?.listAllIngestedFilesOrderedByID())??.count ?? 0
-        return Data(WikiTreeRenderer.render(pageCount: pageCount, fileCount: fileCount).utf8)
+        let sourceCount = (try? store?.listAllSourcesOrderedByID())??.count ?? 0
+        return Data(WikiTreeRenderer.render(pageCount: pageCount, sourceCount: sourceCount).utf8)
     }
 
     /// Build a root-level layout-map file node. Versioned by the change token (like
@@ -403,14 +403,14 @@ struct Projection {
             return indexFileNode(for: id, name: "pages.jsonl", parent: Identity.indexes)
         case Identity.indexLinksJSONL:
             return indexFileNode(for: id, name: "links.jsonl", parent: Identity.indexes)
-        case Identity.indexFilesJSONL:
+        case Identity.indexSourcesJSONL:
             return indexFileNode(for: id, name: "files.jsonl", parent: Identity.indexes)
-        case Identity.files:
+        case Identity.sources:
             return .folder(id: id, parent: .rootContainer, name: "files")
-        case Identity.filesByID:
-            return .folder(id: id, parent: Identity.files, name: "by-id")
-        case Identity.filesByName:
-            return .folder(id: id, parent: Identity.files, name: "by-name")
+        case Identity.sourcesByID:
+            return .folder(id: id, parent: Identity.sources, name: "by-id")
+        case Identity.sourcesByName:
+            return .folder(id: id, parent: Identity.sources, name: "by-name")
         default:
             break
         }
@@ -419,10 +419,10 @@ struct Projection {
         // throws → nil → the node simply isn't found, never an enumeration error).
         if let ulid = Identity.fileULID(from: id) {
             guard let store = openReadStore(),
-                  let file = try? store.getIngestedFile(id: PageID(rawValue: ulid)) else {
+                  let file = try? store.getSource(id: PageID(rawValue: ulid)) else {
                 return nil
             }
-            return Self.ingestedFileNode(for: id, file: file)
+            return Self.sourceNode(for: id, file: file)
         }
         guard let ulid = Identity.pageULID(from: id),
               let store = openReadStore(),
@@ -436,15 +436,15 @@ struct Projection {
     /// belongs to. Size is the stored `byteSize` (NEVER nil → no truncated
     /// `cat`); contentVersion is the row `version`; metadataVersion folds in the
     /// filename + updated_at so a re-ingest under the same id would re-fetch.
-    static func ingestedFileNode(for id: NSFileProviderItemIdentifier,
-                                 file: IngestedFileSummary) -> ProjectedNode {
+    static func sourceNode(for id: NSFileProviderItemIdentifier,
+                                 file: SourceSummary) -> ProjectedNode {
         let raw = id.rawValue
-        let isByName = raw.hasPrefix(Identity.fileByNamePrefix)
+        let isByName = raw.hasPrefix(Identity.sourceByNamePrefix)
         let name = isByName
-            ? FilenameEscaping.byNameIngestedFilename(
-                filename: file.filename, ext: file.ext, fileID: file.id.rawValue)
-            : FilenameEscaping.byIDIngestedFilename(fileID: file.id.rawValue, ext: file.ext)
-        let parent = isByName ? Identity.filesByName : Identity.filesByID
+            ? FilenameEscaping.byNameSourceFilename(
+                filename: file.filename, ext: file.ext, sourceID: file.id.rawValue)
+            : FilenameEscaping.byIDSourceFilename(sourceID: file.id.rawValue, ext: file.ext)
+        let parent = isByName ? Identity.sourcesByName : Identity.sourcesByID
         return .file(
             id: id, parent: parent, name: name, size: file.byteSize,
             version: Data(String(file.version).utf8),
@@ -492,7 +492,7 @@ struct Projection {
                 node(for: Identity.treeMD),
                 node(for: Identity.manifest),
                 node(for: Identity.pages),
-                node(for: Identity.files),
+                node(for: Identity.sources),
                 node(for: Identity.indexes),
             ].compactMap { $0 }
         case Identity.pages:
@@ -500,25 +500,25 @@ struct Projection {
                 node(for: Identity.pagesByID),
                 node(for: Identity.pagesByTitle),
             ].compactMap { $0 }
-        case Identity.files:
+        case Identity.sources:
             return [
-                node(for: Identity.filesByID),
-                node(for: Identity.filesByName),
+                node(for: Identity.sourcesByID),
+                node(for: Identity.sourcesByName),
             ].compactMap { $0 }
         case Identity.indexes:
             return [
                 node(for: Identity.indexPagesJSONL),
                 node(for: Identity.indexLinksJSONL),
-                node(for: Identity.indexFilesJSONL),
+                node(for: Identity.indexSourcesJSONL),
             ].compactMap { $0 }
         case Identity.pagesByID:
             return pageNodes(byTitle: false)
         case Identity.pagesByTitle:
             return pageNodes(byTitle: true)
-        case Identity.filesByID:
-            return ingestedFileNodes(byName: false)
-        case Identity.filesByName:
-            return ingestedFileNodes(byName: true)
+        case Identity.sourcesByID:
+            return sourceNodes(byName: false)
+        case Identity.sourcesByName:
+            return sourceNodes(byName: true)
         case .workingSet:
             // The working set is the set of items the daemon actively tracks for
             // change. Re-emit ALL page nodes (both views) and ALL ingested-file
@@ -527,9 +527,9 @@ struct Projection {
             // the daemon invalidates its materialized copies (the index bytes
             // derive from page + file content, so a mutation must invalidate them).
             return pageNodes(byTitle: false) + pageNodes(byTitle: true)
-                + ingestedFileNodes(byName: false) + ingestedFileNodes(byName: true)
+                + sourceNodes(byName: false) + sourceNodes(byName: true)
                 + [Identity.manifest, Identity.indexPagesJSONL,
-                   Identity.indexLinksJSONL, Identity.indexFilesJSONL,
+                   Identity.indexLinksJSONL, Identity.indexSourcesJSONL,
                    Identity.claudeMD, Identity.agentsMD,
                    Identity.indexMD, Identity.logMD,
                    Identity.wikiStructureMD, Identity.treeMD]
@@ -554,16 +554,16 @@ struct Projection {
     /// All ingested-file rows projected as file nodes under the given view,
     /// ordered by id (ULID == ingest order). Resilient to the table not existing
     /// yet (pre-migration) → empty, so enumeration never errors.
-    private func ingestedFileNodes(byName: Bool) -> [ProjectedNode] {
+    private func sourceNodes(byName: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
-              let files = try? store.listAllIngestedFilesOrderedByID() else { return [] }
+              let files = try? store.listAllSourcesOrderedByID() else { return [] }
         return files.map { row in
-            let id = byName ? Identity.fileByName(row.id) : Identity.fileByID(row.id)
-            let summary = IngestedFileSummary(
+            let id = byName ? Identity.sourceByName(row.id) : Identity.sourceByID(row.id)
+            let summary = SourceSummary(
                 id: PageID(rawValue: row.id), filename: row.filename, ext: row.ext,
                 mimeType: row.mime, byteSize: row.byteSize,
                 createdAt: row.createdAt, updatedAt: row.updatedAt, version: row.version)
-            return Self.ingestedFileNode(for: id, file: summary)
+            return Self.sourceNode(for: id, file: summary)
         }
     }
 
@@ -589,17 +589,17 @@ struct Projection {
         if id == Identity.wikiStructureMD || id == Identity.treeMD {
             return treeBody()
         }
-        // Generated index files: serve the SAME token-cached bytes whose length
+        // Generated index sources: serve the SAME token-cached bytes whose length
         // `node(for:)` reported as `documentSize` (else `cat` truncates).
         if id == Identity.manifest || id == Identity.indexPagesJSONL
-            || id == Identity.indexLinksJSONL || id == Identity.indexFilesJSONL {
+            || id == Identity.indexLinksJSONL || id == Identity.indexSourcesJSONL {
             return indexData(for: id)
         }
-        // Ingested files: serve the verbatim bytes from SQLite (raw, no
+        // Ingested sources: serve the verbatim bytes from SQLite (raw, no
         // conversion). Resilient to a missing row/table → nil (noSuchItem).
         if let fileULID = Identity.fileULID(from: id) {
             guard let store = openReadStore(),
-                  let data = try? store.ingestedFileContent(id: PageID(rawValue: fileULID)) else {
+                  let data = try? store.sourceContent(id: PageID(rawValue: fileULID)) else {
                 return nil
             }
             return data
