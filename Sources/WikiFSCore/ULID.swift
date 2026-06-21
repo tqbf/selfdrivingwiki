@@ -2,6 +2,8 @@ import Foundation
 
 /// Dependency-free ULID generator.
 ///
+/// Specification: https://github.com/ulid/spec
+///
 /// A ULID is a 128-bit value: a 48-bit big-endian millisecond Unix timestamp
 /// followed by 80 bits, rendered as 26 Crockford base32 characters. Because the
 /// timestamp is the high-order component and base32 is encoded most-significant-
