@@ -78,11 +78,11 @@ stays here. The other surviving checks (the stale `AgentOperationRunner.swift:13
 
 ### 2.1 Fold `source_markdown_versions` into `changeToken()`
 
-`SQLiteWikiStore.swift:564-570` returns
+`SQLiteWikiStore.swift:564-570` returns a 7-component token
 `pCount:pSum:fCount:fSum:spVersion:logCount:idxVersion`. None of those move when
 `appendProcessedMarkdown` (`:1412`) or `revertProcessedMarkdown` (`:1440`) inserts a version
 row, because neither touches `sources.version`/`sources.updated_at`. Add a resilient count
-helper (mirroring `logRowCount`, `:600-607`) and a 7th token component:
+helper (mirroring `logRowCount`, `:600-607`) as an 8th token component.
 
 ```swift
 private func sourceMarkdownVersionCount() -> Int64 {
@@ -162,6 +162,12 @@ static func sourceMarkdownNode(
 > Why both `version` and `metadataVersion` off HEAD: the anchor (§2.1) tells the enumerator
 > *something* in the DB changed; the per-item `contentVersion` tells it *this* sibling's
 > bytes changed. Both are needed — anchor alone leaves the daemon serving stale contents.
+>
+> **The sibling's `contentVersion` must differ from the verbatim node's `contentVersion`.**
+> The verbatim node versions off `Data(String(file.version).utf8)` — the source row version.
+> The sibling versions off `Data(head.id.rawValue.utf8)` — the HEAD version id. These are
+> naturally distinct (different types, different values), so the daemon can tell them apart
+> and re-fetches the sibling when a new HEAD row is appended.
 
 ### 3.3 Enumeration — emit the sibling for eligible sources, without N+1
 
@@ -272,7 +278,7 @@ how other commands read `--file <path>` into a string). The app's in-app editor
 
 ---
 
-## 6. Index + agent prompt (recommended)
+## 6. Index + agent prompt (locked)
 
 - **`sources.jsonl`** (`IndexGenerators.swift:142-`): add a `has_markdown` boolean so the
   agent can discover which sources have a `.md` sibling without `ls`-ing. Additive; update
@@ -323,11 +329,11 @@ how other commands read `--file <path>` into a string). The app's in-app editor
 - Generalizing extraction beyond PDF — the design leaves room (eligibility keys on
   `hasProcessedMarkdown`, not on `ext`/`mime`), but only PDFs produce chains today.
 
-## Open decisions
+## Open decisions (all locked)
 
-1. **`smvCount` vs `MAX(id)` in the token.** `COUNT(*)` (recommended) is simpler and matches
-   `logRowCount`; `MAX(id)` is marginally more discriminating. Either moves on any append.
-2. **`edit-markdown` when no chain exists.** Recommended: refuse ("extract first"). Alt:
-   allow it to seed a `"user"` v1 — but that muddies the "extraction is the baseline" model.
-3. **`has_markdown` in `sources.jsonl`.** Recommended yes (cheap, helps the agent). If you'd
-   rather keep the index minimal, drop §6's first bullet.
+1. **`smvCount` vs `MAX(id)` in the token.** ✅ `COUNT(*)` — simpler, matches `logRowCount`.
+   Either moves on any append.
+2. **`edit-markdown` when no chain exists.** ✅ Refuse ("extract first"). Seeding a `"user"` v1
+   muddies the "extraction is the baseline" model.
+3. **`has_markdown` in `sources.jsonl`.** ✅ Yes. One boolean, cheap to compute, saves the agent
+   from `ls`-ing sources to discover which have processed markdown.
