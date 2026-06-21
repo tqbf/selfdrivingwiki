@@ -3,14 +3,14 @@ import WikiFSCore
 
 /// The Files section of the sidebar — filter picker, native multi-select rows,
 /// and right-click → Ingest Selected.
-struct FilesSectionView: View {
+struct SourcesSectionView: View {
     @Bindable var store: WikiStoreModel
     let fileProvider: FileProviderSpike
     /// Files whose agent run is in flight (agent phase) — "Ingesting…" spinner.
-    var ingestingFileIDs: Set<PageID> = []
+    var ingestingSourceIDs: Set<PageID> = []
     /// Files whose pdf2md conversion is in flight (extraction phase) —
-    /// "Extracting…" spinner. Independent of `ingestingFileIDs`.
-    var extractingFileIDs: Set<PageID> = []
+    /// "Extracting…" spinner. Independent of `ingestingSourceIDs`.
+    var extractingSourceIDs: Set<PageID> = []
     var onBatchIngest: (([PageID]) -> Void)? = nil
 
     @State private var fileFilter: FileFilter = .all
@@ -75,11 +75,11 @@ struct FilesSectionView: View {
         let ingestAction: (() -> Void)? = ids.isEmpty ? nil : {
             onBatchIngest?(Array(ids))
         }
-        return IngestedFileRow(
+        return SourceRow(
             file: file,
             hasBeenIngested: store.isSourceIngested(file),
-            isIngesting: ingestingFileIDs.contains(file.id),
-            isExtracting: extractingFileIDs.contains(file.id),
+            isIngesting: ingestingSourceIDs.contains(file.id),
+            isExtracting: extractingSourceIDs.contains(file.id),
             isSelected: ids.contains(file.id),
             onOpen: { Task { await fileProvider.openIngestedFile(id: file.id) } },
             onRemove: { store.deleteSource(file.id) },

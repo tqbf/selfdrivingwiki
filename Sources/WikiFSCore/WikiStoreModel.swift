@@ -682,7 +682,7 @@ public final class WikiStoreModel {
             reloadSources()
             onPageDidChange?()
         } catch {
-            print("WikiStoreModel.ingestFile failed: \(error)")
+            print("WikiStoreModel.addSource failed: \(error)")
         }
     }
 

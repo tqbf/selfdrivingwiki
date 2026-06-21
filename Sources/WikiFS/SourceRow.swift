@@ -11,7 +11,7 @@ import WikiFSCore
 /// once the agent run for this file has committed (`isIngesting`, the agent
 /// phase). Both are always-mounted (no insert/remove transitions); the icon
 /// simply swaps between spinner and the ready/ingested glyph.
-struct IngestedFileRow: View {
+struct SourceRow: View {
     let file: SourceSummary
     let hasBeenIngested: Bool
     /// True while the agent run for this file is in flight (the agent phase —

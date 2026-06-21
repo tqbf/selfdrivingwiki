@@ -35,10 +35,10 @@ struct AgentTranscriptSidebar: View {
 
     /// Show the local pdf2md conversion box only while a pdf2md conversion is in
     /// flight (or has just finished) — not for Markdown ingests, queries, or
-    /// lints. Driven by the extraction-phase flag `extractingFileIDs` (the
-    /// agent-phase `ingestingFileIDs` no longer covers the extraction phase).
+    /// lints. Driven by the extraction-phase flag `extractingSourceIDs` (the
+    /// agent-phase `ingestingSourceIDs` no longer covers the extraction phase).
     private var showsConversion: Bool {
-        !launcher.extractingFileIDs.isEmpty
+        !launcher.extractingSourceIDs.isEmpty
             && (launcher.isExtracting || !launcher.extractionLog.isEmpty)
     }
 
@@ -174,7 +174,7 @@ struct AgentTranscriptSidebar: View {
     }
 
     private var agentBusy: Bool {
-        launcher.isRunning || !launcher.ingestingFileIDs.isEmpty
+        launcher.isRunning || !launcher.ingestingSourceIDs.isEmpty
     }
 
     private static let conversionBottom = "pdf-conversion-bottom"

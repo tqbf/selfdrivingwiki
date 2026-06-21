@@ -37,11 +37,11 @@ enum AgentOperationRunner {
         guard !fileIDs.isEmpty else { return }
         DebugLog.ingest("runMultiIngest: begin count=\(fileIDs.count)")
 
-        // NOTE: `ingestingFileIDs` (the agent-phase flag) is NOT set here. It is
+        // NOTE: `ingestingSourceIDs` (the agent-phase flag) is NOT set here. It is
         // assigned at spawn commit inside `AgentLauncher.run` (around `onLock`),
         // so a pure extraction or a queued ingest never mislabels rows as
         // "Ingesting…" or greys out a peer's Ingest button. The extraction-phase
-        // flag (`extractingFileIDs`) is set around the pdf2md block below.
+        // flag (`extractingSourceIDs`) is set around the pdf2md block below.
         let stateMarkdown = store.currentStateSnapshot().renderStateFile()
 
         var sources: [OperationRequest.StagedSource] = []
@@ -74,9 +74,9 @@ enum AgentOperationRunner {
                     if acquired { launcher.releaseExtractionSlot() }
                     return
                 }
-                launcher.extractingFileIDs.insert(file.id)
+                launcher.extractingSourceIDs.insert(file.id)
                 defer {
-                    launcher.extractingFileIDs.remove(file.id)
+                    launcher.extractingSourceIDs.remove(file.id)
                     launcher.releaseExtractionSlot()
                 }
                 launcher.extractionLog = ""
@@ -117,7 +117,7 @@ enum AgentOperationRunner {
                             // suspenders (the slot serializes, so it holds at most
                             // this one id) to preserve the old cancel-clears-state
                             // behavior.
-                            launcher.extractingFileIDs = []
+                            launcher.extractingSourceIDs = []
                             return
                         }
                         DebugLog.extraction("convert: FAILED — \(error.localizedDescription)")
@@ -150,21 +150,21 @@ enum AgentOperationRunner {
             store: store,
             manager: manager,
             fileProvider: fileProvider,
-            ingestingFileIDs: Set(fileIDs))
+            ingestingSourceIDs: Set(fileIDs))
 
         // If the ingest Task was cancelled while queued for the spawn slot (behind a
         // running query), `launcher.run` returned without spawning and never set
-        // `ingestingFileIDs` (it's assigned at spawn commit). Clear whichever phase
+        // `ingestingSourceIDs` (it's assigned at spawn commit). Clear whichever phase
         // flags might be set as a belt-and-suspenders so the file row never hangs.
         // Already-extracted markdown was seeded before this call and is preserved.
         if Task.isCancelled {
-            launcher.ingestingFileIDs = []
-            launcher.extractingFileIDs = []
+            launcher.ingestingSourceIDs = []
+            launcher.extractingSourceIDs = []
             return
         }
 
         if !launcher.isRunning && launcher.runningKind != .ingest {
-            launcher.ingestingFileIDs = []
+            launcher.ingestingSourceIDs = []
         }
     }
 
@@ -233,7 +233,7 @@ enum AgentOperationRunner {
         store: WikiStoreModel,
         manager: WikiManager,
         fileProvider: FileProviderSpike,
-        ingestingFileIDs: Set<PageID> = []
+        ingestingSourceIDs: Set<PageID> = []
     ) async {
         guard let wikiID = manager.activeWikiID else { return }
 
@@ -261,7 +261,7 @@ enum AgentOperationRunner {
             wikiRoot: root,
             systemPrompt: store.currentSystemPromptBody(),
             wikictlDirectory: HelpersLocation.wikictlDirectory,
-            ingestingFileIDs: ingestingFileIDs,
+            ingestingSourceIDs: ingestingSourceIDs,
             onLock: { store.beginAgentRun() },
             onUnlock: { store.endAgentRun() }
         )

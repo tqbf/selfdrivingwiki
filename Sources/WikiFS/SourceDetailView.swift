@@ -5,7 +5,7 @@ import WikiFSCore
 /// content (markdown render, inline PDF, or tabbed Markdown⇄PDF when extraction
 /// output exists). Cmd-E flips between reader and editor for processed markdown;
 /// source bytes are never modified.
-struct IngestedFileDetailView: View {
+struct SourceDetailView: View {
     let file: SourceSummary
     let hasBeenIngested: Bool
     let isIngesting: Bool
@@ -22,7 +22,7 @@ struct IngestedFileDetailView: View {
     let runIngest: (PageID) -> Void
     /// Shared launcher — used by the standalone `runExtraction` to take the
     /// extraction slot (so a standalone extract and an ingest-path extract serialize
-    /// against each other) and to mirror this file's id into `extractingFileIDs`
+    /// against each other) and to mirror this file's id into `extractingSourceIDs`
     /// so the sidebar row labels it "Extracting…".
     let launcher: AgentLauncher
     @Bindable var store: WikiStoreModel
@@ -159,7 +159,7 @@ struct IngestedFileDetailView: View {
                 } else {
                     Button(isIngesting ? "Ingesting…" : "Ingest into Wiki",
                            systemImage: "text.badge.plus") {
-                        DebugLog.ingest("IngestedFileDetailView: Ingest tapped — id=\(file.id.rawValue)")
+                        DebugLog.ingest("SourceDetailView: Ingest tapped — id=\(file.id.rawValue)")
                         runIngest(file.id)
                     }
                         .keyboardShortcut(.return, modifiers: .command)
@@ -180,7 +180,7 @@ struct IngestedFileDetailView: View {
                                   // slot — this extract would await it, so show
                                   // it as busy rather than letting the tap hang.
                                   || (launcher.isExtractionSlotBusy
-                                      && !launcher.extractingFileIDs.contains(file.id)))
+                                      && !launcher.extractingSourceIDs.contains(file.id)))
                     }
                     if isMarkdownEditable {
                         Button("Edit", systemImage: "pencil") {
@@ -382,9 +382,9 @@ struct IngestedFileDetailView: View {
             launcher.extractionLog = "Extraction cancelled."
             return
         }
-        launcher.extractingFileIDs.insert(file.id)
+        launcher.extractingSourceIDs.insert(file.id)
         defer {
-            launcher.extractingFileIDs.remove(file.id)
+            launcher.extractingSourceIDs.remove(file.id)
             launcher.releaseExtractionSlot()
         }
         guard await PdfExtractionService.checkReady() else {

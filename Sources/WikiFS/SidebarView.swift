@@ -15,10 +15,10 @@ struct SidebarView: View {
     var onBatchIngest: (([PageID]) -> Void)? = nil
     /// Files whose agent run is in flight (agent phase) — shows the
     /// "Ingesting…" spinner on those rows.
-    var ingestingFileIDs: Set<PageID> = []
+    var ingestingSourceIDs: Set<PageID> = []
     /// Files whose pdf2md conversion is in flight (extraction phase) — shows the
-    /// "Extracting…" spinner on those rows. Independent of `ingestingFileIDs`.
-    var extractingFileIDs: Set<PageID> = []
+    /// "Extracting…" spinner on those rows. Independent of `ingestingSourceIDs`.
+    var extractingSourceIDs: Set<PageID> = []
 
     @State private var renameTarget: WikiPageSummary?
     @State private var renameText: String = ""
@@ -63,9 +63,9 @@ struct SidebarView: View {
             toolsSection()
             pagesSection()
             if !store.sources.isEmpty {
-                FilesSectionView(store: store, fileProvider: fileProvider,
-                    ingestingFileIDs: ingestingFileIDs,
-                    extractingFileIDs: extractingFileIDs,
+                SourcesSectionView(store: store, fileProvider: fileProvider,
+                    ingestingSourceIDs: ingestingSourceIDs,
+                    extractingSourceIDs: extractingSourceIDs,
                     onBatchIngest: onBatchIngest,
                     listSelection: $listSelection, activeSection: $activeSection)
             }

@@ -24,8 +24,8 @@ struct ContentView: View {
         NavigationSplitView {
             SidebarView(store: store, manager: manager, fileProvider: fileProvider,
                         onBatchIngest: batchIngest,
-                        ingestingFileIDs: agentLauncher.ingestingFileIDs,
-                        extractingFileIDs: agentLauncher.extractingFileIDs)
+                        ingestingSourceIDs: agentLauncher.ingestingSourceIDs,
+                        extractingSourceIDs: agentLauncher.extractingSourceIDs)
         } detail: {
             VStack(spacing: 0) {
                 TabBarView(store: store)
@@ -109,12 +109,12 @@ struct ContentView: View {
         // Auto-open the transcript the moment an ingest starts — even during the
         // PDF-conversion phase, before the agent process spawns — so the
         // conversion box is visible. The extraction phase now lives in
-        // `extractingFileIDs` (distinct from the agent-phase `ingestingFileIDs`),
+        // `extractingSourceIDs` (distinct from the agent-phase `ingestingSourceIDs`),
         // so observe both: a pure extraction should also surface the transcript.
-        .onChange(of: agentLauncher.ingestingFileIDs) { _, newValue in
+        .onChange(of: agentLauncher.ingestingSourceIDs) { _, newValue in
             if !newValue.isEmpty { isTranscriptExpanded = true }
         }
-        .onChange(of: agentLauncher.extractingFileIDs) { _, newValue in
+        .onChange(of: agentLauncher.extractingSourceIDs) { _, newValue in
             if !newValue.isEmpty { isTranscriptExpanded = true }
         }
     }
@@ -123,11 +123,11 @@ struct ContentView: View {
     /// agent-phase ingest (the extraction phase precedes the agent process).
     /// Drives the toolbar glow. Both phase flags are included so the glow stays
     /// on during a pure extraction; the cross-file Ingest greyout is NOT driven
-    /// here (that is `isAnyFileIngesting` = `!ingestingFileIDs.isEmpty` only).
+    /// here (that is `isAnyFileIngesting` = `!ingestingSourceIDs.isEmpty` only).
     private var agentBusy: Bool {
         agentLauncher.isRunning
-            || !agentLauncher.ingestingFileIDs.isEmpty
-            || !agentLauncher.extractingFileIDs.isEmpty
+            || !agentLauncher.ingestingSourceIDs.isEmpty
+            || !agentLauncher.extractingSourceIDs.isEmpty
     }
 
     private var zoteroContainerDirectory: URL {
@@ -141,8 +141,8 @@ struct ContentView: View {
 
     private var canShowTranscript: Bool {
         agentLauncher.isRunning
-            || !agentLauncher.ingestingFileIDs.isEmpty
-            || !agentLauncher.extractingFileIDs.isEmpty
+            || !agentLauncher.ingestingSourceIDs.isEmpty
+            || !agentLauncher.extractingSourceIDs.isEmpty
             || !agentLauncher.events.isEmpty
             || agentLauncher.preflightError != nil
             || !agentLauncher.stderr.isEmpty
