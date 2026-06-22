@@ -1,16 +1,16 @@
+import AppKit
 import SwiftUI
 import WikiFSCore
 
 /// Settings → Agent tab: configure the agent executable, prefix arguments,
 /// model override, and extra environment variables. Mirrors `ZoteroSettingsView`
-/// in structure: `Form` + `.formStyle(.grouped)`, explicit Save button, resolved
-/// preview, and Reset to default.
+/// in structure: `Form` + `.formStyle(.grouped)`, explicit Save button in the
+/// form (not the toolbar), no height constraint.
 struct AgentCommandSettingsView: View {
     @State private var executable: String
     @State private var prefixArguments: String
     @State private var modelOverride: String
     @State private var extraEnvironment: String
-    @State private var hasChanges = false
     @State private var resolvedPreview: String = ""
 
     let containerDirectory: URL
@@ -28,27 +28,27 @@ struct AgentCommandSettingsView: View {
     var body: some View {
         Form {
             Section {
-                TextField("Executable:", text: $executable)
-                    .onChange(of: executable) { markChanged() }
-                TextField("Prefix arguments:", text: $prefixArguments)
-                    .onChange(of: prefixArguments) { markChanged() }
-                TextField("Model override:", text: $modelOverride, prompt: Text("default (per-op alias)"))
-                    .onChange(of: modelOverride) { markChanged() }
+                TextField("Executable", text: $executable, prompt: Text("claude"))
+                TextField("Prefix arguments", text: $prefixArguments)
+                TextField("Model override", text: $modelOverride, prompt: Text("default (per-op alias)"))
             } header: {
                 Text("Command")
             } footer: {
                 Text("Executable is resolved on the login-shell PATH. Use an absolute path, ./relative/path, or ~/path to pin a specific binary. Prefix arguments are inserted before the standard flags (e.g. sandbox-exec -f profile.sb claude).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
                 TextEditor(text: $extraEnvironment)
                     .font(.system(.body, design: .monospaced))
                     .frame(minHeight: 80)
-                    .onChange(of: extraEnvironment) { markChanged() }
             } header: {
                 Text("Extra Environment")
             } footer: {
                 Text("KEY=VALUE, one per line. WIKI_ROOT and WIKI_DB are always set by the app and cannot be overridden.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -59,34 +59,25 @@ struct AgentCommandSettingsView: View {
             } header: {
                 Text("Resolved Preview")
             }
+
+            Section {
+                HStack {
+                    Button("Reset to Default") {
+                        executable = "claude"
+                        prefixArguments = ""
+                        modelOverride = ""
+                        extraEnvironment = ""
+                        updatePreview()
+                    }
+                    Spacer()
+                    Button("Save") { saveAndClose() }
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
         }
         .formStyle(.grouped)
-        .frame(minWidth: 420, maxWidth: 520, minHeight: 360)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Save") {
-                    save()
-                    dismiss()
-                }
-                .disabled(!hasChanges)
-            }
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Reset to Default") {
-                    executable = "claude"
-                    prefixArguments = ""
-                    modelOverride = ""
-                    extraEnvironment = ""
-                    hasChanges = true
-                    updatePreview()
-                }
-            }
-        }
+        .frame(width: Metrics.width)
         .onAppear { updatePreview() }
-    }
-
-    private func markChanged() {
-        hasChanges = true
-        updatePreview()
     }
 
     private func updatePreview() {
@@ -104,12 +95,18 @@ struct AgentCommandSettingsView: View {
         resolvedPreview = cmd
     }
 
-    private func save() {
+    private func saveAndClose() {
         let config = AgentCommandConfig(
             executable: executable,
             prefixArguments: prefixArguments,
             modelOverride: modelOverride,
             extraEnvironment: extraEnvironment)
         try? config.save(to: containerDirectory)
+        dismiss()
+        NSApp.keyWindow?.close()
+    }
+
+    private enum Metrics {
+        static let width: CGFloat = 460
     }
 }
