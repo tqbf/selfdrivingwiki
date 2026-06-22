@@ -5,7 +5,7 @@ import WikiFSCore
 /// Settings → Agent tab: configure the agent executable, prefix arguments,
 /// model override, and extra environment variables. Mirrors `ZoteroSettingsView`
 /// in structure: `Form` + `.formStyle(.grouped)`, explicit Save button in the
-/// form (not the toolbar), no height constraint.
+/// form (not the toolbar), resolved preview alongside the fields.
 struct AgentCommandSettingsView: View {
     @State private var executable: String
     @State private var prefixArguments: String
@@ -26,15 +26,34 @@ struct AgentCommandSettingsView: View {
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 12) {
+                fieldsForm
+                previewForm
+            }
+            buttonsBar
+                .padding(.top, 12)
+        }
+        .padding()
+        .frame(width: Metrics.width)
+        .onAppear { updatePreview() }
+    }
+
+    // MARK: - Fields (left column)
+
+    private var fieldsForm: some View {
         Form {
             Section {
                 TextField("Executable", text: $executable, prompt: Text("claude"))
+                    .onChange(of: executable) { _, _ in updatePreview() }
                 TextField("Prefix arguments", text: $prefixArguments)
+                    .onChange(of: prefixArguments) { _, _ in updatePreview() }
                 TextField("Model override", text: $modelOverride, prompt: Text("default (per-op alias)"))
+                    .onChange(of: modelOverride) { _, _ in updatePreview() }
             } header: {
                 Text("Command")
             } footer: {
-                Text("Executable is resolved on the login-shell PATH. Use an absolute path, ./relative/path, or ~/path to pin a specific binary. Prefix arguments are inserted before the standard flags (e.g. sandbox-exec -f profile.sb claude).")
+                Text("Executable is resolved on the login-shell PATH. Prefix arguments are inserted before the standard flags.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -43,6 +62,7 @@ struct AgentCommandSettingsView: View {
                 TextEditor(text: $extraEnvironment)
                     .font(.system(.body, design: .monospaced))
                     .frame(minHeight: 80)
+                    .onChange(of: extraEnvironment) { _, _ in updatePreview() }
             } header: {
                 Text("Extra Environment")
             } footer: {
@@ -50,35 +70,45 @@ struct AgentCommandSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+        .formStyle(.grouped)
+    }
 
+    // MARK: - Preview (right column)
+
+    private var previewForm: some View {
+        Form {
             Section {
                 Text(resolvedPreview.isEmpty ? "—" : resolvedPreview)
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } header: {
-                Text("Resolved Preview")
-            }
-
-            Section {
-                HStack {
-                    Button("Reset to Default") {
-                        executable = "claude"
-                        prefixArguments = ""
-                        modelOverride = ""
-                        extraEnvironment = ""
-                        updatePreview()
-                    }
-                    Spacer()
-                    Button("Save") { saveAndClose() }
-                        .keyboardShortcut(.defaultAction)
-                }
+                Text("Resolved Command")
             }
         }
         .formStyle(.grouped)
-        .frame(width: Metrics.width)
-        .onAppear { updatePreview() }
     }
+
+    // MARK: - Buttons
+
+    private var buttonsBar: some View {
+        HStack {
+            Button("Reset to Default") {
+                executable = "claude"
+                prefixArguments = ""
+                modelOverride = ""
+                extraEnvironment = ""
+                updatePreview()
+            }
+            Spacer()
+            Button("Save") { saveAndClose() }
+                .keyboardShortcut(.defaultAction)
+        }
+    }
+
+    // MARK: - Actions
 
     private func updatePreview() {
         let config = AgentCommandConfig(
@@ -107,6 +137,6 @@ struct AgentCommandSettingsView: View {
     }
 
     private enum Metrics {
-        static let width: CGFloat = 460
+        static let width: CGFloat = 700
     }
 }
