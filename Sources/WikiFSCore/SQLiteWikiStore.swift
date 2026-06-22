@@ -733,20 +733,38 @@ public final class SQLiteWikiStore: WikiStore {
         return PageID(rawValue: stmt.text(at: 0))
     }
 
-    /// Resolve a `[[source:…]]` target to a source id. Matches display_name first,
-    /// falling back to filename. Case-insensitive. On a multi-match collision, the
-    /// most recently updated source wins.
+    /// Resolve a `[[source:…]]` target to a source id. Case-insensitive; on a
+    /// multi-match collision, the most recently updated source wins.
+    ///
+    /// Two passes: an exact match on `display_name` (falling back to `filename`
+    /// when `display_name` is NULL), then — because legacy rows stored
+    /// `display_name = filename` WITH the file extension while the canonical cite
+    /// target drops it — a scan that matches the query against each candidate's
+    /// name with its last extension removed, so `[[source:Some Paper]]` still
+    /// resolves a row named `Some Paper.pdf`.
     public func resolveSourceByName(_ displayName: String) throws -> PageID? {
-        let stmt = try statement("""
+        let exact = try statement("""
         SELECT id FROM sources
         WHERE COALESCE(display_name, filename) = ?1 COLLATE NOCASE
            OR filename = ?1 COLLATE NOCASE
         ORDER BY updated_at DESC LIMIT 1;
         """)
-        defer { stmt.reset() }
-        try stmt.bind(displayName, at: 1)
-        guard try stmt.step() else { return nil }
-        return PageID(rawValue: stmt.text(at: 0))
+        defer { exact.reset() }
+        try exact.bind(displayName, at: 1)
+        if try exact.step() { return PageID(rawValue: exact.text(at: 0)) }
+
+        let scan = try statement("""
+        SELECT id, COALESCE(display_name, filename) AS name FROM sources
+        ORDER BY updated_at DESC;
+        """)
+        defer { scan.reset() }
+        while try scan.step() {
+            let name = scan.text(at: 1)
+            if (name as NSString).deletingPathExtension.caseInsensitiveCompare(displayName) == .orderedSame {
+                return PageID(rawValue: scan.text(at: 0))
+            }
+        }
+        return nil
     }
 
     public func replaceLinks(from pageID: PageID,

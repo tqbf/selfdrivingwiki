@@ -351,6 +351,25 @@ struct OperationCommandTests {
     }
   }
 
+  @Test func queryPromptsCarryAnswerCitationRule() {
+    // Query ANSWERS cite sources differently from Ingest footnotes: a source
+    // wikilink plus the visible passage. Both Query surfaces carry that rule.
+    for operation: WikiOperation in [
+      .query(question: "q", stateFilePath: Self.stateFile),
+      .queryConversation(stateFilePath: Self.stateFile),
+    ] {
+      let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)
+      #expect(prompt.contains("CITE SOURCES IN YOUR ANSWER"))
+      #expect(prompt.contains("[[source:DisplayName"))
+      #expect(prompt.contains("[[source:Claim File Helper — ProPublica]]"))
+    }
+    // Lint health-checks; it doesn't cite sources, so it carries neither rule.
+    let lint = WikiOperation.lint(stateFilePath: Self.stateFile)
+      .prompt(wikiRoot: Self.resolvedRoot)
+    #expect(!lint.contains("CITE SOURCES IN YOUR ANSWER"))
+    #expect(!lint.contains("FOOTNOTE EVERY CLAIM"))
+  }
+
   @Test func queryAndLintPromptsNameStateAndForbidRediscovery() {
     for operation: WikiOperation in [
       .query(question: "q", stateFilePath: Self.stateFile),

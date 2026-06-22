@@ -295,6 +295,28 @@ extension WikiOperation {
     `[^id]: [[source:DisplayName#"distinctive quote from the passage"]]`
     """
 
+  /// Citations in a Query ANSWER (chat) — distinct from Ingest's `[^id]` page
+  /// footnotes. The answer is prose, so the agent must both LINK the source and
+  /// SHOW the passage; without this rule it falls back to inert prose like
+  /// `Name.md, "Section" — "quote"` (no link, a `.md` extension, and the passage
+  /// stranded outside any link). Ratified format: a source wikilink followed by
+  /// the quoted passage in plain text.
+  private static let answerCitationRule = """
+    CITE SOURCES IN YOUR ANSWER — When an answer draws on a source, make the \
+    citation a clickable wikilink AND show the passage. Write \
+    `[[source:DisplayName]]` (or `[[source:DisplayName#"distinctive quote"]]` to \
+    deep-link the passage), then put the quoted passage in plain text right after \
+    it so the reader can see exactly what you are citing. `DisplayName` is the \
+    source's display name from `sources.jsonl` / `wikictl source list`, with NO \
+    file extension. \
+    RIGHT: `[[source:Claim File Helper — ProPublica]] ("…human resources \
+    department can help you figure out if that is the case.")`. \
+    WRONG: `Claim File Helper — ProPublica.md, "The Problem" — "quote"` (no link, \
+    a `.md` extension, and the passage stranded outside it). Never wrap a citation \
+    in a pipe alias (`[[source:X|alias]]`) or tack journal/DOI metadata or an \
+    `Anchor:` label onto the link — the source record already has that.
+    """
+
   // MARK: - Query / Lint prompts
 
   /// Query stays single-agent Opus, but still gets the write rule (it may file an
@@ -309,6 +331,8 @@ extension WikiOperation {
 
     \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
 
+    \(answerCitationRule)
+
     TASK — Answer a question from this wiki, following the Query workflow from your \
     instructions. The mount has a root `WIKI-STRUCTURE.md` file that explains the \
     current filesystem layout and `wikictl` cheatsheet; read it when you need to \
@@ -320,8 +344,8 @@ extension WikiOperation {
     with `wikictl source list` (or `--json`), then read it — for text use \
     `wikictl source cat --id <id>`; for a PDF or other binary run \
     `wikictl source export --id <id>` and run `pdftotext` / `Read` / `strings` on the \
-    path it prints. Cite the page titles and any source footnote locations your \
-    answer draws on. If you file a useful answer back as a page, write it via \
+    path it prints. When you cite a source in your answer, follow the CITE SOURCES \
+    rule above. If you file a useful answer back as a page, write it via \
     `wikictl page upsert` and log it with `wikictl log append --kind query`.
 
     WIKI_ROOT (resolved, read-only mount — reference only): \(wikiRoot)
@@ -337,6 +361,8 @@ extension WikiOperation {
 
     \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
 
+    \(answerCitationRule)
+
     ROLE — You are in an interactive Query conversation for this wiki. The user may \
     ask questions, ask follow-ups, ask you to inspect sources, or ask you to update \
     the wiki. Do not assume every answer should be written back. Answer in chat by \
@@ -347,8 +373,8 @@ extension WikiOperation {
     "I'll check the wiki", "I'll consult the sources", "I'll read WIKI_STATE", or \
     "I found this in the wiki" unless the user explicitly asks how you did it. Do \
     not advertise capabilities or ask generic "what would you like me to do" setup \
-    questions. Reply directly and concisely to the user's actual message; cite pages \
-    or sources only when they materially support the answer.
+    questions. Reply directly and concisely to the user's actual message; when a \
+    source materially supports the answer, cite it per the CITE SOURCES rule above.
 
     When answering, use the Query workflow from your instructions. Pull fresh pages \
     with `wikictl page get --title T` (or `--id I`) as needed. If a page contains \

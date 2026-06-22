@@ -416,6 +416,27 @@ struct SQLiteWikiStoreTests {
         #expect(id != nil)
     }
 
+    @Test func resolveSourceByNameMatchesWithoutExtension() throws {
+        // Legacy rows store display_name = filename WITH the extension, but the
+        // canonical cite target drops it — `[[source:report]]` must resolve
+        // report.pdf, case-insensitively on the stem.
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let source = try store.addSource(filename: "report.pdf", data: Data("pdf".utf8))
+        #expect(try store.resolveSourceByName("report") == source.id)
+        #expect(try store.resolveSourceByName("REPORT") == source.id)
+        // The full name with extension still resolves (fast path).
+        #expect(try store.resolveSourceByName("report.pdf") == source.id)
+    }
+
+    @Test func resolveSourceByNameMatchesMarkdownStem() throws {
+        // The exact regression: a markdown source whose display_name is the
+        // filename with `.md`, cited by its stem.
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let source = try store.addSource(
+            filename: "Claim File Helper — ProPublica.md", data: Data("md".utf8))
+        #expect(try store.resolveSourceByName("Claim File Helper — ProPublica") == source.id)
+    }
+
     @Test func resolveSourceByNameReturnsNilForUnknown() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
         #expect(try store.resolveSourceByName("nonexistent") == nil)
