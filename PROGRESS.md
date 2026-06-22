@@ -2,6 +2,50 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-22 — Red missing wiki-links + context-menu design doc
+
+Unresolved `[[Ghost Page]]` wiki links now render **red** in every markdown
+preview, so dangling references are obvious at a glance. Resolved page/source
+links, external links, and same-page anchors keep the standard link color and
+behave exactly as before.
+
+**How.** `WikiLinkMarkdown.linkified` already encodes resolution into the URL
+host (`wiki://missing?title=…` for an unresolved target). A new custom Textual
+`MarkupParser` — `WikiLinkStylingParser` (in `Sources/WikiFS`, since only WikiFS
+depends on Textual) — wraps the default markdown parser and, after parsing,
+recolors each `.link` run: `wiki://missing…` → `Color.red`, every other link →
+the system link color (`NSColor.linkColor`, self-adapting). `MarkdownPreview`
+switched `StructuredText(markdown: rendered)` →
+`StructuredText(rendered, parser: WikiLinkStylingParser())` and adds
+`.textual.inlineStyle(InlineStyle.default.link())` to neutralize Textual's
+style-level link color: `WithInlineStyle` otherwise re-applies `InlineStyle.link`
+to every `.link` run with a `keepNew` merge and would override the parser's
+per-run colors. `.link` is kept on all runs, so missing links remain
+hit-testable/forward-compatible. The change lives entirely inside
+`MarkdownPreview`, so all four call sites (`PageDetailView`,
+`SourceDetailView`, `ChangeLogDetailView`, `SystemPromptDetailView`) get it for
+free.
+
+**Why the system link color, not `DynamicColor.link`.** Textual's
+`DynamicColor.link` can't be resolved inside the parser (it needs a color
+environment the parser doesn't receive); `NSColor.linkColor` is the adaptive
+semantic link color and is visually equivalent. (During implementation we hit
+`Color.link` is a `ShapeStyle`, not a `Color` — fixed by using
+`Color(NSColor.linkColor)`.)
+
+**Also:** wrote `plans/link-context-menus.md` — the design doc for the
+follow-on right-click link context-menu feature (Suggest for missing links,
+Find Similar for any link, Copy as wiki-link / file path, Open in Browser +
+Edit Link). It documents the blocker (Textual's `NSTextInteractionView` owns
+right-click + the context menu internally; the `model.url(for:)` hit-test seam
+is internal; no public API) and the operator-approved decision to vendor Textual
+in-repo for that future PR. No context-menu code shipped here. Added a
+`PLAN.md` doc-index row.
+
+**Tests.** 10 new `WikiLinkStylingParserTests` (per-link-kind colors, external
+links colored, non-link/code-span runs untouched, end-to-end via the linkifier).
+`swift test` — 760 tests, 57 suites, 0 failures. `swift build` clean.
+
 ## 2026-06-21 — Phase D: Editable Display Names + Rename Propagation
 
 Implemented `plans/phase-d-display-names-rename.md`. Sources can now be renamed

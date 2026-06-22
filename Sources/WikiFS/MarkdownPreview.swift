@@ -42,10 +42,14 @@ struct MarkdownPreview: View {
                         // type doc). `renderNumbered` resets the paragraph counter
                         // and returns the rendered markdown in one call.
                         let rendered = renderNumbered(markdown)
-                        StructuredText(markdown: rendered)
+                        StructuredText(rendered, parser: WikiLinkStylingParser())
                             .id(rendered)
                             .textual.paragraphStyle(NumberedParagraphStyle())
                             .textual.textSelection(.enabled)
+                            // Neutralize the style-level link color so the
+                            // parser's per-run colors (red for missing links)
+                            // survive `WithInlineStyle`'s `keepNew` merge.
+                            .textual.inlineStyle(InlineStyle.default.link())
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
