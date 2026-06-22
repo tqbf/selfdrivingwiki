@@ -215,6 +215,40 @@ in-repo for that future PR. No context-menu code shipped here. Added a
 links colored, non-link/code-span runs untouched, end-to-end via the linkifier).
 `swift test` — 760 tests, 57 suites, 0 failures. `swift build` clean.
 
+## 2026-06-21 — Configurable Agent Command (Settings → Agent tab)
+
+Implemented `plans/agent-command-settings.md`. The hardcoded `claude -p` dependency
+is replaced with app-wide configurable settings: executable, prefix arguments, model
+override, and extra environment variables. Default config reproduces today's
+invocation exactly.
+
+**Changes:**
+- **`AgentCommandConfig`** (new): `Codable` value type mirroring `ZoteroConfig`
+  pattern — `load(from:)`/`save(to:)` with atomic JSON in App Group container,
+  corrupt→default, `expandTilde(_:)` for `~`-prefixed executables, `parsedExtraEnv()`
+  for `KEY=VALUE` parsing, `tokenize(_:)` for shell-style argv splitting (quotes,
+  escapes, no shell invocation).
+- **`OperationCommand.build` / `buildInteractiveQuery`:** Replace `claudeExecutable`
+  with `resolvedExecutable` (PATH-preflighted) + `command: AgentCommandConfig`.
+  User env merged first, app-owned `WIKI_ROOT`/`WIKI_DB` authoritative, user `PATH`
+  preserved with `wikictl` prepended. Prefix args inserted before standard flags.
+  Model override replaces per-op alias when non-empty.
+- **`AgentLauncher`:** Loads config fresh at spawn time (not cached) so Settings
+  changes apply without restart. `containerDirectory` property (nil → App Group
+  fallback). PATH preflight now resolves the configured executable.
+- **`AgentCommandSettingsView`** (new): Settings → Agent tab — TextFields for
+  executable / prefix args / model override, TextEditor for extra env, resolved
+  preview, explicit Save, Reset to Default.
+- **`WikiFSApp`:** Settings scene converted to `TabView` (Zotero + Agent tabs).
+- **`ClaudePromptHelp`:** `renderCommand` / `shellQuoted` promoted to `public`
+  for Settings preview reuse.
+
+**Tests.** 770 tests, 57 suites, 0 failures (+23: 23 AgentCommandConfigTests covering
+load/save round-trip, missing→default, corrupt→default, tokenize edge cases,
+tilde expansion, env parsing).
+
+On branch `feature/agent-command-settings`.
+
 ## 2026-06-21 — Phase D: Editable Display Names + Rename Propagation
 
 Implemented `plans/phase-d-display-names-rename.md`. Sources can now be renamed

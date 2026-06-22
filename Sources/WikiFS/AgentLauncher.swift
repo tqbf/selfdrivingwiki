@@ -96,6 +96,12 @@ final class AgentLauncher {
         PathPreflight.resolveOnLoginShell(executable: "claude")
     }
 
+    /// The App Group container directory for loading `AgentCommandConfig`. When
+    /// nil (the default), resolved via `DatabaseLocation.appGroupContainerDirectory()`
+    /// at spawn time. Injected for tests; existing `AgentLauncher()` call sites are
+    /// unchanged.
+    var containerDirectory: URL? = nil
+
     private var process: Process?
     /// Backstop poller that reconciles the UI if the process `terminationHandler`
     /// is ever missed (see `startCompletionWatchdog`). Cancelled on teardown.
@@ -391,10 +397,16 @@ final class AgentLauncher {
         // free it). The edit lock (`onLock`) fires only on a successful spawn, so a
         // preflight/staging failure does NOT lock editing — matching today's behavior.
         resetRunArtifacts()
-        let claudeExecutable: String
-        switch resolveClaude() {
+
+        // Load agent command config fresh at spawn time so Settings changes apply
+        // without a restart.
+        let dir = containerDirectory ?? (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
+        let agentConfig = AgentCommandConfig.load(from: dir)
+
+        let resolvedPath: String
+        switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
         case .found(let path):
-            claudeExecutable = path
+            resolvedPath = path
         case .missing(let reason):
             preflightError = reason
             releaseSpawnSlot()
@@ -428,7 +440,8 @@ final class AgentLauncher {
             systemPrompt: systemPrompt,
             scratchDirectory: scratch.path,
             wikictlDirectory: wikictlDirectory,
-            claudeExecutable: claudeExecutable
+            resolvedExecutable: resolvedPath,
+            command: agentConfig
         )
 
         // RESERVE per-run metadata. `isRunning` is already `true` (the slot set it on
@@ -562,10 +575,15 @@ final class AgentLauncher {
         }
 
         resetRunArtifacts()
-        let claudeExecutable: String
-        switch resolveClaude() {
+
+        // Load agent command config fresh at spawn time.
+        let dir = containerDirectory ?? (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
+        let agentConfig = AgentCommandConfig.load(from: dir)
+
+        let resolvedPath: String
+        switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
         case .found(let path):
-            claudeExecutable = path
+            resolvedPath = path
         case .missing(let reason):
             preflightError = reason
             releaseSpawnSlot()
@@ -597,7 +615,8 @@ final class AgentLauncher {
             systemPrompt: systemPrompt,
             scratchDirectory: scratch.path,
             wikictlDirectory: wikictlDirectory,
-            claudeExecutable: claudeExecutable
+            resolvedExecutable: resolvedPath,
+            command: agentConfig
         )
 
         // RESERVE per-run metadata. `isRunning` is already `true` (slot acquire).

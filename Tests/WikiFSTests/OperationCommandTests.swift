@@ -49,7 +49,7 @@ struct OperationCommandTests {
       systemPrompt: "You are the maintainer.",
       scratchDirectory: "/tmp/scratch-xyz",
       wikictlDirectory: wikictlDir,
-      claudeExecutable: "/opt/homebrew/bin/claude",
+      resolvedExecutable: "/opt/homebrew/bin/claude",
       baseEnvironment: ["PATH": basePATH, "HOME": "/Users/me"])
   }
 
@@ -133,7 +133,7 @@ struct OperationCommandTests {
       systemPrompt: "You are the maintainer.",
       scratchDirectory: "/tmp/scratch-xyz",
       wikictlDirectory: "/Apps/Self Driving Wiki.app/Contents/Helpers",
-      claudeExecutable: "/opt/homebrew/bin/claude",
+      resolvedExecutable: "/opt/homebrew/bin/claude",
       baseEnvironment: ["PATH": "/usr/bin:/bin"])
 
     #expect(cmd.executable == "/opt/homebrew/bin/claude")
@@ -159,7 +159,7 @@ struct OperationCommandTests {
       systemPrompt: "schema",
       scratchDirectory: "/tmp/scratch-xyz",
       wikictlDirectory: "/helpers",
-      claudeExecutable: "claude",
+      resolvedExecutable: "claude",
       baseEnvironment: [:])
     let promptIndex = cmd.arguments.firstIndex(of: "--append-system-prompt")!
     let prompt = cmd.arguments[promptIndex + 1]
@@ -247,7 +247,7 @@ struct OperationCommandTests {
         systemPrompt: "schema",
         scratchDirectory: "/scratch",
         wikictlDirectory: "/helpers",
-        claudeExecutable: "claude",
+        resolvedExecutable: "claude",
         baseEnvironment: [:])
       #expect(cmd.arguments[0] == "-p")
       #expect(cmd.arguments[1] == operation.prompt(wikiRoot: "/mount"))

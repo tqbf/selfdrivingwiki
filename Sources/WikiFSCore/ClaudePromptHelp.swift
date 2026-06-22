@@ -66,7 +66,8 @@ public enum ClaudePromptHelp {
       systemPrompt: systemPromptPlaceholder,
       scratchDirectory: scratchDirectoryPlaceholder,
       wikictlDirectory: wikictlDirectoryPlaceholder,
-      claudeExecutable: "claude",
+      resolvedExecutable: "claude",
+      command: AgentCommandConfig.default,
       baseEnvironment: ["PATH": "<inherited PATH>"])
 
     return """
@@ -97,13 +98,17 @@ public enum ClaudePromptHelp {
       plan: .opusCurator)
   }
 
-  private static func renderCommand(_ command: OperationCommand) -> String {
+  /// Render an `OperationCommand`'s argv as a shell-quoted multi-line string
+  /// suitable for display in Help → Command Template and Settings → Preview.
+  public static func renderCommand(_ command: OperationCommand) -> String {
     ([command.executable] + command.arguments)
       .map(shellQuoted)
       .joined(separator: " \\\n  ")
   }
 
-  private static func shellQuoted(_ value: String) -> String {
+  /// Shell-quote a single argv token. Safe tokens pass through unquoted; anything
+  /// else gets single-quoted with embedded quotes escaped.
+  public static func shellQuoted(_ value: String) -> String {
     if value.range(of: #"^[A-Za-z0-9_@%+=:,./-]+$"#, options: .regularExpression) != nil {
       return value
     }

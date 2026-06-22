@@ -38,8 +38,10 @@ public struct OperationCommand: Equatable, Sendable {
     ///   - wikictlDirectory: the directory containing the `wikictl` binary
     ///     (`Self Driving Wiki.app/Contents/Helpers`). PREPENDED to the child's PATH so the
     ///     agent's `Bash(wikictl:*)` calls resolve.
-    ///   - claudeExecutable: the `claude` binary name (default `"claude"`; the
-    ///     PATH preflight confirms it resolves on the login shell).
+    ///   - resolvedExecutable: the PATH-resolved full path to the executable
+    ///     (e.g. `/opt/homebrew/bin/claude`). Preflight happens in AgentLauncher.
+    ///   - command: the agent command config (prefix args, model override, extra
+    ///     env). Default reproduces today's `claude -p …` exactly.
     ///   - baseEnvironment: the parent environment to inherit (default the current
     ///     process's). Injected so tests can pin a known PATH.
     public static func build(
@@ -49,71 +51,42 @@ public struct OperationCommand: Equatable, Sendable {
         systemPrompt: String,
         scratchDirectory: String,
         wikictlDirectory: String,
-        claudeExecutable: String = "claude",
+        resolvedExecutable: String = "claude",
+        command: AgentCommandConfig = .default,
         baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
     ) -> OperationCommand {
+        // User env first, then app-owned keys (authoritative).
         var environment = baseEnvironment
+        for (key, value) in command.parsedExtraEnv() {
+            environment[key] = value
+        }
         environment["WIKI_ROOT"] = wikiRoot
         environment["WIKI_DB"] = wikiID
-        // Prepend the helper dir so `wikictl` resolves for the agent's Bash calls,
-        // without shadowing system tools the agent also needs (find/cat/grep).
-        let existingPath = baseEnvironment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        // Prepend the helper dir so `wikictl` resolves; preserve any user PATH.
+        let userPath = environment["PATH"]
+        let existingPath = userPath ?? baseEnvironment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
         environment["PATH"] = wikictlDirectory + ":" + existingPath
 
-        var arguments = [
-            // The prompt carries the RESOLVED absolute wikiRoot (not `$WIKI_ROOT`
-            // for the agent to expand) plus the staged source / state file paths, so
-            // it has the load-bearing write rule, a concrete map, and the local
-            // source up front — the live gate showed the agent burning turns probing
-            // for structure and (under the old allowlist) getting every
-            // `$WIKI_ROOT`-expanded command rejected.
+        let model = command.modelOverride.isEmpty
+            ? operation.topLevelModelAlias : command.modelOverride
+
+        var arguments = command.tokenizedPrefixArgs()
+        arguments.append(contentsOf: [
             "-p", operation.prompt(wikiRoot: wikiRoot),
-            // Model tiering (problem #3, verified against CLI 2.1.178): `--model`
-            // sets the TOP-LEVEL model, which is ALWAYS `opus` — Opus is the
-            // curator/writer for both Ingest modes and for Query/Lint. The tiering is
-            // in the FAN-OUT: a large-source Ingest also passes `--agents` (below)
-            // defining a Sonnet `source-reader` DIGESTER that reads source volume and
-            // returns digests (it never writes). Workers inherit the process env
-            // (WIKI_DB, PATH) but NOT `--append-system-prompt`, so the worker prompt
-            // is self-sufficient (and carries no write rule, since it only reads).
-            "--model", operation.topLevelModelAlias,
-            // Stream the run as NDJSON so the UI can render activity in real time
-            // instead of staring at a silent panel until the final result. The
-            // installed CLI (2.1.178) REQUIRES `--verbose` alongside
-            // `--output-format stream-json` in `-p` mode, and
-            // `--include-partial-messages` adds token/text deltas for a livelier
-            // feel. All three were verified against `claude --help` and a real
-            // captured run; see `AgentEvent`/`AgentEventParser` for the schema.
+            "--model", model,
             "--output-format", "stream-json",
             "--verbose",
             "--include-partial-messages",
             "--append-system-prompt", systemPrompt,
-            // Frictionless mode (`plans/llm-wiki.md`): the fine-grained
-            // `--allowedTools 'Bash(wikictl:*) Bash(cat:*) …'` allowlist is
-            // fundamentally incompatible with the `$WIKI_ROOT`/`$WIKI_DB` env-var
-            // paths and compound commands the whole design depends on — the CLI
-            // can't statically verify a command containing a shell expansion, so it
-            // demands approval, and in `-p` mode there is no approval prompt: the
-            // run is dead on arrival (the live gate produced ZERO output for exactly
-            // this reason). It is ALSO required for the Task tool that drives the
-            // Opus→Sonnet fan-out. The app is local, un-sandboxed, and
-            // user-initiated, and the agent only has `wikictl` + read-only shell
-            // intent, so we bypass permission checks entirely. Verified accepted by
-            // the installed CLI (2.1.178 — `permissionMode":"bypassPermissions"`).
             "--dangerously-skip-permissions",
-        ]
+        ])
 
-        // A large-source Ingest fans out to a Sonnet `source-reader` DIGESTER defined
-        // inline. The JSON shape (`description`/`prompt`/`model`/`tools`) and that the
-        // worker actually runs on `claude-sonnet-4-6`, reads the staged source via
-        // its read-only `["Read","Bash"]` tools, and returns its digest to the Opus
-        // parent were verified by a real `--agents` smoke test against CLI 2.1.178.
         if let agentsJSON = operation.agentsJSON {
             arguments.append(contentsOf: ["--agents", agentsJSON])
         }
 
         return OperationCommand(
-            executable: claudeExecutable,
+            executable: resolvedExecutable,
             arguments: arguments,
             environment: environment,
             currentDirectoryPath: scratchDirectory
@@ -130,27 +103,36 @@ public struct OperationCommand: Equatable, Sendable {
         systemPrompt: String,
         scratchDirectory: String,
         wikictlDirectory: String,
-        claudeExecutable: String = "claude",
+        resolvedExecutable: String = "claude",
+        command: AgentCommandConfig = .default,
         baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
     ) -> OperationCommand {
         var environment = baseEnvironment
+        for (key, value) in command.parsedExtraEnv() {
+            environment[key] = value
+        }
         environment["WIKI_ROOT"] = wikiRoot
         environment["WIKI_DB"] = wikiID
-        let existingPath = baseEnvironment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        let userPath = environment["PATH"]
+        let existingPath = userPath ?? baseEnvironment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
         environment["PATH"] = wikictlDirectory + ":" + existingPath
 
-        let arguments = [
+        let model = command.modelOverride.isEmpty
+            ? operation.topLevelModelAlias : command.modelOverride
+
+        var arguments = command.tokenizedPrefixArgs()
+        arguments.append(contentsOf: [
             "-p",
             "--input-format", "stream-json",
             "--output-format", "stream-json",
             "--verbose",
-            "--model", operation.topLevelModelAlias,
+            "--model", model,
             "--append-system-prompt", systemPrompt + "\n\n" + operation.prompt(wikiRoot: wikiRoot),
             "--dangerously-skip-permissions",
-        ]
+        ])
 
         return OperationCommand(
-            executable: claudeExecutable,
+            executable: resolvedExecutable,
             arguments: arguments,
             environment: environment,
             currentDirectoryPath: scratchDirectory
