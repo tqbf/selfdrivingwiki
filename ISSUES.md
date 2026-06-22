@@ -83,3 +83,38 @@ domain teardown — but it covers the transient-busy window that was silently
 dropping fresh registrations.
 
 Recorded 2026-06-15 (Phase A write-path live gate); mitigation added 2026-06-16.
+
+## Vendored Textual fork (in-repo path dependency)
+
+**Symptom.** Textual is no longer a remote SPM dependency; it's vendored at
+`Packages/Textual/` as a path dependency and carries a small fork. Upstream
+Textual updates are no longer picked up automatically.
+
+**Why.** Right-click link context menus need Textual internals — its
+`NSTextInteractionView` owns right-click and the context menu, and the link
+hit-test (`model.url(for:)`) plus the selection model are `internal`. There is no
+public Textual API to customize the menu or select a whole link, so we vendor to
+make three localized edits (`plans/link-context-menus.md`).
+
+**What the fork changes** (vs upstream `textual` 0.5.0, rev `01b5187`):
+- `Sources/Textual/LinkContextMenu.swift` (new) — public `LinkMenuItem`,
+  `LinkContextMenuBuilder`, the `linkContextMenu` env value.
+- `Sources/Textual/View+Textual.swift` — `.textual.linkContextMenu(_:)`.
+- `…/TextLayout/TextLayoutCollection+RunSliceTraversal.swift` — `linkRange(for:)`
+  + `url(at:)`.
+- `…/TextSelectionModel.swift` — `linkRange(for:)` passthrough.
+- `…/AppKit/NSTextInteractionView.swift` — right-click whole-link selection +
+  link-menu builder; refactored `makeContextMenu`.
+- `…/AppKit/AppKitTextInteractionOverlay.swift` — threads the env value.
+- The manifest is byte-identical to upstream (no `testTarget` patch).
+
+**Why it's probably fine.** The diff is tiny and isolated to the link-menu
+feature; it does not change Textual's rendering or selection behavior for
+non-link right-clickes. The vendored tree is a faithful copy of upstream minus
+`.git`, build artifacts, and the `Examples/` tree.
+
+**To re-sync upstream.** Diff the six files above against a fresh checkout of the
+new version, port the edits, bump the recorded rev here. Do NOT re-point
+`Package.swift` at a remote — carrying the fork is the point.
+
+Recorded 2026-06-22 (link-context-menus PR).

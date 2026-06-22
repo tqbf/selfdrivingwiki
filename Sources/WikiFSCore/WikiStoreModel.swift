@@ -228,6 +228,28 @@ public final class WikiStoreModel {
         (try? store.resolveSourceByName(displayName)) != nil
     }
 
+    /// Semantic search for pages matching `query` (sqlite-vec + NLEmbedding, with
+    /// a `LIKE` fallback). Powers the right-click link context menu's "Suggest…"
+    /// (missing links) and "Find Similar…" (any wiki link). Best-effort: returns
+    /// `[]` on any error so the menu never throws.
+    public func searchSimilar(query: String, limit: Int = 8) -> [WikiPageSummary] {
+        (try? store.searchSimilar(query: query, limit: limit)) ?? []
+    }
+
+    /// Resolve a page title to its id (lowest-ULID on a duplicate-title
+    /// collision, matching the link graph). Best-effort: `nil` on any error or
+    /// when no page matches. Used by "Copy File Path" to build the mount path.
+    public func pageID(forTitle title: String) -> PageID? {
+        do { return try store.resolveTitleToID(title) } catch { return nil }
+    }
+
+    /// Resolve a source display name (or filename fallback) to its id
+    /// (most-recently-updated on collision). Best-effort: `nil` on any error or
+    /// no match. Used by "Copy File Path" to build the source's mount path.
+    public func sourceID(forDisplayName displayName: String) -> PageID? {
+        do { return try store.resolveSourceByName(displayName) } catch { return nil }
+    }
+
     /// Navigate to the source with `displayName` from a clicked
     /// `[[source:display-name]]` link in the preview. Resolves display name → id
     /// (most-recently-updated on collision), records navigation history, and opens

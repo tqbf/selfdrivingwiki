@@ -25,6 +25,9 @@ struct MarkdownPreview: View {
     /// The current selection this preview is rendering (page id or source id).
     /// Used to match against `store.pendingScrollAnchor`.
     var currentSelection: WikiSelection? = nil
+    /// The File Provider spike, for "Copy File Path" on wiki links. Only page
+    /// previews (which own a spike) pass it; `nil` elsewhere omits that item.
+    var fileProvider: FileProviderSpike? = nil
 
     @State private var blocks: [AnchorBlock] = []
 
@@ -46,6 +49,12 @@ struct MarkdownPreview: View {
                             .id(rendered)
                             .textual.paragraphStyle(NumberedParagraphStyle())
                             .textual.textSelection(.enabled)
+                            // Right-click a link: select the whole link and show
+                            // a link-specific context menu (Suggest / Find
+                            // Similar / Copy as Wiki Link / Open in Browser …).
+                            .textual.linkContextMenu { url in
+                                WikiLinkContextMenu.items(for: url, store: store, fileProvider: fileProvider)
+                            }
                             // Neutralize the style-level link color so the
                             // parser's per-run colors (red for missing links)
                             // survive `WithInlineStyle`'s `keepNew` merge.

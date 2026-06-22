@@ -2,6 +2,56 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-22 — Right-click link context menus + whole-link selection
+
+Implemented `plans/link-context-menus.md`. Right-clicking **any** link (wiki or
+external) in a markdown preview now **selects the whole link run** (not just the
+word under the cursor) and shows a **link-specific context menu**. Previously a
+right-click on e.g. `Modern` inside `Spinellis's "Modern Debugging"` (from
+`[[Modern Debugging (study)|Spinellis's "Modern Debugging"]]`) selected only
+`Modern` and offered Share/Copy of that word.
+
+**The Textual fork.** Textual is now a vendored in-repo path dependency
+(`Packages/Textual/`, upstream `textual` 0.5.0 rev `01b5187`) so we could touch
+its `internal` text-interaction layer (its `NSTextInteractionView` owns
+right-click + the menu, and the `model.url(for:)` hit-test / selection model are
+`internal` — no public seam). Three localized edits:
+- Public `LinkMenuItem` + `LinkContextMenuBuilder` + a `linkContextMenu`
+  `EnvironmentValues` entry and `.textual.linkContextMenu(_:)` modifier
+  (`LinkContextMenu.swift`, `View+Textual.swift`).
+- `TextSelectionModel.linkRange(for:)` (+ a layout helper) — expands from the
+  clicked run slice over adjacent slices whose run shares the same URL, bounded
+  to one layout so two same-URL links in neighboring paragraphs never merge.
+- `NSTextInteractionView` right-click: `updateSelectionForContextMenu` selects
+  the whole `linkRange` when on a link (word-range otherwise), and
+  `makeContextMenu` builds link items from the builder (then Share/Copy of the
+  selected link text). The env value threads through `AppKitTextInteractionOverlay`
+  exactly like `openURL`. See `ISSUES.md` ("Vendored Textual fork") for re-sync.
+
+**Menu items.** The pure `WikiLinkMenuBuilder` (`WikiFSCore`, no Textual dep)
+classifies a link URL → `[WikiLinkAction]`; the view layer `WikiLinkContextMenu`
+(`WikiFS`) wires them to closures in `MarkdownPreview` via
+`.textual.linkContextMenu`:
+- Missing wiki link → **Suggest…** (semantic-search submenu → navigate) + **Copy
+  as Wiki Link** (`[[Target]]`).
+- Resolved page/source link → **Find Similar…** + **Copy as Wiki Link**
+  (`[[Target]]` / `[[source:Name]]`, `#fragment` preserved) + **Copy File Path**
+  (the target's File Provider mount path — `pages/by-title/…` / `sources/by-id/…`,
+  resolved async if the mount root isn't cached). Only page previews pass the
+  spike, so it's offered there; the filename uses the page's canonical title.
+- External link → **Open in Browser** + **Copy Link**.
+
+**Not implemented (future).** **Edit Link** (enter edit mode + select the link
+source) was deferred — it needs edit-mode plumbing and source-span selection, and
+its behavior is an open question in the plan. It's not scaffolded in
+`WikiLinkAction`.
+
+**Tests.** 16 `WikiLinkMenuBuilderTests` (per-URL-kind action classification +
+`[[…]]` reconstruction incl. fragments and percent-encoded titles). Full
+`swift test` — 776 tests, 58 suites, 0 failures. `make check` clean.
+
+On branch `feature/link-context-menus`.
+
 ## 2026-06-22 — Red missing wiki-links + context-menu design doc
 
 Unresolved `[[Ghost Page]]` wiki links now render **red** in every markdown

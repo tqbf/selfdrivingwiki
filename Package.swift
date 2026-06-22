@@ -8,7 +8,13 @@ let package = Package(
     name: "WikiFS",
     platforms: [.macOS(.v15)],
     dependencies: [
-        .package(url: "https://github.com/gonzalezreal/textual", from: "0.5.0"),
+        // Textual is vendored in-repo (Packages/Textual) so we can carry a
+        // small, localized fork for right-click link context menus (whole-link
+        // selection + a link-context-menu env value). See
+        // plans/link-context-menus.md. Re-sync deliberately; keep the fork diff
+        // tiny (NSTextInteractionView + AppKitTextInteractionOverlay + the
+        // linkRange/link-menu additions).
+        .package(path: "Packages/Textual"),
     ],
     targets: [
         // Non-UI core: page model, ULID, the WikiStore protocol + SQLite

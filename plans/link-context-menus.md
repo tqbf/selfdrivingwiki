@@ -36,6 +36,42 @@ The logic layer already exists and is trivial to drive: `WikiStore.searchSimilar
 `resolveTitleToID`, `resolveSourceByName`, and `WikiLinkMarkdown`'s
 target/fragment helpers. **Only the interaction layer is blocked.**
 
+## Right-click selects the whole link (requirement)
+
+Today a right-click lands as a *word* selection, not a link selection, so the
+menu acts on a fragment of the link text. Concretely, in the vendored Textual
+`NSTextInteractionView` (`…/AppKit/NSTextInteractionView.swift`):
+
+- `rightMouseDown(with:)` → `updateSelectionForContextMenu(at:)`, which sets
+  `model.selectedRange = model.wordRange(for: position)` — the **word** under the
+  cursor — whenever the click isn't already inside an existing selection.
+- `makeContextMenu()` then offers only **Share / Copy** of that selected word;
+  it has no concept of a link.
+
+**Example.** For `[[Modern Debugging (study)|Spinellis's "Modern Debugging"]]`
+the rendered link text is `Spinellis's "Modern Debugging"`. Right-clicking on
+`Modern` inside it selects only the word **`Modern`** (and offers Share/Copy of
+that fragment), not the whole link. The same happens for external URLs: a click
+on `github` in `https://github.com/…` selects just `github`.
+
+**Required behavior.** Right-clicking **any** link (wiki **or** external) must:
+
+1. Select the **entire link run** — the whole visible URL for external links,
+   and the whole alias/display text (`Spinellis's "Modern Debugging"`) for wiki
+   links — not the word, so Copy/Share act on the full link and the visible
+   selection matches the menu's target.
+2. Show the **link-specific context menu** (the link-context-menu builder
+   below), not the generic Share/Copy-of-a-word menu.
+
+**Seam.** The model already hit-tests to the link via `url(for point:)`
+(`TextLayoutCollection+Geometry.swift:5`), but it returns only the URL — it
+discards the run's range. "Select the whole link" therefore needs a small new
+helper (e.g. `linkRange(for position:)` on `TextSelectionModel`) that expands to
+the contiguous run slices sharing the clicked run's URL; then
+`updateSelectionForContextMenu` selects that range for link clicks and falls
+back to today's `wordRange(for:)` for plain text. This is a third localized
+edit on `NSTextInteractionView` inside the same vendored patch approved below.
+
 ## The blocker (why this is its own PR)
 
 Textual owns right-click and the context menu **internally**. From the vendored
@@ -70,16 +106,22 @@ Approved by the operator. The follow-on PR will:
    (`Packages/Textual/`); point `Package.swift` at
    `.package(path: "Packages/Textual")`; pin the version currently in
    `Package.resolved`.
-2. Make two small, localized edits:
+2. Make three small, localized edits:
    - Add a public `@Entry` environment value holding a **link-context-menu
      builder** closure `(URL) -> [LinkMenuItem]` (public `LinkMenuItem { title;
      @MainActor () -> Void }`, plus optional submenu / disabled).
+   - Add `linkRange(for position:)` on `TextSelectionModel` (+ the layout
+     helper) that returns the contiguous run-slice range sharing the clicked
+     run's URL. `updateSelectionForContextMenu` selects it when the click is on
+     a link (the **whole link**, per the requirement above) and keeps
+     `wordRange(for:)` for plain text — so right-clicking
+     `Spinellis's "Modern Debugging"` selects the whole link, not `Modern`.
    - In `NSTextInteractionView`: on right-click, call `model.url(for: location)`;
-     if a URL is present and a builder is set, build link items (then a
-     separator, then the existing Share/Copy items when there is a text
-     selection); otherwise the current menu. Pass the env value through
-     `AppKitTextInteractionOverlay` (which already threads `openURL` the same
-     way).
+     if a URL is present, select the whole link run, then if a builder is set,
+     build link items (then a separator, then the existing Share/Copy items when
+     there is a text selection); otherwise the current menu. Pass the env value
+     through `AppKitTextInteractionOverlay` (which already threads `openURL` the
+     same way).
 
 **Rationale.** Reliable hit-testing (reuses Textual's own laid-out link
 geometry); clean per-link menus for both wiki and external links from one seam;

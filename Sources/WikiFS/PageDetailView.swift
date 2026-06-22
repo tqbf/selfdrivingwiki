@@ -77,7 +77,8 @@ struct PageDetailView: View {
                     .onChange(of: store.draftBody) { store.bodyChanged() }
             } else {
                 MarkdownPreview(store: store, markdown: readerMarkdown,
-                                currentSelection: store.selection)
+                                currentSelection: store.selection,
+                                fileProvider: fileProvider)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: PageEditorMetrics.previewMinHeight)
             }
