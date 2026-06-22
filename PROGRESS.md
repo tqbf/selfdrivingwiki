@@ -2,6 +2,51 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-21 — Phase D: Editable Display Names + Rename Propagation
+
+Implemented `plans/phase-d-display-names-rename.md`. Sources can now be renamed
+(`wikictl source rename --id <id> --to "New Name"`), and all `[[source:<old>…]]`
+links in linking pages are automatically rewritten. Fragments (`#"quote"`) and
+aliases (`|text`) are preserved byte-for-byte; code spans/fences are skipped.
+
+**Architecture.** `WikiLinkRewriter.rewriteSourceBase` finds `[[source:Old…]]` spans
+via the shared `WikiLinkSpan` regex, classifies them to ensure they're source links,
+then structurally splices the bare-target byte range (everything between `source:`
+and the first `#`/`|`) with the new name — not `replaceOccurrences`, so
+`source:  old base#"q"` correctly matches and replaces only the base. The rename
+drives the scan off `source_links` (O(linked-pages), zero false positives).
+
+**Changes:**
+- **`WikiLinkSpan`** (new): Shared `[[…]]` regex + `protectedCodeRanges`, extracted
+  from `WikiLinkMarkdown` and `WikiFootnoteMarkdown` (they were copy-pasted).
+  Both now delegate to `WikiLinkSpan`.
+- **`WikiLinkRewriter`** (new): `rewriteSourceBase(in:matching:to:)` — pure helper,
+  structurally splices the bare target, returns nil if no match.
+- **`SQLiteWikiStore`:** `renameSource(id:to:)` updates `display_name` + bumps
+  `version`, then iterates `sourceLinkingPages(to:)` to rewrite each linking page
+  via `updatePage` + `replaceLinks`. `sourceLinkingPages(to:)` is a new read helper
+  (one query: `SELECT DISTINCT from_page_id FROM source_links WHERE to_source_id = ?`).
+- **`WikiStore` protocol:** Added `renameSource` method.
+- **`WikiStoreModel`:** `renameSource(id:to:)` thin wrapper — calls store, refreshes
+  summaries, updates open tab titles.
+- **`sources.jsonl` `name` field:** Now `displayName ?? filename`.
+- **By-name projection** (`Projection.swift`): `sourceNode`/`sourceMarkdownNode` now
+  use `displayName ?? filename` for by-name names; `metadataVersion` bifurcated
+  (by-name keys on display name, by-id stays filename-keyed).
+- **CLI:** `wikictl source rename <selector> --to "<name>"` — resolves selector,
+  calls `store.renameSource`, returns confirmation. Wired in `ArgumentParser.Command`,
+  `SourceCommand.Action`, and `main.swift` dispatch.
+- **`SystemPrompt`:** Documents `wikictl source rename` + auto-rewrite so the agent
+  knows renames never orphan citations.
+- **Tests:** 17 `WikiLinkRewriterTests` (basic swap, case-insensitive, whitespace-
+  collapsed, fragment preservation, alias preservation, fragment+alias combined,
+  code-span/fence skip, non-source links unchanged, multiple occurrences).
+  5 store tests (`sourceLinkingPages`, `renameSource` update + rewrite + no-op).
+
+**Tests.** 747 tests, 56 suites, 0 failures (+22 new).
+
+On branch `feature/phase-d-display-names-rename`.
+
 ## 2026-06-21 — Markdown Anchors: section/passage links + footnote citations
 
 Implemented `plans/markdown-anchors.md`. Wiki links can now point at a *place inside*

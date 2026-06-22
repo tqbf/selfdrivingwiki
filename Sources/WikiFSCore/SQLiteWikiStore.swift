@@ -844,6 +844,22 @@ public final class SQLiteWikiStore: WikiStore {
         return out
     }
 
+    /// Pages whose bodies link to `sourceID` via `[[source:…]]` (by source ID —
+    /// stable across renames). Used by `renameSource` to find candidate pages for
+    /// link rewriting. One query, zero false positives.
+    public func sourceLinkingPages(to sourceID: PageID) throws -> [PageID] {
+        let stmt = try statement("""
+        SELECT DISTINCT from_page_id FROM source_links WHERE to_source_id = ?1;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(sourceID.rawValue, at: 1)
+        var out: [PageID] = []
+        while try stmt.step() {
+            out.append(PageID(rawValue: stmt.text(at: 0)))
+        }
+        return out
+    }
+
     // MARK: - Sources (Phase 5, renamed v10)
 
     /// Reject any single dropped file larger than this. A soft guard so the
@@ -946,6 +962,44 @@ public final class SQLiteWikiStore: WikiStore {
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         _ = try stmt.step()
+    }
+
+    /// Rename a source's `display_name` and rewrite every
+    /// `[[source:<old>…]]` link that points at it. Bumps `sources.version` (→
+    /// `changeToken` moves → File Provider refreshes).
+    ///
+    /// Rewrites only links whose base equals the old display name (or filename
+    /// fallback). Filename-form links keep resolving (filename is immutable).
+    /// Fragment and alias are preserved byte-for-byte.
+    ///
+    /// The source UPDATE happens first; then each linking page is updated
+    /// individually via the existing `updatePage` + `replaceLinks` methods.
+    /// If a crash occurs mid-loop, remaining pages still resolve (old name is
+    /// a filename fallback) — the rename is eventually consistent.
+    public func renameSource(id: PageID, to newDisplayName: String) throws {
+        let old = try getSource(id: id)
+        let oldBase = old.displayName ?? old.filename
+        guard oldBase != newDisplayName else { return }
+
+        // Update the source row first.
+        let stmt = try statement("""
+        UPDATE sources SET display_name = ?2, updated_at = ?3, version = version + 1 WHERE id = ?1;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        try stmt.bind(newDisplayName, at: 2)
+        try stmt.bind(Date().timeIntervalSince1970, at: 3)
+        _ = try stmt.step()
+
+        // Rewrite links in every page that points at this source.
+        for pageID in try sourceLinkingPages(to: id) {
+            let page = try getPage(id: pageID)
+            guard let rewritten = WikiLinkRewriter.rewriteSourceBase(
+                in: page.bodyMarkdown, matching: oldBase,
+                to: newDisplayName) else { continue }
+            try updatePage(id: pageID, title: page.title, body: rewritten)
+            try replaceLinks(from: pageID, parsedLinks: WikiLinkParser.parse(rewritten))
+        }
     }
 
     /// Stamp a source as summarized-into-the-wiki. Idempotent and a no-op

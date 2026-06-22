@@ -152,7 +152,7 @@ public enum IndexGenerators {
         var out = ""
         for source in sources {
             let id = jsonString(source.id)
-            let name = jsonString(source.filename)
+            let name = jsonString(source.displayName ?? source.filename)
             let relPath = source.ext.isEmpty
                 ? "\(sourcesByIDPath)/\(source.id)"
                 : "\(sourcesByIDPath)/\(source.id).\(source.ext)"

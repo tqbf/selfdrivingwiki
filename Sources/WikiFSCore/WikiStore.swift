@@ -80,6 +80,11 @@ public protocol WikiStore {
     /// Remove a source by id.
     func deleteSource(id: PageID) throws
 
+    /// Rename a source's display_name and rewrite every `[[source:<old>…]]` link
+    /// that points at it. Transactional — source row + all affected pages + their
+    /// link rows in one commit. Fragment and alias are preserved.
+    func renameSource(id: PageID, to newDisplayName: String) throws
+
     /// Stamp a source as summarized-into-the-wiki. The agent calls this on
     /// successful completion via `wikictl log append --kind ingest --source <id>`;
     /// the UI reads it as the authoritative "Processed" status.

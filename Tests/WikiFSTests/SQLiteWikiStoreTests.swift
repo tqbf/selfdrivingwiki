@@ -470,6 +470,68 @@ struct SQLiteWikiStoreTests {
         #expect(id != nil)
     }
 
+    // MARK: - Phase D: sourceLinkingPages + renameSource
+
+    @Test func sourceLinkingPagesReturnsPagesThatLinkToSource() throws {
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let source = try store.addSource(filename: "note.md", data: Data("md".utf8))
+        let page = try store.createPage(title: "Test Page")
+        try store.replaceLinks(from: page.id, parsedLinks: [
+            .init(linkType: .source, target: source.filename, linkText: "note"),
+        ])
+        let pages = try store.sourceLinkingPages(to: source.id)
+        #expect(pages.count == 1)
+        #expect(pages[0] == page.id)
+    }
+
+    @Test func sourceLinkingPagesReturnsEmptyForUnlinkedSource() throws {
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let source = try store.addSource(filename: "orphan.md", data: Data("md".utf8))
+        let pages = try store.sourceLinkingPages(to: source.id)
+        #expect(pages.isEmpty)
+    }
+
+    @Test func renameSourceUpdatesDisplayNameAndBumpsVersion() throws {
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let source = try store.addSource(filename: "old.pdf", data: Data("%PDF".utf8))
+        let oldVersion = try store.getSource(id: source.id).version
+        let oldToken = try store.changeToken()
+
+        try store.renameSource(id: source.id, to: "New Name")
+
+        let updated = try store.getSource(id: source.id)
+        #expect(updated.displayName == "New Name")
+        #expect(updated.version == oldVersion + 1)
+        let newToken = try store.changeToken()
+        #expect(newToken != oldToken)
+    }
+
+    @Test func renameSourceRewritesLinksInLinkingPages() throws {
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let source = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
+        let page = try store.createPage(title: "Summary")
+        // Write a page body with a source link using the old name.
+        try store.updatePage(id: page.id, title: "Summary",
+            body: "See [[source:paper.pdf]] for details.")
+        try store.replaceLinks(from: page.id,
+            parsedLinks: WikiLinkParser.parse("See [[source:paper.pdf]] for details."))
+
+        try store.renameSource(id: source.id, to: "Renamed Paper")
+
+        let updated = try store.getPage(id: page.id)
+        #expect(updated.bodyMarkdown.contains("[[source:Renamed Paper]]"))
+        #expect(!updated.bodyMarkdown.contains("[[source:paper.pdf]]"))
+    }
+
+    @Test func renameSourceIsNoOpWhenNameUnchanged() throws {
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let source = try store.addSource(filename: "x.pdf", data: Data("%PDF".utf8))
+        let oldToken = try store.changeToken()
+        try store.renameSource(id: source.id, to: source.filename)
+        // No version bump, no token change.
+        #expect(try store.changeToken() == oldToken)
+    }
+
     // MARK: - Helpers
 
     private func rows(_ db: OpaquePointer?, _ sql: String) -> [String] {

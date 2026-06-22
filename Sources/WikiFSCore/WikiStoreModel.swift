@@ -625,6 +625,22 @@ public final class WikiStoreModel {
         }
     }
 
+    /// Rename a source's display name. Rewrites `[[source:<old>…]]` links in
+    /// every page that references it (fragment + alias preserved), then refreshes
+    /// the sidebar, open tabs, and File Provider mount.
+    public func renameSource(id: PageID, to newDisplayName: String) {
+        do {
+            try store.renameSource(id: id, to: newDisplayName)
+            reloadSummaries()
+            for i in tabs.indices where tabs[i].selection == .source(id) {
+                tabs[i].title = newDisplayName
+            }
+            onPageDidChange?()
+        } catch {
+            print("WikiStoreModel.renameSource failed: \(error)")
+        }
+    }
+
     public func delete(_ id: PageID) {
         do {
             try store.deletePage(id: id)

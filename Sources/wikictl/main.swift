@@ -103,6 +103,10 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
         return try SourceCommand.run(
             .editMarkdown(selector, content: content), in: store,
             cwd: FileManager.default.currentDirectoryPath)
+    case .sourceRename(let selector, let to):
+        return try SourceCommand.run(
+            .rename(selector, to: to), in: store,
+            cwd: FileManager.default.currentDirectoryPath)
     }
 }
 

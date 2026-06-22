@@ -476,9 +476,10 @@ struct Projection {
     ) -> ProjectedNode {
         let raw = id.rawValue
         let isByName = raw.hasPrefix(Identity.sourceMarkdownByNamePrefix)
+        let humanName = source.displayName ?? source.filename
         let name = isByName
             ? FilenameEscaping.byNameSourceFilename(
-                filename: source.filename, ext: "md", sourceID: source.id.rawValue)
+                filename: humanName, ext: "md", sourceID: source.id.rawValue)
             : FilenameEscaping.byIDSourceFilename(sourceID: source.id.rawValue, ext: "md")
         let parent = isByName ? Identity.sourcesByName : Identity.sourcesByID
         return .file(
@@ -494,21 +495,25 @@ struct Projection {
     /// Build a file node for an ingested-file row, under whichever view `id`
     /// belongs to. Size is the stored `byteSize` (NEVER nil → no truncated
     /// `cat`); contentVersion is the row `version`; metadataVersion folds in the
-    /// filename + updated_at so a re-ingest under the same id would re-fetch.
+    /// display name (or filename fallback) + updated_at so a rename re-fetches
+    /// the by-name node. By-id stays filename-keyed (stable identity).
     static func sourceNode(for id: NSFileProviderItemIdentifier,
                                  file: SourceSummary) -> ProjectedNode {
         let raw = id.rawValue
         let isByName = raw.hasPrefix(Identity.sourceByNamePrefix)
+        let humanName = file.displayName ?? file.filename
         let name = isByName
             ? FilenameEscaping.byNameSourceFilename(
-                filename: file.filename, ext: file.ext, sourceID: file.id.rawValue)
+                filename: humanName, ext: file.ext, sourceID: file.id.rawValue)
             : FilenameEscaping.byIDSourceFilename(sourceID: file.id.rawValue, ext: file.ext)
         let parent = isByName ? Identity.sourcesByName : Identity.sourcesByID
+        let metaKey = isByName
+            ? "\(humanName)|\(file.updatedAt.timeIntervalSince1970)|\(file.version)"
+            : "\(file.filename)|\(file.updatedAt.timeIntervalSince1970)|\(file.version)"
         return .file(
             id: id, parent: parent, name: name, size: file.byteSize,
             version: Data(String(file.version).utf8),
-            metadataVersion: Data(
-                "\(file.filename)|\(file.updatedAt.timeIntervalSince1970)|\(file.version)".utf8),
+            metadataVersion: Data(metaKey.utf8),
             created: file.createdAt, modified: file.updatedAt,
             ingestedExt: file.ext,
             mimeType: file.mimeType

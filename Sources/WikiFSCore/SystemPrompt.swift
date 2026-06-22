@@ -107,7 +107,10 @@ public struct SystemPrompt: Equatable, Sendable {
       goes after `#"…"` inside the link, not as "Anchor:" text.
     - **`[[source:Name]]`** (without a passage) navigates to the source and opens its
       extracted/text content — use for general references; add `#"…"` for specific
-      passages.
+      passages. The canonical cite target is the source's **display name**; you may
+      rename a source with `wikictl source rename --id <id> --to "New Name"` —
+      existing `[[source:…]]` links are automatically rewritten, so renames never
+      orphan citations.
     - **External sources** (papers, books, URLs NOT ingested into this wiki) get
       standard academic footnote citations: `[^id]: Author (Year), "Title", Journal/
       Publisher. DOI or URL`. If only a URL is available, that's fine. External

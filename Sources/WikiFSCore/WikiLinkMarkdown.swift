@@ -31,9 +31,8 @@ public enum WikiLinkMarkdown {
     /// Host for a link whose target has no page/source (rendered dimmed, inert).
     public static let unresolvedHost = "missing"
 
-    // Same grammar as WikiLinkParser.pattern: [[ target (no ] or |) (| alias)? ]]
-    private static let pattern = #"\[\[([^\]\|]+)(?:\|([^\]]+))?\]\]"#
-    private static let regex = try! NSRegularExpression(pattern: pattern)
+    // Shared grammar from WikiLinkSpan (same pattern as WikiLinkParser).
+    private static let regex = WikiLinkSpan.regex
 
     /// Rewrite all `[[…]]` spans in `body` to Markdown links, EXCEPT those that
     /// fall inside a backtick code span or fenced code block (where `[[…]]` is
@@ -52,7 +51,7 @@ public enum WikiLinkMarkdown {
         isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool = { _, _ in true }
     ) -> String {
         let ns = body as NSString
-        let codeRanges = protectedCodeRanges(in: body)
+        let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
         let matches = regex.matches(in: body, range: NSRange(location: 0, length: ns.length))
 
         // Build the output by walking matches left→right, copying the gaps
@@ -247,75 +246,5 @@ public enum WikiLinkMarkdown {
         return set
     }()
 
-    /// Ranges of the body that are inside an inline code span (`` `…` ``) or a
-    /// fenced code block (``` ```…``` ```), where `[[…]]` must NOT be linkified.
-    /// A deliberately small scanner: it handles the two CommonMark code forms the
-    /// preview actually shows; it does not model indented (4-space) code blocks,
-    /// which the preview's inline-only parse doesn't render as code anyway.
-    private static func protectedCodeRanges(in body: String) -> [NSRange] {
-        let ns = body as NSString
-        var ranges: [NSRange] = []
-
-        // 1) Fenced blocks: a line starting with ``` opens; the next such line
-        //    (or end of text) closes. Whole span (incl. fences) is protected.
-        let lines = body.components(separatedBy: "\n")
-        var offset = 0
-        var fenceStart: Int? = nil
-        for line in lines {
-            let lineLen = (line as NSString).length
-            let isFence = line.trimmingCharacters(in: .whitespaces).hasPrefix("```")
-            if isFence {
-                if let start = fenceStart {
-                    ranges.append(NSRange(location: start, length: (offset + lineLen) - start))
-                    fenceStart = nil
-                } else {
-                    fenceStart = offset
-                }
-            }
-            offset += lineLen + 1 // + the "\n" we split on
-        }
-        if let start = fenceStart {
-            ranges.append(NSRange(location: start, length: ns.length - start))
-        }
-
-        // 2) Inline code spans: backtick runs of length N delimit a span that
-        //    closes on the next run of exactly N backticks. We skip any region
-        //    already covered by a fence.
-        var i = 0
-        while i < ns.length {
-            if isInside(i, ranges) { i += 1; continue }
-            if ns.character(at: i) == backtick {
-                var runLen = 0
-                while i + runLen < ns.length, ns.character(at: i + runLen) == backtick { runLen += 1 }
-                let spanOpen = i
-                var j = i + runLen
-                var closed = false
-                while j < ns.length {
-                    if ns.character(at: j) == backtick {
-                        var closeLen = 0
-                        while j + closeLen < ns.length, ns.character(at: j + closeLen) == backtick { closeLen += 1 }
-                        if closeLen == runLen {
-                            ranges.append(NSRange(location: spanOpen, length: (j + closeLen) - spanOpen))
-                            i = j + closeLen
-                            closed = true
-                            break
-                        }
-                        j += closeLen
-                    } else {
-                        j += 1
-                    }
-                }
-                if !closed { i = spanOpen + runLen } // unterminated run: not a span
-            } else {
-                i += 1
-            }
-        }
-        return ranges
-    }
-
-    private static let backtick: unichar = 0x60 // `
-
-    private static func isInside(_ index: Int, _ ranges: [NSRange]) -> Bool {
-        ranges.contains { NSLocationInRange(index, $0) }
-    }
+    // protectedCodeRanges, isInside, and backtick live in WikiLinkSpan (shared).
 }

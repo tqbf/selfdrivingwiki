@@ -55,6 +55,8 @@ public enum ArgumentParser {
         /// the literal markdown content. `main` resolves the file in the former
         /// case before appending.
         case sourceEditMarkdown(SourceCommand.Selector, contentOrFile: String, isFile: Bool)
+        /// Rename a source's display name and rewrite links pointing at it.
+        case sourceRename(SourceCommand.Selector, to: String)
     }
 
     public enum Failure: Error, Equatable, CustomStringConvertible {
@@ -220,6 +222,13 @@ public enum ArgumentParser {
 
         case "edit-markdown":
             return try parseSourceEditMarkdown(options)
+
+        case "rename":
+            let selector = try options.requireSourceSelector()
+            guard let newName = options.value("--to"), !newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw Failure.usage("source rename: --to <new-display-name> is required")
+            }
+            return .sourceRename(selector, to: newName)
 
         default:
             throw Failure.usage("source: unknown subcommand \(sub.debugDescription)")

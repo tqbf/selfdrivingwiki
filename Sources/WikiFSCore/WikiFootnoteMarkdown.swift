@@ -123,7 +123,7 @@ public enum WikiFootnoteMarkdown {
 
     private static func orderedReferencedIDs(in markdown: String, knownIDs: Dictionary<String, String>.Keys) -> [String] {
         let ns = markdown as NSString
-        let codeRanges = protectedCodeRanges(in: markdown)
+        let codeRanges = WikiLinkSpan.protectedCodeRanges(in: markdown)
         let matches = referenceRegex.matches(in: markdown, range: NSRange(location: 0, length: ns.length))
         var seen = Set<String>()
         var ids: [String] = []
@@ -139,7 +139,7 @@ public enum WikiFootnoteMarkdown {
 
     private static func rewriteReferences(in markdown: String, numbersByID: [String: Int]) -> String {
         let ns = markdown as NSString
-        let codeRanges = protectedCodeRanges(in: markdown)
+        let codeRanges = WikiLinkSpan.protectedCodeRanges(in: markdown)
         let matches = referenceRegex.matches(in: markdown, range: NSRange(location: 0, length: ns.length))
 
         var output = ""
@@ -210,69 +210,5 @@ public enum WikiFootnoteMarkdown {
         return lines
     }
 
-    private static func protectedCodeRanges(in body: String) -> [NSRange] {
-        let ns = body as NSString
-        var ranges: [NSRange] = []
-
-        let lines = body.components(separatedBy: "\n")
-        var offset = 0
-        var fenceStart: Int? = nil
-        for line in lines {
-            let lineLen = (line as NSString).length
-            let isFence = line.trimmingCharacters(in: .whitespaces).hasPrefix("```")
-            if isFence {
-                if let start = fenceStart {
-                    ranges.append(NSRange(location: start, length: (offset + lineLen) - start))
-                    fenceStart = nil
-                } else {
-                    fenceStart = offset
-                }
-            }
-            offset += lineLen + 1
-        }
-        if let start = fenceStart {
-            ranges.append(NSRange(location: start, length: ns.length - start))
-        }
-
-        var i = 0
-        while i < ns.length {
-            if isInside(i, ranges) { i += 1; continue }
-            if ns.character(at: i) == backtick {
-                var runLength = 0
-                while i + runLength < ns.length, ns.character(at: i + runLength) == backtick {
-                    runLength += 1
-                }
-                let spanOpen = i
-                var j = i + runLength
-                var closed = false
-                while j < ns.length {
-                    if ns.character(at: j) == backtick {
-                        var closeLength = 0
-                        while j + closeLength < ns.length, ns.character(at: j + closeLength) == backtick {
-                            closeLength += 1
-                        }
-                        if closeLength == runLength {
-                            ranges.append(NSRange(location: spanOpen, length: (j + closeLength) - spanOpen))
-                            i = j + closeLength
-                            closed = true
-                            break
-                        }
-                        j += closeLength
-                    } else {
-                        j += 1
-                    }
-                }
-                if !closed { i = spanOpen + runLength }
-            } else {
-                i += 1
-            }
-        }
-        return ranges
-    }
-
-    private static let backtick: unichar = 0x60
-
-    private static func isInside(_ index: Int, _ ranges: [NSRange]) -> Bool {
-        ranges.contains { NSLocationInRange(index, $0) }
-    }
+    // protectedCodeRanges, isInside, and backtick live in WikiLinkSpan (shared).
 }

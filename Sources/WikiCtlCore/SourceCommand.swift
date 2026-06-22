@@ -40,6 +40,7 @@ public enum SourceCommand {
         case cat(Selector)
         case export(Selector, out: String?)
         case editMarkdown(Selector, content: String)
+        case rename(Selector, to: String)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -65,6 +66,8 @@ public enum SourceCommand {
             return try export(selector, out: out, in: store, cwd: cwd)
         case .editMarkdown(let selector, let content):
             return try editMarkdown(selector, content: content, in: store)
+        case .rename(let selector, let to):
+            return try rename(selector, to: to, in: store)
         }
     }
 
@@ -185,5 +188,16 @@ public enum SourceCommand {
         }
         try store.appendProcessedMarkdown(sourceID: id, content: content, origin: "user", note: nil)
         return Result(payload: .text(""), didCommit: true)
+    }
+
+    // MARK: - rename
+
+    /// Rename a source's display name and rewrite `[[source:<old>…]]` links in
+    /// every page that references it. Commits — the caller posts the Darwin
+    /// notification on `didCommit`.
+    private static func rename(_ selector: Selector, to newName: String, in store: WikiStore) throws -> Result {
+        let id = try resolve(selector, in: store)
+        try store.renameSource(id: id, to: newName)
+        return Result(payload: .text("Renamed source to \"\(newName)\"."), didCommit: true)
     }
 }
