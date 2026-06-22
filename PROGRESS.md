@@ -35,13 +35,16 @@ classifies a link URL → `[WikiLinkAction]`; the view layer `WikiLinkContextMen
 - Missing wiki link → **Suggest…** (semantic-search submenu → navigate) + **Copy
   as Wiki Link** (`[[Target]]`).
 - Resolved page/source link → **Find Similar…** + **Copy as Wiki Link**
-  (`[[Target]]` / `[[source:Name]]`, `#fragment` preserved).
+  (`[[Target]]` / `[[source:Name]]`, `#fragment` preserved) + **Copy File Path**
+  (the target's File Provider mount path — `pages/by-title/…` / `sources/by-id/…`,
+  resolved async if the mount root isn't cached). Only page previews pass the
+  spike, so it's offered there; the filename uses the page's canonical title.
 - External link → **Open in Browser** + **Copy Link**.
 
-**Deferred (follow-ups).** **Copy File Path** (needs the File Provider mount root
-+ `FilenameEscaping` plumbed to `MarkdownPreview`'s call sites) and **Edit Link**
-(behavior is an open scope question in the plan) are classified in
-`WikiLinkAction` but not yet wired; the view skips them with a comment.
+**Not implemented (future).** **Edit Link** (enter edit mode + select the link
+source) was deferred — it needs edit-mode plumbing and source-span selection, and
+its behavior is an open question in the plan. It's not scaffolded in
+`WikiLinkAction`.
 
 **Tests.** 16 `WikiLinkMenuBuilderTests` (per-URL-kind action classification +
 `[[…]]` reconstruction incl. fragments and percent-encoded titles). Full

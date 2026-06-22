@@ -40,16 +40,16 @@ struct WikiLinkMenuBuilderTests {
     #expect(WikiLinkMenuBuilder.actions(for: url("wiki://anchor#Section")) == [])
   }
 
-  @Test func externalHttpsGetsBrowserCopyEdit() {
+  @Test func externalHttpsGetsBrowserAndCopy() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("https://github.com/foo/bar"))
-        == [.openInBrowser, .copyLink, .editLink])
+        == [.openInBrowser, .copyLink])
   }
 
-  @Test func externalMailtoGetsBrowserCopyEdit() {
+  @Test func externalMailtoGetsBrowserAndCopy() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("mailto:user@example.com"))
-        == [.openInBrowser, .copyLink, .editLink])
+        == [.openInBrowser, .copyLink])
   }
 
   @Test func pageLinkWithFragmentStillResolved() {

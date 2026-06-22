@@ -37,8 +37,6 @@ public enum WikiLinkAction: Sendable, Equatable {
     case openInBrowser
     /// External link — copy the raw URL string.
     case copyLink
-    /// Open the page editor to fix a link by hand (scope is best-effort).
-    case editLink
 }
 
 public enum WikiLinkMenuBuilder {
@@ -54,9 +52,9 @@ public enum WikiLinkMenuBuilder {
             return []
         }
 
-        // External link (not our wiki scheme): browser + copy + edit.
+        // External link (not our wiki scheme): browser + copy.
         if url.scheme != WikiLinkMarkdown.scheme {
-            return [.openInBrowser, .copyLink, .editLink]
+            return [.openInBrowser, .copyLink]
         }
 
         // Wiki link: resolved page/source vs unresolved (missing).

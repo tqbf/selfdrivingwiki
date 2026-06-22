@@ -12,7 +12,11 @@ import WikiFSCore
 @MainActor
 enum WikiLinkContextMenu {
 
-    static func items(for url: URL, store: WikiStoreModel) -> [LinkMenuItem] {
+    static func items(
+        for url: URL,
+        store: WikiStoreModel,
+        fileProvider: FileProviderSpike?
+    ) -> [LinkMenuItem] {
         var items: [LinkMenuItem] = []
         for action in WikiLinkMenuBuilder.actions(for: url) {
             switch action {
@@ -36,10 +40,25 @@ enum WikiLinkContextMenu {
                     pasteboard.setString(link, forType: .string)
                 })
             case .copyFilePath:
-                // Not wired in this PR — needs the File Provider mount root +
-                // FilenameEscaping plumbed to MarkdownPreview. Tracked as a
-                // follow-up (plans/link-context-menus.md).
-                continue
+                // Copies the linked target's File Provider mount path
+                // (`<root>/pages/by-title/…` or `<root>/sources/by-id/…`). Needs
+                // the spike; the mount root may be unresolved, so the action
+                // resolves it async (if needed) then copies. Omitted when no
+                // spike is wired into the preview (changelog / system-prompt).
+                guard let fileProvider else { continue }
+                let kind = WikiLinkMarkdown.resolvedKind(from: url)
+                let target = WikiLinkMarkdown.target(from: url) ?? ""
+                items.append(.item("Copy File Path") {
+                    Task { @MainActor in
+                        if fileProvider.path == nil { await fileProvider.resolvePath() }
+                        guard let root = fileProvider.path,
+                              let leaf = Self.pathLeaf(kind: kind, target: target, store: store)
+                        else { return }
+                        let pasteboard = NSPasteboard.general
+                        pasteboard.clearContents()
+                        pasteboard.setString("\(root)/\(leaf)", forType: .string)
+                    }
+                })
             case .openInBrowser:
                 items.append(.item("Open in Browser") {
                     NSWorkspace.shared.open(url)
@@ -50,14 +69,34 @@ enum WikiLinkContextMenu {
                     pasteboard.clearContents()
                     pasteboard.setString(url.absoluteString, forType: .string)
                 })
-            case .editLink:
-                // Not wired in this PR — behavior is an open scope question in
-                // plans/link-context-menus.md (jump-to-editor-and-select vs.
-                // structural rewrite).
-                continue
             }
         }
         return items
+    }
+
+    /// The mount subpath (`pages/by-title/…` / `sources/by-id/…`) for a resolved
+    /// wiki link's target, or `nil` if it can't be resolved. Uses the page's
+    /// canonical title (looked up by id, not the link text) so the filename
+    /// casing matches the File Provider projection exactly.
+    private static func pathLeaf(
+        kind: WikiLinkParser.ParsedLink.LinkType?,
+        target: String,
+        store: WikiStoreModel
+    ) -> String? {
+        switch kind {
+        case .page:
+            guard let id = store.pageID(forTitle: target),
+                  let canonicalTitle = store.summaries.first(where: { $0.id == id })?.title
+            else { return nil }
+            return "pages/by-title/\(FilenameEscaping.byTitleFilename(title: canonicalTitle, pageID: id.rawValue))"
+        case .source:
+            guard let id = store.sourceID(forDisplayName: target),
+                  let ext = store.sources.first(where: { $0.id == id })?.ext
+            else { return nil }
+            return "sources/by-id/\(FilenameEscaping.byIDSourceFilename(sourceID: id.rawValue, ext: ext))"
+        case nil:
+            return nil
+        }
     }
 
     /// A submenu listing the closest pages to `query`; choosing one navigates to
