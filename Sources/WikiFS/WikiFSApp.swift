@@ -134,6 +134,7 @@ struct WikiFSApp: App {
                 AgentCommandSettingsView(containerDirectory: containerDirectory)
                     .tabItem { Label("Agent", systemImage: "terminal") }
             }
+            .frame(width: 780, height: 520)
         }
     }
 }

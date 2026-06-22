@@ -8,9 +8,11 @@ import WikiFSCore
 /// failures via `.alert`, mirroring `WikiFSApp`'s `FileProviderSetupWarning`
 /// pattern.
 ///
-/// Changes persist immediately via `.onChange(of:)` — no explicit save step.
-/// The Keychain-backed API key is written on every keystroke; the config JSON
-/// is written whenever the library ID or directory override change.
+/// Saving is a single explicit action (the "Save" button), not an implicit
+/// on-blur/on-submit side effect: a field that loses focus because the WINDOW
+/// closed (red close button, `⌘W`) never fires `onSubmit`/focus-change, so an
+/// implicit save would silently drop the just-typed value. "Save" closes the
+/// window itself, so there's one unambiguous way edits land.
 struct ZoteroSettingsView: View {
     let containerDirectory: URL
     let credentialStore: any ZoteroCredentialStore
@@ -20,6 +22,7 @@ struct ZoteroSettingsView: View {
     @State private var libraryIDText = ""
     @State private var zoteroDirText = ""
     @State private var testPhase: TestPhase = .idle
+    @Environment(\.dismiss) private var dismiss
 
     private enum TestPhase: Equatable {
         case idle
@@ -39,40 +42,48 @@ struct ZoteroSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                SecureField("API Key", text: $apiKeyText)
-                TextField("Library ID", text: $libraryIDText)
-            } header: {
-                Text("Zotero Account")
-            } footer: {
-                Text("Generate a key at zotero.org/settings/keys. Your library ID is the numeric userID shown on that page.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                HStack {
-                    TextField(
-                        "Zotero Folder", text: $zoteroDirText,
-                        prompt: Text(ZoteroLocalStorage.defaultDirectory().path)
-                    )
-                    Button("Choose…") { chooseDirectory() }
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    SecureField("API Key", text: $apiKeyText)
+                    TextField("Library ID", text: $libraryIDText)
+                } header: {
+                    Text("Zotero Account")
+                } footer: {
+                    Text("Generate a key at zotero.org/settings/keys. Your library ID is the numeric userID shown on that page.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-            } header: {
-                Text("Local Library")
-            } footer: {
-                Text("Leave blank to use the default location.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
 
-            Section {
-                testConnectionRow
+                Section {
+                    HStack {
+                        TextField(
+                            "Zotero Folder", text: $zoteroDirText,
+                            prompt: Text(ZoteroLocalStorage.defaultDirectory().path)
+                        )
+                        Button("Choose…") { chooseDirectory() }
+                    }
+                } header: {
+                    Text("Local Library")
+                } footer: {
+                    Text("Leave blank to use the default location.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .formStyle(.grouped)
+
+            Divider()
+
+            HStack {
+                testConnectionRow
+                Spacer()
+                Button("Save") { saveAndClose() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
         }
-        .formStyle(.grouped)
-        .frame(width: Metrics.width)
         .onAppear { load() }
         .alert(
             "Couldn't Connect to Zotero",
@@ -83,9 +94,6 @@ struct ZoteroSettingsView: View {
         } message: { message in
             Text(message)
         }
-        .onChange(of: apiKeyText) { _, _ in saveCredential() }
-        .onChange(of: libraryIDText) { _, _ in saveConfig() }
-        .onChange(of: zoteroDirText) { _, _ in saveConfig() }
     }
 
     // MARK: - Test Connection row
@@ -141,6 +149,17 @@ struct ZoteroSettingsView: View {
         try? config.save(to: containerDirectory)
     }
 
+    /// Save both the secret (Keychain) and non-secret (JSON) halves, then close
+    /// the Settings window. `dismiss` covers a sheet-presented case; the
+    /// `NSApp.keyWindow` fallback covers the `Settings` scene itself, which
+    /// isn't a SwiftUI "presentation" `dismiss` necessarily unwinds.
+    private func saveAndClose() {
+        saveCredential()
+        saveConfig()
+        dismiss()
+        NSApp.keyWindow?.close()
+    }
+
     private func chooseDirectory() {
         guard let url = WikiFilePanels.chooseDirectory(
             title: "Choose Zotero Folder", prompt: "Choose"
@@ -149,6 +168,8 @@ struct ZoteroSettingsView: View {
     }
 
     private func testConnection() {
+        saveCredential()
+        saveConfig()
         let config = ZoteroClient.Config(
             libraryID: libraryIDText.trimmingCharacters(in: .whitespacesAndNewlines),
             apiKey: apiKeyText)
@@ -166,7 +187,4 @@ struct ZoteroSettingsView: View {
         }
     }
 
-    private enum Metrics {
-        static let width: CGFloat = 460
-    }
 }

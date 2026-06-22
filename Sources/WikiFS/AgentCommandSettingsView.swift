@@ -4,8 +4,7 @@ import WikiFSCore
 
 /// Settings → Agent tab: configure the agent executable, prefix arguments,
 /// model override, and extra environment variables. Mirrors `ZoteroSettingsView`
-/// in structure: `Form` + `.formStyle(.grouped)`, explicit Save button in the
-/// form (not the toolbar), resolved preview alongside the fields.
+/// in structure: `Form` + bottom bar with Reset / Save.
 struct AgentCommandSettingsView: View {
     @State private var executable: String
     @State private var prefixArguments: String
@@ -26,20 +25,33 @@ struct AgentCommandSettingsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
                 fieldsForm
                 previewForm
             }
-            buttonsBar
-                .padding(.top, 8)
+
+            Divider()
+
+            HStack {
+                Button("Reset to Default") {
+                    executable = "claude"
+                    prefixArguments = ""
+                    modelOverride = ""
+                    extraEnvironment = ""
+                    updatePreview()
+                }
+                Spacer()
+                Button("Save") { saveAndClose() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
         }
-        .padding([.horizontal, .top])
-        .frame(width: Metrics.width)
         .onAppear { updatePreview() }
     }
 
-    // MARK: - Fields (left column)
+    // MARK: - Fields (left)
 
     private var fieldsForm: some View {
         Form {
@@ -57,7 +69,7 @@ struct AgentCommandSettingsView: View {
             Section {
                 TextEditor(text: $extraEnvironment)
                     .font(.system(.body, design: .monospaced))
-                    .frame(minHeight: 80)
+                    .frame(minHeight: 120)
                     .onChange(of: extraEnvironment) { _, _ in updatePreview() }
             } header: {
                 Text("Extra Environment")
@@ -70,38 +82,24 @@ struct AgentCommandSettingsView: View {
         .formStyle(.grouped)
     }
 
-    // MARK: - Preview (right column)
+    // MARK: - Preview (right)
 
     private var previewForm: some View {
         Form {
             Section {
-                Text(resolvedPreview.isEmpty ? "—" : resolvedPreview)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                ScrollView {
+                    Text(resolvedPreview.isEmpty ? "—" : resolvedPreview)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(minHeight: 200)
             } header: {
                 Text("Resolved Command")
             }
         }
         .formStyle(.grouped)
-    }
-
-    // MARK: - Buttons
-
-    private var buttonsBar: some View {
-        HStack {
-            Button("Reset to Default") {
-                executable = "claude"
-                prefixArguments = ""
-                modelOverride = ""
-                extraEnvironment = ""
-                updatePreview()
-            }
-            Spacer()
-            Button("Save") { saveAndClose() }
-                .keyboardShortcut(.defaultAction)
-        }
     }
 
     // MARK: - Actions
@@ -130,9 +128,5 @@ struct AgentCommandSettingsView: View {
         try? config.save(to: containerDirectory)
         dismiss()
         NSApp.keyWindow?.close()
-    }
-
-    private enum Metrics {
-        static let width: CGFloat = 700
     }
 }
