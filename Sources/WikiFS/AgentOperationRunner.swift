@@ -196,10 +196,20 @@ enum AgentOperationRunner {
         fileProvider: FileProviderSpike
     ) async {
         let trimmed = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let wikiID = manager.activeWikiID else { return }
+        guard !trimmed.isEmpty else { return }
+        guard let wikiID = manager.activeWikiID else {
+            DebugLog.agent("startQueryConversation: no active wiki — bailing")
+            return
+        }
 
         await fileProvider.signalChange()
-        guard let root = fileProvider.path else { return }
+        guard let root = fileProvider.path else {
+            await MainActor.run {
+                launcher.preflightError = "File Provider is not mounted. Open a wiki first."
+            }
+            DebugLog.agent("startQueryConversation: fileProvider.path is nil — bailing")
+            return
+        }
 
         await launcher.startInteractiveQuery(
             firstMessage: trimmed,

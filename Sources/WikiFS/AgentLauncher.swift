@@ -72,8 +72,9 @@ final class AgentLauncher {
     private(set) var exitStatus: Int32?
     /// Set when the PATH preflight fails (claude not resolvable) or the spawn
     /// itself throws; shown in the UI instead of spawning. Cleared on the next
-    /// successful run.
-    private(set) var preflightError: String?
+    /// successful run. Settable from `AgentOperationRunner` for silent-failure
+    /// paths where no agent process is spawned.
+    var preflightError: String?
     /// The kind of the operation currently running (drives the UI title / spinner).
     private(set) var runningKind: WikiOperation.Kind?
     /// The per-run `run.jsonl` backend log on disk (raw stream-json), so the UI can
@@ -377,6 +378,11 @@ final class AgentLauncher {
             // touching the slot. If we were handed the slot then cancelled (race),
             // give it back so a queued peer isn't stranded.
             if acquired { releaseSpawnSlot() }
+            if Task.isCancelled {
+                preflightError = "Run cancelled before starting."
+            } else {
+                preflightError = "Another operation is already running. Wait for it to finish and try again."
+            }
             return
         }
 
@@ -547,6 +553,11 @@ final class AgentLauncher {
         let acquired = await awaitSpawnSlot()
         guard acquired, !Task.isCancelled else {
             if acquired { releaseSpawnSlot() }
+            if Task.isCancelled {
+                preflightError = "Query cancelled before starting."
+            } else {
+                preflightError = "Another operation is already running. Wait for it to finish and try again."
+            }
             return
         }
 

@@ -327,12 +327,15 @@ struct OperationCommandTests {
   @Test func ingestPromptsTellOpusToFootnoteConclusionsWithSourceLocations() {
     for operation in [Self.tinyIngest(), Self.curatedIngest()] {
       let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)
-      #expect(prompt.contains("FOOTNOTE CONCLUSIONS"))
-      #expect(prompt.contains("synthesized conclusions"))
-      #expect(prompt.contains("`[^id]`"))
-      #expect(prompt.contains("`[^id]: Source filename, page N`"))
-      #expect(prompt.contains("We do NOT need real links"))
-      #expect(prompt.contains("section, heading, line range, or chunk range"))
+      #expect(prompt.contains("FOOTNOTE EVERY CLAIM"))
+      #expect(prompt.contains("FOR WIKI SOURCES"))
+      #expect(prompt.contains("FOR EXTERNAL SOURCES"))
+      #expect(prompt.contains("wikictl source list --json"))
+      #expect(prompt.contains("[[source:DisplayName#"))
+      #expect(prompt.contains("`[^id]: [[source:"))
+      #expect(prompt.contains("distinctive quote"))
+      #expect(prompt.contains("`#` IS NOT `|`"))
+      #expect(prompt.contains("WRONG — do NOT do any of this"))
     }
   }
 
@@ -343,8 +346,8 @@ struct OperationCommandTests {
       .lint(stateFilePath: Self.stateFile),
     ] {
       let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)
-      #expect(!prompt.contains("FOOTNOTE CONCLUSIONS"))
-      #expect(!prompt.contains("`[^id]: Source filename, page N`"))
+      #expect(!prompt.contains("FOOTNOTE EVERY CLAIM"))
+      #expect(!prompt.contains("`[^id]: [[source:"))
     }
   }
 

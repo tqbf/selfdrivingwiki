@@ -75,12 +75,16 @@ public struct SystemPrompt: Equatable, Sendable {
       bytes it came from. Prefer passage-level citations with `[[source:Name#"…"]]`
       (see Footnotes & Citations below).
     - **Link to source passages by distinctive quote** —
-      `[[source:Smith2023#"the effect vanishes above 40°C"]]`. Pick a snippet unique
-      to that passage; it survives re-extraction and needs no heading. The quote is
-      whitespace-normalized and case-sensitive.
+      `[[source:Smith2023#"the effect vanishes above 40°C"]]`. The `#"…"` goes AFTER
+      the source name with NO pipe (`|`). The quote makes the link scroll to that
+      exact passage when clicked. Pick a snippet unique to that passage; it survives
+      re-extraction. The quote is whitespace-normalized and case-sensitive.
     - **Link to page sections by heading** — `[[Overview#Methodology]]`. The heading
       text becomes a URL-style slug (lowercase, spaces→`-`, punctuation dropped,
       `-1/-2` suffix on duplicates). Same-page scroll: `[[#Methodology]]`.
+    - **`#` is NOT `|`.** `[[source:X|alias]]` changes the DISPLAY TEXT. `[[source:X#"quote"]]`
+      scrolls to a PASSAGE. They do different things. Never use `|` in a footnote
+      citation — the source's display name IS the link text.
     - **Footnotes** cite evidence at the passage level. Use `[^id]` inline (any label;
       auto-numbered 1,2,3… in output) and `[^id]: definition` on its own line after
       the paragraph that references it. Definitions accept full markdown including
@@ -93,9 +97,24 @@ public struct SystemPrompt: Equatable, Sendable {
       for the original discovery, and [[Calvin Cycle#Regulation]] for regulatory
       mechanisms.
       ```
+
+      WRONG (do NOT do this):
+      ```
+      [^def]: [[source:Bassham1950|Bassham (1950)]], *JACS* 72: 456–460. Anchor: "the dark reactions..."
+      ```
+      This is wrong because: (a) `|` changes display text instead of linking a passage,
+      (b) journal/DOI metadata doesn't belong in a wikilink citation, (c) the quote
+      goes after `#"…"` inside the link, not as "Anchor:" text.
     - **`[[source:Name]]`** (without a passage) navigates to the source and opens its
       extracted/text content — use for general references; add `#"…"` for specific
       passages.
+    - **External sources** (papers, books, URLs NOT ingested into this wiki) get
+      standard academic footnote citations: `[^id]: Author (Year), "Title", Journal/
+      Publisher. DOI or URL`. If only a URL is available, that's fine. External
+      citations go in footnotes just like wiki-source citations — the only difference
+      is the definition format. Example:
+      `[^rosenthal]: Rosenthal (2002), "Explaining Consciousness", in Philosophy of
+      Mind: Classical and Contemporary Readings.`
 
     ## Tooling — write via `wikictl`, never the filesystem
 
@@ -137,7 +156,9 @@ public struct SystemPrompt: Equatable, Sendable {
     **Ingest** — bring one raw source into the wiki:
     1. Read the source (`Read` for PDFs/images, `cat` for text).
     2. Write at least one summary page capturing its key content via
-       `wikictl page upsert`; cite the source by its `sources/…` path.
+       `wikictl page upsert`. FOOTNOTE EVERY CLAIM drawn from the source with
+       `[^id]` + `[^id]: [[source:DisplayName#"distinctive quote"]]` — see the
+       Footnotes convention above for exact syntax.
     3. Create or update the entity/concept pages it mentions, cross-linking with
        `[[wiki links]]`.
     4. Rewrite `index.md` via `wikictl index set` so the catalog lists the pages
@@ -151,8 +172,10 @@ public struct SystemPrompt: Equatable, Sendable {
        search across page bodies. If that misses, fall back to `wikictl page list`,
        then `wikictl page get`; `grep`/`cat` over `index.md`, `log.md`, and
        `WIKI-STRUCTURE.md`.
-    2. Answer concisely, CITING the page titles or `sources/…` paths you drew on. If
-       the wiki lacks the information, say so plainly rather than guessing.
+    2. Answer concisely, CITING page titles with `[[wiki links]]` and source passages
+       with `[^id]` + `[^id]: [[source:Name#"quote"]]` footnotes (see Footnotes
+       convention above). If the wiki lacks the information, say so plainly rather
+       than guessing.
     3. Optionally file a useful answer back as a page via `wikictl page upsert`,
        then `wikictl log append --kind query --title "<the question>"`.
 

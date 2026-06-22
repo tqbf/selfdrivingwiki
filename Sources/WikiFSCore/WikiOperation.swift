@@ -255,14 +255,44 @@ extension WikiOperation {
     return lines.joined(separator: "\n")
   }
 
-  /// Ingest-written pages should make provenance visible without making the agent
-  /// chase or construct durable URLs. The reader renders Markdown footnotes.
+  /// Every claim drawn from a source MUST be footnoted. The format depends on
+  /// whether the source lives in the wiki's `sources/` directory.
+  /// - Wiki sources (ANY file in `sources/` — look up display names with
+  ///   `wikictl source list --json` or check `sources.jsonl`): use
+  ///   `[[source:DisplayName#"quote"]]` — a clickable wikilink that navigates to
+  ///   the source and scrolls to the quoted passage.
+  /// - External sources (papers, books, URLs NOT in `sources/`): use a standard
+  ///   academic-style citation: Author (Year), "Title", Journal/Publisher, DOI/URL.
   private static let footnoteConclusionsRule = """
-    FOOTNOTE CONCLUSIONS — When you add synthesized conclusions, interpretations, \
-    or non-obvious facts to wiki pages, footnote them in Markdown using `[^id]` \
-    references and `[^id]: Source filename, page N` definitions. We do NOT need \
-    real links; use concise provenance such as a source file name plus page, \
-    section, heading, line range, or chunk range.
+    FOOTNOTE EVERY CLAIM — When you write a claim, interpretation, or non-obvious \
+    fact drawn from a source, footnote it.
+
+    FOR WIKI SOURCES — i.e. any file in the wiki's `sources/` directory, not just \
+    the files in this ingest batch. Before writing, check whether a source is in \
+    the wiki: search `sources.jsonl` or run `wikictl source list --json` and match \
+    by filename or display name. If it IS a wiki source, cite it with \
+    `[^id]: [[source:DisplayName#"distinctive quote from the passage"]]`. \
+    `DisplayName` is the source's display name from `sources.jsonl` or \
+    `wikictl source list`. The quote goes AFTER `#"` with NO pipe, NO "Anchor:" \
+    text, and NO journal/DOI metadata — the source already has that. Example: \
+    `[^id]: [[source:Bassham1950#"the dark reactions of photosynthesis"]] and \
+    [[Calvin Cycle#Regulation]].`
+
+    FOR EXTERNAL SOURCES — any paper, book, or URL NOT in the wiki's `sources/`: \
+    use `[^id]: Author (Year), "Title", Journal/Publisher. DOI or URL`. Example: \
+    `[^id]: Rosenthal (2002), "Explaining Consciousness", in Philosophy of Mind: \
+    Classical and Contemporary Readings.`
+
+    `#` IS NOT `|`. `[[source:X|alias]]` changes display text. \
+    `[[source:X#"quote"]]` links a PASSAGE. Never use `|` in a footnote citation.
+
+    WRONG — do NOT do any of this: \
+    `[^id]: [[source:X|Author (Year)]], Journal. Anchor: "quote"` \
+    `[^id]: [[source:X]] Author (Year), "Title", Journal.` \
+    `[^id]: Author (Year) — Source (path), page N: "quote"`
+
+    RIGHT: \
+    `[^id]: [[source:DisplayName#"distinctive quote from the passage"]]`
     """
 
   // MARK: - Query / Lint prompts
