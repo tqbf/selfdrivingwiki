@@ -32,9 +32,9 @@ struct AgentCommandSettingsView: View {
                 previewForm
             }
             buttonsBar
-                .padding(.top, 12)
+                .padding(.top, 8)
         }
-        .padding()
+        .padding([.horizontal, .top])
         .frame(width: Metrics.width)
         .onAppear { updatePreview() }
     }
@@ -52,10 +52,6 @@ struct AgentCommandSettingsView: View {
                     .onChange(of: modelOverride) { _, _ in updatePreview() }
             } header: {
                 Text("Command")
-            } footer: {
-                Text("Executable is resolved on the login-shell PATH. Prefix arguments are inserted before the standard flags.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             Section {
