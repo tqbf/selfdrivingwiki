@@ -2,16 +2,31 @@ import Foundation
 
 /// Dependency-free ULID generator.
 ///
+/// Specification: https://github.com/ulid/spec
+///
 /// A ULID is a 128-bit value: a 48-bit big-endian millisecond Unix timestamp
-/// followed by 80 random bits, rendered as 26 Crockford base32 characters.
-/// Because the timestamp is the high-order component and base32 is encoded
-/// most-significant-first, ULIDs sort **lexicographically in creation order** —
-/// the property we lean on for `PageID` ordering and future date views.
+/// followed by 80 bits, rendered as 26 Crockford base32 characters. Because the
+/// timestamp is the high-order component and base32 is encoded most-significant-
+/// first, ULIDs sort **lexicographically in creation order** — the property we
+/// lean on for `PageID` ordering and future date views.
+///
+/// Monotonic within the same millisecond per the spec: the random component is
+/// seeded randomly for the first ULID of a new timestamp, then incremented for
+/// subsequent ULIDs in that same millisecond. This guarantees lexicographic
+/// ordering across any number of generations.
 public enum ULID {
     /// Crockford base32 alphabet (no I, L, O, U to avoid ambiguity).
     private static let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
 
-    /// Generate a new 26-character ULID string.
+    /// Lock for the monotonic counter and last timestamp. Protected by `lock`;
+    /// `nonisolated(unsafe)` is correct because the lock serializes all access.
+    private static let lock = NSLock()
+    private nonisolated(unsafe) static var lastTimestamp: UInt64 = 0
+    private nonisolated(unsafe) static var lastRandom: [UInt8] = [UInt8](repeating: 0, count: 10)
+
+    /// Generate a new 26-character ULID string. Guaranteed lexicographically
+    /// sortable: within the same millisecond the random component increments
+    /// monotonically instead of re-randomizing.
     /// - Parameter timestamp: the moment to encode; defaults to now. Exposed so
     ///   tests can pin increasing timestamps and assert lexicographic ordering.
     public static func generate(
@@ -20,16 +35,42 @@ public enum ULID {
     ) -> String {
         let ms = UInt64(max(0, timestamp.timeIntervalSince1970) * 1000)
 
-        // 16 bytes: 6 timestamp (big-endian) + 10 random.
-        var bytes = [UInt8](repeating: 0, count: 16)
-        for i in 0..<6 {
-            bytes[i] = UInt8((ms >> (8 * (5 - i))) & 0xFF)
-        }
-        for i in 6..<16 {
-            bytes[i] = UInt8.random(in: 0...255, using: &generator)
+        let bytes: [UInt8] = lock.withLock {
+            if ms == lastTimestamp {
+                // Same ms: increment the random component for monotonicity.
+                lastRandom = incrementBytes(lastRandom)
+            } else {
+                // New ms: fresh random bytes.
+                lastTimestamp = ms
+                for i in 0..<10 {
+                    lastRandom[i] = UInt8.random(in: 0...255, using: &generator)
+                }
+            }
+            var b = [UInt8](repeating: 0, count: 16)
+            for i in 0..<6 {
+                b[i] = UInt8((ms >> (8 * (5 - i))) & 0xFF)
+            }
+            for i in 0..<10 {
+                b[6 + i] = lastRandom[i]
+            }
+            return b
         }
 
         return encodeBase32(bytes)
+    }
+
+    /// Increment a 10-byte big-endian integer in place, returning the new array.
+    /// Wraps around to 0 on overflow (vanishingly unlikely with 80 bits).
+    private static func incrementBytes(_ bytes: [UInt8]) -> [UInt8] {
+        var b = bytes
+        for i in (0..<10).reversed() {
+            if b[i] < 0xFF {
+                b[i] &+= 1
+                return b
+            }
+            b[i] = 0
+        }
+        return b  // overflow: wraps to all zeros
     }
 
     /// Convenience overload using the system RNG.

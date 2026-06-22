@@ -2,6 +2,25 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-21 — Deferred MarkdownPreview rendering
+
+`MarkdownPreview` now shows a `ProgressView` spinner immediately and defers regex
+preprocessing (footnote expansion + wiki-link linkification) via `Task.yield()`, so the
+view shell appears instantly and the rendered text fills in after. For large markdown
+documents this avoids blocking the main thread during body evaluation.
+
+**Changes:**
+
+- **`MarkdownPreview`:** Replaced the synchronous `renderedMarkdown` computed property
+  with `@State private var renderedBody: String?` and `.task(id: markdown)`. The task
+  yields first so the `ProgressView` renders, then runs the preprocessing on the main
+  actor, then yields again so the frame commits. A task key prevents stale renders
+  when the markdown changes mid-processing.
+
+**Tests.** `swift test` — 684 tests, 54 suites, 0 failures.
+
+On branch `feature/deferred-markdown-rendering`.
+
 ## 2026-06-21 — Phase C: source markdown in the File Provider
 
 Implemented `plans/phase-c-source-markdown-projection.md`. PDFs with extraction output now
