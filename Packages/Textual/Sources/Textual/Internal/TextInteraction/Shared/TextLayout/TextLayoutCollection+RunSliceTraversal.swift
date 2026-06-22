@@ -98,4 +98,58 @@
       return nil
     }
   }
+
+  // MARK: Link ranges
+
+  extension TextLayoutCollection {
+    /// The URL carried by the run at a run-slice index path, or `nil`.
+    ///
+    /// `TextRun.url` is uniform across all slices of a run (AttributedString
+    /// runs split on attribute changes, and `.link` is one of those attributes),
+    /// so a run-slice's URL is its run's URL.
+    fileprivate func url(at indexPath: IndexPath) -> URL? {
+      guard layouts.indices.contains(indexPath.layout) else { return nil }
+      let layout = layouts[indexPath.layout]
+      guard layout.lines.indices.contains(indexPath.line) else { return nil }
+      let line = layout.lines[indexPath.line]
+      guard line.runs.indices.contains(indexPath.run) else { return nil }
+      return line.runs[indexPath.run].url
+    }
+
+    /// The range of the whole link containing `position`, or `nil` if the
+    /// position is not on a link.
+    ///
+    /// Expands outward from the position's run slice over adjacent slices whose
+    /// run shares the same URL, bounded to a single layout so two same-URL links
+    /// in neighboring paragraphs never merge into one selection.
+    @available(macOS 10.0, *)
+    @available(iOS, unavailable)
+    @available(visionOS, unavailable)
+    func linkRange(for position: TextPosition) -> TextRange? {
+      let indexPath = position.indexPath
+      guard layouts.indices.contains(indexPath.layout) else { return nil }
+      guard let targetURL = url(at: indexPath) else { return nil }
+
+      var startIndexPath = indexPath
+      while let previous = indexPathForRunSlice(before: startIndexPath),
+        previous.layout == indexPath.layout,
+        url(at: previous) == targetURL
+      {
+        startIndexPath = previous
+      }
+
+      var endIndexPath = indexPath
+      while let next = indexPathForRunSlice(after: endIndexPath),
+        next.layout == indexPath.layout,
+        url(at: next) == targetURL
+      {
+        endIndexPath = next
+      }
+
+      return TextRange(
+        start: TextPosition(indexPath: startIndexPath, affinity: .downstream),
+        end: TextPosition(indexPath: endIndexPath, affinity: .upstream)
+      )
+    }
+  }
 #endif

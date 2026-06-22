@@ -159,6 +159,25 @@ extension TextualNamespace where Base: View {
     #endif
   }
 
+  /// Sets the builder for right-click link context menus.
+  ///
+  /// When the user right-clicks a link in this view, Textual selects the whole
+  /// link run and builds a context menu from the items `builder` returns for the
+  /// link's URL, followed by the default Share/Copy items when there is a text
+  /// selection. Without this modifier, right-clicking a link shows only the
+  /// default Share/Copy menu.
+  @available(tvOS, unavailable)
+  @available(watchOS, unavailable)
+  public func linkContextMenu(
+    _ builder: @escaping @MainActor (URL) -> [LinkMenuItem]
+  ) -> some View {
+    #if TEXTUAL_ENABLE_TEXT_SELECTION
+      base.environment(\.linkContextMenu, LinkContextMenuBuilder(builder))
+    #else
+      base
+    #endif
+  }
+
   /// Sets the spacing used between table cells in ``StructuredText``.
   public func tableCellSpacing(
     horizontal: CGFloat? = nil,

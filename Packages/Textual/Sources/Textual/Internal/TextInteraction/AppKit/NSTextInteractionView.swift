@@ -14,6 +14,7 @@
     var model: TextSelectionModel
     var exclusionRects: [CGRect]
     var openURL: OpenURLAction
+    var linkContextMenu: LinkContextMenuBuilder?
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
@@ -22,14 +23,23 @@
     private var dragStart: TextPosition?
     private var selectionAnchor: TextPosition?
 
+    // The location of the most recent right-click, so `makeContextMenu` can
+    // resolve the link (if any) under the cursor.
+    private var lastContextMenuLocation: CGPoint?
+    // Strong references to the closure-backed menu-item targets for the menu
+    // currently being built (NSMenuItem.target is weak).
+    private var menuItemTargets: [LinkMenuItemTarget] = []
+
     init(
       model: TextSelectionModel,
       exclusionRects: [CGRect],
-      openURL: OpenURLAction
+      openURL: OpenURLAction,
+      linkContextMenu: LinkContextMenuBuilder? = nil
     ) {
       self.model = model
       self.exclusionRects = exclusionRects
       self.openURL = openURL
+      self.linkContextMenu = linkContextMenu
 
       super.init(frame: .zero)
       self.wantsLayer = false
@@ -100,6 +110,7 @@
 
     override func rightMouseDown(with event: NSEvent) {
       let location = convert(event.locationInWindow, from: nil)
+      lastContextMenuLocation = location
       updateSelectionForContextMenu(at: location)
 
       NSMenu.popUpContextMenu(makeContextMenu(), with: event, for: self)
@@ -107,6 +118,7 @@
 
     override func menu(for event: NSEvent) -> NSMenu? {
       let location = convert(event.locationInWindow, from: nil)
+      lastContextMenuLocation = location
       updateSelectionForContextMenu(at: location)
 
       return makeContextMenu()
@@ -174,6 +186,15 @@
         return
       }
 
+      // Right-clicking a link selects the whole link run, not just the word
+      // under the cursor.
+      if model.url(for: location) != nil,
+        let linkRange = model.linkRange(for: position)
+      {
+        model.selectedRange = linkRange
+        return
+      }
+
       if let selectedRange = model.selectedRange, selectedRange.contains(position) {
         // do nothing
         return
@@ -184,11 +205,36 @@
 
     private func makeContextMenu() -> NSMenu {
       let contextMenu = NSMenu()
+      menuItemTargets = []
 
-      guard let selectedRange = model.selectedRange, !selectedRange.isCollapsed else {
+      // Link-specific items, if the right-click landed on a link and a builder
+      // is set. The host app's builder decides what to show per link URL.
+      if let location = lastContextMenuLocation,
+        let url = model.url(for: location),
+        let linkContextMenu
+      {
+        var addedLinkItems = false
+        for item in linkContextMenu(url) {
+          contextMenu.addItem(makeNSMenuItem(from: item))
+          addedLinkItems = true
+        }
+        // Keep Share/Copy available for the selected link text.
+        if addedLinkItems, model.selectedRange?.isCollapsed == false {
+          contextMenu.addItem(.separator())
+          addShareCopyItems(to: contextMenu)
+        }
         return contextMenu
       }
 
+      // Default: Share/Copy of the current selection.
+      guard model.selectedRange?.isCollapsed == false else {
+        return contextMenu
+      }
+      addShareCopyItems(to: contextMenu)
+      return contextMenu
+    }
+
+    private func addShareCopyItems(to contextMenu: NSMenu) {
       // Get the localized title for the share action
       let sharingPicker = NSSharingServicePicker(items: [])
       let shareActionTitle = sharingPicker.standardShareMenuItem.title
@@ -218,8 +264,35 @@
           keyEquivalent: ""
         )
       )
+    }
 
-      return contextMenu
+    private func makeNSMenuItem(from item: LinkMenuItem) -> NSMenuItem {
+      if item.isSeparator {
+        return NSMenuItem.separator()
+      }
+
+      let nsItem = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
+
+      if let submenu = item.submenu, !submenu.isEmpty {
+        let submenuMenu = NSMenu()
+        for sub in submenu {
+          submenuMenu.addItem(makeNSMenuItem(from: sub))
+        }
+        nsItem.submenu = submenuMenu
+        nsItem.isEnabled = item.isEnabled
+      } else if let action = item.action {
+        // Closure-backed item: a retained target forwards the menu choice to
+        // the main-actor action.
+        let target = LinkMenuItemTarget(action: action)
+        menuItemTargets.append(target)
+        nsItem.target = target
+        nsItem.action = #selector(LinkMenuItemTarget.invoke(_:))
+        nsItem.isEnabled = item.isEnabled
+      } else {
+        nsItem.isEnabled = false
+      }
+
+      return nsItem
     }
 
     private func modifySelection(
@@ -287,6 +360,27 @@
       let formatter = Formatter(attributedText)
       pasteboard.setString(formatter.plainText(), forType: .string)
       pasteboard.setString(formatter.html(), forType: .html)
+    }
+  }
+
+  // Retained target that bridges a context-menu choice to a main-actor closure.
+  private final class LinkMenuItemTarget: NSObject, NSUserInterfaceValidations {
+    private let action: @MainActor () -> Void
+
+    init(action: @escaping @MainActor () -> Void) {
+      self.action = action
+    }
+
+    @objc func invoke(_ sender: NSMenuItem) {
+      // NSMenu invokes actions on the main thread (AppKit), so assuming main-
+      // actor isolation to call the @MainActor closure is sound. Capture the
+      // (Sendable) action into a local so we don't send non-Sendable `self`.
+      let action = action
+      MainActor.assumeIsolated { action() }
+    }
+
+    func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+      true
     }
   }
 

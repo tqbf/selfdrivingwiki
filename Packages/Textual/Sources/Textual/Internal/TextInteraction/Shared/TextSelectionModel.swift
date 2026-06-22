@@ -176,6 +176,16 @@
       layoutCollection.wordRange(for: position)
     }
 
+    /// The range of the whole link run containing `position`, or `nil` when the
+    /// position is not on a link. Used to select an entire link on right-click
+    /// (rather than just the word under the cursor).
+    @available(macOS 10.0, *)
+    @available(iOS, unavailable)
+    @available(visionOS, unavailable)
+    func linkRange(for position: TextPosition) -> TextRange? {
+      layoutCollection.linkRange(for: position)
+    }
+
     @available(macOS 10.0, *)
     @available(iOS, unavailable)
     @available(visionOS, unavailable)
