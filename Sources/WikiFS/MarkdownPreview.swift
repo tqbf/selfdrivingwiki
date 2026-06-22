@@ -2,10 +2,18 @@ import SwiftUI
 import Textual
 import WikiFSCore
 
-/// Live, read-only render of the page body. Regex preprocessing (footnote
-/// expansion + wiki-link linkification) runs in a detached task so the view
-/// shell appears immediately and the rendered text fills in after. For large
-/// documents this avoids blocking the main thread during body evaluation.
+/// Live, read-only render of the page body. Footnote expansion + wiki-link
+/// linkification run SYNCHRONOUSLY in `body` so `StructuredText` is built with
+/// its final content during the first layout pass.
+///
+/// Why synchronous (reverts the `95d237f` `Task.yield()` deferral): Textual's
+/// macOS text-selection overlay owns both the cursor and link hit-testing — both
+/// gate on the selection model's laid-out link geometry (`model.url(for:)`).
+/// When `StructuredText` is swapped in AFTER the first layout pass (the old
+/// `ProgressView` → rendered swap), that geometry is stale until a scroll forces
+/// relayout, so links are unclickable and the cursor stays the I-beam everywhere
+/// until you scroll. Rendering in `body` attaches the model to final, laid-out
+/// content up front.
 ///
 /// Anchor scrolling: `StructuredText.Heading` already applies `.id(slug)` via
 /// Textual (`Heading.swift:24`); `NumberedParagraphStyle` applies `.id("p\(n)")`
@@ -18,8 +26,6 @@ struct MarkdownPreview: View {
     /// Used to match against `store.pendingScrollAnchor`.
     var currentSelection: WikiSelection? = nil
 
-    @State private var renderedBody: String?
-    @State private var renderTaskKey: String?
     @State private var blocks: [AnchorBlock] = []
 
     var body: some View {
@@ -30,16 +36,17 @@ struct MarkdownPreview: View {
                         Text("Nothing to preview yet.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
-                    } else if let body = renderedBody {
-                        StructuredText(markdown: body)
-                            .id(body)
+                    } else {
+                        // Render synchronously so StructuredText is built with
+                        // its final content during the first layout pass (see the
+                        // type doc). `renderNumbered` resets the paragraph counter
+                        // and returns the rendered markdown in one call.
+                        let rendered = renderNumbered(markdown)
+                        StructuredText(markdown: rendered)
+                            .id(rendered)
                             .textual.paragraphStyle(NumberedParagraphStyle())
                             .textual.textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        ProgressView()
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.vertical, 40)
                     }
                 }
                 .frame(maxWidth: contentInset ? PageEditorMetrics.readableContentWidth : .infinity,
@@ -70,16 +77,10 @@ struct MarkdownPreview: View {
                 return .handled
             })
             .task(id: markdown) {
-                let captured = markdown
-                let key = UUID().uuidString
-                renderTaskKey = key
-                await Task.yield()
-                guard renderTaskKey == key else { return }
-                NumberedParagraphStyle.resetCounter()
-                renderedBody = renderMarkdown(captured)
-                blocks = AnchorBlock.parse(renderedBody ?? captured)
-                await Task.yield()
-                // Consume pending scroll anchor (set by selectPage/Source).
+                // Display is rendered synchronously in `body`; this task only
+                // derives the anchor block list (post-layout) and consumes any
+                // pending scroll anchor set by selectPage/Source.
+                blocks = AnchorBlock.parse(renderMarkdown(markdown))
                 if let frag = store.consumePendingScrollAnchor(for: currentSelection),
                    let id = resolveAnchor(frag, in: blocks) {
                     try? await Task.sleep(for: .milliseconds(50))
@@ -87,6 +88,16 @@ struct MarkdownPreview: View {
                 }
             }
         }
+    }
+
+    /// Reset the paragraph counter and return the rendered markdown, together,
+    /// so both run in `body` before `StructuredText`'s layout pass consumes the
+    /// counter. (A bare `resetCounter()` statement isn't valid inside a
+    /// `@ViewBuilder`, so it's bundled into this one-call helper.)
+    @MainActor
+    private func renderNumbered(_ raw: String) -> String {
+        NumberedParagraphStyle.resetCounter()
+        return renderMarkdown(raw)
     }
 
     @MainActor
