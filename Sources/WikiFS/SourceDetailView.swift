@@ -25,6 +25,9 @@ struct SourceDetailView: View {
     /// against each other) and to mirror this file's id into `extractingSourceIDs`
     /// so the sidebar row labels it "Extracting…".
     let launcher: AgentLauncher
+    /// Resolves the selected extraction backend (local pdf2md / Claude / Docling
+    /// Serve) for the standalone Extract button.
+    let extractionCoordinator: ExtractionCoordinator
     @Bindable var store: WikiStoreModel
 
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
@@ -394,37 +397,35 @@ struct SourceDetailView: View {
             launcher.extractingSourceIDs.remove(file.id)
             launcher.releaseExtractionSlot()
         }
-        guard await PdfExtractionService.checkReady() else {
-            launcher.extractionLog = "PDF extraction not available — pdf2md is not ready."
-            return
-        }
-        guard let data = store.sourceBytes(id: file.id) else {
-            launcher.extractionLog = "Could not read source bytes."
-            return
-        }
-        do {
-            let markdown = try await PdfExtractionService.convert(
-                pdfData: data,
-                filename: file.filename,
-                onProgress: { line in
-                    Task { @MainActor in launcher.extractionLog.append(line) }
-                },
-                onStart: { pid in
-                    Task { @MainActor in
-                        launcher.extractionPID = pid
-                        launcher.extractionLog.append("Started pdf2md (pid \(pid)).\n")
-                    }
-                })
-            if let version = store.seedPdfMarkdown(for: file.id, content: markdown) {
-                headVersion = version
-                launcher.extractionLog = "Markdown extracted — \(markdown.count) chars."
+        let extractor = extractionCoordinator.current()
+        switch await extractor.readiness() {
+        case .ready:
+            guard let data = store.sourceBytes(id: file.id) else {
+                launcher.extractionLog = "Could not read source bytes."
+                return
             }
-        } catch {
-            if Task.isCancelled {
-                launcher.extractionLog = "Extraction cancelled."
-            } else {
-                launcher.extractionLog = "Extraction failed: \(error.localizedDescription)"
+            do {
+                // PID-less protocol: the local backend reports its pid via
+                // onProgress; remote/model backends have none.
+                let markdown = try await extractor.convert(
+                    pdfData: data,
+                    filename: file.filename,
+                    onProgress: { line in
+                        Task { @MainActor in launcher.extractionLog.append(line) }
+                    })
+                if let version = store.seedPdfMarkdown(for: file.id, content: markdown) {
+                    headVersion = version
+                    launcher.extractionLog = "Markdown extracted — \(markdown.count) chars."
+                }
+            } catch {
+                if Task.isCancelled {
+                    launcher.extractionLog = "Extraction cancelled."
+                } else {
+                    launcher.extractionLog = "Extraction failed: \(error.localizedDescription)"
+                }
             }
+        case .needsSetup(let message), .notInstalled(let message):
+            launcher.extractionLog = message
         }
     }
 

@@ -17,6 +17,9 @@ struct WikiFSApp: App {
     @State private var manager: WikiManager
     @State private var fileProvider = FileProviderSpike()
     @State private var agentLauncher = AgentLauncher()
+    /// App-wide extraction backend resolver (local pdf2md / Claude / Docling
+    /// Serve). Threaded like `agentLauncher` — one instance, owned by the app.
+    @State private var extractionCoordinator: ExtractionCoordinator
     @State private var showingLaunchLocationWarning: Bool
     @State private var fileProviderSetupWarning: FileProviderSetupWarning?
     @State private var showingFileProviderSetupWarning = false
@@ -44,11 +47,13 @@ struct WikiFSApp: App {
         }
         containerDirectory = directory
         _manager = State(initialValue: WikiManager(containerDirectory: directory))
+        _extractionCoordinator = State(
+            initialValue: ExtractionCoordinator(containerDirectory: directory))
     }
 
     var body: some Scene {
         WindowGroup {
-            RootView(manager: manager, fileProvider: fileProvider, agentLauncher: agentLauncher)
+            RootView(manager: manager, fileProvider: fileProvider, agentLauncher: agentLauncher, extractionCoordinator: extractionCoordinator)
                 .alert(
                     "Install Self Driving Wiki in Applications",
                     isPresented: $showingLaunchLocationWarning,
@@ -121,7 +126,12 @@ struct WikiFSApp: App {
         .defaultSize(width: 880, height: 680)
 
         Settings {
-            ZoteroSettingsView(containerDirectory: containerDirectory)
+            TabView {
+                ZoteroSettingsView(containerDirectory: containerDirectory)
+                    .tabItem { Label("Zotero", systemImage: "books.vertical") }
+                ExtractionSettingsView(containerDirectory: containerDirectory, launcher: agentLauncher)
+                    .tabItem { Label("Extraction", systemImage: "doc.viewfinder") }
+            }
         }
     }
 }

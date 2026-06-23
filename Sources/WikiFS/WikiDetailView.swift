@@ -9,6 +9,7 @@ struct WikiDetailView: View {
     @Bindable var launcher: AgentLauncher
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
+    let extractionCoordinator: ExtractionCoordinator
     let runIngest: (PageID) -> Void
     @Binding var showingAddFromURL: Bool
     @Binding var showingImportMarkdown: Bool
@@ -77,6 +78,7 @@ struct WikiDetailView: View {
                     isThisFileExtracting: launcher.extractingSourceIDs.contains(file.id),
                     runIngest: runIngest,
                     launcher: launcher,
+                    extractionCoordinator: extractionCoordinator,
                     store: store
                 )
             } else {

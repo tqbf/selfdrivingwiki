@@ -14,14 +14,16 @@ enum AgentOperationRunner {
         launcher: AgentLauncher,
         store: WikiStoreModel,
         manager: WikiManager,
-        fileProvider: FileProviderSpike
+        fileProvider: FileProviderSpike,
+        extractionCoordinator: ExtractionCoordinator
     ) async {
         await runMultiIngest(
             sourceIDs: [sourceID],
             launcher: launcher,
             store: store,
             manager: manager,
-            fileProvider: fileProvider)
+            fileProvider: fileProvider,
+            extractionCoordinator: extractionCoordinator)
     }
 
     /// Ingest multiple files in a SINGLE agent run. All sources are staged together
@@ -32,7 +34,8 @@ enum AgentOperationRunner {
         launcher: AgentLauncher,
         store: WikiStoreModel,
         manager: WikiManager,
-        fileProvider: FileProviderSpike
+        fileProvider: FileProviderSpike,
+        extractionCoordinator: ExtractionCoordinator
     ) async {
         guard !sourceIDs.isEmpty else { return }
         DebugLog.ingest("runMultiIngest: begin count=\(sourceIDs.count)")
@@ -43,6 +46,12 @@ enum AgentOperationRunner {
         // "Ingesting…" or greys out a peer's Ingest button. The extraction-phase
         // flag (`extractingSourceIDs`) is set around the pdf2md block below.
         let stateMarkdown = store.currentStateSnapshot().renderStateFile()
+
+        // Resolve the selected backend once — it won't change mid-run. Every
+        // backend (local pdf2md / Claude / Docling Serve) goes through the same
+        // `readiness()` + `convert()` contract, so this path is backend-agnostic.
+        let extractor = extractionCoordinator.current()
+        DebugLog.ingest("runMultiIngest: backend=\(extractor.displayName)")
 
         var sources: [OperationRequest.StagedSource] = []
         for sourceID in sourceIDs {
@@ -79,9 +88,9 @@ enum AgentOperationRunner {
                     launcher.extractingSourceIDs.remove(source.id)
                     launcher.releaseExtractionSlot()
                 }
-                launcher.extractionLog = ""
-                if await PdfExtractionService.checkReady() {
-                    DebugLog.extraction("checkReady: ready — converting \(source.filename)")
+                switch await extractor.readiness() {
+                case .ready:
+                    DebugLog.extraction("readiness: ready — converting \(source.filename) via \(extractor.displayName)")
                     launcher.isExtracting = true
                     launcher.extractionPID = nil
                     launcher.extractionLog = ""
@@ -90,17 +99,15 @@ enum AgentOperationRunner {
                         launcher.extractionPID = nil
                     }
                     do {
-                        let markdown = try await PdfExtractionService.convert(
+                        // No `onStart(pid:)` here — the protocol is PID-free.
+                        // Only the local backend has a PID, and it reports it via
+                        // the `onProgress` line; remote/model backends have none,
+                        // so the sidebar just shows "Converting…".
+                        let markdown = try await extractor.convert(
                             pdfData: bytes,
                             filename: source.filename,
                             onProgress: { line in
                                 Task { @MainActor in launcher.extractionLog.append(line) }
-                            },
-                            onStart: { pid in
-                                Task { @MainActor in
-                                    launcher.extractionPID = pid
-                                    launcher.extractionLog.append("Started pdf2md (pid \(pid)).\n")
-                                }
                             })
                         sourceBytes = markdown.data(using: .utf8) ?? bytes
                         sourceExt = "md"
@@ -123,8 +130,12 @@ enum AgentOperationRunner {
                         DebugLog.extraction("convert: FAILED — \(error.localizedDescription)")
                         launcher.extractionLog.append("PDF conversion: \(error.localizedDescription)\n")
                     }
-                } else {
-                    launcher.extractionLog = "PDF extraction not ready — sending raw PDF to agent."
+                case .needsSetup(let message), .notInstalled(let message):
+                    // Backend unconfigured (no API key / endpoint) or the local
+                    // deps aren't installed — show the reason and fall through so
+                    // the raw PDF is sent to the agent as-is.
+                    DebugLog.extraction("readiness: not ready — \(message)")
+                    launcher.extractionLog = message
                 }
                 } // end else (no existing markdown → extract)
             } // end if source.mimeType == "application/pdf"

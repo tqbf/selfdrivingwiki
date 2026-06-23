@@ -13,6 +13,7 @@ struct RootView: View {
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
     @Bindable var agentLauncher: AgentLauncher
+    @Bindable var extractionCoordinator: ExtractionCoordinator
 
     var body: some View {
         Group {
@@ -21,7 +22,8 @@ struct RootView: View {
                     store: store,
                     manager: manager,
                     fileProvider: fileProvider,
-                    agentLauncher: agentLauncher
+                    agentLauncher: agentLauncher,
+                    extractionCoordinator: extractionCoordinator
                 )
                 .id(manager.activeWikiID)
             } else {

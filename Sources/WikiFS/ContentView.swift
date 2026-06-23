@@ -10,6 +10,7 @@ struct ContentView: View {
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
     @Bindable var agentLauncher: AgentLauncher
+    let extractionCoordinator: ExtractionCoordinator
     @State private var isTranscriptExpanded = false
     /// Driven by `.dropDestination`'s `isTargeted` callback to fade in a subtle
     /// accent border while a drag hovers the window (set via the closure param —
@@ -31,18 +32,7 @@ struct ContentView: View {
                 TabBarView(store: store)
 
                 HStack(spacing: 0) {
-                    WikiDetailView(
-                        store: store,
-                        launcher: agentLauncher,
-                        manager: manager,
-                        fileProvider: fileProvider,
-                        runIngest: runIngest,
-                        showingAddFromURL: $showingAddFromURL,
-                        showingImportMarkdown: $showingImportMarkdown,
-                        showingAddFromZotero: $showingAddFromZotero,
-                        isZoteroConfigured: isZoteroConfigured
-                    )
-                    .frame(maxWidth: .infinity)
+                    wikiDetailPane
 
                     if isTranscriptExpanded {
                         Divider()
@@ -160,6 +150,24 @@ struct ContentView: View {
         store.navigateForward()
     }
 
+    /// The selected-document/source detail pane, extracted so the `HStack`'s
+    /// view builder stays under the type-checker's complexity budget.
+    private var wikiDetailPane: some View {
+        WikiDetailView(
+            store: store,
+            launcher: agentLauncher,
+            manager: manager,
+            fileProvider: fileProvider,
+            extractionCoordinator: extractionCoordinator,
+            runIngest: runIngest,
+            showingAddFromURL: $showingAddFromURL,
+            showingImportMarkdown: $showingImportMarkdown,
+            showingAddFromZotero: $showingAddFromZotero,
+            isZoteroConfigured: isZoteroConfigured
+        )
+        .frame(maxWidth: .infinity)
+    }
+
     private func runIngest(sourceID: PageID) {
         DebugLog.ingest("ContentView.runIngest: user pressed Ingest (sourceID=\(sourceID.rawValue))")
         let task = Task {
@@ -169,7 +177,8 @@ struct ContentView: View {
                 launcher: agentLauncher,
                 store: store,
                 manager: manager,
-                fileProvider: fileProvider)
+                fileProvider: fileProvider,
+                extractionCoordinator: extractionCoordinator)
         }
         agentLauncher.ingestTask = task
     }
@@ -183,7 +192,8 @@ struct ContentView: View {
                 launcher: agentLauncher,
                 store: store,
                 manager: manager,
-                fileProvider: fileProvider)
+                fileProvider: fileProvider,
+                extractionCoordinator: extractionCoordinator)
         }
         agentLauncher.ingestTask = task
     }
