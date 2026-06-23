@@ -2,6 +2,40 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-22 — Quote Highlight + Scroll-to-Quote for Source Links
+
+Implemented `plans/quote-highlight-and-scroll.md`. When a
+`[[source:Name#"quoted passage"]]` (or `[[Page#"…"]]`) link is clicked, the
+destination document now **highlights the exact passage and scrolls to it** —
+for both markdown and PDF.
+
+**Markdown.** `WikiLinkStylingParser` gets a `highlightQuote` parameter; the
+pure `quoteRange(_:in:)` does whitespace-tolerant (collapsed, trimmed) first-match
+substring search against the `AttributedString` and sets `.backgroundColor` to
+a dynamic highlight color that adapts to light/dark mode. `MarkdownPreview` holds
+`@State highlightQuote`, keys its `.task` on `RenderKey(markdown, pendingScrollAnchorVersion)`,
+and scrolls first (while the view hierarchy is stable) before setting highlight
+state. Trailing newlines keyed to `highlightVersion` trigger `StructuredText`
+re-parse without changing view identity, keeping `ScrollViewProxy` valid.
+
+**Re-click reactivity.** `WikiStoreModel.pendingScrollAnchorVersion` is
+incremented in `selectPage`/`selectSource` whenever `pendingScrollAnchor` is
+assigned, so repeat quote clicks to the same open document re-fire both scroll
+and highlight.
+
+**PDF.** `PDFViewWrapper` gains `highlightQuote` + a `Coordinator` with
+`lastSearchedQuote`; `updateNSView` runs `PDFDocument.findString` and sets
+`currentSelection` + `scrollSelectionToVisible`. `SourceDetailView` adds a
+pdf-only consume task keyed on `PDFTaskKey(sourceID, anchorVersion)` and only
+fires when `isPDF && !hasMarkdown` (the markdown side handles extracted PDFs).
+
+**Tests.** 17 new `QuoteHighlightTests` (pure `quoteRange` edge cases +
+integration via `WikiLinkStylingParser(highlightQuote:)`) and 2 regression tests
+in `AnchorBlockTests`. 911 total tests pass.
+
+**Builds on:** markdown-anchors (render-time block ids, `selectSource(anchor:)`,
+`pendingScrollAnchor`), phase-b-source-wikilinks (`wiki://source` scheme).
+
 ## 2026-06-22 — Zotero settings auto-save
 
 Removed the explicit "Save" button from `ZoteroSettingsView`. API key, library ID,

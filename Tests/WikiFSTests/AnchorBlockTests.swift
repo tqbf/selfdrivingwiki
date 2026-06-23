@@ -158,4 +158,21 @@ struct AnchorBlockTests {
         // All punctuation → empty string after filtering.
         #expect(AnchorBlock.makeSlug("?!", counts: &counts) == "heading")
     }
+
+    // MARK: - Regression: resolveAnchor with quote fragments (Quote Highlight)
+
+    @Test func resolveAnchorQuoteFragmentStripsQuotesAndNormalizes() {
+        // Simulates the fragment from `[[source:Paper#"30%  improvement"]]`
+        // (extra spaces inside the quote, surrounded by double-quotes).
+        let blocks = AnchorBlock.parse("# Intro\n\nThe results show a 30% improvement in throughput.")
+        let id = resolveAnchor("\"30%  improvement\"", in: blocks)
+        #expect(id == "p1")
+    }
+
+    @Test func resolveAnchorBareQuoteFragment() {
+        // Fragment without surrounding quotes (heading slug or bare quote).
+        let blocks = AnchorBlock.parse("# Intro\n\nThe results show a 30% improvement.")
+        let id = resolveAnchor("30% improvement", in: blocks)
+        #expect(id == "p1")
+    }
 }
