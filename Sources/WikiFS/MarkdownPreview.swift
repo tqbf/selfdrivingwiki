@@ -18,6 +18,16 @@ import WikiFSCore
 /// Anchor scrolling: `StructuredText.Heading` already applies `.id(slug)` via
 /// Textual (`Heading.swift:24`); `NumberedParagraphStyle` applies `.id("p\(n)")`
 /// to paragraphs. The block list (via `AnchorBlock.parse`) maps fragments to ids.
+///
+/// Quote highlighting: a `[[source:Name#"quote"]]` or `[[Page#"quote"]]` link
+/// sets `highlightQuote` via the scroll-anchor consume path, and
+/// `WikiLinkStylingParser` applies `.backgroundColor` to the matched substring.
+///
+/// Scrolling is driven by `highlightVersion`: the `.task` consumes the anchor
+/// and stashes the target + bumps the version; `.onChange(of: highlightVersion)`
+/// scrolls with a *current* `ScrollViewProxy` after the view hierarchy settles.
+/// Trailing newlines keyed to the version force `StructuredText` to re-parse
+/// without changing its structural identity, so the proxy stays valid.
 struct MarkdownPreview: View {
     @Bindable var store: WikiStoreModel
     let markdown: String
@@ -31,6 +41,12 @@ struct MarkdownPreview: View {
     var fileProvider: FileProviderSpike? = nil
 
     @State private var blocks: [AnchorBlock] = []
+    /// The quote to highlight, set after consuming a `pendingScrollAnchor` with
+    /// a `#"quoted passage"` fragment. Nil when there's no active highlight.
+    @State private var highlightQuote: String?
+    /// Bumped each time `highlightQuote` changes. Used in the versioned markup
+    /// to force `StructuredText` to re-parse without changing its view identity.
+    @State private var highlightVersion: Int = 0
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -41,25 +57,20 @@ struct MarkdownPreview: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     } else {
-                        // Render synchronously so StructuredText is built with
-                        // its final content during the first layout pass (see the
-                        // type doc). `renderNumbered` resets the paragraph counter
-                        // and returns the rendered markdown in one call.
                         let rendered = renderNumbered(markdown)
-                        StructuredText(rendered, parser: WikiLinkStylingParser())
-                            .id(rendered)
+                        // Append trailing newlines keyed to highlightVersion so
+                        // StructuredText sees a markup change and re-parses with
+                        // the current parser, without changing view identity.
+                        let versioned = highlightVersion > 0
+                            ? rendered + String(repeating: "\n", count: highlightVersion)
+                            : rendered
+                        StructuredText(versioned, parser: WikiLinkStylingParser(highlightQuote: highlightQuote))
                             .textual.paragraphStyle(NumberedParagraphStyle())
                             .textual.textSelection(.enabled)
                             .textual.fontScale(CGFloat(readerZoom))
-                            // Right-click a link: select the whole link and show
-                            // a link-specific context menu (Suggest / Find
-                            // Similar / Copy as Wiki Link / Open in Browser …).
                             .textual.linkContextMenu { url in
                                 WikiLinkContextMenu.items(for: url, store: store, fileProvider: fileProvider)
                             }
-                            // Neutralize the style-level link color so the
-                            // parser's per-run colors (red for missing links)
-                            // survive `WithInlineStyle`'s `keepNew` merge.
                             .textual.inlineStyle(InlineStyle.default.link())
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -91,16 +102,24 @@ struct MarkdownPreview: View {
                 }
                 return .handled
             })
-            .task(id: markdown) {
-                // Display is rendered synchronously in `body`; this task only
-                // derives the anchor block list (post-layout) and consumes any
-                // pending scroll anchor set by selectPage/Source.
+            .task(id: RenderKey(markdown: markdown, anchorVersion: store.pendingScrollAnchorVersion)) {
                 blocks = AnchorBlock.parse(renderMarkdown(markdown))
                 if let frag = store.consumePendingScrollAnchor(for: currentSelection),
                    let id = resolveAnchor(frag, in: blocks) {
+                    let quote = frag.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                    // Scroll first — while the view hierarchy is stable and the
+                    // proxy is guaranteed valid. Then set the highlight state
+                    // which triggers StructuredText to re-parse via the versioned
+                    // markup. Scroll before state change is load-bearing.
                     try? await Task.sleep(for: .milliseconds(50))
                     proxy.scrollTo(id, anchor: .top)
+                    highlightQuote = quote.wikiNormalized
+                    highlightVersion += 1
                 }
+            }
+            .onChange(of: markdown) {
+                highlightQuote = nil
+                highlightVersion = 0
             }
         }
     }
@@ -127,6 +146,13 @@ struct MarkdownPreview: View {
             .joined(separator: "\n")
         return "\(body)\n\n---\n\n\(footnotes)"
     }
+}
+
+/// Keys the `MarkdownPreview` consume task so it re-fires on repeat quote clicks
+/// to the already-open document (same markdown, bumped anchor version).
+private struct RenderKey: Hashable {
+    let markdown: String
+    let anchorVersion: Int
 }
 
 #Preview {

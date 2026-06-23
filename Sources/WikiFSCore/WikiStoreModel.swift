@@ -213,6 +213,7 @@ public final class WikiStoreModel {
         // after render. Tagged with the target selection so a stale anchor can't
         // misfire on the wrong page.
         pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
+        pendingScrollAnchorVersion += 1
         // Record history while `loadedSelection` still points at the outgoing
         // page (openTab/setActiveTab don't record history themselves).
         recordHistoryTransition(from: loadedSelection, to: target)
@@ -262,6 +263,7 @@ public final class WikiStoreModel {
         guard let id = (try? store.resolveSourceByName(displayName)) ?? nil else { return false }
         let target = WikiSelection.source(id)
         pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
+        pendingScrollAnchorVersion += 1
         recordHistoryTransition(from: loadedSelection, to: target)
         openTab(target)
         return true
@@ -271,6 +273,11 @@ public final class WikiStoreModel {
     /// `MarkdownPreview` after render. Tagged with the target `WikiSelection` so
     /// a stale anchor can't misfire on the wrong page.
     public private(set) var pendingScrollAnchor: (selection: WikiSelection, fragment: String)?
+
+    /// Monotonic counter bumped each time `pendingScrollAnchor` is assigned. Keyed
+    /// into `MarkdownPreview`'s `.task(id:)` so re-clicking a quote link to the
+    /// already-open document re-fires scroll + highlight.
+    public private(set) var pendingScrollAnchorVersion: Int = 0
 
     /// Atomically consume the pending scroll anchor if `selection` matches.
     /// Returns the fragment to resolve and clears the anchor. Returns nil if the

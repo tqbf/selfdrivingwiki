@@ -37,6 +37,9 @@ struct SourceDetailView: View {
     @State private var editBuffer = ""
     @State private var isExtracting = false
     @State private var selectedTab = FileContentTab.markdown
+    /// Quote to highlight in the PDF view, set when a `[[source:Name#"…"]]` link
+    /// targets an un-extracted PDF. Consumed from `store.pendingScrollAnchor`.
+    @State private var pdfQuote: String?
 
     private enum FileContentTab: String, CaseIterable {
         case markdown = "Markdown"
@@ -112,8 +115,18 @@ struct SourceDetailView: View {
             isExtracting = false
             headVersion = nil
             selectedTab = .markdown
+            pdfQuote = nil
         }
         .task(id: file.id) { headVersion = store.processedMarkdownHead(for: file) }
+        .task(id: PDFTaskKey(sourceID: file.id, anchorVersion: store.pendingScrollAnchorVersion)) {
+            // Only consume for un-extracted PDFs (the markdown side handles
+            // extracted PDFs via MarkdownPreview). Double-check at consume time
+            // since `hasMarkdown` may have changed since render.
+            guard isPDF, !hasMarkdown else { return }
+            if let frag = store.consumePendingScrollAnchor(for: store.selection) {
+                pdfQuote = frag.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            }
+        }
         .onChange(of: store.selection) { flushEditIfDirty(); isEditing = false }
         .onChange(of: store.isAgentRunning) {
             if $1 { flushEditIfDirty(); isEditing = false }
@@ -359,7 +372,7 @@ struct SourceDetailView: View {
     private var pdfView: some View {
         Group {
             if let data = store.sourceBytes(id: file.id) {
-                PDFViewWrapper(data: data)
+                PDFViewWrapper(data: data, highlightQuote: pdfQuote)
             } else {
                 ContentUnavailableView {
                     Label("Cannot Load PDF", systemImage: "doc.richtext")
@@ -496,4 +509,11 @@ struct SourceDetailView: View {
         formatter.countStyle = .file
         return formatter
     }()
+}
+
+/// Keys the PDF-only anchor consume task so it re-fires on repeat quote clicks
+/// to the same un-extracted PDF (same file, bumped anchor version).
+private struct PDFTaskKey: Hashable {
+    let sourceID: PageID
+    let anchorVersion: Int
 }

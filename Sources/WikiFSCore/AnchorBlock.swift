@@ -175,7 +175,7 @@ extension String {
     /// Collapse whitespace runs to a single space and trim — the same normalization
     /// used by `WikiText.normalized`, available here so `AnchorBlock` stays pure
     /// without importing the module's full normalization enum at the call site.
-    fileprivate var wikiNormalized: String {
+    public var wikiNormalized: String {
         self.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 }
