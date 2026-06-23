@@ -2,6 +2,59 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-22 — Pluggable PDF→Markdown extraction backends (Claude, Gemini, Docling Serve)
+
+Implemented `plans/pdf-extraction-backends.md`. PDF→Markdown extraction is no
+longer hardwired to the local pdf2md subprocess: a `MarkdownExtractor` protocol +
+`ExtractionCoordinator` let it run via **local pdf2md** (default), **Claude**
+(Anthropic Messages API), **Gemini** (Google AI `generateContent`), or a
+self-hosted **Docling Serve**. All four write the same `source_markdown_versions`
+row (origin `"extraction"`) — **no schema change**. Both extraction call sites
+(`AgentOperationRunner.runMultiIngest`, `SourceDetailView.runExtraction`)
+dispatch through `readiness()` / `convert()` instead of `PdfExtractionService`
+directly.
+
+**The abstraction (`WikiFSCore`).** `MarkdownExtractor` (PID-free — only the
+subprocess has one, funneled via `onProgress`), `ExtractionBackend`, and
+`ExtractionReadiness`. Three fetcher-injected value-type clients with pure
+`build` / `decode` / `checkStatus` helpers + a `verifyConnection` probe:
+`AnthropicExtractionClient` (base64 PDF `document` block; 24 MB guard; handles
+`stop_reason: refusal` / empty / `max_tokens`), `GeminiExtractionClient` (base64
+PDF `inline_data` part; 48 MB guard; handles `promptFeedback.blockReason` /
+blocking `finishReason` / `MAX_TOKENS`; uses the stable `generateContent`
+endpoint, not the beta Interactions API), and `DoclingServeClient` (multipart
+`POST /v1/convert/file`; pulls `document.md_content`; surfaces `errors[]` only
+when there's no usable markdown). The two model clients share one transcription
+prompt (`ExtractionPrompts`) so their output is consistent.
+
+**Config + secrets (mirrors Zotero).** `ExtractionConfig` is the single source of
+truth for non-secret prefs (backend, per-backend model + base-URL overrides,
+Docling endpoint) — resilient `Codable` (an unknown backend value degrades to
+local). Secrets (Anthropic + Gemini API keys, Docling token) live in Keychain via
+`ExtractionCredentialStore`, never the JSON file. `ExtractionCoordinator`
+(`@MainActor @Observable`) resolves the configured backend fresh each call.
+
+**Settings.** A new Settings tab (`ExtractionSettingsView`) alongside Zotero.
+Auto-saves on change (no Save button — closing the window can't drop a typed
+value), shows only the selected backend's config section, and **locks itself
+while an extraction is running** (`launcher.extractingSourceIDs` non-empty) so a
+mid-conversion backend/key change can't derail it.
+
+**Defaults.** Extraction is transcription, not reasoning — Claude
+`claude-sonnet-4-6`, Gemini `gemini-3.5-flash` (both user-overridable to cheaper
+Haiku / Flash-Lite or more-capable Opus / Pro tiers).
+
+**Tests.** +43 across `ExtractionConfigTests`, `ExtractionCredentialStoreTests`,
+`AnthropicExtractionClientTests`, `GeminiExtractionClientTests`,
+`DoclingServeClientTests`, `ExtractionCoordinatorTests`. Full `swift test` —
+**892 tests**, 65 suites, 0 failures. `swift build` + `make check` clean.
+
+**Pending.** Manual per-backend smoke tests against a real PDF (need a real API
+key / a running `docling-serve`) — the one verification gate not covered by unit
+tests.
+
+PR #47. On branch `feature/extraction-backends`.
+
 ## 2026-06-22 — Right-click link context menus + whole-link selection
 
 Implemented `plans/link-context-menus.md`. Right-clicking **any** link (wiki or
