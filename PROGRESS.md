@@ -2,6 +2,13 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-22 — Zotero settings auto-save
+
+Removed the explicit "Save" button from `ZoteroSettingsView`. API key, library ID,
+and directory override now persist immediately via `.onChange(of:)` on each field
+— no data can be lost on window close (`⌘W` / red button). Also removed the
+redundant save calls from `testConnection()`.
+
 ## 2026-06-22 — Pluggable PDF→Markdown extraction backends (Claude, Gemini, Docling Serve)
 
 Implemented `plans/pdf-extraction-backends.md`. PDF→Markdown extraction is no
