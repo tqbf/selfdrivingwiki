@@ -175,4 +175,45 @@ struct AnchorBlockTests {
         let id = resolveAnchor("30% improvement", in: blocks)
         #expect(id == "p1")
     }
+
+    // MARK: - Regression: anchors parse the RAW markdown (#1 dedupe)
+    // MarkdownPreview's consume task now parses the RAW markdown instead of the
+    // fully preprocessed (footnote-expanded + linkified) string, to avoid
+    // re-running both preprocessing passes over the whole document. These guard
+    // that the raw path yields identical block count/order to the rendered one.
+
+    @Test func rawMarkdownParityIgnoresFootnoteDefsAndLinks() {
+        let raw = """
+        # Heading One
+
+        First paragraph with a [[Wiki Link]] and a footnote[^1].
+
+        ## Heading Two
+
+        Second paragraph here.
+
+        [^1]: This footnote definition must not become a paragraph.
+        """
+        let blocks = AnchorBlock.parse(raw)
+        // Heading, p1, Heading, p2: the footnote definition is skipped, and the
+        // inline [[Wiki Link]] / [^1] reference don't add blocks or shift ids.
+        #expect(blocks.count == 4)
+        #expect(blocks[0].kind == .heading && blocks[0].id == "heading-one")
+        #expect(blocks[1].kind == .paragraph && blocks[1].id == "p1")
+        #expect(blocks[2].kind == .heading && blocks[2].id == "heading-two")
+        #expect(blocks[3].kind == .paragraph && blocks[3].id == "p2")
+    }
+
+    @Test func appendedFootnoteSectionDoesNotAddBlocks() {
+        // `MarkdownPreview.renderMarkdown` appends "\n\n---\n\n1. note\n2. note".
+        // `---` is a thematic break (skipped); "1. x" is an ordered list (skipped).
+        // Confirm that tail neither creates paragraph blocks nor shifts ids, so
+        // parsing the raw (footnote-less) string matches the rendered count.
+        let body = "# Doc\n\nIntro paragraph."
+        let rendered = body + "\n\n---\n\n1. first note\n2. second note"
+        let bodyBlocks = AnchorBlock.parse(body)
+        let renderedBlocks = AnchorBlock.parse(rendered)
+        #expect(renderedBlocks.count == bodyBlocks.count)
+        #expect(renderedBlocks.last?.id == bodyBlocks.last?.id)
+    }
 }
