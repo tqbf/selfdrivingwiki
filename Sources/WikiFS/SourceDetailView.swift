@@ -364,7 +364,9 @@ struct SourceDetailView: View {
             if useWebReader {
                 // EXPERIMENTAL: web-view reader. Compare against the native
                 // MarkdownPreview on the same large source (open speed + scroll).
-                SourceWebView(markdown: head.content, store: store)
+                SourceWebView(markdown: head.content,
+                              currentSelection: store.selection,
+                              store: store)
             } else {
                 MarkdownPreview(store: store, markdown: head.content,
                                 currentSelection: store.selection)
