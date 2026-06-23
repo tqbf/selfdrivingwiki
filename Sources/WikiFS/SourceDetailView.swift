@@ -45,6 +45,12 @@ struct SourceDetailView: View {
     /// browser-windowed layout removes the large-source render freeze. Off by
     /// default — the native reader is the production path.
     @AppStorage("debug.webReader") private var useWebReader = false
+    /// Sources larger than this (KB) render in the web reader automatically —
+    /// its windowed layout avoids the native reader's whole-document layout
+    /// freeze on large docs; smaller sources use the native reader (better
+    /// selection / links / anchors for the common case). The Web checkbox above
+    /// overrides this on. Tunable via `defaults write`.
+    @AppStorage("reader.webThresholdKB") private var webThresholdKB: Int = 96
 
     private enum FileContentTab: String, CaseIterable {
         case markdown = "Markdown"
@@ -213,11 +219,13 @@ struct SourceDetailView: View {
                         .keyboardShortcut("e", modifiers: .command)
                         .disabled(isRunning)
                     }
-                    // Prototype A/B: web-view reader vs native reader.
+                    // Web-view reader: used automatically for large sources
+                    // (webThresholdKB); this checkbox forces it on for small
+                    // sources too (A/B comparison).
                     if hasMarkdown {
                         Toggle("Web", isOn: $useWebReader)
                             .toggleStyle(.checkbox)
-                            .help("Prototype: render markdown in a WKWebView instead of the native reader")
+                            .help("Force the web-view reader (large sources use it automatically)")
                     }
                 }
             }
@@ -361,9 +369,10 @@ struct SourceDetailView: View {
                 .zoomShortcuts($editorZoom)
                 .zoomScroll($editorZoom)
         } else if let head = headVersion {
-            if useWebReader {
-                // EXPERIMENTAL: web-view reader. Compare against the native
-                // MarkdownPreview on the same large source (open speed + scroll).
+            // Web reader when forced on, or automatically for large sources
+            // (its windowed layout avoids the native reader's layout freeze).
+            let useWeb = useWebReader || head.content.utf8.count > webThresholdKB * 1024
+            if useWeb {
                 SourceWebView(markdown: head.content,
                               currentSelection: store.selection,
                               store: store)

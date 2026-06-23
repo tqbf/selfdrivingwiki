@@ -144,9 +144,22 @@ scope for v1** (the native reader doesn't have it either) — noted as a follow-
 ## Open Decisions
 
 1. ~~Markdown converter~~ — **decided: `swift-markdown`.**
-2. **Size threshold value.** Picked in Phase 0 from measurement; provisional
-   default ~96 KB.
-3. **Prewarm.** Include iff Phase 0 shows a meaningful first-open cold-start.
+2. ~~Size threshold value~~ — **decided: 96 KB default, tunable via
+   `@AppStorage("reader.webThresholdKB")`.** Sources above it use the web reader
+   automatically; smaller sources use the native reader. The debug "Web"
+   checkbox forces it on for A/B.
+3. **Prewarm.** **Deferred.** Cold-start wasn't observed in A/B testing (the web
+   reader was "much faster" with no reported first-open lag), so the WebContent
+   process isn't prewarmed at launch yet. Cheap to add (hold one off-screen
+   `WKWebView` alive at launch) if first-open lag shows up on a real source.
+
+## Status
+
+Phases 1–4 are implemented on `feat/source-web-reader`: real `swift-markdown`
+HTML renderer + shared pre-pass (1), external anchors + quote highlight (2),
+native-matched theming (3), and automatic size-gating with a force-on override
+(4). Ghost-link coloring remains deferred (needs the `@MainActor` store off-main
+for the web path's linkify).
 
 ## Non-goals (v1)
 
