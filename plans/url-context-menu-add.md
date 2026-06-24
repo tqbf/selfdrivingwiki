@@ -1,9 +1,11 @@
 # Right-click external link → Add as Source
 
-> **Status: implemented (`main`).** Extends the link context menus
-> (`plans/link-context-menus.md`) so right-clicking an external http(s) link
-> offers **Add as Source**, which opens the existing "Add from URL" sheet
-> pre-filled with the URL (the same Fetch + ingest path as the toolbar button).
+> **Status: implemented (`feat/url-context-menu-add`, PR #52).** Extends the
+> link context menus (`plans/link-context-menus.md`) so right-clicking an
+> external http(s) link offers **Add as Source**, which opens the existing "Add
+> from URL" sheet pre-filled with the URL (the same Fetch + ingest path as the
+> toolbar button). Works in **both** the native Textual reader (`MarkdownPreview`)
+> and the WKWebView large-source reader (`SourceWebView`).
 
 ## Feature
 
@@ -24,12 +26,22 @@ Copy Link
 
 ## Scope
 
-- **In scope:** the native Textual reader (`MarkdownPreview`), where the link
-  context-menu feature already lives. The new item is available in every reader
-  because the handler reaches it via a SwiftUI environment value (see below).
-- **Out of scope:** `SourceWebView` (the WKWebView reader for 500 KB+ sources,
-  `plans/source-web-reader.md`). WKWebView renders its own native context menu;
-  hooking "Add as Source" in there is a separate WebKit-delegate task. Follow-up.
+- **Native Textual reader (`MarkdownPreview`)** — where the link context-menu
+  feature already lives. The new item is available in every native reader
+  (pages, sources, system prompt, changelog) because the handler reaches it via a
+  SwiftUI environment value (see below).
+- **WKWebView large-source reader (`SourceWebView`)** — the 500 KB+ path
+  (`plans/source-web-reader.md`). WKWebView has no public macOS API for
+  customizing its context menu (the `WKUIDelegate` `contextMenuConfiguration…`
+  family is iOS/visionOS-only — confirmed in WebKit's `WKUIDelegate.h`), so a
+  `SourceDetailWebView: WKWebView` subclass overrides `NSView.willOpenMenu`. It
+  prepends **Add as Source** only when WebKit's menu contains a link item
+  (`WKMenuItemIdentifierCopyLink`); on selection it hit-tests the captured
+  right-click point in the DOM (`document.elementFromPoint` → walk to the `<a>`)
+  and keeps only http(s) `href`s, then hands the URL to the **same**
+  `\.addURLHandler` environment value — so both readers open the identical sheet.
+  The AppKit→CSS coordinate flip + the hit-test JS are pure helpers
+  (`cssHitTestPoint`, `linkHrefAtJS`), unit-tested.
 
 ## Design
 
@@ -99,9 +111,14 @@ wiki benefits from the sheet's inline **Fetching…** progress and **error** row
   `.sheet(item:)` + sets `\.addURLHandler` + `PendingAddURL` wrapper.
 - `Sources/WikiFS/WikiDetailView.swift` — drops the `showingAddFromURL` binding;
   empty-state button calls `addURLHandler?("")`.
+- `Sources/WikiFS/SourceWebView.swift` — `SourceDetailWebView` subclass
+  (`willOpenMenu` + DOM hit-test) reads `\.addURLHandler` and threads it through
+  `WebViewRep`.
 
 ## Tests
 
-- `WikiLinkMenuBuilderTests` — http/https now return `[.addAsSource,
-  .openInBrowser, .copyLink]` (two cases: `https` and `http`); `mailto:`
-  unchanged at `[.openInBrowser, .copyLink]`. Full suite: 935 tests pass.
+- `WikiLinkMenuBuilderTests` — http/https return `[.addAsSource, .openInBrowser,
+  .copyLink]` (two cases); `mailto:` unchanged.
+- `SourceDetailWebViewMenuTests` — `cssHitTestPoint` (AppKit→CSS flip + clamp)
+  and `linkHrefAtJS` (coordinate embedding + http(s) filter + POSIX decimal).
+  Full suite: 965 tests pass.

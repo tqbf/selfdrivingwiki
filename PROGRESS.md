@@ -2,6 +2,30 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-24 — SourceWebView (WKWebView) gets the same "Add as Source" menu
+
+Extended `plans/url-context-menu-add.md` to the WKWebView large-source reader,
+which the first cut had deferred. Now right-clicking an external http(s) link in
+`SourceWebView` leads the context menu with **Add as Source** too, opening the
+same pre-filled "Add from URL" sheet via the same `\.addURLHandler` env value.
+
+- **Why it's a different mechanism:** `WKUIDelegate`'s `contextMenuConfiguration…`
+  family is **iOS/visionOS-only** (confirmed in WebKit's `WKUIDelegate.h`) — macOS
+  gives no public API to customize WKWebView's context menu. So a
+  `SourceDetailWebView: WKWebView` subclass overrides `NSView.willOpenMenu(_:with:)`.
+- **The menu:** prepend **Add as Source** + a separator only when WebKit's menu
+  contains a link item (`WKMenuItemIdentifierCopyLink`), so it never appears for
+  plain text / images.
+- **Getting the URL:** WebKit's menu items carry no URL, so on selection we
+  hit-test the captured right-click point in the DOM (`document.elementFromPoint`
+  → walk to the `<a>`) and keep only http(s) `href`s (matching the native
+  reader's `.addAsSource` gate). Cleaner than the iCab `createWebViewWith`
+  hijack: no `WKUIDelegate`/pending-action state machine, all in the view.
+- **Pure + tested:** the AppKit→CSS coordinate flip + clamp (`cssHitTestPoint`)
+  and the hit-test JS (`linkHrefAtJS`, POSIX-decimal numbers) are `nonisolated
+  static` helpers — 7 `SourceDetailWebViewMenuTests`. The menu wiring + JS exec
+  run inside WKWebView and are covered manually. 965 tests pass.
+
 ## 2026-06-24 — Right-click external link → Add as Source
 
 Implemented `plans/url-context-menu-add.md`. Right-clicking an external
