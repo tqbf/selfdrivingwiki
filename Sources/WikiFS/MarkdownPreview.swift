@@ -47,6 +47,10 @@ struct MarkdownPreview: View {
     /// Bumped each time `highlightQuote` changes. Used in the versioned markup
     /// to force `StructuredText` to re-parse without changing its view identity.
     @State private var highlightVersion: Int = 0
+    /// Opens the "Add from URL" sheet pre-filled with a URL — injected by
+    /// `ContentView` so the right-click "Add as Source" item works in every
+    /// reader (pages, sources, system prompt, changelog) without per-view wiring.
+    @Environment(\.addURLHandler) private var addURLHandler
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -71,7 +75,7 @@ struct MarkdownPreview: View {
                             .textual.textSelection(.enabled)
                             .textual.fontScale(CGFloat(readerZoom))
                             .textual.linkContextMenu { url in
-                                WikiLinkContextMenu.items(for: url, store: store, fileProvider: fileProvider)
+                                WikiLinkContextMenu.items(for: url, store: store, fileProvider: fileProvider, addURL: addURLHandler)
                             }
                             .textual.inlineStyle(InlineStyle.default.link())
                             .frame(maxWidth: .infinity, alignment: .leading)

@@ -2,6 +2,38 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-24 — Right-click external link → Add as Source
+
+Implemented `plans/url-context-menu-add.md`. Right-clicking an external
+**http(s)** link in any native reader now leads the context menu with **Add as
+Source**, which opens the existing "Add from URL" sheet pre-filled with the URL
+— the same Fetch + `store.ingestURL` path as the toolbar button (chosen over
+fire-and-forget ingest so the user gets the sheet's inline progress + error row
+and a confirm step before a network write).
+
+- **Pure layer:** new `WikiLinkAction.addAsSource`; the external-link branch in
+  `WikiLinkMenuBuilder.actions(for:)` returns `[.addAsSource, .openInBrowser,
+  .copyLink]` for **http/https only**. `mailto:` (and other non-http schemes)
+  stay `[.openInBrowser, .copyLink]` — `URLIngestService.normalizeURL` rejects
+  them, so the item would dead-end on a disabled Fetch button.
+- **Wiring + reach:** `WikiLinkContextMenu.items(...addURL:)` calls
+  `addURL(url.absoluteString)` (guard-skipped when nil, like `.copyFilePath`).
+  The sheet is presented by `ContentView` but the menu lives deep in
+  `MarkdownPreview`, so a single `@Entry` env value `\.addURLHandler`
+  carries the closure down — no threading through the four detail views, and the
+  item works uniformly in every reader. Mirrors `MarkdownPreview`'s existing
+  `\.openURL` override.
+- **Pre-fill:** `AddFromURLSheet(store:initialURL:)` seeds the `@State` field in
+  a custom init (populated on first paint, not a racy `.onAppear`). `ContentView`
+  switched from `.sheet(isPresented:)` Bool to `.sheet(item: $pendingAddURL)`
+  (`Identifiable` `PendingAddURL`) so presentation carries the pre-fill URL and
+  auto-clears on dismiss. Dropped the now-redundant `showingAddFromURL` binding;
+  the empty-state button in `WikiDetailView` calls `addURLHandler?("")`.
+
+**Out of scope:** `SourceWebView` (WKWebView large-doc reader) uses its own
+native context menu — follow-up. **Tests:** 2 new `WikiLinkMenuBuilderTests`
+cases (http, https); mailto unchanged. 935 tests pass.
+
 ## 2026-06-23 — Source web reader (fixes large-source render freeze)
 
 Implemented `plans/source-web-reader.md`. Large sources (500 KB+) beachballed
