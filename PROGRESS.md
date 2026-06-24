@@ -2,6 +2,19 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-24 — Source versioning & providers (design doc)
+
+Authored `plans/source-versioning-and-providers.md` — the foundational design for
+versioned, provider-backed, rich-media sources. Whole-wiki/page versioning
+descoped (SQLite file = external backups). Three layers: (1) source *content*
+versioning via append-only provider-fetch snapshots incl. byteless/external
+sources; (2) a unified `SourceProvider` protocol absorbing Zotero/folder/URL/
+drag-drop + adding git/Tavily/Slack/archive, usable from UI + agent; (3) a
+derived/extraction *alternatives-family* (technique-tagged, comparable, active
+selection) generalizing the linear `source_markdown_versions` chain. Plus
+provenance grouping (HTML+images) with render-time path resolution, inline media,
+and page→source `@version` pinning. Design phase only — no code yet.
+
 ## 2026-06-23 — Source web reader (fixes large-source render freeze)
 
 Implemented `plans/source-web-reader.md`. Large sources (500 KB+) beachballed
