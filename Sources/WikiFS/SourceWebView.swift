@@ -29,6 +29,9 @@ struct SourceWebView: View {
     let markdown: String
     var currentSelection: WikiSelection? = nil
     let store: WikiStoreModel
+    /// Opens the "Add from URL" sheet pre-filled with a URL — the same value
+    /// the Textual reader uses, so right-click "Add as Source" works here too.
+    @Environment(\.addURLHandler) private var addURLHandler
     @State private var isLoading = true
     /// Resolved from a consumed pending anchor; applied once the page paints.
     @State private var pendingScroll: PendingScroll?
@@ -42,7 +45,8 @@ struct SourceWebView: View {
                        store: store,
                        isLoading: $isLoading,
                        pendingScroll: pendingScroll,
-                       scrollVersion: scrollVersion)
+                       scrollVersion: scrollVersion,
+                       addURLHandler: addURLHandler)
             if isLoading {
                 ProgressView()
                     .controlSize(.large)
@@ -163,15 +167,93 @@ private struct RenderKey: Equatable {
 
 // MARK: - WKWebView bridge
 
+/// A `WKWebView` subclass that augments the macOS context menu with **Add as
+/// Source** when you right-click an external http(s) link — the WKWebView
+/// counterpart to the Textual reader's menu (`plans/url-context-menu-add.md`).
+///
+/// WKWebView has **no** public macOS API for customizing its context menu (the
+/// `WKUIDelegate` `contextMenuConfigurationForElement:` family is iOS/
+/// visionOS-only — confirmed in WebKit's `WKUIDelegate.h`), so we override
+/// `NSView.willOpenMenu(_:with:)`. WebKit's menu items don't carry the link's
+/// URL, so on selection we hit-test the captured right-click point in the DOM
+/// (`document.elementFromPoint` → walk up to the `<a>`) and keep only http(s)
+/// `href`s — matching `WikiLinkMenuBuilder`'s `.addAsSource` gate. The URL is
+/// handed to `addURLHandler`, the same `\.addURLHandler` environment value the
+/// Textual reader uses, so both readers open the identical pre-filled sheet.
+@MainActor
+final class SourceDetailWebView: WKWebView {
+    /// Opens the "Add from URL" sheet pre-filled with a URL — injected from
+    /// `SourceWebView`'s `\.addURLHandler` environment value.
+    var addURLHandler: ((String) -> Void)?
+    /// The right-click location (view coords) captured in `willOpenMenu`, used
+    /// to hit-test the DOM when the item is chosen.
+    private var contextMenuPoint: NSPoint?
+
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        contextMenuPoint = convert(event.locationInWindow, from: nil)
+
+        // WebKit only adds a "Copy Link" item when the right-click is on a link;
+        // gate on that so the item never appears for plain text / images.
+        let isLink = menu.items.contains { $0.identifier?.rawValue == "WKMenuItemIdentifierCopyLink" }
+        guard isLink, addURLHandler != nil else { return }
+
+        let item = NSMenuItem(title: "Add as Source", action: #selector(addSourceFromLink), keyEquivalent: "")
+        item.target = self
+        // Lead with the headline action, separated from WebKit's default items.
+        menu.insertItem(NSMenuItem.separator(), at: 0)
+        menu.insertItem(item, at: 0)
+    }
+
+    @objc private func addSourceFromLink() {
+        guard let point = contextMenuPoint, let handler = addURLHandler else { return }
+        let css = Self.cssHitTestPoint(point, in: bounds)
+        evaluateJavaScript(Self.linkHrefAtJS(x: css.x, y: css.y)) { result, _ in
+            guard let href = result as? String, !href.isEmpty else { return }
+            handler(href)
+        }
+    }
+
+    /// Flip an AppKit (bottom-left origin) view point to the CSS (top-left
+    /// origin) viewport coordinates `document.elementFromPoint` expects, clamped
+    /// to the bounds. Pure — unit-tested.
+    nonisolated static func cssHitTestPoint(_ point: NSPoint, in bounds: CGRect) -> (x: CGFloat, y: CGFloat) {
+        let x = min(max(0, point.x), bounds.width)
+        let y = min(max(0, bounds.height - point.y), bounds.height)
+        return (x, y)
+    }
+
+    /// JS that returns the `href` of the anchor under `(x, y)`, or `""` if there
+    /// is none / it isn't http(s). Coordinates are embedded as POSIX-formatted
+    /// numbers (no locale-dependent separators). Pure — unit-tested.
+    nonisolated static func linkHrefAtJS(x: CGFloat, y: CGFloat) -> String {
+        """
+        (function(x,y){
+          var el=document.elementFromPoint(x,y);
+          while(el && el.tagName!=="A"){ el=el.parentElement; }
+          if(!el){ return ""; }
+          return (el.protocol==="http:"||el.protocol==="https:") ? el.href : "";
+        })(\(posix(x)),\(posix(y)))
+        """
+    }
+
+    /// Format a coordinate with a POSIX decimal point so it's valid JS anywhere.
+    nonisolated private static func posix(_ v: CGFloat) -> String {
+        String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), Double(v))
+    }
+}
+
 private struct WebViewRep: NSViewRepresentable {
     let markdown: String
     let store: WikiStoreModel
     @Binding var isLoading: Bool
     let pendingScroll: PendingScroll?
     let scrollVersion: Int
+    let addURLHandler: ((String) -> Void)?
 
-    func makeNSView(context: Context) -> WKWebView {
-        let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+    func makeNSView(context: Context) -> SourceDetailWebView {
+        let webView = SourceDetailWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        webView.addURLHandler = addURLHandler
         webView.navigationDelegate = context.coordinator
         context.coordinator.webView = webView
         context.coordinator.store = store
@@ -181,7 +263,8 @@ private struct WebViewRep: NSViewRepresentable {
         return webView
     }
 
-    func updateNSView(_ webView: WKWebView, context: Context) {
+    func updateNSView(_ webView: SourceDetailWebView, context: Context) {
+        webView.addURLHandler = addURLHandler
         context.coordinator.store = store
         context.coordinator.pendingScroll = pendingScroll
         context.coordinator.pendingScrollVersion = scrollVersion

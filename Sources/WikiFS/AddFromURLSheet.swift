@@ -20,6 +20,15 @@ struct AddFromURLSheet: View {
     @State private var phase: Phase = .idle
     @FocusState private var fieldFocused: Bool
 
+    /// `initialURL` pre-fills the field — set by the right-click "Add as Source"
+    /// context-menu item so the user lands on a ready-to-Fetch sheet. Defaults to
+    /// empty for the toolbar / empty-state buttons. Seeding `_urlText` here (rather
+    /// than an `.onAppear` sync) means the field is populated on first paint.
+    init(store: WikiStoreModel, initialURL: String = "") {
+        self.store = store
+        self._urlText = State(initialValue: initialURL)
+    }
+
     /// The fetch lifecycle. A small closed enum so the view derives every piece of
     /// UI from one value (§3.1) rather than juggling several bools.
     private enum Phase: Equatable {

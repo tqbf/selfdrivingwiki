@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Textual
 import WikiFSCore
 
@@ -15,11 +16,21 @@ enum WikiLinkContextMenu {
     static func items(
         for url: URL,
         store: WikiStoreModel,
-        fileProvider: FileProviderSpike?
+        fileProvider: FileProviderSpike?,
+        addURL: ((String) -> Void)? = nil
     ) -> [LinkMenuItem] {
         var items: [LinkMenuItem] = []
         for action in WikiLinkMenuBuilder.actions(for: url) {
             switch action {
+            case .addAsSource:
+                // Opens the "Add from URL" sheet pre-filled with the URL, the same
+                // path the toolbar button takes. Omitted when no handler is wired
+                // (e.g. SwiftUI previews), mirroring how `.copyFilePath` omits
+                // itself without a File Provider spike.
+                guard let addURL else { continue }
+                items.append(.item("Add as Source") {
+                    addURL(url.absoluteString)
+                })
             case .suggest:
                 items.append(
                     similarPagesMenu(
@@ -117,4 +128,17 @@ enum WikiLinkContextMenu {
 
         return .item(title, submenu: submenu)
     }
+}
+
+extension EnvironmentValues {
+    /// Opens the "Add from URL" sheet, pre-filling the field with the given URL
+    /// string (empty for the toolbar / empty-state buttons; the absolute URL for
+    /// the right-click "Add as Source" item).
+    ///
+    /// Set once by `ContentView` and read deep in the tree (the reader views'
+    /// link context menu, via `WikiLinkContextMenu`, plus the empty-state
+    /// buttons) so external links can be ingested from any reader without
+    /// threading a closure through every detail view. Mirrors how
+    /// `MarkdownPreview` already injects behavior via `\.openURL`.
+    @Entry var addURLHandler: ((String) -> Void)? = nil
 }

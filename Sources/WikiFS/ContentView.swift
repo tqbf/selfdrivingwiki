@@ -16,7 +16,11 @@ struct ContentView: View {
     /// accent border while a drag hovers the window (set via the closure param —
     /// no `Binding(get:set:)`).
     @State private var isDropTargeted = false
-    @State private var showingAddFromURL = false
+    /// Drives the "Add from URL" sheet. Non-`nil` while presented; the wrapped
+    /// URL pre-fills the field — empty for the toolbar / empty-state buttons,
+    /// the absolute URL for the right-click "Add as Source" item (set via the
+    /// `\.addURLHandler` environment value).
+    @State private var pendingAddURL: PendingAddURL?
     @State private var showingImportMarkdown = false
     @State private var showingAddFromZotero = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -80,7 +84,16 @@ struct ContentView: View {
 
             primaryToolbarItems()
         }
-        .sheet(isPresented: $showingAddFromURL) { AddFromURLSheet(store: store) }
+        .sheet(item: $pendingAddURL) { pending in
+            AddFromURLSheet(store: store, initialURL: pending.url)
+        }
+        // Expose the "present Add from URL (pre-filled)" action to the whole
+        // subtree so the reader views' right-click "Add as Source" item (and the
+        // empty-state button in `WikiDetailView`) can trigger it without a
+        // per-view binding. Mirrors `MarkdownPreview`'s `\.openURL` override.
+        .environment(\.addURLHandler) { url in
+            pendingAddURL = PendingAddURL(url: url)
+        }
         .sheet(isPresented: $showingImportMarkdown) { ImportMarkdownSheet(store: store) }
         .sheet(isPresented: $showingAddFromZotero) {
             AddFromZoteroSheet(store: store, containerDirectory: zoteroContainerDirectory)
@@ -160,7 +173,6 @@ struct ContentView: View {
             fileProvider: fileProvider,
             extractionCoordinator: extractionCoordinator,
             runIngest: runIngest,
-            showingAddFromURL: $showingAddFromURL,
             showingImportMarkdown: $showingImportMarkdown,
             showingAddFromZotero: $showingAddFromZotero,
             isZoteroConfigured: isZoteroConfigured
@@ -244,7 +256,7 @@ struct ContentView: View {
         }
         ToolbarItem(placement: .primaryAction) {
             Button("Add from URL…", systemImage: "link.badge.plus") {
-                showingAddFromURL = true
+                pendingAddURL = PendingAddURL(url: "")
             }.help("Fetch a web page or PDF by URL and ingest it into this wiki")
         }
         ToolbarItem(placement: .primaryAction) {
@@ -280,4 +292,12 @@ struct ContentView: View {
             .help(isTranscriptExpanded ? "Hide agent transcript" : "Show agent transcript")
         }
     }
+}
+
+/// The "Add from URL" sheet's presentation payload: the URL to pre-fill the
+/// field with (empty when launched from the toolbar / empty-state buttons).
+/// Identifiable so `.sheet(item:)` can present + auto-clear it on dismiss.
+private struct PendingAddURL: Identifiable {
+    let id = UUID()
+    let url: String
 }

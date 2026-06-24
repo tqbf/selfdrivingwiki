@@ -33,6 +33,11 @@ public enum WikiLinkAction: Sendable, Equatable {
     case copyWikiLink
     /// Copy the File Provider mount path of the linked page/source file.
     case copyFilePath
+    /// External http(s) link — fetch + ingest it into this wiki as a source,
+    /// the same path the "Add from URL…" toolbar button uses (it opens the sheet
+    /// pre-filled with the URL). Offered only for http/https links; other
+    /// external schemes (mailto:, etc.) can't be ingested and are skipped.
+    case addAsSource
     /// External link — open in the system browser.
     case openInBrowser
     /// External link — copy the raw URL string.
@@ -52,9 +57,14 @@ public enum WikiLinkMenuBuilder {
             return []
         }
 
-        // External link (not our wiki scheme): browser + copy.
+        // External link (not our wiki scheme): browser + copy. For http(s) links
+        // we also lead with "Add as Source" (fetch + ingest, like the toolbar
+        // button); other schemes (mailto:, etc.) can't be fetched/ingested, so
+        // they get only browser + copy.
         if url.scheme != WikiLinkMarkdown.scheme {
-            return [.openInBrowser, .copyLink]
+            let base: [WikiLinkAction] = [.openInBrowser, .copyLink]
+            let scheme = url.scheme?.lowercased()
+            return (scheme == "http" || scheme == "https") ? [.addAsSource] + base : base
         }
 
         // Wiki link: resolved page/source vs unresolved (missing).

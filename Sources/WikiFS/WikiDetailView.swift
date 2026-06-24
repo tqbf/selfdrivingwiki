@@ -11,10 +11,10 @@ struct WikiDetailView: View {
     let fileProvider: FileProviderSpike
     let extractionCoordinator: ExtractionCoordinator
     let runIngest: (PageID) -> Void
-    @Binding var showingAddFromURL: Bool
     @Binding var showingImportMarkdown: Bool
     @Binding var showingAddFromZotero: Bool
     let isZoteroConfigured: Bool
+    @Environment(\.addURLHandler) private var addURLHandler
 
     var body: some View {
         switch store.selection {
@@ -27,7 +27,7 @@ struct WikiDetailView: View {
                 VStack(spacing: 8) {
                     Button("New Page", systemImage: "plus") { store.newPage() }
                     Button("Add from URL…", systemImage: "link.badge.plus") {
-                        showingAddFromURL = true
+                        addURLHandler?("")
                     }
                     Button("Import Markdown Folder…", systemImage: "doc.badge.plus") {
                         showingImportMarkdown = true

@@ -40,10 +40,17 @@ struct WikiLinkMenuBuilderTests {
     #expect(WikiLinkMenuBuilder.actions(for: url("wiki://anchor#Section")) == [])
   }
 
-  @Test func externalHttpsGetsBrowserAndCopy() {
+  @Test func externalHttpsGetsAddSourceBrowserAndCopy() {
+    // http(s) links lead with "Add as Source" (fetch + ingest), then browser/copy.
     #expect(
       WikiLinkMenuBuilder.actions(for: url("https://github.com/foo/bar"))
-        == [.openInBrowser, .copyLink])
+        == [.addAsSource, .openInBrowser, .copyLink])
+  }
+
+  @Test func externalHttpGetsAddSourceBrowserAndCopy() {
+    #expect(
+      WikiLinkMenuBuilder.actions(for: url("http://example.com/page"))
+        == [.addAsSource, .openInBrowser, .copyLink])
   }
 
   @Test func externalMailtoGetsBrowserAndCopy() {
