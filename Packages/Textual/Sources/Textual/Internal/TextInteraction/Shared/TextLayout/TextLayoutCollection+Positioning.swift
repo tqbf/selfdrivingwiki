@@ -75,10 +75,20 @@
     }
 
     func localCharacterRange(at indexPath: IndexPath) -> Range<Int> {
-      let line = layouts[indexPath.layout].lines[indexPath.line]
-      return line.runs[indexPath.run]
-        .slices[indexPath.runSlice]
-        .characterRange
+      // A stale IndexPath — e.g. a selection held across a text replacement —
+      // can point past the current layout structure (same layout count, but
+      // fewer lines/runs/slices). Clamp each level rather than trap on an
+      // out-of-bounds subscript. Selection reconciliation then lands on a
+      // nearby valid position instead of crashing.
+      guard !layouts.isEmpty else { return 0..<0 }
+      let layout = layouts[min(indexPath.layout, layouts.count - 1)]
+      guard !layout.lines.isEmpty else { return 0..<0 }
+      let line = layout.lines[min(indexPath.line, layout.lines.count - 1)]
+      guard !line.runs.isEmpty else { return 0..<0 }
+      let run = line.runs[min(indexPath.run, line.runs.count - 1)]
+      guard !run.slices.isEmpty else { return 0..<0 }
+      let slice = run.slices[min(indexPath.runSlice, run.slices.count - 1)]
+      return slice.characterRange
     }
 
     func layoutDirection(at indexPath: IndexPath) -> LayoutDirection {

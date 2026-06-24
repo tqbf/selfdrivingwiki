@@ -106,6 +106,12 @@ make three localized edits (`plans/link-context-menus.md`).
 - `…/AppKit/NSTextInteractionView.swift` — right-click whole-link selection +
   link-menu builder; refactored `makeContextMenu`.
 - `…/AppKit/AppKitTextInteractionOverlay.swift` — threads the env value.
+- `…/TextLayout/TextLayoutCollection+Positioning.swift` — `localCharacterRange(at:)`
+  clamps each IndexPath level instead of trapping when a stale selection (held
+  across a markdown re-render / text replacement) indexes past the layout
+  structure. Fixes an `EXC_BREAKPOINT` crash from `setLayoutCollection` →
+  `reconcileRange` → `reconcilePosition` reaching the primitive with a stale
+  `IndexPath`. Only the out-of-bounds path changes; valid indexes are unchanged.
 - The manifest is byte-identical to upstream (no `testTarget` patch).
 
 **Why it's probably fine.** The diff is tiny and isolated to the link-menu
@@ -113,8 +119,9 @@ feature; it does not change Textual's rendering or selection behavior for
 non-link right-clickes. The vendored tree is a faithful copy of upstream minus
 `.git`, build artifacts, and the `Examples/` tree.
 
-**To re-sync upstream.** Diff the six files above against a fresh checkout of the
+**To re-sync upstream.** Diff the seven files above against a fresh checkout of the
 new version, port the edits, bump the recorded rev here. Do NOT re-point
 `Package.swift` at a remote — carrying the fork is the point.
 
-Recorded 2026-06-22 (link-context-menus PR).
+Recorded 2026-06-22 (link-context-menus PR). `localCharacterRange` bounds clamp
+added 2026-06-23 (stale-selection crash fix).
