@@ -1,19 +1,17 @@
-import AppKit
 import SwiftUI
 import WikiFSCore
 
 /// Settings → Agent tab: configure the agent executable, prefix arguments,
-/// model override, and extra environment variables. Mirrors `ZoteroSettingsView`
-/// in structure: `Form` + bottom bar with Reset / Save.
+/// model override, and extra environment variables. Mirrors `ZoteroSettingsView`:
+/// a `Form` whose fields persist immediately via `.onChange(of:)` — no explicit
+/// save step, so a value is never lost when the Settings window closes.
 struct AgentCommandSettingsView: View {
     @State private var executable: String
     @State private var prefixArguments: String
     @State private var modelOverride: String
     @State private var extraEnvironment: String
-    @State private var resolvedPreview: String = ""
 
     let containerDirectory: URL
-    @Environment(\.dismiss) private var dismiss
 
     init(containerDirectory: URL) {
         self.containerDirectory = containerDirectory
@@ -26,107 +24,63 @@ struct AgentCommandSettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 12) {
-                fieldsForm
-                previewForm
+            Form {
+                Section {
+                    TextField("Executable", text: $executable, prompt: Text("claude"))
+                    TextField("Prefix arguments", text: $prefixArguments)
+                    TextField("Model override", text: $modelOverride, prompt: Text("default (per-op alias)"))
+                } header: {
+                    Text("Command")
+                }
+
+                Section {
+                    TextEditor(text: $extraEnvironment)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(minHeight: 64)
+                } header: {
+                    Text("Extra Environment")
+                } footer: {
+                    Text("KEY=VALUE, one per line. WIKI_ROOT and WIKI_DB are always set by the app and cannot be overridden.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .formStyle(.grouped)
 
             Divider()
 
             HStack {
-                Button("Reset to Default") {
-                    executable = "claude"
-                    prefixArguments = ""
-                    modelOverride = ""
-                    extraEnvironment = ""
-                    updatePreview()
-                }
+                Button("Reset to Default") { resetToDefault() }
                 Spacer()
-                Button("Save") { saveAndClose() }
-                    .keyboardShortcut(.defaultAction)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
         }
-        .onAppear { updatePreview() }
-    }
-
-    // MARK: - Fields (left)
-
-    private var fieldsForm: some View {
-        Form {
-            Section {
-                TextField("Executable", text: $executable, prompt: Text("claude"))
-                    .onChange(of: executable) { _, _ in updatePreview() }
-                TextField("Prefix arguments", text: $prefixArguments)
-                    .onChange(of: prefixArguments) { _, _ in updatePreview() }
-                TextField("Model override", text: $modelOverride, prompt: Text("default (per-op alias)"))
-                    .onChange(of: modelOverride) { _, _ in updatePreview() }
-            } header: {
-                Text("Command")
-            }
-
-            Section {
-                TextEditor(text: $extraEnvironment)
-                    .font(.system(.body, design: .monospaced))
-                    .frame(minHeight: 120)
-                    .onChange(of: extraEnvironment) { _, _ in updatePreview() }
-            } header: {
-                Text("Extra Environment")
-            } footer: {
-                Text("KEY=VALUE, one per line. WIKI_ROOT and WIKI_DB are always set by the app and cannot be overridden.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-    }
-
-    // MARK: - Preview (right)
-
-    private var previewForm: some View {
-        Form {
-            Section {
-                ScrollView {
-                    Text(resolvedPreview.isEmpty ? "—" : resolvedPreview)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(minHeight: 200)
-            } header: {
-                Text("Resolved Command")
-            }
-        }
-        .formStyle(.grouped)
+        .onChange(of: executable) { _, _ in save() }
+        .onChange(of: prefixArguments) { _, _ in save() }
+        .onChange(of: modelOverride) { _, _ in save() }
+        .onChange(of: extraEnvironment) { _, _ in save() }
     }
 
     // MARK: - Actions
 
-    private func updatePreview() {
-        let config = AgentCommandConfig(
-            executable: executable,
-            prefixArguments: prefixArguments,
-            modelOverride: modelOverride,
-            extraEnvironment: extraEnvironment)
-        let args = config.tokenizedPrefixArgs()
-        let model = config.modelOverride.isEmpty ? "opus" : config.modelOverride
-        let argv = args + ["-p", "<prompt>", "--model", model, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--append-system-prompt", "<system-prompt>", "--dangerously-skip-permissions"]
-        let cmd = ([config.resolvedExecutable()] + argv)
-            .map(ClaudePromptHelp.shellQuoted)
-            .joined(separator: " \\\n  ")
-        resolvedPreview = cmd
-    }
-
-    private func saveAndClose() {
+    /// Persist the current fields immediately (auto-save).
+    private func save() {
         let config = AgentCommandConfig(
             executable: executable,
             prefixArguments: prefixArguments,
             modelOverride: modelOverride,
             extraEnvironment: extraEnvironment)
         try? config.save(to: containerDirectory)
-        dismiss()
-        NSApp.keyWindow?.close()
+    }
+
+    /// Restore the built-in defaults and persist them.
+    private func resetToDefault() {
+        let defaults = AgentCommandConfig.default
+        executable = defaults.executable
+        prefixArguments = defaults.prefixArguments
+        modelOverride = defaults.modelOverride
+        extraEnvironment = defaults.extraEnvironment
+        save()
     }
 }
