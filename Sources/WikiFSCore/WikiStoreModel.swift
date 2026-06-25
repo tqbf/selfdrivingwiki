@@ -204,12 +204,12 @@ public final class WikiStoreModel {
     /// no page.
     ///
     /// - Parameter anchor: optional `#fragment` from a `[[Page#Section]]` link;
-    ///   the destination `MarkdownPreview` scrolls to it after load.
+    ///   the destination `WikiReaderView` scrolls to it after load.
     @discardableResult
     public func selectPage(byTitle title: String, anchor: String? = nil) -> Bool {
         guard let id = (try? store.resolveTitleToID(title)) ?? nil else { return false }
         let target = WikiSelection.page(id)
-        // Stash the anchor so the destination MarkdownPreview can scroll to it
+        // Stash the anchor so the destination WikiReaderView can scroll to it
         // after render. Tagged with the target selection so a stale anchor can't
         // misfire on the wrong page.
         pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
@@ -257,7 +257,7 @@ public final class WikiStoreModel {
     /// the source's tab. Returns whether navigation happened.
     ///
     /// - Parameter anchor: optional `#fragment` from a `[[source:Name#"quote"]]`
-    ///   link; the destination `MarkdownPreview` scrolls to it after load.
+    ///   link; the destination `WikiReaderView` scrolls to it after load.
     @discardableResult
     public func selectSource(byDisplayName displayName: String, anchor: String? = nil) -> Bool {
         guard let id = (try? store.resolveSourceByName(displayName)) ?? nil else { return false }
@@ -269,19 +269,25 @@ public final class WikiStoreModel {
         return true
     }
 
-    /// Pending scroll anchor set by `selectPage`/`selectSource` and consumed by
-    /// `MarkdownPreview` after render. Tagged with the target `WikiSelection` so
-    /// a stale anchor can't misfire on the wrong page.
+    /// The pending scroll/highlight target set by `selectPage`/`selectSource` and
+    /// consumed by the destination reader's `Coordinator` (see
+    /// `WikiReaderView.consumeAndApplyPendingAnchor`). Tagged with the target
+    /// `WikiSelection` so a stale anchor can't misfire on the wrong page.
     public private(set) var pendingScrollAnchor: (selection: WikiSelection, fragment: String)?
 
-    /// Monotonic counter bumped each time `pendingScrollAnchor` is assigned. Keyed
-    /// into `MarkdownPreview`'s `.task(id:)` so re-clicking a quote link to the
-    /// already-open document re-fires scroll + highlight.
+    /// Monotonic counter bumped each time `pendingScrollAnchor` is assigned. The
+    /// reader's `Coordinator` keys its "have I applied this anchor yet?" check off
+    /// this value (not off view `@State`), so re-clicking a quote link to an
+    /// already-open document re-fires scroll + highlight even though the view
+    /// itself may be re-created mid-navigation.
     public private(set) var pendingScrollAnchorVersion: Int = 0
 
     /// Atomically consume the pending scroll anchor if `selection` matches.
-    /// Returns the fragment to resolve and clears the anchor. Returns nil if the
-    /// selection doesn't match or there is no pending anchor.
+    /// Returns the fragment to resolve and clears the anchor; nil if the
+    /// selection doesn't match or there is no pending anchor. Only the reader
+    /// `Coordinator` consumes — and only once the page has painted (see
+    /// `WikiReaderView.ConsumeAndApplyPendingAnchor`) — so a view that is
+    /// discarded before painting never clears an anchor it never applied.
     public func consumePendingScrollAnchor(for selection: WikiSelection?) -> String? {
         guard let pending = pendingScrollAnchor,
               let sel = selection,
@@ -326,13 +332,13 @@ public final class WikiStoreModel {
     /// a copy.
     public func openTab(_ selection: WikiSelection, title: String? = nil) {
         if let existing = tabs.first(where: { $0.selection == selection }) {
-            print("[tabs] openTab: focus existing tab for \(selection) (id=\(existing.id))")
+            DebugLog.store("[tabs] openTab: focus existing tab for \(selection) (id=\(existing.id))")
             setActiveTab(existing.id)
             return
         }
         let tab = EditorTab(selection: selection, title: title ?? tabTitle(for: selection))
         tabs.append(tab)
-        print("[tabs] openTab: new tab for \(selection) (id=\(tab.id)), \(tabs.count) tabs total")
+        DebugLog.store("[tabs] openTab: new tab for \(selection) (id=\(tab.id)), \(tabs.count) tabs total")
         setActiveTab(tab.id)
     }
 
@@ -414,7 +420,7 @@ public final class WikiStoreModel {
             openTab(.page(page.id), title: title)
             onPageDidChange?()
         } catch {
-            print("WikiStoreModel.newPageInNewTab failed: \(error)")
+            DebugLog.store("WikiStoreModel.newPageInNewTab failed: \(error)")
         }
     }
 
@@ -529,7 +535,7 @@ public final class WikiStoreModel {
             onPageDidChange?()
         } catch {
             // Phase 1: log to console; a save-error surface lands later.
-            print("WikiStoreModel.save failed: \(error)")
+            DebugLog.store("WikiStoreModel.save failed: \(error)")
         }
     }
 
@@ -572,7 +578,7 @@ public final class WikiStoreModel {
             isSystemPromptDirty = false
             onPageDidChange?()
         } catch {
-            print("WikiStoreModel.saveSystemPrompt failed: \(error)")
+            DebugLog.store("WikiStoreModel.saveSystemPrompt failed: \(error)")
         }
     }
 
@@ -632,7 +638,7 @@ public final class WikiStoreModel {
             openTab(newSelection, title: title)
             onPageDidChange?()
         } catch {
-            print("WikiStoreModel.newPage failed: \(error)")
+            DebugLog.store("WikiStoreModel.newPage failed: \(error)")
         }
     }
 
@@ -650,7 +656,7 @@ public final class WikiStoreModel {
             }
             onPageDidChange?()
         } catch {
-            print("WikiStoreModel.rename failed: \(error)")
+            DebugLog.store("WikiStoreModel.rename failed: \(error)")
         }
     }
 
@@ -666,7 +672,7 @@ public final class WikiStoreModel {
             }
             onPageDidChange?()
         } catch {
-            print("WikiStoreModel.renameSource failed: \(error)")
+            DebugLog.store("WikiStoreModel.renameSource failed: \(error)")
         }
     }
 
@@ -681,7 +687,7 @@ public final class WikiStoreModel {
             reloadSummaries()
             onPageDidChange?()
         } catch {
-            print("WikiStoreModel.delete failed: \(error)")
+            DebugLog.store("WikiStoreModel.delete failed: \(error)")
         }
     }
 
@@ -699,7 +705,7 @@ public final class WikiStoreModel {
             // Skip directories — only flat files are ingested.
             let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
             if isDir {
-                print("WikiStoreModel.ingest skipping directory: \(url.lastPathComponent)")
+                DebugLog.store("WikiStoreModel.ingest skipping directory: \(url.lastPathComponent)")
                 continue
             }
             let filename = url.lastPathComponent
@@ -710,7 +716,7 @@ public final class WikiStoreModel {
                     try Data(contentsOf: url)
                 }.value
             } catch {
-                print("WikiStoreModel.ingest read failed for \(filename): \(error)")
+                DebugLog.store("WikiStoreModel.ingest read failed for \(filename): \(error)")
                 continue
             }
             do {
@@ -718,7 +724,7 @@ public final class WikiStoreModel {
                     filename: filename, data: data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil)
                 lastSourceID = summary.id
             } catch {
-                print("WikiStoreModel.ingest store failed for \(filename): \(error)")
+                DebugLog.store("WikiStoreModel.ingest store failed for \(filename): \(error)")
             }
         }
         reloadSources()
@@ -775,7 +781,7 @@ public final class WikiStoreModel {
             reloadSources()
             onPageDidChange?()
         } catch {
-            print("WikiStoreModel.addSource failed: \(error)")
+            DebugLog.store("WikiStoreModel.addSource failed: \(error)")
         }
     }
 
@@ -810,7 +816,7 @@ public final class WikiStoreModel {
                 openTab(.source(summary.id))
                 onPageDidChange?()
             } catch {
-                print("WikiStoreModel.ingestFromZotero failed: \(error)")
+                DebugLog.store("WikiStoreModel.ingestFromZotero failed: \(error)")
                 throw error
             }
         case .unavailable(let reason):
@@ -875,7 +881,7 @@ public final class WikiStoreModel {
             reloadSources()
             onPageDidChange?()
         } catch {
-            print("WikiStoreModel.deleteSource failed: \(error)")
+            DebugLog.store("WikiStoreModel.deleteSource failed: \(error)")
         }
     }
 

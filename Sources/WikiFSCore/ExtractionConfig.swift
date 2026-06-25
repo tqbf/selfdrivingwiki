@@ -100,7 +100,7 @@ public struct ExtractionConfig: Codable, Equatable, Sendable {
         let url = directory.appendingPathComponent(fileName, isDirectory: false)
         guard let data = try? Data(contentsOf: url) else { return ExtractionConfig() }
         guard let config = try? JSONDecoder().decode(ExtractionConfig.self, from: data) else {
-            print("ExtractionConfig: corrupt \(fileName), starting with defaults")
+            DebugLog.config("ExtractionConfig: corrupt \(fileName), starting with defaults")
             return ExtractionConfig()
         }
         return config

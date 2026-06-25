@@ -6,6 +6,10 @@ import SwiftUI
 /// silent lock state.
 struct AgentTranscriptSidebar: View {
     @Bindable var launcher: AgentLauncher
+    /// Forwards wiki-link clicks in the transcript to the detail column. Built
+    /// where the store lives (the owning `ContentView` / `LintView`) and
+    /// forwarded unchanged to the activity view.
+    var onWikiLink: ((URL) -> Void)? = nil
     @State private var showsInternals = false
     @State private var splitFraction: CGFloat = 0.3
     @State private var dragOrigin: CGFloat = 0.3
@@ -207,7 +211,7 @@ struct AgentTranscriptSidebar: View {
                     .foregroundStyle(.secondary)
             }
             AgentRunBanner(isVisible: isAgentActive, kind: launcher.runningKind)
-            AgentActivityView(launcher: launcher, showsInternals: showsInternals)
+            AgentActivityView(launcher: launcher, showsInternals: showsInternals, onWikiLink: onWikiLink)
         }
     }
 

@@ -7,7 +7,7 @@ import Foundation
 // `WikiLinkMenuBuilder` decides which actions apply to a link URL (and rebuilds
 // the canonical `[[…]]` text for "Copy as Wiki Link"). It is pure so it is
 // trivially unit-testable and free of the Textual/AppKit dependency. The view
-// layer (`MarkdownPreview` in `WikiFS`) maps these actions to menu items with
+// layer (`WikiLinkMenuNSItems` in `WikiFS`) maps these actions to menu items with
 // real closures (navigation, semantic search, pasteboard, the File Provider
 // mount), where state is needed.
 //

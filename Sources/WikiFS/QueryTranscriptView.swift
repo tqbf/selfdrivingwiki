@@ -5,6 +5,10 @@ import WikiFSCore
 /// bookkeeping stays in AgentActivityView behind "Show internals".
 struct QueryTranscriptView: View {
     @Bindable var launcher: AgentLauncher
+    /// Forwards wiki-link clicks in the transcript to the detail column. Built
+    /// where the store lives (the parent `QueryConversationView`) and forwarded
+    /// unchanged to the transcript web view.
+    var onWikiLink: ((URL) -> Void)? = nil
 
     var body: some View {
         Group {
@@ -12,7 +16,7 @@ struct QueryTranscriptView: View {
                 placeholder
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
-                AgentTranscriptWebView(events: visibleEvents, style: .chat)
+                AgentTranscriptWebView(events: visibleEvents, style: .chat, onWikiLink: onWikiLink)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }

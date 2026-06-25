@@ -1,28 +1,22 @@
 import Foundation
 import Testing
-import Textual
-@testable import WikiFSCore
+import WikiFSCore
 @testable import WikiFS
 
-/// Headless benchmark for the markdown reader render path: isolates the two
-/// main-thread, **non-layout** costs — preprocessing (footnote expansion +
-/// wiki-link linkification) and Markdown→`AttributedString` parse (Textual) —
-/// on a ~512 KB synthetic source, the size at which the reader beachballs (see
-/// the "Reader freezes on large source documents" note).
+/// Headless benchmark for the WKWebView reader render path: isolates the
+/// non-layout costs the reader runs off the main actor — preprocessing
+/// (footnote expansion + wiki-link linkification) and the swift-markdown → HTML
+/// render (`MarkdownHTMLRenderer`) — on a ~512 KB synthetic source. This is the
+/// path `WikiReaderView`'s detached convert task runs before handing HTML to
+/// `WKWebView`.
 ///
-/// Layout (SwiftUI measuring every block, with no virtualization) can't be
-/// timed headlessly and is the remaining unknown — capture it in Instruments
-/// against the `reader.preprocess` signpost (`com.selfdrivingwiki.debug`).
+/// Layout (WebKit painting the windowed document) can't be timed headlessly and
+/// is the remaining unknown — capture it in Instruments against the
+/// `reader.preprocess` / `webview.convert` signposts (`com.selfdrivingwiki.debug`).
 ///
-/// This answers the load-bearing question: of the ~10 s freeze, how much is
-/// parse vs. preprocessing? If parse + preprocessing together are small, layout
-/// is the target and the fix is virtualization (#3) or a web view (#4), not
-/// off-main parse (#2).
-///
-/// `@MainActor`: Textual's `MarkupParser` protocol is main-actor-isolated
-/// (`Packages/Textual/Sources/Textual/MarkupParser.swift`), so the parse can
-/// only be driven from the main actor today — a constraint on the off-main-parse
-/// idea, recorded here as a finding.
+/// (This superseded a Textual-era benchmark that also measured the native
+/// reader's Markdown→`AttributedString` parse; that reader — and its parse axis —
+/// was removed in `plans/textual-to-wkwebview.md`.)
 ///
 /// Run just this benchmark with:
 ///
@@ -31,14 +25,12 @@ struct ReaderRenderPerfTests {
 
     private static let targetBytes = 512 * 1024
 
-    @MainActor
-    @Test func preprocessVsParseSplitOnLargeSource() {
+    @Test func preprocessVsWebRenderSplitOnLargeSource() {
         let raw = Self.makeLargeMarkdown(targetBytes: Self.targetBytes)
         let bytes = raw.utf8.count
-        let parser = AttributedStringMarkdownParser.markdown()
 
-        // Faithfully replay `MarkdownPreview.renderMarkdown` (string cost only —
-        // the `isResolved` closure is a constant, so no per-link DB lookup; that
+        // Faithfully replay `ReaderMarkdown.prepared` (string cost only — the
+        // `isResolved` closure is a constant, so no per-link DB lookup; that
         // lookup is a separate axis measured against a real store).
         func preprocess(_ source: String) -> String {
             let rendered = WikiFootnoteMarkdown.rendered(source)
@@ -50,8 +42,8 @@ struct ReaderRenderPerfTests {
             return "\(body)\n\n---\n\n\(footnotes)"
         }
 
-        // Warm up (regex caches, Foundation Markdown JIT) before timing.
-        _ = try? parser.attributedString(for: preprocess(raw))
+        // Warm up (regex caches, swift-markdown) before timing.
+        _ = MarkdownHTMLRenderer.render(preprocess(raw))
 
         // Preprocess: median of 5 runs (median ignores GC/scheduling spikes).
         var preprocessSamples: [Double] = []
@@ -64,26 +56,13 @@ struct ReaderRenderPerfTests {
         preprocessSamples.sort()
         let preprocessMs = preprocessSamples[preprocessSamples.count / 2]
 
-        // Parse: median of 5 runs, on the fully preprocessed string (what
-        // StructuredText actually receives).
+        // Web render: the swift-markdown → HTML render the reader runs off-main,
+        // on the fully preprocessed string (what `WikiReaderView` converts).
         let rendered = preprocess(raw)
-        var parseSamples: [Double] = []
-        for _ in 0..<5 {
-            let start = DispatchTime.now().uptimeNanoseconds
-            _ = try? parser.attributedString(for: rendered)
-            let elapsedNs = DispatchTime.now().uptimeNanoseconds - start
-            parseSamples.append(Double(elapsedNs) / 1_000_000)
-        }
-        parseSamples.sort()
-        let parseMs = parseSamples[parseSamples.count / 2]
-
-        // Web-view renderer cost: the swift-markdown → HTML render the web-view
-        // path runs off-main (Sources/WikiFS/MarkdownHTMLRenderer.swift). Timed
-        // on the raw markdown; the pre-pass cost is the `preprocess` number above.
         var convertSamples: [Double] = []
         for _ in 0..<5 {
             let start = DispatchTime.now().uptimeNanoseconds
-            _ = MarkdownHTMLRenderer.render(raw)
+            _ = MarkdownHTMLRenderer.render(rendered)
             let elapsedNs = DispatchTime.now().uptimeNanoseconds - start
             convertSamples.append(Double(elapsedNs) / 1_000_000)
         }
@@ -91,17 +70,16 @@ struct ReaderRenderPerfTests {
         let convertMs = convertSamples[convertSamples.count / 2]
 
         // Sanity: the full pipeline produced a non-empty document.
-        let attributed = try? parser.attributedString(for: rendered)
-        #expect(attributed?.characters.isEmpty == false)
+        let html = MarkdownHTMLRenderer.render(rendered)
+        #expect(html.isEmpty == false)
 
         let kb = Double(bytes) / 1024.0
         print("""
 
-        ── reader render-path benchmark ─────────────────────────
+        ── reader render-path benchmark (WKWebView) ─────────────
         source size : \(bytes) bytes (\(String(format: "%.0f", kb)) KB)
         preprocess  : \(String(format: "%.1f", preprocessMs)) ms  (footnote expand + wiki-link linkify, full string)
-        parse       : \(String(format: "%.1f", parseMs)) ms  (Textual Markdown → AttributedString)
-        web render : \(String(format: "%.1f", convertMs)) ms  (swift-markdown → HTML, web-view path)
+        web render  : \(String(format: "%.1f", convertMs)) ms  (swift-markdown → HTML)
         ──────────────────────────────────────────────────────────
         """)
     }

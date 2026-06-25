@@ -21,7 +21,7 @@ import WikiFSCore
 /// TextEditor(...)
 ///     .zoomShortcuts($editorZoom)
 ///
-/// MarkdownPreview(...)
+/// WikiReaderView(...)
 ///     .zoomShortcuts($readerZoom)
 /// ```
 extension View {

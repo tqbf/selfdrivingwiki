@@ -7,11 +7,16 @@ struct AgentActivityView: View {
     @Bindable var launcher: AgentLauncher
     let showsResultEvents: Bool
     let showsInternals: Bool
+    /// Forwards wiki-link clicks in the transcript to the detail column. Built
+    /// where the store lives and threaded down; `nil` when navigation is
+    /// impossible (links still render, just don't navigate).
+    var onWikiLink: ((URL) -> Void)? = nil
 
-    init(launcher: AgentLauncher, showsResultEvents: Bool = true, showsInternals: Bool = false) {
+    init(launcher: AgentLauncher, showsResultEvents: Bool = true, showsInternals: Bool = false, onWikiLink: ((URL) -> Void)? = nil) {
         self.launcher = launcher
         self.showsResultEvents = showsResultEvents
         self.showsInternals = showsInternals
+        self.onWikiLink = onWikiLink
     }
 
     var body: some View {
@@ -45,7 +50,7 @@ struct AgentActivityView: View {
                 .padding(ActivityMetrics.padding)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
-            AgentTranscriptWebView(events: renderedEvents, style: .activityFeed, showsInternals: showsInternals)
+            AgentTranscriptWebView(events: renderedEvents, style: .activityFeed, showsInternals: showsInternals, onWikiLink: onWikiLink)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }

@@ -10,7 +10,7 @@ struct SourceWebAnchorTests {
 
     @Test func headingFragmentResolvesToHeading() {
         let blocks = AnchorBlock.parse("# Methodology\n\nbody text")
-        let target = SourceWebView.resolveScrollTarget("Methodology", blocks: blocks)
+        let target = WikiReaderView.resolveScrollTarget("Methodology", blocks: blocks)
         #expect(target == .heading(slug: "methodology"))
     }
 
@@ -18,7 +18,7 @@ struct SourceWebAnchorTests {
         // A `"quote"` matches a paragraph by substring (resolveAnchor), so it's
         // not a heading → quote highlight.
         let blocks = AnchorBlock.parse("# Intro\n\nThe results show a 30% improvement.")
-        let target = SourceWebView.resolveScrollTarget("\"30% improvement\"", blocks: blocks)
+        let target = WikiReaderView.resolveScrollTarget("\"30% improvement\"", blocks: blocks)
         if case .quote(let q) = target {
             #expect(q == "30% improvement")
         } else {
@@ -28,7 +28,7 @@ struct SourceWebAnchorTests {
 
     @Test func quoteNormalizesInternalWhitespace() {
         let blocks = AnchorBlock.parse("# Intro\n\nText.")
-        let target = SourceWebView.resolveScrollTarget("\"a   b\"", blocks: blocks)
+        let target = WikiReaderView.resolveScrollTarget("\"a   b\"", blocks: blocks)
         if case .quote(let q) = target {
             #expect(q == "a b")
         } else {
@@ -38,7 +38,7 @@ struct SourceWebAnchorTests {
 
     @Test func unknownFragmentFallsBackToQuote() {
         let blocks = AnchorBlock.parse("# Intro\n\nText.")
-        let target = SourceWebView.resolveScrollTarget("not a heading anywhere", blocks: blocks)
+        let target = WikiReaderView.resolveScrollTarget("not a heading anywhere", blocks: blocks)
         if case .quote = target {
             // ok
         } else {
@@ -48,6 +48,6 @@ struct SourceWebAnchorTests {
 
     @Test func emptyQuoteReturnsNil() {
         let blocks = AnchorBlock.parse("# Intro\n\nText.")
-        #expect(SourceWebView.resolveScrollTarget("\"\"", blocks: blocks) == nil)
+        #expect(WikiReaderView.resolveScrollTarget("\"\"", blocks: blocks) == nil)
     }
 }

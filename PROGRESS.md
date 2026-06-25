@@ -2,6 +2,91 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-25 — Fix quote-link highlight across inline elements (WKWebView reader)
+
+A clicked `[[source:Name#"quote"]]` no longer silently failed to
+highlight/scroll when the quoted passage spanned an inline element in the
+source (a markdown link, bold, etc.). Diagnosed by reading the wiki's SQLite
+DB directly: the real quote ("AI is an amplifier. It magnifies…struggling
+ones.") had its first sentence as a hyperlink, so after HTML render it lived in
+two text nodes separated by an `<a>`.
+
+- **Root cause.** `WikiReaderRep.highlightJS` searched for the quote within a
+  *single* text node (plus an unreliable `window.find` first attempt), so any
+  quote crossing an element boundary was never matched → no `<mark>`, no scroll.
+- **Fix.** Rewrote `highlightJS` to walk every text node under `<body>`, build a
+  whitespace-collapsed/lowercased index map over the whole document, find the
+  quote there, build a Range across the nodes it spans, and wrap each
+  intersecting text segment in `<mark class="sdwhl">` (preserving inline elements
+  like the link). `window.find` removed.
+- **Tests.** Added `QuoteHighlightWebViewTests` that EXECUTE the JS in a real
+  headless `WKWebView` (made it work in `swift test` by creating
+  `NSApplication.shared` + the completion-handler `evaluateJavaScript` bridge).
+  Covers: single-node, whitespace-collapsed, the full markdown pipeline, a
+  cross-element quote, the **verbatim source prose** from the DB, re-highlight
+  clearing, plus a hosted `NSHostingController` lifecycle test driving the real
+  `selectSource(byDisplayName:anchor:)` seam. Updated `QuoteHighlightJSTests`
+  for the new whole-document approach. 1041 tests pass.
+
+## 2026-06-25 — Replace vendored Textual reader with WKWebView everywhere
+
+Implemented `plans/textual-to-wkwebview.md`. Removed the app's only large vendored
+dependency (the ~193-file Textual fork in `Packages/Textual/`) by consolidating
+every markdown reader onto the WKWebView + `MarkdownHTMLRenderer` path. One
+reader stack instead of two; whole-link selection + a native context menu for
+free (the fork existed solely to get those inside Textual).
+
+- **`WikiReaderView` (renamed from `SourceWebView`).** The web reader is now the
+  only reader — used by pages, sources, system prompt, changelog. The
+  `SourceDetailView` size threshold (`reader.webThresholdKB`) is gone; the web
+  reader is faster at every size. `SourceDetailWebView` → `WikiReaderWebView`,
+  the private `WebViewRep` → `WikiReaderRep` (now `internal` so the quote-highlight
+  JS is unit-testable).
+- **Ghost links + zoom (the two gaps).** Missing `[[Ghost]]` links now render red
+  via a single CSS rule (`a[href^="wiki://missing"]`); the off-main convert
+  resolves links against page/source existence sets computed on the main actor
+  before the `Task.detached` (mirrors `resolveSourceByName` — display name OR
+  filename, case-insensitive). ⌘+/⌘−/⌘0/⌘scroll zoom works via
+  `WKWebView.pageZoom`, fed from the existing `@AppStorage("reader.zoom")`.
+- **Fixed the `wiki://` routing bug.** `route(_:)` read `comps.path`, which is `""`
+  for the query-encoded `wiki://page?title=…` URLs the linkifier emits — so every
+  wiki-link click silently no-op'd. Replaced with the proven query-based helpers
+  (`WikiLinkMarkdown.target/fragment/resolvedKind/isSamePageAnchor`), extracted as
+  a pure `linkRoute(for:)` classifier (8 `WikiReaderRoutingTests`). External
+  http(s) links now also open in the browser instead of navigating the reader.
+- **Custom context menus (no fork).** `WikiReaderWebView.willOpenMenu` prepends
+  the custom items (Suggest / Find Similar / Copy as Wiki Link / Copy File Path
+  for wiki links, Add as Source for http(s)) on top of WKWebView's native
+  Copy / Copy Link / Look Up / Share. WKWebView gives no synchronous DOM query, so
+  the hovered `<a>` href is tracked via an injected `mouseover` listener →
+  `WKScriptMessageHandler` and read in `willOpenMenu`. `WikiLinkMenuNSItems`
+  (renamed from `WikiLinkContextMenu`/`LinkContextMenuItems`) returns `[NSMenuItem]`
+  from the pure `WikiLinkMenuBuilder`, via a closure→selector target retained on
+  the item's `representedObject`.
+- **Agent transcript `[[wiki-links]]` (the original task).** Assistant/result rows
+  now run through `ReaderMarkdown.prepared` so `[[Page]]` renders as a clickable
+  `wiki://` link; user text stays literal. An `onWikiLink: ((URL) -> Void)?` is
+  built where the store lives (`ContentView`, `LintView`, `QueryConversationView`)
+  and threaded unchanged through `AgentTranscriptSidebar` → `AgentActivityView` →
+  `AgentTranscriptWebView` (and the Query `QueryTranscriptView` path). `wiki://`
+  clicks route to `selectPage`/`selectSource` and `.cancel` (never load into the
+  web view).
+- **Removed:** `MarkdownPreview.swift`, `WikiLinkStylingParser.swift`,
+  `NumberedParagraphStyle.swift`, `Packages/Textual/`, the Textual
+  dependency/product in `Package.swift`, and the "Vendored Textual fork" ISSUES.md
+  entry. The 17 `QuoteHighlightTests` + 10 `WikiLinkStylingParserTests` (both
+  Textual-dependent) were retired; `QuoteHighlightJSTests` (11) and
+  `AgentTranscriptLinkifyTests` (7) replace them at the new seams.
+
+**Tests.** 1022 pass, 75 suites, 0 failures (`swift build` + `swift test` clean).
+The retired `ReaderRenderPerfTests` benchmark was rewritten to measure the
+surviving web-render path only (preprocess 174 ms + render 59 ms on 513 KB).
+
+**Manual gates pending:** AC.3 (transcript `[[wiki-link]]` click navigates),
+AC.5 (zoom), AC.6 (right-click custom + native menu), AC.7 (find/quote/anchor in
+the unified reader) — live-WKWebView interactivity not unit-testable. On branch
+`feature/textual-to-wkwebview`.
+
 ## 2026-06-25 — Agent activity sidebar: full-height panel, turn-aware spinner/banner, edit-lock release fix
 
 Reworked the agent activity surface and run lifecycle so "done" actually reads as

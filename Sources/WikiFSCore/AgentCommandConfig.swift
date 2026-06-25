@@ -53,7 +53,7 @@ public struct AgentCommandConfig: Codable, Equatable, Sendable {
         let url = directory.appendingPathComponent(fileName, isDirectory: false)
         guard let data = try? Data(contentsOf: url) else { return .default }
         guard let config = try? JSONDecoder().decode(AgentCommandConfig.self, from: data) else {
-            print("AgentCommandConfig: corrupt \(fileName), starting default")
+            DebugLog.config("AgentCommandConfig: corrupt \(fileName), starting default")
             return .default
         }
         return config

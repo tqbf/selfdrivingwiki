@@ -36,7 +36,7 @@ struct LintView: View {
 
             Divider().opacity(PageEditorMetrics.dividerOpacity)
 
-            AgentTranscriptSidebar(launcher: launcher)
+            AgentTranscriptSidebar(launcher: launcher, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .textBackgroundColor))

@@ -35,6 +35,12 @@ struct AgentTranscriptWebView: NSViewRepresentable {
     /// retroactively (e.g. `AgentActivityView`'s "Show internals" toggle).
     /// Callers whose filtering never changes mid-stream can ignore this.
     var showsInternals: Bool = false
+    /// Invoked when the user clicks a `wiki://` link inside the transcript
+    /// (rendered from an assistant/result row's `[[wiki-link]]`). The closure
+    /// is built where the store lives (two levels up) and routes to
+    /// `selectPage` / `selectSource`. `nil` → links still render but don't
+    /// navigate (a strict improvement over literal `[[brackets]]`).
+    var onWikiLink: ((URL) -> Void)? = nil
 
     func makeNSView(context: Context) -> WKWebView {
         let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
@@ -44,12 +50,14 @@ struct AgentTranscriptWebView: NSViewRepresentable {
         webView.allowsBackForwardNavigationGestures = false
         context.coordinator.webView = webView
         context.coordinator.style = style
+        context.coordinator.onWikiLink = onWikiLink
         context.coordinator.reload(events: events, showsInternals: showsInternals)
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.style = style
+        context.coordinator.onWikiLink = onWikiLink
         context.coordinator.apply(events: events, showsInternals: showsInternals)
     }
 
@@ -58,6 +66,9 @@ struct AgentTranscriptWebView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         weak var webView: WKWebView?
         var style: VisualStyle = .activityFeed
+        /// Routes a clicked `wiki://` link out to the view's `onWikiLink`
+        /// closure (built where the store lives). Refreshed each update.
+        var onWikiLink: ((URL) -> Void)?
         private var renderedCount = 0
         private var renderedShowsInternals: Bool?
         private var isLoaded = false
@@ -100,18 +111,27 @@ struct AgentTranscriptWebView: NSViewRepresentable {
         }
 
         /// Open external links in the default browser instead of navigating
-        /// the inline web view.
-        @MainActor func webView(
+        /// the inline web view. `wiki://` links (rendered from `[[wiki-links]]`
+        /// in assistant/result rows) are routed to `onWikiLink` instead of being
+        /// loaded into the web view (which would produce a broken-navigation
+        /// error page) — mirroring the http(s) branch's `.cancel`.
+        func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction,
-            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+            decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
         ) {
             if navigationAction.navigationType == .linkActivated,
-               let url = navigationAction.request.url,
-               url.scheme == "http" || url.scheme == "https" {
-                NSWorkspace.shared.open(url)
-                decisionHandler(.cancel)
-                return
+               let url = navigationAction.request.url {
+                if url.scheme == "wiki" {
+                    onWikiLink?(url)
+                    decisionHandler(.cancel)
+                    return
+                }
+                if url.scheme == "http" || url.scheme == "https" {
+                    NSWorkspace.shared.open(url)
+                    decisionHandler(.cancel)
+                    return
+                }
             }
             decisionHandler(.allow)
         }
@@ -134,7 +154,16 @@ struct AgentTranscriptWebView: NSViewRepresentable {
             }
         }
 
-        private static func feedRowHTML(for event: AgentEvent) -> String {
+        /// Render assistant/result markdown with the shared footnote + wiki-link
+        /// pre-pass (constant `true` resolution: the agent references pages it
+        /// just wrote, and the transcript has no store to check existence). User
+        /// text is intentionally NOT run through this — a user typing `[[Foo]]`
+        /// is not a link. `internal` so the linkify behavior is unit-testable.
+        static func renderedMarkdown(_ text: String) -> String {
+            MarkdownHTMLRenderer.render(ReaderMarkdown.prepared(text) { _, _ in true })
+        }
+
+        static func feedRowHTML(for event: AgentEvent) -> String {
             switch event {
             case .userText(let text):
                 return """
@@ -144,7 +173,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
             case .systemInit(let model):
                 return "<div class=\"row row-meta\">Started · \(escape(model))</div>"
             case .assistantText(let text):
-                return "<div class=\"row row-assistant\">\(MarkdownHTMLRenderer.render(text))</div>"
+                return "<div class=\"row row-assistant\">\(renderedMarkdown(text))</div>"
             case .toolUse(let name, let summary):
                 let summaryHTML = summary.isEmpty ? "" : "<span class=\"row-tool-summary\">\(escape(summary))</span>"
                 return """
@@ -162,7 +191,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
                 """
             case .result(let isError, let text):
                 let label = isError ? "Failed" : "Result"
-                let bodyHTML = text.isEmpty ? "" : MarkdownHTMLRenderer.render(text)
+                let bodyHTML = text.isEmpty ? "" : renderedMarkdown(text)
                 return """
                 <div class="row row-result\(isError ? " is-error" : "")"><div class="row-label">\(label)</div>\(bodyHTML)</div>
                 """
@@ -177,7 +206,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
         /// chat-styled transcript (the caller's `events` is pre-filtered to
         /// user/assistant/result), but render nothing rather than crash if one
         /// slips through.
-        private static func chatRowHTML(for event: AgentEvent) -> String {
+        static func chatRowHTML(for event: AgentEvent) -> String {
             switch event {
             case .userText(let text):
                 return """
@@ -185,12 +214,12 @@ struct AgentTranscriptWebView: NSViewRepresentable {
                 """
             case .assistantText(let text):
                 return """
-                <div class="row chat-row chat-assistant"><div class="bubble">\(MarkdownHTMLRenderer.render(text))</div></div>
+                <div class="row chat-row chat-assistant"><div class="bubble">\(renderedMarkdown(text))</div></div>
                 """
             case .result(_, let text):
                 guard !text.isEmpty else { return "" }
                 return """
-                <div class="row chat-row chat-assistant"><div class="bubble">\(MarkdownHTMLRenderer.render(text))</div></div>
+                <div class="row chat-row chat-assistant"><div class="bubble">\(renderedMarkdown(text))</div></div>
                 """
             case .systemInit, .toolUse, .toolResult, .subagent, .raw:
                 return ""

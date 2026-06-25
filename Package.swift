@@ -8,16 +8,10 @@ let package = Package(
     name: "WikiFS",
     platforms: [.macOS(.v15)],
     dependencies: [
-        // Textual is vendored in-repo (Packages/Textual) so we can carry a
-        // small, localized fork for right-click link context menus (whole-link
-        // selection + a link-context-menu env value). See
-        // plans/link-context-menus.md. Re-sync deliberately; keep the fork diff
-        // tiny (NSTextInteractionView + AppKitTextInteractionOverlay + the
-        // linkRange/link-menu additions).
-        .package(path: "Packages/Textual"),
-        // swift-markdown powers the source web reader's markdown→HTML renderer
-        // (plans/source-web-reader.md). Pure-Swift GFM AST (tables, footnotes,
-        // task lists); we walk it with a MarkupVisitor to emit HTML.
+        // swift-markdown powers the reader's markdown→HTML renderer
+        // (plans/source-web-reader.md / textual-to-wkwebview.md). Pure-Swift GFM
+        // AST (tables, footnotes, task lists); we walk it with a MarkupVisitor to
+        // emit HTML for the WKWebView reader that replaced the vendored Textual.
         .package(url: "https://github.com/apple/swift-markdown", from: "0.8.0"),
     ],
     targets: [
@@ -34,13 +28,11 @@ let package = Package(
             name: "WikiFS",
             dependencies: [
                 "WikiFSCore",
-                .product(name: "Textual", package: "textual"),
                 .product(name: "Markdown", package: "swift-markdown"),
             ],
             path: "Sources/WikiFS",
-            // WKWebView for the experimental web-view reader path
-            // (Sources/WikiFS/SourceWebView.swift) — see plans for the large-doc
-            // render-freeze fix.
+            // WKWebView for the reader path (Sources/WikiFS/WikiReaderView.swift)
+            // — the single markdown reader (replaced the vendored Textual).
             linkerSettings: [.linkedFramework("WebKit")]
         ),
         // wikictl's logic (arg parsing, command dispatch, wiki resolution, the

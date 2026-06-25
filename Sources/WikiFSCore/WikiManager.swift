@@ -251,7 +251,7 @@ public final class WikiManager {
             model = WikiStoreModel(store: store)
             if model.summaries.isEmpty { model.newPage(title: "Home") }
         } catch {
-            print("WikiManager: failed to open wiki \(id), using in-memory: \(error)")
+            DebugLog.store("WikiManager: failed to open wiki \(id), using in-memory: \(error)")
             // swiftlint:disable:next force_try
             let memory = try! SQLiteWikiStore(databaseURL: URL(fileURLWithPath: ":memory:"))
             model = WikiStoreModel(store: memory)
@@ -271,7 +271,7 @@ public final class WikiManager {
                 model.newPage(title: "Home")
             }
         } catch {
-            print("WikiManager: createDatabase failed for \(descriptor.id): \(error)")
+            DebugLog.store("WikiManager: createDatabase failed for \(descriptor.id): \(error)")
         }
     }
 
@@ -343,7 +343,7 @@ public final class WikiManager {
             registry.add(descriptor)
             try? registry.save(to: containerDirectory)
         } catch {
-            print("WikiManager: legacy migration failed: \(error)")
+            DebugLog.store("WikiManager: legacy migration failed: \(error)")
         }
     }
 }

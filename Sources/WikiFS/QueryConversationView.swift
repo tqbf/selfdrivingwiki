@@ -68,7 +68,7 @@ struct QueryConversationView: View {
         // The internals view only shows during an active query run; when idle the
         // view always returns to the conversation/empty state (AC.1).
         if showsInternals && launcher.isRunning && launcher.runningKind == .query {
-            AgentActivityView(launcher: launcher, showsResultEvents: false, showsInternals: true)
+            AgentActivityView(launcher: launcher, showsResultEvents: false, showsInternals: true, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(QueryConversationMetrics.contentInset)
         } else if hasVisibleConversation {
@@ -80,7 +80,7 @@ struct QueryConversationView: View {
 
     private var conversation: some View {
         VStack(spacing: 0) {
-            QueryTranscriptView(launcher: launcher)
+            QueryTranscriptView(launcher: launcher, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
                 .frame(maxWidth: QueryConversationMetrics.chatColumnWidth, maxHeight: .infinity)
                 .padding(.top, QueryConversationMetrics.conversationTopInset)
             composer(maxWidth: QueryConversationMetrics.chatColumnWidth)

@@ -48,7 +48,7 @@ public struct SandboxConfig: Codable, Equatable, Sendable {
         let url = directory.appendingPathComponent(fileName, isDirectory: false)
         guard let data = try? Data(contentsOf: url) else { return .default }
         guard let config = try? JSONDecoder().decode(SandboxConfig.self, from: data) else {
-            print("SandboxConfig: corrupt \(fileName), starting default")
+            DebugLog.config("SandboxConfig: corrupt \(fileName), starting default")
             return .default
         }
         return config

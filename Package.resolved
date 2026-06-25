@@ -1,5 +1,5 @@
 {
-  "originHash" : "c18c475ad2d51c9f1e8a14cf177cc4c8dd2b5c590a4ecb0e4655208e88bbc5b8",
+  "originHash" : "1b482475c8ca2f4bd9e9c2a74df62b646bbb88614858fee760bc3128add0ea57",
   "pins" : [
     {
       "identity" : "swift-cmark",
@@ -11,30 +11,12 @@
       }
     },
     {
-      "identity" : "swift-concurrency-extras",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/pointfreeco/swift-concurrency-extras",
-      "state" : {
-        "revision" : "a90e2e40a7a840a853dd29e57cbef5dbb72c9d5b",
-        "version" : "1.4.0"
-      }
-    },
-    {
       "identity" : "swift-markdown",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-markdown",
       "state" : {
         "revision" : "3c6f9523da3a1ec2fd829673e472d95b8097a3b8",
         "version" : "0.8.0"
-      }
-    },
-    {
-      "identity" : "swiftui-math",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/gonzalezreal/swiftui-math",
-      "state" : {
-        "revision" : "0b5c2cfaaec8d6193db206f675048eeb5ce95f71",
-        "version" : "0.1.0"
       }
     }
   ],
