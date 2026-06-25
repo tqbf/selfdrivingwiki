@@ -163,6 +163,17 @@ struct QueryConversationView: View {
                     .onSubmit(sendMessage)
                     .disabled(!canType)
 
+                if launcher.isRunning {
+                    Button(action: { launcher.stopAgent() }) {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.red)
+                            .frame(width: QueryConversationMetrics.sendButtonSize, height: QueryConversationMetrics.sendButtonSize)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("End this query session")
+                }
+
                 Button(action: sendMessage) {
                     Image(systemName: sendButtonIcon)
                         .font(.system(size: 18, weight: .semibold))
