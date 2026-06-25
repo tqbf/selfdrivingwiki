@@ -33,6 +33,13 @@ struct QueryConversationView: View {
             // `AgentActivityView`. (AC.1)
             if !isRunning { showsInternals = false }
         }
+        .onChange(of: launcher.isGenerating) { _, generating in
+            // Release the edit lock between turns so the user can ingest while
+            // the query agent is idle. Re-acquire when the agent starts generating
+            // a response. Only applies when "Allow wiki edits" is checked.
+            guard allowWikiEdits else { return }
+            store.setAgentRunning(generating)
+        }
     }
 
     private var controls: some View {
@@ -102,7 +109,7 @@ struct QueryConversationView: View {
     }
 
     private var showsEditingEnabledBanner: Bool {
-        allowWikiEdits && launcher.isInteractiveSession && launcher.isRunning
+        allowWikiEdits && launcher.isGenerating
     }
 
     private var conversation: some View {

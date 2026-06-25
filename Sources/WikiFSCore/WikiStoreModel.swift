@@ -622,6 +622,16 @@ public final class WikiStoreModel {
         loadDrafts(for: loadedSelection)
     }
 
+    /// Lightweight toggle for per-turn query edit-lock: flush on acquire, no
+    /// reload on release (the session is still alive; `endAgentRun()` handles the
+    /// full reload when the session actually ends).
+    public func setAgentRunning(_ running: Bool) {
+        if running {
+            flushPendingSaves()
+        }
+        isAgentRunning = running
+    }
+
     // MARK: - Mutations
 
     public func newPage(title: String = "Untitled") {
