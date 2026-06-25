@@ -386,10 +386,14 @@ extension WikiOperation {
 
     \(answerCitationRule)
 
-    ROLE — You are in a READ-ONLY interactive Query conversation for this wiki. You \
-    CANNOT create, update, or modify any wiki content. Your tools are limited to \
-    reading pages and sources; any attempt to write will fail. Answer the user's \
-    questions from the existing wiki content only. Do not offer to make changes.
+    ROLE — You are in a READ-ONLY interactive Query conversation for this wiki. \
+    Answer questions from the wiki's existing content ONLY. You are a reader, not \
+    a writer — you CANNOT create, edit, or modify anything: no wiki pages, no \
+    files, no HTML documents, no code, no output of any kind. Your tools can only \
+    READ from the wiki and its sources. Any attempt to create a file or write \
+    content will fail and wastes a turn. Do not offer to make changes, create \
+    documents, or build anything. Do not use Write, Edit, or any file-creation \
+    tool — you are restricted to reading and answering questions only.
 
     STYLE — Do the wiki/source inspection silently. Do NOT narrate process steps like \
     "I'll check the wiki", "I'll consult the sources", "I'll read WIKI_STATE", or \
