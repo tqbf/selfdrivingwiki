@@ -43,6 +43,16 @@ public enum AgentEvent: Equatable, Sendable {
     /// `isError` is the run-level error flag.
     case result(isError: Bool, text: String)
 
+    /// A `{"type":"message_stop"}` event — marks the end of one turn in an
+    /// interactive session. Claude emits this after every response when running
+    /// with `--input-format stream-json` + `--output-format stream-json`. It is
+    /// the turn-boundary signal: the agent finished its response and is waiting
+    /// for the next user input. Without it, the only completion signal is
+    /// `.result`, which fires at session end — so `isGenerating` would stay
+    /// `true` forever between turns and the per-turn edit lock would never release.
+    /// Not rendered in the transcript (filtered by `isInternalTranscriptEvent`).
+    case messageStop
+
     /// A line we didn't model (an unrecognized event type, or a malformed/partial
     /// line). Carries the raw text verbatim so nothing is silently swallowed.
     case raw(String)
@@ -72,6 +82,8 @@ public enum AgentEvent: Equatable, Sendable {
         case .result(let isError, let text):
             let label = isError ? "Failed" : "Result"
             return text.isEmpty ? label : "\(label):\n\(text)"
+        case .messageStop:
+            return ""  // internal — not rendered
         case .raw(let line):
             return line
         }
@@ -138,6 +150,9 @@ public enum AgentEventParser {
 
         case "result":
             return .result(isError: envelope.isError ?? false, text: envelope.result ?? "")
+
+        case "message_stop":
+            return .messageStop
 
         default:
             // Unmodeled event types (stream_event deltas, status, rate_limit_event,

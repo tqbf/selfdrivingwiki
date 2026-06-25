@@ -119,7 +119,7 @@ private enum ActivityMetrics {
 extension AgentEvent {
     var isInternalTranscriptEvent: Bool {
         switch self {
-        case .systemInit, .toolUse, .toolResult, .subagent, .raw:
+        case .systemInit, .toolUse, .toolResult, .subagent, .raw, .messageStop:
             true
         case .userText, .assistantText, .result:
             false

@@ -195,6 +195,8 @@ struct AgentTranscriptWebView: NSViewRepresentable {
                 return """
                 <div class="row row-result\(isError ? " is-error" : "")"><div class="row-label">\(label)</div>\(bodyHTML)</div>
                 """
+            case .messageStop:
+                return ""  // internal — not rendered
             case .raw(let line):
                 return "<pre class=\"row row-raw\">\(escape(line))</pre>"
             }
@@ -221,7 +223,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
                 return """
                 <div class="row chat-row chat-assistant"><div class="bubble">\(renderedMarkdown(text))</div></div>
                 """
-            case .systemInit, .toolUse, .toolResult, .subagent, .raw:
+            case .systemInit, .toolUse, .toolResult, .subagent, .messageStop, .raw:
                 return ""
             }
         }

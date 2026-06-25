@@ -827,10 +827,14 @@ final class AgentLauncher {
             stdoutLineBuffer.removeSubrange(...newlineIndex)
             if let event = AgentEventParser.parse(line: line) {
                 events.append(event)
-                // The terminal `result` event ends an agent turn (and a one-shot
-                // run's output). Clear the active-generation flag so an idle
-                // interactive session stops spinning.
+                // `.result` fires at session end (one-shot runs, or when the
+                // interactive session terminates). `.messageStop` fires at the
+                // end of EACH turn in an interactive session — Claude emits it
+                // after every response when stdin/stdout are both stream-json.
+                // Clear isGenerating on either so the per-turn edit lock releases
+                // between turns instead of staying stuck until session end.
                 if case .result = event { isGenerating = false }
+                if case .messageStop = event { isGenerating = false }
             }
         }
     }
