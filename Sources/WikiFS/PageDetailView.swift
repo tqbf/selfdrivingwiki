@@ -50,9 +50,12 @@ struct PageDetailView: View {
                         }
                         .keyboardShortcut(.escape, modifiers: [])
                     } else {
-                        Button("Edit", systemImage: "pencil") { isEditing = true }
+                        Button(store.isAgentRunning ? "Agent updating wiki…" : "Edit",
+                               systemImage: "pencil") { isEditing = true }
                             .disabled(store.isAgentRunning)
-                            .help("Edit this page manually")
+                            .help(store.isAgentRunning
+                                  ? "Editing is paused while the agent is updating the wiki"
+                                  : "Edit this page manually")
                         if let path = pageMountPath {
                             Button("Copy Path", systemImage: "terminal") {
                                 NSPasteboard.general.clearContents()

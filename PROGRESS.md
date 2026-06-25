@@ -45,6 +45,9 @@ done, and the trailing panel behaves like the leading sidebar.
   button lives in the Agent Activity section, gated on `isRunning` so an idle
   interactive session can still be ended. Per-page banners above each detail
   surface were removed. (A toolbar status-button experiment was tried and reverted.)
+- **Edit-button reason.** The disabled Edit button on the page / system-prompt
+  surfaces now reads "Agent updating wiki…" while a run holds the edit lock, so
+  it's clear why editing is paused (was a bare disabled "Edit").
 
 **Tests.** 1030 pass, 74 suites, 0 failures (`debugClusterPredicate…` updated for
 `isGenerating`; `swift build` clean). On branch `feature/selectable-agent-activity`.
