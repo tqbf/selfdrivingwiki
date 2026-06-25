@@ -16,4 +16,7 @@ enum PageEditorMetrics {
     static let editorMinHeight: CGFloat = 160
     static let previewMinHeight: CGFloat = 120
     static let dividerOpacity: Double = 0.5
+    /// Corner radius for inset panels (the trailing transcript sidebar) that
+    /// round the edge facing the content, matching the sidebar column's look.
+    static let panelCornerRadius: CGFloat = 10
 }

@@ -15,7 +15,6 @@ struct QueryConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            AgentRunBanner(isVisible: store.isAgentRunning)
             ZStack(alignment: .topTrailing) {
                 content
                 if showsDebugControls {
@@ -40,10 +39,6 @@ struct QueryConversationView: View {
         HStack(spacing: 8) {
             ProgressView()
                 .controlSize(.small)
-            Button("Stop", systemImage: "stop.fill") {
-                launcher.stop()
-            }
-            .tint(.red)
             Menu {
                 Toggle("Show internals", isOn: $showsInternals)
                 if let status = launcher.exitStatus {
@@ -65,7 +60,7 @@ struct QueryConversationView: View {
 
     private var showsDebugControls: Bool {
         AgentLauncher.showsQueryDebugControls(
-            isRunning: launcher.isRunning, runningKind: launcher.runningKind)
+            isGenerating: launcher.isGenerating, runningKind: launcher.runningKind)
     }
 
     @ViewBuilder
@@ -112,7 +107,7 @@ struct QueryConversationView: View {
 
     private func composer(maxWidth: CGFloat) -> some View {
         HStack(alignment: .bottom, spacing: 10) {
-            TextField("Ask a question, or ask Claude to update the wiki…", text: $draftMessage, axis: .vertical)
+            TextField("Ask a question, or ask the Agent to update the wiki…", text: $draftMessage, axis: .vertical)
                 .font(.body)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)

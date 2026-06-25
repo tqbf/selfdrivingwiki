@@ -32,20 +32,25 @@ struct ContentView: View {
                         ingestingSourceIDs: agentLauncher.ingestingSourceIDs,
                         extractingSourceIDs: agentLauncher.extractingSourceIDs)
         } detail: {
-            VStack(spacing: 0) {
-                TabBarView(store: store)
-
-                HStack(spacing: 0) {
+            HStack(spacing: 0) {
+                // Main column: tab bar + content. The transcript lives INSIDE the
+                // detail column (not a separate inspector layer) so opening it
+                // compresses the content INWARDS — matching how the leading
+                // navigation sidebar subdivides the window — instead of growing the
+                // window. It shares the detail column's full height, so it sits at
+                // the same height as the leading sidebar rather than under the tab bar.
+                VStack(spacing: 0) {
+                    TabBarView(store: store)
                     wikiDetailPane
-
-                    if isTranscriptExpanded {
-                        Divider()
-                        AgentTranscriptSidebar(launcher: agentLauncher)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                    }
                 }
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isTranscriptExpanded)
+
+                if isTranscriptExpanded {
+                    Divider()
+                    AgentTranscriptSidebar(launcher: agentLauncher)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
             }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isTranscriptExpanded)
             // Hidden buttons for keyboard shortcuts.
             .background { keyboardShortcutButtons }
         }
@@ -128,7 +133,7 @@ struct ContentView: View {
     /// on during a pure extraction; the cross-file Ingest greyout is NOT driven
     /// here (that is `isAnySourceIngesting` = `!ingestingSourceIDs.isEmpty` only).
     private var agentBusy: Bool {
-        agentLauncher.isRunning
+        agentLauncher.isGenerating
             || !agentLauncher.ingestingSourceIDs.isEmpty
             || !agentLauncher.extractingSourceIDs.isEmpty
     }
@@ -248,18 +253,18 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private func ingestToolbarItems() -> some ToolbarContent {
         if isZoteroConfigured {
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItem(placement: .principal) {
                 Button("Add from Zotero…", systemImage: "books.vertical") {
                     showingAddFromZotero = true
                 }.help("Browse your Zotero library and ingest a PDF or Markdown attachment")
             }
         }
-        ToolbarItem(placement: .primaryAction) {
+        ToolbarItem(placement: .principal) {
             Button("Add from URL…", systemImage: "link.badge.plus") {
                 pendingAddURL = PendingAddURL(url: "")
             }.help("Fetch a web page or PDF by URL and ingest it into this wiki")
         }
-        ToolbarItem(placement: .primaryAction) {
+        ToolbarItem(placement: .principal) {
             Button("Import Markdown Folder…", systemImage: "doc.badge.plus") {
                 showingImportMarkdown = true
             }.help("Import all .md files from a folder as source material")
@@ -268,7 +273,7 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private func navigationToolbarItems() -> some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
+        ToolbarItem(placement: .principal) {
             Button("New Page", systemImage: "plus") { store.newPageInNewTab() }
                 .keyboardShortcut("n", modifiers: .command)
                 .help("Create a new page")

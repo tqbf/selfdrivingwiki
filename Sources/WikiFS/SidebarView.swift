@@ -86,7 +86,7 @@ struct SidebarView: View {
                 SidebarModeRow(title: "Query", subtitle: "Ask or update",
                     systemImage: "bubble.left.and.text.bubble.right")
                     .tag(WikiSelection.query)
-                    .help("Ask questions and decide whether Claude should update the wiki")
+                    .help("Ask questions and decide whether the Agent should update the wiki")
             }
         } header: { SidebarSectionHeader(title: "Tools", isExpanded: $isToolsExpanded) }
     }

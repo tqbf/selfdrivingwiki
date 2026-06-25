@@ -67,6 +67,13 @@ final class AgentLauncher {
     @ObservationIgnored var extractTask: Task<Void, Never>?
     /// True while a spawned `claude -p` process is running.
     private(set) var isRunning = false
+    /// True only while the agent is actively producing output. For one-shot runs
+    /// (ingest/lint/query) this mirrors `isRunning` for the run's duration. For an
+    /// interactive query session it tracks the *current turn*: set when a message is
+    /// sent, cleared when the terminal `.result` event arrives (or the run ends) —
+    /// so an open-but-idle session does not show a perpetual spinner. Every UI
+    /// spinner / Stop affordance keys off this rather than the raw `isRunning`.
+    private(set) var isGenerating = false
     /// Exit status of the last finished process, or nil if none finished / one is
     /// running.
     private(set) var exitStatus: Int32?
@@ -103,6 +110,12 @@ final class AgentLauncher {
     var containerDirectory: URL? = nil
 
     private var process: Process?
+    /// The edit-lock release closure for the current run (nil when no lock is held).
+    /// Stored so `finish()` — and thus the completion watchdog — can release the
+    /// lock even when the process's `terminationHandler` never fires. Without this,
+    /// a process that dies unreconciled strands `store.isAgentRunning` (and the
+    /// "Agent is updating the wiki" banner) forever.
+    @ObservationIgnored private var onUnlockHandler: (@MainActor @Sendable () -> Void)?
     /// Backstop poller that reconciles the UI if the process `terminationHandler`
     /// is ever missed (see `startCompletionWatchdog`). Cancelled on teardown.
     private var watchdogTask: Task<Void, Never>?
@@ -119,13 +132,13 @@ final class AgentLauncher {
     private(set) var isInteractiveSession = false
 
     /// Pure predicate for the Query page's debug cluster (spinner / Stop / Activity
-    /// menu): the cluster is visible only while a QUERY run is in flight. Extracted
-    /// as a pure static function so it is unit-testable without driving launcher
-    /// state. The View calls this with its `launcher` state.
+    /// menu): the cluster is visible only while a QUERY turn is actively generating.
+    /// Extracted as a pure static function so it is unit-testable without driving
+    /// launcher state. The View calls this with its `launcher` state.
     static func showsQueryDebugControls(
-        isRunning: Bool, runningKind: WikiOperation.Kind?
+        isGenerating: Bool, runningKind: WikiOperation.Kind?
     ) -> Bool {
-        isRunning && runningKind == .query
+        isGenerating && runningKind == .query
     }
 
     // MARK: - Three independent locks (relationship)
@@ -357,7 +370,8 @@ final class AgentLauncher {
     ///   (`Self Driving Wiki.app/Contents/Helpers`), prepended to the child's PATH so the
     ///   agent's `wikictl` calls resolve.
     /// - `onLock`/`onUnlock` are the edit-lock callbacks: `onLock` fires before the
-    ///   spawn, `onUnlock` from the `terminationHandler` (so a killed agent still
+    ///   spawn, `onUnlock` from `finish()` (so a killed agent, or one whose
+    ///   `terminationHandler` was missed and is reconciled by the watchdog, still
     ///   releases). Both run on the main actor.
     /// - `ingestingSourceIDs` is the **agent phase** flag for THIS run: the ids whose
     ///   ingest is now committing. The launcher assigns it to `self.ingestingSourceIDs`
@@ -455,6 +469,8 @@ final class AgentLauncher {
         runStartedAt = now
         lastActivityAt = now
         openLogFiles(in: scratch)
+        // A one-shot run is "generating" for its whole duration.
+        isGenerating = true
         // SPAWN COMMIT: the agent phase now begins. Assign the agent-phase flag
         // (`ingestingSourceIDs`) here — NOT while queued for the slot — so the
         // "Ingesting…" label and the cross-file Ingest greyout activate only once
@@ -463,6 +479,7 @@ final class AgentLauncher {
         // extraction-phase flag, which the runner manages around the pdf2md block.
         self.ingestingSourceIDs = ingestingSourceIDs
         onLock()
+        onUnlockHandler = onUnlock
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: command.executable)
@@ -497,7 +514,6 @@ final class AgentLauncher {
             DebugLog.agent("terminationHandler fired: pid=\(proc.processIdentifier) status=\(status)")
             Task { @MainActor [weak self] in
                 self?.finish(status: status)
-                onUnlock()
             }
         }
 
@@ -516,7 +532,7 @@ final class AgentLauncher {
             runningKind = nil
             currentProcessID = nil
             lastActivityAt = Date()
-            onUnlock()
+            releaseEditLock()
             // Release the slot so a queued peer isn't stranded. `isRunning` was set
             // by the slot acquire; the spawn-failure teardown must hand it back.
             releaseSpawnSlot()
@@ -630,10 +646,13 @@ final class AgentLauncher {
         runStartedAt = now
         lastActivityAt = now
         openLogFiles(in: scratch)
+        // The first turn is in flight as soon as we spawn + send.
+        isGenerating = true
         // SPAWN COMMIT: a query conversation never ingests, so the agent-phase flag
         // is empty — clearing any stale value (mirrors `run`'s spawn-commit).
         self.ingestingSourceIDs = []
         onLock()
+        onUnlockHandler = onUnlock
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: command.executable)
@@ -665,7 +684,6 @@ final class AgentLauncher {
             let status = proc.terminationStatus
             Task { @MainActor [weak self] in
                 self?.finish(status: status)
-                onUnlock()
             }
         }
 
@@ -674,7 +692,13 @@ final class AgentLauncher {
             self.process = process
             inputHandle = stdinPipe.fileHandleForWriting
             currentProcessID = process.processIdentifier
+            DebugLog.agent("startInteractiveQuery: spawned pid=\(process.processIdentifier)")
             sendInteractiveMessage(firstMessage)
+            // Mirror `run()`: arm the completion watchdog so a process that exits
+            // without a reconciling `terminationHandler` still clears `isRunning`.
+            // Interactive sessions stay alive between turns; the watchdog only acts
+            // when the OS reports the process gone, so a live idle session is safe.
+            startCompletionWatchdog()
         } catch {
             preflightError = "Failed to launch claude: \(error.localizedDescription)"
             closeLogFiles()
@@ -683,7 +707,7 @@ final class AgentLauncher {
             runningKind = nil
             currentProcessID = nil
             lastActivityAt = Date()
-            onUnlock()
+            releaseEditLock()
             // Release the slot so a queued peer isn't stranded.
             releaseSpawnSlot()
         }
@@ -698,11 +722,12 @@ final class AgentLauncher {
         else { return }
 
         events.append(.userText(trimmed))
+        isGenerating = true
         lastActivityAt = Date()
         do {
             try inputHandle?.write(contentsOf: data)
         } catch {
-            ingestStderr("Failed to send message to Claude: \(error.localizedDescription)\n")
+            ingestStderr("Failed to send message to the Agent: \(error.localizedDescription)\n")
         }
     }
 
@@ -788,6 +813,10 @@ final class AgentLauncher {
             stdoutLineBuffer.removeSubrange(...newlineIndex)
             if let event = AgentEventParser.parse(line: line) {
                 events.append(event)
+                // The terminal `result` event ends an agent turn (and a one-shot
+                // run's output). Clear the active-generation flag so an idle
+                // interactive session stops spinning.
+                if case .result = event { isGenerating = false }
             }
         }
     }
@@ -826,11 +855,26 @@ final class AgentLauncher {
         inputHandle = nil
         currentProcessID = nil
         ingestingSourceIDs = []
+        isGenerating = false
         lastActivityAt = Date()
+        // Release the edit lock (`store.isAgentRunning`) from here — NOT from the
+        // `terminationHandler` — so EVERY completion path releases it: the real
+        // terminationHandler, the watchdog (which calls `finish` directly when the
+        // handler is missed), and `stopAgent`. The `guard isRunning` above makes this
+        // exactly-once; `releaseEditLock` is itself idempotent.
+        releaseEditLock()
         // Release the spawn slot, handing it to the next live waiter (FIFO) or freeing
         // it. Replaces the old `isRunning = false`. The guard at the top of `finish`
         // still runs exactly once per run.
         releaseSpawnSlot()
+    }
+
+    /// Release the run's edit lock exactly once. Idempotent: clearing the stored
+    /// handler makes repeated calls (from `finish()`, a spawn-failure teardown, or
+    /// the watchdog) a no-op.
+    private func releaseEditLock() {
+        onUnlockHandler?()
+        onUnlockHandler = nil
     }
 
     /// Clear per-run artifacts (events, transcript, exit status, log handles, etc.)
@@ -847,12 +891,14 @@ final class AgentLauncher {
         stdoutLineBuffer = ""
         exitStatus = nil
         isInteractiveSession = false
+        isGenerating = false
         runningKind = nil
         logFileURL = nil
         runStartedAt = nil
         lastActivityAt = nil
         currentProcessID = nil
         inputHandle = nil
+        onUnlockHandler = nil
     }
 
     private static func streamJSONLine(forUserText text: String) -> String? {

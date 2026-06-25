@@ -172,4 +172,60 @@ struct AgentEventParserTests {
         #expect(ToolInputSummary.summarize(name: "Bash", input: nil) == "")
         #expect(ToolInputSummary.summarize(name: "Bash", input: [:]) == "")
     }
+
+    // MARK: - AgentEvent.plainText (Copy Transcript export)
+
+    @Test func plainTextUserText() {
+        #expect(AgentEvent.userText("hello").plainText == "You:\nhello")
+    }
+
+    @Test func plainTextSystemInit() {
+        #expect(AgentEvent.systemInit(model: "claude").plainText == "Started · claude")
+    }
+
+    @Test func plainTextAssistantText() {
+        #expect(AgentEvent.assistantText("some prose").plainText == "some prose")
+    }
+
+    @Test func plainTextToolUseWithSummary() {
+        #expect(AgentEvent.toolUse(name: "Bash", inputSummary: "ls").plainText == "Bash  ls")
+    }
+
+    @Test func plainTextToolUseWithoutSummary() {
+        #expect(AgentEvent.toolUse(name: "Bash", inputSummary: "").plainText == "Bash")
+    }
+
+    @Test func plainTextToolResultOk() {
+        #expect(AgentEvent.toolResult(isError: false, summary: "done").plainText == "done")
+    }
+
+    @Test func plainTextToolResultError() {
+        #expect(AgentEvent.toolResult(isError: true, summary: "").plainText == "Error: (error)")
+    }
+
+    @Test func plainTextSubagentStart() {
+        #expect(
+            AgentEvent.subagent(subagentType: "source-reader", description: "reading paper", isCompletion: false)
+                .plainText == "source-reader reading — reading paper"
+        )
+    }
+
+    @Test func plainTextSubagentDone() {
+        #expect(
+            AgentEvent.subagent(subagentType: "source-reader", description: "", isCompletion: true)
+                .plainText == "source-reader digested"
+        )
+    }
+
+    @Test func plainTextResult() {
+        #expect(AgentEvent.result(isError: false, text: "all good").plainText == "Result:\nall good")
+    }
+
+    @Test func plainTextResultEmpty() {
+        #expect(AgentEvent.result(isError: true, text: "").plainText == "Failed")
+    }
+
+    @Test func plainTextRaw() {
+        #expect(AgentEvent.raw("garbage line").plainText == "garbage line")
+    }
 }

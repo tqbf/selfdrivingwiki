@@ -11,9 +11,6 @@ struct LintView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            AgentRunBanner(isVisible: launcher.isRunning)
-                .padding(.horizontal, PageEditorMetrics.contentInset)
-
             VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
                 Text("Lint")
                     .font(.largeTitle)

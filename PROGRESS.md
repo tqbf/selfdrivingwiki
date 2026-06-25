@@ -2,6 +2,57 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-25 — Agent activity sidebar: full-height panel, turn-aware spinner/banner, edit-lock release fix
+
+Reworked the agent activity surface and run lifecycle so "done" actually reads as
+done, and the trailing panel behaves like the leading sidebar.
+
+- **Toolbar centering.** The "add" buttons (Add from Zotero / Add from URL / Import
+  Markdown) and New Page moved to `.principal` (center of the toolbar); the
+  transcript toggle stays on the right.
+- **Transcript sidebar layout.** The panel now lives **inside the detail column** as
+  a full-height sibling of `(TabBarView + content)`, so opening it compresses the
+  content **inward** — exactly how the leading navigation sidebar subdivides the
+  window — instead of growing the window. (An earlier `.inspector` attempt popped
+  the window outward; reverted.) Rounded the inner (leading) corners via
+  `UnevenRoundedRectangle` (`PageEditorMetrics.panelCornerRadius`) and restored the
+  leading-edge drag-to-resize handle.
+- **Turn-aware activity (`AgentLauncher.isGenerating`).** New flag, set on send /
+  spawn and cleared on the terminal `.result` event (plus `finish()` /
+  `resetRunArtifacts()`). Every spinner / debug cluster now keys off it instead of
+  `isRunning`, so an **idle interactive session no longer shows a perpetual
+  spinner**. For one-shot runs it mirrors `isRunning`. `showsQueryDebugControls`
+  and its unit test switched to `isGenerating`.
+- **Interactive completion watchdog.** `startInteractiveQuery` now arms
+  `startCompletionWatchdog()` like `run()`, so a `claude` process that dies without
+  firing its `terminationHandler` is reconciled within ~3s instead of spinning
+  forever. (The live `run.jsonl`/`log show` diagnosis showed the process gone but
+  `isRunning` stuck.)
+- **Edit-lock release fix.** `onUnlock` is now stored (`onUnlockHandler`) and
+  released from `finish()` via an idempotent `releaseEditLock()` — so the watchdog
+  and `stopAgent()` release `store.isAgentRunning` too. Previously only the
+  `terminationHandler` released the edit lock, so a missed handler stranded it
+  (and the "Agent is updating the wiki" banner) forever.
+- **Operation-aware banner.** Query → "Agent is searching your wiki…", ingest →
+  "updating", lint → "checking" (was hardcoded "updating" for all). On the query
+  page the banner tracks `isGenerating`; elsewhere `store.isAgentRunning`.
+- **"Claude" → "Agent".** User-facing conversational strings (banner, composer
+  placeholder, waiting text, sidebar tooltip, send-error). The Anthropic PDF-
+  extraction backend and the Claude CLI / prompt-help references stay "Claude"
+  (they name the actual product).
+- **Status consolidation.** `AgentRunBanner` moved into the activity sidebar's
+  Agent Activity section (under its label, display-only and turn-aware via
+  `isAgentActive = isGenerating`); the Stop button lives in that section, gated on
+  `isRunning` so an idle interactive session can still be ended. Per-page banners
+  above each detail surface were removed. (A toolbar status-button experiment was
+  tried and reverted.)
+- **Edit-button reason.** The disabled Edit button on the page / system-prompt
+  surfaces now reads "Agent updating wiki…" while a run holds the edit lock, so
+  it's clear why editing is paused (was a bare disabled "Edit").
+
+**Tests.** 1030 pass, 74 suites, 0 failures (`debugClusterPredicate…` updated for
+`isGenerating`; `swift build` clean). On branch `feature/selectable-agent-activity`.
+
 ## 2026-06-24 — Find bar (⌘F) with next/prev navigation + match highlight
 
 Added a native macOS-style find bar (driven by a `FindModel` `@Observable`)

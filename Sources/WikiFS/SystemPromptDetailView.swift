@@ -14,8 +14,6 @@ struct SystemPromptDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            AgentRunBanner(isVisible: store.isAgentRunning)
-
             VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("System Prompt")
@@ -28,9 +26,12 @@ struct SystemPromptDetailView: View {
                 }
 
                 HStack(spacing: 10) {
-                    Button("Edit", systemImage: "pencil") { isEditing = true }
+                    Button(store.isAgentRunning ? "Agent updating wiki…" : "Edit",
+                           systemImage: "pencil") { isEditing = true }
                         .disabled(store.isAgentRunning)
-                        .help("Edit the system prompt source")
+                        .help(store.isAgentRunning
+                              ? "Editing is paused while the agent is updating the wiki"
+                              : "Edit the system prompt source")
                 }
             }
             .padding(.horizontal, PageEditorMetrics.contentInset)

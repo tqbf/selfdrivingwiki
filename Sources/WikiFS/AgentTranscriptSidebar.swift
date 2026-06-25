@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// A trailing inspector for the active agent run. It reuses the operations
@@ -8,22 +9,33 @@ struct AgentTranscriptSidebar: View {
     @State private var showsInternals = false
     @State private var splitFraction: CGFloat = 0.3
     @State private var dragOrigin: CGFloat = 0.3
+    @State private var width: CGFloat = AgentTranscriptMetrics.defaultWidth
+    @State private var widthDragOrigin: CGFloat = AgentTranscriptMetrics.defaultWidth
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider().opacity(PageEditorMetrics.dividerOpacity)
-            if showsConversion {
-                splitContent
-            } else {
-                activitySection
-                    .padding(AgentTranscriptMetrics.padding)
+        HStack(alignment: .top, spacing: 0) {
+            widthResizeHandle
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                Divider().opacity(PageEditorMetrics.dividerOpacity)
+                if showsConversion {
+                    splitContent
+                } else {
+                    activitySection
+                        .padding(AgentTranscriptMetrics.padding)
+                }
             }
+            .frame(width: width)
+            .frame(maxHeight: .infinity)
+            .background(
+                Color(nsColor: .controlBackgroundColor),
+                in: UnevenRoundedRectangle(
+                    cornerRadii: .init(
+                        topLeading: PageEditorMetrics.panelCornerRadius,
+                        bottomLeading: PageEditorMetrics.panelCornerRadius),
+                    style: .continuous))
+            .clipped()
         }
-        .frame(width: AgentTranscriptMetrics.width)
-        .frame(maxHeight: .infinity)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipped()
         .onChange(of: showsConversion) { _, newValue in
             // Reset the split when the conversion section appears or disappears.
             if newValue {
@@ -31,6 +43,32 @@ struct AgentTranscriptSidebar: View {
                 dragOrigin = 0.3
             }
         }
+    }
+
+    /// A thin draggable strip on the sidebar's leading edge — dragging it left
+    /// widens the sidebar, dragging right narrows it, clamped to a sane range.
+    private var widthResizeHandle: some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: 6)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                DispatchQueue.main.async {
+                    if inside {
+                        NSCursor.resizeLeftRight.set()
+                    } else {
+                        NSCursor.arrow.set()
+                    }
+                }
+            }
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        let proposed = widthDragOrigin - value.translation.width
+                        width = min(AgentTranscriptMetrics.maxWidth, max(AgentTranscriptMetrics.minWidth, proposed))
+                    }
+                    .onEnded { _ in widthDragOrigin = width }
+            )
     }
 
     /// Show the local pdf2md conversion box only while a pdf2md conversion is in
@@ -154,8 +192,7 @@ struct AgentTranscriptSidebar: View {
                     .font(.subheadline)
                     .fontWeight(.medium)
                 Spacer()
-                if agentBusy {
-                    ProgressView().controlSize(.small)
+                if launcher.isRunning {
                     Button("Stop Agent", systemImage: "stop.fill") {
                         launcher.stopAgent()
                     }
@@ -169,22 +206,28 @@ struct AgentTranscriptSidebar: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            AgentRunBanner(isVisible: isAgentActive, kind: launcher.runningKind)
             AgentActivityView(launcher: launcher, showsInternals: showsInternals)
         }
     }
 
-    private var agentBusy: Bool {
-        launcher.isRunning || !launcher.ingestingSourceIDs.isEmpty
-    }
-
     private static let conversionBottom = "pdf-conversion-bottom"
+
+    /// True only while the agent is actively producing output — drives the status
+    /// banner at the top of the sidebar. Turn-aware (uses `isGenerating`) so an
+    /// open-but-idle interactive session does not leave the banner up. The Stop
+    /// button below keys off `isRunning` instead, so an idle session can still be
+    /// ended.
+    private var isAgentActive: Bool {
+        launcher.isGenerating
+    }
 
     // MARK: - Header
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Label("Transcript", systemImage: "text.bubble")
+                Label("Activity", systemImage: "text.bubble")
                     .font(.headline)
                 Spacer()
             }
@@ -194,7 +237,9 @@ struct AgentTranscriptSidebar: View {
     }
 }
 
-private enum AgentTranscriptMetrics {
-    static let width: CGFloat = 340
+enum AgentTranscriptMetrics {
+    static let defaultWidth: CGFloat = 340
+    static let minWidth: CGFloat = 260
+    static let maxWidth: CGFloat = 720
     static let padding: CGFloat = 12
 }

@@ -124,7 +124,6 @@ struct SourceDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            AgentRunBanner(isVisible: store.isAgentRunning)
             if alreadyIngested {
                 alreadyIngestedBanner
             }

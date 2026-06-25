@@ -12,31 +12,14 @@ struct QueryTranscriptView: View {
                 placeholder
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: QueryTranscriptMetrics.messageSpacing) {
-                            ForEach(visibleEvents, id: \.offset) { _, event in
-                                QueryTranscriptRow(event: event)
-                            }
-                            Color.clear
-                                .frame(height: 1)
-                                .id(Self.bottomAnchor)
-                        }
-                        .padding(QueryTranscriptMetrics.padding)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .onChange(of: launcher.events.count) {
-                        withAnimation(.linear(duration: 0.12)) {
-                            proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
-                        }
-                    }
-                }
+                AgentTranscriptWebView(events: visibleEvents, style: .chat)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
 
-    private var visibleEvents: [(offset: Int, element: AgentEvent)] {
-        launcher.events.enumerated().filter { _, event in
+    private var visibleEvents: [AgentEvent] {
+        launcher.events.filter { event in
             switch event {
             case .result(_, let text):
                 return !hasAssistantText(matching: text)
@@ -59,7 +42,7 @@ struct QueryTranscriptView: View {
 
     private var placeholder: some View {
         VStack(spacing: 7) {
-            Text(launcher.isRunning ? "Waiting for Claude..." : "Ask a question to start a conversation.")
+            Text(launcher.isRunning ? "Waiting for the Agent..." : "Ask a question to start a conversation.")
                 .font(.headline)
                 .fontWeight(.medium)
                 .foregroundStyle(.primary)
@@ -70,72 +53,8 @@ struct QueryTranscriptView: View {
         .multilineTextAlignment(.center)
         .padding(QueryTranscriptMetrics.emptyStatePadding)
     }
-
-    private static let bottomAnchor = "query-transcript-bottom"
-}
-
-private struct QueryTranscriptRow: View {
-    let event: AgentEvent
-
-    var body: some View {
-        switch event {
-        case .userText(let text):
-            QueryMessageBubble(role: .user, text: text)
-        case .assistantText(let text):
-            QueryMessageBubble(role: .assistant, text: text)
-        case .result(_, let text):
-            if !text.isEmpty {
-                QueryMessageBubble(role: .assistant, text: text)
-            }
-        case .systemInit, .toolUse, .toolResult, .subagent, .raw:
-            EmptyView()
-        }
-    }
-}
-
-private struct QueryMessageBubble: View {
-    enum Role: Equatable {
-        case user
-        case assistant
-    }
-
-    let role: Role
-    let text: String
-
-    var body: some View {
-        HStack(alignment: .top) {
-            if role == .user {
-                Spacer(minLength: QueryTranscriptMetrics.bubbleGutter)
-            }
-            if role == .assistant {
-                VStack(alignment: .leading, spacing: 0) {
-                    AgentMarkdownText(markdown: text)
-                }
-                .frame(maxWidth: QueryTranscriptMetrics.maxBubbleWidth, alignment: .leading)
-            } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(text)
-                        .font(.callout)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 11)
-                .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
-                .frame(maxWidth: QueryTranscriptMetrics.maxBubbleWidth, alignment: .trailing)
-            }
-            if role == .assistant {
-                Spacer(minLength: QueryTranscriptMetrics.bubbleGutter)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: role == .user ? .trailing : .leading)
-    }
 }
 
 private enum QueryTranscriptMetrics {
-    static let padding: CGFloat = 18
     static let emptyStatePadding: CGFloat = 24
-    static let messageSpacing: CGFloat = 14
-    static let bubbleGutter: CGFloat = 52
-    static let maxBubbleWidth: CGFloat = 760
 }

@@ -46,6 +46,36 @@ public enum AgentEvent: Equatable, Sendable {
     /// A line we didn't model (an unrecognized event type, or a malformed/partial
     /// line). Carries the raw text verbatim so nothing is silently swallowed.
     case raw(String)
+
+    /// A plain-text, copy-friendly rendering of this event — no icons, colors, or
+    /// layout. Used by the "Copy Transcript" affordance so the styled feed's
+    /// contents can be copied out as plain text (the styled `LazyVStack` can't be
+    /// drag-selected across rows in SwiftUI).
+    public var plainText: String {
+        switch self {
+        case .userText(let text):
+            return "You:\n\(text)"
+        case .systemInit(let model):
+            return "Started · \(model)"
+        case .assistantText(let text):
+            return text
+        case .toolUse(let name, let inputSummary):
+            return inputSummary.isEmpty ? name : "\(name)  \(inputSummary)"
+        case .toolResult(let isError, let summary):
+            let body = summary.isEmpty ? (isError ? "(error)" : "(ok)") : summary
+            return isError ? "Error: \(body)" : body
+        case .subagent(let subagentType, let description, let isCompletion):
+            let verb = isCompletion ? "digested" : "reading"
+            return description.isEmpty
+                ? "\(subagentType) \(verb)"
+                : "\(subagentType) \(verb) — \(description)"
+        case .result(let isError, let text):
+            let label = isError ? "Failed" : "Result"
+            return text.isEmpty ? label : "\(label):\n\(text)"
+        case .raw(let line):
+            return line
+        }
+    }
 }
 
 /// Tolerant line-at-a-time parser for `claude -p --output-format stream-json`

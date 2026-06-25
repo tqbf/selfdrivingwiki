@@ -122,18 +122,18 @@ struct AgentSpawnSlotTests {
     /// `QueryConversationView.showsDebugControls`. The cluster is visible only
     /// while a QUERY run is in flight (AC.1). Assert it across the state matrix.
     @Test func debugClusterPredicateOnlyTrueForActiveQueryRun() {
-        func p(_ isRunning: Bool, _ kind: WikiOperation.Kind?) -> Bool {
-            AgentLauncher.showsQueryDebugControls(isRunning: isRunning, runningKind: kind)
+        func p(_ isGenerating: Bool, _ kind: WikiOperation.Kind?) -> Bool {
+            AgentLauncher.showsQueryDebugControls(isGenerating: isGenerating, runningKind: kind)
         }
         // Idle: no cluster.
         #expect(!p(false, nil))
-        // Ingest run active: no cluster on the query page.
+        // Ingest generating: no cluster on the query page.
         #expect(!p(true, .ingest))
-        // Lint run active: no cluster.
+        // Lint generating: no cluster.
         #expect(!p(true, .lint))
-        // Query run active: cluster shows.
+        // Query turn generating: cluster shows.
         #expect(p(true, .query))
-        // Run ended (isRunning false): cluster hides even if runningKind is stale.
+        // Turn ended (not generating): cluster hides even if runningKind is stale.
         #expect(!p(false, .query))
         #expect(!p(false, nil))
     }

@@ -20,8 +20,6 @@ struct PageDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            AgentRunBanner(isVisible: store.isAgentRunning)
-
             // Header — always visible, same layout in both modes.
             VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
                 Text(displayTitle)
@@ -52,9 +50,12 @@ struct PageDetailView: View {
                         }
                         .keyboardShortcut(.escape, modifiers: [])
                     } else {
-                        Button("Edit", systemImage: "pencil") { isEditing = true }
+                        Button(store.isAgentRunning ? "Agent updating wiki…" : "Edit",
+                               systemImage: "pencil") { isEditing = true }
                             .disabled(store.isAgentRunning)
-                            .help("Edit this page manually")
+                            .help(store.isAgentRunning
+                                  ? "Editing is paused while the agent is updating the wiki"
+                                  : "Edit this page manually")
                         if let path = pageMountPath {
                             Button("Copy Path", systemImage: "terminal") {
                                 NSPasteboard.general.clearContents()
