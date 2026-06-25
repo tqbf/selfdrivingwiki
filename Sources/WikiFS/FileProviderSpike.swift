@@ -83,7 +83,7 @@ final class FileProviderSpike {
                     // Distinguish benign already-exists (the verify below confirms
                     // presence) from a real failure we must not bury: log it AND
                     // keep it in `status` so it shows in the console and the UI.
-                    print("FileProviderSpike.registerDomain(\(displayName)): add failed: \(error)")
+                    DebugLog.fileprovider("FileProviderSpike.registerDomain(\(displayName)): add failed: \(error)")
                     status = "Register \(displayName) failed: \(error.localizedDescription)"
                 }
             }
@@ -102,7 +102,7 @@ final class FileProviderSpike {
                 try? await Task.sleep(for: DomainRegistrationPolicy.retryBackoff)
 
             case .failed:
-                print("""
+                DebugLog.fileprovider("""
                     FileProviderSpike.registerDomain(\(displayName)): domain \(id) \
                     still absent after \(attemptsMade) attempts — daemon may be wedged.
                     """)

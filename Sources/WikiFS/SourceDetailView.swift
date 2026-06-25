@@ -40,12 +40,6 @@ struct SourceDetailView: View {
     /// Quote to highlight in the PDF view, set when a `[[source:Name#"…"]]` link
     /// targets an un-extracted PDF. Consumed from `store.pendingScrollAnchor`.
     @State private var pdfQuote: String?
-    /// Sources larger than this (KB) render in the web reader automatically —
-    /// its windowed layout avoids the native reader's whole-document layout
-    /// freeze on large docs; smaller sources use the native reader (better
-    /// selection / links / anchors for the common case). Tunable via
-    /// `defaults write` (set very high to effectively disable).
-    @AppStorage("reader.webThresholdKB") private var webThresholdKB: Int = 96
 
     // Find bar state.
     @State private var findModel = FindModel()
@@ -154,7 +148,7 @@ struct SourceDetailView: View {
         .task(id: file.id) { headVersion = store.processedMarkdownHead(for: file) }
         .task(id: PDFTaskKey(sourceID: file.id, anchorVersion: store.pendingScrollAnchorVersion)) {
             // Only consume for un-extracted PDFs (the markdown side handles
-            // extracted PDFs via MarkdownPreview). Double-check at consume time
+            // extracted PDFs via WikiReaderView). Double-check at consume time
             // since `hasMarkdown` may have changed since render.
             guard isPDF, !hasMarkdown else { return }
             if let frag = store.consumePendingScrollAnchor(for: store.selection) {
@@ -401,21 +395,15 @@ struct SourceDetailView: View {
                 .zoomShortcuts($editorZoom)
                 .zoomScroll($editorZoom)
         } else if let head = headVersion {
-            // Web reader when forced on, or automatically for large sources
-            // (its windowed layout avoids the native reader's layout freeze).
-            let useWeb = head.content.utf8.count > webThresholdKB * 1024
-            if useWeb {
-                SourceWebView(markdown: head.content,
-                              currentSelection: store.selection,
-                              store: store,
-                              findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
-            } else {
-                MarkdownPreview(store: store, markdown: head.content,
-                                currentSelection: store.selection,
-                                findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
-                    .zoomShortcuts($readerZoom)
-                    .zoomScroll($readerZoom)
-            }
+            // The web reader is the only reader — it handles all sizes (its
+            // windowed layout is faster than the native reader even on small
+            // docs, so the size threshold that once gated web-vs-native is gone).
+            WikiReaderView(markdown: head.content,
+                            currentSelection: store.selection,
+                            store: store,
+                            findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
+                .zoomShortcuts($readerZoom)
+                .zoomScroll($readerZoom)
         } else {
             ContentUnavailableView {
                 Label("No Processed Markdown", systemImage: "doc.plaintext")

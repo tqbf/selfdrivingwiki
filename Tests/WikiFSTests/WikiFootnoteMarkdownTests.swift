@@ -11,7 +11,7 @@ struct WikiFootnoteMarkdownTests {
         [^source]: Footnote **markdown**.
         """)
 
-        #expect(rendered.bodyMarkdown == "A sentence with a note[¹](wiki-footnote://note?id=source).\n")
+        #expect(rendered.bodyMarkdown == "A sentence with a note[¹](#wiki-fn-source).\n")
         #expect(rendered.footnotes == [
             WikiFootnoteMarkdown.Footnote(id: "source", number: 1, markdown: "Footnote **markdown**.")
         ])
@@ -25,9 +25,9 @@ struct WikiFootnoteMarkdownTests {
         [^b]: Beta
         """)
 
-        #expect(rendered.bodyMarkdown.contains("First[¹](wiki-footnote://note?id=b)"))
-        #expect(rendered.bodyMarkdown.contains("then[²](wiki-footnote://note?id=a)"))
-        #expect(rendered.bodyMarkdown.contains("repeat[¹](wiki-footnote://note?id=b)"))
+        #expect(rendered.bodyMarkdown.contains("First[¹](#wiki-fn-b)"))
+        #expect(rendered.bodyMarkdown.contains("then[²](#wiki-fn-a)"))
+        #expect(rendered.bodyMarkdown.contains("repeat[¹](#wiki-fn-b)"))
         #expect(rendered.footnotes.map(\.id) == ["b", "a"])
     }
 
@@ -59,7 +59,7 @@ struct WikiFootnoteMarkdownTests {
         [^real]: Render me.
         """)
 
-        #expect(rendered.bodyMarkdown.contains("Literal `[^x]`, real[¹](wiki-footnote://note?id=real)."))
+        #expect(rendered.bodyMarkdown.contains("Literal `[^x]`, real[¹](#wiki-fn-real)."))
         #expect(rendered.bodyMarkdown.contains("[^x]: Not a definition."))
         #expect(rendered.footnotes.map(\.id) == ["real"])
     }
@@ -73,7 +73,7 @@ struct WikiFootnoteMarkdownTests {
             .joined(separator: " ")
         let rendered = WikiFootnoteMarkdown.rendered("\(references)\n\n\(definitions)")
 
-        #expect(rendered.bodyMarkdown.contains("ref[¹⁰](wiki-footnote://note?id=n10)"))
+        #expect(rendered.bodyMarkdown.contains("ref[¹⁰](#wiki-fn-n10)"))
         #expect(rendered.footnotes.last?.number == 10)
     }
 }

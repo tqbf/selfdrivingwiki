@@ -85,8 +85,9 @@ struct PageDetailView: View {
                     .zoomShortcuts($editorZoom)
                     .zoomScroll($editorZoom)
             } else {
-                MarkdownPreview(store: store, markdown: readerMarkdown,
+                WikiReaderView(markdown: readerMarkdown,
                                 currentSelection: store.selection,
+                                store: store,
                                 fileProvider: fileProvider,
                                 findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                     .frame(maxWidth: .infinity)

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import WikiFSCore
 
 /// Converts a PDF to Markdown by spawning the `pdf2md` script as a subprocess,
 /// matching the existing `wikictl`/`claude` subprocess pattern.
@@ -75,10 +76,10 @@ enum PdfExtractionService {
     /// this returns in under a second; if not, it can take minutes.
     static func checkReady() async -> Bool {
         guard let script = resolveScript() else {
-            print("[pdf2md] checkReady: script not found at any candidate location")
+            DebugLog.extraction("[pdf2md] checkReady: script not found at any candidate location")
             return false
         }
-        print("[pdf2md] checkReady: probing \(script.path)")
+        DebugLog.extraction("[pdf2md] checkReady: probing \(script.path)")
 
         return await withCheckedContinuation { continuation in
             let process = Process()
@@ -95,7 +96,7 @@ enum PdfExtractionService {
             process.terminationHandler = { proc in
                 processRegistry.untrack(proc)
                 let ok = proc.terminationStatus == 0
-                print("[pdf2md] checkReady: probe exit=\(proc.terminationStatus) ready=\(ok)")
+                DebugLog.extraction("[pdf2md] checkReady: probe exit=\(proc.terminationStatus) ready=\(ok)")
                 continuation.resume(returning: ok)
             }
             processRegistry.track(process)
@@ -103,7 +104,7 @@ enum PdfExtractionService {
                 try process.run()
             } catch {
                 processRegistry.untrack(process)
-                print("[pdf2md] checkReady: process.run() failed: \(error)")
+                DebugLog.extraction("[pdf2md] checkReady: process.run() failed: \(error)")
                 continuation.resume(returning: false)
             }
         }
@@ -183,13 +184,13 @@ enum PdfExtractionService {
         let fm = FileManager.default
         guard let revisions = try? fm.contentsOfDirectory(
             at: snapshots, includingPropertiesForKeys: nil) else {
-            print("[pdf2md] modelWeightsPresent: no snapshots at \(snapshots.path)")
+            DebugLog.extraction("[pdf2md] modelWeightsPresent: no snapshots at \(snapshots.path)")
             return false
         }
         let present = revisions.contains { revision in
             fm.fileExists(atPath: revision.appendingPathComponent("model.safetensors").path)
         }
-        print("[pdf2md] modelWeightsPresent: \(present) (\(revisions.count) snapshot(s))")
+        DebugLog.extraction("[pdf2md] modelWeightsPresent: \(present) (\(revisions.count) snapshot(s))")
         return present
     }
 
@@ -305,10 +306,10 @@ enum PdfExtractionService {
         for candidate in candidateLocations() {
             let script = candidate.appendingPathComponent("pdf2md", isDirectory: false)
             let exists = FileManager.default.isExecutableFile(atPath: script.path)
-            print("[pdf2md] resolveScript: \(script.path) exists=\(exists)")
+            DebugLog.extraction("[pdf2md] resolveScript: \(script.path) exists=\(exists)")
             if exists { return script }
         }
-        print("[pdf2md] resolveScript: not found in any candidate location")
+        DebugLog.extraction("[pdf2md] resolveScript: not found in any candidate location")
         return nil
     }
 
@@ -324,7 +325,7 @@ enum PdfExtractionService {
             throw ExtractionError.scriptNotFound
         }
 
-        print("[pdf2md] convert: \(filename) (\(pdfData.count) bytes) → \(script.path)")
+        DebugLog.extraction("[pdf2md] convert: \(filename) (\(pdfData.count) bytes) → \(script.path)")
         onProgress?("Converting \(filename) (\(pdfData.count / 1024) KB)…\n")
 
         // Write PDF bytes to a temp file so pdf2md can read them.
@@ -335,11 +336,11 @@ enum PdfExtractionService {
 
         let inputFile = tempDir.appendingPathComponent(filename, isDirectory: false)
         try pdfData.write(to: inputFile)
-        print("[pdf2md] convert: wrote temp input \(inputFile.path)")
+        DebugLog.extraction("[pdf2md] convert: wrote temp input \(inputFile.path)")
 
         let result = try await run(script: script, input: inputFile, onProgress: onProgress, onStart: onStart)
         onProgress?("Done — \(result.count) chars of markdown.\n")
-        print("[pdf2md] convert: success — \(result.count) chars of markdown")
+        DebugLog.extraction("[pdf2md] convert: success — \(result.count) chars of markdown")
         return result
     }
 

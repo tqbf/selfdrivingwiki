@@ -14,6 +14,16 @@ PROGRESS.md" and trust it's up to speed with this codebase.
 * Use the macos-design skill to make sure the UI we come up with makes sense as a modern
   macOS app, with modern professional macOS idioms. Keep things simple.
 
+* When a feature passes tests but fails in the running app (and you can't see the
+  screen), follow [`docs/skills/reproducing-live-ui-bugs.md`](docs/skills/reproducing-live-ui-bugs.md):
+  read the real data, host the real view in an `NSWindow` test, instrument every
+  seam via `os_log`, and read the trace back with `log show`.
+
+* Never use `print` for diagnostics — route all logging through `DebugLog`
+  (`os_log` → Console.app, subsystem `com.selfdrivingwiki.debug`) so it's visible
+  no matter how the app launched. The only exception is real CLI stdout (e.g.
+  `wikictl`'s command output).
+
 * You may push PRs, but you MUST NOT ever merge them youself to main.
 
 ## Testing

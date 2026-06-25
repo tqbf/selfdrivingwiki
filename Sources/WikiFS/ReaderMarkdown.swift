@@ -2,7 +2,7 @@ import Foundation
 import WikiFSCore
 
 /// The footnote-expand + wiki-link-linkify pre-pass shared by both readers
-/// (native `MarkdownPreview` and the web `SourceWebView`), so wiki links and
+/// (the `WikiReaderView` (WKWebView)), so wiki links and
 /// footnotes behave identically regardless of which reader renders them.
 ///
 /// `isResolved` drives resolved-vs-ghost link styling. The native reader passes
@@ -18,8 +18,16 @@ enum ReaderMarkdown {
         let renderedFootnotes = WikiFootnoteMarkdown.rendered(raw)
         let body = WikiLinkMarkdown.linkified(renderedFootnotes.bodyMarkdown, isResolved: isResolved)
         guard !renderedFootnotes.footnotes.isEmpty else { return body }
+        // Each definition gets a raw-HTML anchor (`wiki-fn-<id>`) so a clicked
+        // reference (`wiki-footnote://note?id=…`) can scroll to it. The anchor is
+        // inline HTML at the start of the (tight) list item; swift-markdown emits
+        // it verbatim, giving the reader a stable `getElementById` target.
         let footnotes = renderedFootnotes.footnotes
-            .map { "\($0.number). \(WikiLinkMarkdown.linkified($0.markdown, isResolved: isResolved))" }
+            .map { footnote in
+                let anchor = "<a id=\"\(WikiFootnoteMarkdown.footnoteAnchorID(for: footnote.id))\"></a>"
+                let def = WikiLinkMarkdown.linkified(footnote.markdown, isResolved: isResolved)
+                return "\(footnote.number). \(anchor)\(def)"
+            }
             .joined(separator: "\n")
         return "\(body)\n\n---\n\n\(footnotes)"
     }

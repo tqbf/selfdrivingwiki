@@ -12,7 +12,7 @@ import WikiFSCore
 /// through so ordinary scrolling is untouched.
 ///
 /// ```swift
-/// MarkdownPreview(...)
+/// WikiReaderView(...)
 ///     .zoomScroll($readerZoom)
 /// ```
 extension View {

@@ -74,7 +74,7 @@ public struct WikiRegistry: Codable, Equatable, Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let registry = try? decoder.decode(WikiRegistry.self, from: data) else {
-            print("WikiRegistry: corrupt \(fileName), starting empty")
+            DebugLog.config("WikiRegistry: corrupt \(fileName), starting empty")
             return WikiRegistry()
         }
         return registry

@@ -120,7 +120,7 @@ public enum DatabaseLocation {
         } catch {
             // Best-effort: leave the container empty; the app bootstraps a fresh
             // DB (with a default Home) at the container path.
-            print("DatabaseLocation: migration copy failed: \(error)")
+            DebugLog.store("DatabaseLocation: migration copy failed: \(error)")
         }
     }
 

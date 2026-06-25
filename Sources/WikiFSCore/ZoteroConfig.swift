@@ -48,7 +48,7 @@ public struct ZoteroConfig: Codable, Equatable, Sendable {
         let url = directory.appendingPathComponent(fileName, isDirectory: false)
         guard let data = try? Data(contentsOf: url) else { return ZoteroConfig() }
         guard let config = try? JSONDecoder().decode(ZoteroConfig.self, from: data) else {
-            print("ZoteroConfig: corrupt \(fileName), starting empty")
+            DebugLog.config("ZoteroConfig: corrupt \(fileName), starting empty")
             return ZoteroConfig()
         }
         return config

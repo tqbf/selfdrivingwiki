@@ -11,7 +11,7 @@ import WikiFSCore
 /// breaks, and tables.
 ///
 /// Wiki links and footnotes arrive already pre-processed into ordinary markdown
-/// links by `SourceWebView`'s pre-pass (`WikiFootnoteMarkdown` +
+/// links by `WikiReaderView`'s pre-pass (`WikiFootnoteMarkdown` +
 /// `WikiLinkMarkdown` — the same transforms the native reader uses), so they
 /// need no special handling here.
 ///
@@ -19,7 +19,7 @@ import WikiFSCore
 struct MarkdownHTMLRenderer: MarkupVisitor {
 
     /// Render `markdown` to an HTML fragment (no `<html>`/`<body>` wrapper —
-    /// `SourceWebView.documentHTML` wraps it).
+    /// `WikiReaderView.documentHTML` wraps it).
     static func render(_ markdown: String) -> String {
         var renderer = MarkdownHTMLRenderer()
         return renderer.visit(Document(parsing: markdown))

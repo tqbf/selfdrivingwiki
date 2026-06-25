@@ -46,7 +46,7 @@ struct ContentView: View {
 
                 if isTranscriptExpanded {
                     Divider()
-                    AgentTranscriptSidebar(launcher: agentLauncher)
+                    AgentTranscriptSidebar(launcher: agentLauncher, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
@@ -95,7 +95,7 @@ struct ContentView: View {
         // Expose the "present Add from URL (pre-filled)" action to the whole
         // subtree so the reader views' right-click "Add as Source" item (and the
         // empty-state button in `WikiDetailView`) can trigger it without a
-        // per-view binding. Mirrors `MarkdownPreview`'s `\.openURL` override.
+        // per-view binding. Mirrors `WikiReaderView`'s `\.openURL` override.
         .environment(\.addURLHandler) { url in
             pendingAddURL = PendingAddURL(url: url)
         }

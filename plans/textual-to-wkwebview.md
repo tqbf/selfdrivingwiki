@@ -1,7 +1,7 @@
 # Replace the vendored Textual reader with WKWebView everywhere
 
 **Branch:** `feature/textual-to-wkwebview`.
-**Status:** design, ready for review.
+**Status:** implemented (1022 tests green; manual gates AC.3/AC.5/AC.6/AC.7 pending).
 
 ## Goal
 

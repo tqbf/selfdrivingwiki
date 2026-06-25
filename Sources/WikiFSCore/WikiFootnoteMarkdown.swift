@@ -51,6 +51,19 @@ public enum WikiFootnoteMarkdown {
         url.scheme == scheme
     }
 
+    /// The HTML element id for a footnote definition, used both as the
+    /// definition's anchor (`<a id="…">`, injected by `ReaderMarkdown`) and as
+    /// the reference link's fragment target (`#…`, emitted by
+    /// `rewriteReferences`). WKWebView scrolls to the matching `id` natively when
+    /// the fragment is clicked — no JS needed.
+    ///
+    /// Built with a stable percent-encoding so the fragment and the element id
+    /// always agree (the id can contain spaces / punctuation).
+    public static func footnoteAnchorID(for id: String) -> String {
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: titleQueryAllowed) ?? id
+        return "wiki-fn-\(encoded)"
+    }
+
     // MARK: - Definitions
 
     private struct Extraction {
@@ -158,8 +171,11 @@ public enum WikiFootnoteMarkdown {
             }
             cursor = full.location + full.length
 
-            let encodedID = id.addingPercentEncoding(withAllowedCharacters: titleQueryAllowed) ?? id
-            output += "[\(superscript(number))](\(scheme)://note?id=\(encodedID))"
+            // A same-page fragment link (`#wiki-fn-<id>`) — WKWebView scrolls to
+            // the matching definition anchor natively, with no JS or delegate
+            // dependency. (Custom-scheme links aren't reliably routed through
+            // WKWebView's navigation policy for same-document scrolls.)
+            output += "[\(superscript(number))](#\(footnoteAnchorID(for: id)))"
         }
 
         if cursor < ns.length {

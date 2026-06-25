@@ -32,8 +32,9 @@ struct ChangeLogDetailView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                MarkdownPreview(store: store, markdown: logMarkdown,
-                                currentSelection: store.selection)
+                WikiReaderView(markdown: logMarkdown,
+                                currentSelection: store.selection,
+                                store: store)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: PageEditorMetrics.previewMinHeight)
             }
