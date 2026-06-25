@@ -19,6 +19,10 @@ struct SourceDetailView: View {
     /// standalone "Extract Markdown" button for this file only — pdf2md is safe to
     /// overlap with a claude run, so a query/ingest agent run does NOT disable it.
     let isThisFileExtracting: Bool
+    /// `true` when the edit lock is held by an agent OTHER than the ingest agent
+    /// (i.e., the query agent with "Allow wiki edits" checked). Disables the
+    /// Ingest button so the user sees it's unavailable before clicking.
+    let isEditLockedExternally: Bool
     let runIngest: (PageID) -> Void
     /// Shared launcher — used by the standalone `runExtraction` to take the
     /// extraction slot (so a standalone extract and an ingest-path extract serialize
@@ -227,7 +231,7 @@ struct SourceDetailView: View {
                     }
                         .keyboardShortcut(.return, modifiers: .command)
                         .disabled(isRunning || isIngesting || isAnySourceIngesting
-                                  || isThisFileExtracting)
+                                  || isThisFileExtracting || isEditLockedExternally)
                     if isPDF, !hasMarkdown {
                         Button(isExtracting ? "Extracting…" : "Extract Markdown",
                                systemImage: "doc.plaintext") {

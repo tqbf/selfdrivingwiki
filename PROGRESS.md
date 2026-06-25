@@ -2,6 +2,56 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-25 — Separate query agent from ingestion agent + opt-in edit lock
+
+Split the single `AgentLauncher` singleton into two independent instances so
+ingest and query can run concurrently, with a physical read-only boundary when
+the query agent shouldn't write.
+
+**Problem.** The query tool reused the same `AgentLauncher` as ingestion: (1) stale
+ingest text appeared in the query conversation view after switching tabs, (2) a
+single spawn slot prevented ingest and query from running concurrently, and (3)
+the prompt always included write instructions, so the agent wrote to the wiki
+regardless of user intent.
+
+**Two-launcher architecture.** `WikiFSApp` now creates a second `AgentLauncher`
+instance (`queryLauncher`) dedicated to query operations only, with its own spawn
+slot, events array, and process state. The existing `agentLauncher` remains for
+ingest and lint. Threaded through `RootView` → `ContentView` → `WikiDetailView`
+→ `QueryConversationView` (5 files, parameter-only changes).
+
+**Opt-in edit lock.** A new **"Allow wiki edits"** checkbox (`.toggleStyle(.checkbox)`)
+in the query composer. When checked:
+- The query agent takes `store.isAgentRunning` (the edit lock), blocking
+  ingestion and page editing — mirrored in the UI: the ingest button greys out
+  (`isEditLockedExternally` on `SourceDetailView`) and an orange **"Editing
+  enabled — ingestion is paused"** banner appears above the transcript.
+- `AgentOperationRunner.startQueryConversation` checks `store.isAgentRunning`
+  before starting — if ingest already holds the lock, it shows a preflight error:
+  "An ingestion is updating the wiki. Wait for it to finish, or uncheck 'Allow
+  wiki edits' to start a read-only query."
+- Conversely, `run()` (ingest/lint) checks `store.isAgentRunning` before taking
+  the lock — if the query agent holds it, it shows a preflight error: "The query
+  agent is currently editing the wiki."
+
+**Physical read-only enforcement.** When the checkbox is OFF:
+- A **read-only seatbelt sandbox** (`SandboxProfile.readOnlyInvocation`) is
+  always applied (regardless of global sandbox settings), allowing scratch writes
+  but denying writes to the wiki DB — `wikictl page upsert` physically fails at
+  the OS level.
+- The prompt is split into two variants in `WikiOperation`:
+  `queryConversationReadOnlyPrompt` (no `IngestWriteRule.writes`, no write
+  commands, explicit "You CANNOT create, update, or modify any wiki content") vs
+  `queryConversationReadWritePrompt` (current behavior, full write instructions).
+
+**Files changed (12):** `WikiFSApp.swift`, `RootView.swift`, `ContentView.swift`,
+`WikiDetailView.swift`, `QueryConversationView.swift`, `AgentLauncher.swift`,
+`AgentOperationRunner.swift`, `SourceDetailView.swift`, `SandboxProfile.swift`,
+`WikiOperation.swift`, plus test updates in `OperationCommandTests.swift` and
+`SandboxedOperationCommandTests.swift`.
+
+**Tests.** 1041 pass, 77 suites, 0 failures. `swift build` clean.
+
 ## 2026-06-25 — Fix quote-link highlight across inline elements (WKWebView reader)
 
 A clicked `[[source:Name#"quote"]]` no longer silently failed to

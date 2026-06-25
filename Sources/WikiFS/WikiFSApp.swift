@@ -17,6 +17,7 @@ struct WikiFSApp: App {
     @State private var manager: WikiManager
     @State private var fileProvider = FileProviderSpike()
     @State private var agentLauncher = AgentLauncher()
+    @State private var queryLauncher = AgentLauncher()
     /// App-wide extraction backend resolver (local pdf2md / Claude / Docling
     /// Serve). Threaded like `agentLauncher` — one instance, owned by the app.
     @State private var extractionCoordinator: ExtractionCoordinator
@@ -53,7 +54,7 @@ struct WikiFSApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(manager: manager, fileProvider: fileProvider, agentLauncher: agentLauncher, extractionCoordinator: extractionCoordinator)
+            RootView(manager: manager, fileProvider: fileProvider, agentLauncher: agentLauncher, queryLauncher: queryLauncher, extractionCoordinator: extractionCoordinator)
                 .alert(
                     "Install Self Driving Wiki in Applications",
                     isPresented: $showingLaunchLocationWarning,

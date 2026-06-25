@@ -89,6 +89,39 @@ public enum SandboxProfile {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    /// Generate a READ-ONLY seatbelt profile that allows writes to scratch (the agent
+    /// needs a writable cwd for temp files) but DENIES writes to the wiki database.
+    /// Used when the query agent runs without "Allow wiki edits" — it physically
+    /// prevents `wikictl page upsert` / `wikictl index set` / `wikictl log append`
+    /// from writing, regardless of prompt instructions.
+    public static func generateReadOnly(scratchDir: String) -> String {
+        let lines: [String] = [
+            "(version 1)",
+            "(allow default)",
+            "(deny file-write*)",
+            // The scratch dir is writable — the agent needs a cwd.
+            "(allow file-write* (subpath (param \"SCRATCH_DIR\")))",
+        ]
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// Build a read-only `SandboxInvocation` that confines the agent to scratch
+    /// writes only. No wiki DB path is allowed — wikictl writes will fail.
+    public static func readOnlyInvocation(
+        homePath: String,
+        scratchDir: String
+    ) -> SandboxInvocation {
+        let resolvedScratch = Self.canonical(scratchDir)
+        let profile = generateReadOnly(scratchDir: resolvedScratch)
+        return SandboxInvocation(
+            profile: profile,
+            defines: [
+                ("HOME", homePath),
+                ("SCRATCH_DIR", resolvedScratch),
+            ]
+        )
+    }
+
     /// Build a `SandboxInvocation` from the three spawn-time paths. The scratch dir,
     /// DB path, and extra-allowed paths are **symlink-resolved** here, because the
     /// seatbelt `subpath`/`literal` matchers match the CANONICAL path — a symlinked

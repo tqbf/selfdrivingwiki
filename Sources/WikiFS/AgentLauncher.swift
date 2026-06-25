@@ -571,6 +571,8 @@ final class AgentLauncher {
 
     /// Start a stdin-backed query conversation. The first user message is sent
     /// immediately after the process launches; later turns use `sendInteractiveMessage`.
+    /// - Parameter allowWikiEdits: when `false` (default), the agent runs under a
+    ///   READ-ONLY seatbelt sandbox that physically blocks all writes to the wiki DB.
     func startInteractiveQuery(
         firstMessage: String,
         stateMarkdown: String,
@@ -578,6 +580,7 @@ final class AgentLauncher {
         wikiRoot: String,
         systemPrompt: String,
         wikictlDirectory: String,
+        allowWikiEdits: Bool = false,
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void
     ) async {
@@ -625,8 +628,19 @@ final class AgentLauncher {
             return
         }
 
-        let operation = WikiOperation.queryConversation(stateFilePath: stateFilePath)
-        let sandbox = resolveSandboxInvocation(wikiID: wikiID, scratch: scratch, dir: dir)
+        let operation = WikiOperation.queryConversation(
+            stateFilePath: stateFilePath, allowWikiEdits: allowWikiEdits)
+        // When "Allow wiki edits" is off, force a read-only seatbelt sandbox that
+        // physically blocks writes to the wiki DB — regardless of global sandbox
+        // settings. When on, use the existing opt-in sandbox behavior.
+        let sandbox: SandboxProfile.SandboxInvocation?
+        if allowWikiEdits {
+            sandbox = resolveSandboxInvocation(wikiID: wikiID, scratch: scratch, dir: dir)
+        } else {
+            let homePath = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+            sandbox = SandboxProfile.readOnlyInvocation(
+                homePath: homePath, scratchDir: scratch.path)
+        }
         let command = OperationCommand.buildInteractiveQuery(
             operation: operation,
             wikiRoot: wikiRoot,

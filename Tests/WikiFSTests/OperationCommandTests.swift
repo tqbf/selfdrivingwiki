@@ -115,7 +115,7 @@ struct OperationCommandTests {
   @Test func queryAndLintStayOpusSingleAgent() {
     for operation: WikiOperation in [
       .query(question: "How does X work?", stateFilePath: Self.stateFile),
-      .queryConversation(stateFilePath: Self.stateFile),
+      .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
       .lint(stateFilePath: Self.stateFile),
     ] {
       let cmd = build(operation: operation)
@@ -127,7 +127,7 @@ struct OperationCommandTests {
 
   @Test func interactiveQueryUsesStreamingInputAndNoPositionalPrompt() {
     let cmd = OperationCommand.buildInteractiveQuery(
-      operation: .queryConversation(stateFilePath: Self.stateFile),
+      operation: .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
       wikiRoot: Self.resolvedRoot,
       wikiID: "01WIKIULID",
       systemPrompt: "You are the maintainer.",
@@ -153,7 +153,7 @@ struct OperationCommandTests {
 
   @Test func interactiveQueryPromptAnswersByDefaultAndWritesOnlyOnRequest() {
     let cmd = OperationCommand.buildInteractiveQuery(
-      operation: .queryConversation(stateFilePath: Self.stateFile),
+      operation: .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: true),
       wikiRoot: Self.resolvedRoot,
       wikiID: "01WIKIULID",
       systemPrompt: "schema",
@@ -237,7 +237,7 @@ struct OperationCommandTests {
       Self.tinyIngest(),
       Self.curatedIngest(),
       .query(question: "How does X compare to Y?", stateFilePath: Self.stateFile),
-      .queryConversation(stateFilePath: Self.stateFile),
+      .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
       .lint(stateFilePath: Self.stateFile),
     ] {
       let cmd = OperationCommand.build(
@@ -290,7 +290,7 @@ struct OperationCommandTests {
       Self.tinyIngest(),
       Self.curatedIngest(),
       .query(question: "q", stateFilePath: Self.stateFile),
-      .queryConversation(stateFilePath: Self.stateFile),
+      .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: true),
       .lint(stateFilePath: Self.stateFile),
     ] {
       let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)
@@ -342,7 +342,7 @@ struct OperationCommandTests {
   @Test func queryAndLintPromptsDoNotCarryIngestFootnoteRule() {
     for operation: WikiOperation in [
       .query(question: "q", stateFilePath: Self.stateFile),
-      .queryConversation(stateFilePath: Self.stateFile),
+      .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
       .lint(stateFilePath: Self.stateFile),
     ] {
       let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)
@@ -356,7 +356,7 @@ struct OperationCommandTests {
     // wikilink plus the visible passage. Both Query surfaces carry that rule.
     for operation: WikiOperation in [
       .query(question: "q", stateFilePath: Self.stateFile),
-      .queryConversation(stateFilePath: Self.stateFile),
+      .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
     ] {
       let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)
       #expect(prompt.contains("CITE SOURCES IN YOUR ANSWER"))
@@ -373,7 +373,7 @@ struct OperationCommandTests {
   @Test func queryAndLintPromptsNameStateAndForbidRediscovery() {
     for operation: WikiOperation in [
       .query(question: "q", stateFilePath: Self.stateFile),
-      .queryConversation(stateFilePath: Self.stateFile),
+      .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
       .lint(stateFilePath: Self.stateFile),
     ] {
       let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)
@@ -481,7 +481,7 @@ struct OperationCommandTests {
       Self.tinyIngest(),
       Self.curatedIngest(),
       .query(question: "q", stateFilePath: Self.stateFile),
-      .queryConversation(stateFilePath: Self.stateFile),
+      .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
       .lint(stateFilePath: Self.stateFile),
     ] {
       let prompt = operation.prompt(wikiRoot: "")

@@ -196,7 +196,8 @@ enum AgentOperationRunner {
             launcher: launcher,
             store: store,
             manager: manager,
-            fileProvider: fileProvider)
+            fileProvider: fileProvider,
+            takeEditLock: false)
     }
 
     static func startQueryConversation(
@@ -204,12 +205,20 @@ enum AgentOperationRunner {
         launcher: AgentLauncher,
         store: WikiStoreModel,
         manager: WikiManager,
-        fileProvider: FileProviderSpike
+        fileProvider: FileProviderSpike,
+        allowWikiEdits: Bool = false
     ) async {
         let trimmed = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard let wikiID = manager.activeWikiID else {
             DebugLog.agent("startQueryConversation: no active wiki — bailing")
+            return
+        }
+
+        // If the query agent wants edit permissions, it must take the edit lock.
+        // Refuse to start if another agent (ingest) already holds it.
+        if allowWikiEdits && store.isAgentRunning {
+            launcher.preflightError = "An ingestion is updating the wiki. Wait for it to finish, or uncheck \"Allow wiki edits\" to start a read-only query."
             return
         }
 
@@ -220,6 +229,8 @@ enum AgentOperationRunner {
         let root = fileProvider.path ?? ""
         DebugLog.agent("startQueryConversation: wikiRoot=\(root.isEmpty ? "<mount unavailable>" : root)")
 
+        // Query agent takes the edit lock only when "Allow wiki edits" is checked.
+        // When unchecked, the seatbelt sandbox physically blocks writes to the wiki DB.
         await launcher.startInteractiveQuery(
             firstMessage: trimmed,
             stateMarkdown: store.currentStateSnapshot().renderStateFile(),
@@ -227,8 +238,9 @@ enum AgentOperationRunner {
             wikiRoot: root,
             systemPrompt: store.currentSystemPromptBody(),
             wikictlDirectory: HelpersLocation.wikictlDirectory,
-            onLock: { store.beginAgentRun() },
-            onUnlock: { store.endAgentRun() }
+            allowWikiEdits: allowWikiEdits,
+            onLock: { if allowWikiEdits { store.beginAgentRun() } },
+            onUnlock: { if allowWikiEdits { store.endAgentRun() } }
         )
     }
 
@@ -252,9 +264,16 @@ enum AgentOperationRunner {
         store: WikiStoreModel,
         manager: WikiManager,
         fileProvider: FileProviderSpike,
-        ingestingSourceIDs: Set<PageID> = []
+        ingestingSourceIDs: Set<PageID> = [],
+        takeEditLock: Bool = true
     ) async {
         guard let wikiID = manager.activeWikiID else { return }
+
+        // Refuse to start if we need the edit lock and another agent holds it.
+        if takeEditLock && store.isAgentRunning {
+            launcher.preflightError = "The query agent is currently editing the wiki. Wait for it to finish before ingesting."
+            return
+        }
 
         switch request {
         case .ingest:
@@ -275,8 +294,8 @@ enum AgentOperationRunner {
             systemPrompt: store.currentSystemPromptBody(),
             wikictlDirectory: HelpersLocation.wikictlDirectory,
             ingestingSourceIDs: ingestingSourceIDs,
-            onLock: { store.beginAgentRun() },
-            onUnlock: { store.endAgentRun() }
+            onLock: { if takeEditLock { store.beginAgentRun() } },
+            onUnlock: { if takeEditLock { store.endAgentRun() } }
         )
     }
 

@@ -6,7 +6,8 @@ import WikiFSCore
 /// selected document/source surface.
 struct WikiDetailView: View {
     @Bindable var store: WikiStoreModel
-    @Bindable var launcher: AgentLauncher
+    @Bindable var launcher: AgentLauncher       // ingest launcher
+    @Bindable var queryLauncher: AgentLauncher   // query-only launcher
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
     let extractionCoordinator: ExtractionCoordinator
@@ -41,7 +42,7 @@ struct WikiDetailView: View {
             }
         case .query:
             QueryConversationView(
-                launcher: launcher,
+                launcher: queryLauncher,
                 store: store,
                 manager: manager,
                 fileProvider: fileProvider
@@ -76,6 +77,9 @@ struct WikiDetailView: View {
                     // driven rather than the old `isExtracting &&
                     // ingestingSourceIDs.contains` overload.
                     isThisFileExtracting: launcher.extractingSourceIDs.contains(file.id),
+                    // True when the edit lock is held but NO ingest is in flight —
+                    // the query agent has "Allow wiki edits" checked and owns the lock.
+                    isEditLockedExternally: store.isAgentRunning && launcher.ingestingSourceIDs.isEmpty,
                     runIngest: runIngest,
                     launcher: launcher,
                     extractionCoordinator: extractionCoordinator,

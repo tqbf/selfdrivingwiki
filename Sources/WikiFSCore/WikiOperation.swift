@@ -46,8 +46,8 @@ public enum WikiOperation: Equatable, Sendable {
   case query(question: String, stateFilePath: String)
 
   /// Keep a query conversation open. User turns arrive over stdin, and Claude may
-  /// answer only, or update the wiki with `wikictl` when the conversation asks for it.
-  case queryConversation(stateFilePath: String)
+  /// answer only, or update the wiki with `wikictl` when `allowWikiEdits` is true.
+  case queryConversation(stateFilePath: String, allowWikiEdits: Bool)
 
   /// Health-check the wiki and report findings. `stateFilePath` is the staged
   /// `WIKI_STATE.md` snapshot.
@@ -132,8 +132,8 @@ extension WikiOperation {
     case .query(let question, let stateFilePath):
       return Self.queryPrompt(
         wikiRoot: wikiRoot, question: question, stateFilePath: stateFilePath)
-    case .queryConversation(let stateFilePath):
-      return Self.queryConversationPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath)
+    case .queryConversation(let stateFilePath, let allowWikiEdits):
+      return Self.queryConversationPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath, allowWikiEdits: allowWikiEdits)
     case .lint(let stateFilePath):
       return Self.lintPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath)
     }
@@ -364,9 +364,56 @@ extension WikiOperation {
     """
   }
 
-  /// Interactive Query stays alive across user turns. It gives Claude permission
-  /// to either answer conversationally or make durable wiki updates on request.
-  private static func queryConversationPrompt(wikiRoot: String, stateFilePath: String) -> String {
+  /// Interactive Query stays alive across user turns.
+  private static func queryConversationPrompt(
+    wikiRoot: String, stateFilePath: String, allowWikiEdits: Bool
+  ) -> String {
+    if allowWikiEdits {
+      return queryConversationReadWritePrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath)
+    } else {
+      return queryConversationReadOnlyPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath)
+    }
+  }
+
+  /// Read-only variant: no write instructions, explicit read-only constraint.
+  /// The seatbelt sandbox physically blocks writes, so this prompt never mentions
+  /// wikictl write commands — the agent learns read operations only.
+  private static func queryConversationReadOnlyPrompt(
+    wikiRoot: String, stateFilePath: String
+  ) -> String {
+    """
+    \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
+
+    \(answerCitationRule)
+
+    ROLE — You are in a READ-ONLY interactive Query conversation for this wiki. You \
+    CANNOT create, update, or modify any wiki content. Your tools are limited to \
+    reading pages and sources; any attempt to write will fail. Answer the user's \
+    questions from the existing wiki content only. Do not offer to make changes.
+
+    STYLE — Do the wiki/source inspection silently. Do NOT narrate process steps like \
+    "I'll check the wiki", "I'll consult the sources", "I'll read WIKI_STATE", or \
+    "I found this in the wiki" unless the user explicitly asks how you did it. Do \
+    not advertise capabilities or ask generic "what would you like me to do" setup \
+    questions. Reply directly and concisely to the user's actual message; when a \
+    source materially supports the answer, cite it per the CITE SOURCES rule above.
+
+    When answering, use the Query workflow from your instructions. Pull fresh pages \
+    with `wikictl page get --title T` (or `--id I`) as needed. If a page contains \
+    Markdown footnotes (`[^id]: ...`) that cite a raw source, resolve it with \
+    `wikictl source list` (or `--json`), then read it — for text use \
+    `wikictl source cat --id <id>`; for a PDF or other binary run \
+    `wikictl source export --id <id>` and run `pdftotext` / `Read` / `strings` on \
+    the path it prints.
+
+    \(Self.wikiRootLine(wikiRoot))
+    """
+  }
+
+  /// Read-write variant: includes full write instructions (current behavior).
+  private static func queryConversationReadWritePrompt(
+    wikiRoot: String, stateFilePath: String
+  ) -> String {
     """
     \(IngestWriteRule.writes)
 
