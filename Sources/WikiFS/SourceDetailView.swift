@@ -71,7 +71,7 @@ struct SourceDetailView: View {
     }
 
     private var displayName: String {
-        file.filename.isEmpty ? "Untitled" : file.filename
+        file.displayName ?? (file.filename.isEmpty ? "Untitled" : file.filename)
     }
 
     private var alreadyIngested: Bool { hasBeenIngested }

@@ -1,4 +1,5 @@
 import CryptoKit
+import CoreGraphics
 import Foundation
 import SQLite3
 import Testing
@@ -250,5 +251,161 @@ struct SourcesTests {
         #expect(sqlite3_step(stmt) == SQLITE_ROW)
         #expect(sqlite3_column_int(stmt, 0) == 11)
         _ = store
+    }
+
+    // MARK: - DisplayNameResolver
+
+    @Test func displayNameFromZoteroTitle() {
+        let result = DisplayNameResolver.resolve(
+            filename: "abc123.pdf", data: Data(),
+            mimeType: "application/pdf",
+            zoteroItemTitle: "A Study in Scarlet")
+        #expect(result == "A Study in Scarlet")
+    }
+
+    @Test func displayNameNilWhenZoteroTitleIsWhitespace() {
+        let result = DisplayNameResolver.resolve(
+            filename: "abc123.pdf", data: Data(),
+            mimeType: "application/pdf",
+            zoteroItemTitle: "   ")
+        #expect(result == nil)
+    }
+
+    @Test func displayNameFromMarkdownFrontMatterDoubleQuoted() {
+        let md = """
+        ---
+        title: "Hello World"
+        ---
+        # Content
+        """
+        let result = DisplayNameResolver.resolve(
+            filename: "note.md", data: Data(md.utf8),
+            mimeType: nil, zoteroItemTitle: nil)
+        #expect(result == "Hello World")
+    }
+
+    @Test func displayNameFromMarkdownFrontMatterSingleQuoted() {
+        let md = """
+        ---
+        title: 'Single Quoted Title'
+        ---
+        # Body
+        """
+        let result = DisplayNameResolver.resolve(
+            filename: "doc.md", data: Data(md.utf8),
+            mimeType: nil, zoteroItemTitle: nil)
+        #expect(result == "Single Quoted Title")
+    }
+
+    @Test func displayNameFromMarkdownFrontMatterUnquoted() {
+        let md = """
+        ---
+        title: Plain Title
+        author: Someone
+        ---
+        """
+        let result = DisplayNameResolver.resolve(
+            filename: "page.md", data: Data(md.utf8),
+            mimeType: nil, zoteroItemTitle: nil)
+        #expect(result == "Plain Title")
+    }
+
+    @Test func displayNameNilForMarkdownWithoutFrontMatter() {
+        let md = "# Just a heading\n\nSome content."
+        let result = DisplayNameResolver.resolve(
+            filename: "plain.md", data: Data(md.utf8),
+            mimeType: nil, zoteroItemTitle: nil)
+        #expect(result == nil)
+    }
+
+    @Test func displayNameFromMarkdownMimeTypeNotExtension() {
+        let md = """
+        ---
+        title: "From MIME"
+        ---
+        """
+        let result = DisplayNameResolver.resolve(
+            filename: "file.txt", data: Data(md.utf8),
+            mimeType: "text/markdown", zoteroItemTitle: nil)
+        #expect(result == "From MIME")
+    }
+
+    @Test func displayNameFromPDFTitle() throws {
+        // Build a minimal valid PDF with a /Title entry.
+        let title = "My PDF Document"
+        let pdfData = try minimalPDF(title: title)
+        let result = DisplayNameResolver.resolve(
+            filename: "report.pdf", data: pdfData,
+            mimeType: "application/pdf", zoteroItemTitle: nil)
+        #expect(result == "My PDF Document")
+    }
+
+    @Test func displayNameNilForInvalidPDF() {
+        let result = DisplayNameResolver.resolve(
+            filename: "corrupt.pdf", data: Data("not a pdf".utf8),
+            mimeType: "application/pdf", zoteroItemTitle: nil)
+        #expect(result == nil)
+    }
+
+    @Test func displayNameNilForPDFWithoutTitle() throws {
+        // Minimal PDF with no /Title entry.
+        let pdfData = try minimalPDF()
+        let result = DisplayNameResolver.resolve(
+            filename: "untitled.pdf", data: pdfData,
+            mimeType: nil, zoteroItemTitle: nil)
+        #expect(result == nil)
+    }
+
+    @Test func displayNameNilForPlainTextFile() {
+        let result = DisplayNameResolver.resolve(
+            filename: "readme.txt", data: Data("Hello".utf8),
+            mimeType: "text/plain", zoteroItemTitle: nil)
+        #expect(result == nil)
+    }
+
+    @Test func zoteroTitleTakesPriorityOverPDFTitle() throws {
+        let pdfData = try minimalPDF(title: "PDF Title")
+        let result = DisplayNameResolver.resolve(
+            filename: "doc.pdf", data: pdfData,
+            mimeType: "application/pdf",
+            zoteroItemTitle: "Zotero Title")
+        #expect(result == "Zotero Title")
+    }
+
+    @Test func zoteroTitleTakesPriorityOverMarkdownTitle() {
+        let md = """
+        ---
+        title: "MD Title"
+        ---
+        """
+        let result = DisplayNameResolver.resolve(
+            filename: "note.md", data: Data(md.utf8),
+            mimeType: "text/markdown",
+            zoteroItemTitle: "Zotero Title")
+        #expect(result == "Zotero Title")
+    }
+
+    // MARK: - DisplayNameResolver helpers
+
+    /// Build a minimal valid PDF with an optional /Title in the Info dict,
+    /// using CoreGraphics to produce a structurally correct PDF that PDFKit
+    /// can parse.
+    private func minimalPDF(title: String? = nil) throws -> Data {
+        let data = NSMutableData()
+        guard let consumer = CGDataConsumer(data: data as CFMutableData)
+        else { throw NSError(domain: "test", code: 1) }
+        var mediaBox = CGRect(origin: .zero, size: CGSize(width: 612, height: 792))
+
+        var auxInfo: [String: Any] = [:]
+        auxInfo[kCGPDFContextTitle as String] = title as Any?
+
+        guard let ctx = CGContext(consumer: consumer, mediaBox: &mediaBox, auxInfo as CFDictionary) else {
+            throw NSError(domain: "test", code: 2)
+        }
+        ctx.beginPDFPage(nil)
+        ctx.endPDFPage()
+        ctx.closePDF()
+
+        return data as Data
     }
 }

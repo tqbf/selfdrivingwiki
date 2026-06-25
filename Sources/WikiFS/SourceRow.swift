@@ -60,7 +60,7 @@ struct SourceRow: View {
             hasBeenIngested: hasBeenIngested)
         Label {
             HStack(spacing: 8) {
-                Text(source.filename.isEmpty ? "Untitled" : source.filename)
+                Text(source.displayName ?? (source.filename.isEmpty ? "Untitled" : source.filename))
                     .font(.body)
                     .lineLimit(1)
                     .truncationMode(.middle)

@@ -632,7 +632,8 @@ struct Projection {
             let summary = SourceSummary(
                 id: PageID(rawValue: row.id), filename: row.filename, ext: row.ext,
                 mimeType: row.mime, byteSize: row.byteSize,
-                createdAt: row.createdAt, updatedAt: row.updatedAt, version: row.version)
+                createdAt: row.createdAt, updatedAt: row.updatedAt, version: row.version,
+                displayName: row.displayName)
             let verbatimNode = Self.sourceNode(for: id, file: summary)
             // Sibling eligibility: has a chain AND is NOT markdown-native.
             // Markdown-native sources don't get a sibling — the verbatim .md is the content.

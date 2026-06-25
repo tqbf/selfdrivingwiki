@@ -910,12 +910,15 @@ public final class SQLiteWikiStore: WikiStore {
             ?? ContentSniff.mimeType(of: data)
             ?? (ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType)
         let now = Date()
+        let displayName = DisplayNameResolver.resolve(
+            filename: filename, data: data, mimeType: mime,
+            zoteroItemTitle: zoteroItemTitle)
 
         let stmt = try statement("""
         INSERT INTO sources
           (id, filename, ext, mime_type, byte_size, content, created_at, updated_at, version,
            zotero_item_key, zotero_item_title, display_name)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, 1, ?8, ?9, ?2);
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, 1, ?8, ?9, ?10);
         """)
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
@@ -927,12 +930,14 @@ public final class SQLiteWikiStore: WikiStore {
         try stmt.bind(now.timeIntervalSince1970, at: 7)
         if let zoteroItemKey { try stmt.bind(zoteroItemKey, at: 8) }  // else leave NULL
         if let zoteroItemTitle { try stmt.bind(zoteroItemTitle, at: 9) }  // else leave NULL
+        if let displayName { try stmt.bind(displayName, at: 10) }  // else leave NULL
         _ = try stmt.step()
 
         return SourceSummary(
             id: id, filename: filename, ext: ext, mimeType: mime,
             byteSize: data.count, createdAt: now, updatedAt: now, version: 1,
-            zoteroItemKey: zoteroItemKey, zoteroItemTitle: zoteroItemTitle
+            zoteroItemKey: zoteroItemKey, zoteroItemTitle: zoteroItemTitle,
+            displayName: displayName
         )
     }
 
