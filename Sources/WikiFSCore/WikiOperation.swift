@@ -149,6 +149,17 @@ extension WikiOperation {
 
   // MARK: - Ingest prompts
 
+  /// The closing `WIKI_ROOT` line. The mount is **reference-only** (the agent reads
+  /// pages and raw sources via `wikictl`/SQLite, not the mount), so an unavailable
+  /// mount never blocks an operation — but the line tells the agent explicitly when the
+  /// mount is down so it doesn't try to read from a path that isn't there.
+  private static func wikiRootLine(_ wikiRoot: String) -> String {
+    if wikiRoot.isEmpty {
+      return "WIKI_ROOT: (File Provider mount is not available for this run — read pages and raw sources via `wikictl` only.)"
+    }
+    return "WIKI_ROOT (resolved, read-only mount — reference only): \(wikiRoot)"
+  }
+
   /// Single-pass Ingest (tiny total source): one Opus pass does the whole ingest
   /// itself via `wikictl`. No fan-out — Opus reads the small staged source(s) and
   /// writes the pages + index + log. (Opus is the curator even for small sources.)
@@ -181,7 +192,7 @@ extension WikiOperation {
     Each `--source` id is REQUIRED — it marks that file Ingested in the app. \
     Work autonomously to completion; the live app shows your changes as they land.
 
-    WIKI_ROOT (resolved, read-only mount — reference only): \(wikiRoot)
+    \(Self.wikiRootLine(wikiRoot))
     """
   }
 
@@ -240,7 +251,7 @@ extension WikiOperation {
 
     Work autonomously to completion; the live app shows changes as they land.
 
-    WIKI_ROOT (resolved, read-only mount — reference only): \(wikiRoot)
+    \(Self.wikiRootLine(wikiRoot))
     """
   }
 
@@ -348,7 +359,7 @@ extension WikiOperation {
     rule above. If you file a useful answer back as a page, write it via \
     `wikictl page upsert` and log it with `wikictl log append --kind query`.
 
-    WIKI_ROOT (resolved, read-only mount — reference only): \(wikiRoot)
+    \(Self.wikiRootLine(wikiRoot))
     Question: \(question)
     """
   }
@@ -389,7 +400,7 @@ extension WikiOperation {
     query` describing the change. Tell the user what you changed and which pages or \
     source paths you relied on.
 
-    WIKI_ROOT (resolved, read-only mount — reference only): \(wikiRoot)
+    \(Self.wikiRootLine(wikiRoot))
     """
   }
 
@@ -405,7 +416,7 @@ extension WikiOperation {
     Lint workflow from your instructions. Record it with \
     `wikictl log append --kind lint`.
 
-    WIKI_ROOT (resolved, read-only mount — reference only): \(wikiRoot)
+    \(Self.wikiRootLine(wikiRoot))
     """
   }
 }

@@ -472,6 +472,39 @@ struct OperationCommandTests {
     #expect(WikiOperation.Kind.lint.title == "Lint")
   }
 
+  // MARK: - Mount-unavailable prompts (the agent reads via wikictl, not the mount)
+
+  @Test func promptsNoteWhenTheMountIsUnavailable() {
+    // With an empty WIKI_ROOT (File Provider not mounted), the prompts must tell the
+    // agent to read via `wikictl` only, instead of an empty reference path.
+    for operation: WikiOperation in [
+      Self.tinyIngest(),
+      Self.curatedIngest(),
+      .query(question: "q", stateFilePath: Self.stateFile),
+      .queryConversation(stateFilePath: Self.stateFile),
+      .lint(stateFilePath: Self.stateFile),
+    ] {
+      let prompt = operation.prompt(wikiRoot: "")
+      #expect(prompt.contains("mount is not available"))
+      #expect(prompt.contains("wikictl"))
+      // No dangling empty reference path line.
+      #expect(!prompt.contains("WIKI_ROOT (resolved, read-only mount — reference only): \n"))
+    }
+  }
+
+  @Test func promptsKeepTheResolvedMountPathWhenAvailable() {
+    // A non-empty WIKI_ROOT still renders the reference-only path line.
+    for operation: WikiOperation in [
+      Self.tinyIngest(),
+      .query(question: "q", stateFilePath: Self.stateFile),
+      .lint(stateFilePath: Self.stateFile),
+    ] {
+      let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)
+      #expect(prompt.contains("WIKI_ROOT (resolved, read-only mount — reference only): \(Self.resolvedRoot)"))
+      #expect(!prompt.contains("mount is not available"))
+    }
+  }
+
   // MARK: - PathPreflight
 
   @Test func preflightFindsExecutableOnPath() {

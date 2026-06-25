@@ -2,6 +2,28 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-24 — Agent runs without the File Provider mount
+
+The agent (Ingest / Query / Lint + interactive Query) no longer hard-requires a
+mounted File Provider. `fileProvider.path` was a hard gate for Query/Lint/interactive
+(the query conversation bailed with "File Provider is not mounted. Open a wiki
+first."), even though the prompts route ALL reads through `wikictl` (SQLite via
+`WIKI_DB`) and label the mount **reference-only**. Ingest already tolerated a missing
+mount.
+
+- `AgentOperationRunner.run` and `startQueryConversation` now pass
+  `fileProvider.path ?? ""` for every operation (no bail). The mount is still used
+  when available; it's just no longer load-bearing for the agent to start.
+- The closing `WIKI_ROOT` prompt line is now adaptive: when the mount is down it says
+  "File Provider mount is not available for this run — read pages and raw sources via
+  `wikictl` only" (was a dangling empty path). So the agent knows not to read a
+  non-existent mount.
+- Diagnosed live: a `build/`-located app instance can't mount (FP only reliably
+  mounts from the `/Applications` install), which silently blocked every agent op
+  even though the app otherwise worked. This removes that failure mode.
+- Tests: 2 new (`promptsNoteWhenTheMountIsUnavailable`,
+  `promptsKeepTheResolvedMountPathWhenAvailable`); 967 pass.
+
 ## 2026-06-24 — SourceWebView (WKWebView) gets the same "Add as Source" menu
 
 Extended `plans/url-context-menu-add.md` to the WKWebView large-source reader,

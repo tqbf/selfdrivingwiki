@@ -214,13 +214,11 @@ enum AgentOperationRunner {
         }
 
         await fileProvider.signalChange()
-        guard let root = fileProvider.path else {
-            await MainActor.run {
-                launcher.preflightError = "File Provider is not mounted. Open a wiki first."
-            }
-            DebugLog.agent("startQueryConversation: fileProvider.path is nil — bailing")
-            return
-        }
+        // The mount is reference-only (the agent reads via `wikictl`); proceed even
+        // when it isn't mounted, passing an empty WIKI_ROOT. The prompt tells the
+        // agent to read via `wikictl` only when the mount is unavailable.
+        let root = fileProvider.path ?? ""
+        DebugLog.agent("startQueryConversation: wikiRoot=\(root.isEmpty ? "<mount unavailable>" : root)")
 
         await launcher.startInteractiveQuery(
             firstMessage: trimmed,
@@ -264,17 +262,11 @@ enum AgentOperationRunner {
         case .query, .lint:
             await fileProvider.signalChange()
         }
-        let root: String
-        if let resolvedRoot = fileProvider.path {
-            root = resolvedRoot
-        } else if case .ingest = request {
-            // Ingest stages both the raw source bytes and WIKI_STATE.md from SQLite,
-            // so it can proceed even if the File Provider mount URL is still being
-            // resolved. Query/Lint keep requiring the mount for raw-file reads.
-            root = ""
-        } else {
-            return
-        }
+        // The mount path is reference-only in the prompts (the agent reads pages and
+        // raw sources via `wikictl`/SQLite, not the mount), so every operation can
+        // proceed even when the File Provider isn't mounted — it just gets an empty
+        // WIKI_ROOT, and the prompt tells the agent to read via `wikictl` only.
+        let root = fileProvider.path ?? ""
 
         await launcher.run(
             request: request,
