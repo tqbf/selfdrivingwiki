@@ -31,6 +31,10 @@ struct AgentActivityView: View {
                 stderrBanner
             }
         }
+        // Enable selection + copy across the whole feed (propagates to every
+        // descendant `Text` via environment). StructuredText (AgentMarkdownText)
+        // selects via its own `.textual.textSelection`.
+        .textSelection(.enabled)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
     }
 
@@ -110,7 +114,6 @@ struct AgentActivityView: View {
             Text(launcher.stderr)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.secondary)
-                .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(ActivityMetrics.padding)
@@ -143,7 +146,6 @@ private struct AgentEventRow: View {
             Text(line)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.tertiary)
-                .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -157,7 +159,6 @@ private struct AgentEventRow: View {
                 .foregroundStyle(.secondary)
             Text(text)
                 .font(.callout)
-                .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -185,7 +186,6 @@ private struct AgentEventRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .truncationMode(.middle)
-                    .textSelection(.enabled)
             }
             Spacer(minLength: 0)
         }
@@ -210,7 +210,6 @@ private struct AgentEventRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .truncationMode(.tail)
-                    .textSelection(.enabled)
             }
             Spacer(minLength: 0)
         }
@@ -227,7 +226,6 @@ private struct AgentEventRow: View {
                 .foregroundStyle(isError ? .red : .secondary)
                 .lineLimit(3)
                 .truncationMode(.tail)
-                .textSelection(.enabled)
             Spacer(minLength: 0)
         }
     }

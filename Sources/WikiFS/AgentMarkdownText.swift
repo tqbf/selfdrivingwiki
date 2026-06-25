@@ -10,6 +10,7 @@ struct AgentMarkdownText: View {
     var body: some View {
         StructuredText(markdown: markdown)
             .id(markdown)
+            .textual.textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
     }
