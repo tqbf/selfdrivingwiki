@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// A trailing inspector for the active agent run. It reuses the operations
@@ -8,6 +9,8 @@ struct AgentTranscriptSidebar: View {
     @State private var showsInternals = false
     @State private var splitFraction: CGFloat = 0.3
     @State private var dragOrigin: CGFloat = 0.3
+    /// Briefly true after "Copy Transcript" to show a confirmation.
+    @State private var copied = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -164,6 +167,15 @@ struct AgentTranscriptSidebar: View {
                     .foregroundStyle(.red)
                     .help("Stop the agent run")
                 }
+                Button {
+                    copyTranscript()
+                } label: {
+                    Label(copied ? "Copied" : "Copy Transcript", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .disabled(launcher.events.isEmpty)
+                .help("Copy the transcript as plain text")
                 Toggle("Show internals", isOn: $showsInternals)
                     .toggleStyle(.checkbox)
                     .font(.caption)
@@ -175,6 +187,28 @@ struct AgentTranscriptSidebar: View {
 
     private var agentBusy: Bool {
         launcher.isRunning || !launcher.ingestingSourceIDs.isEmpty
+    }
+
+    /// Plain-text rendering of the currently-visible transcript (respects the
+    /// "Show internals" filter so what's copied matches what's shown).
+    private var transcriptPlainText: String {
+        launcher.events
+            .filter { showsInternals || !$0.isInternalTranscriptEvent }
+            .map(\.plainText)
+            .joined(separator: "\n\n")
+    }
+
+    private func copyTranscript() {
+        let text = transcriptPlainText
+        guard !text.isEmpty else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        withAnimation { copied = true }
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            withAnimation { copied = false }
+        }
     }
 
     private static let conversionBottom = "pdf-conversion-bottom"
