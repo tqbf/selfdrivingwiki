@@ -47,6 +47,10 @@ Code and other agents — NOT Polytoken — included for provenance:
   the branch, and open a PR. You may push PR branches but MUST NOT merge them to
   main yourself.
 
+* Never pipe literal markdown or multi-line content into `gh pr edit --body` —
+  the shell mangles the formatting. Use plain text for the inline body, or write
+  the body to a file first and use `gh pr edit --body-file <file>`.
+
 ## Testing
 
 **Swift** (from repo root):
