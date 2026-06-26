@@ -120,4 +120,20 @@ struct MarkdownHTMLRendererTests {
         let html = MarkdownHTMLRenderer.render(md)
         #expect(html == "<pre><code>some code\n</code></pre>")
     }
+
+    @Test func mermaidFenceIsCaseSensitive() {
+        // The mermaid hook is keyed on the exact lowercase `mermaid` info string
+        // (the canonical fence tag). A case variant must fall through to the
+        // ordinary highlighted-code path, not the diagram container.
+        let html = MarkdownHTMLRenderer.render("```Mermaid\ngraph TD\n```")
+        #expect(html == "<pre><code class=\"language-Mermaid\">graph TD\n</code></pre>")
+        #expect(!html.contains("class=\"mermaid\""))
+    }
+
+    @Test func emptyMermaidBlock() {
+        // An empty diagram fence is harmless: it yields a valid empty container
+        // (mermaid simply finds nothing to render).
+        let html = MarkdownHTMLRenderer.render("```mermaid\n```")
+        #expect(html == "<pre class=\"mermaid\"></pre>")
+    }
 }
