@@ -42,7 +42,9 @@ Code and other agents — NOT Polytoken — included for provenance:
   no matter how the app launched. The only exception is real CLI stdout (e.g.
   `wikictl`'s command output).
 
-* You may push PRs, but you MUST NOT ever merge them youself to main.
+* Never commit or push directly to `main`. Always work on a feature branch, push
+  the branch, and open a PR. You may push PR branches but MUST NOT merge them to
+  main yourself.
 
 ## Testing
 
