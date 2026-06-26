@@ -88,7 +88,7 @@ struct SystemPromptTests {
         #expect(body.contains("PDF"))
     }
 
-    @Test func defaultBodyDocumentsDiagramsSection() {
+    @Test func defaultBodyDocumentsDiagramsSection() throws {
         let body = SystemPrompt.defaultBody
         // Section heading present.
         #expect(body.contains("## Diagrams"))
@@ -100,14 +100,13 @@ struct SystemPromptTests {
         #expect(body.contains("sequence"))
         #expect(body.contains("gantt"))
         // Diagrams section appears after Conventions and before Tooling.
-        let conventionsRange = body.range(of: "## Conventions")
-        let diagramsRange = body.range(of: "## Diagrams")
-        let toolingRange = body.range(of: "## Tooling")
-        #expect(conventionsRange != nil && diagramsRange != nil && toolingRange != nil)
-        if let c = conventionsRange, let d = diagramsRange, let t = toolingRange {
-            #expect(c.lowerBound < d.lowerBound)
-            #expect(d.lowerBound < t.lowerBound)
-        }
+        // #require aborts with a clear nil-range error rather than silently
+        // skipping the ordering checks if any heading goes missing.
+        let c = try #require(body.range(of: "## Conventions"))
+        let d = try #require(body.range(of: "## Diagrams"))
+        let t = try #require(body.range(of: "## Tooling"))
+        #expect(c.lowerBound < d.lowerBound)
+        #expect(d.lowerBound < t.lowerBound)
     }
 
     // MARK: - Update persists + bumps version
