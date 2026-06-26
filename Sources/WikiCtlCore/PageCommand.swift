@@ -56,10 +56,13 @@ public enum PageCommand {
     ///
     /// `validator` injects the Mermaid validator (defaults to the bundled one) so
     /// the abort-before-write path is end-to-end testable without a bundle.
+    /// `linter` injects the Markdown linter (defaults to the bundled one) so the
+    /// auto-fix-before-write path is testable without a bundle.
     public static func run(
         _ action: Action,
         in store: WikiStore,
-        validator: MermaidValidator? = MermaidValidator.loadDefault()
+        validator: MermaidValidator? = MermaidValidator.loadDefault(),
+        linter: MarkdownLinter? = MarkdownLinter.loadDefault()
     ) throws -> Result {
         switch action {
         case .list(let json):
@@ -67,7 +70,7 @@ public enum PageCommand {
         case .get(let selector):
             return try get(selector, in: store)
         case .upsert(let id, let title, let body):
-            return try upsert(id: id, title: title, body: body, in: store, validator: validator)
+            return try upsert(id: id, title: title, body: body, in: store, validator: validator, linter: linter)
         case .delete(let id):
             return try delete(id: id, in: store)
         case .search(let query, let limit):
@@ -139,16 +142,37 @@ public enum PageCommand {
         title: String,
         body: String,
         in store: WikiStore,
-        validator: MermaidValidator?
+        validator: MermaidValidator?,
+        linter: MarkdownLinter?
     ) throws -> Result {
-        // Validate ```mermaid blocks BEFORE the write: a structurally-broken
-        // diagram is rejected (the agent fixes what's reported and re-saves).
-        // Skipped silently when the validator is nil (no bundle → dev / swift test).
-        try abortOnInvalidMermaid(body, validator: validator)
-        // The SHARED seam: identical create-or-update + `[[link]]` reparse as the
-        // in-app editor, so the link graph stays consistent across both writers.
-        let outcome = try PageUpsert.upsert(in: store, id: id, title: title, body: body)
+        // 1. Auto-fix cosmetic markdown issues BEFORE the write (trailing
+        //    whitespace, hard tabs, blank-line spacing, etc.). Skipped silently
+        //    when the linter is nil (no bundle → dev / swift test). If any
+        //    finding can't be auto-fixed, abort (inert under the cosmetic-only
+        //    config — every enabled rule is auto-fixable).
+        let fixed = try autoFixMarkdown(body, linter: linter)
+        // 2. Validate ```mermaid blocks in the FIXED text (so the linter's
+        //    whitespace fixes don't disturb a fence boundary). Skipped silently
+        //    when the validator is nil.
+        try abortOnInvalidMermaid(fixed, validator: validator)
+        // 3. The SHARED seam: identical create-or-update + `[[link]]` reparse as
+        //    the in-app editor, so the link graph stays consistent across both
+        //    writers.
+        let outcome = try PageUpsert.upsert(in: store, id: id, title: title, body: fixed)
         return Result(output: outcome.id.rawValue, didCommit: true)
+    }
+
+    /// Apply `MarkdownLinter.fix` to `body`, returning the normalized text. When
+    /// `linter` is nil (unbundled / dev / `swift test`), returns `body` unchanged
+    /// (no-op pass-through — the save proceeds unmodified). If `fix` returns
+    /// unfixable findings, throws a `.message` with a report the agent can act on.
+    static func autoFixMarkdown(_ body: String, linter: MarkdownLinter?) throws -> String {
+        guard let linter else { return body }
+        let outcome = linter.fix(markdown: body)
+        if !outcome.unfixable.isEmpty {
+            throw Failure.message(MarkdownLinter.describe(outcome.unfixable))
+        }
+        return outcome.fixed
     }
 
     /// Abort the save when `body` contains any invalid ```mermaid block, throwing

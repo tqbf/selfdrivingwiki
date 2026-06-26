@@ -549,4 +549,106 @@ struct WikiCtlCommandTests {
         #expect(name == "org.sockpuppet.wiki.changed.01ABCDEF")
         #expect(name.hasPrefix(WikiChangeNotification.baseName))
     }
+
+    // MARK: - Markdown auto-fix (wikictl page upsert)
+
+    /// Resolve the committed bundles relative to this test file for injection.
+    private func repoMarkdownLinter() throws -> MarkdownLinter {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("../../Resources/markdownlint.bundle.js")
+        guard let src = try? String(contentsOf: url, encoding: .utf8), !src.isEmpty,
+              let l = MarkdownLinter(jsSource: src) else {
+            throw Failure("Resources/markdownlint.bundle.js unavailable")
+        }
+        return l
+    }
+    private func repoMermaidValidator() throws -> MermaidValidator {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("../../Resources/merval.bundle.js")
+        guard let src = try? String(contentsOf: url, encoding: .utf8), !src.isEmpty,
+              let v = MermaidValidator(jsSource: src) else {
+            throw Failure("Resources/merval.bundle.js unavailable")
+        }
+        return v
+    }
+    private struct Failure: Error { let msg: String; init(_ s: String) { msg = s } }
+
+    @Test func autoFixMarkdownPassesThroughWhenLinterIsNil() throws {
+        // Nil linter = no-op pass-through (the unbundled / dev / swift test path).
+        let body = "#No space\ntrailing   \n"
+        let fixed = try PageCommand.autoFixMarkdown(body, linter: nil)
+        #expect(fixed == body)
+    }
+
+    @Test func upsertAutoFixesMarkdownAndStoresNormalized() throws {
+        let l = try repoMarkdownLinter()
+        let store = try tempStore()
+        let messy = "#No space\ntrailing   \n\n\n\ntext"
+        let result = try PageCommand.run(
+            .upsert(id: nil, title: "Messy", body: messy),
+            in: store, linter: l)
+        #expect(result.didCommit)
+        // The stored body must be the NORMALIZED text.
+        let stored = try store.getPage(id: PageID(rawValue: result.output)).bodyMarkdown
+        #expect(stored.hasPrefix("# No space"))      // space after heading
+        #expect(!stored.contains("   "))              // trailing whitespace stripped
+        #expect(!stored.contains("\n\n\n"))           // blanks collapsed
+        #expect(stored.hasSuffix("\n"))               // single trailing newline
+    }
+
+    @Test func upsertWithNilLinterStoresBodyUnchanged() throws {
+        let store = try tempStore()
+        let messy = "#No space\ntrailing   \n"
+        _ = try PageCommand.run(
+            .upsert(id: nil, title: "Raw", body: messy),
+            in: store, linter: nil)
+        let stored = try store.getPage(id: try store.resolveTitleToID("Raw")!).bodyMarkdown
+        #expect(stored == messy)
+    }
+
+    @Test func compositionFixThenMermaidValidateThenUpsert() throws {
+        // AC.2 proof: upsert a body with BOTH cosmetic issues AND a valid
+        // ```mermaid block. Assert (a) stored body is normalized, (b) mermaid
+        // content is byte-for-byte intact, (c) save succeeded (no abort).
+        let l = try repoMarkdownLinter()
+        let v = try repoMermaidValidator()
+        let store = try tempStore()
+        let fence = String(repeating: "`", count: 3)
+        // Trailing spaces on the heading + no blank line before the fence.
+        let body = "# Title   \n\(fence)mermaid\nflowchart LR\nA-->B\n\(fence)\nmore text"
+        let result = try PageCommand.run(
+            .upsert(id: nil, title: "Composition", body: body),
+            in: store, validator: v, linter: l)
+        #expect(result.didCommit)
+        let stored = try store.getPage(id: PageID(rawValue: result.output)).bodyMarkdown
+        // (a) Normalized: trailing space stripped, blank line before fence.
+        #expect(stored.hasPrefix("# Title\n"))
+        #expect(stored.contains("\n\n\(fence)mermaid"))
+        // (b) Mermaid content byte-for-byte intact.
+        #expect(stored.contains("flowchart LR"))
+        #expect(stored.contains("A-->B"))
+        // (c) Save succeeded (didCommit == true, already asserted).
+    }
+
+    @Test func upsertStillBlocksOnInvalidMermaidWithLinter() throws {
+        // Regression: markdown fix runs first, but an invalid mermaid block
+        // still hard-blocks the save.
+        let l = try repoMarkdownLinter()
+        let v = try repoMermaidValidator()
+        let store = try tempStore()
+        let fence = String(repeating: "`", count: 3)
+        let body = "# Title\n\n\(fence)mermaid\nflowchart LR\nA B\n\(fence)\n"
+        do {
+            _ = try PageCommand.run(
+                .upsert(id: nil, title: "Bad Mermaid", body: body),
+                in: store, validator: v, linter: l)
+            Issue.record("expected upsert to abort on invalid mermaid")
+        } catch let PageCommand.Failure.message(text) {
+            #expect(text.contains("MISSING_ARROW"))
+        }
+        // No page was written.
+        #expect(try store.listPages(sortBy: .lastUpdated).isEmpty)
+    }
 }

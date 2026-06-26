@@ -540,6 +540,9 @@ public final class WikiStoreModel {
             // editor is the human escape from wikictl's hard block), but a broken
             // diagram is flagged so the author can fix it.
             updateMermaidWarning(for: draftBody)
+            // Non-blocking markdown lint: same pattern — save succeeds with the
+            // original text, cosmetic issues are flagged as informational.
+            updateMarkdownWarning(for: draftBody)
         } catch {
             // Phase 1: log to console; a save-error surface lands later.
             DebugLog.store("WikiStoreModel.save failed: \(error)")
@@ -568,6 +571,47 @@ public final class WikiStoreModel {
         }
         let bad = validator.invalidBlocks(markdown: body)
         mermaidSaveWarning = bad.isEmpty ? nil : MermaidValidator.describe(bad)
+    }
+
+    /// The last markdown lint warning for the saved draft, or `nil`. Surfaced in
+    /// the page editor as a non-blocking informational hint (the save still
+    /// succeeds with the original text — the editor is the human escape hatch).
+    public var markdownSaveWarning: String?
+
+    /// The Markdown linter used for the non-blocking save warning. Defaults to the
+    /// process-wide bundled linter; injectable so the warning path is testable
+    /// without a bundle. `@ObservationIgnored` — it's plumbing, not UI state.
+    @ObservationIgnored var markdownLinter: MarkdownLinter? = MarkdownLinter.shared
+
+    /// The in-flight markdown warning Task (if any). Cancelled before starting a
+    /// new one, so rapid re-saves don't complete out of order and leave a stale
+    /// `markdownSaveWarning` that doesn't match the just-saved body.
+    @ObservationIgnored private var markdownWarningTask: Task<Void, Never>?
+
+    /// Lint `body` for cosmetic markdown issues and set `markdownSaveWarning`.
+    /// Unlike the mermaid scan (a cheap fence line-scan), markdownlint runs all
+    /// ~20 cosmetic rules over the whole body — so the computation runs on a
+    /// background `Task` (the linter's `NSLock` makes it thread-safe) and the
+    /// result is set via a `@MainActor` hop to avoid UI jank on large pages.
+    /// Non-blocking: the save already succeeded with the original text.
+    private func updateMarkdownWarning(for body: String) {
+        guard let linter = markdownLinter else {
+            markdownWarningTask?.cancel()
+            markdownWarningTask = nil
+            markdownSaveWarning = nil
+            return
+        }
+        markdownWarningTask?.cancel()
+        markdownWarningTask = Task.detached { [linter, weak self] in
+            let findings = linter.lint(markdown: body)
+            // Bail if a newer save superseded this task.
+            guard !Task.isCancelled else { return }
+            let warning = findings.isEmpty ? nil : MarkdownLinter.describe(findings)
+            await MainActor.run {
+                guard !Task.isCancelled else { return }
+                self?.markdownSaveWarning = warning
+            }
+        }
     }
 
     /// Cancel any pending debounce and save synchronously. Called on page

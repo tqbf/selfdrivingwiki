@@ -1,0 +1,18 @@
+{
+  "name": "markdownlint-vendor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Vendor pin for markdownlint + helpers, bundled to a single IIFE for JavaScriptCore (no Node at runtime). See plans/markdown-linter.md for the reproduction recipe.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "verify": "node verify.mjs"
+  },
+  "dependencies": {
+    "markdownlint": "0.41.0",
+    "markdownlint-rule-helpers": "0.31.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
