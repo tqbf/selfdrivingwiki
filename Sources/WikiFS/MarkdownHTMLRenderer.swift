@@ -55,6 +55,12 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         "<blockquote>\(visitChildren(blockQuote))</blockquote>"
     }
 
+    /// Opening tag emitted for a ` ```mermaid ` fence. Single source of truth:
+    /// callers that need to detect a diagram in rendered HTML (e.g. the reader
+    /// deciding whether to inject the runtime) match on THIS constant rather than
+    /// re-spelling the literal, so the renderer↔detector contract can't drift.
+    static let mermaidContainerOpenTag = "<pre class=\"mermaid\">"
+
     mutating func visitCodeBlock(_ codeBlock: CodeBlock) -> String {
         // Mermaid fences get a bare <pre class="mermaid"> — no <code> wrapper.
         // The .mermaid class is the render hook the WKWebView runtime keys on.
@@ -62,7 +68,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         // back to text before mermaid reads textContent, keeping the surrounding
         // HTML document well-formed (raw < > & would break the parser).
         if codeBlock.language == "mermaid" {
-            return "<pre class=\"mermaid\">\(escape(codeBlock.code))</pre>"
+            return "\(Self.mermaidContainerOpenTag)\(escape(codeBlock.code))</pre>"
         }
         let cls = (codeBlock.language ?? "").isEmpty
             ? ""

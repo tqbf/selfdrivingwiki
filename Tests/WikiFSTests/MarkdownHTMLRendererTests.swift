@@ -92,6 +92,17 @@ struct MarkdownHTMLRendererTests {
 
     // MARK: Mermaid
 
+    @Test func mermaidOutputUsesTheSharedDetectorTag() {
+        // The reader decides whether to inject the runtime by matching
+        // MarkdownHTMLRenderer.mermaidContainerOpenTag against rendered HTML.
+        // Pin the contract: the renderer's emitted output must actually contain
+        // that exact tag (incl. the empty-diagram case), or diagrams would
+        // silently stop being detected.
+        let tag = MarkdownHTMLRenderer.mermaidContainerOpenTag
+        #expect(MarkdownHTMLRenderer.render("```mermaid\ngraph TD\n```").contains(tag))
+        #expect(MarkdownHTMLRenderer.render("```mermaid\n```").contains(tag))
+    }
+
     @Test func mermaidBlockRendersMermaidContainer() {
         // ```mermaid fences must produce <pre class="mermaid"> so the WKWebView
         // mermaid runtime can find and render them via the .mermaid class hook.
