@@ -602,15 +602,17 @@ public final class WikiStoreModel {
             return
         }
         markdownWarningTask?.cancel()
-        markdownWarningTask = Task.detached { [linter, weak self] in
-            let findings = linter.lint(markdown: body)
-            // Bail if a newer save superseded this task.
+        // The outer Task inherits @MainActor isolation (WikiStoreModel is
+        // @MainActor), so self access stays on the main actor. Only the lint
+        // computation runs detached (background) — it captures only `linter`
+        // (Sendable) and `body` (String), never `self`.
+        markdownWarningTask = Task { [linter, weak self] in
+            let findings = await Task.detached(priority: .utility) {
+                linter.lint(markdown: body)
+            }.value
             guard !Task.isCancelled else { return }
             let warning = findings.isEmpty ? nil : MarkdownLinter.describe(findings)
-            await MainActor.run {
-                guard !Task.isCancelled else { return }
-                self?.markdownSaveWarning = warning
-            }
+            self?.markdownSaveWarning = warning
         }
     }
 
