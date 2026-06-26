@@ -240,8 +240,75 @@ enum AgentOperationRunner {
             wikictlDirectory: HelpersLocation.wikictlDirectory,
             allowWikiEdits: allowWikiEdits,
             onLock: { if allowWikiEdits { store.beginAgentRun() } },
-            onUnlock: { if allowWikiEdits { store.endAgentRun() } }
+            onUnlock: { if allowWikiEdits { store.endAgentRun() } },
+            // Per-turn edit lock: release between turns (re-acquire on the next
+            // send). Lives in the launcher — not the view — so it fires even when
+            // the Query view is unmounted (the bug fix). Gated on `allowWikiEdits`
+            // so a read-only session never touches the lock.
+            onTurnBoundary: { if allowWikiEdits { store.setAgentRunning($0) } }
         )
+    }
+
+    /// Restart an active interactive query session in a different edit mode. Used
+    /// when the user flips "Allow wiki edits" mid-session: a running claude process
+    /// can't change its seatbelt sandbox or system prompt, so we stop it and launch
+    /// a fresh one in the new mode, re-feeding the prior transcript as opening
+    /// context (the new process has no memory of the old one).
+    ///
+    /// Precondition: switching TO edit mode needs the edit lock. If an ingest
+    /// already holds it, refuse WITHOUT stopping the existing (read-only) session,
+    /// so the user isn't left stranded. Switching to read-only always succeeds.
+    static func restartQueryConversation(
+        launcher: AgentLauncher,
+        store: WikiStoreModel,
+        manager: WikiManager,
+        fileProvider: FileProviderSpike,
+        allowWikiEdits: Bool
+    ) async {
+        if allowWikiEdits && store.isAgentRunning {
+            launcher.preflightError = "An ingestion is updating the wiki. Wait for it to finish before enabling edits."
+            return
+        }
+        let context = transcriptContextMessage(
+            from: launcher.events, allowWikiEdits: allowWikiEdits)
+        launcher.stopAgent()
+        await startQueryConversation(
+            firstMessage: context,
+            launcher: launcher,
+            store: store,
+            manager: manager,
+            fileProvider: fileProvider,
+            allowWikiEdits: allowWikiEdits)
+    }
+
+    /// Build the opening message for a restarted session from the prior transcript,
+    /// so the new claude process retains conversational context. Only user/assistant
+    /// prose is carried; tool calls, system events, and bookkeeping are dropped.
+    /// Pure + `nonisolated` so the formatting is unit-testable off the main actor.
+    nonisolated static func transcriptContextMessage(
+        from events: [AgentEvent], allowWikiEdits: Bool
+    ) -> String {
+        let mode = allowWikiEdits
+            ? "ALLOWED — you may write to the wiki via wikictl"
+            : "read-only — you can only read the wiki"
+        let turns = events.compactMap { event -> String? in
+            switch event {
+            case .userText(let text):
+                return "User: \(text)"
+            case .assistantText(let text):
+                return "Assistant: \(text)"
+            case .result(_, let text) where !text.isEmpty:
+                return "Assistant: \(text)"
+            default:
+                return nil
+            }
+        }
+        if turns.isEmpty {
+            return "[This session was restarted; wiki edits are now \(mode).]"
+        }
+        return "[This session was restarted; wiki edits are now \(mode). "
+            + "The prior conversation is below for context — do not re-answer it; continue from here.]\n\n"
+            + turns.joined(separator: "\n\n")
     }
 
     static func runLint(

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import WikiFSCore
+@testable import WikiFS
 
 /// Tests for the tolerant `claude -p --output-format stream-json` NDJSON parser.
 /// The fixture lines are REAL shapes captured from the installed CLI (2.1.178), so
@@ -76,6 +77,17 @@ struct AgentEventParserTests {
     @Test func resultErrorIsFlagged() {
         let line = #"{"type":"result","subtype":"error_during_execution","is_error":true,"result":"the run failed"}"#
         #expect(AgentEventParser.parse(line: line) == .result(isError: true, text: "the run failed"))
+    }
+
+    @Test func messageStopParsesToMessageStop() {
+        // The per-turn boundary event emitted after each interactive response.
+        let line = #"{"type":"message_stop"}"#
+        let event = AgentEventParser.parse(line: line)
+        #expect(event == .messageStop)
+        // It carries no renderable text and is filtered from the transcript (it
+        // is the turn-boundary signal, not content).
+        #expect(event?.plainText == "")
+        #expect(event?.isInternalTranscriptEvent == true)
     }
 
     // MARK: - Tolerance: garbage, partials, unmodeled types
@@ -227,5 +239,27 @@ struct AgentEventParserTests {
 
     @Test func plainTextRaw() {
         #expect(AgentEvent.raw("garbage line").plainText == "garbage line")
+    }
+
+    // MARK: - endsGeneration predicate (per-turn boundary logic)
+
+    @Test func endsGenerationTrueForResultAndMessageStop() {
+        // The two events that end a generation: the terminal `.result` (session
+        // end) and the per-turn `.messageStop`.
+        #expect(AgentEvent.endsGeneration(.result(isError: false, text: "done")))
+        #expect(AgentEvent.endsGeneration(.result(isError: true, text: "")))
+        #expect(AgentEvent.endsGeneration(.messageStop))
+    }
+
+    @Test func endsGenerationFalseForEverythingElse() {
+        // Prose, tool calls, tool results, subagent lifecycle, raw lines, user
+        // text, and init never end a generation.
+        #expect(!AgentEvent.endsGeneration(.systemInit(model: "claude")))
+        #expect(!AgentEvent.endsGeneration(.assistantText("prose")))
+        #expect(!AgentEvent.endsGeneration(.toolUse(name: "Bash", inputSummary: "ls")))
+        #expect(!AgentEvent.endsGeneration(.toolResult(isError: false, summary: "ok")))
+        #expect(!AgentEvent.endsGeneration(.subagent(subagentType: "x", description: "y", isCompletion: false)))
+        #expect(!AgentEvent.endsGeneration(.raw("garbage")))
+        #expect(!AgentEvent.endsGeneration(.userText("hi")))
     }
 }

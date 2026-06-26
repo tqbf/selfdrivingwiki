@@ -2,6 +2,72 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-25 — Fix query/ingestion-agent review findings (per-turn lock, dead code, tests)
+
+Addressed every issue from the code review of the query/ingestion-agent
+separation.
+
+**Per-turn edit lock is now launcher-owned (HIGH).** The per-turn
+`store.isAgentRunning` toggle lived in `QueryConversationView`'s
+`.onChange(of: launcher.isGenerating)`, which never fires while the view is
+unmounted — so navigating to a Page mid-session stranded the lock (editor stayed
+read-only, ingestion stayed blocked) until session end. Moved the toggle into
+`AgentLauncher`:
+- Added `setGenerating(_:)` — the SINGLE mutation point for `isGenerating`. Every
+  assignment now routes through it; it fires an `onTurnBoundaryHandler` callback
+  only on a real transition. One-shot runs never install the handler (no-op).
+- `startInteractiveQuery` accepts an `onTurnBoundary` callback; the runner
+  installs `{ if allowWikiEdits { store.setAgentRunning($0) } }`. The lock now
+  releases between turns even when the Query view is off-screen.
+- Removed the view-side `.onChange`. `setAgentRunning` now has exactly one caller
+  (the runner callback); no View mutates lock state.
+
+**Deleted dead `EditLock`.** The per-wiki refcounting `EditLock` class had zero
+production references (the app uses the single-bool `store.isAgentRunning`).
+Deleted `Sources/WikiFSCore/EditLock.swift` + `Tests/WikiFSTests/EditLockTests.swift`.
+
+**Single lock owner.** Consolidated `WikiStoreModel`'s three mutation paths
+(`beginAgentRun` / `endAgentRun` / `setAgentRunning`) behind one private
+`mutateAgentRunning(_:reload:)`. The three public methods are now thin
+intent-named wrappers.
+
+**Send-while-generating guard.** `QueryConversationView.canSend` requires
+`!launcher.isGenerating` (composer disables during a response); added a defensive
+`guard !isGenerating` in `sendInteractiveMessage`; help text now reads "Wait for
+the response before sending the next message".
+
+> **Regression caught live + fixed.** The `guard !isGenerating` initially dropped
+> the FIRST message: `startInteractiveQuery` set `isGenerating=true` in
+> spawn-commit, so the `sendInteractiveMessage(firstMessage)` call right after hit
+> the new guard and returned early — claude spawned, waited on stdin forever, and
+> the Query page spun with zero events (confirmed via `DebugLog` heartbeats:
+> `pid=… procAlive=true events=0 idleSec` climbing). Fix: the first-turn
+> `isGenerating(true)` transition is now owned by `sendInteractiveMessage` itself
+> (spawn-commit no longer pre-sets it), so the guard passes for the first send and
+> still blocks follow-up sends while a turn is in flight.
+
+**Testable + tested.** Extracted two pure predicates so the new behavior is unit-
+covered: `AgentEvent.endsGeneration(_:)` (the `.result`/`.messageStop` rule) and
+`AgentLauncher.selectQuerySandbox(…)`. Tests: `messageStop` parse +
+`isInternalTranscriptEvent`, `endsGeneration` matrix, and the read-only-wins
+sandbox invariant (read-only returned even when a non-nil edit sandbox is set).
+
+**Copy/docs.** Banner now reads "Editing enabled — ingestion is paused while the
+agent is responding." (it releases between turns). Added a security/trust-surface
+note to `plans/query-conversation.md`.
+
+**Edit-mode is now switchable mid-session (restart-on-toggle).** "Allow wiki
+edits" was locked once a session started (`.disabled(isInteractiveSession)`),
+which frustrated users — but the lock was *necessary*: edit mode is baked into the
+spawned claude process (its seatbelt sandbox + system prompt), so a running process
+can't change it. Fix: the checkbox is now always tappable; flipping it mid-session
+calls `AgentOperationRunner.restartQueryConversation`, which **stops the current
+session and relaunches in the new mode**, re-feeding the prior transcript as
+opening context (`transcriptContextMessage`) so the new process keeps continuity.
+Switching to edit mode while an ingest holds the lock is refused without tearing
+down the read-only session (clear preflight error). Added `QueryRestartTests` for
+the context formatting (5 tests).
+
 ## 2026-06-25 — Separate query agent from ingestion agent + opt-in edit lock
 
 Split the single `AgentLauncher` singleton into two independent instances so

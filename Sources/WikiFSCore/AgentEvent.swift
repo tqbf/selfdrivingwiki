@@ -88,6 +88,19 @@ public enum AgentEvent: Equatable, Sendable {
             return line
         }
     }
+
+    /// Pure predicate for the "this event ends a generation" rule, extracted from
+    /// `AgentLauncher.ingestStdout` so the per-turn transition logic is unit-testable
+    /// without a live process. Returns `true` for the two turn/session boundary
+    /// events: `.result` (the terminal event at session end) and `.messageStop`
+    /// (the per-turn boundary in an interactive session). Everything else — prose,
+    /// tool calls, tool results, subagent lifecycle, raw lines — leaves a generation
+    /// in progress. See `AgentLauncher.setGenerating`.
+    public static func endsGeneration(_ event: AgentEvent) -> Bool {
+        if case .result = event { return true }
+        if case .messageStop = event { return true }
+        return false
+    }
 }
 
 /// Tolerant line-at-a-time parser for `claude -p --output-format stream-json`

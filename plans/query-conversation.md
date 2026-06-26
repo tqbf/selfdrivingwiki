@@ -55,6 +55,33 @@ schema plus an interactive Query overlay:
 - when mutating, write via `wikictl`, update `index.md` if appropriate, and
   append a `query` log entry.
 
+## Security: read-only vs edit-mode trust surface
+
+Query has two distinct trust tiers, enforced by **different mechanisms**:
+
+- **Read-only (default, "Allow wiki edits" OFF).** The agent runs under a
+  **hard seatbelt-sandbox boundary** (`SandboxProfile.readOnlyInvocation`) that
+  DENIES writes to the wiki database at the OS level. `wikictl page upsert` /
+  `index set` / `log append` physically fail regardless of what the prompt says.
+  This is enforced by `AgentLauncher.selectQuerySandbox(allowWikiEdits:false, …)`,
+  which returns the read-only sandbox EVEN WHEN a non-nil edit sandbox is
+  configured — global sandbox settings can never override the forced read-only
+  boundary. The editor lock is never taken, so ingestion stays unblocked.
+
+- **Edit-mode ("Allow wiki edits" ON).** A higher-trust surface. The agent runs
+  `claude --dangerously-skip-permissions` with only the opt-in seatbelt sandbox
+  (which may be `nil` / fail-open) plus prompt-level instructions. The per-turn
+  edit lock (`store.isAgentRunning`, driven by `onTurnBoundary`) is taken while
+  the agent is responding and RELEASED between turns so ingestion can run when the
+  agent is idle. Because edit mode skips the permission prompts, **ingested and
+  source content can influence agent writes** — a malicious source document could
+  attempt prompt injection. Read-only mode is the safe default for untrusted
+  material; edit mode should be reserved for material the user intends to act on.
+
+The lock is owned by `AgentLauncher.setGenerating(_:)` (single mutation point),
+fired via the `onTurnBoundary` callback the runner installs — NOT by any View —
+so it releases between turns even when the Query view is unmounted.
+
 ## UI Notes
 
 The page uses two explicit states. Empty Query is a centered greeting plus a

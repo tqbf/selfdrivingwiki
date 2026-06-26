@@ -601,6 +601,25 @@ public final class WikiStoreModel {
 
     // MARK: - Agent run lock (Phase C, decision #6)
 
+    /// The SINGLE mutation point for `isAgentRunning`. Every public entry point
+    /// below routes through here so the lock invariant lives in exactly one place:
+    /// pending drafts are flushed on ACQUIRE (so an in-flight edit isn't lost to a
+    /// concurrent agent write), and the `reload` flag governs the from-source
+    /// rebuild on RELEASE. The full session teardown (`endAgentRun`) reloads so the
+    /// sidebar reflects the agent's writes; the per-turn release
+    /// (`setAgentRunning(false)`) does not, because the session is still alive and
+    /// `endAgentRun()` will do the full reload when it actually ends.
+    private func mutateAgentRunning(_ running: Bool, reload: Bool) {
+        if running {
+            flushPendingSaves()
+        }
+        isAgentRunning = running
+        if reload {
+            reloadFromStore()
+            loadDrafts(for: loadedSelection)
+        }
+    }
+
     /// Enter the edit-locked state for the duration of a `claude -p` run: flush any
     /// pending edits FIRST (so nothing in-flight is lost), then mark the model
     /// running so the editor goes read-only and autosave is paused. Pausing
@@ -608,8 +627,7 @@ public final class WikiStoreModel {
     /// `wikictl` writes. The live change-bridge `reloadFromStore()` is unaffected —
     /// the sidebar still fills in as the agent's writes land.
     public func beginAgentRun() {
-        flushPendingSaves()
-        isAgentRunning = true
+        mutateAgentRunning(true, reload: false)
     }
 
     /// Exit the edit-locked state (from the spawn's `terminationHandler`, so a
@@ -617,19 +635,14 @@ public final class WikiStoreModel {
     /// the sidebar reflects everything the agent wrote, and reloads the open
     /// document's draft from the (possibly agent-rewritten) source.
     public func endAgentRun() {
-        isAgentRunning = false
-        reloadFromStore()
-        loadDrafts(for: loadedSelection)
+        mutateAgentRunning(false, reload: true)
     }
 
     /// Lightweight toggle for per-turn query edit-lock: flush on acquire, no
     /// reload on release (the session is still alive; `endAgentRun()` handles the
     /// full reload when the session actually ends).
     public func setAgentRunning(_ running: Bool) {
-        if running {
-            flushPendingSaves()
-        }
-        isAgentRunning = running
+        mutateAgentRunning(running, reload: false)
     }
 
     // MARK: - Mutations

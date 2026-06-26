@@ -33,13 +33,12 @@ struct QueryConversationView: View {
             // `AgentActivityView`. (AC.1)
             if !isRunning { showsInternals = false }
         }
-        .onChange(of: launcher.isGenerating) { _, generating in
-            // Release the edit lock between turns so the user can ingest while
-            // the query agent is idle. Re-acquire when the agent starts generating
-            // a response. Only applies when "Allow wiki edits" is checked.
-            guard allowWikiEdits else { return }
-            store.setAgentRunning(generating)
-        }
+        // NOTE: the per-turn edit lock is NO LONGER driven from this view. It is
+        // owned by `AgentLauncher` (via the `onTurnBoundary` callback the runner
+        // installs in `startQueryConversation`), so it releases between turns even
+        // when this view is unmounted — the old `.onChange(of: isGenerating)` here
+        // never fired while the view was off-screen, stranding the lock. The view
+        // only READS `isGenerating` now (banner, debug cluster, send gating).
     }
 
     private var controls: some View {
@@ -92,7 +91,7 @@ struct QueryConversationView: View {
         HStack(spacing: 8) {
             Image(systemName: "pencil.and.list.clipboard")
                 .font(.system(size: 13, weight: .semibold))
-            Text("Editing enabled — ingestion is paused while this session is active.")
+            Text("Editing enabled — ingestion is paused while the agent is responding.")
                 .font(.subheadline)
                 .fontWeight(.medium)
             Spacer()
@@ -154,10 +153,24 @@ struct QueryConversationView: View {
                     .foregroundStyle(.secondary)
             }
             .toggleStyle(.checkbox)
-            .disabled(launcher.isInteractiveSession)
-            .help(launcher.isInteractiveSession
-                  ? "Edit permissions are set when the session starts."
-                  : "When on, the agent can update the wiki and ingestion is paused until this session ends.")
+            .help("When on, the agent can edit the wiki. Toggling restarts the session with the new permission, keeping the conversation as context.")
+            .onChange(of: allowWikiEdits) { _, isOn in
+                // Edit mode is a property of the spawned claude process (its seatbelt
+                // sandbox + system prompt), so it can't change for a RUNNING session.
+                // Flipping the checkbox mid-session stops the current session and
+                // relaunches in the new mode, re-feeding the transcript so the new
+                // process keeps context. Pre-first-message (no session yet) this just
+                // sets the mode the next session starts in.
+                guard launcher.isInteractiveSession else { return }
+                Task {
+                    await AgentOperationRunner.restartQueryConversation(
+                        launcher: launcher,
+                        store: store,
+                        manager: manager,
+                        fileProvider: fileProvider,
+                        allowWikiEdits: isOn)
+                }
+            }
             .padding(.horizontal, QueryConversationMetrics.composerHorizontalPadding)
 
             HStack(alignment: .bottom, spacing: 10) {
@@ -224,11 +237,15 @@ struct QueryConversationView: View {
     private var canSend: Bool {
         fileProvider.path != nil
             && canType
+            && !launcher.isGenerating
             && !draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var sendButtonTitle: String {
-        launcher.isInteractiveSession ? "Send" : "Start Query"
+        if launcher.isGenerating {
+            return "Wait for the response before sending the next message"
+        }
+        return launcher.isInteractiveSession ? "Send" : "Start Query"
     }
 
     private var sendButtonIcon: String {

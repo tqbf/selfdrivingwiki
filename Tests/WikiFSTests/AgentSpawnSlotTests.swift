@@ -138,6 +138,48 @@ struct AgentSpawnSlotTests {
         #expect(!p(false, nil))
     }
 
+    // MARK: - sendInteractiveMessage gate predicate (first-message regression)
+
+    /// `AgentLauncher.shouldSendMessage` is the pure gate backing
+    /// `sendInteractiveMessage`. This locks in the regression where the FIRST
+    /// message of an interactive query was dropped: `startInteractiveQuery` used to
+    /// set `isGenerating = true` in spawn-commit, so the `sendInteractiveMessage(
+    /// firstMessage)` call right after hit the `!isGenerating` guard and returned
+    /// early — claude then blocked on stdin forever (events=0, perpetual spinner).
+    /// The fix: the first-turn `isGenerating(true)` transition is owned by
+    /// `sendInteractiveMessage` itself, so the first send runs with
+    /// `isGenerating == false`.
+    @Test func firstMessageIsSentBecauseGenerationIsNotPreSet() {
+        // The exact state at the first send: running, interactive, NOT yet
+        // generating (the fix), real text. Must send.
+        #expect(AgentLauncher.shouldSendMessage(
+            isRunning: true, isInteractiveSession: true, isGenerating: false, message: "hi"))
+        // Whitespace-only text never sends.
+        #expect(!AgentLauncher.shouldSendMessage(
+            isRunning: true, isInteractiveSession: true, isGenerating: false, message: "   "))
+    }
+
+    @Test func followUpWhileGeneratingIsRefused() {
+        // A follow-up send while the agent is mid-response must be refused so two
+        // turns never interleave on the shared stdin. (The UI's `canSend` also
+        // disables the button; this is the defensive backstop.)
+        #expect(!AgentLauncher.shouldSendMessage(
+            isRunning: true, isInteractiveSession: true, isGenerating: true, message: "again"))
+        // But a follow-up BETWEEN turns (generation finished) sends again.
+        #expect(AgentLauncher.shouldSendMessage(
+            isRunning: true, isInteractiveSession: true, isGenerating: false, message: "again"))
+    }
+
+    @Test func sendGateRequiresRunningInteractiveSession() {
+        // Not running, or not an interactive session, or empty: never send.
+        #expect(!AgentLauncher.shouldSendMessage(
+            isRunning: false, isInteractiveSession: true, isGenerating: false, message: "hi"))
+        #expect(!AgentLauncher.shouldSendMessage(
+            isRunning: true, isInteractiveSession: false, isGenerating: false, message: "hi"))
+        #expect(!AgentLauncher.shouldSendMessage(
+            isRunning: true, isInteractiveSession: true, isGenerating: false, message: ""))
+    }
+
     // MARK: - Edit-lock phase: extraction does not lock, agent spawn does
 
     /// `store.isAgentRunning` is the edit lock. It is `true` only while a claude
