@@ -121,6 +121,14 @@ if [ -f "${VEC_DYLIB}" ]; then
 else
   echo "  (vec0.dylib not found at ${VEC_DYLIB} — semantic search will fall back to LIKE)"
 fi
+# Copy vendored mermaid runtime for inline diagram rendering. Read at runtime
+# via Bundle.main; plain data file — not separately codesigned.
+MERMAID_JS="Resources/mermaid.min.js"
+if [ -f "${MERMAID_JS}" ]; then
+  cp "${MERMAID_JS}" "${RESOURCES_DIR}/"
+else
+  echo "  (mermaid.min.js not found at ${MERMAID_JS} — skipping; mermaid diagrams will not render)"
+fi
 [ -f "${APP_ICON}" ] && cp "${APP_ICON}" "${RESOURCES_DIR}/AppIcon.icns"
 
 cat > "${CONTENTS}/Info.plist" <<PLIST
