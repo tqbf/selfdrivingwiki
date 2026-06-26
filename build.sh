@@ -121,6 +121,17 @@ if [ -f "${VEC_DYLIB}" ]; then
 else
   echo "  (vec0.dylib not found at ${VEC_DYLIB} — semantic search will fall back to LIKE)"
 fi
+# Vendored Mermaid 10.9.6 (UMD build) for rendering ```mermaid fenced blocks in
+# the reader. Copied as mermaid.js (dropping the `.min`) so the Bundle lookup is
+# a simple name=mermaid / ext=js — avoids a flaky double-extension resource
+# lookup. A plain JS resource needs no separate codesign step (sealed by the
+# outer .app), matching how wiki-identifiers.env is handled.
+MERMAID_JS="Resources/mermaid.min.js"
+if [ -f "${MERMAID_JS}" ]; then
+  cp "${MERMAID_JS}" "${RESOURCES_DIR}/mermaid.js"
+else
+  echo "  (mermaid.min.js not found at ${MERMAID_JS} — mermaid blocks will render as code)"
+fi
 [ -f "${APP_ICON}" ] && cp "${APP_ICON}" "${RESOURCES_DIR}/AppIcon.icns"
 
 cat > "${CONTENTS}/Info.plist" <<PLIST

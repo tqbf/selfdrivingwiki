@@ -2,6 +2,33 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-26 — Mermaid diagram support in the markdown reader
+
+` ```mermaid ` fenced code blocks now render as live inline SVG diagrams in the
+`WikiReaderView` WKWebView reader, matching light/dark appearance, with no network
+dependency. Diagram-free pages pay no cost.
+
+- **Vendored Mermaid 10.9.6 (UMD build)** at `Resources/mermaid.min.js` (3.3 MB);
+  `build.sh` copies it into `Contents/Resources/mermaid.js`. Pinned to v10 because
+  v11's ESM build exposes no clean `window.mermaid` global for a single inline
+  `<script>`. SHA256 `eda3a0ad572bbe69a318c1be0163e8233dd824f3f12939e5168feba207767151`.
+- **Conditional embed:** `documentHTML(_:)` inlines the library + a bootstrap
+  `<script>` at the end of `<body>` ONLY when the body contains a mermaid block
+  AND the library is bundled (`mermaidLib`, a one-shot `Bundle.main` loader that
+  returns nil unbundled → graceful no-op under `swift test` / dev `swift run`).
+- **Bootstrap JS** initializes mermaid with `securityLevel:'strict'` + the
+  `prefers-color-scheme` theme, converts each `<pre><code class="language-mermaid">`
+  → `<div class="mermaid">` via `textContent` (un-escaping the renderer's
+  `&lt;`/`&gt;`), then `mermaid.run`. One bad diagram logs but never breaks the page.
+- No change to `MarkdownHTMLRenderer` (it already emitted the right class).
+- Tests: `mermaidFenceEmitsLanguageClassAndEscaping` + `documentHTMLEmbedsNoScriptWhenLibAbsent`
+  (pins graceful degradation). Full suite: 1050 tests pass. Read-only review subagent:
+  no Critical/High findings.
+
+**Known limitation:** diagrams theme once at load; toggling System Settings
+appearance updates the page chrome via CSS but the baked SVG lags until reload
+(documented non-goal — a `matchMedia('change')` re-render is a follow-up).
+
 ## 2026-06-25 — Fix query/ingestion-agent review findings (per-turn lock, dead code, tests)
 
 Addressed every issue from the code review of the query/ingestion-agent

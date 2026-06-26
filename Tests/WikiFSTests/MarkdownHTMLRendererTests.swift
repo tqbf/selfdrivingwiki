@@ -89,4 +89,25 @@ struct MarkdownHTMLRendererTests {
         let html = MarkdownHTMLRenderer.render("# Overview\n\n# Overview")
         #expect(html == "<h1 id=\"overview\">Overview</h1><h1 id=\"overview-1\">Overview</h1>")
     }
+
+    // MARK: Mermaid
+
+    @Test func mermaidFenceEmitsLanguageClassAndEscaping() {
+        // The mermaid bootstrap depends on visitCodeBlock emitting the exact
+        // `class="language-mermaid"` and HTML-escaping the body (so textContent
+        // un-escapes it back to the diagram source). Uses `contains` rather than
+        // == because cmark keeps the trailing newline in fenced code.
+        let html = MarkdownHTMLRenderer.render("```mermaid\ngraph TD\nA-->B\n```")
+        #expect(html.contains(#"class="language-mermaid""#))
+        #expect(html.contains("A--&gt;B"))   // escape(): > → &gt;
+    }
+
+    @Test func documentHTMLEmbedsNoScriptWhenLibAbsent() {
+        // Under `swift test` there's no .app bundle, so `mermaidLib` is nil →
+        // documentHTML embeds NO <script>, and the mermaid block is preserved as
+        // ordinary code. Pins graceful degradation (AC.4/AC.5).
+        let h = WikiReaderView.documentHTML("<pre><code class=\"language-mermaid\">graph TD</code></pre>")
+        #expect(!h.contains("<script>"))
+        #expect(h.contains(#"class="language-mermaid""#))
+    }
 }

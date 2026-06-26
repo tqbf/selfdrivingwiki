@@ -125,14 +125,67 @@ struct WikiReaderView: View {
         }
     }
 
+    /// One-shot loader for the vendored Mermaid library. Reads the bundled
+    /// `mermaid.js` once and caches it; `nil` when unbundled (e.g. `swift test`,
+    /// `swift run` without `./build.sh`), so diagram pages degrade gracefully to
+    /// ordinary code blocks. `nonisolated` so it's safe off the main actor where
+    /// the convert task reads it.
+    nonisolated private static let mermaidLib: String? = {
+        guard let url = Bundle.main.url(forResource: "mermaid", withExtension: "js"),
+              let src = try? String(contentsOf: url, encoding: .utf8),
+              !src.isEmpty else { return nil }
+        return src
+    }()
+
+    /// Bootstrap that initializes Mermaid (matching the system appearance via
+    /// `prefers-color-scheme`), converts each
+    /// `<pre><code class="language-mermaid">` into a `<div class="mermaid">`
+    /// using `textContent` (which un-escapes the renderer's `&lt;`/`&gt;`/`&amp;`),
+    /// then renders. Wrapped in try/catch so a bad diagram logs but never breaks
+    /// the page.
+    nonisolated static let mermaidBootstrapJS = """
+    (function(){
+      try {
+        var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        mermaid.initialize({ startOnLoad:false, securityLevel:'strict', theme: dark ? 'dark' : 'default' });
+        var codes = document.querySelectorAll('code.language-mermaid');
+        codes.forEach(function(code){
+          var pre = code.parentElement;
+          if(!pre || pre.tagName !== 'PRE') return;
+          var div = document.createElement('div');
+          div.className = 'mermaid';
+          div.textContent = code.textContent;
+          pre.parentNode.replaceChild(div, pre);
+        });
+        mermaid.run({ querySelector: '.mermaid' }).catch(function(e){
+          console.error('mermaid run failed', e);
+        });
+      } catch(e) {
+        console.error('mermaid init failed', e);
+      }
+    })();
+    """
+
     /// Full HTML document string built around `body` (the converted markdown).
     /// Pure / callable off the main actor. The theme mirrors the native reader's
     /// geometry (760pt column, 12pt inset from `PageEditorMetrics`) and uses CSS
     /// variables + `color-scheme` so light/dark match the app appearance. A CSS
-    /// rule colors unresolved `wiki://missing` links red (ghost links).
+    /// rule colors unresolved `wiki://missing` links red (ghost links). When the
+    /// body contains a mermaid block and the library is bundled, the Mermaid lib
+    /// + bootstrap are appended at the end of `<body>` so they run after the DOM
+    /// exists without blocking first paint.
     nonisolated static func documentHTML(_ body: String) -> String {
         let width = Int(PageEditorMetrics.readableContentWidth)
         let inset = Int(PageEditorMetrics.contentInset)
+        // Embed the vendored Mermaid library + bootstrap only when the page
+        // actually contains a mermaid code block (the exact class visitCodeBlock
+        // emits) and the library is bundled. Otherwise the block stays a normal
+        // <pre><code> — graceful degradation for swift test / dev runs with no
+        // bundle, and no ~3 MB parse cost for diagram-free pages.
+        var mermaidScripts = ""
+        if body.contains("class=\"language-mermaid\""), let lib = mermaidLib {
+            mermaidScripts = "<script>\(lib)</script>\n<script>\(mermaidBootstrapJS)</script>"
+        }
         return """
         <!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
         <meta name="color-scheme" content="light dark">
@@ -192,8 +245,10 @@ struct WikiReaderView: View {
           th { font-weight: 600; }
           img { max-width: 100%; height: auto; }
           mark.sdwhl { background: rgba(255, 213, 79, 0.8); border-radius: 2px; }
+          .mermaid { text-align:center; margin:0 0 1em; overflow:auto; }
+          .mermaid svg { max-width:100%; height:auto; }
         </style></head>
-        <body><article>\(body)</article></body></html>
+        <body><article>\(body)</article>\(mermaidScripts)</body></html>
         """
     }
 }
