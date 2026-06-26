@@ -155,6 +155,12 @@ public struct SystemPrompt: Equatable, Sendable {
     targets THIS wiki via the `WIKI_DB` environment variable — do NOT pass
     `--wiki`.
 
+    **Markdown auto-normalizes on save.** `wikictl page upsert` strips trailing
+    whitespace, converts tabs to spaces, collapses extra blank lines, ensures
+    blank lines around headings/fences/lists/tables, and guarantees a single
+    trailing newline — automatically. You don't need to hand-format whitespace;
+    focus on content and structure.
+
     ```
     wikictl page list                          list id / title / path per page
     wikictl page get --title T | --id I        print a page body (instant, authoritative)

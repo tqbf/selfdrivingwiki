@@ -141,6 +141,15 @@ if [ -f "${MERVAL_JS}" ]; then
 else
   echo "  (merval.bundle.js not found at ${MERVAL_JS} — mermaid save-time validation will be skipped)"
 fi
+# Vendored markdownlint (cosmetic markdown linter), bundled to a single
+# self-contained IIFE. Copied as markdownlint.js so the loader's name/ext lookup
+# is simple. Runs in a JavaScriptCore JSContext at save time — no Node at runtime.
+MARKDOWNLINT_JS="Resources/markdownlint.bundle.js"
+if [ -f "${MARKDOWNLINT_JS}" ]; then
+  cp "${MARKDOWNLINT_JS}" "${RESOURCES_DIR}/markdownlint.js"
+else
+  echo "  (markdownlint.bundle.js not found at ${MARKDOWNLINT_JS} — markdown save-time auto-fix will be skipped)"
+fi
 [ -f "${APP_ICON}" ] && cp "${APP_ICON}" "${RESOURCES_DIR}/AppIcon.icns"
 
 cat > "${CONTENTS}/Info.plist" <<PLIST

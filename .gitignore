@@ -6,3 +6,5 @@ dist/
 .DS_Store
 signing/*.provisionprofile
 signing/local.config
+# Vendored JS tooling — reproduction is `npm ci` from the pinned lockfile.
+tools/markdownlint-vendor/node_modules/

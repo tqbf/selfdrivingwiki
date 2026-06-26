@@ -540,6 +540,9 @@ public final class WikiStoreModel {
             // editor is the human escape from wikictl's hard block), but a broken
             // diagram is flagged so the author can fix it.
             updateMermaidWarning(for: draftBody)
+            // Non-blocking markdown lint: same pattern — save succeeds with the
+            // original text, cosmetic issues are flagged as informational.
+            updateMarkdownWarning(for: draftBody)
         } catch {
             // Phase 1: log to console; a save-error surface lands later.
             DebugLog.store("WikiStoreModel.save failed: \(error)")
@@ -568,6 +571,66 @@ public final class WikiStoreModel {
         }
         let bad = validator.invalidBlocks(markdown: body)
         mermaidSaveWarning = bad.isEmpty ? nil : MermaidValidator.describe(bad)
+    }
+
+    /// The last markdown lint warning for the saved draft, or `nil`. Surfaced in
+    /// the page editor as a non-blocking informational hint (the save still
+    /// succeeds with the original text — the editor is the human escape hatch).
+    public var markdownSaveWarning: String?
+
+    /// The Markdown linter used for the non-blocking save warning. Defaults to the
+    /// process-wide bundled linter; injectable so the warning path is testable
+    /// without a bundle. `@ObservationIgnored` — it's plumbing, not UI state.
+    @ObservationIgnored var markdownLinter: MarkdownLinter? = MarkdownLinter.shared
+
+    /// Apply the markdown linter's auto-fix to the current draft body and save.
+    /// Replaces cosmetic issues (trailing whitespace, blank-line spacing, etc.)
+    /// in-place — the same normalization `wikictl page upsert` applies, but
+    /// triggered manually from the in-app editor. No-op when the linter is
+    /// unavailable or the body is already clean.
+    public func fixMarkdownInDraft() {
+        guard let linter = markdownLinter else { return }
+        let outcome = linter.fix(markdown: draftBody)
+        guard outcome.fixed != draftBody else { return }
+        draftBody = outcome.fixed
+        save()
+    }
+
+    /// The in-flight markdown warning Task (if any). Cancelled before starting a
+    /// new one, so rapid re-saves don't complete out of order and leave a stale
+    /// `markdownSaveWarning` that doesn't match the just-saved body.
+    @ObservationIgnored private var markdownWarningTask: Task<Void, Never>?
+
+    /// Lint `body` for cosmetic markdown issues and set `markdownSaveWarning`.
+    /// Unlike the mermaid scan (a cheap fence line-scan), markdownlint runs all
+    /// ~20 cosmetic rules over the whole body — so the computation runs on a
+    /// background `Task` (the linter's `NSLock` makes it thread-safe) and the
+    /// result is set via a `@MainActor` hop to avoid UI jank on large pages.
+    /// Non-blocking: the save already succeeded with the original text.
+    private func updateMarkdownWarning(for body: String) {
+        guard let linter = markdownLinter else {
+            DebugLog.store("MarkdownLinter: linter unavailable (bundle not loaded) — skipping markdown warning")
+            markdownWarningTask?.cancel()
+            markdownWarningTask = nil
+            markdownSaveWarning = nil
+            return
+        }
+        markdownWarningTask?.cancel()
+        // The outer Task inherits @MainActor isolation (WikiStoreModel is
+        // @MainActor), so self access stays on the main actor. Only the lint
+        // computation runs detached (background) — it captures only `linter`
+        // (Sendable) and `body` (String), never `self`.
+        markdownWarningTask = Task { [linter, weak self] in
+            let findings = await Task.detached(priority: .utility) {
+                linter.lint(markdown: body)
+            }.value
+            guard !Task.isCancelled else { return }
+            let warning = findings.isEmpty ? nil : MarkdownLinter.describe(findings)
+            if let warning {
+                DebugLog.store("MarkdownLinter: \(findings.count) finding(s) for saved body")
+            }
+            self?.markdownSaveWarning = warning
+        }
     }
 
     /// Cancel any pending debounce and save synchronously. Called on page

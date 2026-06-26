@@ -2,6 +2,54 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-26 — Markdown linter (cosmetic auto-fix on save)
+
+Mirrors the `merval` (Mermaid) save-time validation pattern, generalized to
+general markdown. Vendored **markdownlint 0.41.0** + **markdownlint-rule-helpers
+0.31.0** (npm), bundled to a single self-contained IIFE via esbuild
+(`Resources/markdownlint.bundle.js`, SHA256
+`e022302172162c294bcec1a0d3ee44938c765d15afb5b3e230fc48425d499f0e`). Runs in a
+`JavaScriptCore` `JSContext` — **no Node at runtime** (Node was only the build
+tool). `MarkdownLinter` (WikiFSCore) lints and auto-fixes.
+
+**Engine details:** markdownlint 0.41 is ESM-heavy (pulls in micromark + GFM
+extensions + katex). Two build tricks were needed: (1) a targeted esbuild plugin
+swaps only `#node-imports` → the browser shim (avoids Node builtins), keeping
+everything else on default conditions (avoids DOM probes from
+decode-named-character-reference); (2) a minimal `URL` polyfill is installed in
+the JSContext (markdownlint builds rule-info links with `new URL()` at
+load-time; JSC has no `URL` global). `applyFixes` moved from
+`markdownlint-rule-helpers` into the main `markdownlint` package in 0.41.
+
+**Rule set: cosmetic normalization only.** MD009/010/012 (trailing whitespace,
+hard tabs, multiple blanks), MD018–022/023/027/030 (spacing after heading/block-
+quote/list markers), MD031/032 (blanks around fences/lists), MD037–039 (spaces
+in emphasis/code/links), MD047 (single trailing newline), MD058 (blanks around
+tables). Excluded: MD013 (line-length), MD040 (fenced-language), MD041 (first-
+line-H1), MD001/024/025/033. Every enabled rule is auto-fixable.
+
+**Two write surfaces (both mirror merval):**
+- **`wikictl page upsert`** — `fix()` is applied BEFORE the write. Order:
+  markdown-fix → mermaid-validate (block) → `PageUpsert`. Frictionless under the
+  cosmetic-only config (no round-trips).
+- **In-app editor** — `lint()` computes findings on a background `Task` and sets
+  a non-blocking `markdownSaveWarning`; the original text is saved (editor is the
+  human escape hatch). Combined banner with the mermaid warning in
+  `PageDetailView`.
+
+**Scope/limits:** normalizes whitespace and blank-line structure only. Does NOT
+enforce structural rules (heading hierarchy, consistent list markers) or line
+length. Fenced code blocks (including ` ```mermaid `) are never touched inside
+the fence. `[[wiki-links]]` are inert text — no false positives.
+
+**Reproduce:** `cd tools/markdownlint-vendor && npm ci && node build.mjs`. The
+pinned `package-lock.json` is the reproduction recipe; the SHA256 is a best-effort
+drift indicator (esbuild output is not byte-deterministic across runs).
+
+Tests: 28 new (`MarkdownLinterTests` 18, `MarkdownEditorWarningTests` 5, 5 added
+to `WikiCtlCommandTests` incl. the fix→mermaid-validate→upsert composition
+ordering proof). Full suite: 1101 tests pass.
+
 ## 2026-06-26 — Mermaid agent knowledge + save-time validation (merval)
 
 Follow-on to the mermaid-rendering work (PR #64). Two things the rendering alone
