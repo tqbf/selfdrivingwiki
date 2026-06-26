@@ -40,6 +40,10 @@ struct SourceDetailView: View {
     @State private var isEditing = false
     @State private var editBuffer = ""
     @State private var isExtracting = false
+    /// Raised when the user taps Ingest on a document that has already been
+    /// ingested — prompts before re-ingesting, since that may create duplicate
+    /// pages. (Replaces the old always-on "already ingested" warning banner.)
+    @State private var showReingestConfirmation = false
     @State private var selectedTab = FileContentTab.markdown
     /// Quote to highlight in the PDF view, set when a `[[source:Name#"…"]]` link
     /// targets an un-extracted PDF. Consumed from `store.pendingScrollAnchor`.
@@ -101,30 +105,10 @@ struct SourceDetailView: View {
     /// navigation targets distinct occurrences instead of always the first.
     private var findOccurrence: Int { findModel.currentMatchIndex }
 
-    private var alreadyIngested: Bool { hasBeenIngested }
-
-    private var alreadyIngestedBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-            Text("This document has already been ingested. Running ingest again may create duplicate pages.")
-                .font(.subheadline)
-                .fontWeight(.medium)
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 32)
-        .frame(maxWidth: .infinity)
-        .background(.yellow.opacity(0.18))
-        .clipped()
-    }
-
     // MARK: - Body
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if alreadyIngested {
-                alreadyIngestedBanner
-            }
             headerSection
             if showTabs, !isEditing {
                 tabPicker
@@ -145,6 +129,7 @@ struct SourceDetailView: View {
             flushEditIfDirty()
             isEditing = false
             isExtracting = false
+            showReingestConfirmation = false
             headVersion = nil
             selectedTab = .markdown
             pdfQuote = nil
@@ -227,11 +212,27 @@ struct SourceDetailView: View {
                     Button(isIngesting ? "Ingesting…" : "Ingest into Wiki",
                            systemImage: "text.badge.plus") {
                         DebugLog.ingest("SourceDetailView: Ingest tapped — id=\(file.id.rawValue)")
-                        runIngest(file.id)
+                        if hasBeenIngested {
+                            showReingestConfirmation = true
+                        } else {
+                            runIngest(file.id)
+                        }
                     }
                         .keyboardShortcut(.return, modifiers: .command)
                         .disabled(isRunning || isIngesting || isAnySourceIngesting
                                   || isThisFileExtracting || isEditLockedExternally)
+                        .confirmationDialog(
+                            "Ingest Again?",
+                            isPresented: $showReingestConfirmation,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Ingest Again", role: .destructive) {
+                                runIngest(file.id)
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("This document has already been ingested. Running ingest again may create duplicate pages.")
+                        }
                     if isPDF, !hasMarkdown {
                         Button(isExtracting ? "Extracting…" : "Extract Markdown",
                                systemImage: "doc.plaintext") {
