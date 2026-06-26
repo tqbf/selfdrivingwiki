@@ -551,13 +551,18 @@ public final class WikiStoreModel {
     /// refreshes shortly after the author stops typing and re-saves.
     public var mermaidSaveWarning: String?
 
+    /// The Mermaid validator used for the non-blocking save warning. Defaults to
+    /// the process-wide bundled validator; injectable (e.g. from a repo bundle)
+    /// so the warning path is testable without a bundle. `@ObservationIgnored` —
+    /// it's plumbing, not UI state.
+    @ObservationIgnored var mermaidValidator: MermaidValidator? = MermaidValidator.shared
+
     /// Validate ```mermaid blocks in `body` and set `mermaidSaveWarning`. Uses
     /// the extractor as the source of truth (so it agrees with `wikictl`'s
-    /// hard block on `~~~mermaid`/any case, not just ```mermaid) and the cached
-    /// validator (no per-save JSContext rebuild). Non-mermaid pages pay only a
-    /// cheap line scan.
+    /// hard block on `~~~mermaid`/any case, not just ```mermaid). Non-mermaid
+    /// pages pay only a cheap line scan.
     private func updateMermaidWarning(for body: String) {
-        guard let validator = MermaidValidator.shared else {
+        guard let validator = mermaidValidator else {
             mermaidSaveWarning = nil
             return
         }

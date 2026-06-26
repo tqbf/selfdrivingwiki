@@ -53,14 +53,21 @@ public enum PageCommand {
     /// Run one action against `store`. Read actions never commit; `upsert` /
     /// `delete` do. Output mirrors the doc's command surface (TSV or JSON for
     /// `list`; the raw body for `get`; the resulting id for `upsert`).
-    public static func run(_ action: Action, in store: WikiStore) throws -> Result {
+    ///
+    /// `validator` injects the Mermaid validator (defaults to the bundled one) so
+    /// the abort-before-write path is end-to-end testable without a bundle.
+    public static func run(
+        _ action: Action,
+        in store: WikiStore,
+        validator: MermaidValidator? = MermaidValidator.loadDefault()
+    ) throws -> Result {
         switch action {
         case .list(let json):
             return try list(in: store, json: json)
         case .get(let selector):
             return try get(selector, in: store)
         case .upsert(let id, let title, let body):
-            return try upsert(id: id, title: title, body: body, in: store)
+            return try upsert(id: id, title: title, body: body, in: store, validator: validator)
         case .delete(let id):
             return try delete(id: id, in: store)
         case .search(let query, let limit):
@@ -131,12 +138,13 @@ public enum PageCommand {
         id: PageID?,
         title: String,
         body: String,
-        in store: WikiStore
+        in store: WikiStore,
+        validator: MermaidValidator?
     ) throws -> Result {
         // Validate ```mermaid blocks BEFORE the write: a structurally-broken
         // diagram is rejected (the agent fixes what's reported and re-saves).
-        // Skipped silently when merval.js isn't bundled (dev / `swift test`).
-        try abortOnInvalidMermaid(body, validator: MermaidValidator.loadDefault())
+        // Skipped silently when the validator is nil (no bundle → dev / swift test).
+        try abortOnInvalidMermaid(body, validator: validator)
         // The SHARED seam: identical create-or-update + `[[link]]` reparse as the
         // in-app editor, so the link graph stays consistent across both writers.
         let outcome = try PageUpsert.upsert(in: store, id: id, title: title, body: body)

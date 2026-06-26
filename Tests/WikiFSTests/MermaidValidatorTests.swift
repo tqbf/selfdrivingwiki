@@ -181,4 +181,36 @@ struct MermaidValidatorTests {
         let v = try validator()
         try PageCommand.abortOnInvalidMermaid("just prose, no diagrams", validator: v)
     }
+
+    // MARK: - wikictl page upsert end-to-end (injected validator, real store)
+
+    private func tempDB() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-mermaid-\(UUID().uuidString).sqlite")
+    }
+
+    @Test func upsertAbortsBeforeWritingAnInvalidBlock() throws {
+        let v = try validator()
+        let store = try SQLiteWikiStore(databaseURL: tempDB())
+        let bad = "```mermaid\nflowchart LR\n  A B\n```"
+        do {
+            _ = try PageCommand.run(.upsert(id: nil, title: "Diagrams", body: bad),
+                                    in: store, validator: v)
+            Issue.record("expected upsert to abort before writing")
+        } catch let PageCommand.Failure.message(text) {
+            #expect(text.contains("MISSING_ARROW"))
+        }
+        // The hard guarantee: a rejected body left NO page behind.
+        #expect(try store.listPages(sortBy: .lastUpdated).isEmpty)
+    }
+
+    @Test func upsertEndToEndWritesAValidDiagram() throws {
+        let v = try validator()
+        let store = try SQLiteWikiStore(databaseURL: tempDB())
+        let good = "# Diagrams\n\n```mermaid\nflowchart LR\n  A[\"X\"] --> B[\"Y\"]\n```"
+        let result = try PageCommand.run(.upsert(id: nil, title: "Diagrams", body: good),
+                                         in: store, validator: v)
+        #expect(result.didCommit)
+        #expect(try store.listPages(sortBy: .lastUpdated).count == 1)
+    }
 }
