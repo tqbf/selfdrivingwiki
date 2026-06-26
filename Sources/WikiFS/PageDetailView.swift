@@ -73,6 +73,20 @@ struct PageDetailView: View {
 
             Divider().opacity(PageEditorMetrics.dividerOpacity)
 
+            // Non-blocking hint: a saved draft with a broken ```mermaid block.
+            // Surfaced on save; clears once the block is fixed and re-saved.
+            if let warning = store.mermaidSaveWarning {
+                Text(warning)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                    .padding(.horizontal, PageEditorMetrics.contentInset)
+                    .padding(.top, 8)
+                    .help("A Mermaid diagram in this page has a syntax error. The reader shows the error too; fix the block and save to clear this warning.")
+            }
+
             // Content — swaps between reader and editor, header stays put.
             if isEditing {
                 TextEditor(text: $store.draftBody)

@@ -132,6 +132,15 @@ if [ -f "${MERMAID_JS}" ]; then
 else
   echo "  (mermaid.min.js not found at ${MERMAID_JS} — mermaid blocks will render as code)"
 fi
+# Vendored merval (zero-dependency Mermaid syntax validator), bundled to a single
+# self-contained IIFE. Copied as merval.js so the loader's name/ext lookup is
+# simple. Runs in a JavaScriptCore JSContext at save time — no Node at runtime.
+MERVAL_JS="Resources/merval.bundle.js"
+if [ -f "${MERVAL_JS}" ]; then
+  cp "${MERVAL_JS}" "${RESOURCES_DIR}/merval.js"
+else
+  echo "  (merval.bundle.js not found at ${MERVAL_JS} — mermaid save-time validation will be skipped)"
+fi
 [ -f "${APP_ICON}" ] && cp "${APP_ICON}" "${RESOURCES_DIR}/AppIcon.icns"
 
 cat > "${CONTENTS}/Info.plist" <<PLIST

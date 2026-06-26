@@ -2,6 +2,36 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-26 — Mermaid agent knowledge + save-time validation (merval)
+
+Follow-on to the mermaid-rendering work (PR #64). Two things the rendering alone
+didn't cover:
+
+- **The agent now knows how to write mermaid.** Added a distilled Mermaid
+  authoring section to `SystemPrompt.defaultBody` (stolen from
+  `awesome-skills/mermaid-syntax-skill`): supported diagram types, and the
+  high-value error-prevention rules (quote special-char labels, reserved words
+  like `end`/`default` aren't node IDs, avoid `o`/`x`-leading IDs, `%%` comments,
+  `#59;` for sequence semicolons). Note: `defaultBody` only seeds NEW wikis —
+  existing wikis keep their co-evolved prompt (edit in-app to add it).
+- **Save-time validation via merval.** Vendored `merval.bundle.js` (merval 1.0.7,
+  a zero-dependency Mermaid syntax validator, bundled to a single IIFE with
+  esbuild — SHA256 `3babe2220c3a247719ef769017152fc7960011e693c8407391cbc3cea4833c0b`).
+  Runs in a `JavaScriptCore` `JSContext` — **no Node at runtime** (Node was only
+  the build tool that produced the vendored file). `MermaidValidator` (WikiFSCore)
+  extracts ` ```mermaid ` blocks and validates each.
+  - **`wikictl page upsert` blocks** a save on an invalid block (prints the error
+    to stderr, non-zero exit — the agent fixes and re-saves).
+  - **The in-app editor warns** (non-blocking) via an orange banner; the save
+    still succeeds so the editor is the human escape from wikictl's hard block.
+
+**Scope/limits:** merval catches *structural* errors (missing arrows, dangling
+edges, malformed brackets), NOT mermaid's semantic gotchas (reserved words,
+unquoted special chars) — the prompt rules cover those. merval is validated
+against Mermaid v11.12.0 while the reader renders 10.9.6; rare v10/v11 divergences
+may slip through. Tests: 15 new (`MermaidValidatorTests`, incl. command-level
+abort behavior). Full suite 1065 pass. Vendored blob integrity recorded above.
+
 ## 2026-06-26 — Mermaid diagram support in the markdown reader
 
 ` ```mermaid ` fenced code blocks now render as live inline SVG diagrams in the

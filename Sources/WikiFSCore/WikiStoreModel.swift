@@ -426,6 +426,9 @@ public final class WikiStoreModel {
 
     private func loadDrafts(for newValue: WikiSelection?) {
         loadedSelection = newValue
+        // A page switch invalidates the prior page's mermaid warning so a stale
+        // banner doesn't bleed onto an unrelated page (it's recomputed on save).
+        mermaidSaveWarning = nil
         switch newValue {
         case .query, .lint:
             draftTitle = ""
@@ -533,10 +536,33 @@ public final class WikiStoreModel {
             isDraftDirty = false
             reloadSummaries()
             onPageDidChange?()
+            // Non-blocking mermaid lint: the in-app save still succeeds (the
+            // editor is the human escape from wikictl's hard block), but a broken
+            // diagram is flagged so the author can fix it.
+            updateMermaidWarning(for: draftBody)
         } catch {
             // Phase 1: log to console; a save-error surface lands later.
             DebugLog.store("WikiStoreModel.save failed: \(error)")
         }
+    }
+
+    /// The last mermaid validation warning for the saved draft, or `nil`. Surfaced
+    /// in the page editor as a non-blocking hint. Set on save (debounced), so it
+    /// refreshes shortly after the author stops typing and re-saves.
+    public var mermaidSaveWarning: String?
+
+    /// Validate ```mermaid blocks in `body` and set `mermaidSaveWarning`. Uses
+    /// the extractor as the source of truth (so it agrees with `wikictl`'s
+    /// hard block on `~~~mermaid`/any case, not just ```mermaid) and the cached
+    /// validator (no per-save JSContext rebuild). Non-mermaid pages pay only a
+    /// cheap line scan.
+    private func updateMermaidWarning(for body: String) {
+        guard let validator = MermaidValidator.shared else {
+            mermaidSaveWarning = nil
+            return
+        }
+        let bad = validator.invalidBlocks(markdown: body)
+        mermaidSaveWarning = bad.isEmpty ? nil : MermaidValidator.describe(bad)
     }
 
     /// Cancel any pending debounce and save synchronously. Called on page

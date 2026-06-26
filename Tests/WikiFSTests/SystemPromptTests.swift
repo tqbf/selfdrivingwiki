@@ -86,6 +86,9 @@ struct SystemPromptTests {
         // Sources may be PDFs/images, read with the Read tool.
         #expect(body.contains("Read"))
         #expect(body.contains("PDF"))
+        // Mermaid diagrams: authoring rules + save-time validation note.
+        #expect(body.contains("```mermaid"))
+        #expect(body.contains("wikictl page upsert"))
     }
 
     // MARK: - Update persists + bumps version

@@ -22,7 +22,13 @@ let package = Package(
         .target(
             name: "WikiFSCore",
             path: "Sources/WikiFSCore",
-            linkerSettings: [.linkedFramework("NaturalLanguage")]
+            // NaturalLanguage: semantic-search embeddings. JavaScriptCore: the
+            // MermaidValidator runs the vendored merval bundle in a JSContext
+            // (system framework — no Node) to validate ```mermaid blocks on save.
+            linkerSettings: [
+                .linkedFramework("NaturalLanguage"),
+                .linkedFramework("JavaScriptCore"),
+            ]
         ),
         .executableTarget(
             name: "WikiFS",

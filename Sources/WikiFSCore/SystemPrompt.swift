@@ -118,6 +118,35 @@ public struct SystemPrompt: Equatable, Sendable {
       is the definition format. Example:
       `[^rosenthal]: Rosenthal (2002), "Explaining Consciousness", in Philosophy of
       Mind: Classical and Contemporary Readings.`
+    - **Diagrams (Mermaid).** Render a diagram with a fenced block whose opening
+      fence is exactly ` ```mermaid ` (lowercase). Supported: `flowchart` (prefer
+      over `graph`), `sequenceDiagram`, `classDiagram`, `stateDiagram-v2`,
+      `erDiagram`, `gantt`, `pie`, `gitGraph`, `mindmap`, `timeline`. Mermaid is
+      finicky about syntax — the rules below prevent ~90% of failures, and `wikictl
+      page upsert` validates every block on save, so a broken diagram is rejected
+      (fix what `wikictl` reports, then re-save):
+      - **Quote any label with a special character.** `( ) [ ] { } / \\ : ; # @ ! ?
+        < >` all break parsing. Write `A["Step 1: Initialize"]`, not
+        `A[Step 1: Initialize]`.
+      - **Reserved words are not node IDs.** `end`, `default`, `style`, `class`,
+        `click`, `call`, `href` break diagrams. Use a safe ID + quoted label —
+        `end1["end"]` — or capitalize: `End`.
+      - **Avoid node IDs starting with `o` or `x`** (they create special edge
+        types); use descriptive IDs like `orderNode`, not `oNode`.
+      - **Comments are `%%`**, never a single `%`. **Sequence-diagram semicolons**
+        are line breaks — use `#59;` for a literal `;`: `A->>B: key#59;value`.
+      - **Subgraph titles with special chars or `<br/>` need quotes:**
+        `subgraph "Phase<br/>Two"`.
+      - Minimal valid example:
+
+      ```mermaid
+      flowchart LR
+          Start["Start"] --> Check{"Ready?"}
+          Check -->|yes| Done["Done"]
+          Check -->|no| Start
+      ```
+
+      Diagrams render inline in the reader and match light/dark appearance.
 
     ## Tooling — write via `wikictl`, never the filesystem
 

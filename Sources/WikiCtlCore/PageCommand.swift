@@ -133,10 +133,25 @@ public enum PageCommand {
         body: String,
         in store: WikiStore
     ) throws -> Result {
+        // Validate ```mermaid blocks BEFORE the write: a structurally-broken
+        // diagram is rejected (the agent fixes what's reported and re-saves).
+        // Skipped silently when merval.js isn't bundled (dev / `swift test`).
+        try abortOnInvalidMermaid(body, validator: MermaidValidator.loadDefault())
         // The SHARED seam: identical create-or-update + `[[link]]` reparse as the
         // in-app editor, so the link graph stays consistent across both writers.
         let outcome = try PageUpsert.upsert(in: store, id: id, title: title, body: body)
         return Result(output: outcome.id.rawValue, didCommit: true)
+    }
+
+    /// Abort the save when `body` contains any invalid ```mermaid block, throwing
+    /// a `.message` with a multi-line report the agent can act on. Pure over the
+    /// injected validator (testable): pass `nil` to skip (the unbundled path).
+    static func abortOnInvalidMermaid(_ body: String, validator: MermaidValidator?) throws {
+        guard let validator else { return }
+        let bad = validator.invalidBlocks(markdown: body)
+        if !bad.isEmpty {
+            throw Failure.message(MermaidValidator.describe(bad))
+        }
     }
 
     // MARK: - delete
