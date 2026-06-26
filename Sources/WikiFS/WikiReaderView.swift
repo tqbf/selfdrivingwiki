@@ -533,7 +533,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 // pages — non-diagram pages pay zero parse cost. MermaidAsset.js
                 // is "" outside the app bundle (dev/swift test), which documentHTML
                 // treats as no-injection, so this path is safe off the main actor.
-                let needsMermaid = body.contains("<pre class=\"mermaid\"")
+                // Match the full opening tag incl. the closing `>` so a future
+                // compound class (e.g. `mermaid-flowchart`) can't false-positive.
+                let needsMermaid = body.contains("<pre class=\"mermaid\">")
                 let html = WikiReaderView.documentHTML(body, mermaidScript: needsMermaid ? MermaidAsset.js : nil)
                 let convertMs = Self.elapsedMs(since: t0)
                 await MainActor.run { [weak self] in

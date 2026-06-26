@@ -28,9 +28,25 @@ struct WikiReaderDocumentHTMLTests {
         // Init script must call mermaid.run() to render the diagrams.
         #expect(html.contains("mermaid.run()"))
 
+        // Theme is picked from prefers-color-scheme at init (a key plan decision).
+        #expect(html.contains("prefers-color-scheme"))
+
+        // startOnLoad must be false — we drive rendering explicitly via run().
+        #expect(html.contains("startOnLoad: false"))
+
         // Exactly two <script blocks: one runtime, one init.
         let count = html.components(separatedBy: "<script").count - 1
         #expect(count == 2)
+
+        // The runtime <script> MUST precede the init script — otherwise `mermaid`
+        // is undefined when initialize() runs. This is the load-order invariant
+        // the implementation comment calls out; pin it so a reorder can't pass.
+        let runtimeIdx = html.range(of: "MERMAID_RUNTIME")?.lowerBound
+        let initIdx = html.range(of: "mermaid.initialize")?.lowerBound
+        #expect(runtimeIdx != nil && initIdx != nil)
+        if let runtimeIdx, let initIdx {
+            #expect(runtimeIdx < initIdx, "runtime <script> must precede the init script")
+        }
     }
 
     // MARK: - No injection when script is nil
