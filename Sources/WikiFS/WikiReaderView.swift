@@ -130,9 +130,29 @@ struct WikiReaderView: View {
     /// geometry (760pt column, 12pt inset from `PageEditorMetrics`) and uses CSS
     /// variables + `color-scheme` so light/dark match the app appearance. A CSS
     /// rule colors unresolved `wiki://missing` links red (ghost links).
-    nonisolated static func documentHTML(_ body: String) -> String {
+    nonisolated static func documentHTML(_ body: String, mermaidScript: String? = nil) -> String {
         let width = Int(PageEditorMetrics.readableContentWidth)
         let inset = Int(PageEditorMetrics.contentInset)
+        // Build the optional mermaid script block. Classic inline scripts execute
+        // in document order: the runtime must appear before the init/run call so
+        // `mermaid` is defined when the second script runs. The .mermaid <pre>
+        // nodes are already in the DOM (inside <article> above) when mermaid.run()
+        // is called, so no DOMContentLoaded wait is needed.
+        //
+        // securityLevel:'strict' is mandatory — diagram text is semi-trusted
+        // (agent/user authored) and 'loose' is mermaid's historical XSS vector.
+        // Combined with the about:blank origin (no network access) this is the
+        // safe posture. Empty string is treated identically to nil (MermaidAsset.js
+        // returns "" outside the app bundle during dev/test — no injection there).
+        let scripts: String
+        if let script = mermaidScript, !script.isEmpty {
+            scripts = """
+            <script>\(script)</script>\
+            <script>mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default' }); mermaid.run();</script>
+            """
+        } else {
+            scripts = ""
+        }
         return """
         <!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
         <meta name="color-scheme" content="light dark">
@@ -193,7 +213,7 @@ struct WikiReaderView: View {
           img { max-width: 100%; height: auto; }
           mark.sdwhl { background: rgba(255, 213, 79, 0.8); border-radius: 2px; }
         </style></head>
-        <body><article>\(body)</article></body></html>
+        <body><article>\(body)</article>\(scripts)</body></html>
         """
     }
 }
@@ -509,7 +529,16 @@ internal struct WikiReaderRep: NSViewRepresentable {
                                     : pageTitles.contains(name.lowercased())
                 }
                 let body = MarkdownHTMLRenderer.render(prepared)
-                let html = WikiReaderView.documentHTML(body)
+                // The ~2.5 MB mermaid runtime is inlined only on diagram-bearing
+                // pages — non-diagram pages pay zero parse cost. MermaidAsset.js
+                // is "" outside the app bundle (dev/swift test), which documentHTML
+                // treats as no-injection, so this path is safe off the main actor.
+                // Detect a diagram via the renderer's own emitted tag constant
+                // (single source of truth — the literal can't drift from what the
+                // renderer produces). Matching the full tag incl. the closing `>`
+                // also keeps a future compound class from false-positiving.
+                let needsMermaid = body.contains(MarkdownHTMLRenderer.mermaidContainerOpenTag)
+                let html = WikiReaderView.documentHTML(body, mermaidScript: needsMermaid ? MermaidAsset.js : nil)
                 let convertMs = Self.elapsedMs(since: t0)
                 await MainActor.run { [weak self] in
                     guard let self, let webView = self.webView,

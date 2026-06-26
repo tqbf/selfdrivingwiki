@@ -88,6 +88,27 @@ struct SystemPromptTests {
         #expect(body.contains("PDF"))
     }
 
+    @Test func defaultBodyDocumentsDiagramsSection() throws {
+        let body = SystemPrompt.defaultBody
+        // Section heading present.
+        #expect(body.contains("## Diagrams"))
+        // Mermaid fence syntax taught.
+        #expect(body.contains("```mermaid"))
+        // A worked flowchart example included.
+        #expect(body.contains("flowchart"))
+        // Supported types listed.
+        #expect(body.contains("sequence"))
+        #expect(body.contains("gantt"))
+        // Diagrams section appears after Conventions and before Tooling.
+        // #require aborts with a clear nil-range error rather than silently
+        // skipping the ordering checks if any heading goes missing.
+        let c = try #require(body.range(of: "## Conventions"))
+        let d = try #require(body.range(of: "## Diagrams"))
+        let t = try #require(body.range(of: "## Tooling"))
+        #expect(c.lowerBound < d.lowerBound)
+        #expect(d.lowerBound < t.lowerBound)
+    }
+
     // MARK: - Update persists + bumps version
 
     @Test func updatePersistsBodyAndBumpsVersion() throws {

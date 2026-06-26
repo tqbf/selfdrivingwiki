@@ -89,4 +89,62 @@ struct MarkdownHTMLRendererTests {
         let html = MarkdownHTMLRenderer.render("# Overview\n\n# Overview")
         #expect(html == "<h1 id=\"overview\">Overview</h1><h1 id=\"overview-1\">Overview</h1>")
     }
+
+    // MARK: Mermaid
+
+    @Test func mermaidOutputUsesTheSharedDetectorTag() {
+        // The reader decides whether to inject the runtime by matching
+        // MarkdownHTMLRenderer.mermaidContainerOpenTag against rendered HTML.
+        // Pin the contract: the renderer's emitted output must actually contain
+        // that exact tag (incl. the empty-diagram case), or diagrams would
+        // silently stop being detected.
+        let tag = MarkdownHTMLRenderer.mermaidContainerOpenTag
+        #expect(MarkdownHTMLRenderer.render("```mermaid\ngraph TD\n```").contains(tag))
+        #expect(MarkdownHTMLRenderer.render("```mermaid\n```").contains(tag))
+    }
+
+    @Test func mermaidBlockRendersMermaidContainer() {
+        // ```mermaid fences must produce <pre class="mermaid"> so the WKWebView
+        // mermaid runtime can find and render them via the .mermaid class hook.
+        let md = "```mermaid\ngraph TD\n    A --> B\n```"
+        let html = MarkdownHTMLRenderer.render(md)
+        #expect(html == "<pre class=\"mermaid\">graph TD\n    A --&gt; B\n</pre>")
+        #expect(!html.contains("<code"))
+    }
+
+    @Test func mermaidBlockEscapesSpecialCharacters() {
+        // Mermaid reads decoded textContent — the browser decodes entities back
+        // before mermaid sees them. Keep escaping so raw < > & in diagram source
+        // don't break the surrounding HTML document.
+        let md = "```mermaid\nA --> B & <x>\n```"
+        let html = MarkdownHTMLRenderer.render(md)
+        #expect(html.contains("&amp;"))
+        #expect(html.contains("&lt;"))
+        #expect(html.contains("&gt;"))
+        #expect(!html.contains("<code"))
+    }
+
+    @Test func fencedCodeBlockNoLanguage() {
+        // A fence with no language tag must still render the generic <pre><code>
+        // wrapper (no class attribute).
+        let md = "```\nsome code\n```"
+        let html = MarkdownHTMLRenderer.render(md)
+        #expect(html == "<pre><code>some code\n</code></pre>")
+    }
+
+    @Test func mermaidFenceIsCaseSensitive() {
+        // The mermaid hook is keyed on the exact lowercase `mermaid` info string
+        // (the canonical fence tag). A case variant must fall through to the
+        // ordinary highlighted-code path, not the diagram container.
+        let html = MarkdownHTMLRenderer.render("```Mermaid\ngraph TD\n```")
+        #expect(html == "<pre><code class=\"language-Mermaid\">graph TD\n</code></pre>")
+        #expect(!html.contains("class=\"mermaid\""))
+    }
+
+    @Test func emptyMermaidBlock() {
+        // An empty diagram fence is harmless: it yields a valid empty container
+        // (mermaid simply finds nothing to render).
+        let html = MarkdownHTMLRenderer.render("```mermaid\n```")
+        #expect(html == "<pre class=\"mermaid\"></pre>")
+    }
 }

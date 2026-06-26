@@ -319,10 +319,31 @@ struct AgentTranscriptWebView: NSViewRepresentable {
           }
         </style>
         </head><body>
+        <!-- Mermaid v11 UMD runtime (vendored, inlined).
+             Outside the app bundle (swift test) MermaidAsset.js is "" so the first
+             <script> is empty and window.mermaid is undefined. Every call below is
+             guarded with `if (window.mermaid)` so the transcript JS never throws in
+             that environment. The runtime <script> MUST appear before the init block
+             (classic scripts run in document order). mermaid.initialize is called once
+             at load; mermaid.run is called per appendRows on unprocessed nodes only
+             (mermaid stamps rendered nodes with data-processed="true"). Because
+             mermaid.run is async (SVG generation inflates page height after it
+             resolves), we scroll once synchronously AND again once rendering
+             settles, so a streamed row ending in a diagram still lands at the
+             bottom. -->
+        <script>\(MermaidAsset.js)</script>
         <script>
+          if (window.mermaid) {
+            mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default' });
+          }
           function appendRows(html) {
             document.body.insertAdjacentHTML('beforeend', html);
-            window.scrollTo(0, document.body.scrollHeight);
+            var scrollToBottom = function () { window.scrollTo(0, document.body.scrollHeight); };
+            scrollToBottom();
+            if (window.mermaid) {
+              mermaid.run({ querySelector: '.mermaid:not([data-processed="true"])' })
+                .then(scrollToBottom, scrollToBottom);
+            }
           }
         </script>
         </body></html>

@@ -2,6 +2,24 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-26 — Inline Mermaid diagrams in reader + agent transcript
+
+Vendored mermaid v11 and wired it into both WKWebView readers so ` ```mermaid ` fences render as live diagrams. The agent now knows when/how to author them. Plan: `plans/mermaid-diagrams.md`.
+
+**Renderer.** `MarkdownHTMLRenderer.visitCodeBlock` emits ` ```mermaid ` fences as `<pre class="mermaid">…HTML-escaped source…</pre>` (mermaid reads the decoded `textContent`, so escaping stays); every other language keeps its `<pre><code class="language-…">` output. There is no separate predicate — the main reader detects a diagram with `body.contains("<pre class=\"mermaid\">")`.
+
+**Asset bundle.** `Resources/mermaid.min.js` is the pinned v11.4.1 UMD build (~2.5 MB, committed; the app is offline/local-only). It ends with `globalThis.mermaid = …`, so an inline classic `<script>` exposes a usable global on `about:blank`. `build.sh` copies it into `Contents/Resources` (a plain data asset, like `AppIcon.icns` — not codesigned). `MermaidAsset.js` reads it once via `Bundle.main` with an empty-string fallback for out-of-bundle test/dev runs; callers treat `""` as "no runtime → skip injection".
+
+**Wiki reader.** `WikiReaderView.documentHTML(_:mermaidScript:)` gained an optional script param and stays `nonisolated`/pure. When it's non-nil and non-empty it appends, after the `<article>`, the runtime `<script>` then an init `<script>` running `mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: <prefers-color-scheme> }); mermaid.run();`. `startLoad` passes `MermaidAsset.js` only on diagram-bearing pages, so diagram-free pages pay zero ~2.5 MB parse cost.
+
+**Agent transcript.** `AgentTranscriptWebView.shellHTML` always carries the runtime (the feed can grow a diagram at any time). Every mermaid call is guarded by `if (window.mermaid)` (no-op when the runtime is absent in dev/test). `appendRows` runs `mermaid.run({ querySelector: '.mermaid:not([data-processed="true"])' })` on only the newly inserted, unprocessed nodes, then re-scrolls once the async render settles (the SVG inflates page height after the synchronous scroll).
+
+**Security.** `securityLevel: 'strict'` everywhere (never `'loose'`, mermaid's historical XSS vector); combined with the `about:blank` origin (no network) this is the safe posture for semi-trusted agent/user-authored diagram source.
+
+**Agent prompt.** `SystemPrompt.defaultBody` gained a `## Diagrams` section (after `## Conventions`): when a diagram aids understanding (process/sequence, hierarchy, relationships, state machine, timeline — never decorative), keep them small, prefer the offline-safe core types (flowchart/sequence/state/class/ER/mindmap/gantt), and the ` ```mermaid ` fence with one worked `flowchart` example. Reaches NEW wikis only; propagating to existing wikis is a separate follow-up (see the plan).
+
+**Tests.** New files `MermaidAssetTests`, `WikiReaderDocumentHTMLTests`, `AgentTranscriptShellTests`; added cases to the existing `MarkdownHTMLRendererTests` and `SystemPromptTests`. Full suite green at 1067 tests. The live SVG render in each reader is a manual gate (can't assert from `swift test`, which has no `.app` bundle or WKWebView).
+
 ## 2026-06-25 — Fix query/ingestion-agent review findings (per-turn lock, dead code, tests)
 
 Addressed every issue from the code review of the query/ingestion-agent
