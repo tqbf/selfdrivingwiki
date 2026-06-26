@@ -56,6 +56,14 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     }
 
     mutating func visitCodeBlock(_ codeBlock: CodeBlock) -> String {
+        // Mermaid fences get a bare <pre class="mermaid"> — no <code> wrapper.
+        // The .mermaid class is the render hook the WKWebView runtime keys on.
+        // The source is still HTML-escaped because the browser decodes entities
+        // back to text before mermaid reads textContent, keeping the surrounding
+        // HTML document well-formed (raw < > & would break the parser).
+        if codeBlock.language == "mermaid" {
+            return "<pre class=\"mermaid\">\(escape(codeBlock.code))</pre>"
+        }
         let cls = (codeBlock.language ?? "").isEmpty
             ? ""
             : " class=\"language-\(escapeAttribute(codeBlock.language ?? ""))\""
