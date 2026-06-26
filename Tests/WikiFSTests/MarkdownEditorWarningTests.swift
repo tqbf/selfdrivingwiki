@@ -75,6 +75,41 @@ struct MarkdownEditorWarningTests {
         #expect(stored == messy)
     }
 
+    @Test func fixMarkdownInDraftCleansAndSaves() async throws {
+        let store = try SQLiteWikiStore(databaseURL: tempURL())
+        let model = WikiStoreModel(store: store)
+        model.markdownLinter = try repoLinter()
+        model.newPage(title: "FixMe")
+        // Trailing whitespace on heading + body — fixes cleanly in one pass.
+        model.draftBody = "# Title   \n\nText with trailing   \n"
+        model.save()
+        try await pollFor { model.markdownSaveWarning != nil }
+        // Apply the fix button.
+        model.fixMarkdownInDraft()
+        // The draft body is now normalized (trailing whitespace stripped).
+        #expect(!model.draftBody.contains("   "))
+        #expect(model.draftBody.hasSuffix("\n"))
+        // The stored body matches the fixed draft (save() was called).
+        let id = try store.resolveTitleToID("FixMe")!
+        let stored = try store.getPage(id: id).bodyMarkdown
+        #expect(stored == model.draftBody)
+        // The warning clears after the fix (fixed body has no findings).
+        try await pollFor { model.markdownSaveWarning == nil }
+        #expect(model.markdownSaveWarning == nil)
+    }
+
+    @Test func fixMarkdownInDraftIsNoOpForCleanBody() async throws {
+        let store = try SQLiteWikiStore(databaseURL: tempURL())
+        let model = WikiStoreModel(store: store)
+        model.markdownLinter = try repoLinter()
+        model.newPage(title: "AlreadyClean")
+        let clean = "# Title\n\nClean text.\n"
+        model.draftBody = clean
+        model.save()
+        model.fixMarkdownInDraft()
+        #expect(model.draftBody == clean)
+    }
+
     @Test func noWarningForCleanPage() async throws {
         let store = try SQLiteWikiStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)

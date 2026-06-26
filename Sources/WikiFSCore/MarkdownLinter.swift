@@ -226,17 +226,26 @@ public final class MarkdownLinter: @unchecked Sendable {
     public static func loadDefault() -> MarkdownLinter? {
         if let url = Bundle.main.url(forResource: "markdownlint", withExtension: "js"),
            let src = try? String(contentsOf: url, encoding: .utf8), !src.isEmpty {
-            return MarkdownLinter(jsSource: src)
+            let linter = MarkdownLinter(jsSource: src)
+            DebugLog.store("MarkdownLinter.loadDefault: bundle found at \(url.lastPathComponent), init \(linter != nil ? "OK" : "FAILED")")
+            return linter
         }
+        // Fallback for the bundled wikictl helper (executable in Contents/Helpers).
         let exeDir = Bundle.main.executableURL?.deletingLastPathComponent()
             ?? CommandLine.arguments.first.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
-        guard let exeDir else { return nil }
+        guard let exeDir else {
+            DebugLog.store("MarkdownLinter.loadDefault: no executable URL — linter unavailable")
+            return nil
+        }
         let candidate = exeDir.deletingLastPathComponent()
             .appendingPathComponent("Resources/markdownlint.js")
         guard let src = try? String(contentsOf: candidate, encoding: .utf8), !src.isEmpty else {
+            DebugLog.store("MarkdownLinter.loadDefault: markdownlint.js not found — linter unavailable")
             return nil
         }
-        return MarkdownLinter(jsSource: src)
+        let linter = MarkdownLinter(jsSource: src)
+        DebugLog.store("MarkdownLinter.loadDefault: resolved via \(candidate.lastPathComponent), init \(linter != nil ? "OK" : "FAILED")")
+        return linter
     }
 
     /// A process-wide linter built ONCE from the bundled `markdownlint.js` (or

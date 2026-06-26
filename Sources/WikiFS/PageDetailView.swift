@@ -77,27 +77,7 @@ struct PageDetailView: View {
             // and/or cosmetic markdown issues. Surfaced on save; clear once the
             // issues are fixed and re-saved. Combined into a single banner when
             // both are present to avoid stacked notification noise.
-            if store.mermaidSaveWarning != nil || store.markdownSaveWarning != nil {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let mermaid = store.mermaidSaveWarning {
-                        Text(mermaid)
-                            .foregroundStyle(.orange)
-                    }
-                    if let md = store.markdownSaveWarning {
-                        Text("Markdown formatting (informational — page saved as-is):\n\(md)")
-                            .foregroundStyle(.orange.opacity(0.8))
-                    }
-                }
-                .font(.system(size: 12, design: .monospaced))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-                .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-                .padding(.horizontal, PageEditorMetrics.contentInset)
-                .padding(.top, 8)
-                .help(store.mermaidSaveWarning != nil
-                      ? "A Mermaid diagram has a syntax error, and/or markdown has cosmetic formatting issues. Markdown issues are non-blocking (the agent auto-fixes them on wikictl writes); fix the mermaid block and re-save to clear that warning."
-                      : "Cosmetic markdown formatting suggestions. These are non-blocking — the page saved as-is. The agent auto-fixes these on wikictl writes.")
-            }
+            saveWarningBanner
 
             // Content — swaps between reader and editor, header stays put.
             if isEditing {
@@ -216,6 +196,45 @@ struct PageDetailView: View {
               let root = fileProvider.path else { return nil }
         let leaf = FilenameEscaping.byTitleFilename(title: title, pageID: id.rawValue)
         return "\(root)/pages/by-title/\(leaf)"
+    }
+
+    // MARK: - Subviews
+
+    @ViewBuilder private var saveWarningBanner: some View {
+        if store.mermaidSaveWarning != nil || store.markdownSaveWarning != nil {
+            VStack(alignment: .leading, spacing: 6) {
+                if let mermaid = store.mermaidSaveWarning {
+                    Text(mermaid)
+                        .foregroundStyle(.orange)
+                }
+                if let md = store.markdownSaveWarning {
+                    markdownSection(md)
+                }
+            }
+            .font(.system(size: 12, design: .monospaced))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+            .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+            .padding(.horizontal, PageEditorMetrics.contentInset)
+            .padding(.top, 8)
+        }
+    }
+
+    @ViewBuilder private func markdownSection(_ md: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("Markdown formatting (informational — page saved as-is):\n\(md)")
+                .foregroundStyle(.orange.opacity(0.8))
+            Spacer(minLength: 4)
+            // The button only appears when markdownSaveWarning is non-nil, which
+            // only happens when the linter IS loaded — so fixMarkdownInDraft()
+            // will always have a linter to call. No separate nil guard needed.
+            Button("Fix", systemImage: "wand.and.stars") {
+                store.fixMarkdownInDraft()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Auto-fix cosmetic markdown issues (trailing whitespace, blank-line spacing, etc.)")
+        }
     }
 
     // MARK: - Actions

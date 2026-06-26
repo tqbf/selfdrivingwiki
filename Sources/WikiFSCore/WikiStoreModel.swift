@@ -583,6 +583,19 @@ public final class WikiStoreModel {
     /// without a bundle. `@ObservationIgnored` — it's plumbing, not UI state.
     @ObservationIgnored var markdownLinter: MarkdownLinter? = MarkdownLinter.shared
 
+    /// Apply the markdown linter's auto-fix to the current draft body and save.
+    /// Replaces cosmetic issues (trailing whitespace, blank-line spacing, etc.)
+    /// in-place — the same normalization `wikictl page upsert` applies, but
+    /// triggered manually from the in-app editor. No-op when the linter is
+    /// unavailable or the body is already clean.
+    public func fixMarkdownInDraft() {
+        guard let linter = markdownLinter else { return }
+        let outcome = linter.fix(markdown: draftBody)
+        guard outcome.fixed != draftBody else { return }
+        draftBody = outcome.fixed
+        save()
+    }
+
     /// The in-flight markdown warning Task (if any). Cancelled before starting a
     /// new one, so rapid re-saves don't complete out of order and leave a stale
     /// `markdownSaveWarning` that doesn't match the just-saved body.
@@ -596,6 +609,7 @@ public final class WikiStoreModel {
     /// Non-blocking: the save already succeeded with the original text.
     private func updateMarkdownWarning(for body: String) {
         guard let linter = markdownLinter else {
+            DebugLog.store("MarkdownLinter: linter unavailable (bundle not loaded) — skipping markdown warning")
             markdownWarningTask?.cancel()
             markdownWarningTask = nil
             markdownSaveWarning = nil
@@ -612,6 +626,9 @@ public final class WikiStoreModel {
             }.value
             guard !Task.isCancelled else { return }
             let warning = findings.isEmpty ? nil : MarkdownLinter.describe(findings)
+            if let warning {
+                DebugLog.store("MarkdownLinter: \(findings.count) finding(s) for saved body")
+            }
             self?.markdownSaveWarning = warning
         }
     }
