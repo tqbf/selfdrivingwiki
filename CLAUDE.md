@@ -14,6 +14,24 @@ PROGRESS.md" and trust it's up to speed with this codebase.
 * Use the macos-design skill to make sure the UI we come up with makes sense as a modern
   macOS app, with modern professional macOS idioms. Keep things simple.
 
+## Design skills — sources
+
+The three design skills above are vendored in this repo at
+`.polytoken/skills/` (Polytoken loads skills from there). They originate from
+these public Agent Skills repos; the `npx` / `/plugin` commands are for Claude
+Code and other agents — NOT Polytoken — included for provenance:
+
+- **swiftui-pro** — https://github.com/twostraws/swiftui-agent-skill
+  (`npx skills add https://github.com/twostraws/swiftui-agent-skill --skill swiftui-pro`)
+- **macos-design** — https://github.com/ceorkm/macos-design-skill
+- **typography-designer** (upstream name `typography`) —
+  https://github.com/petekp/claude-code-setup (`skills/typography/`)
+
+> Caveat: swiftui-pro targets iOS 26 / Swift 6.2; this app is macOS 15 /
+> Swift 6.0 — filter version-gated guidance. macos-design & typography
+> express values in CSS/web terms — translate to SwiftUI
+> (`.regularMaterial`, points, `Font`, system faces).
+
 * When a feature passes tests but fails in the running app (and you can't see the
   screen), follow [`docs/skills/reproducing-live-ui-bugs.md`](docs/skills/reproducing-live-ui-bugs.md):
   read the real data, host the real view in an `NSWindow` test, instrument every

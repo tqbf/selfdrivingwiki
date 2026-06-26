@@ -2,6 +2,33 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-26 — Vendored design skills (swiftui-pro, macos-design, typography-designer)
+
+Three public Agent Skills vendored into `.polytoken/skills/` (project-level) so
+the `skill` tool can load them — prerequisite for the sidebar→managed-windows
+redesign. All MIT-licensed. Installed verbatim via `git clone --depth 1` + copy
+(`npx skills add` was NOT used — it writes to `.claude/skills/`, not `.polytoken/skills/`).
+
+| Skill | Source repo | Commit SHA | Files | Notes |
+|-------|------------|------------|-------|-------|
+| `swiftui-pro` | https://github.com/twostraws/SwiftUI-Agent-Skill | `be297ff80dddec529af1f9b1f1f114aab6c9d11c` | 1 SKILL + 10 refs + assets | ⚠️ targets iOS 26 / Swift 6.2; app is macOS 15 / Swift 6.0 — filter version-gated guidance |
+| `macos-design` | https://github.com/ceorkm/macos-design-skill | `8f528a2364f996cd42f02a10b1b27198a74ca2a3` | 1 SKILL + 3 refs | CSS/web examples → translate to SwiftUI (`.regularMaterial`, points, `Font`, system faces) |
+| `typography-designer` (upstream `typography`) | https://github.com/petekp/claude-code-setup (`skills/typography/`) | `8355490ec50d174573cbd4cc0663a72a178e55e0` | 1 SKILL + 7 refs | Web-oriented (px/rem/Tailwind) → translate to points / `Font` |
+
+SHA values are git commit SHAs (not file-content SHA256s — these are multi-file
+git artifacts, unlike the single-blob vendored JS). Pinned so updates are a clean
+re-clone.
+
+`CLAUDE.md` updated with a provenance note (sources + install commands + caveats);
+`PLAN.md` Documentation index points to `.polytoken/skills/`.
+
+Skills load at Polytoken startup / config reload. Verify with:
+```
+skill(name: "swiftui-pro")  # should return body
+skill(name: "macos-design")  # should return body
+skill(name: "typography-designer")  # should return body
+```
+
 ## 2026-06-26 — Markdown linter (cosmetic auto-fix on save)
 
 Mirrors the `merval` (Mermaid) save-time validation pattern, generalized to
