@@ -6,11 +6,11 @@ import Testing
 /// exercised here. The real bundled-load assertion is a manual gate after `make`.
 struct MermaidAssetTests {
 
-    @Test func jsIsStringAndDoesNotCrash() {
-        // Outside the app bundle the resource is absent; the fallback returns "".
-        // Regardless, accessing MermaidAsset.js must never crash or force-unwrap.
-        let js = MermaidAsset.js
-        // count >= 0 is always true for String — this just proves no crash / trap.
-        #expect(js.count >= 0)
+    @Test func jsFallsBackToEmptyOutsideBundle() {
+        // Under `swift test` there is no `.app`, so `Bundle.main` lacks the
+        // resource and the loader must fall back to "" (not crash, not a stub).
+        // Asserting the exact empty string also pins the fallback contract:
+        // callers treat "" as "runtime unavailable → skip injection".
+        #expect(MermaidAsset.js == "")
     }
 }
