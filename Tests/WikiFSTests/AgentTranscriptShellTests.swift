@@ -33,11 +33,28 @@ struct AgentTranscriptShellTests {
         #expect(Coordinator.shellHTML.contains("mermaid.run({ querySelector: '.mermaid:not([data-processed=\"true\"])' })"))
     }
 
-    /// Every mermaid call is guarded by `if (window.mermaid)` so the transcript
-    /// JavaScript does not throw when the runtime is absent (dev/test environments
-    /// where `MermaidAsset.js` returns `""`).
-    @Test func shellGuardsMermaidCalls() {
-        #expect(Coordinator.shellHTML.contains("if (window.mermaid)"))
+    /// BOTH mermaid call sites (the `initialize` block and the `run` block inside
+    /// `appendRows`) must be guarded by `if (window.mermaid)` so the transcript
+    /// JavaScript never throws when the runtime is absent (dev/test where
+    /// `MermaidAsset.js` returns `""`). Count both guards so dropping one fails.
+    @Test func shellGuardsBothMermaidCallSites() {
+        // Match the guard statement (with brace) so the prose mention of
+        // `if (window.mermaid)` in the shell's explanatory comment isn't counted.
+        let guards = Coordinator.shellHTML.components(separatedBy: "if (window.mermaid) {").count - 1
+        #expect(guards == 2)
+    }
+
+    /// `startOnLoad: false` is required — rendering is driven explicitly via
+    /// `mermaid.run` per append, not by mermaid's DOM-ready auto-start.
+    @Test func shellDisablesStartOnLoad() {
+        #expect(Coordinator.shellHTML.contains("startOnLoad: false"))
+    }
+
+    /// `mermaid.run` is async; the shell must re-scroll once it resolves (or
+    /// rejects) so a streamed row ending in a diagram lands at the bottom after
+    /// the SVG inflates page height — not at the pre-render height.
+    @Test func shellRescrollsAfterDiagramRenders() {
+        #expect(Coordinator.shellHTML.contains(".then(scrollToBottom, scrollToBottom)"))
     }
 
     /// The runtime `<script>` tag must precede the init block so that classic-script

@@ -326,7 +326,11 @@ struct AgentTranscriptWebView: NSViewRepresentable {
              that environment. The runtime <script> MUST appear before the init block
              (classic scripts run in document order). mermaid.initialize is called once
              at load; mermaid.run is called per appendRows on unprocessed nodes only
-             (mermaid stamps rendered nodes with data-processed="true"). -->
+             (mermaid stamps rendered nodes with data-processed="true"). Because
+             mermaid.run is async (SVG generation inflates page height after it
+             resolves), we scroll once synchronously AND again once rendering
+             settles, so a streamed row ending in a diagram still lands at the
+             bottom. -->
         <script>\(MermaidAsset.js)</script>
         <script>
           if (window.mermaid) {
@@ -334,10 +338,12 @@ struct AgentTranscriptWebView: NSViewRepresentable {
           }
           function appendRows(html) {
             document.body.insertAdjacentHTML('beforeend', html);
+            var scrollToBottom = function () { window.scrollTo(0, document.body.scrollHeight); };
+            scrollToBottom();
             if (window.mermaid) {
-              mermaid.run({ querySelector: '.mermaid:not([data-processed="true"])' });
+              mermaid.run({ querySelector: '.mermaid:not([data-processed="true"])' })
+                .then(scrollToBottom, scrollToBottom);
             }
-            window.scrollTo(0, document.body.scrollHeight);
           }
         </script>
         </body></html>
