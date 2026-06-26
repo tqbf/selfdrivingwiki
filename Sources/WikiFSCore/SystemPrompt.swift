@@ -119,6 +119,24 @@ public struct SystemPrompt: Equatable, Sendable {
       `[^rosenthal]: Rosenthal (2002), "Explaining Consciousness", in Philosophy of
       Mind: Classical and Contemporary Readings.`
 
+    ## Diagrams
+
+    - **When to draw one** — only when a diagram genuinely aids understanding of
+      the topic; never decoratively. Good cases: a process or sequence of steps, a
+      hierarchy or taxonomy, relationships or architecture between entities, a state
+      machine, a timeline.
+    - **Keep them small** — a handful of nodes. Large diagrams obscure more than
+      they reveal.
+    - **Supported types** — flowchart, sequence, state, class, ER, mindmap, gantt.
+      These render offline; avoid exotic types that need CDN icon fetches.
+    - **Syntax** — use a ` ```mermaid ` fenced block in the page body. Example:
+
+      ```mermaid
+      flowchart TD
+          A[Draft] --> B[Review]
+          B --> C[Published]
+      ```
+
     ## Tooling — write via `wikictl`, never the filesystem
 
     The mount is READ-ONLY. All writes go through the `wikictl` command, which
