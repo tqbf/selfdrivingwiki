@@ -17,7 +17,8 @@ PROGRESS.md" and trust it's up to speed with this codebase.
 ## Design skills — sources
 
 The three design skills above are vendored in this repo at
-`.polytoken/skills/` (Polytoken loads skills from there). They originate from
+`docs/skills/` (central skills directory, symlinked as `.polytoken/skills/`
+and `.claude/skills/`). They originate from
 these public Agent Skills repos; the `npx` / `/plugin` commands are for Claude
 Code and other agents — NOT Polytoken — included for provenance:
 
@@ -33,7 +34,7 @@ Code and other agents — NOT Polytoken — included for provenance:
 > (`.regularMaterial`, points, `Font`, system faces).
 
 * When a feature passes tests but fails in the running app (and you can't see the
-  screen), follow [`docs/skills/reproducing-live-ui-bugs.md`](docs/skills/reproducing-live-ui-bugs.md):
+  screen), follow [`docs/skills/reproducing-live-ui-bugs/SKILL.md`](docs/skills/reproducing-live-ui-bugs/SKILL.md):
   read the real data, host the real view in an `NSWindow` test, instrument every
   seam via `os_log`, and read the trace back with `log show`.
 
