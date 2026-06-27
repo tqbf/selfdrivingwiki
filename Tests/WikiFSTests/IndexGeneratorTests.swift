@@ -191,7 +191,7 @@ struct IndexGeneratorTests {
     @Test func sourcesJSONLHasMarkdownFalseWhenNoChain() throws {
         let store = try tempStore()
         // Add a source without any processed-markdown version.
-        let ingested = try store.addSource(filename: "plain.pdf", data: Data("%PDF".utf8))
+        _ = try store.addSource(filename: "plain.pdf", data: Data("%PDF".utf8))
         let sources = try store.listAllSourcesOrderedByID()
         #expect(sources.count == 1)
         #expect(sources[0].hasMarkdown == false)
