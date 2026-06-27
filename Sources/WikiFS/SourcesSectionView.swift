@@ -38,30 +38,18 @@ struct SourcesSectionView: View {
         })
     }
 
-    @State private var isSourcesExpanded = true
-
     // Rename dialog state (mirrors the page-row rename in SidebarView).
     @State private var renameTarget: SourceSummary?
     @State private var renameText = ""
 
     var body: some View {
         Section {
-            if isSourcesExpanded {
-                ForEach(filteredSources) { source in
-                    sourceRow(source)
-                }
+            ForEach(filteredSources) { source in
+                sourceRow(source)
             }
         } header: {
             HStack(spacing: 0) {
-                HStack(spacing: 4) {
-                    Image(systemName: isSourcesExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Text("Sources").font(.headline).foregroundStyle(.primary)
-                }
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.2)) { isSourcesExpanded.toggle() }
-                }
+                Text("Sources").font(.headline).foregroundStyle(.primary)
                 Spacer()
                 Picker("Filter", selection: $sourceFilter) {
                     ForEach(SourceFilter.allCases, id: \.self) { filter in
