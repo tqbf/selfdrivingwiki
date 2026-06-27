@@ -1145,9 +1145,7 @@ final class AgentLauncher {
     /// inside the seatbelt allowlist. Best-effort: failure (e.g. scratch unwritable)
     /// is surfaced later by the provider's own write errors.
     private func createSandboxRelocationDirs(in scratch: URL) {
-        let claudeConfig = scratch.appendingPathComponent(".claude-config", isDirectory: true)
         let tmp = scratch.appendingPathComponent(".tmp", isDirectory: true)
-        try? FileManager.default.createDirectory(at: claudeConfig, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
     }
 

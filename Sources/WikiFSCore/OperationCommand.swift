@@ -32,15 +32,11 @@ public struct OperationCommand: Equatable, Sendable {
     /// legible and free of wiki content), and only the auth/resolution-relevant
     /// environment keys — never the whole environment, which may carry API keys.
     ///
-    /// The headline diagnostic for claude's "Not logged in · Please run /login":
-    /// `CLAUDE_CONFIG_DIR` is relocated into an empty per-run scratch dir whenever
-    /// the run is sandboxed (the read-only query default), so the child can't see
-    /// the user's `~/.claude` credentials. `authSet` lists which API-key env vars
-    /// are present (NAMES ONLY, never values) — an empty list plus a relocated
-    /// `CLAUDE_CONFIG_DIR` is the fingerprint of that failure.
+    /// `authSet` lists which API-key env vars are present (NAMES ONLY, never values) —
+    /// an empty list means Claude Code will fall back to ~/.claude credential lookup.
     public var debugSummary: String {
         let redactedArgs = arguments.map { Self.redactArgument($0) }.joined(separator: " ")
-        let reportedEnvKeys = ["CLAUDE_CONFIG_DIR", "HOME", "TMPDIR", "PATH", "WIKI_ROOT", "WIKI_DB"]
+        let reportedEnvKeys = ["HOME", "TMPDIR", "PATH", "WIKI_ROOT", "WIKI_DB"]
         let env = reportedEnvKeys
             .compactMap { key in environment[key].map { "\(key)=\($0)" } }
             .joined(separator: " ")
@@ -85,8 +81,8 @@ public struct OperationCommand: Equatable, Sendable {
     ///   - sandbox: when non-nil, wrap the invocation in `/usr/bin/sandbox-exec`
     ///     with the seatbelt profile that confines writes to the scratch dir + active
     ///     wiki DB (`plans/sandbox-agent.md`). Default `nil` reproduces today's run
-    ///     byte-for-byte. The relocation env (`CLAUDE_CONFIG_DIR`, `TMPDIR`) is set
-    ///     only when non-nil; it never clobbers `WIKI_ROOT`/`WIKI_DB`/`PATH`.
+    ///     byte-for-byte. `TMPDIR` is relocated into scratch when non-nil; it never
+    ///     clobbers `WIKI_ROOT`/`WIKI_DB`/`PATH`.
     ///   - baseEnvironment: the parent environment to inherit (default the current
     ///     process's). Injected so tests can pin a known PATH.
     public static func build(
@@ -222,10 +218,11 @@ public struct OperationCommand: Equatable, Sendable {
     ) -> (executable: String, arguments: [String]) {
         guard let sandbox else { return (resolvedExecutable, arguments) }
 
-        // Relocate the provider's self-writes into the writable scratch zone so the
-        // profile allowlist stays tiny. These keys are distinct from WIKI_ROOT /
-        // WIKI_DB / PATH, so they don't clobber the app-owned block.
-        environment["CLAUDE_CONFIG_DIR"] = scratchDirectory + "/.claude-config"
+        // Relocate temp writes into scratch so they land inside the seatbelt allowlist.
+        // CLAUDE_CONFIG_DIR is intentionally NOT redirected: Claude Code reads its
+        // credentials from ~/.claude/.credentials.json, and pointing it at an empty
+        // scratch dir hides those credentials. The sandbox's (deny file-write*) rule
+        // already blocks writes to ~/.claude/ — Claude Code handles the EPERM quietly.
         environment["TMPDIR"] = scratchDirectory + "/.tmp"
 
         var head: [String] = ["-p", sandbox.profile]

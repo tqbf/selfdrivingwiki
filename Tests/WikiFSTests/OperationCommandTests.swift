@@ -248,9 +248,10 @@ struct OperationCommandTests {
     #expect(!summary.contains(String(repeating: "x", count: 200)))
   }
 
-  @Test func debugSummaryReportsRelocatedConfigDirButNeverSecretValues() {
-    // Sandboxed build relocates CLAUDE_CONFIG_DIR — the "Not logged in" fingerprint —
-    // and the env carries an API key whose VALUE must never appear in the summary.
+  @Test func debugSummaryReportsAuthSetButNeverSecretValues() {
+    // Sandboxed build; the env carries an API key whose VALUE must never appear in
+    // the summary. CLAUDE_CONFIG_DIR is intentionally NOT set (fixing the auth bug
+    // where redirecting it to an empty scratch dir hid ~/.claude credentials).
     let cmd = OperationCommand.build(
       operation: Self.tinyIngest(),
       wikiRoot: Self.resolvedRoot,
@@ -263,7 +264,8 @@ struct OperationCommandTests {
       baseEnvironment: ["PATH": "/usr/bin", "HOME": "/Users/me",
                         "ANTHROPIC_API_KEY": "sk-ant-supersecret"])
     let summary = cmd.debugSummary
-    #expect(summary.contains("CLAUDE_CONFIG_DIR=/tmp/scratch-xyz/.claude-config"))
+    // CLAUDE_CONFIG_DIR must NOT appear — we no longer redirect it.
+    #expect(!summary.contains("CLAUDE_CONFIG_DIR"))
     #expect(summary.contains("sandboxed=true"))
     // The key's PRESENCE is reported by name; its value is never logged.
     #expect(summary.contains("authSet=[ANTHROPIC_API_KEY]"))

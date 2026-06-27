@@ -4,7 +4,7 @@ import Testing
 
 /// Sandbox-wrapping tests for `OperationCommand.build` / `buildInteractiveQuery`.
 /// Verifies the seatbelt argv shape (AC.2), byte-identical-when-off (AC.1), the
-/// relocation env (`CLAUDE_CONFIG_DIR`/`TMPDIR`) present-on / absent-off, and that
+/// relocation env (`TMPDIR`) present-on / absent-off, and that
 /// the provider's own prefix args land AFTER `-- <providerExe>`.
 struct SandboxedOperationCommandTests {
 
@@ -81,7 +81,9 @@ struct SandboxedOperationCommandTests {
     #expect(cmd.environment["WIKI_ROOT"] == Self.resolvedRoot)
     #expect(cmd.environment["WIKI_DB"] == "01WIKIULID")
     #expect(cmd.environment["PATH"] == "/helpers:/usr/bin:/bin")
-    #expect(cmd.environment["CLAUDE_CONFIG_DIR"] == Self.scratch + "/.claude-config")
+    // CLAUDE_CONFIG_DIR is intentionally NOT set: redirecting it to an empty scratch
+    // dir hid ~/.claude/.credentials.json and caused "Not logged in" auth failures.
+    #expect(cmd.environment["CLAUDE_CONFIG_DIR"] == nil)
     #expect(cmd.environment["TMPDIR"] == Self.scratch + "/.tmp")
   }
 
@@ -114,7 +116,7 @@ struct SandboxedOperationCommandTests {
     #expect(cmd.arguments[1] == Self.sandbox.profile)
     #expect(cmd.arguments[8] == "--")
     #expect(cmd.arguments[9] == Self.providerExe)
-    #expect(cmd.environment["CLAUDE_CONFIG_DIR"] == Self.scratch + "/.claude-config")
+    #expect(cmd.environment["CLAUDE_CONFIG_DIR"] == nil)
     #expect(cmd.environment["TMPDIR"] == Self.scratch + "/.tmp")
     // The WIKI_DB env var (the ULID the agent/wikictl use) is NOT clobbered by the
     // `-D WIKI_DB=<path>` profile param — they are separate channels.
