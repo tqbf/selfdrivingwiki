@@ -8,6 +8,7 @@ struct RealDatabaseTest {
             .appendingPathComponent("Library/CloudStorage/SelfDrivingWiki-MyWiki/pages/by-title")
         
         let fm = FileManager.default
+        guard fm.fileExists(atPath: pagesDir.path) else { return }
         let files = try fm.contentsOfDirectory(at: pagesDir, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "md" }
             
