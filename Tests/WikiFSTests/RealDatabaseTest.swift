@@ -15,7 +15,7 @@ struct RealDatabaseTest {
         
         for file in files {
             let content = try String(contentsOf: file, encoding: .utf8)
-            let fixed = WikiLinkValidator.applyFixes(to: content)
+            let fixed = WikiLinkFixer.applyFixes(to: content)
             
             if fixed != content {
                 print("\n--- Fixed file: \(file.lastPathComponent) ---")
