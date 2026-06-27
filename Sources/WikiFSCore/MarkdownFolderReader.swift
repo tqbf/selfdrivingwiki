@@ -139,10 +139,10 @@ public enum MarkdownFolderReader {
 
     // MARK: - Private helpers
 
-    /// Supported markdown extensions (case-insensitive comparison).
-    private static let markdownExtensions: Set<String> = ["md", "markdown"]
+    /// Supported source extensions (case-insensitive comparison).
+    private static let sourceExtensions: Set<String> = ["md", "markdown", "pdf"]
 
-    /// Recursively collect markdown file URLs relative to `root`.
+    /// Recursively collect source file URLs relative to `root`.
     private static func collectMarkdownFiles(
         in directory: URL,
         root: URL,
@@ -158,7 +158,7 @@ public enum MarkdownFolderReader {
                 collectMarkdownFiles(in: child, root: root, fileOps: fileOps, found: &found)
             } else {
                 let ext = child.pathExtension.lowercased()
-                guard markdownExtensions.contains(ext) else { continue }
+                guard sourceExtensions.contains(ext) else { continue }
                 let relPath = String(child.path.dropFirst(root.path.count + 1))
                 found.append((relativePath: relPath, url: child))
             }

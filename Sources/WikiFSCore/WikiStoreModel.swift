@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UniformTypeIdentifiers
 
 /// The app's single source of truth for wiki state and the in-flight editing
 /// session. `@MainActor @Observable` (uses `Observation`, NOT SwiftUI — this
@@ -842,9 +843,15 @@ public final class WikiStoreModel {
                 DebugLog.store("WikiStoreModel.ingest read failed for \(filename): \(error)")
                 continue
             }
+            
+            let ext = (filename as NSString).pathExtension.lowercased()
+            let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
+            let response = URLIngestService.FetchResponse(data: data, contentType: mimeType, finalURL: url)
+            let plan = URLIngestService.plan(for: response)
+
             do {
                 let summary = try store.addSource(
-                    filename: filename, data: data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil)
+                    filename: plan.filename, data: plan.data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: mimeType)
                 lastSourceID = summary.id
             } catch {
                 DebugLog.store("WikiStoreModel.ingest store failed for \(filename): \(error)")
@@ -969,9 +976,11 @@ public final class WikiStoreModel {
 
         var firstSourceID: PageID?
         for file in result.files {
+            let ext = (file.filename as NSString).pathExtension.lowercased()
+            let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
             do {
                 let summary = try store.addSource(
-                    filename: file.filename, data: file.data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil)
+                    filename: file.filename, data: file.data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: mimeType)
                 if firstSourceID == nil { firstSourceID = summary.id }
                 imported += 1
             } catch {

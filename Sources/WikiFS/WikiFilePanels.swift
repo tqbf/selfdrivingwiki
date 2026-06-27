@@ -43,4 +43,18 @@ enum WikiFilePanels {
         panel.title = title
         return panel.runModal() == .OK ? panel.url : nil
     }
+
+    /// A generic file picker for importing a single file.
+    static func chooseFile(title: String, prompt: String, allowedContentTypes: [UTType]? = nil) -> URL? {
+        let panel = NSOpenPanel()
+        if let allowedContentTypes {
+            panel.allowedContentTypes = allowedContentTypes
+        }
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.prompt = prompt
+        panel.title = title
+        return panel.runModal() == .OK ? panel.url : nil
+    }
 }

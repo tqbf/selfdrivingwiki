@@ -72,6 +72,13 @@ struct AgentTranscriptSidebar: View {
                 selectedSection = .activity
             }
         }
+        .onAppear {
+            if launcher.isExtracting {
+                selectedSection = .extraction
+            } else if launcher.isRunning {
+                selectedSection = .activity
+            }
+        }
     }
 
     @ViewBuilder
