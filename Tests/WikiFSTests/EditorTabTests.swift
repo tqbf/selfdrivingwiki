@@ -106,6 +106,20 @@ struct EditorTabTests {
         #expect(model.selection == .page(a.id))
     }
 
+    // MARK: - Two distinct singleton tabs coexist
+
+    /// The headline AC: `.ask` and `.edit` are distinct singleton keys and can
+    /// occupy two separate, coexisting tabs in the same store. Opening one after
+    /// the other must produce exactly two tabs, each carrying its own selection.
+    @Test func askAndEditTabsCoexist() throws {
+        let (model, _) = try tempModel()
+        model.openTab(.ask)
+        model.openTab(.edit)
+        #expect(model.tabs.count == 2)
+        #expect(model.tabs.contains { $0.selection == .ask })
+        #expect(model.tabs.contains { $0.selection == .edit })
+    }
+
     // MARK: - Singleton reuse
 
     @Test func singletonSelectionReusesExistingTab() throws {
@@ -115,14 +129,14 @@ struct EditorTabTests {
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
-        model.openTab(.query)
+        model.openTab(.ask)
         #expect(model.tabs.count == 2)
-        let queryTabID = model.tabs[1].id
+        let askTabID = model.tabs[1].id
 
-        // Opening query again should focus the existing query tab.
-        model.openTab(.query)
+        // Opening ask again should focus the existing ask tab.
+        model.openTab(.ask)
         #expect(model.tabs.count == 2)  // No duplicate
-        #expect(model.activeTabID == queryTabID)  // Query tab is active
+        #expect(model.activeTabID == askTabID)  // Ask tab is active
     }
 
     @Test func singletonSystemPromptReusesExistingTab() throws {
@@ -640,13 +654,13 @@ struct EditorTabTests {
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
         model.openTab(.page(b.id))
-        model.openTab(.query)
+        model.openTab(.ask)
         #expect(model.tabs.count == 3)
 
         model.rename(a.id, to: "Renamed A")
         #expect(model.tabs[0].title == "Renamed A")  // page A
         #expect(model.tabs[1].title == "B")          // page B unchanged
-        #expect(model.tabs[2].title == "Query")      // Query unchanged
+        #expect(model.tabs[2].title == "Ask")        // Ask tab unchanged
     }
 
     // MARK: - newPageInNewTab
@@ -707,7 +721,8 @@ struct EditorTabTests {
 
     @Test func tabTitleForSpecialSelections() throws {
         let (model, _) = try tempModel()
-        #expect(model.tabTitle(for: .query) == "Query")
+        #expect(model.tabTitle(for: .ask) == "Ask")
+        #expect(model.tabTitle(for: .edit) == "Edit")
         #expect(model.tabTitle(for: .systemPrompt) == "Instructions")
         #expect(model.tabTitle(for: .changeLog) == "Activity")
     }
@@ -723,7 +738,8 @@ struct EditorTabTests {
 
     @Test func tabIconReturnsExpectedSymbols() throws {
         let (model, _) = try tempModel()
-        #expect(model.tabIcon(for: .query) == "bubble.left.and.text.bubble.right")
+        #expect(model.tabIcon(for: .ask) == "bubble.left.and.text.bubble.right")
+        #expect(model.tabIcon(for: .edit) == "square.and.pencil")
         #expect(model.tabIcon(for: .systemPrompt) == "sparkles")
         #expect(model.tabIcon(for: .changeLog) == "clock.arrow.circlepath")
         #expect(model.tabIcon(for: .page(PageID(rawValue: "any"))) == "doc.text")

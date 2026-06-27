@@ -5,8 +5,8 @@
 A native **macOS SwiftUI wiki**, backed by **SQLite**, mirrored **read-only** onto
 the filesystem by a **File Provider extension** — and now a **self-maintaining LLM
 wiki**. A user keeps **many** wikis (a personal one, a research one, a per-book
-one); for each wiki an LLM (`claude -p`, run from the app as **Ingest / Query /
-Lint**) authors and maintains the content: it *reads* the wiki through the mount and
+one); for each wiki an LLM (`claude -p`, run from the app as **Ingest / Ask /
+Edit / Lint**) authors and maintains the content: it *reads* the wiki through the mount and
 *writes* it through a small CLI, `wikictl`. The human curates sources and asks
 questions; the agent does the bookkeeping (summary/entity/concept pages,
 `[[wiki-links]]`, a curated `index.md`, a chronological `log.md`).
@@ -114,7 +114,7 @@ The test target is `WikiFSTests` (in `Tests/WikiFSTests/`).
 - **Schema + migrations + change token:** `Sources/WikiFSCore/SQLiteWikiStore.swift`
 - **Multi-wiki:** `WikiRegistry.swift` / `WikiDescriptor.swift` / `WikiManager.swift`, `DatabaseLocation.swift`
 - **File Provider projection:** `Sources/WikiFSFileProvider/Projection.swift`, `FileProviderExtension.swift`, `WikiFSEnumerator.swift`, `WikiFSItem.swift`
-- **The agent operations:** `WikiOperation.swift` / `OperationCommand.swift` / `IngestPlan.swift` / `IngestWriteRule.swift` / `AgentEvent.swift` (core) and `AgentLauncher.swift` / `OperationsView.swift` / `AgentActivityView.swift` / `OperationRequest.swift` (app)
+- **The agent operations:** `WikiOperation.swift` / `OperationCommand.swift` / `IngestPlan.swift` / `IngestWriteRule.swift` / `AgentEvent.swift` (core) and `AgentLauncher.swift` / `SpawnGate.swift` (spawn serialization) / `QueryConversationView.swift` (ask/edit sessions) / `OperationsView.swift` / `AgentActivityView.swift` / `OperationRequest.swift` (app)
 - **Write path + change bridge:** `wikictl/main.swift`, `WikiCtlCore/*`, `WikiFSCore/PageUpsert.swift`, `WikiFSCore/WikiChangeNotification.swift`, `WikiFS/WikiChangeBridge.swift`, `WikiFSCore/ChangeCoalescer.swift`
 - **URL ingest:** `URLIngestService.swift`, `URLSessionFetcher.swift`, `ShareLinkNormalizer.swift`, `HTMLToMarkdown.swift` (+ `HTMLTokenizer`/`HTMLMarkdownRenderer`/`HTMLEntities`)
 
@@ -140,17 +140,23 @@ A deeper map is in [`plans/architecture.md`](plans/architecture.md); the short v
   refreshes. `PageUpsert` is the **shared** create-or-update + `[[link]]`-reparse
   seam used by *both* the app and `wikictl`, so the link graph can't drift.
 
-- **The `claude -p` operations.** From the app you run three operations against the
-  active wiki, each a one-shot `claude -p` spawned from a writable scratch dir with
-  `WIKI_ROOT` (the live mount) and `WIKI_DB` (the wiki ULID) in the environment,
+- **The `claude -p` operations.** The app surfaces four operations. **Ingest** and
+  **Lint** are one-shot `claude -p` spawns, each launched into a fresh scratch dir
+  with `WIKI_ROOT` (the live mount) and `WIKI_DB` (the wiki ULID) in the environment,
   the wiki's schema via `--append-system-prompt`, `--dangerously-skip-permissions`,
   and `--output-format stream-json` (parsed live into an activity panel; also
   written to a backend `run.jsonl`). The in-app editor is **locked** during a run.
+  **Ask** and **Edit** are persistent interactive sessions — each owns its own tab,
+  process, and transcript; follow-up turns go to stdin rather than spawning a new
+  process. All four surfaces share one `SpawnGate`: at most one `claude` process runs
+  at a time, FIFO-serialized across ingest / ask / edit / lint.
   - **Ingest** is tiered by source size: a **tiny** source gets a single **Opus**
     pass; a **large** source gets an **Opus curator** that fans out to **2–19
     Sonnet `source-reader` subagents** which only *digest* the bulk (read-only,
     never write) — **Opus decides what belongs and writes everything**.
-  - **Query** and **Lint** are single-Opus runs.
+  - **Ask** runs under a physically-enforced read-only seatbelt — the agent cannot
+    write the wiki regardless of prompt. **Edit** may write the wiki (governed by the
+    sandbox enable toggle in Settings → Agent). **Lint** is a single-Opus one-shot run.
 - **URL ingest.** Paste a URL → fetch (desktop UA, follows redirects) → share-link
   normalize (e.g. Dropbox `www`→`dl`) → content-sniff magic numbers →
   HTML→Markdown (hand-rolled) or verbatim PDF/bytes → stored through the same

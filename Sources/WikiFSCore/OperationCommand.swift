@@ -204,6 +204,12 @@ public struct OperationCommand: Equatable, Sendable {
     /// 15+ (deprecated but functional; no entitlement needed by an un-sandboxed app).
     static let sandboxExecutable = "/usr/bin/sandbox-exec"
 
+    /// The path component appended to the scratch directory to form the `TMPDIR`
+    /// relocation target for sandboxed spawns. Shared with `AgentLauncher` so that
+    /// both the env-var writer (`applySandbox`) and the directory creator
+    /// (`createSandboxTmpDir`) always agree on the same leaf name without duplication.
+    public static let tmpRelocationLeaf = ".tmp"
+
     /// When `sandbox` is non-nil, rewrite the invocation so the provider runs inside
     /// `/usr/bin/sandbox-exec -p <profile> -D … -- <provider>`, and relocate the
     /// provider's own config/temp into the scratch dir so they land inside the
@@ -223,7 +229,7 @@ public struct OperationCommand: Equatable, Sendable {
         // credentials from ~/.claude/.credentials.json, and pointing it at an empty
         // scratch dir hides those credentials. The sandbox's (deny file-write*) rule
         // already blocks writes to ~/.claude/ — Claude Code handles the EPERM quietly.
-        environment["TMPDIR"] = scratchDirectory + "/.tmp"
+        environment["TMPDIR"] = scratchDirectory + "/" + Self.tmpRelocationLeaf
 
         var head: [String] = ["-p", sandbox.profile]
         for (key, value) in sandbox.defines {

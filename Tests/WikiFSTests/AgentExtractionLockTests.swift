@@ -3,17 +3,22 @@ import Testing
 @testable import WikiFS
 import WikiFSCore
 
-/// Tests for the SEPARATE extraction lock on `AgentLauncher` (option B): two
-/// pdf2md conversions never overlap; a cancelled extraction waiter self-removes;
+/// Tests for the SEPARATE extraction lock on `AgentLauncher`: two pdf2md
+/// conversions never overlap; a cancelled extraction waiter self-removes;
 /// `releaseExtractionSlot` wakes the next live waiter FIFO. Critically, the
-/// extraction lock is INDEPENDENT of the claude spawn slot — holding one never
+/// extraction lock is INDEPENDENT of the generation gate — holding one never
 /// blocks the other — and of the edit lock. Also covers the two-flag phase
 /// split (`extractingSourceIDs` vs `ingestingSourceIDs`) and the row's
 /// Extracting-vs-Ingesting label predicate.
 ///
 /// These exercise the slot seams (`awaitExtractionSlot` / `releaseExtractionSlot`
-/// / `extractionSlotWaiterCount` / `isExtractionSlotBusy` and the spawn-slot
+/// / `extractionSlotWaiterCount` / `isExtractionSlotBusy` and the generation-slot
 /// siblings) directly, without spawning a real process — fast and deterministic.
+///
+/// NOTE (Step 6): `awaitGenerationSlot()` does NOT set `isRunning`. Tests that
+/// used `awaitSpawnSlot()` as a proxy for "isRunning = true" are updated: they
+/// set `isRunning` directly (accessible via `@testable import WikiFS`) where
+/// needed to simulate "a process is alive."
 @MainActor
 struct AgentExtractionLockTests {
 
@@ -34,7 +39,7 @@ struct AgentExtractionLockTests {
         let acquired = await launcher.awaitExtractionSlot()
         #expect(acquired)
         #expect(launcher.isExtractionSlotBusy)
-        // Acquiring the extraction slot does NOT touch the spawn slot.
+        // Acquiring the extraction slot does NOT touch the generation gate or isRunning.
         #expect(!launcher.isRunning)
         #expect(launcher.extractionSlotWaiterCount == 0)
         launcher.releaseExtractionSlot()
@@ -118,12 +123,16 @@ struct AgentExtractionLockTests {
         launcher.releaseExtractionSlot()
     }
 
-    // MARK: - Independence from the spawn slot (the key invariant)
+    // MARK: - Independence from the generation gate (the key invariant)
 
-    /// While the extraction slot is held, `awaitSpawnSlot()` for a query still
+    /// While the extraction slot is held, `awaitGenerationSlot()` for a query still
     /// returns `true` immediately (does not wait) — holding the extraction lock
-    /// does NOT block the spawn slot. Assert via the test seams.
-    @Test func extractionSlotHeldDoesNotBlockSpawnSlot() async {
+    /// does NOT block the generation gate. Assert via the test seams.
+    ///
+    /// NOTE (Step 6): `awaitGenerationSlot()` does NOT set `isRunning` — gate
+    /// ownership is decoupled from process lifetime. We verify independence via
+    /// the return value and waiter counts.
+    @Test func extractionSlotHeldDoesNotBlockGenerationSlot() async {
         let launcher = makeLauncher()
         // Hold the extraction slot (simulating a pdf2md conversion in flight).
         let extractionAcquired = await launcher.awaitExtractionSlot()
@@ -131,45 +140,42 @@ struct AgentExtractionLockTests {
         #expect(launcher.isExtractionSlotBusy)
         #expect(!launcher.isRunning)
 
-        // A claude query run starts during the extraction. It takes the spawn
-        // slot immediately — no waiting on the extraction slot.
-        let spawnAcquired = await launcher.awaitSpawnSlot()
-        #expect(spawnAcquired)
-        #expect(launcher.isRunning)
+        // A claude query run starts during the extraction. It acquires the generation
+        // gate immediately — no waiting on the extraction slot.
+        let generationAcquired = await launcher.awaitGenerationSlot()
+        #expect(generationAcquired)
+        // Gate acquire does NOT set isRunning (Step 6 decoupling — only spawn commit does).
         // The extraction slot is still held by the conversion; the two locks are
         // fully independent.
         #expect(launcher.isExtractionSlotBusy)
-        #expect(launcher.spawnSlotWaiterCount == 0)
+        #expect(launcher.generationSlotWaiterCount == 0)
         #expect(launcher.extractionSlotWaiterCount == 0)
 
         // Teardown: release both, in either order.
-        launcher.releaseSpawnSlot()
+        launcher.releaseGenerationSlot()
         launcher.releaseExtractionSlot()
-        #expect(!launcher.isRunning)
         #expect(!launcher.isExtractionSlotBusy)
     }
 
-    /// Independence the other way: holding the spawn slot does not block
+    /// Independence the other way: holding the generation gate does not block
     /// `awaitExtractionSlot()`.
-    @Test func spawnSlotHeldDoesNotBlockExtractionSlot() async {
+    @Test func generationSlotHeldDoesNotBlockExtractionSlot() async {
         let launcher = makeLauncher()
-        _ = await launcher.awaitSpawnSlot()
-        #expect(launcher.isRunning)
+        _ = await launcher.awaitGenerationSlot()
+        // Gate acquire does NOT set isRunning (Step 6 decoupling).
         #expect(!launcher.isExtractionSlotBusy)
 
-        // An extraction starts while a claude run holds the spawn slot. It takes
-        // the extraction slot immediately — no waiting on the spawn slot.
+        // An extraction starts while the generation gate is held. It takes
+        // the extraction slot immediately — no waiting on the generation gate.
         let extractionAcquired = await launcher.awaitExtractionSlot()
         #expect(extractionAcquired)
         #expect(launcher.isExtractionSlotBusy)
-        #expect(launcher.isRunning)
-        #expect(launcher.spawnSlotWaiterCount == 0)
+        #expect(launcher.generationSlotWaiterCount == 0)
         #expect(launcher.extractionSlotWaiterCount == 0)
 
         launcher.releaseExtractionSlot()
-        launcher.releaseSpawnSlot()
+        launcher.releaseGenerationSlot()
         #expect(!launcher.isExtractionSlotBusy)
-        #expect(!launcher.isRunning)
     }
 
     // MARK: - Phase flags: extraction phase vs agent phase
@@ -205,9 +211,14 @@ struct AgentExtractionLockTests {
     }
 
     /// The agent phase sets `ingestingSourceIDs` only at spawn commit (i.e. once
-    /// the spawn slot is acquired), and the cross-file Ingest greyout activates
-    /// only then. Acquire the spawn slot (simulating spawn commit) and assign the
-    /// agent-phase flag, mirroring what `AgentLauncher.run` does around `onLock`.
+    /// the generation gate is acquired and the process is launched), and the
+    /// cross-file Ingest greyout activates only then. Acquire the generation gate
+    /// (simulating spawn commit) and assign the agent-phase flag, mirroring what
+    /// `AgentLauncher.run` does around `onLock`.
+    ///
+    /// NOTE (Step 6): `awaitGenerationSlot()` does NOT set `isRunning` — gate
+    /// acquisition is separate from process lifetime. `ingestingSourceIDs` is set
+    /// at spawn commit (inside run()), not just at gate acquire.
     @Test func agentPhaseSetsIngestingFileIDsOnlyAtSpawnCommit() async {
         let launcher = makeLauncher()
         let idA = PageID(rawValue: "01AGENTPHASEA00000")
@@ -217,8 +228,9 @@ struct AgentExtractionLockTests {
         #expect(launcher.extractingSourceIDs.isEmpty)
         #expect(launcher.ingestingSourceIDs.isEmpty)
 
-        // Spawn commit: acquire the spawn slot, then assign the agent-phase flag.
-        let acquired = await launcher.awaitSpawnSlot()
+        // Spawn commit simulation: acquire the generation gate, then assign the
+        // agent-phase flag (mirroring what run() does around onLock).
+        let acquired = await launcher.awaitGenerationSlot()
         #expect(acquired)
         launcher.ingestingSourceIDs = [idA, idB]
         #expect(launcher.ingestingSourceIDs.contains(idA))
@@ -227,12 +239,11 @@ struct AgentExtractionLockTests {
         // The cross-file Ingest greyout is now active for any other file.
         #expect(!launcher.ingestingSourceIDs.isEmpty)
 
-        // finish() clears the agent-phase flag and releases the spawn slot.
+        // finish() clears the agent-phase flag and releases the gate.
         // Simulate via the public seam: clear + release (finish is private).
         launcher.ingestingSourceIDs = []
-        launcher.releaseSpawnSlot()
+        launcher.releaseGenerationSlot()
         #expect(launcher.ingestingSourceIDs.isEmpty)
-        #expect(!launcher.isRunning)
     }
 
     /// While file A is in the EXTRACTION phase, file B's Ingest is not greyed
@@ -388,6 +399,11 @@ struct AgentExtractionLockTests {
 
     /// `stopAgent()` does NOT clear extraction-phase flags — the two are
     /// independent. A standalone extraction running alongside a query continues.
+    ///
+    /// Step 6 rework: `isRunning` is now set explicitly to simulate "a process is
+    /// alive" since `awaitGenerationSlot()` no longer sets it. When `isRunning` is
+    /// true, `stopAgent()` calls `finish()` which clears it — confirming the correct
+    /// teardown path. Extraction flags must remain untouched throughout.
     @Test func stopAgentDoesNotClearExtractionFlags() async {
         let launcher = makeLauncher()
         let extractionID = PageID(rawValue: "01EXTRACTCONTINUES")
@@ -396,14 +412,15 @@ struct AgentExtractionLockTests {
         launcher.extractionLog = "still converting…"
         launcher.extractingSourceIDs = [extractionID]
 
-        // Simulate an agent run in progress.
-        _ = await launcher.awaitSpawnSlot()
+        // Simulate an agent run in progress: set isRunning directly (accessible via
+        // @testable import) since awaitGenerationSlot() no longer sets it in Step 6.
+        launcher.isRunning = true
         #expect(launcher.isRunning)
 
         launcher.stopAgent()
-        // stopAgent() calls finish() which releases the spawn slot → isRunning = false.
+        // stopAgent() calls finish() (because isRunning was true) → isRunning = false.
         #expect(!launcher.isRunning)
-        // Extraction flags are untouched.
+        // Extraction flags are untouched — stopAgent() never clears them.
         #expect(launcher.isExtracting)
         #expect(launcher.extractionPID == 99999)
         #expect(launcher.extractionLog == "still converting…")

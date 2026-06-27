@@ -48,6 +48,34 @@ struct SandboxProfileTests {
     #expect(SandboxProfile.sqliteSidecarSuffixes == ["-wal", "-shm", "-journal"])
   }
 
+  // MARK: - Claude config writes (generate)
+
+  @Test func generate_allowsClaudeSubpathWrite() {
+    let p = profile()
+    #expect(p.contains("(allow file-write* (subpath (string-append (param \"HOME\") \"/.claude\")))"))
+  }
+
+  @Test func generate_allowsClaudeJsonLiteralWrite() {
+    #expect(profile().contains("(allow file-write* (literal (string-append (param \"HOME\") \"/.claude.json\")))"))
+  }
+
+  // MARK: - Claude per-session temp dir (the EPERM-on-Bash regression)
+
+  /// Claude Code mkdir's its session temp dir under /private/tmp/claude-<uid>/ before
+  /// running any shell command; without this allow rule the sandboxed agent's Bash tool
+  /// dies with EPERM on the first invocation.
+  @Test func generate_allowsClaudeTempSubpathWrite() {
+    #expect(profile().contains("(allow file-write* (subpath (param \"CLAUDE_TMP\")))"))
+  }
+
+  @Test func readOnly_allowsClaudeTempSubpathWrite() {
+    #expect(readOnlyProfile().contains("(allow file-write* (subpath (param \"CLAUDE_TMP\")))"))
+  }
+
+  @Test func defaultClaudeTempBaseIsPrivateTmpClaudeUid() {
+    #expect(SandboxProfile.defaultClaudeTempBase() == "/private/tmp/claude-\(getuid())")
+  }
+
   // MARK: - Extra allowed paths
 
   @Test func splicesInValidAbsolutePathAsLiteral() {
@@ -73,14 +101,42 @@ struct SandboxProfileTests {
     #expect(p.contains("\\\"quote"))
   }
 
+  // MARK: - generateReadOnly
+
+  private func readOnlyProfile() -> String {
+    SandboxProfile.generateReadOnly(scratchDir: Self.scratchDir)
+  }
+
+  @Test func readOnly_startsWithVersionAndAllowDefault() {
+    let p = readOnlyProfile()
+    let lines = p.split(separator: "\n").map(String.init)
+    #expect(lines[0] == "(version 1)")
+    #expect(lines[1] == "(allow default)")
+    #expect(lines[2] == "(deny file-write*)")
+  }
+
+  /// Regression guard: adding new allowances must not drop the default-deny fence.
+  @Test func readOnly_stillDeniesFileWriteStar() {
+    #expect(readOnlyProfile().contains("(deny file-write*)"))
+  }
+
+  @Test func readOnly_allowsClaudeSubpathWrite() {
+    #expect(readOnlyProfile().contains("(allow file-write* (subpath (string-append (param \"HOME\") \"/.claude\")))"))
+  }
+
+  @Test func readOnly_allowsClaudeJsonLiteralWrite() {
+    #expect(readOnlyProfile().contains("(allow file-write* (literal (string-append (param \"HOME\") \"/.claude.json\")))"))
+  }
+
   // MARK: - SandboxInvocation (Equatable + defines)
 
   @Test func invocationCarriesHomeScratchAndWikiDBDefines() {
     let inv = SandboxProfile.invocation(
       homePath: "/Users/me",
       scratchDir: Self.scratchDir,
-      wikiDBPath: Self.wikiDB)
-    #expect(inv.defines.count == 3)
+      wikiDBPath: Self.wikiDB,
+      claudeTempBase: "/private/tmp/claude-999")
+    #expect(inv.defines.count == 4)
     // Order matters for the argv emit.
     #expect(inv.defines[0].0 == "HOME")
     #expect(inv.defines[0].1 == "/Users/me")
@@ -88,7 +144,28 @@ struct SandboxProfileTests {
     #expect(inv.defines[1].1 == Self.scratchDir)
     #expect(inv.defines[2].0 == "WIKI_DB")
     #expect(inv.defines[2].1 == Self.wikiDB)
+    // CLAUDE_TMP canonicalizes via realpath; the non-existent probe path falls back to
+    // the input (same behaviour the other defines rely on for non-existent paths).
+    #expect(inv.defines[3].0 == "CLAUDE_TMP")
+    #expect(inv.defines[3].1 == "/private/tmp/claude-999")
     #expect(inv.profile == profile([]))
+  }
+
+  @Test func readOnlyInvocationCarriesHomeScratchAndClaudeTempDefines() {
+    let inv = SandboxProfile.readOnlyInvocation(
+      homePath: "/Users/me",
+      scratchDir: Self.scratchDir,
+      claudeTempBase: "/private/tmp/claude-999")
+    #expect(inv.defines.count == 3)
+    // Order matters for the argv emit.
+    #expect(inv.defines[0].0 == "HOME")
+    #expect(inv.defines[0].1 == "/Users/me")
+    #expect(inv.defines[1].0 == "SCRATCH_DIR")
+    // readOnlyInvocation canonicalizes via realpath; non-existent paths fall back to
+    // the input (same behaviour the invocation test relies on for Self.scratchDir).
+    #expect(inv.defines[1].1 == Self.scratchDir)
+    #expect(inv.defines[2].0 == "CLAUDE_TMP")
+    #expect(inv.defines[2].1 == "/private/tmp/claude-999")
   }
 
   @Test func invocationEquatableComparesProfileAndDefines() {

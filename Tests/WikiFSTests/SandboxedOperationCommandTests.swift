@@ -71,9 +71,11 @@ struct SandboxedOperationCommandTests {
     #expect(args[5] == "SCRATCH_DIR=\(Self.scratch)")
     #expect(args[6] == "-D")
     #expect(args[7] == "WIKI_DB=\(Self.wikiDBPath)")
-    #expect(args[8] == "--")
-    #expect(args[9] == Self.providerExe)
-    #expect(args[10] == "-p")
+    #expect(args[8] == "-D")
+    #expect(args[9] == "CLAUDE_TMP=/private/tmp/claude-\(getuid())")
+    #expect(args[10] == "--")
+    #expect(args[11] == Self.providerExe)
+    #expect(args[12] == "-p")
   }
 
   @Test func onPathPreservesAppOwnedEnvAndSetsRelocation() {
@@ -114,8 +116,8 @@ struct SandboxedOperationCommandTests {
     #expect(cmd.executable == OperationCommand.sandboxExecutable)
     #expect(cmd.arguments[0] == "-p")
     #expect(cmd.arguments[1] == Self.sandbox.profile)
-    #expect(cmd.arguments[8] == "--")
-    #expect(cmd.arguments[9] == Self.providerExe)
+    #expect(cmd.arguments[10] == "--")
+    #expect(cmd.arguments[11] == Self.providerExe)
     #expect(cmd.environment["CLAUDE_CONFIG_DIR"] == nil)
     #expect(cmd.environment["TMPDIR"] == Self.scratch + "/.tmp")
     // The WIKI_DB env var (the ULID the agent/wikictl use) is NOT clobbered by the

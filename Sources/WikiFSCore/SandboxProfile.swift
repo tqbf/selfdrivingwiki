@@ -69,6 +69,16 @@ public enum SandboxProfile {
             "(deny file-write*)",
             // The scratch dir is a directory tree.
             "(allow file-write* (subpath (param \"SCRATCH_DIR\")))",
+            // Claude Code writes its session transcript and config under ~/.claude/ and
+            // to ~/.claude.json — allow the subtree and the top-level file so sandboxed
+            // runs can record their transcript without EPERM.
+            "(allow file-write* (subpath (string-append (param \"HOME\") \"/.claude\")))",
+            "(allow file-write* (literal (string-append (param \"HOME\") \"/.claude.json\")))",
+            // Claude Code derives a per-session temp dir from the cwd and places it under
+            // /private/tmp/claude-<uid>/<munged-cwd>/ — NOT under $TMPDIR. Its Bash tool
+            // mkdir's this dir before running any command, so without this allow rule the
+            // sandboxed agent's shell dies with EPERM on the first invocation.
+            "(allow file-write* (subpath (param \"CLAUDE_TMP\")))",
             // The active wiki DB and its SQLite sidecars are exact files.
             "(allow file-write* (literal (param \"WIKI_DB\")))",
         ]
@@ -101,23 +111,42 @@ public enum SandboxProfile {
             "(deny file-write*)",
             // The scratch dir is writable — the agent needs a cwd.
             "(allow file-write* (subpath (param \"SCRATCH_DIR\")))",
+            // Claude Code writes its session transcript and config under ~/.claude/ and
+            // to ~/.claude.json — allow the subtree and the top-level file so sandboxed
+            // runs can record their transcript without EPERM.
+            "(allow file-write* (subpath (string-append (param \"HOME\") \"/.claude\")))",
+            "(allow file-write* (literal (string-append (param \"HOME\") \"/.claude.json\")))",
+            // See `generate` — Claude Code's per-session temp dir lives under
+            // /private/tmp/claude-<uid>/ (cwd-derived, not $TMPDIR). Required for the
+            // Bash tool to function under the sandbox.
+            "(allow file-write* (subpath (param \"CLAUDE_TMP\")))",
         ]
         return lines.joined(separator: "\n") + "\n"
     }
 
     /// Build a read-only `SandboxInvocation` that confines the agent to scratch
     /// writes only. No wiki DB path is allowed — wikictl writes will fail.
+    ///
+    /// Both `homePath` and `scratchDir` are canonicalized via `realpath` so a
+    /// symlinked HOME (e.g. on systems where the home directory path goes through
+    /// a symlink) does not make the `~/.claude` allow rule silently fail. For
+    /// non-existent paths `realpath` falls back to the input, which matches the
+    /// behavior in `invocation(...)`.
     public static func readOnlyInvocation(
         homePath: String,
-        scratchDir: String
+        scratchDir: String,
+        claudeTempBase: String = defaultClaudeTempBase()
     ) -> SandboxInvocation {
+        let resolvedHome = Self.canonical(homePath)
         let resolvedScratch = Self.canonical(scratchDir)
+        let resolvedClaudeTemp = Self.canonical(claudeTempBase)
         let profile = generateReadOnly(scratchDir: resolvedScratch)
         return SandboxInvocation(
             profile: profile,
             defines: [
-                ("HOME", homePath),
+                ("HOME", resolvedHome),
                 ("SCRATCH_DIR", resolvedScratch),
+                ("CLAUDE_TMP", resolvedClaudeTemp),
             ]
         )
     }
@@ -133,13 +162,20 @@ public enum SandboxProfile {
         homePath: String,
         scratchDir: String,
         wikiDBPath: String,
-        extraAllowedPaths: [String] = []
+        extraAllowedPaths: [String] = [],
+        claudeTempBase: String = defaultClaudeTempBase()
     ) -> SandboxInvocation {
         func realPath(_ s: String) -> String {
             Self.canonical(s)
         }
+        // Canonicalize ALL paths — including HOME — so a symlinked component (e.g.
+        // a HOME that goes through a symlink, or the classic `/tmp` → `/private/tmp`
+        // on macOS) does not make a seatbelt allow rule silently fail. Non-existent
+        // paths fall back to the input (realpath returns nil for non-existent paths).
+        let resolvedHome = realPath(homePath)
         let resolvedScratch = realPath(scratchDir)
         let resolvedDB = realPath(wikiDBPath)
+        let resolvedClaudeTemp = realPath(claudeTempBase)
         let resolvedExtra = extraAllowedPaths.map(realPath)
         let profile = generate(
             scratchDir: resolvedScratch,
@@ -152,14 +188,25 @@ public enum SandboxProfile {
         return SandboxInvocation(
             profile: profile,
             defines: [
-                ("HOME", homePath),
+                ("HOME", resolvedHome),
                 ("SCRATCH_DIR", resolvedScratch),
                 ("WIKI_DB", resolvedDB),
+                ("CLAUDE_TMP", resolvedClaudeTemp),
             ]
         )
     }
 
     // MARK: - Helpers
+
+    /// The base directory Claude Code uses for its per-session temp dirs:
+    /// `/private/tmp/claude-<uid>`. Claude Code places a `<munged-cwd>/<session>` tree
+    /// under here (cwd-derived, independent of `$TMPDIR`) and its Bash tool mkdir's it
+    /// before running anything — so the whole subtree must be writable or the sandboxed
+    /// shell fails with EPERM. The seatbelt matches the canonical path; `/private/tmp`
+    /// is already canonical, but callers run this through `canonical(...)` regardless.
+    public static func defaultClaudeTempBase() -> String {
+        "/private/tmp/claude-\(getuid())"
+    }
 
     /// `true` if `path` exists and is a directory. Used to pick `subpath` (tree) vs
     /// `literal` (exact file) for an extra-allowed path.

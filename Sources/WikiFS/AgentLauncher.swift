@@ -39,21 +39,21 @@ final class AgentLauncher {
     /// stuck conversion can be identified (and killed) by the user.
     var extractionPID: Int32?
     /// The ingested-file ids whose **agent run** is in flight — set only once the
-    /// claude spawn is actually committed (slot acquired, around `onLock`), and
-    /// cleared in `finish()`. Drives the per-file "Ingesting…" row label and the
-    /// cross-file `isAnySourceIngesting` Ingest-button greyout. This is the
-    /// **agent phase** flag; it is NOT set during the pdf2md extraction phase that
-    /// precedes the spawn (see `extractingSourceIDs`), so a pure extraction no longer
-    /// mislabels a row as "Ingesting…" or greys out another file's Ingest button.
+    /// claude spawn is actually committed (around `onLock`), and cleared in
+    /// `finish()`. Drives the per-file "Ingesting…" row label and the cross-file
+    /// `isAnySourceIngesting` Ingest-button greyout. This is the **agent phase**
+    /// flag; it is NOT set during the pdf2md extraction phase that precedes the
+    /// spawn (see `extractingSourceIDs`), so a pure extraction no longer mislabels
+    /// a row as "Ingesting…" or greys out another file's Ingest button.
     var ingestingSourceIDs: Set<PageID> = []
     /// The ingested-file ids whose **pdf2md conversion** is in flight — set around
     /// the pdf2md block of EITHER extraction path (the ingest-path conversion in
     /// `AgentOperationRunner.runMultiIngest`, and the standalone
-    /// `SourceDetailView.runExtraction`), and cleared when the conversion
-    /// ends (success or failure). Drives the per-file "Extracting…" row label and
-    /// the standalone Extract button's per-file disable. This is the **extraction
+    /// `SourceDetailView.runExtraction`), and cleared when the conversion ends
+    /// (success or failure). Drives the per-file "Extracting…" row label and the
+    /// standalone Extract button's per-file disable. This is the **extraction
     /// phase** flag; it never feeds the cross-file Ingest greyout (that is
-    /// `ingestingSourceIDs` only) and never touches the spawn slot or edit lock.
+    /// `ingestingSourceIDs` only) and never touches the generation gate or edit lock.
     var extractingSourceIDs: Set<PageID> = []
     /// The in-flight ingest operation Task (set by `IngestSheetView`). Cancelling
     /// it aborts a running `pdf2md` conversion (via its task-cancellation handler).
@@ -65,15 +65,29 @@ final class AgentLauncher {
     /// extract path — cancelled by `stop()` so the pdf2md subprocess is terminated
     /// via `PdfExtractionService`'s `onCancel` handler. Self-clears when done.
     @ObservationIgnored var extractTask: Task<Void, Never>?
-    /// True while a spawned `claude -p` process is running.
-    private(set) var isRunning = false
+    /// True while a spawned `claude -p` process is alive (one-shot runs: from spawn
+    /// to finish; interactive sessions: from spawn to session end, across all turns).
+    /// Set at spawn commit in `run()` and `startInteractiveQuery()`; cleared in
+    /// `finish()`. This is NOT coupled to the generation gate — the gate serializes
+    /// ACTIVE GENERATION (a turn in flight), not process lifetime. An interactive
+    /// session's process is alive between turns without holding the gate.
+    ///
+    /// Exposed without `private(set)` so tests can simulate "process alive" state
+    /// via `@testable import WikiFS`, without requiring a real spawned process.
+    var isRunning = false
     /// True only while the agent is actively producing output. For one-shot runs
     /// (ingest/lint/query) this mirrors `isRunning` for the run's duration. For an
     /// interactive query session it tracks the *current turn*: set when a message is
-    /// sent, cleared when the terminal `.result` event arrives (or the run ends) —
+    /// sent, cleared when the terminal `.result` or `.messageStop` event arrives —
     /// so an open-but-idle session does not show a perpetual spinner. Every UI
     /// spinner / Stop affordance keys off this rather than the raw `isRunning`.
     private(set) var isGenerating = false
+    /// True while an interactive session is queued waiting to acquire the shared
+    /// generation gate (another launcher is currently generating). Cleared when the
+    /// slot is acquired, when the wait is cancelled, or when the session ends.
+    /// Published so the UI can show a "Waiting for the other session to finish…"
+    /// hint and keep `canSend` false — the message is NOT silently dropped.
+    private(set) var isAwaitingGenerationSlot = false
     /// Exit status of the last finished process, or nil if none finished / one is
     /// running.
     private(set) var exitStatus: Int32?
@@ -123,6 +137,11 @@ final class AgentLauncher {
     /// never fired while the view was unmounted, so the lock stuck until session end.
     /// `nil` for one-shot runs (those lock for the whole run via `onLock`/`onUnlock`
     /// only). Cleared in `finish()` and `resetRunArtifacts()`.
+    ///
+    /// Per-turn semantics (Step 6): for an Edit-mode interactive session, the
+    /// generation gate release (per turn) now genuinely lets ingest run between
+    /// turns. The per-turn lock release via `onTurnBoundary(false)` is the mechanism
+    /// that makes this visible to the wiki store.
     @ObservationIgnored private var onTurnBoundaryHandler: (@MainActor (Bool) -> Void)?
     /// Backstop poller that reconciles the UI if the process `terminationHandler`
     /// is ever missed (see `startCompletionWatchdog`). Cancelled on teardown.
@@ -136,13 +155,12 @@ final class AgentLauncher {
     private var stderrLogHandle: FileHandle?
     /// Writable stdin for an interactive stream-json query session.
     private var inputHandle: FileHandle?
-    /// The per-run copy of the user's `.credentials.json` seeded into the relocated
-    /// `CLAUDE_CONFIG_DIR` (sandboxed runs only), or nil. Tracked so `finish()` can
-    /// delete it — the scratch dir is kept for debugging, so the OAuth token must
-    /// not outlive the run there.
-    @ObservationIgnored private var seededCredentialFile: URL?
     /// True when the running process is waiting for user turns over stdin.
     private(set) var isInteractiveSession = false
+    /// Stored, cancellable Task for the current interactive send (which waits for
+    /// the generation gate before writing to stdin). Cancelled by `stopAgent()` and
+    /// `finish()` so an in-flight gate wait doesn't outlive the session.
+    @ObservationIgnored private var interactiveSendTask: Task<Void, Never>?
 
     /// Pure predicate for the Query page's debug cluster (spinner / Stop / Activity
     /// menu): the cluster is visible only while a QUERY turn is actively generating.
@@ -166,6 +184,19 @@ final class AgentLauncher {
         onTurnBoundaryHandler?(value)
     }
 
+    /// Per-turn generation-gate release policy. Interactive sessions release the
+    /// gate at EACH turn boundary (`.messageStop`/`.result`) so a peer launcher or
+    /// ingest run can generate between turns. One-shot runs (ingest/lint/query) do
+    /// NOT release per-turn — they hold the gate through `finish()`. Releasing in
+    /// a one-shot would double-release with `finish()`, but `releaseGenerationSlot`
+    /// is idempotent, so the real invariant being encoded is: one-shot runs must
+    /// hold the gate for their full duration so no peer generation interleaves.
+    /// Extracted as a pure static so the policy is unit-testable without driving
+    /// launcher state.
+    static func releasesGenerationSlotPerTurn(isInteractiveSession: Bool) -> Bool {
+        isInteractiveSession
+    }
+
     /// Pure selection of the interactive-query sandbox. When "Allow wiki edits" is
     /// OFF, the read-only seatbelt sandbox wins REGARDLESS of `editSandbox` — a
     /// global sandbox config can never override the forced read-only boundary. When
@@ -180,16 +211,27 @@ final class AgentLauncher {
         allowWikiEdits ? editSandbox : readOnlySandbox
     }
 
-    // MARK: - Three independent locks (relationship)
+    // MARK: - Three independent mechanisms (relationship)
 
-    /// The launcher coordinates three INDEPENDENT locks. They never touch each
+    /// The launcher coordinates three INDEPENDENT mechanisms. They never touch each
     /// other's state; understanding the boundaries is what keeps extraction from
     /// blocking the user.
     ///
-    /// 1. **Spawn slot** (`spawnWaiters` / `awaitSpawnSlot` / `releaseSpawnSlot`,
-    ///    held ↔ `isRunning`): serializes ONLY `claude -p` spawns. One `claude`
-    ///    process at a time across ingest / query / lint. Extraction does NOT take
-    ///    it, so a `pdf2md` conversion may overlap a `claude` query run.
+    /// 1. **Generation gate** (`generationGate` / `awaitGenerationSlot` /
+    ///    `releaseGenerationSlot`, per-launcher `holdsGenerationSlot` tracks THIS
+    ///    launcher's gate state): serializes ACTIVE GENERATION globally across all
+    ///    launchers sharing the same `GenerationGate` instance. One active generation
+    ///    at a time across ingest / ask / edit / lint, regardless of which launcher
+    ///    initiates it. CRITICALLY, "active generation" is scoped differently per path:
+    ///    - One-shot runs (ingest/lint/query): hold the gate for the whole run.
+    ///    - Interactive sessions (ask/edit): hold the gate only for ONE TURN (from
+    ///      send to `messageStop`/`result`). The process itself stays alive between
+    ///      turns WITHOUT holding the gate, so both Ask and Edit sessions can coexist
+    ///      simultaneously; only one generates at a time.
+    ///    `isRunning` is per-instance: it means "THIS launcher has a claude process
+    ///    alive." It is NOT coupled to gate ownership — an interactive session's
+    ///    `isRunning` stays true across idle turns when the gate is free.
+    ///
     /// 2. **Edit lock** (`store.isAgentRunning`), driven by TWO mechanisms:
     ///      - **Session level** (`onLock`/`onUnlock` around the spawn): for
     ///        one-shot runs (ingest/lint/query) and the lifetime of an interactive
@@ -197,16 +239,19 @@ final class AgentLauncher {
     ///      - **Per-turn** (`onTurnBoundary`, interactive query ONLY): for an
     ///        edit-enabled interactive query, the lock additionally RELEASES between
     ///        turns (`messageStop`/`result`) and RE-ACQUIRES on the next send — so
-    ///        the user can ingest while the query agent is idle mid-session. This is
-    ///        owned by `setGenerating` (single source of truth for the transition),
-    ///        not by any View. Neither extraction path touches the lock.
+    ///        the user can ingest while the query agent is idle mid-session. Because
+    ///        the generation gate now releases between turns too, ingest can actually
+    ///        run during that window (the gate is free when editing is unlocked).
+    ///        This is owned by `setGenerating` (single source of truth for the
+    ///        transition), not by any View. Neither extraction path touches the lock.
+    ///
     /// 3. **Extraction slot** (`extractionWaiters` / `awaitExtractionSlot` /
     ///    `releaseExtractionSlot`, held ↔ `isExtractionSlotBusy`): serializes ONLY
     ///    `pdf2md` conversions against each other (the VLM pipeline is heavy; one
     ///    conversion at a time on a single local machine). Acquiring it does NOT set
     ///    `isRunning`, does NOT set `isExtracting`, and does NOT fire `onLock`. A
     ///    `claude` query run starting during an extraction still runs immediately —
-    ///    it takes the spawn slot, which the extraction lock never holds.
+    ///    it takes the generation gate, which the extraction lock never holds.
     ///
     /// The phase flags `extractingSourceIDs` (extraction phase) and
     /// `ingestingSourceIDs` (agent phase, set at spawn commit) are the UI-facing
@@ -214,109 +259,69 @@ final class AgentLauncher {
     /// pure extraction is never labeled "Ingesting…" and never greys out a peer's
     /// Ingest button.
 
-    // MARK: - Serialized claude spawn slot
+    // MARK: - Shared generation gate
 
-    /// The single serialized "claude spawn slot." Only one `claude -p` process may
-    /// run at a time across all surfaces (ingest / query / lint all share this
-    /// launcher). The slot is "held" exactly while `isRunning == true`. A spawn
-    /// request `await`s it via `awaitSpawnSlot()`; the fast path (slot free, no
-    /// waiters) acquires without suspending. `releaseSpawnSlot()` (called by
-    /// `finish()` and on any post-acquire early-return) hands the slot to the next
-    /// waiter (keeping `isRunning == true`) or frees it.
-    private var spawnWaiters: [SpawnWaiter] = []
+    /// The shared gate that serializes all ACTIVE GENERATION. All launchers sharing
+    /// the same `GenerationGate` instance contend on a single FIFO queue — ingest,
+    /// ask-turn, edit-turn, and lint never generate simultaneously. Each instance
+    /// has its own `isRunning` flag (process alive) and `holdsGenerationSlot` flag
+    /// (currently generating), which are now DECOUPLED — an interactive session's
+    /// process can be alive without holding the gate (between turns).
+    let generationGate: GenerationGate
 
-    /// One queued spawn request. A class so the cancellation handler can identify
-    /// its waiter by reference and self-remove it from `spawnWaiters` — a cancelled
-    /// waiter must never be handed the slot. `@unchecked Sendable` because it is
-    /// only ever touched on the main actor (registration in `awaitSpawnSlot`'s
-    /// continuation; removal in the cancel handler's `@MainActor` hop).
-    private final class SpawnWaiter: @unchecked Sendable {
-        var continuation: CheckedContinuation<Void, Never>?
-        var didReceiveSlot = false
-        var didCancel = false
+    /// The number of generation requests currently queued for the slot (test seam).
+    /// Delegates to the shared gate so single-launcher tests observe the same
+    /// count as before.
+    var generationSlotWaiterCount: Int { generationGate.waiterCount }
+
+    /// True while this launcher holds the generation gate. For one-shot runs: held
+    /// from slot acquire to `finish()`. For interactive sessions: held only while a
+    /// turn is in flight (from `sendInteractiveMessage`'s send to `ingestStdout`'s
+    /// `endsGeneration` event). Private — observable externally via `isGenerating`.
+    @ObservationIgnored private var holdsGenerationSlot = false
+
+    init(generationGate: GenerationGate = GenerationGate()) {
+        self.generationGate = generationGate
     }
 
-    /// The number of spawn requests currently queued for the slot (test seam).
-    var spawnSlotWaiterCount: Int { spawnWaiters.count }
-
-    /// Wait for the single serialized claude spawn slot, returning `true` iff this
-    /// caller acquired it (and `isRunning` is now `true`). Returns `false` if the
-    /// wait was cancelled before the slot was handed over — in that case the caller
-    /// owns nothing and must simply return (no release). Cancellation-safe: a
-    /// cancelled waiter self-removes from the queue and is never handed the slot.
-    func awaitSpawnSlot() async -> Bool {
-        // Fast path: slot free and nobody queued — acquire atomically. There is no
-        // suspension point, so no other main-actor task can interleave between the
-        // check and the set. Zero overhead for the common single-run case; keeps
-        // single-run tests unchanged.
-        if !isRunning && spawnWaiters.isEmpty {
-            isRunning = true
-            return true
-        }
-        let waiter = SpawnWaiter()
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-                if waiter.didCancel {
-                    // Cancelled before we could register — resume immediately, don't
-                    // enqueue. The caller will see `didReceiveSlot == false`.
-                    c.resume()
-                    return
-                }
-                waiter.continuation = c
-                spawnWaiters.append(waiter)
-            }
-        } onCancel: {
-            // Hop to the main actor (the launcher is @MainActor) to self-remove. A
-            // cancelled waiter must not be handed the slot; if it already was (race
-            // with `releaseSpawnSlot`), do nothing — the woken caller will see
-            // `Task.isCancelled` and bail, releasing the slot it was handed.
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                waiter.didCancel = true
-                if let idx = self.spawnWaiters.firstIndex(where: { $0 === waiter }),
-                   let c = waiter.continuation {
-                    self.spawnWaiters.remove(at: idx)
-                    c.resume()
-                }
-            }
-        }
-        return waiter.didReceiveSlot
+    /// Wait for the shared generation gate, returning `true` iff this caller
+    /// acquired it (and `holdsGenerationSlot` is now `true`). Returns `false` if
+    /// the wait was cancelled before the slot was handed over — in that case the
+    /// caller owns nothing and must simply return (no release). Cancellation-safe:
+    /// a cancelled waiter self-removes from the gate's queue and is never handed
+    /// the slot. See `GenerationGate` for the full FIFO + cancellation protocol.
+    ///
+    /// NOTE: this does NOT touch `isRunning`. Process lifetime (`isRunning`) is
+    /// decoupled from generation serialization (`holdsGenerationSlot`).
+    func awaitGenerationSlot() async -> Bool {
+        let ok = await generationGate.acquire()
+        if ok { holdsGenerationSlot = true }
+        return ok
     }
 
-    /// Release the spawn slot, handing it to the next live waiter (FIFO) or freeing
-    /// it. Called by `finish()` on process termination and by every post-acquire
-    /// early-return in `run` / `startInteractiveQuery`.
-    func releaseSpawnSlot() {
-        // Pop the next non-cancelled waiter and hand off the slot. `isRunning` stays
-        // `true` on a handoff so the transfer is atomic — there is no window where
-        // another task could grab the slot via the fast path and double-spawn.
-        while let head = spawnWaiters.first {
-            spawnWaiters.removeFirst()
-            if head.didCancel {
-                // Already resumed by its cancel handler; don't hand the slot to a
-                // dead task.
-                continue
-            }
-            head.didReceiveSlot = true
-            head.continuation?.resume()
-            return
-        }
-        // No live waiters: free the slot.
-        isRunning = false
+    /// Release the generation gate, handing it to the next live waiter (FIFO) or
+    /// freeing it. Idempotent: guarded by `holdsGenerationSlot` so double-calls
+    /// (e.g. from `finish()` racing an interactive turn's `endsGeneration` release)
+    /// are safe. Does NOT touch `isRunning`.
+    func releaseGenerationSlot() {
+        guard holdsGenerationSlot else { return }
+        holdsGenerationSlot = false
+        generationGate.release()
     }
 
     // MARK: - Serialized extraction slot (pdf2md only)
 
     /// The separate, independent lock that serializes `pdf2md` conversions against
-    /// each other. See the "three independent locks" overview above. Held ↔
-    /// `isExtractionSlotBusy`. Same FIFO + cancellation-safe shape as the spawn
-    /// slot, but with its OWN state — it never touches `isRunning`, `isExtracting`,
-    /// `onLock`/`onUnlock`, or the spawn slot. A `claude` query run starting while
-    /// an extraction holds this lock still acquires the spawn slot immediately.
+    /// each other. See the "three independent mechanisms" overview above. Held ↔
+    /// `isExtractionSlotBusy`. Same FIFO + cancellation-safe shape as the generation
+    /// gate, but with its OWN state — it never touches `isRunning`, `isExtracting`,
+    /// `onLock`/`onUnlock`, or the generation gate. A `claude` query run starting
+    /// while an extraction holds this lock still acquires the generation gate
+    /// immediately.
     private var extractionWaiters: [ExtractionWaiter] = []
 
-    /// One queued extraction request. Same shape and rationale as `SpawnWaiter`: a
-    /// class so the cancellation handler can identify its waiter by reference and
+    /// One queued extraction request. Same shape and rationale as `GenerationWaiter`:
+    /// a class so the cancellation handler can identify its waiter by reference and
     /// self-remove it from `extractionWaiters` — a cancelled waiter must never be
     /// handed the slot. `@unchecked Sendable` because it is only ever touched on the
     /// main actor.
@@ -327,7 +332,7 @@ final class AgentLauncher {
     }
 
     /// True while a pdf2md conversion holds the extraction lock. Independent of
-    /// `isRunning` (spawn slot) and `store.isAgentRunning` (edit lock).
+    /// `isRunning` (generation gate) and `store.isAgentRunning` (edit lock).
     private(set) var isExtractionSlotBusy = false
 
     /// The number of extraction requests currently queued for the slot (test seam).
@@ -339,7 +344,7 @@ final class AgentLauncher {
     /// nothing and must simply return (no release). Cancellation-safe: a cancelled
     /// waiter self-removes from the queue and is never handed the slot. Does NOT
     /// set `isRunning`, `isExtracting`, or fire `onLock` — fully independent of the
-    /// spawn slot and edit lock.
+    /// generation gate and edit lock.
     func awaitExtractionSlot() async -> Bool {
         // Fast path: slot free and nobody queued — acquire atomically. No
         // suspension point, so no other main-actor task can interleave.
@@ -397,9 +402,9 @@ final class AgentLauncher {
         isExtractionSlotBusy = false
     }
 
-    /// Run an operation `request` against one wiki. Serializes on the spawn slot: if
-    /// another `claude -p` run is in flight, this `await`s until it finishes (or this
-    /// task is cancelled). Returns without spawning if cancelled while queued.
+    /// Run an operation `request` against one wiki. Serializes on the generation gate:
+    /// if another `claude -p` run is generating, this `await`s until it finishes (or
+    /// this task is cancelled). Returns without spawning if cancelled while queued.
     ///
     /// The launcher OWNS the per-run scratch dir, so it also owns STAGING: it creates
     /// scratch, writes `WIKI_STATE.md` (and, for Ingest, `source.<ext>`) from the
@@ -434,15 +439,15 @@ final class AgentLauncher {
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void
     ) async {
-        // Serialize on the single claude spawn slot. Extraction does NOT take the
-        // slot, so a pdf2md conversion may overlap a query run; only the claude
-        // spawn serializes.
-        let acquired = await awaitSpawnSlot()
+        // Serialize on the shared generation gate. Extraction does NOT take the
+        // gate, so a pdf2md conversion may overlap a query run; only the active
+        // generation serializes.
+        let acquired = await awaitGenerationSlot()
         guard acquired, !Task.isCancelled else {
-            // Cancelled while queued (self-removed; slot not acquired) — bail without
-            // touching the slot. If we were handed the slot then cancelled (race),
+            // Cancelled while queued (self-removed; gate not acquired) — bail without
+            // touching the gate. If we were handed the gate then cancelled (race),
             // give it back so a queued peer isn't stranded.
-            if acquired { releaseSpawnSlot() }
+            if acquired { releaseGenerationSlot() }
             if Task.isCancelled {
                 preflightError = "Run cancelled before starting."
             } else {
@@ -451,10 +456,14 @@ final class AgentLauncher {
             return
         }
 
-        // PREFLIGHT + STAGING run AFTER the slot is acquired, so any early-return
-        // below must `releaseSpawnSlot()` to hand the slot to the next waiter (or
-        // free it). The edit lock (`onLock`) fires only on a successful spawn, so a
-        // preflight/staging failure does NOT lock editing — matching today's behavior.
+        // Set isRunning NOW (gate acquired = this run is committed). This is the
+        // explicit assignment that decouples process lifetime from gate ownership.
+        isRunning = true
+
+        // PREFLIGHT + STAGING run AFTER the gate is acquired, so any early-return
+        // below must `isRunning = false` + `releaseGenerationSlot()` to hand the gate
+        // to the next waiter (or free it). The edit lock (`onLock`) fires only on a
+        // successful spawn, so a preflight/staging failure does NOT lock editing.
         resetRunArtifacts()
 
         // Load agent command config fresh at spawn time so Settings changes apply
@@ -468,14 +477,16 @@ final class AgentLauncher {
             resolvedPath = path
         case .missing(let reason):
             preflightError = reason
-            releaseSpawnSlot()
+            isRunning = false
+            releaseGenerationSlot()
             return
         }
         preflightError = nil
 
         guard let scratch = makeScratchDirectory() else {
             preflightError = "Could not create a scratch working directory for the agent."
-            releaseSpawnSlot()
+            isRunning = false
+            releaseGenerationSlot()
             return
         }
 
@@ -488,11 +499,13 @@ final class AgentLauncher {
         } catch {
             preflightError = "Could not stage the agent's inputs: \(error.localizedDescription)"
             try? FileManager.default.removeItem(at: scratch)
-            releaseSpawnSlot()
+            isRunning = false
+            releaseGenerationSlot()
             return
         }
 
         let sandbox = resolveSandboxInvocation(wikiID: wikiID, scratch: scratch, dir: dir)
+        if sandbox != nil { createSandboxTmpDir(in: scratch) }
         let command = OperationCommand.build(
             operation: operation,
             wikiRoot: wikiRoot,
@@ -505,14 +518,7 @@ final class AgentLauncher {
             sandbox: sandbox
         )
 
-        // Seed the user's credentials into the relocated CLAUDE_CONFIG_DIR (sandboxed
-        // runs only) so the child authenticates without an interactive /login.
-        seedSandboxCredentials(for: command, scratch: scratch)
-
-        // RESERVE per-run metadata. `isRunning` is already `true` (the slot set it on
-        // acquire); set the rest. No `resetRunState` here — the prior `finish()`
-        // already cleared artifacts, and clearing now would race a peer that owns the
-        // slot.
+        // RESERVE per-run metadata. isRunning is already `true` (set above).
         let now = Date()
         runningKind = operation.kind
         runStartedAt = now
@@ -524,7 +530,7 @@ final class AgentLauncher {
         // `onLock`/`onUnlock` around the spawn, not the per-turn callback.
         setGenerating(true)
         // SPAWN COMMIT: the agent phase now begins. Assign the agent-phase flag
-        // (`ingestingSourceIDs`) here — NOT while queued for the slot — so the
+        // (`ingestingSourceIDs`) here — NOT while queued for the gate — so the
         // "Ingesting…" label and the cross-file Ingest greyout activate only once
         // the spawn is actually committed. For query/lint this is empty (default),
         // which clears any stale flag. See `extractingSourceIDs` for the separate
@@ -585,10 +591,15 @@ final class AgentLauncher {
             runningKind = nil
             currentProcessID = nil
             lastActivityAt = Date()
+            // Clear the agent-phase ingest flag so spawn failure doesn't strand
+            // the "Ingesting…" row label or the cross-file Ingest greyout. finish()
+            // is not called on this path, so we clear explicitly here.
+            self.ingestingSourceIDs = []
             releaseEditLock()
-            // Release the slot so a queued peer isn't stranded. `isRunning` was set
-            // by the slot acquire; the spawn-failure teardown must hand it back.
-            releaseSpawnSlot()
+            // Release the generation gate so a queued peer isn't stranded.
+            // Also clear isRunning (set above at gate acquire; spawn failed).
+            isRunning = false
+            releaseGenerationSlot()
         }
     }
 
@@ -623,7 +634,14 @@ final class AgentLauncher {
     }
 
     /// Start a stdin-backed query conversation. The first user message is sent
-    /// immediately after the process launches; later turns use `sendInteractiveMessage`.
+    /// immediately after the process launches (via `sendInteractiveMessage`, which
+    /// acquires the generation gate for that first turn). Later turns use
+    /// `sendInteractiveMessage` as well — each acquires the gate for its duration.
+    ///
+    /// IMPORTANT: this function does NOT acquire the generation gate for the session.
+    /// The process stays alive between turns without holding the gate, allowing
+    /// another launcher's process to coexist. The gate is held only per-turn.
+    ///
     /// - Parameter allowWikiEdits: when `false` (default), the agent runs under a
     ///   READ-ONLY seatbelt sandbox that physically blocks all writes to the wiki DB.
     func startInteractiveQuery(
@@ -638,17 +656,11 @@ final class AgentLauncher {
         onUnlock: @escaping @MainActor @Sendable () -> Void,
         onTurnBoundary: @escaping @MainActor (Bool) -> Void
     ) async {
-        let acquired = await awaitSpawnSlot()
-        guard acquired, !Task.isCancelled else {
-            if acquired { releaseSpawnSlot() }
-            if Task.isCancelled {
-                preflightError = "Query cancelled before starting."
-            } else {
-                preflightError = "Another operation is already running. Wait for it to finish and try again."
-            }
-            return
-        }
+        // No gate acquisition here — the interactive session does NOT hold the gate
+        // for its lifetime, only per-turn (via sendInteractiveMessage). Two sessions
+        // can coexist as processes; only one generates at a time via the gate.
 
+        // Preflight (no gate held — early returns here don't need gate release).
         resetRunArtifacts()
 
         // Load agent command config fresh at spawn time.
@@ -661,14 +673,12 @@ final class AgentLauncher {
             resolvedPath = path
         case .missing(let reason):
             preflightError = reason
-            releaseSpawnSlot()
             return
         }
         preflightError = nil
 
         guard let scratch = makeScratchDirectory() else {
             preflightError = "Could not create a scratch working directory for the agent."
-            releaseSpawnSlot()
             return
         }
 
@@ -678,7 +688,6 @@ final class AgentLauncher {
         } catch {
             preflightError = "Could not stage the agent's inputs: \(error.localizedDescription)"
             try? FileManager.default.removeItem(at: scratch)
-            releaseSpawnSlot()
             return
         }
 
@@ -699,6 +708,7 @@ final class AgentLauncher {
             allowWikiEdits: allowWikiEdits,
             editSandbox: editSandbox,
             readOnlySandbox: readOnlySandbox)
+        if sandbox != nil { createSandboxTmpDir(in: scratch) }
         let command = OperationCommand.buildInteractiveQuery(
             operation: operation,
             wikiRoot: wikiRoot,
@@ -711,13 +721,9 @@ final class AgentLauncher {
             sandbox: sandbox
         )
 
-        // Seed the user's credentials into the relocated CLAUDE_CONFIG_DIR (sandboxed
-        // runs only) so the query session authenticates without an interactive /login.
-        seedSandboxCredentials(for: command, scratch: scratch)
-
-        // RESERVE per-run metadata. `isRunning` is already `true` (slot acquire).
+        // RESERVE per-run metadata. isRunning will be set at spawn commit below
+        // (after process.run() succeeds).
         let now = Date()
-        isInteractiveSession = true
         runningKind = operation.kind
         runStartedAt = now
         lastActivityAt = now
@@ -734,11 +740,9 @@ final class AgentLauncher {
         // (the old view `.onChange` never fired while unmounted).
         onTurnBoundaryHandler = onTurnBoundary
         // NOTE: do NOT `setGenerating(true)` here. The first turn's transition is
-        // owned by `sendInteractiveMessage(firstMessage)` below, which sets
-        // `isGenerating(true)` (firing the handler above) at the moment it writes
-        // the first message to stdin. If we set it here, `sendInteractiveMessage`'s
-        // `guard !isGenerating` would DROP the first message — claude would then
-        // wait on stdin forever, producing zero events and a perpetual spinner.
+        // owned by `sendInteractiveMessage(firstMessage)` below (after the gate is
+        // acquired). If we set it here, `sendInteractiveMessage`'s gate-guard would
+        // see `isGenerating == true` and bail — claude would block on stdin forever.
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: command.executable)
@@ -779,7 +783,11 @@ final class AgentLauncher {
             self.process = process
             inputHandle = stdinPipe.fileHandleForWriting
             currentProcessID = process.processIdentifier
+            // SPAWN COMMIT: process is alive. isRunning = true (process alive across turns).
+            isInteractiveSession = true
+            isRunning = true
             DebugLog.agent("startInteractiveQuery: spawned pid=\(process.processIdentifier)")
+            // Start the first turn — this acquires the generation gate for turn 1.
             sendInteractiveMessage(firstMessage)
             // Mirror `run()`: arm the completion watchdog so a process that exits
             // without a reconciling `terminationHandler` still clears `isRunning`.
@@ -791,56 +799,94 @@ final class AgentLauncher {
             closeLogFiles()
             try? FileManager.default.removeItem(at: scratch)
             isInteractiveSession = false
+            isRunning = false
             runningKind = nil
             currentProcessID = nil
             lastActivityAt = Date()
             releaseEditLock()
-            // Release the slot so a queued peer isn't stranded.
-            releaseSpawnSlot()
+            // Cancel any queued send task (shouldn't exist yet, but guard for safety).
+            interactiveSendTask?.cancel()
+            interactiveSendTask = nil
+            isAwaitingGenerationSlot = false
+            // No gate to release — we never acquired it for the session.
         }
     }
 
     /// Send one user turn to the active interactive query session.
+    ///
+    /// This function acquires the shared generation gate for the duration of the turn
+    /// (from the write to stdin until the agent emits `messageStop`/`result`). The
+    /// acquisition is ASYNC and may wait if another launcher is currently generating.
+    /// While waiting, `isAwaitingGenerationSlot` is `true` so the UI can show a hint.
     func sendInteractiveMessage(_ message: String) {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.shouldSendMessage(
             isRunning: isRunning,
             isInteractiveSession: isInteractiveSession,
             isGenerating: isGenerating,
-            message: message
+            isAwaitingGenerationSlot: isAwaitingGenerationSlot,
+            message: trimmed
         ) else { return }
-        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+
         guard let line = Self.streamJSONLine(forUserText: trimmed),
               let data = (line + "\n").data(using: .utf8)
         else { return }
 
-        events.append(.userText(trimmed))
-        setGenerating(true)
-        lastActivityAt = Date()
-        do {
-            try inputHandle?.write(contentsOf: data)
-        } catch {
-            ingestStderr("Failed to send message to the Agent: \(error.localizedDescription)\n")
+        // Signal that we're waiting for the gate. The UI shows a hint; canSend = false.
+        isAwaitingGenerationSlot = true
+
+        // Spawn a cancellable task that acquires the generation gate, then writes to
+        // stdin. Stored so stopAgent()/finish() can cancel a pending wait.
+        interactiveSendTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let ok = await self.awaitGenerationSlot()
+            self.isAwaitingGenerationSlot = false
+            guard ok, !Task.isCancelled, self.isInteractiveSession,
+                  self.inputHandle != nil else {
+                // Acquired the gate then bailed (cancelled or session ended) — give
+                // it back so a queued peer isn't stranded.
+                if ok { self.releaseGenerationSlot() }
+                return
+            }
+            self.events.append(.userText(trimmed))
+            self.setGenerating(true)    // fires onTurnBoundary(true) → edit lock (Edit only)
+            self.lastActivityAt = Date()
+            do {
+                try self.inputHandle?.write(contentsOf: data)
+            } catch {
+                self.ingestStderr(
+                    "Failed to send message to the Agent: \(error.localizedDescription)\n")
+                self.setGenerating(false)
+                self.releaseGenerationSlot()    // turn failed — release immediately
+            }
         }
     }
 
-    /// Pure decision: whether `sendInteractiveMessage` would actually send (vs. bail
-    /// on a guard). Extracted so the gate logic is unit-testable without a live
-    /// process (the full send path needs a spawned claude + stdin). The four
-    /// conditions: a run is active, it's an interactive (stdin-backed) session, the
-    /// text isn't blank, and the agent is NOT already generating a response (so two
-    /// turns never interleave on the shared stdin).
+    /// Pure decision: whether `sendInteractiveMessage` would actually start a turn
+    /// (vs. bail on a guard). Extracted so the gate logic is unit-testable without a
+    /// live process (the full send path needs a spawned claude + stdin).
+    ///
+    /// A turn may start iff: a process is alive (`isRunning`), it's an interactive
+    /// (stdin-backed) session, the text isn't blank, the agent is NOT already
+    /// generating a response, and we're NOT already waiting to acquire the gate. The
+    /// last condition prevents double-queueing — there can be at most one pending
+    /// send task at a time.
     ///
     /// Regression guard: `startInteractiveQuery` must NOT pre-set `isGenerating`
     /// before calling `sendInteractiveMessage(firstMessage)` — the first send runs
     /// with `isGenerating == false`, so it passes this gate and the message lands.
-    /// If that ordering regresses (isGenerating already true), the first message is
-    /// dropped and claude blocks on stdin forever (events=0, perpetual spinner) —
-    /// exactly the live bug `firstMessageIsSentBecauseGenerationIsNotPreSet` locks in.
+    /// If that ordering regresses, the first message is dropped and claude blocks
+    /// on stdin forever (events=0, perpetual spinner).
     static func shouldSendMessage(
-        isRunning: Bool, isInteractiveSession: Bool, isGenerating: Bool, message: String
+        isRunning: Bool,
+        isInteractiveSession: Bool,
+        isGenerating: Bool,
+        isAwaitingGenerationSlot: Bool,
+        message: String
     ) -> Bool {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        return isRunning && isInteractiveSession && !trimmed.isEmpty && !isGenerating
+        return isRunning && isInteractiveSession && !trimmed.isEmpty
+            && !isGenerating && !isAwaitingGenerationSlot
     }
 
     /// Cancel ONLY the pdf2md conversion (standalone or ingest-path extraction
@@ -872,12 +918,17 @@ final class AgentLauncher {
 
     /// Stop ONLY the agent process (claude -p). Does NOT touch a running pdf2md
     /// conversion — a standalone extract running alongside a query continues.
+    /// Also cancels any in-flight send task (generation gate wait).
     func stopAgent() {
         DebugLog.agent(
             "stopAgent() requested: isRunning=\(isRunning) "
             + "process=\(process != nil) procAlive=\(process?.isRunning ?? false) "
             + "pid=\(currentProcessID ?? -1)")
         ingestTask?.cancel()
+        // Cancel any pending send (gate wait) so it doesn't fire after the session ends.
+        interactiveSendTask?.cancel()
+        interactiveSendTask = nil
+        isAwaitingGenerationSlot = false
         try? inputHandle?.close()
         inputHandle = nil
         process?.terminate()
@@ -931,7 +982,24 @@ final class AgentLauncher {
                 // after every response when stdin/stdout are both stream-json.
                 // Clear isGenerating on either so the per-turn edit lock releases
                 // between turns instead of staying stuck until session end.
-                if AgentEvent.endsGeneration(event) { setGenerating(false) }
+                if AgentEvent.endsGeneration(event) {
+                    setGenerating(false)
+                    // Correctness assumption: `AgentEvent.endsGeneration` is true
+                    // for `.result` and `.messageStop`. The per-turn release below
+                    // relies on `.result` firing only at interactive SESSION end
+                    // (not per turn) and `.messageStop` firing per turn — the same
+                    // assumption the pre-existing per-turn edit-lock transition
+                    // (via `setGenerating`) depends on. If that ever changes,
+                    // both the lock and the gate would need re-evaluation.
+                    //
+                    // For interactive sessions: release the generation gate per turn
+                    // so other launchers (or ingest) can generate between turns.
+                    // For one-shot runs: the gate is held through finish() — do NOT
+                    // release here; finish() handles it.
+                    if Self.releasesGenerationSlotPerTurn(isInteractiveSession: isInteractiveSession) {
+                        releaseGenerationSlot()
+                    }
+                }
             }
         }
     }
@@ -946,8 +1014,8 @@ final class AgentLauncher {
     }
 
     /// Drain any trailing partial line, record the exit status, and tear down.
-    /// Guarded on `isRunning` so it runs EXACTLY ONCE per run: `stop()` and the
-    /// watchdog may both race the real `terminationHandler` to call it.
+    /// Guarded on `isRunning` so it runs EXACTLY ONCE per run: `stopAgent()` and
+    /// the watchdog may both race the real `terminationHandler` to call it.
     private func finish(status: Int32) {
         guard isRunning else {
             DebugLog.agent("finish: ignored (already torn down) status=\(status)")
@@ -963,16 +1031,20 @@ final class AgentLauncher {
             stdoutLineBuffer = ""
         }
         closeLogFiles()
-        // Delete the per-run seeded credential copy so the user's OAuth token does
-        // not linger in the persisted scratch dir.
-        removeSeededCredentials()
         exitStatus = status
+        // Clear process-alive state.
+        isRunning = false
         isInteractiveSession = false
         runningKind = nil
         process = nil
         inputHandle = nil
         currentProcessID = nil
         ingestingSourceIDs = []
+        // Cancel any in-flight send task (gate wait or stdin write). Clear the
+        // awaiting flag so the UI stops showing the "Waiting…" hint.
+        interactiveSendTask?.cancel()
+        interactiveSendTask = nil
+        isAwaitingGenerationSlot = false
         // Clear the per-turn callback before the final state transition: the
         // session is ending, so the lock's final release is the session-level
         // `onUnlock` (via `releaseEditLock`), not a per-turn boundary.
@@ -980,15 +1052,14 @@ final class AgentLauncher {
         setGenerating(false)
         lastActivityAt = Date()
         // Release the edit lock (`store.isAgentRunning`) from here — NOT from the
-        // `terminationHandler` — so EVERY completion path releases it: the real
-        // terminationHandler, the watchdog (which calls `finish` directly when the
-        // handler is missed), and `stopAgent`. The `guard isRunning` above makes this
-        // exactly-once; `releaseEditLock` is itself idempotent.
+        // `terminationHandler` — so EVERY completion path releases it.
         releaseEditLock()
-        // Release the spawn slot, handing it to the next live waiter (FIFO) or freeing
-        // it. Replaces the old `isRunning = false`. The guard at the top of `finish`
-        // still runs exactly once per run.
-        releaseSpawnSlot()
+        // Release the generation gate if still held. For one-shot runs this is the
+        // primary release path (they hold the gate through finish). For interactive
+        // sessions this covers the edge case where the process died MID-TURN (the
+        // normal per-turn release via ingestStdout.endsGeneration didn't fire). The
+        // idempotent `releaseGenerationSlot()` guard makes this safe in all paths.
+        releaseGenerationSlot()
     }
 
     /// Release the run's edit lock exactly once. Idempotent: clearing the stored
@@ -1000,10 +1071,9 @@ final class AgentLauncher {
     }
 
     /// Clear per-run artifacts (events, transcript, exit status, log handles, etc.)
-    /// at the start of a new run, AFTER the spawn slot is acquired. Unlike the old
-    /// `resetRunState`, this does NOT touch `isRunning` — the slot owns that flag now.
-    /// Called right after `awaitSpawnSlot()` succeeds, before setting the new run's
-    /// metadata.
+    /// at the start of a new run. Unlike the old `resetRunState`, this does NOT
+    /// touch `isRunning` — process lifetime is managed explicitly. Called right
+    /// before staging/preflight at the top of each launch path.
     private func resetRunArtifacts() {
         watchdogTask?.cancel()
         watchdogTask = nil
@@ -1098,11 +1168,14 @@ final class AgentLauncher {
     /// Resolve the seatbelt sandbox invocation for this spawn, or `nil` to run
     /// un-sandboxed. Loads `SandboxConfig` FRESH at spawn (so Settings changes apply
     /// on the next run, mirroring `AgentCommandConfig`). When enabled, resolves the
-    /// per-run scratch path + the active wiki's DB path and creates the provider's
-    /// relocation subdirs inside scratch (the app process is unsandboxed; only the
-    /// spawned child is confined). Returns `nil` (fail-open) when disabled OR when a
-    /// required path can't be resolved — logged. Fail-open is acceptable because the
-    /// feature is opt-in and default-off.
+    /// per-run scratch path + the active wiki's DB path. Returns `nil` (fail-open)
+    /// when disabled OR when a required path can't be resolved — logged. Fail-open is
+    /// acceptable because the feature is opt-in and default-off.
+    ///
+    /// This function ONLY resolves the invocation; it does NOT create any directories.
+    /// Each spawn site that receives a non-nil result MUST call `createSandboxTmpDir(in:)`
+    /// before launching the child so that `TMPDIR` (set by `OperationCommand.applySandbox`)
+    /// points at a directory that actually exists.
     private func resolveSandboxInvocation(
         wikiID: String,
         scratch: URL,
@@ -1129,8 +1202,6 @@ final class AgentLauncher {
             return nil
         }
 
-        createSandboxRelocationDirs(in: scratch)
-
         let invocation = SandboxProfile.invocation(
             homePath: homePath,
             scratchDir: scratch.path,
@@ -1141,82 +1212,13 @@ final class AgentLauncher {
         return invocation
     }
 
-    /// Create the provider self-write relocation subdirs inside scratch so they land
-    /// inside the seatbelt allowlist. Best-effort: failure (e.g. scratch unwritable)
-    /// is surfaced later by the provider's own write errors.
-    private func createSandboxRelocationDirs(in scratch: URL) {
-        let tmp = scratch.appendingPathComponent(".tmp", isDirectory: true)
+    /// Create the `scratch/.tmp` directory that `OperationCommand.applySandbox`
+    /// points `TMPDIR` at for sandboxed spawns. Must be called at each spawn site
+    /// whenever a non-nil sandbox is applied so the directory exists before the
+    /// child process tries to write into it. Best-effort: failure (e.g. scratch
+    /// unwritable) is surfaced later by the child's own write errors.
+    private func createSandboxTmpDir(in scratch: URL) {
+        let tmp = scratch.appendingPathComponent(OperationCommand.tmpRelocationLeaf, isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-    }
-
-    // MARK: - Sandbox credential seeding
-
-    /// Pure decision for credential seeding. Given the built command's
-    /// `CLAUDE_CONFIG_DIR` (set only when the spawn is sandboxed) and the run's
-    /// `scratchPath`, return the `(source, target)` `.credentials.json` copy to
-    /// perform — or nil when no seeding applies. Seeds ONLY when the config dir was
-    /// relocated INTO our scratch, so a user who set their OWN `CLAUDE_CONFIG_DIR`
-    /// is never touched, and unsandboxed runs (which read the real `~/.claude`)
-    /// are no-ops. Pure + injectable so the path logic is unit-testable.
-    static func relocatedCredentialPlan(
-        configDir: String?,
-        scratchPath: String,
-        home: String
-    ) -> (source: String, target: String)? {
-        guard let configDir, configDir.hasPrefix(scratchPath) else { return nil }
-        return (source: home + "/.claude/.credentials.json",
-                target: configDir + "/.credentials.json")
-    }
-
-    /// Seed the relocated `CLAUDE_CONFIG_DIR` a sandboxed spawn points at so the
-    /// child can authenticate without an interactive `/login`.
-    /// `OperationCommand.applySandbox` redirects claude's config dir into the
-    /// per-run scratch zone; that dir starts empty, so when the spawn can't reach
-    /// the login Keychain (the headless, sandboxed GUI-spawn case observed in the
-    /// app) claude finds no credentials and reports "Not logged in · Please run
-    /// /login". Copying the user's `.credentials.json` into the relocated dir gives
-    /// it a file-based credential to read instead. (An expired access token in that
-    /// file self-heals via its refresh token on first use.)
-    ///
-    /// Best-effort and reversible: records the seeded path in `seededCredentialFile`
-    /// so `finish()` deletes it when the run ends — the scratch dir is kept for
-    /// debugging, so a copy of the user's OAuth token must not accumulate there. A
-    /// missing source file or a copy failure just leaves the child to whatever else
-    /// it can reach (e.g. an `ANTHROPIC_API_KEY` in the env).
-    private func seedSandboxCredentials(for command: OperationCommand, scratch: URL) {
-        let fm = FileManager.default
-        // Ensure the relocated dirs we own exist — the read-only query path doesn't
-        // run `createSandboxRelocationDirs`, and claude writes its config + temp here.
-        for key in ["CLAUDE_CONFIG_DIR", "TMPDIR"] {
-            if let dir = command.environment[key], dir.hasPrefix(scratch.path) {
-                try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            }
-        }
-        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
-        guard let plan = Self.relocatedCredentialPlan(
-            configDir: command.environment["CLAUDE_CONFIG_DIR"],
-            scratchPath: scratch.path,
-            home: home) else { return }
-        guard fm.fileExists(atPath: plan.source) else {
-            DebugLog.agent("seedSandboxCredentials: no \(plan.source) to copy — child may report Not logged in")
-            return
-        }
-        do {
-            if fm.fileExists(atPath: plan.target) { try fm.removeItem(atPath: plan.target) }
-            try fm.copyItem(atPath: plan.source, toPath: plan.target)
-            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: plan.target)
-            seededCredentialFile = URL(fileURLWithPath: plan.target)
-            DebugLog.agent("seedSandboxCredentials: seeded credentials into relocated CLAUDE_CONFIG_DIR")
-        } catch {
-            DebugLog.agent("seedSandboxCredentials: copy failed: \(error.localizedDescription)")
-        }
-    }
-
-    /// Delete the per-run seeded credential copy (if any). Called from `finish()` so
-    /// the OAuth-token copy never outlives the run in the persisted scratch dir.
-    private func removeSeededCredentials() {
-        guard let file = seededCredentialFile else { return }
-        try? FileManager.default.removeItem(at: file)
-        seededCredentialFile = nil
     }
 }
