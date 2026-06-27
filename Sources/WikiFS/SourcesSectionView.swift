@@ -13,6 +13,11 @@ struct SourcesSectionView: View {
     var extractingSourceIDs: Set<PageID> = []
     var onBatchIngest: (([PageID]) -> Void)? = nil
 
+    @Binding var showingAddFromZotero: Bool
+    @Binding var showingImportMarkdown: Bool
+    var onAddFromURL: () -> Void
+    var isZoteroConfigured: Bool = false
+
     @State private var sourceFilter: SourceFilter = .all
     @Binding var listSelection: Set<WikiSelection>
     @Binding var activeSection: SidebarView.ActiveSection
@@ -44,12 +49,39 @@ struct SourcesSectionView: View {
 
     var body: some View {
         Section {
-            ForEach(filteredSources) { source in
-                sourceRow(source)
+            if isZoteroConfigured {
+                Button {
+                    showingAddFromZotero = true
+                } label: {
+                    SidebarModeRow(title: "Add from Zotero…", subtitle: "Import from library",
+                        systemImage: "books.vertical")
+                }
+                .buttonStyle(.plain)
+                .help("Browse your Zotero library and ingest a PDF or Markdown attachment")
             }
-        } header: {
-            HStack(spacing: 0) {
-                Text("Sources").font(.headline).foregroundStyle(.primary)
+
+            Button {
+                onAddFromURL()
+            } label: {
+                SidebarModeRow(title: "Add from URL…", subtitle: "Web page or PDF",
+                    systemImage: "link.badge.plus")
+            }
+            .buttonStyle(.plain)
+            .help("Fetch a web page or PDF by URL and ingest it into this wiki")
+
+            Button {
+                showingImportMarkdown = true
+            } label: {
+                SidebarModeRow(title: "Import Markdown…", subtitle: "Bulk folder import",
+                    systemImage: "doc.badge.plus")
+            }
+            .buttonStyle(.plain)
+            .help("Import all .md files from a folder as source material")
+
+            Divider()
+
+            HStack {
+                Text("Show").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Picker("Filter", selection: $sourceFilter) {
                     ForEach(SourceFilter.allCases, id: \.self) { filter in
@@ -57,8 +89,15 @@ struct SourcesSectionView: View {
                     }
                 }
                 .pickerStyle(.menu).buttonStyle(.borderless).labelsHidden().fixedSize()
-                .help("Filter sources by ingest status")
             }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+
+            ForEach(filteredSources) { source in
+                sourceRow(source)
+            }
+        } header: {
+            Text("Sources").font(.headline).foregroundStyle(.primary)
         }
         .alert("Rename Source", isPresented: renamePresented) {
             TextField("Name", text: $renameText)

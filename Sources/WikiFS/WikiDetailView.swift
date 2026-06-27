@@ -20,25 +20,83 @@ struct WikiDetailView: View {
     var body: some View {
         switch store.selection {
         case .none:
-            ContentUnavailableView {
-                Label("No Page Selected", systemImage: "doc.text")
-            } description: {
-                Text("Select a page from the sidebar, create a new one, or add source material.")
-            } actions: {
-                VStack(spacing: 8) {
-                    Button("New Page", systemImage: "plus") { store.newPage() }
-                    Button("Add from URL…", systemImage: "link.badge.plus") {
-                        addURLHandler?("")
+            ScrollView {
+                VStack(spacing: 32) {
+                    VStack(spacing: 12) {
+                        Image(nsImage: NSApp.applicationIconImage)
+                            .resizable()
+                            .frame(width: 80, height: 80)
+                        Text("Welcome to Self Driving Wiki")
+                            .font(.largeTitle)
+                            .fontWeight(.bold)
+                        Text("An AI-powered knowledge base for your personal research.")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
                     }
-                    Button("Import Markdown Folder…", systemImage: "doc.badge.plus") {
-                        showingImportMarkdown = true
+                    .padding(.top, 60)
+
+                    VStack(alignment: .leading, spacing: 20) {
+                        introRow(title: "Pages", description: "Create and edit markdown notes with deep wiki-linking.", systemImage: "doc.text")
+                        introRow(title: "Sources", description: "Manage and ingest raw material from URLs, folders, or Zotero.", systemImage: "tray.full")
+                        introRow(title: "Agent", description: "Query the AI, check wiki health, and view system logs.", systemImage: "sparkles")
                     }
-                    if isZoteroConfigured {
-                        Button("Add from Zotero…", systemImage: "books.vertical") {
-                            showingAddFromZotero = true
+                    .frame(maxWidth: 400)
+
+                    VStack(spacing: 12) {
+                        Text("Get Started")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+
+                        FlowLayout(spacing: 12) {
+                            Button {
+                                store.newPageInNewTab()
+                            } label: {
+                                Label("New Page", systemImage: "plus")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+
+                            Button {
+                                store.openTab(.query)
+                            } label: {
+                                Label("Query Agent", systemImage: "bubble.left.and.text.bubble.right")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+
+                            Button {
+                                addURLHandler?("")
+                            } label: {
+                                Label("Add from URL", systemImage: "link.badge.plus")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+
+                            Button {
+                                showingImportMarkdown = true
+                            } label: {
+                                Label("Import Markdown", systemImage: "doc.badge.plus")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+
+                            if isZoteroConfigured {
+                                Button {
+                                    showingAddFromZotero = true
+                                } label: {
+                                    Label("Add from Zotero", systemImage: "books.vertical")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.large)
+                            }
                         }
                     }
+                    .padding(.top, 20)
+                    .padding(.bottom, 60)
                 }
+                .padding(.horizontal, 40)
+                .frame(maxWidth: .infinity)
             }
         case .query:
             QueryConversationView(
@@ -93,5 +151,65 @@ struct WikiDetailView: View {
                 }
             }
         }
+    }
+
+    private func introRow(title: String, description: String, systemImage: String) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            Image(systemName: systemImage)
+                .font(.title2)
+                .foregroundStyle(.tint)
+                .frame(width: 32)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                Text(description)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// A simple flow layout that wraps its subviews to the next line when they overflow the width.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = layout(proposal: proposal, subviews: subviews)
+        return result.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        _ = layout(proposal: proposal, subviews: subviews, bounds: bounds, place: true)
+    }
+
+    private func layout(proposal: ProposedViewSize, subviews: Subviews, bounds: CGRect = .zero, place: Bool = false) -> (size: CGSize, rows: Int) {
+        let maxWidth = proposal.width ?? .infinity
+        var currentX: CGFloat = bounds.minX
+        var currentY: CGFloat = bounds.minY
+        var rowHeight: CGFloat = 0
+        var totalWidth: CGFloat = 0
+        var rows = 1
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentX + size.width > bounds.minX + maxWidth && currentX > bounds.minX {
+                currentX = bounds.minX
+                currentY += rowHeight + spacing
+                rowHeight = 0
+                rows += 1
+            }
+
+            if place {
+                subview.place(at: CGPoint(x: currentX, y: currentY), proposal: .unspecified)
+            }
+
+            currentX += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            totalWidth = max(totalWidth, currentX - bounds.minX)
+        }
+
+        return (CGSize(width: totalWidth, height: currentY + rowHeight - bounds.minY), rows)
     }
 }

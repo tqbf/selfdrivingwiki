@@ -31,7 +31,12 @@ struct ContentView: View {
             SidebarView(store: store, manager: manager, fileProvider: fileProvider,
                         onBatchIngest: batchIngest,
                         ingestingSourceIDs: agentLauncher.ingestingSourceIDs,
-                        extractingSourceIDs: agentLauncher.extractingSourceIDs)
+                        extractingSourceIDs: agentLauncher.extractingSourceIDs,
+                        showingAddFromZotero: $showingAddFromZotero,
+                        showingImportMarkdown: $showingImportMarkdown,
+                        onAddFromURL: { pendingAddURL = PendingAddURL(url: "") },
+                        onNewPage: { store.newPageInNewTab() },
+                        isZoteroConfigured: isZoteroConfigured)
         } detail: {
             HStack(spacing: 0) {
                 // Main column: tab bar + content. The transcript lives INSIDE the
@@ -247,39 +252,7 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private func primaryToolbarItems() -> some ToolbarContent {
-        ingestToolbarItems()
-        navigationToolbarItems()
         transcriptToolbarItem()
-    }
-
-    @ToolbarContentBuilder
-    private func ingestToolbarItems() -> some ToolbarContent {
-        if isZoteroConfigured {
-            ToolbarItem(placement: .principal) {
-                Button("Add from Zotero…", systemImage: "books.vertical") {
-                    showingAddFromZotero = true
-                }.help("Browse your Zotero library and ingest a PDF or Markdown attachment")
-            }
-        }
-        ToolbarItem(placement: .principal) {
-            Button("Add from URL…", systemImage: "link.badge.plus") {
-                pendingAddURL = PendingAddURL(url: "")
-            }.help("Fetch a web page or PDF by URL and ingest it into this wiki")
-        }
-        ToolbarItem(placement: .principal) {
-            Button("Import Markdown Folder…", systemImage: "doc.badge.plus") {
-                showingImportMarkdown = true
-            }.help("Import all .md files from a folder as source material")
-        }
-    }
-
-    @ToolbarContentBuilder
-    private func navigationToolbarItems() -> some ToolbarContent {
-        ToolbarItem(placement: .principal) {
-            Button("New Page", systemImage: "plus") { store.newPageInNewTab() }
-                .keyboardShortcut("n", modifiers: .command)
-                .help("Create a new page")
-        }
     }
 
     @ToolbarContentBuilder

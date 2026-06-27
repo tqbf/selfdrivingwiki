@@ -20,6 +20,12 @@ struct SidebarView: View {
     /// "Extracting…" spinner on those rows. Independent of `ingestingSourceIDs`.
     var extractingSourceIDs: Set<PageID> = []
 
+    @Binding var showingAddFromZotero: Bool
+    @Binding var showingImportMarkdown: Bool
+    var onAddFromURL: () -> Void
+    var onNewPage: () -> Void
+    var isZoteroConfigured: Bool = false
+
     @State private var renameTarget: WikiPageSummary?
     @State private var renameText: String = ""
 
@@ -31,25 +37,23 @@ struct SidebarView: View {
     /// The sidebar's sections. Each gets an icon in the selector bar and, when
     /// selected, fills the list below.
     enum SidebarSection: String, CaseIterable, Identifiable {
-        case tools, pages, sources, system
+        case pages, sources, agent
 
         var id: String { rawValue }
 
         var title: String {
             switch self {
-            case .tools: "Tools"
             case .pages: "Pages"
             case .sources: "Sources"
-            case .system: "System"
+            case .agent: "Agent"
             }
         }
 
         var systemImage: String {
             switch self {
-            case .tools: "wrench.and.screwdriver"
             case .pages: "doc.text"
             case .sources: "tray.full"
-            case .system: "gearshape"
+            case .agent: "sparkles"
             }
         }
     }
@@ -126,17 +130,18 @@ struct SidebarView: View {
     private var listContent: some View {
         List(selection: $listSelection) {
             switch selectedSection {
-            case .tools: toolsSection()
             case .pages: pagesSection()
             case .sources:
-                if !store.sources.isEmpty {
-                    SourcesSectionView(store: store, fileProvider: fileProvider,
-                        ingestingSourceIDs: ingestingSourceIDs,
-                        extractingSourceIDs: extractingSourceIDs,
-                        onBatchIngest: onBatchIngest,
-                        listSelection: $listSelection, activeSection: $activeSection)
-                }
-            case .system: systemSection()
+                SourcesSectionView(store: store, fileProvider: fileProvider,
+                    ingestingSourceIDs: ingestingSourceIDs,
+                    extractingSourceIDs: extractingSourceIDs,
+                    onBatchIngest: onBatchIngest,
+                    showingAddFromZotero: $showingAddFromZotero,
+                    showingImportMarkdown: $showingImportMarkdown,
+                    onAddFromURL: onAddFromURL,
+                    isZoteroConfigured: isZoteroConfigured,
+                    listSelection: $listSelection, activeSection: $activeSection)
+            case .agent: toolsSection()
             }
         }
     }
@@ -154,15 +159,12 @@ struct SidebarView: View {
                 systemImage: "bubble.left.and.text.bubble.right")
                 .tag(WikiSelection.query)
                 .help("Ask questions and decide whether the Agent should update the wiki")
-        } header: { SidebarSectionHeader(title: "Tools") }
-    }
 
-    private func systemSection() -> some View {
-        Section {
             SidebarModeRow(title: "Lint", subtitle: "Health-check the wiki",
                 systemImage: "checkmark.shield")
                 .tag(WikiSelection.lint)
                 .help("Check the wiki for stale content, broken links, and inconsistencies")
+
             Button {
                 _ = store.recomputeMissingEmbeddings()
             } label: {
@@ -171,23 +173,35 @@ struct SidebarView: View {
             }
             .buttonStyle(.plain)
             .help("Recompute embeddings for all missing pages for semantic search")
+
             SidebarModeRow(title: "Activity", subtitle: "Operation log",
                 systemImage: "clock.arrow.circlepath")
                 .tag(WikiSelection.changeLog)
                 .help("Operation history, projected read-only as log.md")
+
             SidebarModeRow(title: "Instructions", subtitle: "Agent prompt",
                 systemImage: "sparkles")
                 .tag(WikiSelection.systemPrompt)
                 .help("Agent instructions, projected read-only as CLAUDE.md and AGENTS.md")
-        } header: { SidebarSectionHeader(title: "System") }
+        } header: { SidebarSectionHeader(title: "Agent") }
     }
 
     private func pagesSection() -> some View {
         Section {
-            pagesSectionRows()
-        } header: {
-            HStack(spacing: 0) {
-                SidebarSectionHeader(title: "Pages")
+            Button {
+                onNewPage()
+            } label: {
+                SidebarModeRow(title: "New Page", subtitle: "Create empty page",
+                    systemImage: "plus")
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("n", modifiers: .command)
+            .help("Create a new page")
+
+            Divider()
+
+            HStack {
+                Text("Sort by").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Picker("Sort", selection: $store.pageSortOrder) {
                     Text("Last Updated").tag(PageSortOrder.lastUpdated)
@@ -195,7 +209,30 @@ struct SidebarView: View {
                     Text("Title A–Z").tag(PageSortOrder.titleAZ)
                 }
                 .pickerStyle(.menu).buttonStyle(.borderless).labelsHidden().fixedSize()
-                .help("Sort pages by date or title")
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+
+            searchBar
+                .padding(.horizontal, 4)
+                .padding(.vertical, 6)
+
+            pagesSectionRows()
+        } header: {
+            SidebarSectionHeader(title: "Pages")
+        }
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary).font(.callout)
+            TextField("Search pages…", text: $store.searchQuery)
+                .textFieldStyle(.plain).font(.callout).disableAutocorrection(true)
+            if !store.searchQuery.isEmpty {
+                Button { store.searchQuery = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }.buttonStyle(.borderless)
             }
         }
     }
@@ -203,18 +240,6 @@ struct SidebarView: View {
     /// Extracted to keep the `body` type-checkable.
     private func pagesSectionRows() -> some View {
         Group {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary).font(.callout)
-                TextField("Search pages…", text: $store.searchQuery)
-                    .textFieldStyle(.plain).font(.callout).disableAutocorrection(true)
-                if !store.searchQuery.isEmpty {
-                    Button { store.searchQuery = "" } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    }.buttonStyle(.borderless)
-                }
-            }
-            .padding(.vertical, 4).padding(.horizontal, 2)
             let source = store.searchQuery.isEmpty ? store.summaries : store.searchResults
             if source.isEmpty, !store.searchQuery.isEmpty {
                 Text("No matching pages").foregroundStyle(.secondary).font(.callout)

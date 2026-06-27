@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WikiFSCore
 
 /// A trailing inspector for the active agent run. It reuses the operations
 /// sheet's transcript renderer so inline page queries do not disappear into a
@@ -11,23 +12,44 @@ struct AgentTranscriptSidebar: View {
     /// forwarded unchanged to the activity view.
     var onWikiLink: ((URL) -> Void)? = nil
     @State private var showsInternals = false
-    @State private var splitFraction: CGFloat = 0.3
-    @State private var dragOrigin: CGFloat = 0.3
     @State private var width: CGFloat = AgentTranscriptMetrics.defaultWidth
     @State private var widthDragOrigin: CGFloat = AgentTranscriptMetrics.defaultWidth
+
+    /// Which section is currently shown. Like Xcode's navigator, the icon bar at
+    /// the top of the sidebar is a mutually-exclusive selector — exactly one
+    /// section's "window" is visible at a time. Pure UI state — not persisted.
+    @State private var selectedSection: SidebarSection = .activity
+
+    enum SidebarSection: String, CaseIterable, Identifiable {
+        case activity, extraction
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .activity: "Activity"
+            case .extraction: "Extraction"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .activity: "sparkles"
+            case .extraction: "doc.viewfinder"
+            }
+        }
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             widthResizeHandle
             VStack(alignment: .leading, spacing: 0) {
-                header
+                sectionSelectorBar
+                    .padding(.top, 8)
                 Divider().opacity(PageEditorMetrics.dividerOpacity)
-                if showsConversion {
-                    splitContent
-                } else {
-                    activitySection
-                        .padding(AgentTranscriptMetrics.padding)
-                }
+
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(width: width)
             .frame(maxHeight: .infinity)
@@ -40,13 +62,58 @@ struct AgentTranscriptSidebar: View {
                     style: .continuous))
             .clipped()
         }
-        .onChange(of: showsConversion) { _, newValue in
-            // Reset the split when the conversion section appears or disappears.
+        .onChange(of: launcher.isExtracting) { _, newValue in
             if newValue {
-                splitFraction = 0.3
-                dragOrigin = 0.3
+                selectedSection = .extraction
             }
         }
+        .onChange(of: launcher.isRunning) { _, newValue in
+            if newValue {
+                selectedSection = .activity
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch selectedSection {
+        case .activity:
+            activitySection
+                .padding(AgentTranscriptMetrics.padding)
+        case .extraction:
+            pdfConversionBox
+                .padding(AgentTranscriptMetrics.padding)
+        }
+    }
+
+    /// A row of evenly-spaced icons — one per section — that selects which
+    /// section's "window" is shown, exactly like Xcode's navigator selector.
+    private var sectionSelectorBar: some View {
+        HStack(spacing: 0) {
+            ForEach(SidebarSection.allCases) { section in
+                sectionSelectorButton(section)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 6)
+    }
+
+    private func sectionSelectorButton(_ section: SidebarSection) -> some View {
+        let isSelected = selectedSection == section
+        return Button {
+            selectedSection = section
+        } label: {
+            Image(systemName: section.systemImage)
+                .font(.body)
+                .frame(maxWidth: .infinity)
+                .frame(height: 26)
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(section.title)
     }
 
     /// A thin draggable strip on the sidebar's leading edge — dragging it left
@@ -74,75 +141,6 @@ struct AgentTranscriptSidebar: View {
                     .onEnded { _ in widthDragOrigin = width }
             )
     }
-
-    /// Show the local pdf2md conversion box only while a pdf2md conversion is in
-    /// flight (or has just finished) — not for Markdown ingests, queries, or
-    /// lints. Driven by the extraction-phase flag `extractingSourceIDs` (the
-    /// agent-phase `ingestingSourceIDs` no longer covers the extraction phase).
-    private var showsConversion: Bool {
-        !launcher.extractingSourceIDs.isEmpty
-            && (launcher.isExtracting || !launcher.extractionLog.isEmpty)
-    }
-
-    // MARK: - Split layout
-
-    /// When the conversion box is visible, the two sections share the available
-    /// height. A draggable grippy between them lets the user grow one while the
-    /// other contracts.
-    private var splitContent: some View {
-        GeometryReader { proxy in
-            let totalH = proxy.size.height
-            let gripThickness: CGFloat = 7
-            let pdfH = max(60, totalH * splitFraction)
-            let activityH = max(60, totalH - pdfH - gripThickness)
-
-            VStack(alignment: .leading, spacing: 0) {
-                pdfConversionBox
-                    .padding(AgentTranscriptMetrics.padding)
-                    .frame(height: pdfH)
-
-                grippy(totalHeight: totalH)
-                    .frame(height: gripThickness)
-
-                activitySection
-                    .padding(AgentTranscriptMetrics.padding)
-                    .frame(height: activityH)
-            }
-        }
-    }
-
-    /// A thin horizontal bar the user drags to resize the two sections.
-    private func grippy(totalHeight: CGFloat) -> some View {
-        Rectangle()
-            .fill(.quaternary)
-            .overlay(alignment: .center) {
-                Capsule()
-                    .fill(.secondary.opacity(0.4))
-                    .frame(width: 32, height: 4)
-            }
-            .contentShape(Rectangle())
-            .onHover { inside in
-                DispatchQueue.main.async {
-                    if inside {
-                        NSCursor.resizeUpDown.set()
-                    } else {
-                        NSCursor.arrow.set()
-                    }
-                }
-            }
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        let newFraction = dragOrigin + value.translation.height / totalHeight
-                        splitFraction = min(0.75, max(0.15, newFraction))
-                    }
-                    .onEnded { _ in
-                        dragOrigin = splitFraction
-                    }
-            )
-    }
-
-    // MARK: - Sections
 
     private var pdfConversionBox: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -224,20 +222,6 @@ struct AgentTranscriptSidebar: View {
     /// ended.
     private var isAgentActive: Bool {
         launcher.isGenerating
-    }
-
-    // MARK: - Header
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Label("Activity", systemImage: "text.bubble")
-                    .font(.headline)
-                Spacer()
-            }
-        }
-        .padding(.horizontal, AgentTranscriptMetrics.padding)
-        .padding(.vertical, 10)
     }
 }
 

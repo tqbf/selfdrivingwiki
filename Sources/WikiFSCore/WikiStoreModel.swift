@@ -626,7 +626,7 @@ public final class WikiStoreModel {
             }.value
             guard !Task.isCancelled else { return }
             let warning = findings.isEmpty ? nil : MarkdownLinter.describe(findings)
-            if let warning {
+            if warning != nil {
                 DebugLog.store("MarkdownLinter: \(findings.count) finding(s) for saved body")
             }
             self?.markdownSaveWarning = warning
