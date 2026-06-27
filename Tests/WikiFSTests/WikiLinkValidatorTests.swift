@@ -3,6 +3,8 @@ import Testing
 
 struct WikiLinkFixerTests {
 
+    // MARK: - Single link (fix)
+
     @Test func testNormalLink() {
         let result = WikiLinkFixer.fix(target: "Page Name", alias: "alias")
         #expect(result.target == "Page Name")
@@ -24,5 +26,30 @@ struct WikiLinkFixerTests {
         #expect(result.target == "Page")
         #expect(result.alias == "My alias")
         #expect(result.wasModified == true)
+    }
+
+    // MARK: - Batch (applyFixes) — patterns from production pages
+
+    @Test func testApplyFixesProductionPatterns() {
+        let markdown = """
+            See [[source:The Value of Beliefs#"quote"\\]] for details.
+            Also [[Information Seeking (neuroscience)\\]] and [[Page|alias\\]].
+            This [[normal link]] should be untouched.
+            And [[source:Doc#"passage"\\]] is another common pattern.
+            """
+
+        let fixed = WikiLinkFixer.applyFixes(to: markdown)
+
+        #expect(fixed.contains("[[source:The Value of Beliefs#\"quote\"]]"))
+        #expect(fixed.contains("[[Information Seeking (neuroscience)]]"))
+        #expect(fixed.contains("[[Page|alias]]"))
+        #expect(fixed.contains("[[normal link]]"))
+        #expect(fixed.contains("[[source:Doc#\"passage\"]]"))
+        #expect(!fixed.contains("\\]]"))
+    }
+
+    @Test func testApplyFixesUnchangedWhenClean() {
+        let markdown = "See [[Page Name]] and [[source:Doc#\"quote\"]] here."
+        #expect(WikiLinkFixer.applyFixes(to: markdown) == markdown)
     }
 }
