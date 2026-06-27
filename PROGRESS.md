@@ -2,9 +2,19 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-27 — Hover tooltips for wiki links in the WKWebView reader
+
+Wiki links in `WikiReaderView` now show human-readable tooltips on hover
+instead of raw `wiki://` URLs. `[[Page]]`, `[[source:Paper#"quote"]]`, and
+same-page anchor links reconstruct their original `[[…]]` notation via the
+existing `WikiLinkMarkdown` helpers; external links show the URL (browser
+default). Change is entirely in `MarkdownHTMLRenderer.visitLink` — a `title`
+attribute generated alongside the existing `href`. Two existing tests updated
+to assert the new attribute. See `plans/hover-wikilink.md`.
+
 ## 2026-06-26 — Lint Page, WikilinksFixer
 
-Some links to sources were showing up with "\]]" although they did not throw off the renderer.  
+Some links to sources were showing up with "\]]" although they did not throw off the renderer.
 
 * Added WikilinksFixer to the code to find and correct these.
 * Added a "Lint" button to the page and the page context menu.
