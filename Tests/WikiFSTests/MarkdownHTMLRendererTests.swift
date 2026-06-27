@@ -38,7 +38,7 @@ struct MarkdownHTMLRendererTests {
 
     @Test func regularLink() {
         let html = MarkdownHTMLRenderer.render("[ex](https://example.com)")
-        #expect(html == "<p><a href=\"https://example.com\">ex</a></p>")
+        #expect(html == "<p><a href=\"https://example.com\" title=\"https://example.com\">ex</a></p>")
     }
 
     @Test func wikiLinkHrefPassesThrough() {
@@ -46,7 +46,7 @@ struct MarkdownHTMLRendererTests {
         // wiki:// destination. The renderer must pass it through verbatim so the
         // navigation delegate can route it.
         let html = MarkdownHTMLRenderer.render("[Page](wiki://page/Page)")
-        #expect(html == "<p><a href=\"wiki://page/Page\">Page</a></p>")
+        #expect(html == "<p><a href=\"wiki://page/Page\" title=\"wiki://page/Page\">Page</a></p>")
     }
 
     @Test func unorderedList() {

@@ -99,7 +99,21 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     mutating func visitInlineHTML(_ inlineHTML: InlineHTML) -> String { inlineHTML.rawHTML }
 
     mutating func visitLink(_ link: Link) -> String {
-        "<a href=\"\(escapeAttribute(link.destination ?? ""))\">\(visitChildren(link))</a>"
+        let dest = link.destination ?? ""
+        var tooltip = dest
+        if let url = URL(string: dest), url.scheme == WikiLinkMarkdown.scheme {
+            if url.host == "anchor" {
+                if let frag = WikiLinkMarkdown.fragment(from: url) {
+                    tooltip = "#\(frag)"
+                }
+            } else if let title = WikiLinkMarkdown.target(from: url) {
+                let prefix = url.host == "source" ? "source:" : ""
+                let frag = WikiLinkMarkdown.fragment(from: url)
+                let fragSuffix = frag.map { "#\($0)" } ?? ""
+                tooltip = "[[\(prefix)\(title)\(fragSuffix)]]"
+            }
+        }
+        return "<a href=\"\(escapeAttribute(dest))\" title=\"\(escapeAttribute(tooltip))\">\(visitChildren(link))</a>"
     }
 
     mutating func visitImage(_ image: Image) -> String {
