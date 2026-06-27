@@ -24,6 +24,8 @@ struct SourceRow: View {
     var isSelected: Bool = false
     let onOpen: () -> Void
     let onRemove: () -> Void
+    /// Begin renaming this source's display name (shown in the context menu).
+    var onRename: (() -> Void)? = nil
     /// Ingest all currently-selected sources (shown in context menu when this
     /// source is part of a multi-source selection).
     var onIngestSelected: (() -> Void)? = nil
@@ -98,6 +100,9 @@ struct SourceRow: View {
                 Divider()
             }
             Button("Open", systemImage: "arrow.up.forward.app", action: onOpen)
+            if let onRename {
+                Button("Rename", systemImage: "pencil", action: onRename)
+            }
             Button("Remove", role: .destructive, action: onRemove)
         }
         .swipeActions(edge: .trailing) {

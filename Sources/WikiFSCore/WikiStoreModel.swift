@@ -783,6 +783,12 @@ public final class WikiStoreModel {
     public func renameSource(id: PageID, to newDisplayName: String) {
         do {
             try store.renameSource(id: id, to: newDisplayName)
+            // Refresh BOTH lists: `sources` so the renamed source's display name
+            // updates in the sidebar + detail view (without this the rename commits
+            // to the DB but the live UI snaps back to the old name), and
+            // `summaries` because the rename rewrites inbound `[[source:…]]` links
+            // in the pages that reference it.
+            reloadSources()
             reloadSummaries()
             for i in tabs.indices where tabs[i].selection == .source(id) {
                 tabs[i].title = newDisplayName

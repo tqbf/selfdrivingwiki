@@ -172,11 +172,13 @@ struct SourceDetailView: View {
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
             Label {
-                Text(displayName)
-                    .font(.largeTitle)
-                    .bold()
-                    .lineLimit(2)
-                    .textSelection(.enabled)
+                EditableTitle(
+                    title: displayName,
+                    placeholder: "Untitled",
+                    lineLimit: 2,
+                    isDisabled: store.isAgentRunning || isEditLockedExternally,
+                    onCommit: { store.renameSource(id: file.id, to: $0) }
+                )
             } icon: {
                 Image(systemName: symbol)
                     .foregroundStyle(.secondary)
