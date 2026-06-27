@@ -57,6 +57,19 @@ struct PageDetailView: View {
                             .help(store.isAgentRunning
                                   ? "Editing is paused while the agent is updating the wiki"
                                   : "Edit this page manually")
+                        if case .page(let id) = store.selection {
+                            let pageTitle = store.summaries.first(where: { $0.id == id })?.title ?? ""
+                            Button("Lint", systemImage: "checkmark.seal") {
+                                Task {
+                                    await AgentOperationRunner.runLintPage(
+                                        pageID: id, pageTitle: pageTitle,
+                                        launcher: launcher, store: store,
+                                        manager: manager, fileProvider: fileProvider)
+                                }
+                            }
+                            .disabled(store.isAgentRunning)
+                            .help("Fix [[wiki-link]] syntax and run LLM lint on this page")
+                        }
                         if let path = pageMountPath {
                             Button("Copy Path", systemImage: "terminal") {
                                 NSPasteboard.general.clearContents()

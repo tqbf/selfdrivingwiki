@@ -35,6 +35,10 @@ enum OperationRequest {
   /// Lint the wiki. `stateMarkdown` is the rendered `WIKI_STATE.md`.
   case lint(stateMarkdown: String)
 
+  /// Lint a single page. `brokenLinks` comes from `WikiStoreModel.preflightLint`
+  /// (pre-computed before the LLM run so the agent has concrete targets).
+  case lintPage(pageTitle: String, brokenLinks: [String], stateMarkdown: String)
+
   /// Stage this request's inputs into `scratch` and return the finalized
   /// `WikiOperation`. Writes `WIKI_STATE.md` (always) and, for Ingest, the raw
   /// `source-1.<ext>`, `source-2.<ext>`, …; the Ingest plan (single Opus pass vs
@@ -61,6 +65,10 @@ enum OperationRequest {
     case .lint(let stateMarkdown):
       let stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
       return .lint(stateFilePath: stateFilePath)
+
+    case .lintPage(let pageTitle, let brokenLinks, let stateMarkdown):
+      let stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
+      return .lintPage(pageTitle: pageTitle, brokenLinks: brokenLinks, stateFilePath: stateFilePath)
     }
   }
 }

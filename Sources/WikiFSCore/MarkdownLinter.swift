@@ -173,7 +173,7 @@ public final class MarkdownLinter: @unchecked Sendable {
     /// plus any findings that could NOT be auto-fixed. Under the cosmetic-only
     /// config, `unfixable` is always empty (every rule is auto-fixable).
     public func fix(markdown: String) -> FixOutcome {
-        let validatedMarkdown = WikiLinkValidator.applyFixes(to: markdown)
+        let validatedMarkdown = WikiLinkFixer.applyFixes(to: markdown)
 
         lock.lock()
         defer { lock.unlock() }

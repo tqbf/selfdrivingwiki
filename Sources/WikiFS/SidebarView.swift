@@ -11,6 +11,8 @@ struct SidebarView: View {
     @Bindable var manager: WikiManager
     /// Used to open an ingested file in its default app via its user-visible URL.
     let fileProvider: FileProviderSpike
+    /// Required to launch the LLM lint from the sidebar context menu.
+    @Bindable var launcher: AgentLauncher
     /// Callback when the user clicks "Ingest N Files" in batch mode.
     var onBatchIngest: (([PageID]) -> Void)? = nil
     /// Files whose agent run is in flight (agent phase) — shows the
@@ -250,6 +252,16 @@ struct SidebarView: View {
                     .tag(WikiSelection.page(summary.id))
                     .contextMenu {
                         Button("Rename") { beginRename(summary) }
+                        Button("Lint Page", systemImage: "checkmark.seal") {
+                            Task {
+                                await AgentOperationRunner.runLintPage(
+                                    pageID: summary.id, pageTitle: summary.title,
+                                    launcher: launcher, store: store,
+                                    manager: manager, fileProvider: fileProvider)
+                            }
+                        }
+                        .disabled(store.isAgentRunning)
+                        Divider()
                         Button("Delete", role: .destructive) { store.delete(summary.id) }
                     }
                     .swipeActions(edge: .trailing) {

@@ -29,6 +29,7 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             SidebarView(store: store, manager: manager, fileProvider: fileProvider,
+                        launcher: agentLauncher,
                         onBatchIngest: batchIngest,
                         ingestingSourceIDs: agentLauncher.ingestingSourceIDs,
                         extractingSourceIDs: agentLauncher.extractingSourceIDs,

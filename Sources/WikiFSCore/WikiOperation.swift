@@ -53,12 +53,18 @@ public enum WikiOperation: Equatable, Sendable {
   /// `WIKI_STATE.md` snapshot.
   case lint(stateFilePath: String)
 
+  /// Health-check a single page. `brokenLinks` is the pre-computed list of
+  /// `[[page titles]]` that do not resolve to existing pages (computed in-app
+  /// by `WikiStoreModel.preflightLint` before the LLM run so the agent has
+  /// concrete targets rather than having to discover issues itself).
+  case lintPage(pageTitle: String, brokenLinks: [String], stateFilePath: String)
+
   /// A short, stable identifier for the operation kind (logging / UI).
   public var kind: Kind {
     switch self {
     case .ingest: .ingest
     case .query, .queryConversation: .query
-    case .lint: .lint
+    case .lint, .lintPage: .lint
     }
   }
 
@@ -84,7 +90,7 @@ public enum WikiOperation: Equatable, Sendable {
   public var topLevelModelAlias: String {
     switch self {
     case .ingest(_, _, _, let plan): plan.topLevelModelAlias
-    case .query, .queryConversation, .lint: "opus"
+    case .query, .queryConversation, .lint, .lintPage: "opus"
     }
   }
 
@@ -94,7 +100,7 @@ public enum WikiOperation: Equatable, Sendable {
   public var agentsJSON: String? {
     switch self {
     case .ingest(_, _, _, let plan): plan.agentsJSON()
-    case .query, .queryConversation, .lint: nil
+    case .query, .queryConversation, .lint, .lintPage: nil
     }
   }
 }
@@ -136,6 +142,10 @@ extension WikiOperation {
       return Self.queryConversationPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath, allowWikiEdits: allowWikiEdits)
     case .lint(let stateFilePath):
       return Self.lintPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath)
+    case .lintPage(let pageTitle, let brokenLinks, let stateFilePath):
+      return Self.lintPagePrompt(
+        wikiRoot: wikiRoot, pageTitle: pageTitle,
+        brokenLinks: brokenLinks, stateFilePath: stateFilePath)
     }
   }
 
@@ -469,5 +479,50 @@ extension WikiOperation {
 
     \(Self.wikiRootLine(wikiRoot))
     """
+  }
+
+  /// Single-page lint: pre-flight results (bracket fixes + broken links) are
+  /// passed in so the agent has concrete targets rather than discovering issues
+  /// itself. Runs Opus single-agent with full write permissions.
+  private static func lintPagePrompt(
+    wikiRoot: String,
+    pageTitle: String,
+    brokenLinks: [String],
+    stateFilePath: String
+  ) -> String {
+    let linksSection: String
+    if brokenLinks.isEmpty {
+      linksSection = "Broken [[wiki links]]: none detected."
+    } else {
+      let list = brokenLinks.map { "  - [[\($0)]]" }.joined(separator: "\n")
+      linksSection = """
+        Broken [[wiki links]] (targets not found in the wiki):
+        \(list)
+        """
+    }
+
+    return """
+      \(IngestWriteRule.writes)
+
+      \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
+
+      TASK — Review and fix the page titled "\(pageTitle)".
+
+      Pre-flight already ran before this agent started:
+      - WikiLink bracket syntax (\\]]) auto-corrected if any were present.
+      - \(linksSection)
+
+      Steps:
+      1. Read the page: `wikictl page get --title "\(pageTitle)"`
+      2. For each broken link listed above: search `wikictl page list` to find the \
+         correct target, create the page if it should exist, or remove the link if \
+         spurious.
+      3. Check the page for other issues (stale content, broken external links, \
+         factual gaps) and fix what you can.
+      4. If any changes are needed, rewrite: `wikictl page upsert --title "\(pageTitle)"`
+      5. Record your findings: `wikictl log append --kind lint`
+
+      \(Self.wikiRootLine(wikiRoot))
+      """
   }
 }

@@ -76,9 +76,9 @@ public enum WikiLinkMarkdown {
             let aliasRange = match.range(at: 2)
             let parsedAlias = aliasRange.location != NSNotFound ? ns.substring(with: aliasRange) : nil
             
-            let validated = WikiLinkValidator.validate(target: parsedTarget, alias: parsedAlias)
-            
-            let rawTarget = collapseWhitespace(validated.target)
+            let fixed = WikiLinkFixer.fix(target: parsedTarget, alias: parsedAlias)
+
+            let rawTarget = collapseWhitespace(fixed.target)
             guard !rawTarget.isEmpty else {
                 // Empty target (e.g. `[[ ]]`): leave the literal text in place.
                 out += ns.substring(with: full)
@@ -95,7 +95,7 @@ public enum WikiLinkMarkdown {
                     continue
                 }
                 let display: String
-                if let alias = validated.alias {
+                if let alias = fixed.alias {
                     let collapsedAlias = collapseWhitespace(alias)
                     display = collapsedAlias.isEmpty ? frag : collapsedAlias
                 } else {
@@ -119,7 +119,7 @@ public enum WikiLinkMarkdown {
             }
 
             let display: String
-            if let alias = validated.alias {
+            if let alias = fixed.alias {
                 let collapsedAlias = collapseWhitespace(alias)
                 display = collapsedAlias.isEmpty ? bareTarget : collapsedAlias
             } else {

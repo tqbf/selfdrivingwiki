@@ -115,9 +115,9 @@ public enum WikiLinkParser {
             let aliasRange = match.range(at: 2)
             let rawAlias = aliasRange.location != NSNotFound ? ns.substring(with: aliasRange) : nil
             
-            let validated = WikiLinkValidator.validate(target: rawTarget, alias: rawAlias)
-            
-            let collapsed = collapseWhitespace(validated.target)
+            let fixed = WikiLinkFixer.fix(target: rawTarget, alias: rawAlias)
+
+            let collapsed = collapseWhitespace(fixed.target)
             guard !collapsed.isEmpty else { continue }
 
             // Split on first "#" BEFORE classifying — so `[[#Section]]` yields
@@ -134,7 +134,7 @@ public enum WikiLinkParser {
             guard seen.insert(dedupKey).inserted else { continue }
 
             let linkText: String
-            if let alias = validated.alias {
+            if let alias = fixed.alias {
                 let collapsedAlias = collapseWhitespace(alias)
                 linkText = collapsedAlias.isEmpty ? bareTarget : collapsedAlias
             } else {

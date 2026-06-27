@@ -525,14 +525,6 @@ public final class WikiStoreModel {
     /// Always rebuilds `summaries` from source on success.
     public func save() {
         guard let id = loadedPage else { return }
-        
-        // Auto-heal malformed wiki-links (e.g. LLM escaped brackets) instantly
-        // in the editor before hitting disk.
-        let validatedBody = WikiLinkValidator.applyFixes(to: draftBody)
-        if validatedBody != draftBody {
-            draftBody = validatedBody
-        }
-        
         do {
             // The shared upsert+reparse seam (Phase A): persist the body AND
             // re-resolve this page's `[[wiki-links]]` in one operation. `wikictl`
@@ -640,6 +632,51 @@ public final class WikiStoreModel {
             }
             self?.markdownSaveWarning = warning
         }
+    }
+
+    /// Pre-flight checks run before an LLM page-lint: apply `WikiLinkFixer` fixes and
+    /// detect broken `[[page links]]`. Reads fresh from the store so it works for any
+    /// page, not just the loaded draft. If the current page is loaded, also syncs the
+    /// draft (without marking it dirty). Returns `nil` when the page cannot be read.
+    public struct LintPreflight: Sendable {
+        /// `true` when `WikiLinkFixer.applyFixes` rewrote one or more `\]]` brackets.
+        public let didFixLinks: Bool
+        /// Page titles referenced by `[[wiki links]]` in the page that do not resolve
+        /// to an existing page. Source links (`[[source:X]]`) are excluded.
+        public let brokenPageLinks: [String]
+    }
+
+    public func preflightLint(pageID: PageID) -> LintPreflight? {
+        guard let page = try? store.getPage(id: pageID) else { return nil }
+
+        // Apply WikiLinkFixer and persist if anything changed.
+        let original = page.bodyMarkdown
+        let fixedBody = WikiLinkFixer.applyFixes(to: original)
+        let didFix = fixedBody != original
+        if didFix {
+            do {
+                try PageUpsert.upsert(in: store, id: pageID, title: page.title, body: fixedBody)
+                reloadSummaries()
+                onPageDidChange?()
+                if loadedPage == pageID {
+                    draftBody = fixedBody
+                    isDraftDirty = false
+                }
+            } catch {
+                DebugLog.store("WikiStoreModel.preflightLint fix failed: \(error)")
+            }
+        }
+
+        // Detect broken page links (source links are intentionally excluded).
+        let body = didFix ? fixedBody : original
+        let links = WikiLinkParser.parse(body)
+        let knownTitles = Set(summaries.map { $0.title })
+        let broken = links
+            .filter { $0.linkType == .page }
+            .map { $0.target }
+            .filter { !knownTitles.contains($0) }
+
+        return LintPreflight(didFixLinks: didFix, brokenPageLinks: broken)
     }
 
     /// Cancel any pending debounce and save synchronously. Called on page

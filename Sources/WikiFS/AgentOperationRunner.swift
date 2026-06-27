@@ -325,6 +325,28 @@ enum AgentOperationRunner {
             fileProvider: fileProvider)
     }
 
+    /// Pre-flight a single page (fix `\]]` brackets + detect broken links), then
+    /// run a page-scoped LLM lint with those findings baked into the prompt.
+    static func runLintPage(
+        pageID: PageID,
+        pageTitle: String,
+        launcher: AgentLauncher,
+        store: WikiStoreModel,
+        manager: WikiManager,
+        fileProvider: FileProviderSpike
+    ) async {
+        let preflight = store.preflightLint(pageID: pageID)
+        await run(
+            request: .lintPage(
+                pageTitle: pageTitle,
+                brokenLinks: preflight?.brokenPageLinks ?? [],
+                stateMarkdown: store.currentStateSnapshot().renderStateFile()),
+            launcher: launcher,
+            store: store,
+            manager: manager,
+            fileProvider: fileProvider)
+    }
+
     private static func run(
         request: OperationRequest,
         launcher: AgentLauncher,
@@ -345,7 +367,7 @@ enum AgentOperationRunner {
         switch request {
         case .ingest:
             break
-        case .query, .lint:
+        case .query, .lint, .lintPage:
             await fileProvider.signalChange()
         }
         // The mount path is reference-only in the prompts (the agent reads pages and

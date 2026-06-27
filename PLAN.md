@@ -90,6 +90,7 @@ features below are merged to `main` (single-branch repo, ready for developer
 handoff). 341 tests green; clean signed bundle (app + appex + `wikictl`).**
 
 **Post-completion features (also on `main`):**
+- **WikiLinkFixer + integrated page lint** — renamed `WikiLinkValidator` → `WikiLinkFixer` (it corrects, not merely validates). Added `WikiStoreModel.preflightLint` that applies `WikiLinkFixer.applyFixes()` and detects broken `[[page links]]` (targets with no matching wiki page). New `WikiOperation.lintPage` bakes those findings into the LLM prompt so the agent has concrete targets. "Lint" button (page detail toolbar) and "Lint Page" context menu (sidebar) now run both the regex pre-flight and the page-scoped LLM lint. The orange markdown-lint warning banner surfaces `\]]` issues; "Lint" is the cure.
 - **Agent seatbelt sandbox (write whitelist)** — opt-in (Settings → Agent → Sandbox)
   confines the spawned agent's filesystem WRITES to a strict allowlist via macOS's
   seatbelt (`sandbox-exec`): only the per-run scratch dir + the active wiki's SQLite DB
