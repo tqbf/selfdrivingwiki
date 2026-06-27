@@ -1,40 +1,24 @@
 import Testing
-import Foundation
 @testable import WikiFSCore
 
+/// Regression test for the LLM-hallucinated escaped-bracket pattern seen in production.
+/// Uses inline markdown that reproduces the real failures found across 7 live pages.
 struct RealDatabaseTest {
-    @Test func testRealHallucinations() throws {
-        let pagesDir = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/CloudStorage/SelfDrivingWiki-MyWiki/pages/by-title")
-        
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: pagesDir.path) else { return }
-        let files = try fm.contentsOfDirectory(at: pagesDir, includingPropertiesForKeys: nil)
-            .filter { $0.pathExtension == "md" }
-            
-        var totalFixes = 0
-        
-        for file in files {
-            let content = try String(contentsOf: file, encoding: .utf8)
-            let fixed = WikiLinkFixer.applyFixes(to: content)
-            
-            if fixed != content {
-                print("\n--- Fixed file: \(file.lastPathComponent) ---")
-                totalFixes += 1
-                
-                let origLines = content.components(separatedBy: .newlines)
-                let fixedLines = fixed.components(separatedBy: .newlines)
-                
-                for i in 0..<min(origLines.count, fixedLines.count) {
-                    if origLines[i] != fixedLines[i] {
-                        print("- \(origLines[i])")
-                        print("+ \(fixedLines[i])")
-                    }
-                }
-            }
-        }
-        
-        print("\nTotal files modified by validator: \(totalFixes)")
-        #expect(true)
+    @Test func testRealHallucinations() {
+        let markdown = """
+            See [[source:The Value of Beliefs#"quote"\\]] for details.
+            Also [[Information Seeking (neuroscience)\\]] and [[Page|alias\\]].
+            This [[normal link]] should be untouched.
+            And [[source:Doc#"passage"\\]] is another common pattern.
+            """
+
+        let fixed = WikiLinkFixer.applyFixes(to: markdown)
+
+        #expect(fixed.contains("[[source:The Value of Beliefs#\"quote\"]]"))
+        #expect(fixed.contains("[[Information Seeking (neuroscience)]]"))
+        #expect(fixed.contains("[[Page|alias]]"))
+        #expect(fixed.contains("[[normal link]]"))
+        #expect(fixed.contains("[[source:Doc#\"passage\"]]"))
+        #expect(!fixed.contains("\\]]"))
     }
 }
