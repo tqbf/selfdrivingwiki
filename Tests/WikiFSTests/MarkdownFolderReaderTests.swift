@@ -118,12 +118,12 @@ struct MarkdownFolderReaderTests {
         #expect(result.files.count == 2)
     }
 
-    @Test func ignoresNonMarkdownFiles() {
+    @Test func ignoresUnsupportedFiles() {
         let root = fakeRoot()
         let ops = FakeFileOperations(root: root, files: [
             "\(root)/note.md": Data("md".utf8),
             "\(root)/image.png": Data("png".utf8),
-            "\(root)/doc.pdf": Data("pdf".utf8),
+            "\(root)/video.mp4": Data("mp4".utf8),
             "\(root)/script.txt": Data("txt".utf8),
             "\(root)/sub/note.md": Data("md2".utf8),
         ])
@@ -198,11 +198,11 @@ struct MarkdownFolderReaderTests {
         #expect(result.errors.isEmpty)
     }
 
-    @Test func returnsEmptyResultForDirectoryWithNoMarkdown() {
+    @Test func returnsEmptyResultForDirectoryWithUnsupportedFiles() {
         let root = fakeRoot()
         let ops = FakeFileOperations(root: root, files: [
             "\(root)/image.png": Data("png".utf8),
-            "\(root)/doc.pdf": Data("pdf".utf8),
+            "\(root)/video.mp4": Data("mp4".utf8),
         ])
         let result = MarkdownFolderReader.walk(
             directory: URL(fileURLWithPath: root), fileOps: ops)

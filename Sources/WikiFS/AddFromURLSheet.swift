@@ -55,7 +55,7 @@ struct AddFromURLSheet: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Add from URL")
                 .font(.headline)
-            Text("Fetch a web page or PDF and ingest it. HTML is converted to Markdown; PDFs and other files are stored as-is.")
+            Text("Fetch a web page and add it as source material")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

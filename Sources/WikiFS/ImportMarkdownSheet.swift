@@ -49,9 +49,9 @@ struct ImportMarkdownSheet: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Import Markdown Folder")
+            Text("Import Folder")
                 .font(.headline)
-            Text("Select a folder of Markdown files to import as source material. All `.md` files are imported recursively; frontmatter and [[wikilinks]] are preserved as-is.")
+            Text("Select a folder to import as source material. All `.md` and `.pdf` files are imported recursively; frontmatter and [[wikilinks]] are preserved as-is.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -99,12 +99,12 @@ struct ImportMarkdownSheet: View {
             case .scanning:
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Scanning for .md files…")
+                    Text("Scanning for files…")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
             case .ready(let count):
-                Label("Found \(count) Markdown file\(count == 1 ? "" : "s").", systemImage: "checkmark.circle.fill")
+                Label("Found \(count) file\(count == 1 ? "" : "s").", systemImage: "checkmark.circle.fill")
                     .font(.callout)
                     .foregroundStyle(.green)
             case .importing(let imported, let errorCount):
@@ -202,7 +202,7 @@ struct ImportMarkdownSheet: View {
 
     private func chooseDirectory() {
         guard let url = WikiFilePanels.chooseDirectory(
-            title: "Choose Markdown Folder",
+            title: "Choose Folder",
             prompt: "Select"
         ) else { return }
         directoryURL = url
@@ -221,9 +221,9 @@ struct ImportMarkdownSheet: View {
                 )
             }.value
             if result.files.isEmpty, result.errors.isEmpty {
-                phase = .failed("No .md files found in this folder.")
+                phase = .failed("No valid files found in this folder.")
             } else if result.files.isEmpty {
-                phase = .failed("No .md files found (\(result.errors.count) error\(result.errors.count == 1 ? "" : "s") reading the folder).")
+                phase = .failed("No valid files found (\(result.errors.count) error\(result.errors.count == 1 ? "" : "s") reading the folder).")
             } else {
                 phase = .ready(fileCount: result.files.count)
             }

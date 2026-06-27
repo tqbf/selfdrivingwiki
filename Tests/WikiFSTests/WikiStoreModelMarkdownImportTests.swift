@@ -81,13 +81,13 @@ struct WikiStoreModelMarkdownImportTests {
         #expect(storedContent == Data(body.utf8))
     }
 
-    @Test func ignoresNonMarkdownFiles() async throws {
+    @Test func ignoresUnsupportedFiles() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
         let dir = try tempMarkdownDir(files: [
             "note.md": "# md",
             "image.png": "png bytes",
-            "doc.pdf": "%PDF",
+            "video.mp4": "mp4",
             "data.txt": "text",
         ])
 
@@ -119,12 +119,12 @@ struct WikiStoreModelMarkdownImportTests {
         #expect(model.sources.isEmpty)
     }
 
-    @Test func handlesDirectoryWithOnlyNonMarkdown() async throws {
+    @Test func handlesDirectoryWithOnlyUnsupportedFiles() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
         let dir = try tempMarkdownDir(files: [
             "image.png": "png",
-            "doc.pdf": "%PDF",
+            "video.mp4": "mp4",
         ])
 
         let result = await model.importFromMarkdownFolder(directory: dir)

@@ -39,7 +39,7 @@ struct WikiDetailView: View {
                     VStack(alignment: .leading, spacing: 20) {
                         introRow(title: "Pages", description: "Create and edit markdown notes with deep wiki-linking.", systemImage: "doc.text")
                         introRow(title: "Sources", description: "Manage and ingest raw material from URLs, folders, or Zotero.", systemImage: "tray.full")
-                        introRow(title: "Agent", description: "Query the AI, check wiki health, and view system logs.", systemImage: "sparkles")
+                        introRow(title: "Agent", description: "Query the agent, check wiki health, and view system logs.", systemImage: "sparkles")
                     }
                     .frame(maxWidth: 400)
 
@@ -58,14 +58,6 @@ struct WikiDetailView: View {
                             .controlSize(.large)
 
                             Button {
-                                store.openTab(.query)
-                            } label: {
-                                Label("Query Agent", systemImage: "bubble.left.and.text.bubble.right")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.large)
-
-                            Button {
                                 addURLHandler?("")
                             } label: {
                                 Label("Add from URL", systemImage: "link.badge.plus")
@@ -74,9 +66,21 @@ struct WikiDetailView: View {
                             .controlSize(.large)
 
                             Button {
+                                if let url = WikiFilePanels.chooseFile(title: "Add File", prompt: "Add File") {
+                                    Task {
+                                        await store.ingest(fileURLs: [url])
+                                    }
+                                }
+                            } label: {
+                                Label("Add File", systemImage: "doc.badge.plus")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+
+                            Button {
                                 showingImportMarkdown = true
                             } label: {
-                                Label("Import Markdown", systemImage: "doc.badge.plus")
+                                Label("Add Folder", systemImage: "doc.badge.plus")
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.large)

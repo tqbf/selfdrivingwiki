@@ -53,11 +53,11 @@ struct SourcesSectionView: View {
                 Button {
                     showingAddFromZotero = true
                 } label: {
-                    SidebarModeRow(title: "Add from Zotero…", subtitle: "Import from library",
+                    SidebarModeRow(title: "Add from Zotero…", subtitle: "Browse Zotero library",
                         systemImage: "books.vertical")
                 }
                 .buttonStyle(.plain)
-                .help("Browse your Zotero library and ingest a PDF or Markdown attachment")
+                .help("Browse your Zotero library and add a PDF or Markdown attachment")
             }
 
             Button {
@@ -67,16 +67,29 @@ struct SourcesSectionView: View {
                     systemImage: "link.badge.plus")
             }
             .buttonStyle(.plain)
-            .help("Fetch a web page or PDF by URL and ingest it into this wiki")
+            .help("Fetch a web page or PDF by URL as source material")
+
+            Button {
+                if let url = WikiFilePanels.chooseFile(title: "Add File", prompt: "Import") {
+                    Task {
+                        await store.ingest(fileURLs: [url])
+                    }
+                }
+            } label: {
+                SidebarModeRow(title: "Add File…", subtitle: "Pick one",
+                    systemImage: "doc.badge.plus")
+            }
+            .buttonStyle(.plain)
+            .help("Add a single file from the filesystem as source material")
 
             Button {
                 showingImportMarkdown = true
             } label: {
-                SidebarModeRow(title: "Import Markdown…", subtitle: "Bulk folder import",
+                SidebarModeRow(title: "Add Folder…", subtitle: "Pick many",
                     systemImage: "doc.badge.plus")
             }
             .buttonStyle(.plain)
-            .help("Import all .md files from a folder as source material")
+            .help("Add all .md and .pdf files from a folder as source material")
 
             Divider()
 
