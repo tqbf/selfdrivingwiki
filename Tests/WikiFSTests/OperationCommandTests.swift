@@ -232,6 +232,44 @@ struct OperationCommandTests {
     #expect(!cmd.arguments.contains { $0.contains("Bash(wikictl") })
   }
 
+  // MARK: - Debug summary (redacted, secret-safe)
+
+  @Test func debugSummaryTruncatesLongPayloadArgsButKeepsFlags() {
+    let longPrompt = String(repeating: "x", count: 5000)
+    let cmd = build(operation: .query(question: longPrompt, stateFilePath: Self.stateFile))
+    let summary = cmd.debugSummary
+    // Flags survive verbatim…
+    #expect(summary.contains("--model"))
+    #expect(summary.contains("--output-format"))
+    #expect(summary.contains("--dangerously-skip-permissions"))
+    // …but the multi-thousand-char prompt is collapsed to a length marker, not dumped.
+    #expect(!summary.contains(longPrompt))
+    #expect(summary.contains(" chars)"))   // a truncation marker is present
+    #expect(!summary.contains(String(repeating: "x", count: 200)))
+  }
+
+  @Test func debugSummaryReportsRelocatedConfigDirButNeverSecretValues() {
+    // Sandboxed build relocates CLAUDE_CONFIG_DIR — the "Not logged in" fingerprint —
+    // and the env carries an API key whose VALUE must never appear in the summary.
+    let cmd = OperationCommand.build(
+      operation: Self.tinyIngest(),
+      wikiRoot: Self.resolvedRoot,
+      wikiID: "01WIKIULID",
+      systemPrompt: "You are the maintainer.",
+      scratchDirectory: "/tmp/scratch-xyz",
+      wikictlDirectory: "/Apps/Self Driving Wiki.app/Contents/Helpers",
+      resolvedExecutable: "/opt/homebrew/bin/claude",
+      sandbox: .init(profile: "(version 1)", defines: []),
+      baseEnvironment: ["PATH": "/usr/bin", "HOME": "/Users/me",
+                        "ANTHROPIC_API_KEY": "sk-ant-supersecret"])
+    let summary = cmd.debugSummary
+    #expect(summary.contains("CLAUDE_CONFIG_DIR=/tmp/scratch-xyz/.claude-config"))
+    #expect(summary.contains("sandboxed=true"))
+    // The key's PRESENCE is reported by name; its value is never logged.
+    #expect(summary.contains("authSet=[ANTHROPIC_API_KEY]"))
+    #expect(!summary.contains("sk-ant-supersecret"))
+  }
+
   @Test func eachOperationKindBuildsAValidCommand() {
     for operation: WikiOperation in [
       Self.tinyIngest(),

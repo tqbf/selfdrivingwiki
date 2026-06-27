@@ -24,6 +24,46 @@ public struct OperationCommand: Equatable, Sendable {
     /// mount.
     public let currentDirectoryPath: String
 
+    // MARK: - Debug summary
+
+    /// A single-line, redacted summary of this invocation for `DebugLog`. Surfaces
+    /// the executable, the full FLAG surface (long payloads like the system prompt
+    /// and the query prompt are truncated to a length marker so the log stays
+    /// legible and free of wiki content), and only the auth/resolution-relevant
+    /// environment keys — never the whole environment, which may carry API keys.
+    ///
+    /// The headline diagnostic for claude's "Not logged in · Please run /login":
+    /// `CLAUDE_CONFIG_DIR` is relocated into an empty per-run scratch dir whenever
+    /// the run is sandboxed (the read-only query default), so the child can't see
+    /// the user's `~/.claude` credentials. `authSet` lists which API-key env vars
+    /// are present (NAMES ONLY, never values) — an empty list plus a relocated
+    /// `CLAUDE_CONFIG_DIR` is the fingerprint of that failure.
+    public var debugSummary: String {
+        let redactedArgs = arguments.map { Self.redactArgument($0) }.joined(separator: " ")
+        let reportedEnvKeys = ["CLAUDE_CONFIG_DIR", "HOME", "TMPDIR", "PATH", "WIKI_ROOT", "WIKI_DB"]
+        let env = reportedEnvKeys
+            .compactMap { key in environment[key].map { "\(key)=\($0)" } }
+            .joined(separator: " ")
+        // Presence-only (no values): an API key or OAuth token in the child env
+        // bypasses interactive /login, so knowing which are set explains the auth
+        // path without ever logging a secret.
+        let authKeys = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
+        let authSet = authKeys.filter { (environment[$0]?.isEmpty == false) }
+        let sandboxed = (executable == Self.sandboxExecutable)
+        return "exe=\(executable) sandboxed=\(sandboxed) "
+            + "args=[\(redactedArgs)] env={\(env)} "
+            + "authSet=[\(authSet.joined(separator: ","))] cwd=\(currentDirectoryPath)"
+    }
+
+    /// Truncate one argument to a head + length marker when it's long. The system
+    /// prompt and query prompt run to thousands of characters (and may carry wiki
+    /// content), so dumping them whole would bury the flags and leak page text;
+    /// short flags and values pass through unchanged.
+    static func redactArgument(_ arg: String, limit: Int = 80) -> String {
+        guard arg.count > limit else { return arg }
+        return "\(arg.prefix(limit))…(\(arg.count) chars)"
+    }
+
     /// Build the invocation for `operation` against one wiki.
     ///
     /// - Parameters:
