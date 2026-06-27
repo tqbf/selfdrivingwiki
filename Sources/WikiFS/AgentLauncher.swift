@@ -136,6 +136,11 @@ final class AgentLauncher {
     private var stderrLogHandle: FileHandle?
     /// Writable stdin for an interactive stream-json query session.
     private var inputHandle: FileHandle?
+    /// The per-run copy of the user's `.credentials.json` seeded into the relocated
+    /// `CLAUDE_CONFIG_DIR` (sandboxed runs only), or nil. Tracked so `finish()` can
+    /// delete it — the scratch dir is kept for debugging, so the OAuth token must
+    /// not outlive the run there.
+    @ObservationIgnored private var seededCredentialFile: URL?
     /// True when the running process is waiting for user turns over stdin.
     private(set) var isInteractiveSession = false
 
@@ -500,6 +505,10 @@ final class AgentLauncher {
             sandbox: sandbox
         )
 
+        // Seed the user's credentials into the relocated CLAUDE_CONFIG_DIR (sandboxed
+        // runs only) so the child authenticates without an interactive /login.
+        seedSandboxCredentials(for: command, scratch: scratch)
+
         // RESERVE per-run metadata. `isRunning` is already `true` (the slot set it on
         // acquire); set the rest. No `resetRunState` here — the prior `finish()`
         // already cleared artifacts, and clearing now would race a peer that owns the
@@ -562,6 +571,7 @@ final class AgentLauncher {
 
         do {
             DebugLog.agent("run: spawning kind=\(operation.kind.rawValue) wikiID=\(wikiID) exe=\(command.executable)")
+            DebugLog.agent("run: command \(command.debugSummary)")
             try process.run()
             self.process = process
             currentProcessID = process.processIdentifier
@@ -701,6 +711,10 @@ final class AgentLauncher {
             sandbox: sandbox
         )
 
+        // Seed the user's credentials into the relocated CLAUDE_CONFIG_DIR (sandboxed
+        // runs only) so the query session authenticates without an interactive /login.
+        seedSandboxCredentials(for: command, scratch: scratch)
+
         // RESERVE per-run metadata. `isRunning` is already `true` (slot acquire).
         let now = Date()
         isInteractiveSession = true
@@ -760,6 +774,7 @@ final class AgentLauncher {
         }
 
         do {
+            DebugLog.agent("startInteractiveQuery: command \(command.debugSummary)")
             try process.run()
             self.process = process
             inputHandle = stdinPipe.fileHandleForWriting
@@ -948,6 +963,9 @@ final class AgentLauncher {
             stdoutLineBuffer = ""
         }
         closeLogFiles()
+        // Delete the per-run seeded credential copy so the user's OAuth token does
+        // not linger in the persisted scratch dir.
+        removeSeededCredentials()
         exitStatus = status
         isInteractiveSession = false
         runningKind = nil
@@ -1131,5 +1149,76 @@ final class AgentLauncher {
         let tmp = scratch.appendingPathComponent(".tmp", isDirectory: true)
         try? FileManager.default.createDirectory(at: claudeConfig, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    }
+
+    // MARK: - Sandbox credential seeding
+
+    /// Pure decision for credential seeding. Given the built command's
+    /// `CLAUDE_CONFIG_DIR` (set only when the spawn is sandboxed) and the run's
+    /// `scratchPath`, return the `(source, target)` `.credentials.json` copy to
+    /// perform — or nil when no seeding applies. Seeds ONLY when the config dir was
+    /// relocated INTO our scratch, so a user who set their OWN `CLAUDE_CONFIG_DIR`
+    /// is never touched, and unsandboxed runs (which read the real `~/.claude`)
+    /// are no-ops. Pure + injectable so the path logic is unit-testable.
+    static func relocatedCredentialPlan(
+        configDir: String?,
+        scratchPath: String,
+        home: String
+    ) -> (source: String, target: String)? {
+        guard let configDir, configDir.hasPrefix(scratchPath) else { return nil }
+        return (source: home + "/.claude/.credentials.json",
+                target: configDir + "/.credentials.json")
+    }
+
+    /// Seed the relocated `CLAUDE_CONFIG_DIR` a sandboxed spawn points at so the
+    /// child can authenticate without an interactive `/login`.
+    /// `OperationCommand.applySandbox` redirects claude's config dir into the
+    /// per-run scratch zone; that dir starts empty, so when the spawn can't reach
+    /// the login Keychain (the headless, sandboxed GUI-spawn case observed in the
+    /// app) claude finds no credentials and reports "Not logged in · Please run
+    /// /login". Copying the user's `.credentials.json` into the relocated dir gives
+    /// it a file-based credential to read instead. (An expired access token in that
+    /// file self-heals via its refresh token on first use.)
+    ///
+    /// Best-effort and reversible: records the seeded path in `seededCredentialFile`
+    /// so `finish()` deletes it when the run ends — the scratch dir is kept for
+    /// debugging, so a copy of the user's OAuth token must not accumulate there. A
+    /// missing source file or a copy failure just leaves the child to whatever else
+    /// it can reach (e.g. an `ANTHROPIC_API_KEY` in the env).
+    private func seedSandboxCredentials(for command: OperationCommand, scratch: URL) {
+        let fm = FileManager.default
+        // Ensure the relocated dirs we own exist — the read-only query path doesn't
+        // run `createSandboxRelocationDirs`, and claude writes its config + temp here.
+        for key in ["CLAUDE_CONFIG_DIR", "TMPDIR"] {
+            if let dir = command.environment[key], dir.hasPrefix(scratch.path) {
+                try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            }
+        }
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        guard let plan = Self.relocatedCredentialPlan(
+            configDir: command.environment["CLAUDE_CONFIG_DIR"],
+            scratchPath: scratch.path,
+            home: home) else { return }
+        guard fm.fileExists(atPath: plan.source) else {
+            DebugLog.agent("seedSandboxCredentials: no \(plan.source) to copy — child may report Not logged in")
+            return
+        }
+        do {
+            if fm.fileExists(atPath: plan.target) { try fm.removeItem(atPath: plan.target) }
+            try fm.copyItem(atPath: plan.source, toPath: plan.target)
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: plan.target)
+            seededCredentialFile = URL(fileURLWithPath: plan.target)
+            DebugLog.agent("seedSandboxCredentials: seeded credentials into relocated CLAUDE_CONFIG_DIR")
+        } catch {
+            DebugLog.agent("seedSandboxCredentials: copy failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Delete the per-run seeded credential copy (if any). Called from `finish()` so
+    /// the OAuth-token copy never outlives the run in the persisted scratch dir.
+    private func removeSeededCredentials() {
+        guard let file = seededCredentialFile else { return }
+        try? FileManager.default.removeItem(at: file)
+        seededCredentialFile = nil
     }
 }
