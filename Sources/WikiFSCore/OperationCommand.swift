@@ -222,10 +222,11 @@ public struct OperationCommand: Equatable, Sendable {
     ) -> (executable: String, arguments: [String]) {
         guard let sandbox else { return (resolvedExecutable, arguments) }
 
-        // Relocate the provider's self-writes into the writable scratch zone so the
-        // profile allowlist stays tiny. These keys are distinct from WIKI_ROOT /
-        // WIKI_DB / PATH, so they don't clobber the app-owned block.
-        environment["CLAUDE_CONFIG_DIR"] = scratchDirectory + "/.claude-config"
+        // Relocate temp writes into scratch so they land inside the seatbelt allowlist.
+        // CLAUDE_CONFIG_DIR is intentionally NOT redirected: Claude Code reads its
+        // credentials from ~/.claude/.credentials.json, and pointing it at an empty
+        // scratch dir hides those credentials. The sandbox's (deny file-write*) rule
+        // already blocks writes to ~/.claude/ — Claude Code handles the EPERM quietly.
         environment["TMPDIR"] = scratchDirectory + "/.tmp"
 
         var head: [String] = ["-p", sandbox.profile]
