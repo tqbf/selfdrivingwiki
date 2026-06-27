@@ -40,5 +40,10 @@ Page has [[source:X\]]
 
 ## Testing
 
-- Unit tests: standard, escaped-bracket, and escaped-pipe links.
-- Integration test (`RealDatabaseTest`): ran over all `.md` files in a production iCloud directory; found and patched 7 live files at initial rollout.
+`WikiLinkFixerTests` (`Tests/WikiFSTests/WikiLinkValidatorTests.swift`):
+
+- `testNormalLink` — clean link passes through unchanged.
+- `testEscapedBracketInTarget` — `source:Doc\` → `source:Doc`.
+- `testEscapedBracketInAlias` — `My alias\` → `My alias`.
+- `testApplyFixesProductionPatterns` — batch fixer over inline markdown reproducing the `\]]` patterns found across 7 live production pages at initial rollout.
+- `testApplyFixesUnchangedWhenClean` — clean markdown is returned as-is.
