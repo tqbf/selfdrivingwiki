@@ -22,11 +22,12 @@ struct PageDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Header — always visible, same layout in both modes.
             VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
-                Text(displayTitle)
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                EditableTitle(
+                    title: store.draftTitle,
+                    placeholder: "Untitled",
+                    isDisabled: store.isAgentRunning,
+                    onCommit: renameCurrentPage
+                )
 
                 HStack(spacing: 12) {
                     if let date = pageUpdatedAt {
@@ -242,6 +243,13 @@ struct PageDetailView: View {
     private func commitEdit() {
         store.flushPendingSave()
         isEditing = false
+    }
+
+    /// Rename the currently-selected page. `store.rename` flushes pending edits
+    /// first, then updates the title (and the slug, open tabs, and `draftTitle`).
+    private func renameCurrentPage(to newTitle: String) {
+        guard case .page(let id)? = store.selection else { return }
+        store.rename(id, to: newTitle)
     }
 
 }
