@@ -525,6 +525,14 @@ public final class WikiStoreModel {
     /// Always rebuilds `summaries` from source on success.
     public func save() {
         guard let id = loadedPage else { return }
+        
+        // Auto-heal malformed wiki-links (e.g. LLM escaped brackets) instantly
+        // in the editor before hitting disk.
+        let validatedBody = WikiLinkValidator.applyFixes(to: draftBody)
+        if validatedBody != draftBody {
+            draftBody = validatedBody
+        }
+        
         do {
             // The shared upsert+reparse seam (Phase A): persist the body AND
             // re-resolve this page's `[[wiki-links]]` in one operation. `wikictl`
