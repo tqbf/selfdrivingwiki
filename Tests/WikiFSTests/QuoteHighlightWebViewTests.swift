@@ -187,6 +187,40 @@ struct QuoteHighlightWebViewTests {
         #expect(await markText(in: webView).isEmpty == false)
     }
 
+    @Test func highlightFallsBackToLongestRunWhenQuoteIsSplit() async throws {
+        // PDF extraction spliced a reprint-address block (and a hard hyphen,
+        // "vo-" / "litional") into the MIDDLE of the sentence, so the full quote
+        // never appears contiguously. The fallback must still highlight the
+        // longest contiguous run that IS present and scroll to it.
+        let webView = WKWebView()
+        let body = """
+        <p>More recently, the vo-</p>\
+        <p>For reprints write to: Irving Kirsch, Ph.D., Department of Psychology, U-20.</p>\
+        <p>litional status of suggested behavior has become a source of intense controversy (Kirsch &amp; Lynn, 1995).</p>
+        """
+        try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
+
+        let quote = "the volitional status of suggested behavior has become a source of intense controversy"
+        await run(webView, WikiReaderRep.highlightJS(quote: quote))
+
+        let all = await allMarksText(in: webView).lowercased()
+        #expect(all.contains("status of suggested behavior has become a source of intense controversy"),
+                "split quote not highlighted via fallback; marks=\"\(all)\"")
+        #expect(await markText(in: webView).isEmpty == false)
+    }
+
+    @Test func noFallbackHighlightForShortUnmatchedQuote() async throws {
+        // A short quote (<4 words) that isn't present must NOT trigger a noisy
+        // partial highlight — the fallback floor is 4 words.
+        let webView = WKWebView()
+        let body = "<p>alpha beta gamma delta epsilon</p>"
+        try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
+
+        await run(webView, WikiReaderRep.highlightJS(quote: "nowhere to be found"))
+
+        #expect(await markText(in: webView).isEmpty)
+    }
+
     @Test func reHighlightClearsThePreviousMark() async throws {
         // A second highlight must remove the first mark, not stack them.
         let webView = WKWebView()

@@ -231,18 +231,23 @@ public enum WikiLinkMarkdown {
     /// Allowed characters for the `title=` query value. Start from the URL query
     /// set and remove the sub-delimiters that have query meaning, so a `&`, `=`,
     /// `?`, `#`, `+`, or space in a title is percent-escaped rather than parsed.
+    /// `(` / `)` are also escaped: the whole URL is emitted inside a Markdown
+    /// `[text](url)` destination, where an unbalanced `)` terminates the link.
     private static let titleQueryAllowed: CharacterSet = {
         var set = CharacterSet.urlQueryAllowed
-        set.remove(charactersIn: "&=?#+ ")
+        set.remove(charactersIn: "&=?#+ ()")
         return set
     }()
 
     /// Allowed characters for the URL fragment (everything after `#`). Keeps
     /// alphanumeric + common punctuation; `#`, `"`, space, and `%` are encoded so
-    /// they don't terminate the fragment or confuse URL parsing.
+    /// they don't terminate the fragment or confuse URL parsing. `(` / `)` are
+    /// also escaped: the URL lands inside a Markdown `[text](url)` destination,
+    /// and an unbalanced `)` (e.g. a fragment with `1.) 2.)`) would otherwise end
+    /// the link early and dump the rest of the URL as literal text.
     private static let fragmentAllowed: CharacterSet = {
         var set = CharacterSet.urlFragmentAllowed
-        set.remove(charactersIn: "#\" %")
+        set.remove(charactersIn: "#\" %()")
         return set
     }()
 

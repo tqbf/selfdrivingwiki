@@ -222,6 +222,30 @@ struct WikiLinkMarkdownTests {
         #expect(frag == "\"exact passage\"")
     }
 
+    @Test func fragmentWithUnbalancedParensDoesNotBreakMarkdownLink() {
+        // A quoted passage with `1.) 2.) 3.) 4.)` enumerations carries unbalanced
+        // `)` characters. The whole URL is emitted inside a Markdown `(url)`
+        // destination, so an unencoded `)` would terminate the link early and
+        // dump the rest as literal text (breaking the renderer). They must be
+        // percent-encoded — and still round-trip back to the original fragment.
+        let quote = "it is 1.) outside, 2.) uncontrollable (Bargh, 1994)"
+        let out = WikiLinkMarkdown.linkified("[[source:Paper#\"\(quote)\"]]") { _, _ in true }
+        // No literal parens survive in the emitted link destination.
+        #expect(!extractURL(out).contains("("))
+        #expect(!extractURL(out).contains(")"))
+        let url = URL(string: extractURL(out))!
+        #expect(WikiLinkMarkdown.fragment(from: url) == "\"\(quote)\"")
+    }
+
+    @Test func titleWithParensIsEncoded() {
+        // Parens in the *title* would equally break the `(url)` destination.
+        let out = WikiLinkMarkdown.linkified("[[Title (2024)]]") { _, _ in true }
+        #expect(!extractURL(out).contains("("))
+        #expect(!extractURL(out).contains(")"))
+        let url = URL(string: extractURL(out))!
+        #expect(WikiLinkMarkdown.target(from: url) == "Title (2024)")
+    }
+
     @Test func samePageAnchorRendersAsWikiAnchorHost() {
         let out = WikiLinkMarkdown.linkified("[[#Section]]") { _, _ in true }
         #expect(out == "[Section](wiki://anchor#Section)")

@@ -774,9 +774,25 @@ internal struct WikiReaderRep: NSViewRepresentable {
           var lo=0, hi=chars.length;
           while(lo<hi&&chars[lo]===" "){ lo++; }
           while(hi>lo&&chars[hi-1]===" "){ hi--; }
-          var at=chars.slice(lo,hi).join("").indexOf(nq);
-          if(at<0){ return; }
-          var s=lo+at, e=lo+at+nq.length-1;
+          var hay=chars.slice(lo,hi).join("");
+          var at=hay.indexOf(nq), mlen=nq.length;
+          if(at<0){
+            // The quote may not appear contiguously: PDF extraction can splice
+            // a footer/marginal block (or a hard-hyphenated word) into the
+            // middle of a sentence. Fall back to the LONGEST contiguous run of
+            // >=4 quote-words that IS present, so we still highlight + scroll to
+            // the passage instead of giving up.
+            var words=nq.split(" ");
+            for(var L=words.length-1; L>=4 && at<0; L--){
+              for(var st=0; st+L<=words.length; st++){
+                var cand=words.slice(st,st+L).join(" ");
+                var p=hay.indexOf(cand);
+                if(p>=0){ at=p; mlen=cand.length; break; }
+              }
+            }
+            if(at<0){ return; }
+          }
+          var s=lo+at, e=lo+at+mlen-1;
           var range=document.createRange();
           range.setStart(map[s].n, map[s].o);
           range.setEnd(map[e].n, map[e].o+1);
