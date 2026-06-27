@@ -66,7 +66,7 @@ struct WikiDetailView: View {
                             .controlSize(.large)
 
                             Button {
-                                if let url = WikiFilePanels.chooseFile(title: "Import File", prompt: "Import") {
+                                if let url = WikiFilePanels.chooseFile(title: "Add File", prompt: "Add File") {
                                     Task {
                                         await store.ingest(fileURLs: [url])
                                     }
