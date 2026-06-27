@@ -2,40 +2,13 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-06-27 — WikiLinkFixer: integrated page lint (rename + pre-flight + LLM lint)
+## 2026-06-26 — Lint Page, WikilinksFixer
 
-Renamed `WikiLinkValidator` → `WikiLinkFixer` (it corrects, not merely validates) and integrated the fixer into a full page-scoped lint flow that feeds pre-computed findings to the LLM.
+Some links to sources were showing up with "\]]" although they did not throw off the renderer.  
 
-**Rename (`WikiLinkFixer`):**
-- `WikiLinkValidator` → `WikiLinkFixer`, `ValidatedLink` → `FixResult`, `validate()` → `fix()` across all callers (`WikiLinkParser`, `WikiLinkMarkdown`, `MarkdownLinter`, `WikiStoreModel`).
-
-**`WikiStoreModel.preflightLint(pageID:) → LintPreflight?`** (replaces `lintPage`):
-- Applies `WikiLinkFixer.applyFixes()` and saves immediately if any `\]]` brackets were corrected.
-- Detects `[[page links]]` whose targets don't resolve to existing wiki pages.
-- Returns `{ didFixLinks, brokenPageLinks }` for injection into the LLM prompt.
-
-**`WikiOperation.lintPage` / `OperationRequest.lintPage`:**
-- New case carries `pageTitle` and `brokenLinks` (pre-computed) through to the prompt.
-- `lintPagePrompt` tells the LLM exactly which links are broken (it investigates, not discovers) and instructs it to check for other issues and log findings.
-
-**`AgentOperationRunner.runLintPage`:**
-- Runs `preflightLint` (regex fix + broken-link scan), then launches the LLM with findings baked into the prompt.
-
-**UI wiring:**
-- "Lint" button in `PageDetailView` → `runLintPage` (was `store.lintPage`; now runs fixer + LLM).
-- "Lint Page" context menu in `SidebarView` → `runLintPage`; `SidebarView` gains `launcher: AgentLauncher`.
-- `ContentView` passes `agentLauncher` to `SidebarView`.
-
-The pipeline: markdown lint warning surfaces the `\]]` issue in the orange banner → user clicks "Lint" → `WikiLinkFixer` corrects brackets + broken-link scan → LLM fixes unresolvable links and other issues → `wikictl log append --kind lint`.
-
-## 2026-06-27 — WikiLink Validator (fix escaped brackets and pipes in LLM output)
-
-Implemented `plans/wikilink-validator.md`. Fixed a widespread bug where LLMs would "safely" escape brackets and pipes inside wikilinks (e.g. `[[source:Doc#"quote"\]]` or `[[Page\|Alias]]`), which the app's regex then consumed as part of the link target, breaking the display.
-
-- **`WikiLinkValidator`**: A pure, dependency-free struct that receives regex match captures (`target`, `alias`) and strips trailing backslashes, seamlessly repairing escaped brackets and pipes.
-- **On-the-fly healing**: Both `WikiLinkMarkdown` (the HTML renderer) and `WikiLinkParser` (the database extractor) now pass all raw regex captures through the validator before using them. The UI is instantly fixed.
-- **Data-at-rest healing**: Added `WikiLinkValidator.applyFixes(to:)` and wired it into `MarkdownLinter`. When pages are saved, the linter permanently rewrites `\]]` into `]]` on disk.
-- **Testing**: Added unit tests to verify the pipeline. Also created an integration script `RealDatabaseTest` to scan the live SQLite markdown table for hallucinations; it successfully found and auto-healed 7 files in the user's live database.
+* Added WikilinksFixer to the code to find and correct these.
+* Added a "Lint" button to the page and the page context menu.
+* Added some prompt instructions to the agent when linting a single page.
 
 ## 2026-06-26 — Vendored design skills (swiftui-pro, macos-design, typography-designer)
 
