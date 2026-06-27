@@ -173,24 +173,26 @@ public final class MarkdownLinter: @unchecked Sendable {
     /// plus any findings that could NOT be auto-fixed. Under the cosmetic-only
     /// config, `unfixable` is always empty (every rule is auto-fixable).
     public func fix(markdown: String) -> FixOutcome {
+        let validatedMarkdown = WikiLinkValidator.applyFixes(to: markdown)
+
         lock.lock()
         defer { lock.unlock() }
         exceptionSink.set(nil)
         let options: [String: Any] = [
-            "strings": ["content": markdown],
+            "strings": ["content": validatedMarkdown],
             "config": Self.defaultConfig,
         ]
         guard let lintResult = lint.call(withArguments: [options]),
               let dict = lintResult.toDictionary() as? [String: Any],
               let findings = dict["content"] as? [Any] else {
-            return FixOutcome(fixed: markdown, unfixable: [])
+            return FixOutcome(fixed: validatedMarkdown, unfixable: [])
         }
         let results = findings.compactMap { Self.lintResult(from: $0) }
         // applyFixes filters internally to findings with fixInfo — passing all
         // findings is safe (unfixable ones are ignored).
-        guard let fixedVal = applyFixes.call(withArguments: [markdown, findings]),
+        guard let fixedVal = applyFixes.call(withArguments: [validatedMarkdown, findings]),
               let fixed = fixedVal.toString() else {
-            return FixOutcome(fixed: markdown, unfixable: results.filter { !$0.isFixable })
+            return FixOutcome(fixed: validatedMarkdown, unfixable: results.filter { !$0.isFixable })
         }
         let unfixable = results.filter { !$0.isFixable }
         return FixOutcome(fixed: fixed, unfixable: unfixable)

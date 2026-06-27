@@ -2,6 +2,15 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-27 — WikiLink Validator (fix escaped brackets and pipes in LLM output)
+
+Implemented `plans/wikilink-validator.md`. Fixed a widespread bug where LLMs would "safely" escape brackets and pipes inside wikilinks (e.g. `[[source:Doc#"quote"\]]` or `[[Page\|Alias]]`), which the app's regex then consumed as part of the link target, breaking the display.
+
+- **`WikiLinkValidator`**: A pure, dependency-free struct that receives regex match captures (`target`, `alias`) and strips trailing backslashes, seamlessly repairing escaped brackets and pipes.
+- **On-the-fly healing**: Both `WikiLinkMarkdown` (the HTML renderer) and `WikiLinkParser` (the database extractor) now pass all raw regex captures through the validator before using them. The UI is instantly fixed.
+- **Data-at-rest healing**: Added `WikiLinkValidator.applyFixes(to:)` and wired it into `MarkdownLinter`. When pages are saved, the linter permanently rewrites `\]]` into `]]` on disk.
+- **Testing**: Added unit tests to verify the pipeline. Also created an integration script `RealDatabaseTest` to scan the live SQLite markdown table for hallucinations; it successfully found and auto-healed 7 files in the user's live database.
+
 ## 2026-06-26 — Vendored design skills (swiftui-pro, macos-design, typography-designer)
 
 Three public Agent Skills vendored into `.polytoken/skills/` (project-level) so

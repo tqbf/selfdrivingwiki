@@ -72,7 +72,13 @@ public enum WikiLinkMarkdown {
             }
             cursor = full.location + full.length
 
-            let rawTarget = collapseWhitespace(ns.substring(with: match.range(at: 1)))
+            let parsedTarget = ns.substring(with: match.range(at: 1))
+            let aliasRange = match.range(at: 2)
+            let parsedAlias = aliasRange.location != NSNotFound ? ns.substring(with: aliasRange) : nil
+            
+            let validated = WikiLinkValidator.validate(target: parsedTarget, alias: parsedAlias)
+            
+            let rawTarget = collapseWhitespace(validated.target)
             guard !rawTarget.isEmpty else {
                 // Empty target (e.g. `[[ ]]`): leave the literal text in place.
                 out += ns.substring(with: full)
@@ -88,11 +94,10 @@ public enum WikiLinkMarkdown {
                     out += ns.substring(with: full)
                     continue
                 }
-                let aliasRange = match.range(at: 2)
                 let display: String
-                if aliasRange.location != NSNotFound {
-                    let alias = collapseWhitespace(ns.substring(with: aliasRange))
-                    display = alias.isEmpty ? frag : alias
+                if let alias = validated.alias {
+                    let collapsedAlias = collapseWhitespace(alias)
+                    display = collapsedAlias.isEmpty ? frag : collapsedAlias
                 } else {
                     display = frag
                 }
@@ -113,11 +118,10 @@ public enum WikiLinkMarkdown {
                 continue
             }
 
-            let aliasRange = match.range(at: 2)
             let display: String
-            if aliasRange.location != NSNotFound {
-                let alias = collapseWhitespace(ns.substring(with: aliasRange))
-                display = alias.isEmpty ? bareTarget : alias
+            if let alias = validated.alias {
+                let collapsedAlias = collapseWhitespace(alias)
+                display = collapsedAlias.isEmpty ? bareTarget : collapsedAlias
             } else {
                 display = bareTarget
             }
