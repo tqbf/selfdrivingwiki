@@ -11,6 +11,7 @@ struct AgentCommandSettingsView: View {
     @State private var prefixArguments: String
     @State private var modelOverride: String
     @State private var extraEnvironment: String
+    @State private var sandboxEnabled: Bool
 
     let containerDirectory: URL
 
@@ -21,6 +22,7 @@ struct AgentCommandSettingsView: View {
         _prefixArguments = State(initialValue: config.prefixArguments)
         _modelOverride = State(initialValue: config.modelOverride)
         _extraEnvironment = State(initialValue: config.extraEnvironment)
+        _sandboxEnabled = State(initialValue: SandboxConfig.load(from: containerDirectory).enabled)
     }
 
     var body: some View {
@@ -45,6 +47,16 @@ struct AgentCommandSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                Section {
+                    Toggle("Run agent in sandbox", isOn: $sandboxEnabled)
+                } header: {
+                    Text("Sandbox")
+                } footer: {
+                    Text("When on, the main agent and Edit sessions run under a seatbelt that confines writes to the wiki DB and scratch directory (plus ~/.claude). The Ask session is always read-only sandboxed regardless of this setting.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .formStyle(.grouped)
 
@@ -61,6 +73,7 @@ struct AgentCommandSettingsView: View {
         .onChange(of: prefixArguments) { _, _ in saveCommand() }
         .onChange(of: modelOverride) { _, _ in saveCommand() }
         .onChange(of: extraEnvironment) { _, _ in saveCommand() }
+        .onChange(of: sandboxEnabled) { _, _ in saveSandbox() }
     }
 
     // MARK: - Actions
@@ -74,6 +87,17 @@ struct AgentCommandSettingsView: View {
         try? config.save(to: containerDirectory)
     }
 
+    private func saveSandbox() {
+        // Load fresh to PRESERVE extraAllowedPaths — we only mutate `enabled` here.
+        // Safe because this view is currently the sole writer of sandbox-config.json;
+        // revisit if an extraAllowedPaths editor is added. A corrupt file degrades to
+        // .default (empty paths), which is accepted.
+        var config = SandboxConfig.load(from: containerDirectory)
+        config.enabled = sandboxEnabled
+        // try? is deliberate: the view has no error-reporting surface. Matches saveCommand().
+        try? config.save(to: containerDirectory)
+    }
+
     private func resetToDefault() {
         let cmdDefaults = AgentCommandConfig.default
         executable = cmdDefaults.executable
@@ -81,5 +105,12 @@ struct AgentCommandSettingsView: View {
         modelOverride = cmdDefaults.modelOverride
         extraEnvironment = cmdDefaults.extraEnvironment
         saveCommand()
+        // Also reset the sandbox toggle so "Reset to Default" is fully consistent.
+        sandboxEnabled = SandboxConfig.default.enabled
+        // Explicit save mirrors saveCommand() above: persistence-on-reset is
+        // unconditional regardless of .onChange timing. The .onChange(of: sandboxEnabled)
+        // would also fire and call saveSandbox(), but the explicit call here is
+        // intentional — do not remove it as "redundant".
+        saveSandbox()
     }
 }

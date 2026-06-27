@@ -10,7 +10,8 @@ struct ContentView: View {
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
     @Bindable var agentLauncher: AgentLauncher
-    let queryLauncher: AgentLauncher
+    let askLauncher: AgentLauncher
+    let editLauncher: AgentLauncher
     let extractionCoordinator: ExtractionCoordinator
     @State private var isTranscriptExpanded = false
     /// Driven by `.dropDestination`'s `isTargeted` callback to fade in a subtle
@@ -180,7 +181,8 @@ struct ContentView: View {
         WikiDetailView(
             store: store,
             launcher: agentLauncher,
-            queryLauncher: queryLauncher,
+            askLauncher: askLauncher,
+            editLauncher: editLauncher,
             manager: manager,
             fileProvider: fileProvider,
             extractionCoordinator: extractionCoordinator,

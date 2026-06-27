@@ -24,7 +24,8 @@ extension WikiStoreModel {
     /// after mutations, per SWIFTUI-RULES §3.1).
     public func tabTitle(for selection: WikiSelection) -> String {
         switch selection {
-        case .query: return "Query"
+        case .ask: return "Ask"
+        case .edit: return "Edit"
         case .systemPrompt: return "Instructions"
         case .changeLog: return "Activity"
         case .lint: return "Lint"
@@ -40,7 +41,8 @@ extension WikiStoreModel {
     /// SF Symbol name for a `WikiSelection`, used as the tab icon.
     public func tabIcon(for selection: WikiSelection) -> String {
         switch selection {
-        case .query: return "bubble.left.and.text.bubble.right"
+        case .ask: return "bubble.left.and.text.bubble.right"
+        case .edit: return "square.and.pencil"
         case .systemPrompt: return "sparkles"
         case .changeLog: return "clock.arrow.circlepath"
         case .lint: return "checkmark.shield"

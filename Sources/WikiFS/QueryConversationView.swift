@@ -2,17 +2,25 @@ import AppKit
 import SwiftUI
 import WikiFSCore
 
+/// Whether the session can write to the wiki. Ask = read-only; Edit = can write.
+/// This is a property of the mounted session, not a runtime toggle.
+enum QueryMode {
+    case ask, edit
+
+    var allowsEdits: Bool { self == .edit }
+}
+
 /// Dedicated query workspace for the active wiki. It keeps a Claude session open
 /// so the user can ask follow-ups and choose when an answer should become wiki
 /// content, instead of every query being a one-shot background operation.
 struct QueryConversationView: View {
+    let mode: QueryMode
     @Bindable var launcher: AgentLauncher
     @Bindable var store: WikiStoreModel
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
     @State private var draftMessage = ""
     @State private var showsInternals = false
-    @State private var allowWikiEdits = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,6 +39,8 @@ struct QueryConversationView: View {
             // Belt-and-suspenders: clear the internals toggle when a run ends so a
             // later ingest/lint run doesn't inherit it and strand the view on
             // `AgentActivityView`. (AC.1)
+            // Invariant: interactive session's isRunning only goes false when the
+            // process truly exits — this observer never fires on spurious transients.
             if !isRunning { showsInternals = false }
         }
         // NOTE: the per-turn edit lock is NO LONGER driven from this view. It is
@@ -42,10 +52,14 @@ struct QueryConversationView: View {
     }
 
     private var controls: some View {
-        // Only shown during an active query run (gated by `showsDebugControls`).
+        // Only shown during an active query run or while awaiting the gate
+        // (gated by `showsDebugControls`). The spinner shows only while generating;
+        // the stop button shows in both states.
         HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
+            if launcher.isGenerating {
+                ProgressView()
+                    .controlSize(.small)
+            }
             Menu {
                 Toggle("Show internals", isOn: $showsInternals)
                 if let status = launcher.exitStatus {
@@ -62,12 +76,23 @@ struct QueryConversationView: View {
             .labelStyle(.iconOnly)
             .menuStyle(.borderlessButton)
             .help("Show activity and transcript internals")
+            // Stop button: visible while generating OR awaiting the generation slot.
+            // Wired to stopAgent() which cancels any pending send and terminates the process.
+            Button(action: { launcher.stopAgent() }) {
+                Image(systemName: "stop.circle.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Stop the current response")
         }
     }
 
     private var showsDebugControls: Bool {
-        AgentLauncher.showsQueryDebugControls(
-            isGenerating: launcher.isGenerating, runningKind: launcher.runningKind)
+        // Show controls while generating (spinner + menu + stop) OR while awaiting
+        // the generation slot (stop only — the session is live but waiting its turn).
+        (launcher.isGenerating || launcher.isAwaitingGenerationSlot)
+            && launcher.runningKind == .query
     }
 
     @ViewBuilder
@@ -85,8 +110,8 @@ struct QueryConversationView: View {
         }
     }
 
-    /// Shown when the query agent has "Allow wiki edits" enabled and is actively
-    /// running — the agent CAN write to the wiki, and ingestion is blocked.
+    /// Shown in Edit mode while the agent is actively generating — the agent CAN
+    /// write to the wiki, and ingestion is paused.
     private var editingEnabledBanner: some View {
         HStack(spacing: 8) {
             Image(systemName: "pencil.and.list.clipboard")
@@ -107,14 +132,31 @@ struct QueryConversationView: View {
         }
     }
 
+    /// Pure predicate: true only when an Edit-mode session is actively generating.
+    /// Kept static so tests can verify the full (mode × isGenerating) matrix without
+    /// constructing a view. `mode.allowsEdits` is the sole input from the mode — there
+    /// is no parallel boolean; the mode drives the banner.
+    static func showsEditingBanner(allowsEdits: Bool, isGenerating: Bool) -> Bool {
+        allowsEdits && isGenerating
+    }
+
     private var showsEditingEnabledBanner: Bool {
-        allowWikiEdits && launcher.isGenerating
+        Self.showsEditingBanner(allowsEdits: mode.allowsEdits, isGenerating: launcher.isGenerating)
+    }
+
+    /// Top space the banner reserves so it clears the floating controls cluster,
+    /// which is overlaid in the same top-trailing band. Zero when no controls show.
+    private var bannerTopReservation: CGFloat {
+        showsDebugControls
+            ? QueryConversationMetrics.debugTopInset + QueryConversationMetrics.controlsBandHeight
+            : 0
     }
 
     private var conversation: some View {
         VStack(spacing: 0) {
             if showsEditingEnabledBanner {
                 editingEnabledBanner
+                    .padding(.top, bannerTopReservation)
                     .padding(.bottom, QueryConversationMetrics.sectionSpacing)
             }
             QueryTranscriptView(launcher: launcher, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
@@ -132,9 +174,10 @@ struct QueryConversationView: View {
         VStack(spacing: QueryConversationMetrics.emptyStateSpacing) {
             if showsEditingEnabledBanner {
                 editingEnabledBanner
+                    .padding(.top, bannerTopReservation)
             }
             Spacer(minLength: 0)
-            Text("Ask \(activeWikiName)")
+            Text(mode == .edit ? "Edit \(activeWikiName)" : "Ask \(activeWikiName)")
                 .font(.largeTitle)
                 .fontWeight(.regular)
                 .multilineTextAlignment(.center)
@@ -146,63 +189,35 @@ struct QueryConversationView: View {
     }
 
     private func composer(maxWidth: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Toggle(isOn: $allowWikiEdits) {
-                Text("Allow wiki edits")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .toggleStyle(.checkbox)
-            .help("When on, the agent can edit the wiki. Toggling restarts the session with the new permission, keeping the conversation as context.")
-            .onChange(of: allowWikiEdits) { _, isOn in
-                // Edit mode is a property of the spawned claude process (its seatbelt
-                // sandbox + system prompt), so it can't change for a RUNNING session.
-                // Flipping the checkbox mid-session stops the current session and
-                // relaunches in the new mode, re-feeding the transcript so the new
-                // process keeps context. Pre-first-message (no session yet) this just
-                // sets the mode the next session starts in.
-                guard launcher.isInteractiveSession else { return }
-                Task {
-                    await AgentOperationRunner.restartQueryConversation(
-                        launcher: launcher,
-                        store: store,
-                        manager: manager,
-                        fileProvider: fileProvider,
-                        allowWikiEdits: isOn)
-                }
-            }
-            .padding(.horizontal, QueryConversationMetrics.composerHorizontalPadding)
+        HStack(alignment: .bottom, spacing: 10) {
+            TextField("Ask a question, or ask the Agent to update the wiki…", text: $draftMessage, axis: .vertical)
+                .font(.body)
+                .textFieldStyle(.plain)
+                .lineLimit(1...6)
+                .padding(.leading, QueryConversationMetrics.composerHorizontalPadding)
+                .padding(.vertical, QueryConversationMetrics.composerVerticalPadding)
+                .onSubmit(sendMessage)
+                .disabled(!canType)
 
-            HStack(alignment: .bottom, spacing: 10) {
-                TextField("Ask a question, or ask the Agent to update the wiki…", text: $draftMessage, axis: .vertical)
-                    .font(.body)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...6)
-                    .padding(.leading, QueryConversationMetrics.composerHorizontalPadding)
-                    .padding(.vertical, QueryConversationMetrics.composerVerticalPadding)
-                    .onSubmit(sendMessage)
-                    .disabled(!canType)
-
-                Button(action: sendMessage) {
-                    Image(systemName: sendButtonIcon)
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(canSend ? Color.white : Color.secondary)
-                        .frame(width: QueryConversationMetrics.sendButtonSize, height: QueryConversationMetrics.sendButtonSize)
-                        .background(sendButtonBackground, in: Circle())
-                }
-                    .buttonStyle(.borderless)
-                    .disabled(!canSend)
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .help(sendButtonTitle)
+            Button(action: sendMessage) {
+                Image(systemName: sendButtonIcon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(canSend ? Color.white : Color.secondary)
+                    .frame(width: QueryConversationMetrics.sendButtonSize, height: QueryConversationMetrics.sendButtonSize)
+                    .background(sendButtonBackground, in: Circle())
             }
-            .padding(.trailing, QueryConversationMetrics.composerButtonInset)
-            .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
-            .overlay {
-                Capsule()
-                    .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
-            }
-            .shadow(color: Color.black.opacity(0.06), radius: 18, x: 0, y: 8)
+                .buttonStyle(.borderless)
+                .disabled(!canSend)
+                .keyboardShortcut(.return, modifiers: .command)
+                .help(sendButtonTitle)
         }
+        .padding(.trailing, QueryConversationMetrics.composerButtonInset)
+        .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.06), radius: 18, x: 0, y: 8)
         .frame(maxWidth: maxWidth)
     }
 
@@ -238,10 +253,14 @@ struct QueryConversationView: View {
         fileProvider.path != nil
             && canType
             && !launcher.isGenerating
+            && !launcher.isAwaitingGenerationSlot
             && !draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var sendButtonTitle: String {
+        if launcher.isAwaitingGenerationSlot {
+            return "Waiting for the other session to finish before sending…"
+        }
         if launcher.isGenerating {
             return "Wait for the response before sending the next message"
         }
@@ -266,7 +285,7 @@ struct QueryConversationView: View {
                     store: store,
                     manager: manager,
                     fileProvider: fileProvider,
-                    allowWikiEdits: allowWikiEdits
+                    allowWikiEdits: mode.allowsEdits
                 )
             }
         }
@@ -277,6 +296,10 @@ private enum QueryConversationMetrics {
     static let contentInset: CGFloat = 28
     static let sectionSpacing: CGFloat = 16
     static let debugTopInset: CGFloat = 18
+    /// Vertical room the floating controls cluster (spinner/menu/stop) occupies at
+    /// the top-trailing corner. The editing banner reserves this much top space when
+    /// the controls are visible so the two never overlap in the top band.
+    static let controlsBandHeight: CGFloat = 28
     static let conversationHorizontalInset: CGFloat = 48
     static let conversationTopInset: CGFloat = 56
     static let chatColumnWidth: CGFloat = 900

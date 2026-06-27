@@ -16,8 +16,11 @@ struct WikiFSApp: App {
     private let containerDirectory: URL
     @State private var manager: WikiManager
     @State private var fileProvider = FileProviderSpike()
-    @State private var agentLauncher = AgentLauncher()
-    @State private var queryLauncher = AgentLauncher()
+    /// All three launchers share one `GenerationGate` so ingest, ask-turn, and
+    /// edit-turn generations serialize globally — only one active generation at a time.
+    @State private var agentLauncher: AgentLauncher
+    @State private var askLauncher: AgentLauncher
+    @State private var editLauncher: AgentLauncher
     /// App-wide extraction backend resolver (local pdf2md / Claude / Docling
     /// Serve). Threaded like `agentLauncher` — one instance, owned by the app.
     @State private var extractionCoordinator: ExtractionCoordinator
@@ -50,11 +53,19 @@ struct WikiFSApp: App {
         _manager = State(initialValue: WikiManager(containerDirectory: directory))
         _extractionCoordinator = State(
             initialValue: ExtractionCoordinator(containerDirectory: directory))
+        // All three launchers share one GenerationGate so ingest, ask-turn, and
+        // edit-turn generations contend on the same FIFO queue — only one active
+        // generation at a time. Interactive sessions' processes coexist freely;
+        // only one GENERATES at a time (per-turn gate).
+        let generationGate = GenerationGate()
+        _agentLauncher = State(initialValue: AgentLauncher(generationGate: generationGate))
+        _askLauncher   = State(initialValue: AgentLauncher(generationGate: generationGate))
+        _editLauncher  = State(initialValue: AgentLauncher(generationGate: generationGate))
     }
 
     var body: some Scene {
         WindowGroup {
-            RootView(manager: manager, fileProvider: fileProvider, agentLauncher: agentLauncher, queryLauncher: queryLauncher, extractionCoordinator: extractionCoordinator)
+            RootView(manager: manager, fileProvider: fileProvider, agentLauncher: agentLauncher, askLauncher: askLauncher, editLauncher: editLauncher, extractionCoordinator: extractionCoordinator)
                 .alert(
                     "Install Self Driving Wiki in Applications",
                     isPresented: $showingLaunchLocationWarning,

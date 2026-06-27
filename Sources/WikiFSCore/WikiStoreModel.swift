@@ -328,7 +328,7 @@ public final class WikiStoreModel {
     /// Open the tab for `selection`: if one is already open, focus it (reuse,
     /// never duplicate); otherwise create a new tab and focus it. This holds for
     /// every selection type — pages and files reuse just like the singletons
-    /// (.query, .systemPrompt, .changeLog) — so clicking a page or a
+    /// (.ask, .edit, .systemPrompt, .changeLog) — so clicking a page or a
     /// `[[wiki-link]]` that's already open returns to its tab instead of spawning
     /// a copy.
     public func openTab(_ selection: WikiSelection, title: String? = nil) {
@@ -431,7 +431,7 @@ public final class WikiStoreModel {
         // banner doesn't bleed onto an unrelated page (it's recomputed on save).
         mermaidSaveWarning = nil
         switch newValue {
-        case .query, .lint:
+        case .ask, .edit, .lint:
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
@@ -1204,7 +1204,7 @@ public final class WikiStoreModel {
             pageIDs.contains(id)
         case .source(let id):
             sourceIDs.contains(id)
-        case .query, .systemPrompt, .changeLog, .lint:
+        case .ask, .edit, .systemPrompt, .changeLog, .lint:
             true
         }
     }

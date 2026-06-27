@@ -291,7 +291,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
           .chat-assistant { justify-content: flex-start; }
           .chat-row .bubble { max-width: min(760px, 86%); }
           .chat-user .bubble {
-            background: var(--code-bg); border-radius: 999px;
+            background: var(--code-bg); border-radius: 14px;
             padding: 11px 16px; white-space: pre-wrap; font-size: 13.5px;
           }
           p { margin: 0 0 0.6em; }

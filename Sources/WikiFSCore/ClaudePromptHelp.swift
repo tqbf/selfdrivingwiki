@@ -79,7 +79,6 @@ public enum ClaudePromptHelp {
     ]
     // When sandboxed, the relocation env is part of the real invocation surface.
     if sandbox != nil {
-      envPairs.append(("CLAUDE_CONFIG_DIR", command.environment["CLAUDE_CONFIG_DIR"] ?? ""))
       envPairs.append(("TMPDIR", command.environment["TMPDIR"] ?? ""))
     }
 

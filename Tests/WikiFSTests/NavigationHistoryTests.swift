@@ -76,13 +76,13 @@ struct NavigationHistoryTests {
         model.reloadFromStore()
 
         model.select(.page(page.id))
-        model.select(.query)
+        model.select(.ask)
 
-        #expect(model.selection == .query)
+        #expect(model.selection == .ask)
         model.navigateBack()
         #expect(model.selection == .page(page.id))
         model.navigateForward()
-        #expect(model.selection == .query)
+        #expect(model.selection == .ask)
     }
 
     @Test func historyNavigationFlushesOutgoingDraft() throws {
