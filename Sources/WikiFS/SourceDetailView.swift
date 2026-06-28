@@ -269,33 +269,26 @@ struct SourceDetailView: View {
                         .keyboardShortcut("e", modifiers: .command)
                         .disabled(isRunning)
                     }
-                    // Share — to the left of the Outline toggle.
-                    if let path = fileProvider.sourceMountPath(for: file) {
+                    // Share — to the left of the Outline toggle.  Resolves the
+                    // canonical URL from the daemon (like openSource) so the
+                    // filename is human-readable and the URL is guaranteed
+                    // to resolve.
+                    if fileProvider.path != nil {
                         Button("Share", systemImage: "square.and.arrow.up") {
-                            let url = URL(fileURLWithPath: path)
-                            // Force the File Provider daemon to materialise the
-                            // file synchronously so NSSharingServicePicker can
-                            // determine the UTI when it evaluates the item.
-                            do {
-                                let values = try url.resourceValues(forKeys: [.contentTypeKey])
-                                if let type = values.contentType {
-                                    DebugLog.fileprovider("Share source detail: UTI=\(type.identifier)")
-                                } else {
-                                    DebugLog.fileprovider("Share source detail: no contentType for \(path)")
-                                }
-                            } catch {
-                                DebugLog.fileprovider("Share source detail: resourceValues error=\(error.localizedDescription) path=\(path)")
+                            Task {
+                                guard let url = await fileProvider.resolveSourceByNameURL(id: file.id) else { return }
+                                DebugLog.fileprovider("Share source detail: \(url.lastPathComponent)")
+                                let picker = NSSharingServicePicker(items: [url])
+                                let mouseScreen = NSEvent.mouseLocation
+                                guard let window = NSApplication.shared.keyWindow,
+                                      let contentView = window.contentView else { return }
+                                let windowPoint = window.convertPoint(fromScreen: mouseScreen)
+                                let viewPoint = contentView.convert(windowPoint, from: nil)
+                                picker.show(
+                                    relativeTo: NSRect(origin: viewPoint,
+                                                       size: NSSize(width: 1, height: 1)),
+                                    of: contentView, preferredEdge: .minY)
                             }
-                            let picker = NSSharingServicePicker(items: [url])
-                            let mouseScreen = NSEvent.mouseLocation
-                            guard let window = NSApplication.shared.keyWindow,
-                                  let contentView = window.contentView else { return }
-                            let windowPoint = window.convertPoint(fromScreen: mouseScreen)
-                            let viewPoint = contentView.convert(windowPoint, from: nil)
-                            picker.show(
-                                relativeTo: NSRect(origin: viewPoint,
-                                                   size: NSSize(width: 1, height: 1)),
-                                of: contentView, preferredEdge: .minY)
                         }
                         .help("Share this source file")
                     }

@@ -353,19 +353,48 @@ final class FileProviderSpike {
         }
     }
 
-    /// The user-visible path for an ingested source in the ACTIVE wiki's
-    /// `sources/by-name/` view, or `nil` if the mount root hasn't been resolved
-    /// yet. Using the `by-name` view gives the file a human-readable name in the
-    /// share sheet (e.g. `Trip Report--01AB.pdf`) rather than the raw ULID. The
-    /// path is constructed synchronously — the daemon materializes the file on
-    /// first access via the standard File Provider on-demand mechanism, exactly as
-    /// it does for `pages/by-title/` in `pageMountPath`.
-    func sourceMountPath(for source: SourceSummary) -> String? {
-        guard let root = path else { return nil }
-        let humanName = source.displayName ?? source.filename
-        let leaf = FilenameEscaping.byNameSourceFilename(
-            filename: humanName, ext: source.ext, sourceID: source.id.rawValue)
-        return "\(root)/sources/by-name/\(leaf)"
+    /// Resolve the user-visible URL for sharing a source via its `source-by-name`
+    /// identifier.  Uses `getUserVisibleURL` — the daemon returns the canonical
+    /// URL directly, so no path construction and no cold-cache race.  The filename
+    /// is human-readable (display name + short-id + extension), exactly what
+    /// `sourceNode` projects under `sources/by-name/`.  Returns `nil` if the
+    /// domain isn't active or the daemon can't resolve the item.
+    func resolveSourceByNameURL(id: PageID) async -> URL? {
+        guard let wikiID = activeWikiID else { return nil }
+        let domain = domain(id: wikiID, displayName: wikiID)
+        guard let manager = NSFileProviderManager(for: domain) else { return nil }
+        let identifier = NSFileProviderItemIdentifier(WikiFSContainerID.sourceByName(id.rawValue))
+        do {
+            let url = try await userVisibleURL(
+                manager: manager,
+                itemIdentifier: identifier,
+                timeout: .seconds(5))
+            DebugLog.fileprovider("resolveSourceByNameURL: resolved \(url.lastPathComponent)")
+            return url
+        } catch {
+            DebugLog.fileprovider("resolveSourceByNameURL: failed — \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// Resolve the user-visible URL for sharing a page via its `page-by-title`
+    /// identifier.  Mirrors `resolveSourceByNameURL` but for pages — the daemon
+    /// returns the canonical URL so the filename is human-readable and guaranteed
+    /// to resolve.  Returns `nil` if the domain isn't active.
+    func resolvePageByTitleURL(id: PageID) async -> URL? {
+        guard let wikiID = activeWikiID else { return nil }
+        let domain = domain(id: wikiID, displayName: wikiID)
+        guard let manager = NSFileProviderManager(for: domain) else { return nil }
+        let identifier = NSFileProviderItemIdentifier("page-by-title:\(id.rawValue)")
+        do {
+            return try await userVisibleURL(
+                manager: manager,
+                itemIdentifier: identifier,
+                timeout: .seconds(5))
+        } catch {
+            DebugLog.fileprovider("resolvePageByTitleURL: failed — \(error.localizedDescription)")
+            return nil
+        }
     }
 
     /// Tell the daemon the ACTIVE wiki changed so it re-runs `enumerateChanges`

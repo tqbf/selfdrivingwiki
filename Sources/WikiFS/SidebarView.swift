@@ -252,14 +252,6 @@ struct SidebarView: View {
             let selectedPageIDs: Set<PageID> = Set(listSelection.compactMap { sel in
                 if case .page(let id) = sel { return id } else { return nil }
             })
-            let batchShareURLs: [URL]? = {
-                guard selectedPageIDs.count > 1, let root = fileProvider.path else { return nil }
-                return selectedPageIDs.compactMap { id -> URL? in
-                    guard let s = store.summaries.first(where: { $0.id == id }) else { return nil }
-                    let leaf = FilenameEscaping.byTitleFilename(title: s.title, pageID: id.rawValue)
-                    return URL(fileURLWithPath: "\(root)/pages/by-title/\(leaf)")
-                }
-            }()
             // ---- end batch share plumbing ----
             if source.isEmpty, !store.searchQuery.isEmpty {
                 Text("No matching pages").foregroundStyle(.secondary).font(.callout)
@@ -280,38 +272,50 @@ struct SidebarView: View {
                         }
                         .disabled(store.isAgentRunning)
                         // Batch share — appears only when this row is part of a
-                        // multi-select (2+ pages). Shares every selected page's
-                        // mount URL so Finder/AirDrop/Mail etc. receive all of them.
-                        if let urls = batchShareURLs, selectedPageIDs.contains(summary.id) {
-                            Button("Share \(urls.count) Pages",
+                        // multi-select (2+ pages). Resolves all URLs in parallel
+                        // via the daemon, then passes them to one picker.
+                        if selectedPageIDs.count > 1, selectedPageIDs.contains(summary.id) {
+                            let ids = selectedPageIDs
+                            Button("Share \(ids.count) Pages",
                                    systemImage: "square.and.arrow.up") {
-                                let picker = NSSharingServicePicker(items: urls)
-                                let mouseScreen = NSEvent.mouseLocation
-                                guard let window = NSApplication.shared.keyWindow,
-                                      let contentView = window.contentView else { return }
-                                let windowPoint = window.convertPoint(fromScreen: mouseScreen)
-                                let viewPoint = contentView.convert(windowPoint, from: nil)
-                                picker.show(
-                                    relativeTo: NSRect(origin: viewPoint,
-                                                       size: NSSize(width: 1, height: 1)),
-                                    of: contentView, preferredEdge: .minY)
+                                Task {
+                                    let urls: [URL] = await withTaskGroup(of: URL?.self) { group in
+                                        for id in ids {
+                                            group.addTask { await fileProvider.resolvePageByTitleURL(id: id) }
+                                        }
+                                        var results: [URL] = []
+                                        for await url in group { if let url { results.append(url) } }
+                                        return results
+                                    }
+                                    guard !urls.isEmpty else { return }
+                                    let picker = NSSharingServicePicker(items: urls)
+                                    let mouseScreen = NSEvent.mouseLocation
+                                    guard let window = NSApplication.shared.keyWindow,
+                                          let contentView = window.contentView else { return }
+                                    let windowPoint = window.convertPoint(fromScreen: mouseScreen)
+                                    let viewPoint = contentView.convert(windowPoint, from: nil)
+                                    picker.show(
+                                        relativeTo: NSRect(origin: viewPoint,
+                                                           size: NSSize(width: 1, height: 1)),
+                                        of: contentView, preferredEdge: .minY)
+                                }
                             }
-                        } else if let root = fileProvider.path {
-                            let leaf = FilenameEscaping.byTitleFilename(
-                                title: summary.title, pageID: summary.id.rawValue)
-                            let path = "\(root)/pages/by-title/\(leaf)"
+                        } else if fileProvider.path != nil {
+                            let pageID = summary.id
                             Button("Share", systemImage: "square.and.arrow.up") {
-                                let picker = NSSharingServicePicker(
-                                    items: [URL(fileURLWithPath: path)])
-                                let mouseScreen = NSEvent.mouseLocation
-                                guard let window = NSApplication.shared.keyWindow,
-                                      let contentView = window.contentView else { return }
-                                let windowPoint = window.convertPoint(fromScreen: mouseScreen)
-                                let viewPoint = contentView.convert(windowPoint, from: nil)
-                                picker.show(
-                                    relativeTo: NSRect(origin: viewPoint,
-                                                       size: NSSize(width: 1, height: 1)),
-                                    of: contentView, preferredEdge: .minY)
+                                Task {
+                                    guard let url = await fileProvider.resolvePageByTitleURL(id: pageID) else { return }
+                                    let picker = NSSharingServicePicker(items: [url])
+                                    let mouseScreen = NSEvent.mouseLocation
+                                    guard let window = NSApplication.shared.keyWindow,
+                                          let contentView = window.contentView else { return }
+                                    let windowPoint = window.convertPoint(fromScreen: mouseScreen)
+                                    let viewPoint = contentView.convert(windowPoint, from: nil)
+                                    picker.show(
+                                        relativeTo: NSRect(origin: viewPoint,
+                                                           size: NSSize(width: 1, height: 1)),
+                                        of: contentView, preferredEdge: .minY)
+                                }
                             }
                         }
                         Divider()

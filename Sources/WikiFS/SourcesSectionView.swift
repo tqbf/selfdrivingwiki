@@ -142,59 +142,56 @@ struct SourcesSectionView: View {
         let ingestAction: (() -> Void)? = ids.isEmpty ? nil : {
             onBatchIngest?(Array(ids))
         }
-        // Single-source share via the File Provider mount path.
+        // Single-source share — resolves the canonical URL from the daemon
+        // via the source-by-name identifier, same pattern as openSource.
         let shareAction: (() -> Void)? = {
-            guard let path = fileProvider.sourceMountPath(for: source) else { return nil }
-            let url = URL(fileURLWithPath: path)
+            // Show the item only when the domain is active.
+            guard fileProvider.path != nil else { return nil }
+            let sourceID = source.id
             return {
-                // Force the daemon to materialise the file synchronously so
-                // NSSharingServicePicker can determine the UTI.
-                do {
-                    let values = try url.resourceValues(forKeys: [.contentTypeKey])
-                    if let type = values.contentType {
-                        DebugLog.fileprovider("Share source sidebar: UTI=\(type.identifier)")
-                    } else {
-                        DebugLog.fileprovider("Share source sidebar: no contentType in values for \(path)")
-                    }
-                } catch {
-                    DebugLog.fileprovider("Share source sidebar: resourceValues error=\(error.localizedDescription) path=\(path)")
+                Task {
+                    guard let url = await fileProvider.resolveSourceByNameURL(id: sourceID) else { return }
+                    DebugLog.fileprovider("Share source sidebar: \(url.lastPathComponent)")
+                    let picker = NSSharingServicePicker(items: [url])
+                    let mouseScreen = NSEvent.mouseLocation
+                    guard let window = NSApplication.shared.keyWindow,
+                          let contentView = window.contentView else { return }
+                    let windowPoint = window.convertPoint(fromScreen: mouseScreen)
+                    let viewPoint = contentView.convert(windowPoint, from: nil)
+                    picker.show(
+                        relativeTo: NSRect(origin: viewPoint, size: NSSize(width: 1, height: 1)),
+                        of: contentView, preferredEdge: .minY)
                 }
-                let picker = NSSharingServicePicker(items: [url])
-                let mouseScreen = NSEvent.mouseLocation
-                guard let window = NSApplication.shared.keyWindow,
-                      let contentView = window.contentView else { return }
-                let windowPoint = window.convertPoint(fromScreen: mouseScreen)
-                let viewPoint = contentView.convert(windowPoint, from: nil)
-                picker.show(
-                    relativeTo: NSRect(origin: viewPoint, size: NSSize(width: 1, height: 1)),
-                    of: contentView, preferredEdge: .minY)
             }
         }()
 
-        // Batch share — appears when 2+ sources are selected. Collects every
-        // selected source's mount path, materialises each, and passes all URLs
-        // to a single NSSharingServicePicker.
+        // Batch share — appears when 2+ sources are selected.  Resolves all
+        // URLs in parallel via the daemon, then passes them to one picker.
         let batchShareAction: (() -> Void)? = {
             guard ids.count > 1 else { return nil }
             let selectedIDs = ids
             return {
-                let urls: [URL] = selectedIDs.compactMap { id in
-                    guard let src = store.sources.first(where: { $0.id == id }),
-                          let path = fileProvider.sourceMountPath(for: src) else { return nil }
-                    let url = URL(fileURLWithPath: path)
-                    let _ = try? url.resourceValues(forKeys: [.contentTypeKey])
-                    return url
+                Task {
+                    let urls: [URL] = await withTaskGroup(of: URL?.self) { group in
+                        for id in selectedIDs {
+                            group.addTask { await fileProvider.resolveSourceByNameURL(id: id) }
+                        }
+                        var results: [URL] = []
+                        for await url in group { if let url { results.append(url) } }
+                        return results
+                    }
+                    guard !urls.isEmpty else { return }
+                    DebugLog.fileprovider("Share source batch: \(urls.count) urls")
+                    let picker = NSSharingServicePicker(items: urls)
+                    let mouseScreen = NSEvent.mouseLocation
+                    guard let window = NSApplication.shared.keyWindow,
+                          let contentView = window.contentView else { return }
+                    let windowPoint = window.convertPoint(fromScreen: mouseScreen)
+                    let viewPoint = contentView.convert(windowPoint, from: nil)
+                    picker.show(
+                        relativeTo: NSRect(origin: viewPoint, size: NSSize(width: 1, height: 1)),
+                        of: contentView, preferredEdge: .minY)
                 }
-                guard !urls.isEmpty else { return }
-                let picker = NSSharingServicePicker(items: urls)
-                let mouseScreen = NSEvent.mouseLocation
-                guard let window = NSApplication.shared.keyWindow,
-                      let contentView = window.contentView else { return }
-                let windowPoint = window.convertPoint(fromScreen: mouseScreen)
-                let viewPoint = contentView.convert(windowPoint, from: nil)
-                picker.show(
-                    relativeTo: NSRect(origin: viewPoint, size: NSSize(width: 1, height: 1)),
-                    of: contentView, preferredEdge: .minY)
             }
         }()
         return SourceRow(

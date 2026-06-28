@@ -67,8 +67,8 @@ public enum WikiFSContainerID {
     }
 
     /// Prefix for a single source's `by-name` LEAF identifier. Shared with the
-    /// extension so `FileProviderSpike.sourceMountPath(for:)` and
-    /// `Projection.Identity.sourceByName(_:)` produce identical identifiers.
+    /// extension so `FileProviderSpike.resolveSourceByNameURL(id:)` and
+    /// `Projection.Identity.sourceByName(_:)` use the same identifier.
     public static let sourceByNamePrefix = "source-by-name:"
 
     /// Build the `by-name` leaf identifier string for a source's ULID.
