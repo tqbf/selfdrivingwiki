@@ -29,6 +29,12 @@ struct SourceRow: View {
     /// Ingest all currently-selected sources (shown in context menu when this
     /// source is part of a multi-source selection).
     var onIngestSelected: (() -> Void)? = nil
+    /// When set, a Share item appears in the context menu. The caller passes
+    /// the File Provider mount-path URL to NSSharingServicePicker.
+    var onShare: (() -> Void)? = nil
+    /// Share ALL currently-selected sources (shown in context menu when this
+    /// source is part of a multi-source selection, replacing the single Share).
+    var onShareSelected: (() -> Void)? = nil
 
     /// The trailing status the row shows for a source, mirroring the two phases in
     /// `AgentLauncher`. Extracted as a pure static function so the precedence
@@ -103,6 +109,15 @@ struct SourceRow: View {
             if let onRename {
                 Button("Rename", systemImage: "pencil", action: onRename)
             }
+            // Batch share replaces single share when this row is part of a
+            // multi-select (same pattern as Ingest Selected above).
+            if isSelected, let onShareSelected {
+                Button("Share Selected", systemImage: "square.and.arrow.up",
+                       action: onShareSelected)
+            } else if let onShare {
+                Button("Share", systemImage: "square.and.arrow.up", action: onShare)
+            }
+            Divider()
             Button("Remove", role: .destructive, action: onRemove)
         }
         .swipeActions(edge: .trailing) {

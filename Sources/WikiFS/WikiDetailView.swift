@@ -155,6 +155,7 @@ struct WikiDetailView: View {
                     runIngest: runIngest,
                     launcher: launcher,
                     extractionCoordinator: extractionCoordinator,
+                    fileProvider: fileProvider,
                     store: store
                 )
             } else {

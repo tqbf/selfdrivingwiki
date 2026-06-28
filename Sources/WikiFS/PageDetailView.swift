@@ -72,13 +72,12 @@ struct PageDetailView: View {
                             .help("Fix [[wiki-link]] syntax and run LLM lint on this page")
                         }
                         if let path = pageMountPath {
-                            Button("Copy Path", systemImage: "terminal") {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(path, forType: .string)
+                            ShareLink(item: URL(fileURLWithPath: path)) {
+                                Label("Share", systemImage: "square.and.arrow.up")
                             }
-                            .help("Copy the Unix path of this page on the mounted filesystem")
+                            .help("Share this page")
                         }
-                        
+
                         Button {
                             isOutlineExpanded.toggle()
                         } label: {

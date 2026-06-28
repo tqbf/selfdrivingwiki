@@ -248,6 +248,19 @@ struct SidebarView: View {
     private func pagesSectionRows() -> some View {
         Group {
             let source = store.searchQuery.isEmpty ? store.summaries : store.searchResults
+            // ---- batch share plumbing ----
+            let selectedPageIDs: Set<PageID> = Set(listSelection.compactMap { sel in
+                if case .page(let id) = sel { return id } else { return nil }
+            })
+            let batchShareURLs: [URL]? = {
+                guard selectedPageIDs.count > 1, let root = fileProvider.path else { return nil }
+                return selectedPageIDs.compactMap { id -> URL? in
+                    guard let s = store.summaries.first(where: { $0.id == id }) else { return nil }
+                    let leaf = FilenameEscaping.byTitleFilename(title: s.title, pageID: id.rawValue)
+                    return URL(fileURLWithPath: "\(root)/pages/by-title/\(leaf)")
+                }
+            }()
+            // ---- end batch share plumbing ----
             if source.isEmpty, !store.searchQuery.isEmpty {
                 Text("No matching pages").foregroundStyle(.secondary).font(.callout)
                     .padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
@@ -266,6 +279,41 @@ struct SidebarView: View {
                             }
                         }
                         .disabled(store.isAgentRunning)
+                        // Batch share — appears only when this row is part of a
+                        // multi-select (2+ pages). Shares every selected page's
+                        // mount URL so Finder/AirDrop/Mail etc. receive all of them.
+                        if let urls = batchShareURLs, selectedPageIDs.contains(summary.id) {
+                            Button("Share \(urls.count) Pages",
+                                   systemImage: "square.and.arrow.up") {
+                                let picker = NSSharingServicePicker(items: urls)
+                                let mouseScreen = NSEvent.mouseLocation
+                                guard let window = NSApplication.shared.keyWindow,
+                                      let contentView = window.contentView else { return }
+                                let windowPoint = window.convertPoint(fromScreen: mouseScreen)
+                                let viewPoint = contentView.convert(windowPoint, from: nil)
+                                picker.show(
+                                    relativeTo: NSRect(origin: viewPoint,
+                                                       size: NSSize(width: 1, height: 1)),
+                                    of: contentView, preferredEdge: .minY)
+                            }
+                        } else if let root = fileProvider.path {
+                            let leaf = FilenameEscaping.byTitleFilename(
+                                title: summary.title, pageID: summary.id.rawValue)
+                            let path = "\(root)/pages/by-title/\(leaf)"
+                            Button("Share", systemImage: "square.and.arrow.up") {
+                                let picker = NSSharingServicePicker(
+                                    items: [URL(fileURLWithPath: path)])
+                                let mouseScreen = NSEvent.mouseLocation
+                                guard let window = NSApplication.shared.keyWindow,
+                                      let contentView = window.contentView else { return }
+                                let windowPoint = window.convertPoint(fromScreen: mouseScreen)
+                                let viewPoint = contentView.convert(windowPoint, from: nil)
+                                picker.show(
+                                    relativeTo: NSRect(origin: viewPoint,
+                                                       size: NSSize(width: 1, height: 1)),
+                                    of: contentView, preferredEdge: .minY)
+                            }
+                        }
                         Divider()
                         Button("Delete", role: .destructive) { store.delete(summary.id) }
                     }
