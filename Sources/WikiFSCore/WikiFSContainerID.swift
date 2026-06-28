@@ -65,4 +65,14 @@ public enum WikiFSContainerID {
     public static func sourceByID(_ ulid: String) -> String {
         sourceByIDPrefix + ulid
     }
+
+    /// Prefix for a single source's `by-name` LEAF identifier. Shared with the
+    /// extension so `FileProviderSpike.sourceMountPath(for:)` and
+    /// `Projection.Identity.sourceByName(_:)` produce identical identifiers.
+    public static let sourceByNamePrefix = "source-by-name:"
+
+    /// Build the `by-name` leaf identifier string for a source's ULID.
+    public static func sourceByName(_ ulid: String) -> String {
+        sourceByNamePrefix + ulid
+    }
 }

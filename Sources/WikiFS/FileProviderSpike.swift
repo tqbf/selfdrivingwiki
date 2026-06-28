@@ -27,6 +27,48 @@ final class FileProviderSpike {
     private var activeWikiID: String?
     private var activeDisplayName: String?
 
+    // MARK: - Schema migration
+
+    /// Bump this whenever the container hierarchy changes in a way the daemon
+    /// can't pick up from a running extension (container renames, new required
+    /// containers, identifier prefix changes).  On launch, if the stored
+    /// version doesn't match, the migration flag is set; the next
+    /// `registerDomain` call removes the old domain before re-adding, giving
+    /// every user a clean daemon cache.
+    ///
+    /// History:
+    ///   2 — `files` container renamed to `sources` (source-by-name prefix shared)
+    ///   1 — initial schema
+    private static let currentSchemaVersion = 2
+    private static let schemaVersionKey = "FileProviderDomainSchemaVersion"
+
+    /// Call ONCE at startup, before `registerAllDomains`.  If the stored schema
+    /// version is stale, tears down every registered domain so the daemon
+    /// picks up the new container layout on re-registration.  Idempotent
+    /// (subsequent calls are a no-op after the version is recorded).
+    func migrateDomainsIfNeeded(wikiIDs: [String]) async {
+        let stored = UserDefaults.standard.integer(forKey: Self.schemaVersionKey)
+        guard stored != Self.currentSchemaVersion else { return }
+
+        DebugLog.fileprovider("schema migration: \(stored) → \(Self.currentSchemaVersion) — removing \(wikiIDs.count) domain(s)")
+        for id in wikiIDs {
+            let d = domain(id: id, displayName: id)
+            do {
+                try await NSFileProviderManager.remove(d)
+                DebugLog.fileprovider("schema migration: removed domain \(id)")
+            } catch {
+                DebugLog.fileprovider("schema migration: remove domain \(id) failed: \(error.localizedDescription)")
+            }
+        }
+        UserDefaults.standard.set(Self.currentSchemaVersion, forKey: Self.schemaVersionKey)
+    }
+
+    /// Returns `true` once per launch — callers can use this to decide
+    /// whether to remove a domain before re-adding it.
+    private var needsDomainMigration: Bool {
+        UserDefaults.standard.integer(forKey: Self.schemaVersionKey) != Self.currentSchemaVersion
+    }
+
     /// Build the File Provider domain for a wiki. Identifier is the ULID (stable
     /// across rename); displayName drives the `Self Driving Wiki-<name>` mount label.
     private func domain(id: String, displayName: String) -> NSFileProviderDomain {
@@ -69,6 +111,13 @@ final class FileProviderSpike {
         let domain = domain(id: id, displayName: displayName)
 
         if ProcessInfo.processInfo.environment["WIKIFS_REENUMERATE"] == "1" {
+            try? await NSFileProviderManager.remove(domain)
+        }
+
+        // Schema migration: tear down the old domain so the daemon picks up
+        // the new container layout (e.g. `files` → `sources` rename).
+        if needsDomainMigration {
+            DebugLog.fileprovider("registerDomain: removing \(id) for schema migration")
             try? await NSFileProviderManager.remove(domain)
         }
 
@@ -200,6 +249,10 @@ final class FileProviderSpike {
                 timeout: .seconds(5))
             path = url.path
             status = "Mounted"
+            let rootURL = url
+            Task.detached(priority: .background) { [weak self] in
+                await self?.warmCaches(root: rootURL)
+            }
         } catch {
             status = "Resolving mount timed out; retrying domain registration…"
             if await registerDomain(id: id, displayName: displayName) {
@@ -211,12 +264,55 @@ final class FileProviderSpike {
                         timeout: .seconds(5))
                     path = url.path
                     status = "Mounted"
+                    let rootURL = url
+                    Task.detached(priority: .background) { [weak self] in
+                        await self?.warmCaches(root: rootURL)
+                    }
                     return
                 } catch {
                     status = "Mount unavailable: \(error.localizedDescription)"
                 }
             } else {
                 status = "Mount unavailable: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Force the File Provider daemon to enumerate the directory hierarchy
+    /// top-down so the leaf container cache is warm before the share sheet
+    /// or Finder needs to resolve a path inside it.  The daemon enumerates
+    /// lazily; a cold parent means the child directory doesn't exist yet.
+    /// Listing each level with `FileManager` triggers synchronous
+    /// enumeration.  Best-effort — failures are logged.
+    private func warmCaches(root url: URL) async {
+        // List the root first — the daemon may have an incomplete cache
+        // from a previous enumeration and needs a fresh one that includes
+        // every container.  Then walk top-down so each parent is
+        // enumerated before its children.
+        DebugLog.fileprovider("warmCaches: listing root…")
+        if let rootItems = try? FileManager.default.contentsOfDirectory(
+            at: url, includingPropertiesForKeys: nil) {
+            let names = rootItems.map { $0.lastPathComponent }.sorted()
+            DebugLog.fileprovider("warmCaches: root → \(rootItems.count) items: \(names)")
+        } else {
+            DebugLog.fileprovider("warmCaches: root listing failed")
+        }
+
+        let walks: [(containers: [String], label: String)] = [
+            (["sources", "sources/by-name"], "source share"),
+            (["pages",   "pages/by-title"],   "page share"),
+        ]
+        for (containers, _) in walks {
+            for relative in containers {
+                let dirURL = url.appendingPathComponent(relative, isDirectory: true)
+                DebugLog.fileprovider("warmCaches: listing \(relative)…")
+                do {
+                    let contents = try FileManager.default.contentsOfDirectory(
+                        at: dirURL, includingPropertiesForKeys: nil)
+                    DebugLog.fileprovider("warmCaches: \(relative) → \(contents.count) items")
+                } catch {
+                    DebugLog.fileprovider("warmCaches: \(relative) error=\(error.localizedDescription)")
+                }
             }
         }
     }
@@ -255,6 +351,21 @@ final class FileProviderSpike {
             DebugLog.agent("openSource: FAILED resolving URL — \(error.localizedDescription)")
             status = "open file failed: \(error.localizedDescription)"
         }
+    }
+
+    /// The user-visible path for an ingested source in the ACTIVE wiki's
+    /// `sources/by-name/` view, or `nil` if the mount root hasn't been resolved
+    /// yet. Using the `by-name` view gives the file a human-readable name in the
+    /// share sheet (e.g. `Trip Report--01AB.pdf`) rather than the raw ULID. The
+    /// path is constructed synchronously — the daemon materializes the file on
+    /// first access via the standard File Provider on-demand mechanism, exactly as
+    /// it does for `pages/by-title/` in `pageMountPath`.
+    func sourceMountPath(for source: SourceSummary) -> String? {
+        guard let root = path else { return nil }
+        let humanName = source.displayName ?? source.filename
+        let leaf = FilenameEscaping.byNameSourceFilename(
+            filename: humanName, ext: source.ext, sourceID: source.id.rawValue)
+        return "\(root)/sources/by-name/\(leaf)"
     }
 
     /// Tell the daemon the ACTIVE wiki changed so it re-runs `enumerateChanges`

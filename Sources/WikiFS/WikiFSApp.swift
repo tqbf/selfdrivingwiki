@@ -106,6 +106,8 @@ struct WikiFSApp: App {
                     // injects domain registration/removal + per-store signaling.
                     fileProvider.wire(into: manager)
                     manager.bootstrap()
+                    await fileProvider.migrateDomainsIfNeeded(
+                        wikiIDs: manager.wikis.map(\.id))
                     await manager.registerAllDomains()
                     if let active = manager.activeWikiID,
                        let descriptor = manager.wikis.first(where: { $0.id == active }) {
