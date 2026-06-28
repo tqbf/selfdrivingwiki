@@ -283,6 +283,13 @@ public final class WikiStoreModel {
     /// itself may be re-created mid-navigation.
     public private(set) var pendingScrollAnchorVersion: Int = 0
 
+    /// Sets an anchor to scroll to within the currently selected page or source.
+    public func jumpToAnchorInCurrentSelection(_ anchor: String) {
+        guard let current = selection else { return }
+        pendingScrollAnchor = (selection: current, fragment: anchor)
+        pendingScrollAnchorVersion += 1
+    }
+
     /// Atomically consume the pending scroll anchor if `selection` matches.
     /// Returns the fragment to resolve and clears the anchor; nil if the
     /// selection doesn't match or there is no pending anchor. Only the reader

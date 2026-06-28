@@ -13,6 +13,7 @@ struct PageDetailView: View {
     @State private var isEditing = false
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
+    @AppStorage("isOutlineExpanded") private var isOutlineExpanded = false
 
     // Find bar state.
     @State private var findModel = FindModel()
@@ -77,6 +78,13 @@ struct PageDetailView: View {
                             }
                             .help("Copy the Unix path of this page on the mounted filesystem")
                         }
+                        
+                        Button {
+                            isOutlineExpanded.toggle()
+                        } label: {
+                            Image(systemName: "sidebar.right")
+                        }
+                        .help("Toggle Outline")
                     }
                 }
             }
@@ -93,30 +101,40 @@ struct PageDetailView: View {
             // both are present to avoid stacked notification noise.
             saveWarningBanner
 
-            // Content — swaps between reader and editor, header stays put.
-            if isEditing {
-                TextEditor(text: $store.draftBody)
-                    .font(.system(size: 13 * editorZoom, design: .monospaced))
-                    .scrollContentBackground(.hidden)
-                    .padding(.horizontal, PageEditorMetrics.contentInset)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .frame(minHeight: PageEditorMetrics.editorMinHeight)
-                    .onChange(of: store.draftBody) { store.bodyChanged() }
-                    .zoomShortcuts($editorZoom)
-                    .zoomScroll($editorZoom)
-            } else {
-                WikiReaderView(markdown: readerMarkdown,
-                                currentSelection: store.selection,
-                                store: store,
-                                fileProvider: fileProvider,
-                                findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: PageEditorMetrics.previewMinHeight)
-                    .zoomShortcuts($readerZoom)
-                    .zoomScroll($readerZoom)
+            HStack(spacing: 0) {
+                Group {
+                    // Content — swaps between reader and editor, header stays put.
+                    if isEditing {
+                        TextEditor(text: $store.draftBody)
+                            .font(.system(size: 13 * editorZoom, design: .monospaced))
+                            .scrollContentBackground(.hidden)
+                            .padding(.horizontal, PageEditorMetrics.contentInset)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .frame(minHeight: PageEditorMetrics.editorMinHeight)
+                            .onChange(of: store.draftBody) { store.bodyChanged() }
+                            .zoomShortcuts($editorZoom)
+                            .zoomScroll($editorZoom)
+                    } else {
+                        WikiReaderView(markdown: readerMarkdown,
+                                        currentSelection: store.selection,
+                                        store: store,
+                                        fileProvider: fileProvider,
+                                        findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
+                            .frame(maxWidth: .infinity)
+                            .frame(minHeight: PageEditorMetrics.previewMinHeight)
+                            .zoomShortcuts($readerZoom)
+                            .zoomScroll($readerZoom)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                
+                if isOutlineExpanded {
+                    PageOutlineView(markdown: readerMarkdown) { slug in
+                        store.jumpToAnchorInCurrentSelection(slug)
+                    }
+                }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .textBackgroundColor))
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
         .onChange(of: store.selection) {
@@ -266,3 +284,131 @@ struct PageDetailView: View {
     }
 
 }
+struct HeadingItem: Identifiable, Hashable {
+    let id: String // The anchor slug
+    let text: String
+    let level: Int
+}
+
+struct PageOutlineView: View {
+    let markdown: String
+    let onSelect: (String) -> Void
+    
+    @State private var headings: [HeadingItem] = []
+    @AppStorage("outlineWidth") private var outlineWidth: Double = 75.0
+    @State private var dragStartWidth: Double? = nil
+    
+    var body: some View {
+        HStack(spacing: 0) {
+            // Draggable divider on the outline's leading edge. A 1pt separator
+            // line with a wider invisible hit area so it's easy to grab.
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(width: 1)
+                .frame(maxHeight: .infinity)
+                .padding(.horizontal, 4)
+                .contentShape(Rectangle())
+            .onHover { isHovering in
+                if isHovering {
+                    NSCursor.resizeLeftRight.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        if dragStartWidth == nil {
+                            dragStartWidth = outlineWidth
+                        }
+                        if let start = dragStartWidth {
+                            let newWidth = start - Double(value.translation.width)
+                            outlineWidth = max(60, min(600, newWidth))
+                        }
+                    }
+                    .onEnded { _ in
+                        dragStartWidth = nil
+                    }
+            )
+            .zIndex(1)
+            
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Outline")
+                    .font(.headline)
+                    .padding()
+                    
+                Divider()
+                
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(headings) { heading in
+                            Button(action: {
+                                onSelect(heading.id)
+                            }) {
+                                Text(heading.text)
+                                    .font(.system(size: 13))
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                    .padding(.leading, CGFloat((heading.level - 1) * 12))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .onHover { isHovering in
+                                if isHovering {
+                                    NSCursor.pointingHand.push()
+                                } else {
+                                    NSCursor.pop()
+                                }
+                            }
+                        }
+                    }
+                    .padding()
+                }
+            }
+            .frame(width: outlineWidth)
+            .background(Color(nsColor: .windowBackgroundColor))
+        }
+        .onAppear {
+            parseHeadings()
+        }
+        .onChange(of: markdown) { _, _ in
+            parseHeadings()
+        }
+    }
+    
+    private func parseHeadings() {
+        var items: [HeadingItem] = []
+        var slugCounts: [String: Int] = [:]
+        
+        let lines = markdown.components(separatedBy: .newlines)
+        var inFence = false
+        
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                inFence.toggle()
+                continue
+            }
+            if inFence { continue }
+            
+            if trimmed.hasPrefix("#") {
+                let level = trimmed.prefix(while: { $0 == "#" }).count
+                guard level > 0 && level <= 6 else { continue }
+                
+                let afterPounds = trimmed.dropFirst(level)
+                guard afterPounds.first?.isWhitespace == true else { continue }
+                
+                let text = afterPounds.trimmingCharacters(in: .whitespaces)
+                guard !text.isEmpty else { continue }
+                
+                let slug = AnchorBlock.makeSlug(text, counts: &slugCounts)
+                items.append(HeadingItem(id: slug, text: text, level: level))
+            }
+        }
+        
+        headings = items
+    }
+}
+
