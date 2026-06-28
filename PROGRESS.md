@@ -2,6 +2,28 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-28 — Share pages and sources
+
+Added Share to every page and source surface.  Single share resolves the
+canonical URL from the daemon via `getUserVisibleURL` (same mechanism as
+`openSource`); batch share resolves all selected item URLs in parallel via
+`withTaskGroup`.  Pages use the `page-by-title:<ulid>` identifier, sources use
+`source-by-name:<ulid>` — both produce human-readable filenames.
+
+**Surfaces:**
+- **Page detail** toolbar — Share button (replaces Copy Path)
+- **Page sidebar** context menu — single Share + batch "Share N Pages"
+- **Source detail** toolbar — Share button (left of Outline toggle)
+- **Source sidebar** context menu — single Share + batch "Share Selected"
+
+**Infrastructure** (landed first on `feature/fileprovider-schema-migration`):
+- Schema version migration: auto-tears-down domains when container names change
+- Cache warming: top-down directory enumeration after domain activation
+- `source-by-name:` identifier prefix shared across app and extension
+
+See `plans/share-pages-and-sources.md` and
+`plans/fileprovider-schema-migration-and-cache-warming.md`.
+
 ## 2026-06-27 — Better context menu for links in the reader
 
 Overhauled the right-click context menu for links in `WikiReaderView`. The old menu
