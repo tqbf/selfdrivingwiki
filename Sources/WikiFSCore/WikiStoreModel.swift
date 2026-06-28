@@ -461,7 +461,7 @@ public final class WikiStoreModel {
                 return
             }
             draftTitle = page.title
-            draftBody = page.bodyMarkdown
+            draftBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
             loadedPage = id
         case .systemPrompt:
             draftSystemPrompt = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
@@ -827,7 +827,8 @@ public final class WikiStoreModel {
         flushPendingSave()
         do {
             let page = try store.getPage(id: id)
-            try store.updatePage(id: id, title: newTitle, body: page.bodyMarkdown)
+            let cleanBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
+            try store.updatePage(id: id, title: newTitle, body: cleanBody)
             reloadSummaries()
             if selection == .page(id) { draftTitle = newTitle }
             // Update any tab showing this renamed page.

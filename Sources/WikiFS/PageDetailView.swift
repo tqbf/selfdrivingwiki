@@ -126,7 +126,7 @@ struct PageDetailView: View {
                             .zoomShortcuts($editorZoom)
                             .zoomScroll($editorZoom)
                     } else {
-                        WikiReaderView(markdown: readerMarkdown,
+                        WikiReaderView(markdown: store.draftBody,
                                         currentSelection: store.selection,
                                         store: store,
                                         fileProvider: fileProvider,
@@ -140,7 +140,7 @@ struct PageDetailView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 
                 if isOutlineExpanded {
-                    PageOutlineView(markdown: readerMarkdown) { slug in
+                    PageOutlineView(markdown: store.draftBody) { slug in
                         store.jumpToAnchorInCurrentSelection(slug)
                     }
                 }
@@ -157,13 +157,13 @@ struct PageDetailView: View {
         .background { findShortcutButton }
         .overlay(alignment: .top) { findBarOverlay }
         .onChange(of: store.selection) { findModel.dismiss() }
-        .onChange(of: readerMarkdown) { _, newMarkdown in
+        .onChange(of: store.draftBody) { _, newMarkdown in
             findModel.content = newMarkdown
             findModel.search()
         }
         .onChange(of: findModel.isShowing) { _, showing in
             if showing {
-                findModel.content = readerMarkdown
+                findModel.content = store.draftBody
                 findModel.search()
             }
         }
@@ -213,19 +213,6 @@ struct PageDetailView: View {
             ? "Untitled" : store.draftTitle
     }
 
-    private var readerMarkdown: String {
-        let trimmedTitle = displayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lines = store.draftBody.split(separator: "\n", omittingEmptySubsequences: false)
-        guard let firstLine = lines.first else { return store.draftBody }
-        let firstHeading = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard firstHeading == "# \(trimmedTitle)" else { return store.draftBody }
-        let remainingLines = lines.dropFirst()
-        let withoutDuplicateHeading = remainingLines
-            .drop(while: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
-            .joined(separator: "\n")
-        return withoutDuplicateHeading
-    }
-
     private var pageUpdatedAt: Date? {
         guard let selection = store.selection,
               case .page(let id) = selection else { return nil }
@@ -235,8 +222,13 @@ struct PageDetailView: View {
     // MARK: - Subviews
 
     @ViewBuilder private var saveWarningBanner: some View {
-        if store.mermaidSaveWarning != nil || store.markdownSaveWarning != nil {
+        let hasFrontmatter = store.draftBody.hasPrefix("---")
+        if store.mermaidSaveWarning != nil || store.markdownSaveWarning != nil || hasFrontmatter {
             VStack(alignment: .leading, spacing: 6) {
+                if hasFrontmatter {
+                    Text("Frontmatter (---) is generated automatically and will be stripped from this field on next load. Set the title using the field above.")
+                        .foregroundStyle(.orange)
+                }
                 if let mermaid = store.mermaidSaveWarning {
                     Text(mermaid)
                         .foregroundStyle(.orange)

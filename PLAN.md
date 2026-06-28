@@ -39,6 +39,7 @@ load-bearing for the app to function.
 | [`plans/INITIAL.md`](plans/INITIAL.md) | Original full product/architecture plan (milestones, schema, File Provider design, definition of done). Source of truth for *what we're building*. |
 | [`plans/llm-wiki.md`](plans/llm-wiki.md) | **Next major effort:** turning Self Driving Wiki into a self-maintaining LLM Wiki — **many** wikis (one SQLite DB + one File Provider domain each), with `claude -p` authoring/maintaining each one by writing via a new `wikictl` CLI (read via the mount, write via the CLI). Locked decisions, components, and the Phase 0 → A–D plan. Read before Phase 0. |
 | [`plans/page-reader-ui.md`](plans/page-reader-ui.md) | **Current UI direction:** page detail is reader-first because the agent should maintain wiki content; manual source editing is an explicit, rare mode. |
+| [`plans/page-body-contract.md`](plans/page-body-contract.md) | **Page body contract:** `body_markdown` in SQLite stores clean body only (no H1, no frontmatter); the file provider generates both on the fly via `PageMarkdownFormat`. Covers the outline-flicker fix, migration strategy, frontmatter schema, and editor warning. |
 | [`plans/query-conversation.md`](plans/query-conversation.md) | **Current Query direction:** a dedicated sidebar page with an interactive Claude session; output-first chat by default, hidden tool/internal rows behind a checkbox, and writes via `wikictl` only when the user asks to persist changes. |
 | [`plans/BRINGUP.md`](plans/BRINGUP.md) | The 4-phase bring-up plan from skeleton to v0 (groups INITIAL.md's M0–M6). Source of truth for *the order we build in*. |
 | [`plans/build-environment.md`](plans/build-environment.md) | How the app is built: SwiftPM + `build.sh` + `Makefile`, signing, icon generation, app-bundle layout. Source of truth for *how we build and run*. |
@@ -148,6 +149,11 @@ handoff). 341 tests green; clean signed bundle (app + appex + `wikictl`).**
   `AgentSpawnSlotTests`.
 
 **Phase summary (newest first; see `PROGRESS.md` for each gate's evidence):**
+- **Page body contract** ✅ `body_markdown` in SQLite now stores clean body only
+  (no H1, no frontmatter); `PageMarkdownFormat` strips both on load/rename and
+  regenerates them in the file provider (`Projection`); outline flicker
+  eliminated; editor warns immediately when the user types frontmatter.
+  See `plans/page-body-contract.md`.
 - **Phase D — the schema** ✅ real maintainer `CLAUDE.md` schema (layout,
   conventions, `wikictl` reference, read-after-write rule, Ingest/Query/Lint
   playbooks); `-p` prompts slimmed to rely on it; new wikis seed it, existing
