@@ -74,7 +74,7 @@ struct Projection {
         // Shared with the app (which resolves a per-file user-visible URL to open
         // it in the default app), so the two sides build the identical identifier.
         static let sourceByIDPrefix = WikiFSContainerID.sourceByIDPrefix
-        static let sourceByNamePrefix = "source-by-name:"
+        static let sourceByNamePrefix = WikiFSContainerID.sourceByNamePrefix
         static let sourceMarkdownByIDPrefix = "source-markdown-by-id:"
         static let sourceMarkdownByNamePrefix = "source-markdown-by-name:"
 
