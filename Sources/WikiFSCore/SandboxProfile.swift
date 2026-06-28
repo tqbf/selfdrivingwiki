@@ -82,6 +82,7 @@ public enum SandboxProfile {
             // The active wiki DB and its SQLite sidecars are exact files.
             "(allow file-write* (literal (param \"WIKI_DB\")))",
         ]
+        lines.append(contentsOf: agentRuntimeWriteRules())
         for suffix in sqliteSidecarSuffixes {
             lines.append(
                 "(allow file-write* (literal (string-append (param \"WIKI_DB\") \"\(suffix)\")))"
@@ -105,7 +106,7 @@ public enum SandboxProfile {
     /// prevents `wikictl page upsert` / `wikictl index set` / `wikictl log append`
     /// from writing, regardless of prompt instructions.
     public static func generateReadOnly(scratchDir: String) -> String {
-        let lines: [String] = [
+        var lines: [String] = [
             "(version 1)",
             "(allow default)",
             "(deny file-write*)",
@@ -121,6 +122,7 @@ public enum SandboxProfile {
             // Bash tool to function under the sandbox.
             "(allow file-write* (subpath (param \"CLAUDE_TMP\")))",
         ]
+        lines.append(contentsOf: agentRuntimeWriteRules())
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -194,6 +196,34 @@ public enum SandboxProfile {
                 ("CLAUDE_TMP", resolvedClaudeTemp),
             ]
         )
+    }
+
+    /// Filesystem-write allowances every spawned agent's SHELL and tools need at
+    /// runtime, independent of the wiki write policy — so they belong in BOTH the
+    /// read-write (`generate`) and read-only (`generateReadOnly`) profiles. Shared here
+    /// so the two can't drift. Kept to least privilege — only paths a normal shell run
+    /// actually touches, scoped as narrowly as the use allows:
+    ///
+    /// - **`/dev/null`** — zsh redirects to it during startup; without a write allow the
+    ///   shell prints `operation not permitted: /dev/null` on every command. Only data
+    ///   writes are needed (not chmod/unlink), so `file-write-data`, not `file-write*`.
+    /// - **`/dev/fd`** — the targets of `/dev/stdout`/`/dev/stderr` after symlink
+    ///   canonicalization; aliases the process's own fds, so it can't widen access.
+    ///   Data writes only.
+    /// - **Claude Code's per-shell cwd markers.** Its Bash tool creates a marker dir
+    ///   directly under `/private/tmp` named `claude-<hex>-cwd` — a sibling of, NOT
+    ///   under, the per-session `CLAUDE_TMP` base (`/private/tmp/claude-<uid>`, already
+    ///   allowed separately). Scoped to exactly that marker shape rather than a broad
+    ///   `/private/tmp/claude-*` prefix, so the agent can't write across other uids' or
+    ///   sessions' temp dirs in shared `/private/tmp`. This needs full `file-write*`
+    ///   (mkdir/unlink). `/dev/tty` and `/dev/dtracehelper` are deliberately NOT allowed
+    ///   — they weren't observed as needed (the agent's output is piped, not a tty).
+    private static func agentRuntimeWriteRules() -> [String] {
+        [
+            "(allow file-write-data (literal \"/dev/null\"))",
+            "(allow file-write-data (subpath \"/dev/fd\"))",
+            "(allow file-write* (regex #\"^/private/tmp/claude-[A-Za-z0-9]+-cwd(/|$)\"))",
+        ]
     }
 
     // MARK: - Helpers

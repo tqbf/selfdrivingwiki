@@ -75,6 +75,7 @@ public enum ClaudePromptHelp {
     var envPairs: [(String, String)] = [
       ("WIKI_ROOT", command.environment["WIKI_ROOT"] ?? ""),
       ("WIKI_DB", command.environment["WIKI_DB"] ?? ""),
+      ("WIKICTL", command.environment["WIKICTL"] ?? ""),
       ("PATH", command.environment["PATH"] ?? ""),
     ]
     // When sandboxed, the relocation env is part of the real invocation surface.

@@ -214,6 +214,19 @@ struct OperationCommandTests {
     #expect(cmd.environment["PATH"] == "/Apps/Self Driving Wiki.app/Contents/Helpers:/usr/bin:/bin")
   }
 
+  @Test func exportsWikictlAbsolutePathSoResolutionSurvivesPathRebuild() {
+    // The agent's login shell may rebuild PATH from scratch (dropping our prepend);
+    // $WIKICTL is an env var (which survives) holding the binary's absolute path.
+    let cmd = build(wikictlDir: "/Apps/Self Driving Wiki.app/Contents/Helpers")
+    #expect(cmd.environment["WIKICTL"] == "/Apps/Self Driving Wiki.app/Contents/Helpers/wikictl")
+  }
+
+  @Test func setsNixDarwinGuardSoInjectedPathSurvivesShellInit() {
+    // nix-darwin's shell init rebuilds PATH unless this guard is already set; setting
+    // it preserves the prepended helper dir (and bare `wikictl`) for the agent's shell.
+    #expect(build().environment["__NIX_DARWIN_SET_ENVIRONMENT_DONE"] == "1")
+  }
+
   @Test func cwdIsTheWritableScratchDirNotTheMount() {
     let cmd = build()
     #expect(cmd.currentDirectoryPath == "/tmp/scratch-xyz")

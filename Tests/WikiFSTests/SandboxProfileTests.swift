@@ -72,6 +72,34 @@ struct SandboxProfileTests {
     #expect(readOnlyProfile().contains("(allow file-write* (subpath (param \"CLAUDE_TMP\")))"))
   }
 
+  // MARK: - Agent runtime writes (shell devices + Claude cwd markers)
+
+  /// zsh redirects to /dev/null on startup; without a write allow the shell prints
+  /// `operation not permitted: /dev/null` on every command. Scoped to `file-write-data`
+  /// (no chmod/unlink) on only the devices a piped shell actually touches — `/dev/tty`
+  /// and `/dev/dtracehelper` are deliberately excluded as unneeded.
+  @Test func bothProfilesAllowMinimalDeviceDataWrites() {
+    for p in [profile(), readOnlyProfile()] {
+      #expect(p.contains("(allow file-write-data (literal \"/dev/null\"))"))
+      #expect(p.contains("(allow file-write-data (subpath \"/dev/fd\"))"))
+      // Deliberately NOT allowed (least privilege).
+      #expect(!p.contains("/dev/tty"))
+      #expect(!p.contains("/dev/dtracehelper"))
+    }
+  }
+
+  /// Claude Code's Bash tool creates per-shell cwd markers as `/private/tmp/claude-<hex>-cwd`,
+  /// siblings of (not under) the per-session CLAUDE_TMP base. Scoped to exactly that marker
+  /// shape — NOT a broad `/private/tmp/claude-*` prefix — so the agent can't write across
+  /// other uids'/sessions' temp dirs in shared /private/tmp.
+  @Test func bothProfilesAllowOnlyClaudeCwdMarkerShape() {
+    for p in [profile(), readOnlyProfile()] {
+      #expect(p.contains("(allow file-write* (regex #\"^/private/tmp/claude-[A-Za-z0-9]+-cwd(/|$)\"))"))
+      // Not the broad prefix that would open the whole claude-* namespace.
+      #expect(!p.contains("(allow file-write* (regex #\"^/private/tmp/claude-\"))"))
+    }
+  }
+
   @Test func defaultClaudeTempBaseIsPrivateTmpClaudeUid() {
     #expect(SandboxProfile.defaultClaudeTempBase() == "/private/tmp/claude-\(getuid())")
   }
