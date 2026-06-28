@@ -249,7 +249,10 @@ final class FileProviderSpike {
                 timeout: .seconds(5))
             path = url.path
             status = "Mounted"
-            await warmCaches(root: url)
+            let rootURL = url
+            Task.detached(priority: .background) { [weak self] in
+                await self?.warmCaches(root: rootURL)
+            }
         } catch {
             status = "Resolving mount timed out; retrying domain registration…"
             if await registerDomain(id: id, displayName: displayName) {
@@ -261,7 +264,10 @@ final class FileProviderSpike {
                         timeout: .seconds(5))
                     path = url.path
                     status = "Mounted"
-                    await warmCaches(root: url)
+                    let rootURL = url
+                    Task.detached(priority: .background) { [weak self] in
+                        await self?.warmCaches(root: rootURL)
+                    }
                     return
                 } catch {
                     status = "Mount unavailable: \(error.localizedDescription)"
