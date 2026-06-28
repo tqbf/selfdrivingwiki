@@ -2,6 +2,11 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-27 — Outline Pane
+
+Added an outline pane for the page detail view that shows headers in the Markdown document in a tree.
+Clicking on an element takes you to the position of the header in the document.
+
 ## 2026-06-27 — Hover tooltips for wiki links in the WKWebView reader
 
 Wiki links in `WikiReaderView` now show human-readable tooltips on hover

@@ -613,11 +613,24 @@ internal struct WikiReaderRep: NSViewRepresentable {
             guard let store, pageLoaded,
                   store.pendingScrollAnchorVersion != appliedAnchorVersion else { return }
             appliedAnchorVersion = store.pendingScrollAnchorVersion
-            guard let fragment = store.consumePendingScrollAnchor(for: currentSelection),
-                  let md = loadedMarkdown,
-                  let target = WikiReaderView.resolveScrollTarget(fragment, blocks: AnchorBlock.parse(md))
-            else { return }
-            WikiReaderRep.apply(target, in: webView)
+            guard let fragment = store.consumePendingScrollAnchor(for: currentSelection) else { return }
+            
+            // First, try scrolling assuming fragment is an exact element ID (like a heading slug).
+            // This guarantees that outline clicks work even if AnchorBlock.parse fails or slugs mismatch slightly.
+            let s = WikiReaderRep.jsString(fragment)
+            webView.evaluateJavaScript(
+                #"var e=document.getElementById("\#(s)"); if(e){e.scrollIntoView({block:"start"});}"#
+            ) { [weak self] _, _ in
+                // We don't check for success here because we still want to apply quotes if it wasn't a heading ID.
+                guard let md = self?.loadedMarkdown,
+                      let target = WikiReaderView.resolveScrollTarget(fragment, blocks: AnchorBlock.parse(md))
+                else { return }
+                
+                // If it resolved to a quote, apply it. If it resolved to a heading, applying it again is harmless.
+                if case .quote = target {
+                    WikiReaderRep.apply(target, in: webView)
+                }
+            }
         }
 
         /// Highlight and scroll to the find match using `window.find()`.
