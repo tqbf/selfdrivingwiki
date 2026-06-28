@@ -4,9 +4,8 @@ import WikiFSCore
 
 /// Unit tests for `WikiLinkMenuBuilder` — the pure, storage-free half of the
 /// right-click link context menu. Covers which actions apply per link URL kind
-/// (`actions(for:)`) and the canonical `[[…]]` reconstruction for "Copy as Wiki
-/// Link" (`wikiLinkString(for:)`). The view layer in `WikiFS` maps these
-/// actions to menu items with real closures.
+/// (`actions(for:)`). The view layer in `WikiFS` maps these actions to menu
+/// items with real closures.
 struct WikiLinkMenuBuilderTests {
 
   private func url(_ s: String) -> URL {
@@ -18,39 +17,55 @@ struct WikiLinkMenuBuilderTests {
 
   // MARK: - actions(for:)
 
-  @Test func resolvedPageLinkGetsFindSimilarCopyCopyPath() {
+  @Test func resolvedPageTopActionsAreBackgroundTabCopyPathDownload() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("wiki://page?title=Foo"))
-        == [.findSimilar, .copyWikiLink, .copyFilePath])
+        == [.openInBackgroundTab, .copyFilePath, .downloadLink])
   }
 
-  @Test func resolvedSourceLinkGetsFindSimilarCopyCopyPath() {
+  @Test func resolvedSourceTopActionsAreBackgroundTabCopyPathDownload() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("wiki://source?title=Bar"))
-        == [.findSimilar, .copyWikiLink, .copyFilePath])
+        == [.openInBackgroundTab, .copyFilePath, .downloadLink])
   }
 
-  @Test func missingLinkGetsSuggestAndCopy() {
+  @Test func resolvedPageBottomActionsAreFindSimilar() {
+    #expect(WikiLinkMenuBuilder.bottomActions(for: url("wiki://page?title=Foo")) == [.findSimilar])
+  }
+
+  @Test func resolvedSourceBottomActionsAreFindSimilar() {
+    #expect(WikiLinkMenuBuilder.bottomActions(for: url("wiki://source?title=Bar")) == [.findSimilar])
+  }
+
+  @Test func missingLinkHasNoBottomActions() {
+    #expect(WikiLinkMenuBuilder.bottomActions(for: url("wiki://missing?title=Baz")) == [])
+  }
+
+  @Test func externalLinkHasNoBottomActions() {
+    #expect(WikiLinkMenuBuilder.bottomActions(for: url("https://example.com")) == [])
+  }
+
+  @Test func missingLinkGetsSuggestOnly() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("wiki://missing?title=Baz"))
-        == [.suggest, .copyWikiLink])
+        == [.suggest])
   }
 
   @Test func samePageAnchorHasNoActions() {
     #expect(WikiLinkMenuBuilder.actions(for: url("wiki://anchor#Section")) == [])
   }
 
-  @Test func externalHttpsGetsAddSourceBrowserAndCopy() {
-    // http(s) links lead with "Add as Source" (fetch + ingest), then browser/copy.
+  @Test func externalHttpsGetsAddSourceBrowserDownloadAndCopy() {
+    // http(s) links lead with "Add as Source" (fetch + ingest), then browser/download/copy.
     #expect(
       WikiLinkMenuBuilder.actions(for: url("https://github.com/foo/bar"))
-        == [.addAsSource, .openInBrowser, .copyLink])
+        == [.addAsSource, .openInBrowser, .downloadLink, .copyLink])
   }
 
-  @Test func externalHttpGetsAddSourceBrowserAndCopy() {
+  @Test func externalHttpGetsAddSourceBrowserDownloadAndCopy() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("http://example.com/page"))
-        == [.addAsSource, .openInBrowser, .copyLink])
+        == [.addAsSource, .openInBrowser, .downloadLink, .copyLink])
   }
 
   @Test func externalMailtoGetsBrowserAndCopy() {
@@ -62,59 +77,13 @@ struct WikiLinkMenuBuilderTests {
   @Test func pageLinkWithFragmentStillResolved() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("wiki://page?title=Foo#Section"))
-        == [.findSimilar, .copyWikiLink, .copyFilePath])
+        == [.openInBackgroundTab, .copyFilePath, .downloadLink])
   }
 
   @Test func encodedTitleIsAccepted() {
     // "Baz Q" percent-encoded in the query value still classifies as a page link.
     #expect(
       WikiLinkMenuBuilder.actions(for: url("wiki://page?title=Baz%20Q"))
-        == [.findSimilar, .copyWikiLink, .copyFilePath])
-  }
-
-  // MARK: - wikiLinkString(for:)
-
-  @Test func copyPageLink() {
-    #expect(WikiLinkMenuBuilder.wikiLinkString(for: url("wiki://page?title=Foo")) == "[[Foo]]")
-  }
-
-  @Test func copySourceLink() {
-    #expect(
-      WikiLinkMenuBuilder.wikiLinkString(for: url("wiki://source?title=Bar"))
-        == "[[source:Bar]]")
-  }
-
-  @Test func copyMissingLinkAsPageForm() {
-    // Missing links can't recover an intended `source:` prefix from the
-    // unresolved URL, so they copy as the plain page form.
-    #expect(WikiLinkMenuBuilder.wikiLinkString(for: url("wiki://missing?title=Baz")) == "[[Baz]]")
-  }
-
-  @Test func copyPageLinkWithFragment() {
-    #expect(
-      WikiLinkMenuBuilder.wikiLinkString(for: url("wiki://page?title=Foo#Section"))
-        == "[[Foo#Section]]")
-  }
-
-  @Test func copySourceLinkWithQuoteFragment() {
-    // fragment `%22quote%22` decodes to `"quote"`.
-    #expect(
-      WikiLinkMenuBuilder.wikiLinkString(for: url("wiki://source?title=Bar#%22quote%22"))
-        == "[[source:Bar#\"quote\"]]")
-  }
-
-  @Test func copyEncodedTitleDecodes() {
-    #expect(
-      WikiLinkMenuBuilder.wikiLinkString(for: url("wiki://page?title=Baz%20Q"))
-        == "[[Baz Q]]")
-  }
-
-  @Test func copyExternalLinkReturnsNil() {
-    #expect(WikiLinkMenuBuilder.wikiLinkString(for: url("https://github.com")) == nil)
-  }
-
-  @Test func copySamePageAnchorReturnsNil() {
-    // Anchors carry no `?title=`, so `target(from:)` returns nil.
-    #expect(WikiLinkMenuBuilder.wikiLinkString(for: url("wiki://anchor#Section")) == nil)
+        == [.openInBackgroundTab, .copyFilePath, .downloadLink])
   }
 }

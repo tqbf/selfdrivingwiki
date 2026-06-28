@@ -331,6 +331,19 @@ final class WikiReaderWebView: WKWebView {
         let itemDescs = menu.items.map { "id=\($0.identifier?.rawValue ?? "nil") title=\"\($0.title)\"" }.joined(separator: ", ")
         DebugLog.reader("willOpenMenu \(menu.items.count) items: [\(itemDescs)]")
 
+        // Remove WebKit built-ins that don't work for this app: opening in a new
+        // window is unsupported (we use tabs), and "Download Linked File" no-ops
+        // for our custom schemes. Remove them before building custom items so the
+        // menu stays clean regardless of which URL type triggered it.
+        let removeIDs: Set<String> = [
+            "WKMenuItemIdentifierOpenLinkInNewWindow",
+            "WKMenuItemIdentifierDownloadLinkedFile",
+        ]
+        menu.items.removeAll { removeIDs.contains($0.identifier?.rawValue ?? "") }
+        // Collapse any double separators or leading/trailing separators left
+        // behind by the removal above.
+        collapseMenuSeparators(menu)
+
         // WebKit adds "Copy Link" / "Open Link" when the right-click lands on an <a>
         // IMPORTANT: WebKit may NOT add link items for custom URL schemes (wiki://),
         // so also accept a wiki:// hoveredLinkHref as proof we're on a link.
@@ -371,6 +384,84 @@ final class WikiReaderWebView: WKWebView {
         DebugLog.reader("willOpenMenu: prepending \(custom.count) custom items")
         menu.insertItem(NSMenuItem.separator(), at: 0)
         for item in custom.reversed() { menu.insertItem(item, at: 0) }
+
+        // Insert bottom items (Find Similar) + a file-backed Share before WebKit's
+        // Share item. For wiki:// links WebKit's Share would offer the raw wiki://
+        // URL; we replace it with one that shares the File Provider-mounted file.
+        let bottomActions = WikiLinkMenuBuilder.bottomActions(for: url)
+        let bottomItems = WikiLinkMenuNSItems.items(
+            for: url, actions: bottomActions, store: store, fileProvider: fileProvider)
+        let shareID = "WKMenuItemIdentifierShareMenu"
+
+        if url.scheme == WikiLinkMarkdown.scheme, let fp = fileProvider {
+            let kind = WikiLinkMarkdown.resolvedKind(from: url)
+            let target = WikiLinkMarkdown.target(from: url) ?? ""
+            let shareWebView = self
+            let storeRef = store
+            let viewPoint = convert(event.locationInWindow, from: nil)
+            let customShare = NSMenuItem.wikiItem("Share…") {
+                Task { @MainActor in
+                    if fp.path == nil { await fp.resolvePath() }
+                    guard let root = fp.path,
+                          let leaf = WikiLinkMenuNSItems.pathLeaf(kind: kind, target: target, store: storeRef)
+                    else { return }
+                    let fileURL = URL(fileURLWithPath: "\(root)/\(leaf)")
+                    let picker = NSSharingServicePicker(items: [fileURL])
+                    let rect = NSRect(x: viewPoint.x, y: viewPoint.y, width: 1, height: 1)
+                    picker.show(relativeTo: rect, of: shareWebView, preferredEdge: .minY)
+                }
+            }
+
+            if let shareIdx = menu.items.firstIndex(where: { $0.identifier?.rawValue == shareID }) {
+                // Remove WebKit's Share; insert in reverse: [bottomItems, sep, customShare] at shareIdx.
+                menu.removeItem(at: shareIdx)
+                menu.insertItem(customShare, at: shareIdx)
+                menu.insertItem(NSMenuItem.separator(), at: shareIdx)
+                for item in bottomItems.reversed() { menu.insertItem(item, at: shareIdx) }
+            } else {
+                // WebKit didn't add a Share item (can happen for wiki:// schemes).
+                for item in bottomItems { menu.addItem(item) }
+                menu.addItem(NSMenuItem.separator())
+                menu.addItem(customShare)
+            }
+            collapseMenuSeparators(menu)
+        } else if !bottomItems.isEmpty {
+            // External links: just insert bottom items before Share (don't replace it).
+            if let shareIdx = menu.items.firstIndex(where: { $0.identifier?.rawValue == shareID }) {
+                menu.insertItem(NSMenuItem.separator(), at: shareIdx)
+                for item in bottomItems.reversed() { menu.insertItem(item, at: shareIdx) }
+            } else {
+                menu.addItem(NSMenuItem.separator())
+                for item in bottomItems { menu.addItem(item) }
+            }
+            collapseMenuSeparators(menu)
+        }
+    }
+
+    // MARK: - Menu cleanup helpers
+
+    /// Remove leading, trailing, and consecutive separators from `menu` so that
+    /// removing individual items never leaves an orphaned divider.
+    private func collapseMenuSeparators(_ menu: NSMenu) {
+        var lastWasSeparator = true // treat start-of-menu as "after separator"
+        var i = 0
+        while i < menu.items.count {
+            let item = menu.items[i]
+            if item.isSeparatorItem {
+                if lastWasSeparator {
+                    menu.removeItem(at: i)
+                    continue
+                }
+                lastWasSeparator = true
+            } else {
+                lastWasSeparator = false
+            }
+            i += 1
+        }
+        // Remove trailing separator if any.
+        if menu.items.last?.isSeparatorItem == true {
+            menu.removeItem(at: menu.items.count - 1)
+        }
     }
 
     // MARK: - Pure, testable hit-test helpers

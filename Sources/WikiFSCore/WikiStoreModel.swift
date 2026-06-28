@@ -350,6 +350,16 @@ public final class WikiStoreModel {
         setActiveTab(tab.id)
     }
 
+    /// Open a tab for `selection` without switching focus to it. If a tab for
+    /// `selection` is already open, this is a no-op (avoid duplicates). The
+    /// active tab remains unchanged; the new tab appears at the end of the bar.
+    public func openTabInBackground(_ selection: WikiSelection, title: String? = nil) {
+        guard !tabs.contains(where: { $0.selection == selection }) else { return }
+        let tab = EditorTab(selection: selection, title: title ?? tabTitle(for: selection))
+        tabs.append(tab)
+        DebugLog.store("[tabs] openTabInBackground: new background tab for \(selection) (id=\(tab.id)), \(tabs.count) tabs total")
+    }
+
     /// Switch the active tab by ID. No-op if the ID is unknown or already active.
     public func selectTab(id: UUID) {
         guard tabs.contains(where: { $0.id == id }), id != activeTabID else { return }

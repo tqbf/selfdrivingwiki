@@ -17,12 +17,13 @@ enum WikiLinkMenuNSItems {
 
     static func items(
         for url: URL,
+        actions: [WikiLinkAction]? = nil,
         store: WikiStoreModel,
         fileProvider: FileProviderSpike?,
         addURL: ((String) -> Void)? = nil
     ) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
-        for action in WikiLinkMenuBuilder.actions(for: url) {
+        for action in actions ?? WikiLinkMenuBuilder.actions(for: url) {
             switch action {
             case .addAsSource:
                 // Opens the "Add from URL" sheet pre-filled with the URL, the same
@@ -43,12 +44,17 @@ enum WikiLinkMenuNSItems {
                         title: "Find Similar…",
                         query: WikiLinkMarkdown.target(from: url) ?? "",
                         store: store))
-            case .copyWikiLink:
-                guard let link = WikiLinkMenuBuilder.wikiLinkString(for: url) else { continue }
-                items.append(.wikiItem("Copy as Wiki Link") {
-                    let pasteboard = NSPasteboard.general
-                    pasteboard.clearContents()
-                    pasteboard.setString(link, forType: .string)
+            case .openInBackgroundTab:
+                let kind = WikiLinkMarkdown.resolvedKind(from: url)
+                let target = WikiLinkMarkdown.target(from: url) ?? ""
+                items.append(.wikiItem("Open in Background Tab") {
+                    switch kind {
+                    case .page:
+                        if let id = store.pageID(forTitle: target) { store.openTabInBackground(.page(id)) }
+                    case .source:
+                        if let id = store.sourceID(forDisplayName: target) { store.openTabInBackground(.source(id)) }
+                    case nil: break
+                    }
                 })
             case .copyFilePath:
                 // Copies the linked target's File Provider mount path
@@ -74,6 +80,54 @@ enum WikiLinkMenuNSItems {
                 items.append(.wikiItem("Open in Browser") {
                     NSWorkspace.shared.open(url)
                 })
+            case .downloadLink:
+                if url.scheme == WikiLinkMarkdown.scheme {
+                    // Wiki page/source: copy from the File Provider mount (file://).
+                    // Omitted when no spike is wired (changelog / system-prompt).
+                    guard let fileProvider else { continue }
+                    let kind = WikiLinkMarkdown.resolvedKind(from: url)
+                    let target = WikiLinkMarkdown.target(from: url) ?? ""
+                    items.append(.wikiItem("Download…") {
+                        Task { @MainActor in
+                            if fileProvider.path == nil { await fileProvider.resolvePath() }
+                            guard let root = fileProvider.path,
+                                  let leaf = Self.pathLeaf(kind: kind, target: target, store: store)
+                            else { return }
+                            let src = URL(fileURLWithPath: "\(root)/\(leaf)")
+                            do {
+                                let dest = try Self.uniqueDownloadDest(filename: src.lastPathComponent)
+                                try FileManager.default.copyItem(at: src, to: dest)
+                                NSWorkspace.shared.activateFileViewerSelecting([dest])
+                            } catch {
+                                DebugLog.reader("Download failed for \(src): \(error)")
+                            }
+                        }
+                    })
+                } else {
+                    // External http(s): fetch via URLSession.
+                    let downloadURL = url
+                    items.append(.wikiItem("Download…") {
+                        Task { @MainActor in
+                            do {
+                                let (tempURL, response) = try await URLSession.shared.download(from: downloadURL)
+                                var filename = downloadURL.lastPathComponent
+                                if filename.isEmpty { filename = "download" }
+                                if let httpResponse = response as? HTTPURLResponse,
+                                   let disposition = httpResponse.value(forHTTPHeaderField: "Content-Disposition"),
+                                   let nameRange = disposition.range(of: "filename=") {
+                                    let raw = String(disposition[nameRange.upperBound...])
+                                        .trimmingCharacters(in: CharacterSet(charactersIn: "\"").union(.whitespaces))
+                                    if !raw.isEmpty { filename = raw }
+                                }
+                                let dest = try Self.uniqueDownloadDest(filename: filename)
+                                try FileManager.default.moveItem(at: tempURL, to: dest)
+                                NSWorkspace.shared.activateFileViewerSelecting([dest])
+                            } catch {
+                                DebugLog.reader("Download failed for \(downloadURL): \(error)")
+                            }
+                        }
+                    })
+                }
             case .copyLink:
                 items.append(.wikiItem("Copy Link") {
                     let pasteboard = NSPasteboard.general
@@ -89,7 +143,7 @@ enum WikiLinkMenuNSItems {
     /// wiki link's target, or `nil` if it can't be resolved. Uses the page's
     /// canonical title (looked up by id, not the link text) so the filename
     /// casing matches the File Provider projection exactly.
-    private static func pathLeaf(
+    static func pathLeaf(
         kind: WikiLinkParser.ParsedLink.LinkType?,
         target: String,
         store: WikiStoreModel
@@ -108,6 +162,24 @@ enum WikiLinkMenuNSItems {
         case nil:
             return nil
         }
+    }
+
+    /// Resolve a collision-free destination in `~/Downloads` for `filename`.
+    /// Appends " 2", " 3", … before the extension until the path is free.
+    /// Throws if the Downloads directory can't be located.
+    private static func uniqueDownloadDest(filename: String) throws -> URL {
+        let name = filename.isEmpty ? "download" : filename
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+        var dest = downloads.appendingPathComponent(name)
+        let base = dest.deletingPathExtension().lastPathComponent
+        let ext = dest.pathExtension
+        var n = 2
+        while FileManager.default.fileExists(atPath: dest.path) {
+            let candidate = ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)"
+            dest = downloads.appendingPathComponent(candidate)
+            n += 1
+        }
+        return dest
     }
 
     /// A submenu listing the closest pages to `query`; choosing one navigates to

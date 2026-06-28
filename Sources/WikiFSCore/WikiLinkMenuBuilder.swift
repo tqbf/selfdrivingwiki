@@ -4,12 +4,11 @@ import Foundation
 //
 // Right-click link context menu — the pure, view- and storage-free half.
 //
-// `WikiLinkMenuBuilder` decides which actions apply to a link URL (and rebuilds
-// the canonical `[[…]]` text for "Copy as Wiki Link"). It is pure so it is
-// trivially unit-testable and free of the Textual/AppKit dependency. The view
-// layer (`WikiLinkMenuNSItems` in `WikiFS`) maps these actions to menu items with
-// real closures (navigation, semantic search, pasteboard, the File Provider
-// mount), where state is needed.
+// `WikiLinkMenuBuilder` decides which actions apply to a link URL. It is pure
+// so it is trivially unit-testable and free of the Textual/AppKit dependency.
+// The view layer (`WikiLinkMenuNSItems` in `WikiFS`) maps these actions to menu
+// items with real closures (navigation, semantic search, pasteboard, the File
+// Provider mount), where state is needed.
 //
 // URL kinds (mirroring `WikiLinkMarkdown`):
 //   wiki://page?title=…      — resolved page link
@@ -28,9 +27,9 @@ public enum WikiLinkAction: Sendable, Equatable {
     case suggest
     /// Any resolved wiki link — explore pages similar to the linked target.
     case findSimilar
-    /// Copy the canonical `[[target]]` / `[[source:name]]` (alias and `#fragment`
-    /// preserved). See ``WikiLinkMenuBuilder/wikiLinkString(for:)``.
-    case copyWikiLink
+    /// Resolved wiki link — open the target page/source in a background tab
+    /// without switching focus away from the current page.
+    case openInBackgroundTab
     /// Copy the File Provider mount path of the linked page/source file.
     case copyFilePath
     /// External http(s) link — fetch + ingest it into this wiki as a source,
@@ -40,16 +39,18 @@ public enum WikiLinkAction: Sendable, Equatable {
     case addAsSource
     /// External link — open in the system browser.
     case openInBrowser
+    /// Download the linked file to the Downloads folder. For wiki page/source
+    /// links this copies the file from the File Provider mount (file://); for
+    /// external http(s) links it fetches via URLSession.
+    case downloadLink
     /// External link — copy the raw URL string.
     case copyLink
 }
 
 public enum WikiLinkMenuBuilder {
 
-    /// The menu actions that apply to `url`, in display order.
-    ///
-    /// Pure: decides *what* applies based only on the URL kind. The view layer
-    /// supplies the data and closures when building the actual menu.
+    /// Actions for the top section (prepended above WebKit's native items).
+    /// Pure — see ``actions(for:)``.
     public static func actions(for url: URL) -> [WikiLinkAction] {
         // Same-page anchor: it scrolls within the preview, not a navigation —
         // no link-specific menu.
@@ -59,47 +60,31 @@ public enum WikiLinkMenuBuilder {
 
         // External link (not our wiki scheme): browser + copy. For http(s) links
         // we also lead with "Add as Source" (fetch + ingest, like the toolbar
-        // button); other schemes (mailto:, etc.) can't be fetched/ingested, so
-        // they get only browser + copy.
+        // button) and offer "Download"; other schemes (mailto:, etc.) can't be
+        // fetched/ingested, so they get only browser + copy.
         if url.scheme != WikiLinkMarkdown.scheme {
             let base: [WikiLinkAction] = [.openInBrowser, .copyLink]
             let scheme = url.scheme?.lowercased()
-            return (scheme == "http" || scheme == "https") ? [.addAsSource] + base : base
+            return (scheme == "http" || scheme == "https") ? [.addAsSource, .openInBrowser, .downloadLink, .copyLink] : base
         }
 
         // Wiki link: resolved page/source vs unresolved (missing).
         switch WikiLinkMarkdown.resolvedKind(from: url) {
         case .page?, .source?:
-            return [.findSimilar, .copyWikiLink, .copyFilePath]
+            return [.openInBackgroundTab, .copyFilePath, .downloadLink]
         case nil:
-            // `wiki://missing` — unresolved. Suggest closest matches; the link
-            // text can still be copied. (Find Similar for resolved links is the
-            // non-redundant way to "explore pages like this one".)
-            return [.suggest, .copyWikiLink]
+            // `wiki://missing` — unresolved. Suggest closest matches.
+            return [.suggest]
         }
     }
 
-    /// The canonical `[[…]]` wiki-link string for `url`, or `nil` if `url` is
-    /// not a wiki link we can reconstruct (external links, same-page anchors).
-    ///
-    /// - A resolved page link  → `[[Target]]`
-    /// - A source link         → `[[source:Name]]`
-    /// - A missing link        → `[[Target]]` (we can't recover an intended
-    ///   `source:` prefix from the unresolved URL, so it copies as a page link)
-    /// - Fragments are preserved: `[[Target#Section]]`, `[[source:Name#"quote"]]`
-    public static func wikiLinkString(for url: URL) -> String? {
-        guard let target = WikiLinkMarkdown.target(from: url) else { return nil }
-        let fragment = WikiLinkMarkdown.fragment(from: url)
-
-        let base: String
-        switch WikiLinkMarkdown.resolvedKind(from: url) {
-        case .source?: base = "source:\(target)"
-        case .page?, nil: base = target
-        }
-
-        if let fragment, !fragment.isEmpty {
-            return "[[\(base)#\(fragment)]]"
-        }
-        return "[[\(base)]]"
+    /// Actions for the bottom section (inserted before the Share item, below
+    /// WebKit's Open/Copy Link items). Currently only resolved wiki links get
+    /// "Find Similar…" here.
+    public static func bottomActions(for url: URL) -> [WikiLinkAction] {
+        guard url.scheme == WikiLinkMarkdown.scheme,
+              WikiLinkMarkdown.resolvedKind(from: url) != nil else { return [] }
+        return [.findSimilar]
     }
+
 }
