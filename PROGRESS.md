@@ -30,7 +30,7 @@ WebKit item surgery in `WikiReaderWebView.willOpenMenu`.
 
 ## 2026-06-27 — Outline Pane
 
-Added an outline pane for the page detail view that shows headers in the Markdown document in a tree.
+Added an outline pane for the detail views that shows headers in the Markdown document in a tree.
 Clicking on an element takes you to the position of the header in the document.
 
 ## 2026-06-27 — Hover tooltips for wiki links in the WKWebView reader
