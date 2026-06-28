@@ -28,23 +28,15 @@ public enum WikiLinkAction: Sendable, Equatable {
     /// Any resolved wiki link — explore pages similar to the linked target.
     case findSimilar
     /// Resolved wiki link — open the target page/source in a background tab
-    /// without switching focus away from the current page.
+    /// without switching focus away from the current page.  Handled directly
+    /// in `WikiReaderView.willOpenMenu` (inserted right after WebKit's
+    /// "Open Link") rather than through the normal top-actions array.
     case openInBackgroundTab
-    /// Copy the File Provider mount path of the linked page/source file.
-    case copyFilePath
     /// External http(s) link — fetch + ingest it into this wiki as a source,
     /// the same path the "Add from URL…" toolbar button uses (it opens the sheet
     /// pre-filled with the URL). Offered only for http/https links; other
     /// external schemes (mailto:, etc.) can't be ingested and are skipped.
     case addAsSource
-    /// External link — open in the system browser.
-    case openInBrowser
-    /// Download the linked file to the Downloads folder. For wiki page/source
-    /// links this copies the file from the File Provider mount (file://); for
-    /// external http(s) links it fetches via URLSession.
-    case downloadLink
-    /// External link — copy the raw URL string.
-    case copyLink
 }
 
 public enum WikiLinkMenuBuilder {
@@ -63,15 +55,16 @@ public enum WikiLinkMenuBuilder {
         // button) and offer "Download"; other schemes (mailto:, etc.) can't be
         // fetched/ingested, so they get only browser + copy.
         if url.scheme != WikiLinkMarkdown.scheme {
-            let base: [WikiLinkAction] = [.openInBrowser, .copyLink]
             let scheme = url.scheme?.lowercased()
-            return (scheme == "http" || scheme == "https") ? [.addAsSource, .openInBrowser, .downloadLink, .copyLink] : base
+            return (scheme == "http" || scheme == "https") ? [.addAsSource] : []
         }
 
         // Wiki link: resolved page/source vs unresolved (missing).
+        // openInBackgroundTab is handled directly in willOpenMenu so it
+        // sits right below WebKit's "Open Link".
         switch WikiLinkMarkdown.resolvedKind(from: url) {
         case .page?, .source?:
-            return [.openInBackgroundTab, .copyFilePath, .downloadLink]
+            return []
         case nil:
             // `wiki://missing` — unresolved. Suggest closest matches.
             return [.suggest]

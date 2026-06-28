@@ -263,21 +263,26 @@ enum AgentOperationRunner {
             fileProvider: fileProvider)
     }
 
-    /// Pre-flight a single page (fix `\]]` brackets + detect broken links), then
-    /// run a page-scoped LLM lint with those findings baked into the prompt.
-    static func runLintPage(
-        pageID: PageID,
-        pageTitle: String,
+    /// Pre-flight one or more pages (fix `\]]` brackets + detect broken links),
+    /// then run a single LLM lint with all the findings.  A single page gets
+    /// its own run; multiple pages are combined into one agent pass.
+    static func runLintPages(
+        pages: [(id: PageID, title: String)],
         launcher: AgentLauncher,
         store: WikiStoreModel,
         manager: WikiManager,
         fileProvider: FileProviderSpike
     ) async {
-        let preflight = store.preflightLint(pageID: pageID)
+        let preflights = pages.map { page in
+            let preflight = store.preflightLint(pageID: page.id)
+            return (title: page.title, brokenLinks: preflight?.brokenPageLinks ?? [])
+        }
+        let combinedTitle = pages.map(\.title).joined(separator: ", ")
+        let combinedBroken = preflights.flatMap(\.brokenLinks)
         await run(
             request: .lintPage(
-                pageTitle: pageTitle,
-                brokenLinks: preflight?.brokenPageLinks ?? [],
+                pageTitle: combinedTitle,
+                brokenLinks: combinedBroken,
                 stateMarkdown: store.currentStateSnapshot().renderStateFile()),
             launcher: launcher,
             store: store,

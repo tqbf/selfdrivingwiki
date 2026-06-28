@@ -2,17 +2,17 @@ import SwiftUI
 import WikiFSCore
 
 /// The Sources section of the sidebar — filter picker, native multi-select rows,
-/// and right-click → Ingest Selected.
+/// and right-click → Ingest / Extract.
 struct SourcesSectionView: View {
     @Bindable var store: WikiStoreModel
     let fileProvider: FileProviderSpike
+    let manager: WikiManager
+    let launcher: AgentLauncher
     /// Sources whose agent run is in flight (agent phase) — "Ingesting…" spinner.
     var ingestingSourceIDs: Set<PageID> = []
     /// Sources whose pdf2md conversion is in flight (extraction phase) —
     /// "Extracting…" spinner. Independent of `ingestingSourceIDs`.
     var extractingSourceIDs: Set<PageID> = []
-    var onBatchIngest: (([PageID]) -> Void)? = nil
-
     @Binding var showingAddFromZotero: Bool
     @Binding var showingImportMarkdown: Bool
     var onAddFromURL: () -> Void
@@ -46,6 +46,11 @@ struct SourcesSectionView: View {
     // Rename dialog state (mirrors the page-row rename in SidebarView).
     @State private var renameTarget: SourceSummary?
     @State private var renameText = ""
+    /// Set when the user taps Ingest on a multi-select that includes
+    /// already-ingested sources — prompts before re-ingesting.
+    @State private var showBatchReingestConfirmation = false
+    @State private var pendingBatchIngestIDs: [PageID] = []
+    @State private var pendingReingestNames: [String] = []
 
     var body: some View {
         Section {
@@ -117,6 +122,19 @@ struct SourcesSectionView: View {
             Button("Cancel", role: .cancel) { renameTarget = nil }
             Button("Rename") { commitRename() }
         }
+        .confirmationDialog(
+            "Ingest Again?",
+            isPresented: $showBatchReingestConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Ingest Again", role: .destructive) {
+                launcher.ingestSources(sourceIDs: pendingBatchIngestIDs,
+                    store: store, manager: manager, fileProvider: fileProvider)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The following sources have already been ingested:\n\(pendingReingestNames.joined(separator: "\n"))\n\nRunning ingest again may create duplicate pages.")
+        }
     }
 
     private var renamePresented: Binding<Bool> {
@@ -140,8 +158,39 @@ struct SourcesSectionView: View {
     private func sourceRow(_ source: SourceSummary) -> some View {
         let ids = selectedSourceIDs
         let ingestAction: (() -> Void)? = ids.isEmpty ? nil : {
-            onBatchIngest?(Array(ids))
+            let reingestNames = ids.compactMap { id -> String? in
+                guard let s = store.sources.first(where: { $0.id == id }),
+                      store.isSourceIngested(s) else { return nil }
+                return s.displayName ?? s.filename
+            }
+            if !reingestNames.isEmpty {
+                pendingBatchIngestIDs = Array(ids)
+                pendingReingestNames = reingestNames
+                showBatchReingestConfirmation = true
+            } else {
+                launcher.ingestSources(sourceIDs: Array(ids),
+                    store: store, manager: manager, fileProvider: fileProvider)
+            }
         }
+        // Single-source ingest — always shown. Same re-ingest guard as batch.
+        let singleIngestAction: (() -> Void)? = {
+            let id = source.id
+            let reingestNames: [String] = {
+                guard let s = store.sources.first(where: { $0.id == id }),
+                      store.isSourceIngested(s) else { return [] }
+                return [s.displayName ?? s.filename]
+            }()
+            return {
+                if !reingestNames.isEmpty {
+                    pendingBatchIngestIDs = [id]
+                    pendingReingestNames = reingestNames
+                    showBatchReingestConfirmation = true
+                } else {
+                    launcher.ingestSources(sourceIDs: [id],
+                        store: store, manager: manager, fileProvider: fileProvider)
+                }
+            }
+        }()
         // Single-source share — resolves the canonical URL from the daemon
         // via the source-by-name identifier, same pattern as openSource.
         let shareAction: (() -> Void)? = {
@@ -168,7 +217,8 @@ struct SourcesSectionView: View {
         // Batch share — appears when 2+ sources are selected.  Resolves all
         // URLs in parallel via the daemon, then passes them to one picker.
         let batchShareAction: (() -> Void)? = {
-            guard ids.count > 1 else { return nil }
+            let count = ids.count
+            guard count > 1 else { return nil }
             let selectedIDs = ids
             return {
                 Task {
@@ -201,12 +251,53 @@ struct SourcesSectionView: View {
             isExtracting: extractingSourceIDs.contains(source.id),
             isSelected: ids.contains(source.id),
             onOpen: { Task { await fileProvider.openSource(id: source.id) } },
+            onOpenSelected: {
+                for id in ids { Task { await fileProvider.openSource(id: id) } }
+            },
+            onOpenInBackgroundSelected: {
+                for id in ids { store.openTabInBackground(.source(id)) }
+            },
+            openSelectedCount: ids.count,
             onRemove: { store.deleteSource(source.id) },
+            onRemoveSelected: { for id in ids { store.deleteSource(id) } },
+            deleteSelectedCount: ids.count,
             onRename: { beginRename(source) },
+            onIngest: singleIngestAction,
             onIngestSelected: ingestAction,
+            ingestSelectedCount: ids.count,
             onShare: shareAction,
-            onShareSelected: batchShareAction
+            onOpenInBackground: { store.openTabInBackground(.source(source.id)) },
+            onShareSelected: batchShareAction,
+            shareSelectedCount: ids.count,
+            onExtract: {
+                guard let data = store.sourceBytes(id: source.id) else { return }
+                Task { await launcher.extractPDF(store: store, id: source.id, filename: source.filename, data: data) }
+            },
+            onExtractSelected: {
+                let toExtract = ids.compactMap { id -> (PageID, String, Data)? in
+                    guard let s = store.sources.first(where: { $0.id == id }),
+                          s.mimeType == "application/pdf",
+                          store.processedMarkdownHead(for: s) == nil,
+                          let data = store.sourceBytes(id: id) else { return nil }
+                    return (id, s.filename, data)
+                }
+                guard !toExtract.isEmpty else { return }
+                Task {
+                    for item in toExtract {
+                        await launcher.extractPDF(store: store, id: item.0, filename: item.1, data: item.2)
+                    }
+                }
+            },
+            extractCount: ids.filter { id in
+                guard let s = store.sources.first(where: { $0.id == id }),
+                      s.mimeType == "application/pdf",
+                      store.processedMarkdownHead(for: s) == nil else { return false }
+                return true
+            }.count,
+            canExtract: source.mimeType == "application/pdf"
+                && store.processedMarkdownHead(for: source) == nil
         )
         .tag(WikiSelection.source(source.id))
     }
+
 }

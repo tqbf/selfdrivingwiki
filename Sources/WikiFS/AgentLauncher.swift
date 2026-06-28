@@ -280,8 +280,13 @@ final class AgentLauncher {
     /// `endsGeneration` event). Private — observable externally via `isGenerating`.
     @ObservationIgnored private var holdsGenerationSlot = false
 
-    init(generationGate: GenerationGate = GenerationGate()) {
+    let extractionCoordinator: ExtractionCoordinator
+
+    init(generationGate: GenerationGate = GenerationGate(),
+         extractionCoordinator: ExtractionCoordinator = ExtractionCoordinator(
+            containerDirectory: FileManager.default.temporaryDirectory)) {
         self.generationGate = generationGate
+        self.extractionCoordinator = extractionCoordinator
     }
 
     /// Wait for the shared generation gate, returning `true` iff this caller
@@ -400,6 +405,84 @@ final class AgentLauncher {
         }
         // No live waiters: free the slot.
         isExtractionSlotBusy = false
+    }
+
+    /// Extract markdown from a PDF source, serialising through the extraction
+    /// slot and updating UI state.  Same code path whether triggered from the
+    /// detail view or the sidebar context menu.
+    func extractPDF(store: WikiStoreModel, id: PageID, filename: String, data: Data) async {
+        // Wait for the extraction slot (serialises pdf2md conversions).
+        let acquired = await awaitExtractionSlot()
+        guard acquired, !Task.isCancelled else {
+            if acquired { releaseExtractionSlot() }
+            return
+        }
+        isExtracting = true
+        extractingSourceIDs.insert(id)
+        extractionLog = ""
+        defer {
+            isExtracting = false
+            extractingSourceIDs.remove(id)
+            releaseExtractionSlot()
+        }
+
+        let extractor = extractionCoordinator.current()
+        switch await extractor.readiness() {
+        case .ready:
+            do {
+                let markdown = try await extractor.convert(
+                    pdfData: data, filename: filename,
+                    onProgress: { line in
+                        Task { @MainActor in self.extractionLog.append(line) }
+                    })
+                _ = store.seedPdfMarkdown(for: id, content: markdown)
+                extractionLog = "Markdown extracted — \(markdown.count) chars."
+                DebugLog.extraction("Extracted \(filename): \(markdown.count) chars")
+            } catch {
+                if Task.isCancelled {
+                    extractionLog = "Extraction cancelled."
+                } else {
+                    extractionLog = "Extraction failed: \(error.localizedDescription)"
+                }
+                DebugLog.extraction("Extract failed for \(filename): \(error.localizedDescription)")
+            }
+        case .needsSetup(let message), .notInstalled(let message):
+            extractionLog = message
+            DebugLog.extraction("Extract backend not ready for \(filename): \(message)")
+        }
+    }
+
+    /// Ingest a single source.  Convenience — delegates to `ingestSources`.
+    func ingestSource(
+        sourceID: PageID,
+        store: WikiStoreModel,
+        manager: WikiManager,
+        fileProvider: FileProviderSpike
+    ) {
+        ingestSources(sourceIDs: [sourceID], store: store, manager: manager, fileProvider: fileProvider)
+    }
+
+    /// Ingest one or more sources.  Single entrypoint for both the detail view
+    /// and the sidebar context menu — handles extraction, staging, agent spawn,
+    /// and UI state tracking.
+    func ingestSources(
+        sourceIDs: [PageID],
+        store: WikiStoreModel,
+        manager: WikiManager,
+        fileProvider: FileProviderSpike
+    ) {
+        ingestTask?.cancel()
+        let task = Task {
+            defer { ingestTask = nil }
+            await AgentOperationRunner.runMultiIngest(
+                sourceIDs: sourceIDs,
+                launcher: self,
+                store: store,
+                manager: manager,
+                fileProvider: fileProvider,
+                extractionCoordinator: extractionCoordinator)
+        }
+        ingestTask = task
     }
 
     /// Run an operation `request` against one wiki. Serializes on the generation gate:

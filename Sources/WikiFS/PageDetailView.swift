@@ -62,8 +62,8 @@ struct PageDetailView: View {
                             let pageTitle = store.summaries.first(where: { $0.id == id })?.title ?? ""
                             Button("Lint", systemImage: "checkmark.seal") {
                                 Task {
-                                    await AgentOperationRunner.runLintPage(
-                                        pageID: id, pageTitle: pageTitle,
+                                    await AgentOperationRunner.runLintPages(
+                                        pages: [(id: id, title: pageTitle)],
                                         launcher: launcher, store: store,
                                         manager: manager, fileProvider: fileProvider)
                                 }

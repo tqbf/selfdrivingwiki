@@ -295,6 +295,7 @@ final class WikiReaderWebView: WKWebView {
     /// `WikiReaderRep` from the view's store / fileProvider / addURLHandler.
     var store: WikiStoreModel?
     var fileProvider: FileProviderSpike?
+    var currentSelection: WikiSelection?
     var addURLHandler: ((String) -> Void)?
     /// The href under the cursor, kept current by the injected `mouseover`
     /// listener. Read synchronously in `willOpenMenu`. `fileprivate(set)` so the
@@ -338,29 +339,33 @@ final class WikiReaderWebView: WKWebView {
         let removeIDs: Set<String> = [
             "WKMenuItemIdentifierOpenLinkInNewWindow",
             "WKMenuItemIdentifierDownloadLinkedFile",
+            "WKMenuItemIdentifierCopyLink",
         ]
         menu.items.removeAll { removeIDs.contains($0.identifier?.rawValue ?? "") }
         // Collapse any double separators or leading/trailing separators left
         // behind by the removal above.
         collapseMenuSeparators(menu)
 
-        // WebKit adds "Copy Link" / "Open Link" when the right-click lands on an <a>
-        // IMPORTANT: WebKit may NOT add link items for custom URL schemes (wiki://),
-        // so also accept a wiki:// hoveredLinkHref as proof we're on a link.
-        let hasCopyLink = menu.items.contains {
-            $0.identifier?.rawValue == "WKMenuItemIdentifierCopyLink"
-        }
-        let hasLinkItem = hasCopyLink || menu.items.contains {
+        // We removed Copy Link; Open Link is the only remaining WebKit link
+        // item we rely on to prove we're on a link.  Also accept a wiki://
+        // hoveredLinkHref for custom-scheme links.
+        let hasLinkItem = menu.items.contains {
             $0.identifier?.rawValue == "WKMenuItemIdentifierOpenLink"
         }
         let hasWikiHref = hoveredLinkHref?.hasPrefix("wiki://") ?? false
-        guard hasLinkItem || hasWikiHref else {
-            DebugLog.reader("willOpenMenu: no link item (hasCopyLink=\(hasCopyLink)) and no wiki href → bailing")
-            return
-        }
 
         guard let store else {
             DebugLog.reader("willOpenMenu: store is nil → bailing")
+            return
+        }
+
+        // Non-link right-click: add a Share item below "Reload" so the user
+        // can share the current page/source document directly.
+        guard hasLinkItem || hasWikiHref else {
+            if let sel = currentSelection {
+                addInlineShareItem(to: menu, for: sel, store: store, event: event)
+            }
+            DebugLog.reader("willOpenMenu: no link → added inline Share, bailing")
             return
         }
 
@@ -377,63 +382,100 @@ final class WikiReaderWebView: WKWebView {
         DebugLog.reader("willOpenMenu: building custom items for url=\(url.absoluteString)")
 
         let custom = WikiLinkMenuNSItems.items(for: url, store: store, fileProvider: fileProvider, addURL: addURLHandler)
-        guard !custom.isEmpty else {
-            DebugLog.reader("willOpenMenu: WikiLinkMenuNSItems returned empty for url=\(url.absoluteString) → bailing")
-            return
-        }
-        DebugLog.reader("willOpenMenu: prepending \(custom.count) custom items")
-        menu.insertItem(NSMenuItem.separator(), at: 0)
-        for item in custom.reversed() { menu.insertItem(item, at: 0) }
 
-        // Insert bottom items (Find Similar) + a file-backed Share before WebKit's
-        // Share item. For wiki:// links WebKit's Share would offer the raw wiki://
-        // URL; we replace it with one that shares the File Provider-mounted file.
-        let bottomActions = WikiLinkMenuBuilder.bottomActions(for: url)
-        let bottomItems = WikiLinkMenuNSItems.items(
-            for: url, actions: bottomActions, store: store, fileProvider: fileProvider)
-        let shareID = "WKMenuItemIdentifierShareMenu"
-
-        if url.scheme == WikiLinkMarkdown.scheme, let fp = fileProvider {
-            let kind = WikiLinkMarkdown.resolvedKind(from: url)
+        // Insert "Open in Background" right after WebKit's "Open Link"
+        // for resolved wiki links, so it's the second item in the menu.
+        if let openLinkIdx = menu.items.firstIndex(where: { $0.identifier?.rawValue == "WKMenuItemIdentifierOpenLink" }),
+           WikiLinkMarkdown.resolvedKind(from: url) != nil {
             let target = WikiLinkMarkdown.target(from: url) ?? ""
+            let bgItem = NSMenuItem.wikiItem("Open in Background") {
+                switch WikiLinkMarkdown.resolvedKind(from: url) {
+                case .page:
+                    if let id = store.pageID(forTitle: target) { store.openTabInBackground(.page(id)) }
+                case .source:
+                    if let id = store.sourceID(forDisplayName: target) { store.openTabInBackground(.source(id)) }
+                case nil: break
+                }
+            }
+            bgItem.image = NSImage(systemSymbolName: "dock.arrow.down.rectangle",
+                                   accessibilityDescription: "Open in Background")
+            menu.insertItem(bgItem, at: openLinkIdx + 1)
+            menu.insertItem(NSMenuItem.separator(), at: openLinkIdx + 2)
+        }
+
+        // Prepend remaining custom items (addAsSource, openInBrowser,
+        // suggest for missing links) at the top.
+        if !custom.isEmpty {
+            DebugLog.reader("willOpenMenu: prepending \(custom.count) custom items")
+            menu.insertItem(NSMenuItem.separator(), at: 0)
+            for item in custom.reversed() { menu.insertItem(item, at: 0) }
+        }
+
+        // Find the insertion point for Share + bottom items: right after
+        // "Open in Background" if present, otherwise after "Open Link".
+        let bgIdx = menu.items.firstIndex(where: { $0.title == "Open in Background" })
+        let openLinkIdx = menu.items.firstIndex(where: { $0.identifier?.rawValue == "WKMenuItemIdentifierOpenLink" })
+        let insertIdx = bgIdx.map { $0 + 1 } ?? openLinkIdx.map { $0 + 1 } ?? menu.items.count
+
+        // Remove WebKit's Share (we replace it with our own) if present.
+        let shareID = "WKMenuItemIdentifierShareMenu"
+        if let webKitShareIdx = menu.items.firstIndex(where: { $0.identifier?.rawValue == shareID }) {
+            menu.removeItem(at: webKitShareIdx)
+        }
+
+        // Build Share + bottom items for wiki links.
+        if url.scheme == WikiLinkMarkdown.scheme, let fp = fileProvider {
             let shareWebView = self
-            let storeRef = store
             let viewPoint = convert(event.locationInWindow, from: nil)
+
+            let shareURLTask: Task<URL?, Never>?
+            switch WikiLinkMarkdown.resolvedKind(from: url) {
+            case .page?:
+                let target = WikiLinkMarkdown.target(from: url) ?? ""
+                if let id = store.pageID(forTitle: target) {
+                    shareURLTask = Task { await fp.resolvePageByTitleURL(id: id) }
+                } else { shareURLTask = nil }
+            case .source?:
+                let target = WikiLinkMarkdown.target(from: url) ?? ""
+                if let id = store.sourceID(forDisplayName: target) {
+                    shareURLTask = Task { await fp.resolveSourceByNameURL(id: id) }
+                } else { shareURLTask = nil }
+            case nil:
+                shareURLTask = nil
+            }
+
             let customShare = NSMenuItem.wikiItem("Share…") {
                 Task { @MainActor in
-                    if fp.path == nil { await fp.resolvePath() }
-                    guard let root = fp.path,
-                          let leaf = WikiLinkMenuNSItems.pathLeaf(kind: kind, target: target, store: storeRef)
-                    else { return }
-                    let fileURL = URL(fileURLWithPath: "\(root)/\(leaf)")
+                    guard let fileURL = await shareURLTask?.value as? URL else { return }
                     let picker = NSSharingServicePicker(items: [fileURL])
                     let rect = NSRect(x: viewPoint.x, y: viewPoint.y, width: 1, height: 1)
                     picker.show(relativeTo: rect, of: shareWebView, preferredEdge: .minY)
                 }
             }
+            customShare.image = NSImage(systemSymbolName: "square.and.arrow.up",
+                                        accessibilityDescription: "Share")
 
-            if let shareIdx = menu.items.firstIndex(where: { $0.identifier?.rawValue == shareID }) {
-                // Remove WebKit's Share; insert in reverse: [bottomItems, sep, customShare] at shareIdx.
-                menu.removeItem(at: shareIdx)
-                menu.insertItem(customShare, at: shareIdx)
-                menu.insertItem(NSMenuItem.separator(), at: shareIdx)
-                for item in bottomItems.reversed() { menu.insertItem(item, at: shareIdx) }
-            } else {
-                // WebKit didn't add a Share item (can happen for wiki:// schemes).
-                for item in bottomItems { menu.addItem(item) }
-                menu.addItem(NSMenuItem.separator())
-                menu.addItem(customShare)
-            }
+            let bottomActions = WikiLinkMenuBuilder.bottomActions(for: url)
+            let bottomItems = WikiLinkMenuNSItems.items(
+                for: url, actions: bottomActions, store: store, fileProvider: fileProvider)
+
+            // Insert at insertIdx in reverse so they appear in order.
+            for item in bottomItems.reversed() { menu.insertItem(item, at: insertIdx) }
+            if !bottomItems.isEmpty { menu.insertItem(NSMenuItem.separator(), at: insertIdx) }
+            menu.insertItem(customShare, at: insertIdx)
             collapseMenuSeparators(menu)
-        } else if !bottomItems.isEmpty {
-            // External links: just insert bottom items before Share (don't replace it).
-            if let shareIdx = menu.items.firstIndex(where: { $0.identifier?.rawValue == shareID }) {
-                menu.insertItem(NSMenuItem.separator(), at: shareIdx)
-                for item in bottomItems.reversed() { menu.insertItem(item, at: shareIdx) }
-            } else {
-                menu.addItem(NSMenuItem.separator())
-                for item in bottomItems { menu.addItem(item) }
+        } else {
+            // External link: Share the URL directly.
+            let shareWebView = self
+            let extViewPoint = convert(event.locationInWindow, from: nil)
+            let customShare = NSMenuItem.wikiItem("Share…") {
+                let picker = NSSharingServicePicker(items: [url])
+                let rect = NSRect(x: extViewPoint.x, y: extViewPoint.y, width: 1, height: 1)
+                picker.show(relativeTo: rect, of: shareWebView, preferredEdge: .minY)
             }
+            customShare.image = NSImage(systemSymbolName: "square.and.arrow.up",
+                                        accessibilityDescription: "Share")
+            menu.insertItem(customShare, at: insertIdx)
             collapseMenuSeparators(menu)
         }
     }
@@ -462,6 +504,54 @@ final class WikiReaderWebView: WKWebView {
         if menu.items.last?.isSeparatorItem == true {
             menu.removeItem(at: menu.items.count - 1)
         }
+    }
+
+    /// Insert a Share item after WebKit's "Reload" (or at the end) for
+    /// right-clicks on non-link text.  Resolves the canonical URL from the
+    /// daemon so the share sheet gets a human-readable filename.
+    private func addInlineShareItem(
+        to menu: NSMenu,
+        for selection: WikiSelection,
+        store: WikiStoreModel,
+        event: NSEvent
+    ) {
+        let shareWebView = self
+        let viewPoint = convert(event.locationInWindow, from: nil)
+
+        let shareTask: Task<URL?, Never>?
+        switch selection {
+        case .page(let id):
+            shareTask = Task { [weak fileProvider] in
+                await fileProvider?.resolvePageByTitleURL(id: id)
+            }
+        case .source(let id):
+            shareTask = Task { [weak fileProvider] in
+                await fileProvider?.resolveSourceByNameURL(id: id)
+            }
+        default:
+            return
+        }
+
+        let item = NSMenuItem.wikiItem("Share…") {
+            Task { @MainActor in
+                guard let fileURL = await shareTask?.value as? URL else { return }
+                let picker = NSSharingServicePicker(items: [fileURL])
+                let rect = NSRect(x: viewPoint.x, y: viewPoint.y, width: 1, height: 1)
+                picker.show(relativeTo: rect, of: shareWebView, preferredEdge: .minY)
+            }
+        }
+        item.image = NSImage(systemSymbolName: "square.and.arrow.up",
+                             accessibilityDescription: "Share")
+
+        // Insert after "Reload" if present.
+        if let reloadIdx = menu.items.firstIndex(where: { $0.identifier?.rawValue == "WKMenuItemIdentifierReload" }) {
+            menu.insertItem(NSMenuItem.separator(), at: reloadIdx + 1)
+            menu.insertItem(item, at: reloadIdx + 2)
+        } else {
+            menu.addItem(NSMenuItem.separator())
+            menu.addItem(item)
+        }
+        collapseMenuSeparators(menu)
     }
 
     // MARK: - Pure, testable hit-test helpers
@@ -571,6 +661,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.pageZoom = readerZoom
         webView.store = store
         webView.fileProvider = fileProvider
+        webView.currentSelection = currentSelection
         webView.addURLHandler = addURLHandler
         webView.navigationDelegate = context.coordinator
         context.coordinator.webView = webView
@@ -584,6 +675,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.pageZoom = readerZoom
         webView.store = store
         webView.fileProvider = fileProvider
+        webView.currentSelection = currentSelection
         webView.addURLHandler = addURLHandler
         context.coordinator.store = store
         context.coordinator.currentSelection = currentSelection

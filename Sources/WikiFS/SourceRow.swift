@@ -23,18 +23,43 @@ struct SourceRow: View {
     /// True when this source is part of the List's multi-selection.
     var isSelected: Bool = false
     let onOpen: () -> Void
+    /// Open all currently-selected sources (batch). Replaces single Open
+    /// with "Open N Sources" when batch-selected.
+    var onOpenSelected: (() -> Void)? = nil
+    /// Open all selected sources in background tabs (batch).
+    var onOpenInBackgroundSelected: (() -> Void)? = nil
+    var openSelectedCount: Int = 0
     let onRemove: () -> Void
+    /// Delete all currently-selected sources (shown when batch-selected,
+    /// replaces single Delete with "Delete N Sources").
+    var onRemoveSelected: (() -> Void)? = nil
+    var deleteSelectedCount: Int = 0
     /// Begin renaming this source's display name (shown in the context menu).
     var onRename: (() -> Void)? = nil
+    /// Ingest this single source. Shown for single-select; replaced by
+    /// `onIngestSelected` (with count) for multi-select.
+    var onIngest: (() -> Void)? = nil
     /// Ingest all currently-selected sources (shown in context menu when this
-    /// source is part of a multi-source selection).
+    /// source is part of a multi-source selection, replacing the single Ingest).
     var onIngestSelected: (() -> Void)? = nil
+    var ingestSelectedCount: Int = 0
     /// When set, a Share item appears in the context menu. The caller passes
     /// the File Provider mount-path URL to NSSharingServicePicker.
     var onShare: (() -> Void)? = nil
+    /// Open this source's detail view in a background tab.
+    var onOpenInBackground: (() -> Void)? = nil
     /// Share ALL currently-selected sources (shown in context menu when this
     /// source is part of a multi-source selection, replacing the single Share).
+    /// The count is used for the menu item label ("Share N Sources").
     var onShareSelected: (() -> Void)? = nil
+    var shareSelectedCount: Int = 0
+    /// Extract markdown from this PDF source. Shown only for PDFs that
+    /// haven't been extracted yet.
+    var onExtract: (() -> Void)? = nil
+    /// Batch-extract all selected PDF sources.
+    var onExtractSelected: (() -> Void)? = nil
+    var extractCount: Int = 0
+    var canExtract: Bool = false
 
     /// The trailing status the row shows for a source, mirroring the two phases in
     /// `AgentLauncher`. Extracted as a pure static function so the precedence
@@ -101,27 +126,57 @@ struct SourceRow: View {
         }
         .contentShape(Rectangle())
         .contextMenu {
-            if isSelected, let onIngestSelected {
-                Button("Ingest Selected", systemImage: "text.badge.plus", action: onIngestSelected)
-                Divider()
+            let isMulti = isSelected && openSelectedCount > 1
+            if isMulti, let onOpenSelected {
+                Button("Open \(openSelectedCount) Sources",
+                       systemImage: "arrow.up.forward.app", action: onOpenSelected)
+            } else {
+                Button("Open", systemImage: "arrow.up.forward.app", action: onOpen)
             }
-            Button("Open", systemImage: "arrow.up.forward.app", action: onOpen)
-            if let onRename {
-                Button("Rename", systemImage: "pencil", action: onRename)
+            if isMulti, let onOpenInBackgroundSelected {
+                Button("Open \(openSelectedCount) in Background",
+                       systemImage: "dock.arrow.down.rectangle",
+                       action: onOpenInBackgroundSelected)
+            } else if let onOpenInBackground {
+                Button("Open in Background", systemImage: "dock.arrow.down.rectangle",
+                       action: onOpenInBackground)
             }
-            // Batch share replaces single share when this row is part of a
-            // multi-select (same pattern as Ingest Selected above).
-            if isSelected, let onShareSelected {
-                Button("Share Selected", systemImage: "square.and.arrow.up",
+            if isMulti, let onShareSelected {
+                Button("Share \(shareSelectedCount) Sources",
+                       systemImage: "square.and.arrow.up",
                        action: onShareSelected)
             } else if let onShare {
                 Button("Share", systemImage: "square.and.arrow.up", action: onShare)
             }
+            if isMulti, let onIngestSelected {
+                Divider()
+                Button("Ingest \(ingestSelectedCount) Sources",
+                       systemImage: "text.badge.plus", action: onIngestSelected)
+            } else if let onIngest {
+                Divider()
+                Button("Ingest", systemImage: "text.badge.plus", action: onIngest)
+            }
+            if isMulti, let onExtractSelected, canExtract {
+                Divider()
+                Button("Extract \(extractCount) Sources",
+                       systemImage: "doc.plaintext", action: onExtractSelected)
+            } else if let onExtract, canExtract {
+                Divider()
+                Button("Extract Markdown", systemImage: "doc.plaintext", action: onExtract)
+            }
             Divider()
-            Button("Remove", role: .destructive, action: onRemove)
+            if !isMulti, let onRename {
+                Button("Rename", systemImage: "pencil", action: onRename)
+            }
+            if isMulti, let onRemoveSelected {
+                Button("Delete \(deleteSelectedCount) Sources",
+                       systemImage: "trash", role: .destructive, action: onRemoveSelected)
+            } else {
+                Button("Delete", systemImage: "trash", role: .destructive, action: onRemove)
+            }
         }
         .swipeActions(edge: .trailing) {
-            Button("Remove", role: .destructive, action: onRemove)
+            Button("Delete", systemImage: "trash", role: .destructive, action: onRemove)
         }
     }
 

@@ -51,16 +51,16 @@ struct WikiFSApp: App {
         }
         containerDirectory = directory
         _manager = State(initialValue: WikiManager(containerDirectory: directory))
-        _extractionCoordinator = State(
-            initialValue: ExtractionCoordinator(containerDirectory: directory))
+        let coordinator = ExtractionCoordinator(containerDirectory: directory)
+        _extractionCoordinator = State(initialValue: coordinator)
         // All three launchers share one GenerationGate so ingest, ask-turn, and
         // edit-turn generations contend on the same FIFO queue — only one active
         // generation at a time. Interactive sessions' processes coexist freely;
         // only one GENERATES at a time (per-turn gate).
         let generationGate = GenerationGate()
-        _agentLauncher = State(initialValue: AgentLauncher(generationGate: generationGate))
-        _askLauncher   = State(initialValue: AgentLauncher(generationGate: generationGate))
-        _editLauncher  = State(initialValue: AgentLauncher(generationGate: generationGate))
+        _agentLauncher = State(initialValue: AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator))
+        _askLauncher   = State(initialValue: AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator))
+        _editLauncher  = State(initialValue: AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator))
     }
 
     var body: some Scene {

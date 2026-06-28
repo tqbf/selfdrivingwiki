@@ -744,4 +744,70 @@ struct EditorTabTests {
         #expect(model.tabIcon(for: .changeLog) == "clock.arrow.circlepath")
         #expect(model.tabIcon(for: .page(PageID(rawValue: "any"))) == "doc.text")
     }
+
+    // MARK: - Batch open
+
+    @Test func batchOpenCreatesAllTabs() throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        let b = try store.createPage(title: "B")
+        let c = try store.createPage(title: "C")
+        model.reloadFromStore()
+
+        // Simulate batch opening all three pages.
+        for id in [a.id, b.id, c.id] { model.openTab(.page(id)) }
+
+        #expect(model.tabs.count == 3)
+        #expect(model.tabs.map(\.title) == ["A", "B", "C"])
+        // The last-opened page is active.
+        #expect(model.tabs.last?.selection == .page(c.id))
+        #expect(model.activeTabID == model.tabs.last?.id)
+    }
+
+    @Test func batchOpenBackgroundCreatesAllTabsWithoutSwitching() throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        let b = try store.createPage(title: "B")
+        let c = try store.createPage(title: "C")
+        model.reloadFromStore()
+
+        // Open A first (active), then batch-open B and C in background.
+        model.openTab(.page(a.id))
+        for id in [b.id, c.id] { model.openTabInBackground(.page(id)) }
+
+        #expect(model.tabs.count == 3)
+        // A stays active — background opens don't switch focus.
+        #expect(model.activeTabID == model.tabs.first?.id)
+        #expect(model.tabs.first?.selection == .page(a.id))
+    }
+
+    @Test func batchOpenSkipsDuplicateTabs() throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        model.reloadFromStore()
+
+        // Open A first, then batch-open including A again.
+        model.openTab(.page(a.id))
+        #expect(model.tabs.count == 1)
+
+        // A second openTab for the same page refocuses, doesn't duplicate.
+        model.openTab(.page(a.id))
+        #expect(model.tabs.count == 1)
+    }
+
+    @Test func batchOpenBackgroundSkipsDuplicateTabs() throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        let b = try store.createPage(title: "B")
+        model.reloadFromStore()
+
+        model.openTabInBackground(.page(a.id))
+        #expect(model.tabs.count == 1)
+
+        // Batch background open of A (duplicate) and B (new).
+        for id in [a.id, b.id] { model.openTabInBackground(.page(id)) }
+        // A is a no-op (already open); B is added.
+        #expect(model.tabs.count == 2)
+        #expect(model.tabs.map(\.title).sorted() == ["A", "B"])
+    }
 }

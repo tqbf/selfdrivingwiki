@@ -31,7 +31,6 @@ struct ContentView: View {
         NavigationSplitView {
             SidebarView(store: store, manager: manager, fileProvider: fileProvider,
                         launcher: agentLauncher,
-                        onBatchIngest: batchIngest,
                         ingestingSourceIDs: agentLauncher.ingestingSourceIDs,
                         extractingSourceIDs: agentLauncher.extractingSourceIDs,
                         showingAddFromZotero: $showingAddFromZotero,
@@ -201,21 +200,6 @@ struct ContentView: View {
             defer { agentLauncher.ingestTask = nil }
             await AgentOperationRunner.runIngest(
                 sourceID: sourceID,
-                launcher: agentLauncher,
-                store: store,
-                manager: manager,
-                fileProvider: fileProvider,
-                extractionCoordinator: extractionCoordinator)
-        }
-        agentLauncher.ingestTask = task
-    }
-
-    private func batchIngest(sourceIDs: [PageID]) {
-        DebugLog.ingest("ContentView.batchIngest: user pressed Ingest \(sourceIDs.count) sources")
-        let task = Task {
-            defer { agentLauncher.ingestTask = nil }
-            await AgentOperationRunner.runMultiIngest(
-                sourceIDs: sourceIDs,
                 launcher: agentLauncher,
                 store: store,
                 manager: manager,

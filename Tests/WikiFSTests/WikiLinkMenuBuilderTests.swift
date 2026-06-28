@@ -17,16 +17,19 @@ struct WikiLinkMenuBuilderTests {
 
   // MARK: - actions(for:)
 
-  @Test func resolvedPageTopActionsAreBackgroundTabCopyPathDownload() {
+  @Test func resolvedPageTopActionsAreEmpty() {
+    // openInBackgroundTab is handled directly in willOpenMenu so it sits
+    // below WebKit's "Open Link"; copyFilePath and downloadLink are removed
+    // (Share replaces both).
     #expect(
       WikiLinkMenuBuilder.actions(for: url("wiki://page?title=Foo"))
-        == [.openInBackgroundTab, .copyFilePath, .downloadLink])
+        == [])
   }
 
-  @Test func resolvedSourceTopActionsAreBackgroundTabCopyPathDownload() {
+  @Test func resolvedSourceTopActionsAreEmpty() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("wiki://source?title=Bar"))
-        == [.openInBackgroundTab, .copyFilePath, .downloadLink])
+        == [])
   }
 
   @Test func resolvedPageBottomActionsAreFindSimilar() {
@@ -55,35 +58,34 @@ struct WikiLinkMenuBuilderTests {
     #expect(WikiLinkMenuBuilder.actions(for: url("wiki://anchor#Section")) == [])
   }
 
-  @Test func externalHttpsGetsAddSourceBrowserDownloadAndCopy() {
-    // http(s) links lead with "Add as Source" (fetch + ingest), then browser/download/copy.
+  @Test func externalHttpsGetsAddAsSourceOnly() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("https://github.com/foo/bar"))
-        == [.addAsSource, .openInBrowser, .downloadLink, .copyLink])
+        == [.addAsSource])
   }
 
-  @Test func externalHttpGetsAddSourceBrowserDownloadAndCopy() {
+  @Test func externalHttpGetsAddAsSourceOnly() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("http://example.com/page"))
-        == [.addAsSource, .openInBrowser, .downloadLink, .copyLink])
+        == [.addAsSource])
   }
 
-  @Test func externalMailtoGetsBrowserAndCopy() {
+  @Test func externalMailtoHasNoActions() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("mailto:user@example.com"))
-        == [.openInBrowser, .copyLink])
+        == [])
   }
 
   @Test func pageLinkWithFragmentStillResolved() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("wiki://page?title=Foo#Section"))
-        == [.openInBackgroundTab, .copyFilePath, .downloadLink])
+        == [])
   }
 
   @Test func encodedTitleIsAccepted() {
     // "Baz Q" percent-encoded in the query value still classifies as a page link.
     #expect(
       WikiLinkMenuBuilder.actions(for: url("wiki://page?title=Baz%20Q"))
-        == [.openInBackgroundTab, .copyFilePath, .downloadLink])
+        == [])
   }
 }

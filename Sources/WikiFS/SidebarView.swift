@@ -13,8 +13,6 @@ struct SidebarView: View {
     let fileProvider: FileProviderSpike
     /// Required to launch the LLM lint from the sidebar context menu.
     @Bindable var launcher: AgentLauncher
-    /// Callback when the user clicks "Ingest N Files" in batch mode.
-    var onBatchIngest: (([PageID]) -> Void)? = nil
     /// Files whose agent run is in flight (agent phase) — shows the
     /// "Ingesting…" spinner on those rows.
     var ingestingSourceIDs: Set<PageID> = []
@@ -135,9 +133,9 @@ struct SidebarView: View {
             case .pages: pagesSection()
             case .sources:
                 SourcesSectionView(store: store, fileProvider: fileProvider,
+                    manager: manager, launcher: launcher,
                     ingestingSourceIDs: ingestingSourceIDs,
                     extractingSourceIDs: extractingSourceIDs,
-                    onBatchIngest: onBatchIngest,
                     showingAddFromZotero: $showingAddFromZotero,
                     showingImportMarkdown: $showingImportMarkdown,
                     onAddFromURL: onAddFromURL,
@@ -261,16 +259,24 @@ struct SidebarView: View {
                 SidebarPageRow(summary: summary)
                     .tag(WikiSelection.page(summary.id))
                     .contextMenu {
-                        Button("Rename") { beginRename(summary) }
-                        Button("Lint Page", systemImage: "checkmark.seal") {
-                            Task {
-                                await AgentOperationRunner.runLintPage(
-                                    pageID: summary.id, pageTitle: summary.title,
-                                    launcher: launcher, store: store,
-                                    manager: manager, fileProvider: fileProvider)
+                        let pageID = summary.id
+                        let isBatch = selectedPageIDs.count > 1 && selectedPageIDs.contains(pageID)
+                        Button(isBatch ? "Open \(selectedPageIDs.count) Pages" : "Open",
+                               systemImage: "arrow.up.forward.app") {
+                            if isBatch {
+                                for id in selectedPageIDs { store.openTab(.page(id)) }
+                            } else {
+                                store.openTab(.page(pageID))
                             }
                         }
-                        .disabled(store.isAgentRunning)
+                        Button(isBatch ? "Open \(selectedPageIDs.count) in Background" : "Open in Background",
+                               systemImage: "dock.arrow.down.rectangle") {
+                            if isBatch {
+                                for id in selectedPageIDs { store.openTabInBackground(.page(id)) }
+                            } else {
+                                store.openTabInBackground(.page(pageID))
+                            }
+                        }
                         // Batch share — appears only when this row is part of a
                         // multi-select (2+ pages). Resolves all URLs in parallel
                         // via the daemon, then passes them to one picker.
@@ -301,7 +307,6 @@ struct SidebarView: View {
                                 }
                             }
                         } else if fileProvider.path != nil {
-                            let pageID = summary.id
                             Button("Share", systemImage: "square.and.arrow.up") {
                                 Task {
                                     guard let url = await fileProvider.resolvePageByTitleURL(id: pageID) else { return }
@@ -319,7 +324,56 @@ struct SidebarView: View {
                             }
                         }
                         Divider()
-                        Button("Delete", role: .destructive) { store.delete(summary.id) }
+                        let isBatchLint = selectedPageIDs.count > 1 && selectedPageIDs.contains(summary.id)
+                        Button(isBatchLint ? "Lint \(selectedPageIDs.count) Pages" : "Lint Page",
+                               systemImage: "checkmark.seal") {
+                            Task {
+                                if isBatchLint {
+                                    let pages = selectedPageIDs.compactMap { id -> (id: PageID, title: String)? in
+                                        guard let s = store.summaries.first(where: { $0.id == id }) else { return nil }
+                                        return (id: id, title: s.title)
+                                    }
+                                    await AgentOperationRunner.runLintPages(
+                                        pages: pages,
+                                        launcher: launcher, store: store,
+                                        manager: manager, fileProvider: fileProvider)
+                                } else {
+                                    await AgentOperationRunner.runLintPages(
+                                        pages: [(id: summary.id, title: summary.title)],
+                                        launcher: launcher, store: store,
+                                        manager: manager, fileProvider: fileProvider)
+                                }
+                            }
+                        }
+                        .disabled(store.isAgentRunning)
+                        let similarTitle = summary.title
+                        let similar = store.searchSimilar(query: similarTitle, limit: 8)
+                            .filter { $0.id != summary.id }
+                        if !similar.isEmpty {
+                            Divider()
+                            Menu("Find Similar…", systemImage: "magnifyingglass") {
+                                ForEach(similar) { page in
+                                    Button(page.title) {
+                                        store.openTab(.page(page.id))
+                                    }
+                                }
+                            }
+                        }
+                        if selectedPageIDs.count <= 1 {
+                            Divider()
+                            Button("Rename", systemImage: "pencil") { beginRename(summary) }
+                        } else {
+                            Divider()
+                        }
+                        let isBatchDelete = selectedPageIDs.count > 1 && selectedPageIDs.contains(pageID)
+                        Button(isBatchDelete ? "Delete \(selectedPageIDs.count) Pages" : "Delete",
+                               systemImage: "trash", role: .destructive) {
+                            if isBatchDelete {
+                                for id in selectedPageIDs { store.delete(id) }
+                            } else {
+                                store.delete(pageID)
+                            }
+                        }
                     }
                     .swipeActions(edge: .trailing) {
                         Button("Delete", role: .destructive) { store.delete(summary.id) }
