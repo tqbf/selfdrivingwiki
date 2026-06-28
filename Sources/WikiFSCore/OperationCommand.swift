@@ -104,10 +104,7 @@ public struct OperationCommand: Equatable, Sendable {
         }
         environment["WIKI_ROOT"] = wikiRoot
         environment["WIKI_DB"] = wikiID
-        // Prepend the helper dir so `wikictl` resolves; preserve any user PATH.
-        let userPath = environment["PATH"]
-        let existingPath = userPath ?? baseEnvironment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
-        environment["PATH"] = wikictlDirectory + ":" + existingPath
+        resolveWikictl(into: &environment, wikictlDirectory: wikictlDirectory, baseEnvironment: baseEnvironment)
 
         let model = command.modelOverride.isEmpty
             ? operation.topLevelModelAlias : command.modelOverride
@@ -164,9 +161,7 @@ public struct OperationCommand: Equatable, Sendable {
         }
         environment["WIKI_ROOT"] = wikiRoot
         environment["WIKI_DB"] = wikiID
-        let userPath = environment["PATH"]
-        let existingPath = userPath ?? baseEnvironment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
-        environment["PATH"] = wikictlDirectory + ":" + existingPath
+        resolveWikictl(into: &environment, wikictlDirectory: wikictlDirectory, baseEnvironment: baseEnvironment)
 
         let model = command.modelOverride.isEmpty
             ? operation.topLevelModelAlias : command.modelOverride
@@ -196,6 +191,33 @@ public struct OperationCommand: Equatable, Sendable {
             environment: environment,
             currentDirectoryPath: scratchDirectory
         )
+    }
+
+    // MARK: - wikictl resolution
+
+    /// Make the embedded `wikictl` reachable to the agent **without** depending on the
+    /// agent's interactive shell preserving our `PATH`. Sets three things on `environment`:
+    ///
+    /// 1. `WIKICTL` — the absolute path to the binary. Env vars survive the agent's shell
+    ///    init even when `PATH` does not: Claude Code's Bash tool runs the user's login
+    ///    shell, whose startup may rebuild `PATH` from scratch (e.g. nix-darwin's
+    ///    `/etc/zshenv`), discarding our prepend. The system prompt invokes `$WIKICTL`,
+    ///    so resolution no longer rides on `PATH` at all.
+    /// 2. `PATH` — still prepend the helper dir so a bare `wikictl` resolves where the
+    ///    shell leaves our `PATH` intact (preserving any user `PATH`).
+    /// 3. `__NIX_DARWIN_SET_ENVIRONMENT_DONE` — nix-darwin's shell init rebuilds `PATH`
+    ///    only when this guard is unset (the case for a GUI/launchd-spawned app). Setting
+    ///    it makes nix-darwin treat the environment as already initialized, so the `PATH`
+    ///    prepend in (2) survives into the agent's shell. Inert on non-nix systems.
+    static func resolveWikictl(
+        into environment: inout [String: String],
+        wikictlDirectory: String,
+        baseEnvironment: [String: String]
+    ) {
+        environment["WIKICTL"] = wikictlDirectory + "/wikictl"
+        let existingPath = environment["PATH"] ?? baseEnvironment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        environment["PATH"] = wikictlDirectory + ":" + existingPath
+        environment["__NIX_DARWIN_SET_ENVIRONMENT_DONE"] = "1"
     }
 
     // MARK: - Seatbelt wrapping

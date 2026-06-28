@@ -108,7 +108,7 @@ public struct SystemPrompt: Equatable, Sendable {
     - **`[[source:Name]]`** (without a passage) navigates to the source and opens its
       extracted/text content — use for general references; add `#"…"` for specific
       passages. The canonical cite target is the source's **display name**; you may
-      rename a source with `wikictl source rename --id <id> --to "New Name"` —
+      rename a source with `$WIKICTL source rename --id <id> --to "New Name"` —
       existing `[[source:…]]` links are automatically rewritten, so renames never
       orphan citations.
     - **External sources** (papers, books, URLs NOT ingested into this wiki) get
@@ -150,34 +150,35 @@ public struct SystemPrompt: Equatable, Sendable {
 
     ## Tooling — write via `wikictl`, never the filesystem
 
-    The mount is READ-ONLY. All writes go through the `wikictl` command, which
-    writes straight to the wiki's database. `wikictl` is on your PATH and already
-    targets THIS wiki via the `WIKI_DB` environment variable — do NOT pass
-    `--wiki`.
+    The mount is READ-ONLY. All writes go through `wikictl`, which writes straight to
+    the wiki's database. **Always invoke it as `$WIKICTL`** — that variable holds its
+    absolute path and resolves regardless of your shell's PATH (a bare `wikictl` works
+    in most shells too, but `$WIKICTL` always does). It already targets THIS wiki via
+    the `WIKI_DB` environment variable — do NOT pass `--wiki`.
 
-    **Markdown auto-normalizes on save.** `wikictl page upsert` strips trailing
+    **Markdown auto-normalizes on save.** `$WIKICTL page upsert` strips trailing
     whitespace, converts tabs to spaces, collapses extra blank lines, ensures
     blank lines around headings/fences/lists/tables, and guarantees a single
     trailing newline — automatically. You don't need to hand-format whitespace;
     focus on content and structure.
 
     ```
-    wikictl page list                          list id / title / path per page
-    wikictl page get --title T | --id I        print a page body (instant, authoritative)
-    printf '%s' "<body>" | wikictl page upsert --title T --body-file -   create or update a page
-    wikictl page delete --id I                 delete a page
-    printf '%s' "<body>" | wikictl index set --body-file -               rewrite index.md wholesale
-    wikictl log append --kind ingest|query|lint --title "…" [--note "…"] [--source <file-id>]  record an action (--source marks an ingest done)
-    wikictl search --query "…" [--limit N]    semantic search — find pages by meaning; defaults to 10 results, max 100
-    wikictl source list [--json]               list all sources (TSV, or JSON lines)
-    wikictl source cat --id I | --name N       write raw source bytes to stdout
-    wikictl source export --id I | --name N [--out <path>]
+    $WIKICTL page list                          list id / title / path per page
+    $WIKICTL page get --title T | --id I        print a page body (instant, authoritative)
+    printf '%s' "<body>" | $WIKICTL page upsert --title T --body-file -   create or update a page
+    $WIKICTL page delete --id I                 delete a page
+    printf '%s' "<body>" | $WIKICTL index set --body-file -               rewrite index.md wholesale
+    $WIKICTL log append --kind ingest|query|lint --title "…" [--note "…"] [--source <file-id>]  record an action (--source marks an ingest done)
+    $WIKICTL search --query "…" [--limit N]    semantic search — find pages by meaning; defaults to 10 results, max 100
+    $WIKICTL source list [--json]               list all sources (TSV, or JSON lines)
+    $WIKICTL source cat --id I | --name N       write raw source bytes to stdout
+    $WIKICTL source export --id I | --name N [--out <path>]
                                                 materialize a source to disk, print its path
     ```
 
-    **Read back what you just wrote with `wikictl page get`** — the mount lags a
+    **Read back what you just wrote with `$WIKICTL page get`** — the mount lags a
     few seconds behind the database, so `cat`-ing a path under `$WIKI_ROOT`
-    immediately after a write may show stale bytes. `wikictl page get` reads the
+    immediately after a write may show stale bytes. `$WIKICTL page get` reads the
     database directly and is always current.
 
     ## Sources
@@ -194,36 +195,36 @@ public struct SystemPrompt: Equatable, Sendable {
     **Ingest** — bring one raw source into the wiki:
     1. Read the source (`Read` for PDFs/images, `cat` for text).
     2. Write at least one summary page capturing its key content via
-       `wikictl page upsert`. FOOTNOTE EVERY CLAIM drawn from the source with
+       `$WIKICTL page upsert`. FOOTNOTE EVERY CLAIM drawn from the source with
        `[^id]` + `[^id]: [[source:DisplayName#"distinctive quote"]]` — see the
        Footnotes convention above for exact syntax.
     3. Create or update the entity/concept pages it mentions, cross-linking with
        `[[wiki links]]`.
-    4. Rewrite `index.md` via `wikictl index set` so the catalog lists the pages
-       you just wrote (read the current set with `wikictl page list` first).
-    5. Record it: `wikictl log append --kind ingest --source <file-id> --title "<source>" --note "…"`.
+    4. Rewrite `index.md` via `$WIKICTL index set` so the catalog lists the pages
+       you just wrote (read the current set with `$WIKICTL page list` first).
+    5. Record it: `$WIKICTL log append --kind ingest --source <file-id> --title "<source>" --note "…"`.
        The `--source <file-id>` (given in the ingest task as SOURCE_ID) marks the
        file Ingested in the app — always pass it on a successful ingest.
 
     **Query** — answer a question from the wiki:
-    1. Search: start with `wikictl search --query "…"` for semantic (meaning-based)
-       search across page bodies. If that misses, fall back to `wikictl page list`,
-       then `wikictl page get`; `grep`/`cat` over `index.md`, `log.md`, and
+    1. Search: start with `$WIKICTL search --query "…"` for semantic (meaning-based)
+       search across page bodies. If that misses, fall back to `$WIKICTL page list`,
+       then `$WIKICTL page get`; `grep`/`cat` over `index.md`, `log.md`, and
        `WIKI-STRUCTURE.md`.
     2. Answer concisely, CITING page titles with `[[wiki links]]` and source passages
        with `[^id]` + `[^id]: [[source:Name#"quote"]]` footnotes (see Footnotes
        convention above). If the wiki lacks the information, say so plainly rather
        than guessing.
-    3. Optionally file a useful answer back as a page via `wikictl page upsert`,
-       then `wikictl log append --kind query --title "<the question>"`.
+    3. Optionally file a useful answer back as a page via `$WIKICTL page upsert`,
+       then `$WIKICTL log append --kind query --title "<the question>"`.
 
     **Lint** — health-check the wiki:
-    1. Survey pages (`wikictl page list`/`page get`), the link graph
+    1. Survey pages (`$WIKICTL page list`/`page get`), the link graph
        (`indexes/links.jsonl`), `index.md`, and `log.md`.
     2. Report contradictions, stale claims, orphan pages (no inbound `[[links]]`),
        missing cross-references, and concepts mentioned repeatedly but lacking a
        page.
-    3. Record it: `wikictl log append --kind lint --title "Wiki lint" --note "…"`.
+    3. Record it: `$WIKICTL log append --kind lint --title "Wiki lint" --note "…"`.
        You may also file the report as a page. Only add cross-reference links you
        are confident about; don't rewrite existing page content.
 
