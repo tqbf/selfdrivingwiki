@@ -36,6 +36,7 @@ struct SourceDetailView: View {
 
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
+    @AppStorage("isOutlineExpanded") private var isOutlineExpanded = false
     @State private var headVersion: SourceMarkdownVersion?
     @State private var isEditing = false
     @State private var editBuffer = ""
@@ -114,7 +115,14 @@ struct SourceDetailView: View {
                 tabPicker
             }
             Divider().opacity(PageEditorMetrics.dividerOpacity)
-            contentArea
+            HStack(spacing: 0) {
+                contentArea
+                if isOutlineExpanded, let markdown = currentMarkdownContent {
+                    PageOutlineView(markdown: markdown) { slug in
+                        store.jumpToAnchorInCurrentSelection(slug)
+                    }
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .textBackgroundColor))
@@ -259,6 +267,13 @@ struct SourceDetailView: View {
                         }
                         .keyboardShortcut("e", modifiers: .command)
                         .disabled(isRunning)
+
+                        Button {
+                            isOutlineExpanded.toggle()
+                        } label: {
+                            Image(systemName: "sidebar.right")
+                        }
+                        .help("Toggle Outline")
                     }
                 }
             }
