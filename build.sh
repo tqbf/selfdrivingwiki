@@ -113,14 +113,8 @@ if [ -f "${PDF2MD_SRC}" ]; then
 else
   echo "  (pdf2md not found at ${PDF2MD_SRC} — skipping; PDF extraction will fall back to agent Read tool)"
 fi
-# Copy sqlite-vec dylib for semantic search. Loaded at runtime via
-# sqlite3_load_extension when a WikiStore DB is first opened.
-VEC_DYLIB="Resources/vec0.dylib"
-if [ -f "${VEC_DYLIB}" ]; then
-  cp "${VEC_DYLIB}" "${HELPERS_DIR}/"
-else
-  echo "  (vec0.dylib not found at ${VEC_DYLIB} — semantic search will fall back to LIKE)"
-fi
+# sqlite-vec is now STATICALLY linked (Sources/CSqliteVec, -DSQLITE_CORE) and
+# registered per-connection — no runtime dylib to copy.
 # Vendored Mermaid 10.9.6 (UMD build) for rendering ```mermaid fenced blocks in
 # the reader. Copied as mermaid.js (dropping the `.min`) so the Bundle lookup is
 # a simple name=mermaid / ext=js — avoids a flaky double-extension resource
@@ -267,8 +261,6 @@ PLIST
   echo "→ codesign wikictl helper (${IDENTITY})"
   codesign --force --timestamp=none --sign "${IDENTITY}" \
     "${HELPERS_DIR}/${CTL_NAME}"
-  codesign --force --timestamp=none --sign "${IDENTITY}" \
-    "${HELPERS_DIR}/vec0.dylib"
   # pdf2md is a plain script bundled in Helpers/ — must also be signed, or the
   # outer app's seal fails ("code object is not signed at all").
   if [ -f "${HELPERS_DIR}/${PDF2MD_NAME}" ]; then
@@ -287,7 +279,6 @@ PLIST
 else
   echo "→ ad-hoc codesign (File Provider extension will NOT load)"
   codesign --force --sign - "${HELPERS_DIR}/${CTL_NAME}"
-  codesign --force --sign - "${HELPERS_DIR}/vec0.dylib"
   if [ -f "${HELPERS_DIR}/${PDF2MD_NAME}" ]; then
     codesign --force --sign - "${HELPERS_DIR}/${PDF2MD_NAME}"
   fi

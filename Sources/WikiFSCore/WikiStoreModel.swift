@@ -1284,10 +1284,52 @@ public final class WikiStoreModel {
 
     // MARK: - Search
 
-    /// Recompute embeddings for all pages that are missing one, so semantic
-    /// search covers pre‑v7 pages. Returns the count of newly‑embedded pages.
-    public func recomputeMissingEmbeddings() -> Int {
-        store.recomputeMissingEmbeddings()
+    /// Background chunk-embedding backfill. NLEmbedding's inference (CoreNLP →
+    /// BNNS) is **not safe off the main thread** — calling it from a detached
+    /// Task crashes with EXC_BAD_ACCESS inside `BNNSFilterApplyBatch`. So this
+    /// runs ON the main actor, but embeds chunk-by-chunk with a `Task.yield()`
+    /// between chunks so the run loop can service the UI between NLEmbedding
+    /// calls (each ~0.3 s). Fire-and-forget; safe to call repeatedly (only
+    /// embeds documents still missing chunks). FTS search works immediately;
+    /// semantic search fills in as chunks land. (The per-chunk jank goes away
+    /// once we switch to CoreML MiniLM, which is safe off-main on the ANE.)
+    public func backfillMissingEmbeddings() {
+        Task { [weak self] in
+            guard let self else { return }
+            await self.backfill(
+                kind: "page",
+                work: self.store.missingPageEmbeddingWork(),
+                store: { id, chunks in try? self.store.storePageChunks(id: id, chunks: chunks) })
+            await self.backfill(
+                kind: "source",
+                work: self.store.missingSourceEmbeddingWork(),
+                store: { id, chunks in try? self.store.storeSourceChunks(id: id, chunks: chunks) })
+            DebugLog.store("backfill: complete")
+        }
+    }
+
+    /// Embed each document's chunks on the main actor, yielding between chunks
+    /// (and between documents) so the UI stays responsive. Writes via `store`.
+    @MainActor
+    private func backfill(
+        kind: String,
+        work: [(id: PageID, text: String)],
+        store: @escaping @MainActor (PageID, [Data]) -> Void
+    ) async {
+        guard EmbeddingService.isAvailable else { return }
+        for (id, text) in work {
+            var blobs: [Data] = []
+            for chunk in EmbeddingService.chunks(for: text) {
+                if let blob = EmbeddingService.embeddingBlob(for: chunk) {
+                    blobs.append(blob)
+                }
+                await Task.yield()   // let the run loop keep the UI alive between calls
+            }
+            guard !blobs.isEmpty else { continue }
+            store(id, blobs)
+            DebugLog.store("backfill: \(kind) \(id.rawValue) ← \(blobs.count) chunk(s)")
+            await Task.yield()
+        }
     }
 
     private func scheduleSearch() {
@@ -1305,21 +1347,6 @@ public final class WikiStoreModel {
             guard !Task.isCancelled else { return }
             self.searchResults = results
         }
-    }
-
-    /// Backfill source embeddings. First seeds markdown-native sources that have
-    /// not been viewed yet (calling `processedMarkdownHead` v1-seeds them, which
-    /// triggers the `appendProcessedMarkdown` re-embed hook → content embedding),
-    /// then the store fills the remaining gaps (name-only for PDFs/binaries).
-    /// Returns the count of newly-embedded sources from the store pass.
-    @discardableResult
-    public func recomputeMissingSourceEmbeddings() -> Int {
-        for file in sources where file.mimeType?.hasPrefix("text/") == true {
-            // Idempotent: returns the existing head without writing if present;
-            // only seeds v1 for un-viewed markdown-native sources.
-            _ = processedMarkdownHead(for: file)
-        }
-        return store.recomputeMissingSourceEmbeddings()
     }
 
     private func scheduleSourceSearch() {

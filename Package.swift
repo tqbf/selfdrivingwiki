@@ -15,12 +15,30 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-markdown", from: "0.8.0"),
     ],
     targets: [
+        // Statically-linked sqlite-vec (semantic vector search). The amalgamation
+        // is compiled with -DSQLITE_CORE so it registers on a connection without
+        // sqlite3_load_extension (which the macOS system SQLite omits). See
+        // Sources/CSqliteVec/README.md. The app still uses the system SQLite;
+        // only the vec extension is vendored.
+        .target(
+            name: "CSqliteVec",
+            path: "Sources/CSqliteVec",
+            publicHeadersPath: "include",
+            cSettings: [
+                .define("SQLITE_CORE"),
+                .define("SQLITE_VEC_STATIC"),
+                // sqlite-vec.c #includes "sqlite3ext.h"/"sqlite3.h" (from the
+                // macOS SDK) and "sqlite-vec.h" (in this target's root).
+                .headerSearchPath("."),
+            ]
+        ),
         // Non-UI core: page model, ULID, the WikiStore protocol + SQLite
         // implementation, and the @Observable WikiStoreModel. Depended on by
         // the executable AND the test target so logic is testable without a
         // running app (SWIFTUI-RULES §9.1 — model logic in its own target).
         .target(
             name: "WikiFSCore",
+            dependencies: ["CSqliteVec"],
             path: "Sources/WikiFSCore",
             // NaturalLanguage: semantic-search embeddings. JavaScriptCore: the
             // MermaidValidator runs the vendored merval bundle in a JSContext

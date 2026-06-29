@@ -2,6 +2,176 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-29 — v14 per-chunk RAG embeddings (fixed launch crash; async backfill)
+
+**Crash:** the app aborted at launch with an uncatchable C++ `std::bad_alloc`.
+Root cause (via `lldb` break on `__cxa_throw`): the open-time self-heal called
+`NLEmbedding.vector(for:)` on whole source bodies; above ~250k chars NLEmbedding
+throws `std::bad_alloc` (Swift can't catch C++ exceptions → terminate). It was
+never seen before because the embedding recompute only ran via the never-pressed
+"Reindex Search" button; the self-heal made it run at every launch. Measured:
+NLEmbedding ≈ 5 s / 100k chars and crashes ≥ ~250k.
+
+**Fix — per-chunk (RAG-style) embeddings, computed async:**
+- **`TextChunker`** (`Sources/WikiFSCore/TextChunker.swift`): pure-Swift port of
+  LangChain `RecursiveCharacterTextSplitter` / Chonkie `RecursiveChunker`
+  (separator hierarchy `\n\n → \n → space → char`, ~4k-char chunks + 10% overlap).
+  Research confirmed only Recursive/Sentence chunkers are portable to on-device
+  Swift; Late/Semantic/Neural need a transformer's token embeddings (NLEmbedding
+  is opaque). No mature Swift chunking library exists.
+- **`EmbeddingService.chunkedEmbeddings(for:maxChunks:)`**: chunks the text, embeds
+  each chunk (small → fast + crash-free), caps to 64 chunks (evenly sampled across
+  the doc so a deep passage is still represented). `embeddingBlob(for:)` kept for
+  short query strings.
+- **v14 migration:** `page_chunks` + `source_chunks` (one BLOB per text chunk,
+  FK ON DELETE CASCADE); drops the old one-row-per-doc `page_embeddings` /
+  `source_embeddings`. Semantic search now ranks by each doc's BEST-matching chunk
+  (`GROUP BY doc … MIN(vec_distance_cosine)`), so a query hits the specific passage.
+- **Async, not at launch:** embedding is too slow to run synchronously (full corpus
+  ≈ minutes). Removed from `init`; `WikiStoreModel.backfillMissingEmbeddings()`
+  (kicked off on wiki open) computes vectors OFF the main actor while all DB
+  reads/writes stay on main (single-connection store). Resumable/incremental — only
+  docs still missing chunks are embedded, so a killed run continues next launch. FTS
+  search works immediately; semantic search fills in as chunks land.
+- Protocol: `storePageEmbedding`/`storeSourceEmbedding` → `storePageChunks`/
+  `storeSourceChunks` (+ `missingPageEmbeddingWork`/`missingSourceEmbeddingWork`).
+  `PageUpsert.upsert` (wikictl) chunk-embeds pages too.
+
+**Verified:** `swift build` clean; **1209 tests pass** (incl. 7 new `TextChunkerTests`).
+Rebuilt the `.app` via `./build.sh debug` and launched against the live DB: no crash,
+v14 migration applied, background backfill streamed `backfill: page … ← N chunk(s)`.
+(source_chunks fills after pages; was killed mid-run at 73 page-chunks.)
+
+**Follow-up crash (SIGSEGV) + fix:** the first cut ran the backfill on a detached
+background queue. That crashed with `EXC_BAD_ACCESS` inside `BNNSFilterApplyBatch` —
+**NLEmbedding/CoreNLP inference is not safe off the main thread.** Moved the backfill
+onto the main actor, embedding chunk-by-chunk with `Task.yield()` between chunks so
+the UI stays responsive between the ~0.3 s NLEmbedding calls. Re-verified: app ran
+60 s through active backfill with no crash (newest `.ips` unchanged). Known minor
+warning (non-fatal): "reentrant operation in NSTableView delegate" during backfill
+writes — to revisit. The per-chunk main-actor jank is itself the strongest argument
+for the CoreML MiniLM move (ANE inference is safe off-main).
+
+**Deferred (recommended separately): CoreML all-MiniLM-L6-v2.** NLEmbedding is the
+bottleneck — ~5 s / 100k chars, so a full-corpus first backfill takes minutes.
+Research (see below) says CoreML MiniLM on the Neural Engine is ~5-15 ms/sentence
+(100-1000× faster), better quality, no crash, predictable 512-token truncation — at
+the cost of ~100 MB bundle + a tokenizer + Swift mean-pooling (~2-5 days). When
+adopted, swap it in behind `EmbeddingService` (chunk index + queries unchanged).
+
+## 2026-06-29 — Unified, self-healing hybrid search (removed manual Reindex)
+
+**Bug:** source search returned **no results** in the app. Root cause: the live
+DB (`01KVHRPBPRY368HJTZNSB75D7R`, 71 sources) had `source_search=0` and
+`source_embeddings=0` rows — both halves of the hybrid query came back empty.
+The only thing that populated these was the manual **"Reindex Search"** sidebar
+button (`rebuildFTS` + `recomputeMissing*`), which was never run against
+pre-existing sources. Verified via `DebugLog` + direct sqlite counts.
+
+**Fix — one search flow that self-heals on every writable open:**
+- **Unified the duplicated page/source search flow** into one generic
+  `hybridSearch(kind:query:limit:id:fts:semantic:)` (FTS5 bm25 always; +vec0
+  cosine fused via `RankFusion.rrf` when vec+model available; FTS-only fallback).
+  Both `searchSimilar` and `searchSimilarSources` route through it — the two can
+  no longer drift.
+- **Unified embedding store + maintenance:** `storePageEmbedding`/
+  `storeSourceEmbedding` → one generic `upsertEmbedding(table:idColumn:…)`; the
+  two `recomputeMissing*` → one shared `embedMissing(kind:rows:store:)`.
+- **Self-heal `ensureSearchIndexesPopulated()`** runs in `init(databaseURL:)`
+  (writable only; NOT the read-only File Provider). Idempotent, near-zero cost
+  when healthy: (1) seed native-markdown sources lacking a processed-markdown
+  version, (2) backfill `source_search`, (3) rebuild `pages_fts`/`sources_fts`
+  only when lagging, (4) `recomputeMissingEmbeddings` + `recomputeMissingSourceEmbeddings`.
+- **Removed the manual reindex:** the sidebar "Reindex Search" button, and
+  `recomputeMissingEmbeddings`/`recomputeMissingSourceEmbeddings`/`rebuildFTS`
+  from the `WikiStore` protocol + `WikiStoreModel`. (Kept on the concrete
+  `SQLiteWikiStore` — used by self-heal + tests.)
+
+**Verified:** `swift build` clean; **1202 tests pass**. Against a snapshot copy
+of the real DB, applying the FTS self-heal steps took `source_search` 0→71 and
+`sources_fts` 0→71, and the bm25 query returned relevant hits for "dissociation"
+and "hypnosis". (The embedding half can't run under raw sqlite3 — it needs
+`NLEmbedding` — but is the same path covered by unit tests; it populates on the
+app's next open.)
+
+**Known, out of scope:** `wikictl` resolves the app-group container to
+`group.org.sockpuppet.wiki` (empty) while the live data is in
+`group.com.willsargent.wiki`, so `wikictl source search` can't reach the live DB
+(`no wiki matching`). This is a pre-existing wikictl container mismatch, not a
+search bug.
+
+## 2026-06-29 — `WikiIdentifiers` reads `signing/local.config` (debug wikictl just works)
+
+The plain SwiftPM CLI (`.build/debug/wikictl`) resolved the **wrong** App Group
+(`group.org.sockpuppet.wiki`, empty) while the live data lived in
+`group.com.willsargent.wiki`: it has no Info.plist (so the `WIKIAppGroupID`
+lookup missed) and no `wiki-identifiers.env` sidecar, so it fell through to the
+compiled-in default. The GUI app was unaffected (it gets the value from its
+Info.plist via `build.sh`).
+
+**Fix:** added `signing/local.config` (the gitignored, per-developer file that
+`build.sh` already reads) as a resolution step in `WikiIdentifiers.resolve`,
+checked by walking UP from the executable until a repo root containing it is
+found. `appGroupID` ← `APP_GROUP`, `fileProviderID` ← `EXT_BUNDLE_ID`. New order:
+env → Info.plist → `wiki-identifiers.env` sidecar → `signing/local.config` →
+default. Refactored the shared `KEY=VALUE` parsing into `parseKV`.
+
+**Non-breaking:** no per-user value is committed. Fresh clones / CI without
+`signing/local.config` fall through to the default unchanged. Verified: `.build/debug/wikictl --wiki "My Wiki" source search --query dissociation` now
+returns real hits with NO env var; 1202 tests pass.
+
+## 2026-06-28 — FTS5/BM25 keyword search (v13); vec layer found broken
+
+Discovered the **semantic (vec) search never actually ran in the app**: macOS's
+system SQLite is built with `SQLITE_OMIT_LOAD_EXTENSION`, so
+`sqlite3_enable_load_extension`/`sqlite3_load_extension` don't exist as symbols
+→ `dlsym` returns NULL → `vec0.dylib` never loads → `isVecAvailable()` is always
+false → every search (pages AND sources) degraded to filename-only `LIKE`. The
+body was never indexed or searched. Confirmed via `DebugLog` instrumentation and
+`PRAGMA compile_options` (`OMIT_LOAD_EXTENSION`; `ENABLE_FTS5` present).
+See [`plans/search-fts5-hybrid.md`](plans/search-fts5-hybrid.md) (3-phase plan).
+
+**Phase 1 done — FTS5/BM25 backbone (always-on, fully unit-testable):**
+- **v12 → v13 migration:** `pages_fts` = external-content FTS5 over `pages`
+  (`title`, `body_markdown`) maintained by AFTER INSERT/UPDATE/DELETE triggers
+  (zero page-write Swift changes); `sources_fts` = external-content FTS5 over a
+  new `source_search(source_id PK → sources(id) ON DELETE CASCADE, title, body)`
+  sidecar (body is the HEAD of the version chain, not inline). Porter tokenizer
+  (stemming: `run`↔`running`, `car`↔`cars`). Existing content backfilled lazily
+  via `rebuildFTS()` (Reindex).
+- **Store methods:** `searchPagesFTS`/`searchSourcesFTS` (bm25, `ORDER BY rank`),
+  `upsertSourceSearch(sourceID:body:)` (resolves `display_name ?? filename`),
+  `rebuildFTS() -> (pages, sources)`. Added to the `WikiStore` protocol + model.
+- **Write hooks:** `addSource` (name-only), `appendProcessedMarkdown`,
+  `renameSource` now keep `source_search` fresh (triggers keep `*_fts` in sync).
+- **Search switch:** the `LIKE` fallback in `searchSimilar`/`searchSimilarSources`
+  is now **FTS5 bm25 over the full body** (kept as the path taken when vec is
+  unavailable — i.e. today, and in tests/`wikictl`).
+- **Tests:** new `FullTextSearchTests` (body search with zero filename overlap,
+  porter stemming, name-only, bm25 ranking, delete cascade, rebuild). All pass.
+  Existing source-search tests now exercise FTS and still pass.
+- **Phase 2 done — vec fixed via static amalgamation:** the loadable-`dylib` path
+  was impossible on macOS (`OMIT_LOAD_EXTENSION`). Vendored `sqlite-vec.c`
+  v0.1.9 into a new `CSqliteVec` SwiftPM C target (`Sources/CSqliteVec/`, +MIT
+  license + provenance README) compiled `-DSQLITE_CORE -DSQLITE_VEC_STATIC`,
+  linked against the **system** libsqlite3 (no second SQLite, no
+  `load_extension`). Registered per-connection via the sqlite-vec C/C++ guide's
+  "direct call" pattern — `sqlite3_vec_init(db, NULL, NULL)` — exposed as
+  `wikifs_vec_register` and called from both inits. Removed the dead
+  `dlopen`/`dlsym`/`load_extension` loader, the `vec0.dylib` copy in `build.sh`,
+  and `Resources/vec0.dylib` itself — `make`/`swift build` now Just Works for any
+  contributor (no dylib, no env vars). Proven by
+  `vecScalarIsRegisteredAfterStaticLink` (vec_distance_cosine registers under
+  `swift test` now); full suite green (1197 tests).
+- **Phase 3 done — RRF hybrid reranker:** `RankFusion.rrf` (pure Swift,
+  `Sources/WikiFSCore/RankFusion.swift`) fuses the semantic + FTS result lists by
+  Reciprocal Rank Fusion (`score = Σ 1/(60+rank)`). `searchSimilar` /
+  `searchSimilarSources` now always compute FTS5 (the lexical floor), and when vec
+  + the embedding model are available also run the cosine query and fuse — a doc
+  matching BOTH lexical + semantic outranks one matching only one. Degrades to
+  FTS-only when vec/the model is unavailable (tests, `wikictl`). Fully unit-tested
+  (`RankFusionTests`); full suite green (1202 tests). **Search now works end-to-end.**
+
 ## 2026-06-28 — Semantic (vector) search for sources
 
 Added meaning-based search over sources, mirroring the existing page-embedding

@@ -53,10 +53,13 @@ public enum PageUpsert {
     ) throws -> Outcome {
         let outcome = try writePage(in: store, id: id, title: title, body: body)
         try store.replaceLinks(from: outcome.id, parsedLinks: WikiLinkParser.parse(body))
-        // Compute + store a semantic embedding for the page body.
-        // Non-fatal: embedding failure never breaks the save.
-        if let blob = EmbeddingService.embeddingBlob(title: title, body: body) {
-            try? store.storePageEmbedding(id: outcome.id, blob: blob)
+        // Compute + store chunk embeddings for the page body. Non-fatal: a
+        // failure (or the model being unavailable, e.g. under `wikictl`) never
+        // breaks the save — the background backfill embeds it later.
+        let text = body.isEmpty ? title : "\(title)\n\n\(body)"
+        let chunks = EmbeddingService.chunkedEmbeddings(for: text)
+        if !chunks.isEmpty {
+            try? store.storePageChunks(id: outcome.id, chunks: chunks)
         }
         return outcome
     }

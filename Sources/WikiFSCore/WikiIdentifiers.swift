@@ -27,6 +27,7 @@ public enum WikiIdentifiers {
     public static let appGroupID = resolve(
         env: "WIKI_APP_GROUP_ID",
         infoKey: "WIKIAppGroupID",
+        localConfigKey: "APP_GROUP",
         default: "group.org.sockpuppet.wiki")
 
     /// The File Provider extension's bundle id, used to query/repair its
@@ -34,40 +35,41 @@ public enum WikiIdentifiers {
     public static let fileProviderID = resolve(
         env: "WIKI_FILE_PROVIDER_ID",
         infoKey: "WIKIFileProviderID",
+        localConfigKey: "EXT_BUNDLE_ID",
         default: "org.sockpuppet.WikiFS.FileProvider")
 
     // MARK: - Resolution
 
-    private static func resolve(env: String, infoKey: String, default fallback: String) -> String {
+    /// Resolve a per-developer id, first hit wins:
+    ///  1. **Environment variable** — dev/test override; inherited by children.
+    ///  2. **`Bundle.main` Info.plist key** — `build.sh` injects these into the
+    ///     `.app` and `.appex` so the GUI app and the extension agree.
+    ///  3. **Sidecar `wiki-identifiers.env` next to the executable** — covers the
+    ///     bundled `Contents/Helpers/wikictl` CLI.
+    ///  4. **`signing/local.config`** (gitignored, per-developer) — the SAME file
+    ///     `build.sh` reads. Lets a plain SwiftPM CLI like `.build/debug/wikictl`
+    ///     (no Info.plist, no sidecar) resolve the developer's REAL ids without
+    ///     an env var, so values can never drift from the built `.app`. Absent
+    ///     for fresh clones / CI → falls through to the default.
+    ///  5. **Compiled-in default** — so a fresh `swift build` / `swift test`
+    ///     works with no signing setup at all.
+    private static func resolve(
+        env: String,
+        infoKey: String,
+        localConfigKey: String,
+        default fallback: String
+    ) -> String {
         if let v = ProcessInfo.processInfo.environment[env], !v.isEmpty { return v }
         if let v = Bundle.main.object(forInfoDictionaryKey: infoKey) as? String, !v.isEmpty { return v }
         if let v = sidecar[env], !v.isEmpty { return v }
+        if let v = localConfig[localConfigKey], !v.isEmpty { return v }
         return fallback
     }
 
-    /// `KEY=VALUE` pairs parsed once from `wiki-identifiers.env`. The keys match
-    /// the environment-variable names (e.g. `WIKI_APP_GROUP_ID`). Empty when the
-    /// file is absent — i.e. for the `.app`/`.appex` (which use the Info.plist
-    /// path) and for plain test runs.
-    ///
-    /// Two locations are checked, in order, relative to the running executable:
-    /// `build/wikictl` reads it from its own directory (the Phase A gate copy);
-    /// the bundled `Contents/Helpers/wikictl` reads it from `../Resources`
-    /// (build.sh can't leave plain files in the code-only Helpers dir).
-    private static let sidecar: [String: String] = {
-        let exeDir: URL? = Bundle.main.executableURL?.deletingLastPathComponent()
-            ?? CommandLine.arguments.first.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
-        guard let exeDir else { return [:] }
-        let candidates = [
-            exeDir.appendingPathComponent("wiki-identifiers.env"),
-            exeDir.deletingLastPathComponent()
-                .appendingPathComponent("Resources/wiki-identifiers.env"),
-        ]
-        guard let text = candidates.lazy
-            .compactMap({ try? String(contentsOf: $0, encoding: .utf8) })
-            .first
-        else { return [:] }
-
+    /// Parse shell-style `KEY=VALUE` lines (comments `#…` skipped, surrounding
+    /// whitespace trimmed, surrounding double quotes stripped). Shared by the
+    /// `wiki-identifiers.env` sidecar and `signing/local.config`.
+    private static func parseKV(_ text: String) -> [String: String] {
         var out: [String: String] = [:]
         for raw in text.split(whereSeparator: \.isNewline) {
             let line = raw.trimmingCharacters(in: .whitespaces)
@@ -80,5 +82,59 @@ public enum WikiIdentifiers {
             out[key] = value
         }
         return out
+    }
+
+    /// The running executable's directory, resolved from `Bundle.main` (preferred)
+    /// or, failing that, from `argv[0]`.
+    private static var executableDir: URL? {
+        Bundle.main.executableURL?.deletingLastPathComponent()
+            ?? CommandLine.arguments.first.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
+    }
+
+    /// `KEY=VALUE` pairs parsed once from `wiki-identifiers.env`. The keys match
+    /// the environment-variable names (e.g. `WIKI_APP_GROUP_ID`). Empty when the
+    /// file is absent — i.e. for the `.app`/`.appex` (which use the Info.plist
+    /// path) and for plain test runs.
+    ///
+    /// Two locations are checked, in order, relative to the running executable:
+    /// `build/wikictl` reads it from its own directory (the Phase A gate copy);
+    /// the bundled `Contents/Helpers/wikictl` reads it from `../Resources`
+    /// (build.sh can't leave plain files in the code-only Helpers dir).
+    private static let sidecar: [String: String] = {
+        guard let exeDir = executableDir else { return [:] }
+        let candidates = [
+            exeDir.appendingPathComponent("wiki-identifiers.env"),
+            exeDir.deletingLastPathComponent()
+                .appendingPathComponent("Resources/wiki-identifiers.env"),
+        ]
+        guard let text = candidates.lazy
+            .compactMap({ try? String(contentsOf: $0, encoding: .utf8) })
+            .first
+        else { return [:] }
+        return parseKV(text)
+    }()
+
+    /// `signing/local.config` (gitignored, per-developer) parsed once — the SAME
+    /// file `build.sh` reads to build the `.app`. Keys are the build.sh names
+    /// (`APP_GROUP`, `EXT_BUNDLE_ID`, …), NOT the env-var names. Found by
+    /// walking UP from the running executable until a repo root containing
+    /// `signing/local.config` is located, so a SwiftPM CLI at `.build/debug/`
+    /// reaches it two levels up.
+    ///
+    /// This lets a plain CLI (no Info.plist, no sidecar) resolve the developer's
+    /// REAL ids, matching the built `.app`, without any env var. Absent for fresh
+    /// clones / CI → `[:]` → resolution falls through to the compiled default.
+    private static let localConfig: [String: String] = {
+        guard var dir = executableDir else { return [:] }
+        for _ in 0..<10 {
+            let candidate = dir.appendingPathComponent("signing/local.config")
+            if let text = try? String(contentsOf: candidate, encoding: .utf8) {
+                return parseKV(text)
+            }
+            let parent = dir.deletingLastPathComponent()
+            if parent.path == dir.path { break }   // reached filesystem root
+            dir = parent
+        }
+        return [:]
     }()
 }

@@ -153,37 +153,36 @@ public protocol WikiStore {
     /// Replace the wiki-index body wholesale, bumping its version + `updated_at`.
     func updateWikiIndex(body: String) throws
 
-    // MARK: - Semantic search (v7 page embeddings)
+    // MARK: - Semantic search (v14 chunk embeddings)
 
-    /// Store or replace a page's embedding BLOB (512 × Float32). No-op if the
-    /// store does not support embeddings (pre‑v7 schema, or extension not loaded).
-    func storePageEmbedding(id: PageID, blob: Data) throws
+    /// Store or replace ALL chunk embeddings for a page (one 512 × Float32 BLOB
+    /// per text chunk). Replaces any existing chunks for the page atomically.
+    func storePageChunks(id: PageID, chunks: [Data]) throws
 
-    /// Search pages semantically (cosine similarity via `vec_distance_cosine`).
-    /// Falls back to a `LIKE` title match when the vec extension or embedding
-    /// model is unavailable. Only pages WITH an embedding appear in semantic
-    /// results (pages saved before v7 must be re‑saved or reindexed).
+    /// Pages with no chunk embeddings yet, as `(id, embeddable text)`. Used by
+    /// the background embedding backfill (read on the caller's thread; the
+    /// embedding compute runs off it).
+    func missingPageEmbeddingWork() -> [(id: PageID, text: String)]
+
+    /// Search pages semantically (cosine similarity via `vec_distance_cosine`,
+    /// ranked by each page's best-matching chunk). Falls back to FTS5 only when
+    /// the vec extension or embedding model is unavailable. Search indexes (FTS
+    /// + chunk embeddings) are populated automatically on open, so all content
+    /// is searchable.
     func searchSimilar(query: String, limit: Int) throws -> [WikiPageSummary]
 
-    /// Compute + store embeddings for every page that is missing one. Returns the
-    /// count of newly-embedded pages. Per‑page failures are logged and skipped so
-    /// one bad page doesn't abort the batch.
-    func recomputeMissingEmbeddings() -> Int
+    // MARK: - Semantic source search (v14 source chunk embeddings)
 
-    // MARK: - Semantic source search (v12 source embeddings)
+    /// Store or replace ALL chunk embeddings for a source. Mirrors
+    /// `storePageChunks` for sources.
+    func storeSourceChunks(id: PageID, chunks: [Data]) throws
 
-    /// Store or replace a source's embedding BLOB (512 × Float32). Mirrors
-    /// `storePageEmbedding` for sources.
-    func storeSourceEmbedding(id: PageID, blob: Data) throws
+    /// Sources with no chunk embeddings yet, as `(id, embeddable text)`. Mirrors
+    /// `missingPageEmbeddingWork`.
+    func missingSourceEmbeddingWork() -> [(id: PageID, text: String)]
 
-    /// Search sources semantically (cosine similarity via `vec_distance_cosine`).
-    /// Falls back to a `LIKE` filename/display-name match when the vec extension
-    /// or embedding model is unavailable. Mirrors `searchSimilar`.
+    /// Search sources semantically (cosine similarity via `vec_distance_cosine`,
+    /// ranked by each source's best-matching chunk). Falls back to FTS5 only when
+    /// the vec extension or embedding model is unavailable. Mirrors `searchSimilar`.
     func searchSimilarSources(query: String, limit: Int) throws -> [SourceSummary]
-
-    /// Compute + store embeddings for every source missing one. Embeds each on
-    /// its processed-markdown HEAD body + name; name-only when no processed
-    /// markdown exists yet. Returns the count of newly-embedded sources. Mirrors
-    /// `recomputeMissingEmbeddings`.
-    func recomputeMissingSourceEmbeddings() -> Int
 }

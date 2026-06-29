@@ -5,8 +5,9 @@ import Testing
 @testable import WikiFSCore
 
 /// Semantic source search tests. The cosine-ranking semantic path cannot run
-/// under `swift test` (NLEmbedding is app-bundle-gated, sqlite-vec's dylib is
-/// absent outside a bundle), so these tests exercise: the v12 schema migration,
+/// under `swift test` (NLEmbedding is app-bundle-gated — sqlite-vec itself is
+/// now statically linked and registered; see
+/// `vecScalarIsRegisteredAfterStaticLink`), so these tests exercise: the v13 schema migration,
 /// the `storeSourceEmbedding` write path, the **LIKE fallback** search, the
 /// `reembedSource`/`recomputeMissingSourceEmbeddings` no-op behavior without
 /// vec, the `wikictl source search` CLI (TSV output + arg validation), and the
@@ -49,21 +50,38 @@ struct SourceEmbeddingSearchTests {
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
         defer { sqlite3_close(db) }
 
-        #expect(scalarInt(db, "PRAGMA user_version;") == 12)
-        #expect(tableExists(db, "source_embeddings"))
-        // page_embeddings path unchanged.
-        #expect(tableExists(db, "page_embeddings"))
+        #expect(scalarInt(db, "PRAGMA user_version;") == 14)
+        #expect(tableExists(db, "source_chunks"))
+        // page chunk table mirrors the source one.
+        #expect(tableExists(db, "page_chunks"))
+        // The old single-embedding tables are dropped in v14.
+        #expect(!tableExists(db, "source_embeddings"))
+        // v13: FTS5 full-text search tables.
+        #expect(tableExists(db, "pages_fts"))
+        #expect(tableExists(db, "sources_fts"))
+        #expect(tableExists(db, "source_search"))
     }
 
-    // MARK: - storeSourceEmbedding
+    // MARK: - vec registration (Phase 2: statically-linked sqlite-vec)
 
-    @Test func storeSourceEmbeddingRoundTripsWithoutThrowing() throws {
+    @Test func vecScalarIsRegisteredAfterStaticLink() throws {
+        // sqlite-vec is compiled in (-DSQLITE_CORE) and registered on every
+        // connection now. The cosine semantic path still can't RANK under swift
+        // test (NLEmbedding is app-gated), but this proves the scalar functions
+        // exist — the core Phase 2 guarantee.
+        let store = try tempStore()
+        #expect(store.vecRegisteredForTesting, "sqlite-vec should be registered on the connection")
+    }
+
+    // MARK: - storeSourceChunks
+
+    @Test func storeSourceChunksRoundTripsWithoutThrowing() throws {
         let store = try tempStore()
         let summary = try store.addSource(filename: "note.md", data: Data("# Hi".utf8))
-        // Inserting a 512×Float32-shaped BLOB directly does not require vec.
-        let blob = Data(count: 512 * 4)
+        // Inserting 512×Float32-shaped chunk BLOBs directly does not require vec.
+        let chunk = Data(count: 512 * 4)
         #expect(throws: Never.self) {
-            try store.storeSourceEmbedding(id: summary.id, blob: blob)
+            try store.storeSourceChunks(id: summary.id, chunks: [chunk, chunk])
         }
     }
 
@@ -142,24 +160,24 @@ struct SourceEmbeddingSearchTests {
 
     // MARK: - Cascade (ON DELETE CASCADE)
 
-    @Test func deletingSourceRemovesItsEmbeddingRow() throws {
+    @Test func deletingSourceRemovesItsChunkRows() throws {
         let url = tempDatabaseURL()
         let store = try SQLiteWikiStore(databaseURL: url)
         let s = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
-        try store.storeSourceEmbedding(id: s.id, blob: Data(count: 512 * 4))
+        try store.storeSourceChunks(id: s.id, chunks: [Data(count: 512 * 4), Data(count: 512 * 4)])
 
-        // Confirm the row exists.
+        // Confirm the rows exist.
         var db: OpaquePointer?
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
         defer { sqlite3_close(db) }
         #expect(scalarInt(
-            db, "SELECT COUNT(*) FROM source_embeddings WHERE source_id='\(s.id.rawValue)';") == 1)
+            db, "SELECT COUNT(*) FROM source_chunks WHERE source_id='\(s.id.rawValue)';") == 2)
 
         try store.deleteSource(id: s.id)
 
-        // CASCADE removes the embedding row.
+        // CASCADE removes the chunk rows.
         #expect(scalarInt(
-            db, "SELECT COUNT(*) FROM source_embeddings WHERE source_id='\(s.id.rawValue)';") == 0)
+            db, "SELECT COUNT(*) FROM source_chunks WHERE source_id='\(s.id.rawValue)';") == 0)
     }
 
     // MARK: - CLI: SourceCommand.run(.search)

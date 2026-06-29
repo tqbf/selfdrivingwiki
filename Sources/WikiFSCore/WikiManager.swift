@@ -259,6 +259,11 @@ public final class WikiManager {
         activeWikiID = id
         activeStore = model
         onActiveStoreDidChange?()
+        // Build chunk embeddings for any content the open-time self-heal left
+        // unembedded (NLEmbedding is too slow to run synchronously at open).
+        // Runs in the background: FTS search works immediately; semantic search
+        // fills in as chunks are written.
+        model.backfillMissingEmbeddings()
     }
 
     /// Create the wiki's DB file if absent by opening it once (which runs the

@@ -2,6 +2,7 @@ import Foundation
 import SQLite3
 import UniformTypeIdentifiers
 import Darwin
+import CSqliteVec
 
 /// SQLite-backed `WikiStore`. Hand-wraps the system `SQLite3` C API — no
 /// third-party dependency (per the BRINGUP decision). Owns one serial
@@ -17,12 +18,6 @@ public final class SQLiteWikiStore: WikiStore {
     /// Tests inject a temp-dir or `:memory:` URL; the app injects
     /// `DatabaseLocation.appGroupContainerURL()`.
     public init(databaseURL: URL) throws {
-        // Load sqlite-vec on the first DB open of the process lifetime.
-        // Idempotent — sqlite3_load_extension short-circuits if already loaded
-        // on this connection. On failure (dylib missing, sandbox), semantic
-        // search degrades to LIKE fallback; save + open never fail.
-        Self.ensureVecExtensionLoaded()
-
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         let rc = sqlite3_open_v2(databaseURL.path, &handle, flags, nil)
@@ -36,9 +31,16 @@ public final class SQLiteWikiStore: WikiStore {
         do {
             try configurePragmas()
             try bootstrapSchema()
-            // Load extension on THIS connection (connection-scoped).
-            // Non-fatal: logged, semantic search degrades gracefully.
-            Self.loadVecExtension(on: db)
+            // Register the statically-linked sqlite-vec on THIS connection
+            // (connection-scoped). Non-fatal: FTS5 (v13) remains the fallback.
+            registerVec(on: db)
+            // Self-heal search indexes for content that predates the FTS/vec
+            // migrations (or arrived via wikictl): seed native-markdown sources,
+            // backfill source_search, rebuild any lagging FTS index, and embed
+            // anything missing. Idempotent + near-zero cost when nothing is
+            // missing, so search "just works" on every writable open without a
+            // manual reindex. NOT run by the read-only File Provider connection.
+            ensureSearchIndexesPopulated()
         } catch {
             sqlite3_close(db)
             throw error
@@ -73,7 +75,7 @@ public final class SQLiteWikiStore: WikiStore {
         do {
             try exec("PRAGMA busy_timeout=5000;")
             try exec("PRAGMA query_only=ON;")
-            Self.loadVecExtension(on: db)
+            registerVec(on: db)
         } catch {
             sqlite3_close(db)
             throw error
@@ -375,107 +377,144 @@ public final class SQLiteWikiStore: WikiStore {
             try exec("PRAGMA user_version=12;")
             version = 12
         }
+
+        // v12 → v13: FTS5/BM25 full-text search over title + body. FTS5 is CORE
+        // SQLite (ENABLE_FTS5 on the system build) — no loadable extension needed,
+        // so it works in wikictl and under `swift test`, unlike the vec layer.
+        //
+        // PAGES: body (body_markdown) is inline on `pages`, so use external-content
+        // FTS5 keyed on pages.rowid, maintained by AFTER INSERT/UPDATE/DELETE
+        // triggers. This needs NO changes to the page-write Swift — createPage /
+        // updatePage / deletePage already write `pages`, so the triggers fire.
+        // Existing rows are backfilled lazily by rebuildFTS() (Reindex), via the
+        // FTS5 'rebuild' command; new rows index immediately.
+        //
+        // SOURCES: body is the HEAD of the version chain (source_markdown_versions),
+        // NOT inline on `sources`, so we index a sidecar `source_search` — one row
+        // per source holding the current title + head body — maintained by
+        // appendProcessedMarkdown / renameSource via upsertSourceSearch(). The
+        // trigger keeps sources_fts in sync; deleting a source cascades to
+        // source_search (FK ON DELETE CASCADE) whose trigger removes the FTS row.
+        if version < 13 {
+            try exec("""
+            CREATE VIRTUAL TABLE pages_fts USING fts5(
+                title, body_markdown,
+                content='pages', content_rowid='rowid',
+                tokenize='porter');
+            """)
+            try exec("""
+            CREATE TRIGGER pages_fts_ai AFTER INSERT ON pages BEGIN
+              INSERT INTO pages_fts(rowid, title, body_markdown)
+                VALUES (new.rowid, new.title, new.body_markdown);
+            END;
+            """)
+            try exec("""
+            CREATE TRIGGER pages_fts_ad AFTER DELETE ON pages BEGIN
+              INSERT INTO pages_fts(pages_fts, rowid, title, body_markdown)
+                VALUES ('delete', old.rowid, old.title, old.body_markdown);
+            END;
+            """)
+            try exec("""
+            CREATE TRIGGER pages_fts_au AFTER UPDATE ON pages BEGIN
+              INSERT INTO pages_fts(pages_fts, rowid, title, body_markdown)
+                VALUES ('delete', old.rowid, old.title, old.body_markdown);
+              INSERT INTO pages_fts(rowid, title, body_markdown)
+                VALUES (new.rowid, new.title, new.body_markdown);
+            END;
+            """)
+
+            try exec("""
+            CREATE TABLE source_search (
+                source_id TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                title     TEXT NOT NULL,
+                body      TEXT NOT NULL
+            );
+            """)
+            try exec("""
+            CREATE VIRTUAL TABLE sources_fts USING fts5(
+                title, body,
+                content='source_search', content_rowid='rowid',
+                tokenize='porter');
+            """)
+            try exec("""
+            CREATE TRIGGER sources_fts_ai AFTER INSERT ON source_search BEGIN
+              INSERT INTO sources_fts(rowid, title, body)
+                VALUES (new.rowid, new.title, new.body);
+            END;
+            """)
+            try exec("""
+            CREATE TRIGGER sources_fts_ad AFTER DELETE ON source_search BEGIN
+              INSERT INTO sources_fts(sources_fts, rowid, title, body)
+                VALUES ('delete', old.rowid, old.title, old.body);
+            END;
+            """)
+            try exec("""
+            CREATE TRIGGER sources_fts_au AFTER UPDATE ON source_search BEGIN
+              INSERT INTO sources_fts(sources_fts, rowid, title, body)
+                VALUES ('delete', old.rowid, old.title, old.body);
+              INSERT INTO sources_fts(rowid, title, body)
+                VALUES (new.rowid, new.title, new.body);
+            END;
+            """)
+            try exec("PRAGMA user_version=13;")
+            version = 13
+        }
+
+        // v13 → v14: per-chunk embeddings (RAG-style). Replaces the old
+        // one-embedding-per-document model (`page_embeddings`, `source_embeddings`)
+        // with one embedding BLOB per text chunk, so a query can match the single
+        // best passage of a large document (best-chunk-per-doc ranking) instead of
+        // a blurry document centroid. Also fixes NLEmbedding's hard limit: a whole
+        // document fed to NLEmbedding throws an uncatchable std::bad_alloc above
+        // ~250k chars; chunking keeps each embedding input small.
+        //
+        // FK ON DELETE CASCADE: deleting a page/source removes its chunks. The vec
+        // query uses the `vec_distance_cosine` scalar in a GROUP-BY to pick each
+        // document's best (lowest-distance) chunk.
+        if version < 14 {
+            try exec("""
+            CREATE TABLE page_chunks (
+                page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+                chunk_idx INTEGER NOT NULL,
+                embedding BLOB NOT NULL,
+                PRIMARY KEY (page_id, chunk_idx)
+            ) WITHOUT ROWID;
+            """)
+            try exec("""
+            CREATE TABLE source_chunks (
+                source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                chunk_idx INTEGER NOT NULL,
+                embedding BLOB NOT NULL,
+                PRIMARY KEY (source_id, chunk_idx)
+            ) WITHOUT ROWID;
+            """)
+            // The old single-embedding tables are superseded and unused after v14.
+            try exec("DROP TABLE IF EXISTS page_embeddings;")
+            try exec("DROP TABLE IF EXISTS source_embeddings;")
+            try exec("PRAGMA user_version=14;")
+            version = 14
+        }
     }
 
-    // MARK: - vec extension loading
+    // MARK: - sqlite-vec registration (statically linked, -DSQLITE_CORE)
 
-    /// Called ONCE per process lifetime. Finds the bundled vec0.dylib, enables
-    /// extension loading on a throwaway connection so the module is available
-    /// on every subsequent `sqlite3_load_extension` call across connections.
-    /// Failure is non-fatal: logged, semantic search degrades to LIKE fallback.
-    private static let vecInitQueue = DispatchQueue(label: "wiki.vec.init")
-    nonisolated(unsafe) private static var _vecDylibPath: String?
-    nonisolated(unsafe) private static var _vecLoadAttempted = false
-
-    private static func ensureVecExtensionLoaded() {
-        // When there's no app bundle (test / CI), the dylib path search is
-        // pointless AND Bundle.main can crash in some configurations.
-        // Semantic search degrades to LIKE fallback automatically.
-        guard Bundle.main.bundlePath.hasSuffix(".app") else { return }
-        vecInitQueue.sync {
-            guard !_vecLoadAttempted else { return }
-            _vecLoadAttempted = true
-        // Production: dylib lives in Contents/Helpers/ (copied by build.sh).
-        // Development (swift build / Xcode): the binary runs from a build
-        // directory.  We walk up from the bundle URL to find the project
-        // root's Resources/ dir.  Also respect an explicit env-var override.
-        var candidatePaths: [String] = []
-        if let envPath = ProcessInfo.processInfo.environment["WIKIFS_VEC_DYLIB_PATH"] {
-            candidatePaths.append(envPath)
+    /// Register the statically-linked sqlite-vec (`vec0` vtable + scalar distance
+    /// functions like `vec_distance_cosine`) on a connection. No
+    /// `sqlite3_load_extension` — the macOS system SQLite omits it, so vec is
+    /// compiled in with `-DSQLITE_CORE` (see the `CSqliteVec` target). This is
+    /// the sqlite-vec C/C++ guide's "direct call" pattern: `sqlite3_vec_init(db,
+    /// NULL, NULL)` (NULL `pApi` is valid under SQLITE_CORE). Called from both
+    /// inits. Non-fatal: on failure semantic ranking is skipped and FTS5 (v13)
+    /// remains the search fallback.
+    private func registerVec(on db: OpaquePointer) {
+        let rc = wikifs_vec_register(UnsafeMutableRawPointer(db))
+        if rc == 0 {
+            DebugLog.store("registerVec: sqlite-vec registered on connection (vec_distance_cosine available)")
+        } else {
+            DebugLog.store("registerVec: sqlite3_vec_init FAILED rc=\(rc) — semantic search disabled, FTS5 fallback active")
         }
-        let bundle = Bundle.main.bundleURL
-        candidatePaths.append(
-            bundle.appendingPathComponent("Contents/Helpers/vec0.dylib").path)
-        // Walk up from the bundle to find Resources/vec0.dylib (dev builds).
-        // make → build/*.app; swift build → .build/debug/*.app or .build/release/*.app.
-        var cursor = bundle
-        for _ in 0..<6 {
-            cursor = cursor.deletingLastPathComponent()
-            candidatePaths.append(
-                cursor.appendingPathComponent("Resources/vec0.dylib").path)
-        }
-        if let resourceURL = Bundle.main.resourceURL {
-            candidatePaths.append(
-                resourceURL.appendingPathComponent("vec0.dylib").path)
-        }
-        for path in candidatePaths {
-            if FileManager.default.fileExists(atPath: path) {
-                _vecDylibPath = path
-                break
-            }
-        }
-        guard _vecDylibPath != nil else {
-            FileHandle.standardError.write(Data("SQLiteWikiStore: vec0.dylib not found — semantic search disabled\n".utf8))
-            return
-        }
-        }  // end vecInitQueue.sync
-        // Spin a throwaway connection just to enable extension loading once.
-        var tmp: OpaquePointer?
-        guard sqlite3_open(":memory:", &tmp) == SQLITE_OK, let tmp else { return }
-        defer { sqlite3_close(tmp) }
-        loadVecExtension(on: tmp)
     }
 
-    /// Load the sqlite-vec extension on ONE connection. Safe to call on every
-    /// open — sqlite3_load_extension short-circuits if already loaded on this
-    /// connection. Errors are printed but not thrown.
-    ///
-    /// Apple's Swift `SQLite3` module intentionally omits
-    /// `sqlite3_enable_load_extension` and `sqlite3_load_extension`. Both
-    /// symbols ARE present in the system libsqlite3.dylib — we resolve them
-    /// via `dlsym(RTLD_DEFAULT)` so no experimental compiler flags are needed.
-    private static func loadVecExtension(on db: OpaquePointer) {
-        guard let dylibPath = _vecDylibPath else { return }
-
-        typealias EnableFn = @convention(c) (OpaquePointer?, Int32) -> Int32
-        typealias LoadFn = @convention(c) (
-            OpaquePointer?, UnsafePointer<CChar>?,
-            UnsafePointer<CChar>?,
-            UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
-        ) -> Int32
-
-        guard let enablePtr = dlsym(UnsafeMutableRawPointer(bitPattern: -2)!,
-                                     "sqlite3_enable_load_extension"),
-              let loadPtr = dlsym(UnsafeMutableRawPointer(bitPattern: -2)!,
-                                  "sqlite3_load_extension")
-        else {
-            FileHandle.standardError.write(Data("SQLiteWikiStore: dlsym failed for sqlite3_*_load_extension\n".utf8))
-            return
-        }
-        let enableFn = unsafeBitCast(enablePtr, to: EnableFn.self)
-        let loadFn = unsafeBitCast(loadPtr, to: LoadFn.self)
-
-        guard enableFn(db, 1) == SQLITE_OK else {
-            FileHandle.standardError.write(Data("SQLiteWikiStore: sqlite3_enable_load_extension failed\n".utf8))
-            return
-        }
-        let rc = dylibPath.withCString { path in
-            loadFn(db, path, "sqlite3_vec_init", nil)
-        }
-        if rc != SQLITE_OK, let err = sqlite3_errmsg(db) {
-            FileHandle.standardError.write(Data("SQLiteWikiStore: sqlite3_load_extension failed: \(String(cString: err))\n".utf8))
-        }
-    }
 
     /// Whether sqlite-vec scalar functions are available on THIS connection.
     /// Probes with a lightweight `SELECT vec_distance_cosine` on zero-length
@@ -485,6 +524,14 @@ public final class SQLiteWikiStore: WikiStore {
             "SELECT vec_distance_cosine(x'00000000', x'00000000');"
         )) != nil
     }
+
+    #if DEBUG
+    /// Test hook: whether sqlite-vec is registered on this connection — proves the
+    /// statically-linked extension (`-DSQLITE_CORE`, no `load_extension`) loaded.
+    /// The semantic cosine path still can't RANK under `swift test` (NLEmbedding
+    /// is app-gated), but this confirms the scalar functions are available.
+    var vecRegisteredForTesting: Bool { isVecAvailable() }
+    #endif
 
     // MARK: - WikiStore
 
@@ -948,6 +995,11 @@ public final class SQLiteWikiStore: WikiStore {
         if let displayName { try stmt.bind(displayName, at: 10) }  // else leave NULL
         _ = try stmt.step()
 
+        // Name-only full-text index entry so an un-extracted source is still
+        // findable by filename/display name. The body is indexed once processed
+        // markdown is appended (appendProcessedMarkdown → upsertSourceSearch).
+        upsertSourceSearch(sourceID: id, body: "")
+
         return SourceSummary(
             id: id, filename: filename, ext: ext, mimeType: mime,
             byteSize: data.count, createdAt: now, updatedAt: now, version: 1,
@@ -1044,6 +1096,8 @@ public final class SQLiteWikiStore: WikiStore {
         // embed name-only when there is no markdown yet.
         let headBody = (try? processedMarkdownHead(sourceID: id)?.content) ?? ""
         reembedSource(sourceID: id, body: headBody)
+        // The FTS index title tracks the rename too (resolves display_name ?? filename).
+        upsertSourceSearch(sourceID: id, body: headBody)
     }
 
     /// Stamp a source as summarized-into-the-wiki. Idempotent and a no-op
@@ -1373,33 +1427,99 @@ public final class SQLiteWikiStore: WikiStore {
         return String(cString: c)
     }
 
-    // MARK: - Semantic search (v7)
+    // MARK: - Semantic search (chunk embeddings, v14)
 
-    public func storePageEmbedding(id: PageID, blob: Data) throws {
-        let stmt = try statement("""
-        INSERT OR REPLACE INTO page_embeddings (page_id, embedding)
-        VALUES (?1, ?2);
-        """)
-        defer { stmt.reset() }
-        try stmt.bind(id.rawValue, at: 1)
-        try stmt.bind(blob, at: 2)
-        _ = try stmt.step()
+    /// Replace ALL chunks for one document in a chunk table. Deletes existing
+    /// rows for `id`, then inserts the new chunk blobs (indexed from 0) inside a
+    /// single transaction so a reader never sees a half-populated document.
+    /// Generic over the (table, id-column) pair — `page_chunks(page_id)` and
+    /// `source_chunks(source_id)` are structurally identical. Internal callers
+    /// only; table/column names are never user input.
+    private func replaceChunks(table: String, idColumn: String, id: PageID, chunks: [Data]) throws {
+        try exec("BEGIN IMMEDIATE;")
+        do {
+            let del = try statement("DELETE FROM \(table) WHERE \(idColumn) = ?1;")
+            defer { del.reset() }
+            try del.bind(id.rawValue, at: 1)
+            _ = try del.step()
+            let ins = try statement("""
+            INSERT INTO \(table) (\(idColumn), chunk_idx, embedding) VALUES (?1, ?2, ?3);
+            """)
+            defer { ins.reset() }
+            for (idx, blob) in chunks.enumerated() {
+                try ins.bind(id.rawValue, at: 1)
+                try ins.bind(Int64(idx), at: 2)
+                try ins.bind(blob, at: 3)
+                _ = try ins.step()
+                ins.reset()
+            }
+            try exec("COMMIT;")
+        } catch {
+            try? exec("ROLLBACK;")
+            throw error
+        }
+    }
+
+    /// Store/replace all chunk embeddings for a page. Public so tests + the
+    /// embedding maintenance path can drive it directly.
+    public func storePageChunks(id: PageID, chunks: [Data]) throws {
+        try replaceChunks(table: "page_chunks", idColumn: "page_id", id: id, chunks: chunks)
+    }
+
+    // MARK: - Search (hybrid: FTS5 + semantic vec0, fused via RRF)
+
+    /// The single hybrid search flow used by BOTH page and source search, so the
+    /// two can never drift apart. FTS5 bm25 — the reliable lexical floor — always
+    /// runs; when sqlite-vec + the `NLEmbedding` model are available, a semantic
+    /// cosine pass also runs and the two best-first lists are fused with
+    /// Reciprocal Rank Fusion (`RankFusion.rrf`), so a row matching BOTH lexical
+    /// + semantic outranks one matching only one. Falls back to FTS-only when vec
+    /// or the model is unavailable.
+    ///
+    /// Generic over the result row type; each kind supplies its own FTS query,
+    /// its own vec cosine query (both already in best-first order), and the row's
+    /// id key path for fusion. The only real difference between pages and sources
+    /// is *where the body lives* (inline on `pages` vs the source version chain),
+    /// not the search algorithm.
+    private func hybridSearch<Row>(
+        kind: String,
+        query: String,
+        limit: Int,
+        id: KeyPath<Row, PageID>,
+        fts: (_ pool: Int) throws -> [Row],
+        semantic: (_ queryBlob: Data, _ pool: Int) throws -> [Row]
+    ) throws -> [Row] {
+        let pool = max(limit * 2, limit)
+        let ftsRows = try fts(pool)
+        if isVecAvailable(), let queryBlob = EmbeddingService.embeddingBlob(for: query) {
+            DebugLog.store("search[\(kind)]: query=\(query) hybrid (semantic+FTS) → RRF, vec=true")
+            let semRows = try semantic(queryBlob, pool)
+            return Array(RankFusion.rrf([semRows, ftsRows], id: id).prefix(limit))
+        }
+        DebugLog.store("search[\(kind)]: query=\(query) FTS-only, vec=false")
+        return Array(ftsRows.prefix(limit))
     }
 
     public func searchSimilar(query: String, limit: Int) throws -> [WikiPageSummary] {
-        // Try semantic search first; fall back to LIKE title match.
-        if isVecAvailable(), let queryBlob = EmbeddingService.embeddingBlob(for: query) {
-            return try searchSimilarSemantic(blob: queryBlob, limit: limit)
-        }
-        return try searchSimilarFallback(query: query, limit: limit)
+        try hybridSearch(
+            kind: "pages", query: query, limit: limit, id: \.id,
+            fts: { try searchPagesFTS(query: query, limit: $0) },
+            semantic: { try searchPagesSemantic(blob: $0, limit: $1) })
     }
 
-    private func searchSimilarSemantic(blob queryBlob: Data, limit: Int) throws -> [WikiPageSummary] {
+    /// Semantic (vec0 cosine) pass over pages. Ranks by each page's BEST-matching
+    /// chunk (lowest cosine distance over all its chunks) — a query hits the
+    /// specific passage, not a document centroid. Best-first. Only pages with at
+    /// least one chunk appear here.
+    private func searchPagesSemantic(blob queryBlob: Data, limit: Int) throws -> [WikiPageSummary] {
         let sql = """
         SELECT p.id, p.title, p.updated_at, p.created_at
-        FROM pages p
-        JOIN page_embeddings pe ON pe.page_id = p.id
-        ORDER BY vec_distance_cosine(pe.embedding, ?1) ASC
+        FROM (
+            SELECT page_id, MIN(vec_distance_cosine(embedding, ?1)) AS best
+            FROM page_chunks GROUP BY page_id
+        ) r
+        JOIN pages p ON p.id = r.page_id
+        ORDER BY r.best ASC
         LIMIT ?2;
         """
         let stmt = try statement(sql)
@@ -1419,20 +1539,86 @@ public final class SQLiteWikiStore: WikiStore {
         return out
     }
 
-    private func searchSimilarFallback(query: String, limit: Int) throws -> [WikiPageSummary] {
-        let pattern = "%\(query)%"
+    public func recomputeMissingEmbeddings() -> Int {
+        do {
+            let stmt = try statement("""
+            SELECT p.id, p.title, p.body_markdown
+            FROM pages p
+            LEFT JOIN page_chunks pc ON pc.page_id = p.id
+            WHERE pc.page_id IS NULL;
+            """)
+            defer { stmt.reset() }
+            var rows: [(id: PageID, title: String, body: String)] = []
+            while try stmt.step() {
+                rows.append((PageID(rawValue: stmt.text(at: 0)),
+                             stmt.text(at: 1), stmt.text(at: 2)))
+            }
+            return chunkEmbedMissing(kind: "pages", rows,
+                                     store: { try storePageChunks(id: $0, chunks: $1) })
+        } catch {
+            FileHandle.standardError.write(Data("SQLiteWikiStore.recomputeMissingEmbeddings: \(error)\n".utf8))
+            return 0
+        }
+    }
+
+    /// Shared inner of page + source embedding backfill. For each document the
+    /// caller has already determined is missing from its chunk table, chunk the
+    /// text via `EmbeddingService.chunkedEmbeddings(for:)` and store every chunk
+    /// through the caller's store closure. No-op when vec is unavailable;
+    /// per-doc failures are logged + skipped so one bad document can't abort the
+    /// batch. Returns the count of documents embedded.
+    @discardableResult
+    private func chunkEmbedMissing(
+        kind: String,
+        _ rows: [(id: PageID, title: String, body: String)],
+        store: (PageID, [Data]) throws -> Void
+    ) -> Int {
+        guard isVecAvailable() else { return 0 }
+        var n = 0
+        for (id, title, body) in rows {
+            let text = body.isEmpty ? title : "\(title)\n\n\(body)"
+            let chunks = EmbeddingService.chunkedEmbeddings(for: text)
+            if chunks.isEmpty {
+                DebugLog.store("recompute[\(kind)][\(id.rawValue)] no chunks (model unavailable?) bodyLen=\(body.count)")
+                continue
+            }
+            DebugLog.store("recompute[\(kind)][\(id.rawValue)] bodyLen=\(body.count) chunks=\(chunks.count)")
+            do { try store(id, chunks); n += 1 }
+            catch { DebugLog.store("recompute[\(kind)][\(id.rawValue)] store failed — \(error)") }
+        }
+        DebugLog.store("recompute[\(kind)]: embedded \(n) of \(rows.count) doc(s)")
+        return n
+    }
+
+    // MARK: - Full-text search (FTS5/BM25, v13)
+
+    /// Turn free text into a safe FTS5 MATCH expression: keep alphanumerics and
+    /// whitespace (FTS5 implicit-ANDs the tokens) and drop operator characters
+    /// (`"`, `*`, `(`, `)`, `:`, `^`, …) so user input can't inject query syntax
+    /// or throw a parse error. Returns "" when nothing useful remains.
+    private static func ftsMatch(_ raw: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(.whitespaces)
+        let kept = String(raw.unicodeScalars.map { allowed.contains($0) ? Character($0) : " " })
+        return kept.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+
+    /// Lexical search over pages (FTS5 bm25). External-content over `pages`, so the
+    /// join is on rowid. `ORDER BY rank` ranks by bm25 (lowest = best match).
+    private func searchPagesFTS(query: String, limit: Int) throws -> [WikiPageSummary] {
+        let q = Self.ftsMatch(query)
+        guard !q.isEmpty else { return [] }
         let sql = """
-        SELECT id, title, updated_at, created_at
-        FROM pages
-        WHERE title LIKE ?1
-        ORDER BY updated_at DESC
+        SELECT p.id, p.title, p.updated_at, p.created_at
+        FROM pages_fts
+        JOIN pages p ON p.rowid = pages_fts.rowid
+        WHERE pages_fts MATCH ?1
+        ORDER BY rank
         LIMIT ?2;
         """
         let stmt = try statement(sql)
         defer { stmt.reset() }
-        try stmt.bind(pattern, at: 1)
+        try stmt.bind(q, at: 1)
         try stmt.bind(Int64(limit), at: 2)
-
         var out: [WikiPageSummary] = []
         while try stmt.step() {
             out.append(WikiPageSummary(
@@ -1445,44 +1631,228 @@ public final class SQLiteWikiStore: WikiStore {
         return out
     }
 
-    public func recomputeMissingEmbeddings() -> Int {
-        guard isVecAvailable() else { return 0 }
-        var count = 0
+    /// Lexical search over sources (FTS5 bm25) via the `source_search` sidecar.
+    /// Columns enumerated explicitly — never `SELECT s.*` (the `sources` table has
+    /// a `content` BLOB that would shift indices; see `searchSimilarSources`).
+    private func searchSourcesFTS(query: String, limit: Int) throws -> [SourceSummary] {
+        let q = Self.ftsMatch(query)
+        guard !q.isEmpty else { return [] }
+        let sql = """
+        SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size, s.created_at, s.updated_at,
+               s.version, s.zotero_item_key, s.zotero_item_title, s.display_name
+        FROM sources_fts
+        JOIN source_search ss ON ss.rowid = sources_fts.rowid
+        JOIN sources s ON s.id = ss.source_id
+        WHERE sources_fts MATCH ?1
+        ORDER BY rank
+        LIMIT ?2;
+        """
+        let stmt = try statement(sql)
+        defer { stmt.reset() }
+        try stmt.bind(q, at: 1)
+        try stmt.bind(Int64(limit), at: 2)
+        var out: [SourceSummary] = []
+        while try stmt.step() { out.append(sourceSummary(from: stmt)) }
+        return out
+    }
+
+    /// Keep the source full-text sidecar fresh: one row per source holding the
+    /// current title (display_name ?? filename) + body. INSERT OR REPLACE fires the
+    /// ad+ai triggers, so `sources_fts` updates automatically. Best-effort, like
+    /// `reembedSource`. Called from appendProcessedMarkdown + renameSource.
+    private func upsertSourceSearch(sourceID: PageID, body: String) {
+        guard let nameStmt = try? statement(
+            "SELECT display_name, filename FROM sources WHERE id = ?1;") else { return }
+        defer { nameStmt.reset() }
+        let title: String
+        do {
+            try nameStmt.bind(sourceID.rawValue, at: 1)
+            guard try nameStmt.step() else { return }
+            let displayName = sqlite3_column_type(nameStmt.handle, 0) == SQLITE_NULL
+                ? nil : nameStmt.text(at: 0)
+            title = displayName ?? nameStmt.text(at: 1)
+        } catch {
+            DebugLog.store("upsertSourceSearch[\(sourceID.rawValue)] name lookup failed — \(error)")
+            return
+        }
+        guard let stmt = try? statement("""
+        INSERT OR REPLACE INTO source_search (source_id, title, body) VALUES (?1, ?2, ?3);
+        """) else { return }
+        defer { stmt.reset() }
+        do {
+            try stmt.bind(sourceID.rawValue, at: 1)
+            try stmt.bind(title, at: 2)
+            try stmt.bind(body, at: 3)
+            _ = try stmt.step()
+        } catch {
+            DebugLog.store("upsertSourceSearch[\(sourceID.rawValue)] insert failed — \(error)")
+        }
+    }
+
+    /// Backfill the FTS indexes for pre-existing content. Pages rebuild from
+    /// `pages` via the FTS5 'rebuild' command; sources first backfill `source_search`
+    /// from the HEAD of each version chain, then rebuild. Idempotent. Returns counts.
+    public func rebuildFTS() -> (pages: Int, sources: Int) {
+        do {
+            try exec("INSERT INTO pages_fts(pages_fts) VALUES ('rebuild');")
+        } catch { DebugLog.store("rebuildFTS: pages rebuild failed — \(error)") }
         do {
             let stmt = try statement("""
-            SELECT p.id, p.title, p.body_markdown
-            FROM pages p
-            LEFT JOIN page_embeddings pe ON pe.page_id = p.id
-            WHERE pe.page_id IS NULL;
+            INSERT OR IGNORE INTO source_search (source_id, title, body)
+            SELECT s.id, COALESCE(s.display_name, s.filename),
+                   COALESCE((SELECT smv.content FROM source_markdown_versions smv
+                             WHERE smv.file_id = s.id ORDER BY smv.id DESC LIMIT 1), '')
+            FROM sources s
+            WHERE s.id NOT IN (SELECT source_id FROM source_search);
             """)
             defer { stmt.reset() }
-            while try stmt.step() {
-                let id = PageID(rawValue: stmt.text(at: 0))
-                let title = stmt.text(at: 1)
-                let body = stmt.text(at: 2)
-                if let blob = EmbeddingService.embeddingBlob(title: title, body: body) {
-                    try? storePageEmbedding(id: id, blob: blob)
-                    count += 1
-                }
-            }
+            _ = try stmt.step()
+            try exec("INSERT INTO sources_fts(sources_fts) VALUES ('rebuild');")
+        } catch { DebugLog.store("rebuildFTS: sources rebuild failed — \(error)") }
+        let pages = (Int((try? queryScalarText("SELECT count(*) FROM pages_fts;")) ?? "")) ?? 0
+        let sources = (Int((try? queryScalarText("SELECT count(*) FROM sources_fts;")) ?? "")) ?? 0
+        return (pages, sources)
+    }
+
+    // MARK: - Self-healing search indexes (open-time)
+
+    /// Self-heal: keep the search indexes populated for ALL content (pages +
+    /// sources) so search "just works" without a manual reindex. Run on every
+    /// writable open (idempotent + near-zero cost when nothing is missing — each
+    /// step is either a guarded FTS rebuild or a zero-row scan), which is what
+    /// stops the page and source indexes from drifting out of sync again. NOT
+    /// run by the read-only File Provider connection (which never writes).
+    ///
+    /// Order matters: seed native-markdown sources first (so their body flows
+    /// into `source_search` and the embedding), then backfill any remaining
+    /// `source_search` gaps, rebuild any FTS index that lags its content table,
+    /// and finally embed every page/source still missing one.
+    private func ensureSearchIndexesPopulated() {
+        // 1. Seed a v1 processed-markdown version for markdown-native sources
+        //    that have none, so their body is searchable (name-only otherwise).
+        //    appendProcessedMarkdown also fires the re-embed + upsertSourceSearch
+        //    hooks, so step 2/4 pick these up.
+        _ = seedNativeMarkdownSources()
+
+        // 2. Backfill the source full-text sidecar for any source still lacking a
+        //    row (PDFs/binaries → name-only). The v13 AFTER-INSERT trigger on
+        //    source_search keeps sources_fts in sync.
+        do {
+            let stmt = try statement("""
+            INSERT OR IGNORE INTO source_search (source_id, title, body)
+            SELECT s.id, COALESCE(s.display_name, s.filename),
+                   COALESCE((SELECT smv.content FROM source_markdown_versions smv
+                             WHERE smv.file_id = s.id ORDER BY smv.id DESC LIMIT 1), '')
+            FROM sources s;
+            """)
+            defer { stmt.reset() }
+            _ = try stmt.step()
         } catch {
-            FileHandle.standardError.write(Data("SQLiteWikiStore.recomputeMissingEmbeddings: \(error)\n".utf8))
+            DebugLog.store("ensureSearchIndexes: source_search backfill failed — \(error)")
         }
-        return count
+
+        // 3. Rebuild an FTS index only when it lags its content table (a full
+        //    rebuild on every open of a healthy DB is wasteful).
+        if rowCount("pages") > 0 && rowCount("pages_fts") < rowCount("pages") {
+            do { try exec("INSERT INTO pages_fts(pages_fts) VALUES ('rebuild');")
+            } catch { DebugLog.store("ensureSearchIndexes: pages_fts rebuild failed — \(error)") }
+        }
+        if rowCount("sources") > 0 && rowCount("sources_fts") < rowCount("sources") {
+            do { try exec("INSERT INTO sources_fts(sources_fts) VALUES ('rebuild');")
+            } catch { DebugLog.store("ensureSearchIndexes: sources_fts rebuild failed — \(error)") }
+        }
+
+        // 4. Chunk embeddings are NOT computed here. NLEmbedding is too slow to
+        //    run synchronously at launch (~5 s / 100k chars; minutes for a full
+        //    corpus), so embedding backfill runs in the background via
+        //    ``backfillMissingEmbeddings()`` (compute off-main, DB writes on the
+        //    calling actor). FTS search works immediately; semantic search fills
+        //    in as the background job completes.
+
+        DebugLog.store("ensureSearchIndexes: pages_fts=\(rowCount("pages_fts"))/\(rowCount("pages")) sources_fts=\(rowCount("sources_fts"))/\(rowCount("sources")) pageChunks=\(rowCount("page_chunks")) sourceChunks=\(rowCount("source_chunks"))")
+    }
+
+    /// Snapshot of pages that have no chunk embeddings yet: `(id, embeddable
+    /// text)`. The text is `title\n\nbody` (title-only when the body is empty).
+    /// Read on the caller's thread (main); the expensive embedding runs off-main
+    /// in ``backfillMissingEmbeddings``.
+    public func missingPageEmbeddingWork() -> [(id: PageID, text: String)] {
+        var out: [(id: PageID, text: String)] = []
+        guard let stmt = try? statement("""
+        SELECT p.id, p.title, p.body_markdown
+        FROM pages p
+        LEFT JOIN page_chunks pc ON pc.page_id = p.id
+        WHERE pc.page_id IS NULL;
+        """) else { return out }
+        defer { stmt.reset() }
+        while (try? stmt.step()) ?? false {
+            let id = PageID(rawValue: stmt.text(at: 0))
+            let title = stmt.text(at: 1)
+            let body = stmt.text(at: 2)
+            out.append((id, body.isEmpty ? title : "\(title)\n\n\(body)"))
+        }
+        return out
+    }
+
+    /// Snapshot of sources that have no chunk embeddings yet: `(id, embeddable
+    /// text)`. The text is the source's title + its processed-markdown HEAD body
+    /// (title-only for un-extracted PDFs/binaries). Mirrors
+    /// ``missingPageEmbeddingWork``.
+    public func missingSourceEmbeddingWork() -> [(id: PageID, text: String)] {
+        var out: [(id: PageID, text: String)] = []
+        guard let stmt = try? statement("""
+        SELECT s.id, COALESCE(s.display_name, s.filename),
+               (SELECT content FROM source_markdown_versions smv
+                WHERE smv.file_id = s.id ORDER BY smv.id DESC LIMIT 1)
+        FROM sources s
+        LEFT JOIN source_chunks sc ON sc.source_id = s.id
+        WHERE sc.source_id IS NULL;
+        """) else { return out }
+        defer { stmt.reset() }
+        while (try? stmt.step()) ?? false {
+            let id = PageID(rawValue: stmt.text(at: 0))
+            let title = stmt.text(at: 1)
+            let body = sqlite3_column_type(stmt.handle, 2) == SQLITE_NULL ? "" : stmt.text(at: 2)
+            out.append((id, body.isEmpty ? title : "\(title)\n\n\(body)"))
+        }
+        return out
+    }
+
+    /// Seed the first processed-markdown version for markdown-native sources that
+    /// lack one, by decoding their raw bytes as UTF-8 — the same lazy seeding the
+    /// UI used to do on first view. Returns the count seeded. Best-effort.
+    private func seedNativeMarkdownSources() -> Int {
+        var seeded = 0
+        guard let stmt = try? statement("""
+        SELECT s.id FROM sources s
+        WHERE s.mime_type LIKE 'text/%'
+          AND NOT EXISTS (SELECT 1 FROM source_markdown_versions smv WHERE smv.file_id = s.id);
+        """) else { return 0 }
+        defer { stmt.reset() }
+        while (try? stmt.step()) ?? false {
+            let id = PageID(rawValue: stmt.text(at: 0))
+            guard let bytes = try? sourceContent(id: id),
+                  let text = String(data: bytes, encoding: .utf8) else { continue }
+            _ = try? appendProcessedMarkdown(sourceID: id, content: text, origin: "source", note: nil)
+            seeded += 1
+        }
+        if seeded > 0 { DebugLog.store("seedNativeMarkdownSources: seeded \(seeded) source(s)") }
+        return seeded
+    }
+
+    /// `SELECT count(*) FROM <table>` as an Int (0 on any error). `<table>` is
+    /// interpolated from trusted internal callers only — never user input.
+    private func rowCount(_ table: String) -> Int {
+        (Int((try? queryScalarText("SELECT count(*) FROM \(table);")) ?? "")) ?? 0
     }
 
     // MARK: - Source embeddings (v12, semantic source search)
 
-    /// Store/replace one source embedding. Mirrors `storePageEmbedding`.
-    public func storeSourceEmbedding(id: PageID, blob: Data) throws {
-        let stmt = try statement("""
-        INSERT OR REPLACE INTO source_embeddings (source_id, embedding)
-        VALUES (?1, ?2);
-        """)
-        defer { stmt.reset() }
-        try stmt.bind(id.rawValue, at: 1)
-        try stmt.bind(blob, at: 2)
-        _ = try stmt.step()
+    /// Store/replace all chunk embeddings for a source. Public so tests + the
+    /// embedding maintenance path can drive it directly. Mirrors
+    /// `storePageChunks` — both route through the generic `replaceChunks`.
+    public func storeSourceChunks(id: PageID, chunks: [Data]) throws {
+        try replaceChunks(table: "source_chunks", idColumn: "source_id", id: id, chunks: chunks)
     }
 
     /// Semantic search over sources. Tries cosine ranking on `source_embeddings`
@@ -1496,60 +1866,53 @@ public final class SQLiteWikiStore: WikiStore {
     /// (which reads index 5 as `created_at`) would dereference the BLOB as a
     /// Double. `listSources()` already names its columns for the same reason.
     public func searchSimilarSources(query: String, limit: Int) throws -> [SourceSummary] {
-        if isVecAvailable(), let queryBlob = EmbeddingService.embeddingBlob(for: query) {
-            let sql = """
-            SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size, s.created_at, s.updated_at,
-                   s.version, s.zotero_item_key, s.zotero_item_title, s.display_name
-            FROM sources s
-            JOIN source_embeddings se ON se.source_id = s.id
-            ORDER BY vec_distance_cosine(se.embedding, ?1) ASC
-            LIMIT ?2;
-            """
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            try stmt.bind(queryBlob, at: 1)
-            try stmt.bind(Int64(limit), at: 2)
-            var out: [SourceSummary] = []
-            while try stmt.step() { out.append(sourceSummary(from: stmt)) }
-            return out
-        }
+        try hybridSearch(
+            kind: "sources", query: query, limit: limit, id: \.id,
+            fts: { try searchSourcesFTS(query: query, limit: $0) },
+            semantic: { try searchSourcesSemantic(blob: $0, limit: $1) })
+    }
 
-        // LIKE fallback.
-        let pattern = "%\(query)%"
+    /// Semantic (vec0 cosine) pass over sources. Ranks by each source's
+    /// BEST-matching chunk (lowest cosine distance over all its chunks) — a
+    /// query hits the specific passage, not a document centroid. Best-first.
+    /// Only sources with at least one chunk appear here.
+    private func searchSourcesSemantic(blob queryBlob: Data, limit: Int) throws -> [SourceSummary] {
         let sql = """
         SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size, s.created_at, s.updated_at,
                s.version, s.zotero_item_key, s.zotero_item_title, s.display_name
-        FROM sources s
-        WHERE s.filename LIKE ?1 OR s.display_name LIKE ?1
-        ORDER BY s.updated_at DESC
+        FROM (
+            SELECT source_id, MIN(vec_distance_cosine(embedding, ?1)) AS best
+            FROM source_chunks GROUP BY source_id
+        ) r
+        JOIN sources s ON s.id = r.source_id
+        ORDER BY r.best ASC
         LIMIT ?2;
         """
         let stmt = try statement(sql)
         defer { stmt.reset() }
-        try stmt.bind(pattern, at: 1)
+        try stmt.bind(queryBlob, at: 1)
         try stmt.bind(Int64(limit), at: 2)
         var out: [SourceSummary] = []
         while try stmt.step() { out.append(sourceSummary(from: stmt)) }
         return out
     }
 
-    /// Backfill `source_embeddings` rows for sources that lack one. Embeds each
+    /// Backfill `source_chunks` for sources that lack any. Chunk-embeds each
     /// source on its processed-markdown HEAD body + name; name-only when no
     /// processed markdown exists yet (un-extracted PDF / binary file). Mirrors
     /// `recomputeMissingEmbeddings`. No-op (returns 0) when vec is unavailable.
     public func recomputeMissingSourceEmbeddings() -> Int {
-        guard isVecAvailable() else { return 0 }
-        var count = 0
         do {
             let stmt = try statement("""
             SELECT s.id, s.display_name, s.filename,
                    (SELECT content FROM source_markdown_versions smv
                     WHERE smv.file_id = s.id ORDER BY smv.id DESC LIMIT 1) AS body
             FROM sources s
-            LEFT JOIN source_embeddings se ON se.source_id = s.id
-            WHERE se.source_id IS NULL;
+            LEFT JOIN source_chunks sc ON sc.source_id = s.id
+            WHERE sc.source_id IS NULL;
             """)
             defer { stmt.reset() }
+            var rows: [(id: PageID, title: String, body: String)] = []
             while try stmt.step() {
                 let id = PageID(rawValue: stmt.text(at: 0))
                 let displayName = sqlite3_column_type(stmt.handle, 1) == SQLITE_NULL
@@ -1557,38 +1920,41 @@ public final class SQLiteWikiStore: WikiStore {
                 let filename = stmt.text(at: 2)
                 let body = sqlite3_column_type(stmt.handle, 3) == SQLITE_NULL
                     ? "" : stmt.text(at: 3)
-                let title = displayName ?? filename
-                if let blob = EmbeddingService.embeddingBlob(title: title, body: body) {
-                    try? storeSourceEmbedding(id: id, blob: blob)
-                    count += 1
-                }
+                rows.append((id, displayName ?? filename, body))
             }
+            return chunkEmbedMissing(kind: "sources", rows,
+                                     store: { try storeSourceChunks(id: $0, chunks: $1) })
         } catch {
             FileHandle.standardError.write(Data("SQLiteWikiStore.recomputeMissingSourceEmbeddings: \(error)\n".utf8))
+            return 0
         }
-        return count
     }
 
-    /// Best-effort re-embed of a source after its content/name changed. No-op
-    /// when vec is unavailable (the version still commits; the embedding is
-    /// backfilled by `recomputeMissingSourceEmbeddings` on the next Reindex).
-    /// Called from `appendProcessedMarkdown` (covers extraction seeding,
+    /// Best-effort re-chunk + re-embed of a source after its content/name
+    /// changed. No-op when vec is unavailable (the version still commits; the
+    /// chunks are backfilled by `recomputeMissingSourceEmbeddings` on the next
+    /// open). Called from `appendProcessedMarkdown` (covers extraction seeding,
     /// raw-text seeding, user edits, and revert) and `renameSource`.
     private func reembedSource(sourceID: PageID, body: String) {
         guard isVecAvailable() else { return }
-        guard let stmt = try? statement(
+        guard let nameStmt = try? statement(
             "SELECT display_name, filename FROM sources WHERE id = ?1;") else { return }
-        defer { stmt.reset() }
+        defer { nameStmt.reset() }
         do {
-            try stmt.bind(sourceID.rawValue, at: 1)
-            guard try stmt.step() else { return }
-            let displayName = sqlite3_column_type(stmt.handle, 0) == SQLITE_NULL
-                ? nil : stmt.text(at: 0)
-            let filename = stmt.text(at: 1)
+            try nameStmt.bind(sourceID.rawValue, at: 1)
+            guard try nameStmt.step() else { return }
+            let displayName = sqlite3_column_type(nameStmt.handle, 0) == SQLITE_NULL
+                ? nil : nameStmt.text(at: 0)
+            let filename = nameStmt.text(at: 1)
             let title = displayName ?? filename
-            if let blob = EmbeddingService.embeddingBlob(title: title, body: body) {
-                try? storeSourceEmbedding(id: sourceID, blob: blob)
+            let text = body.isEmpty ? title : "\(title)\n\n\(body)"
+            let chunks = EmbeddingService.chunkedEmbeddings(for: text)
+            if chunks.isEmpty {
+                DebugLog.store("reembedSource[\(sourceID.rawValue)] no chunks (model unavailable?) bodyLen=\(body.count)")
+                return
             }
+            DebugLog.store("reembedSource[\(sourceID.rawValue)] title=\(title) bodyLen=\(body.count) chunks=\(chunks.count)")
+            try? storeSourceChunks(id: sourceID, chunks: chunks)
         } catch {
             FileHandle.standardError.write(Data("SQLiteWikiStore.reembedSource: \(error)\n".utf8))
         }
@@ -1693,6 +2059,9 @@ public final class SQLiteWikiStore: WikiStore {
         // search finds it immediately (covers extraction seeding, raw-text
         // seeding, user edits, and revert — revert routes through this method).
         reembedSource(sourceID: sourceID, body: content)
+        // Keep the FTS5 source-search index fresh (title + head body) so keyword
+        // search finds the new content immediately. Best-effort, like reembedSource.
+        upsertSourceSearch(sourceID: sourceID, body: content)
 
         return SourceMarkdownVersion(
             id: id, sourceID: sourceID, parentID: parentID,

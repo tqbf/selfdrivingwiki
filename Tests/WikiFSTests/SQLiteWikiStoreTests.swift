@@ -54,7 +54,7 @@ struct SQLiteWikiStoreTests {
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))
         #expect(tables.isSuperset(of:
             ["pages", "attachments", "page_links", "sources", "source_links",
-             "system_prompt", "log", "wiki_index", "page_embeddings",
+             "system_prompt", "log", "wiki_index", "page_chunks",
              "source_markdown_versions"]))
 
         let indexes = Set(rows(db,
@@ -62,10 +62,10 @@ struct SQLiteWikiStoreTests {
         #expect(indexes.contains("pages_slug_unique"))
         #expect(indexes.contains("ingested_files_created"))
 
-        // user_version guard: a fresh DB runs all migration steps → version 12.
+        // user_version guard: a fresh DB runs all migration steps → version 14.
         // Reopening must not re-run DDL (no-op bootstrap).
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "12")
+        #expect(userVersion == "14")
         let reopened = try SQLiteWikiStore(databaseURL: url)
         // If bootstrap weren't guarded, the CREATE TABLE would throw here.
         #expect((try? reopened.listPages(sortBy: .lastUpdated)) != nil)
@@ -307,7 +307,7 @@ struct SQLiteWikiStoreTests {
 
     // MARK: - Semantic search (v7)
 
-    @Test func v7SchemaHasPageEmbeddingsTable() throws {
+    @Test func v14SchemaHasPageChunksTable() throws {
         let url = tempDatabaseURL()
         _ = try SQLiteWikiStore(databaseURL: url)  // triggers migration
 
@@ -316,22 +316,24 @@ struct SQLiteWikiStoreTests {
         defer { sqlite3_close(db) }
 
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "12")
+        #expect(userVersion == "14")
 
         let tables = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))
-        #expect(tables.contains("page_embeddings"))
+        #expect(tables.contains("page_chunks"))
+        // The old single-embedding tables are dropped in v14.
+        #expect(!tables.contains("page_embeddings"))
     }
 
-    @Test func storePageEmbeddingInsertsOrReplaces() throws {
+    @Test func storePageChunksInsertsOrReplaces() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
         let page = try store.createPage(title: "Test")
-        let blob = Data(repeating: 0xAB, count: 2048)  // 512 × Float32
-        try store.storePageEmbedding(id: page.id, blob: blob)
+        let chunk = Data(repeating: 0xAB, count: 2048)  // 512 × Float32
+        try store.storePageChunks(id: page.id, chunks: [chunk])
 
-        // Second write replaces.
-        let blob2 = Data(repeating: 0xCD, count: 2048)
-        try store.storePageEmbedding(id: page.id, blob: blob2)
+        // Second write replaces the set (deletes old chunks, inserts new).
+        let chunk2 = Data(repeating: 0xCD, count: 2048)
+        try store.storePageChunks(id: page.id, chunks: [chunk2, chunk2])
     }
 
     @Test func recomputeMissingEmbeddingsCountsCorrectly() throws {
@@ -366,9 +368,9 @@ struct SQLiteWikiStoreTests {
         #expect(scalarText(db, "SELECT count(*) FROM source_links WHERE to_source_id = '\(source.id.rawValue)';") == "0")
     }
 
-    @Test func freshDBReachesUserVersion12() throws {
+    @Test func freshDBReachesUserVersion14() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
-        #expect(store.pragmaValue("user_version") == "12")
+        #expect(store.pragmaValue("user_version") == "14")
     }
 
     @Test func v11SourceLinksHasDeleteCascade() throws {
