@@ -16,7 +16,7 @@ import Tokenizers
 /// serialized with an `NSLock`. This gives a synchronous `vector(for:)` (fitting
 /// the `Embedder` protocol) while remaining safe off-main (Phase 3 backfill).
 /// `@unchecked Sendable` because the lock provides the concurrency guarantee.
-public final class MiniLMEmbedder: @unchecked Sendable {
+public final class MiniLMEmbedder: Embedder, @unchecked Sendable {
     public static let identifier = "minilm-384"
     public let dimension = 384
 
