@@ -1292,7 +1292,7 @@ public final class WikiStoreModel {
     /// calls (each ~0.3 s). Fire-and-forget; safe to call repeatedly (only
     /// embeds documents still missing chunks). FTS search works immediately;
     /// semantic search fills in as chunks land. (The per-chunk jank goes away
-    /// once we switch to CoreML MiniLM, which is safe off-main on the ANE.)
+    /// once we switch to MLX MiniLM, which is safe off-main on Metal/GPU.)
     public func backfillMissingEmbeddings() {
         Task { [weak self] in
             guard let self else { return }

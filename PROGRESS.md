@@ -72,13 +72,16 @@ the UI stays responsive between the ~0.3 s NLEmbedding calls. Re-verified: app r
 60 s through active backfill with no crash (newest `.ips` unchanged). Known minor
 warning (non-fatal): "reentrant operation in NSTableView delegate" during backfill
 writes — to revisit. The per-chunk main-actor jank is itself the strongest argument
-for the CoreML MiniLM move (ANE inference is safe off-main).
+for the MLX MiniLM move (Metal inference is safe off-main).
 
-**Deferred (recommended separately): CoreML all-MiniLM-L6-v2.** NLEmbedding is the
+**Deferred (recommended separately): MLX all-MiniLM-L6-v2.** NLEmbedding is the
 bottleneck — ~5 s / 100k chars, so a full-corpus first backfill takes minutes.
-Research (see below) says CoreML MiniLM on the Neural Engine is ~5-15 ms/sentence
-(100-1000× faster), better quality, no crash, predictable 512-token truncation — at
-the cost of ~100 MB bundle + a tokenizer + Swift mean-pooling (~2-5 days). When
+Research says MLX MiniLM on Metal/GPU is low-single-digit ms/sentence
+(100-1000× faster), better quality, no crash, predictable 512-token truncation —
+using `mlx-community/all-MiniLM-L6-v2-bf16` + Apple's `MLXEmbedders` (~45 MB
+bundle, no conversion pipeline). Design + phased plan are written
+(`plans/mlx-minilm-design.md`); implementation pending. (Pivoted from an earlier
+CoreML/ANE design that hit conversion/quantization/ANE-compile problems.) When
 adopted, swap it in behind `EmbeddingService` (chunk index + queries unchanged).
 
 ## 2026-06-29 — Unified, self-healing hybrid search (removed manual Reindex)
