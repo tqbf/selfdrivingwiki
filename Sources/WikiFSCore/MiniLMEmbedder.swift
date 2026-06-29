@@ -1,3 +1,4 @@
+import Accelerate
 import Foundation
 import Hub
 import MLX
@@ -55,6 +56,18 @@ public final class MiniLMEmbedder: @unchecked Sendable {
             input, positionIds: nil, tokenTypeIds: tokenTypes, attentionMask: mask)
         let pooled = pooler(output, mask: mask, normalize: true, applyLayerNorm: false)
         pooled.eval()
-        return pooled.asArray(Float.self)                                     // [384]
+        var vec = pooled.asArray(Float.self)                                 // [384]
+
+        // Guarantee unit norm: the pooler's `normalize` drifts slightly with bf16
+        // weights (~1.003). cosine search is scale-invariant, but we store unit
+        // vectors, so re-normalize exactly.
+        var sumSq: Float = 0
+        vDSP_svesq(vec, 1, &sumSq, vDSP_Length(vec.count))
+        let nrm = sqrt(sumSq)
+        if nrm > 0 {
+            let inv = 1 / nrm
+            for i in vec.indices { vec[i] *= inv }
+        }
+        return vec
     }
 }
