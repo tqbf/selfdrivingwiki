@@ -40,8 +40,8 @@ extension WikiStoreModel {
             return summaries.first { $0.id == id }?.title
                 .nonEmpty ?? "Untitled"
         case .source(let id):
-            return sources.first { $0.id == id }?.filename
-                .nonEmpty ?? "Source"
+            guard let source = sources.first(where: { $0.id == id }) else { return "Source" }
+            return source.effectiveName.nonEmpty ?? "Source"
         }
     }
 

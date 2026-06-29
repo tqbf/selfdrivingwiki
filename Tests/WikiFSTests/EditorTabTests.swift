@@ -727,11 +727,30 @@ struct EditorTabTests {
         #expect(model.tabTitle(for: .changeLog) == "Activity")
     }
 
-    @Test func tabTitleForSource() throws {
+    @Test func tabTitleForSourceFallsBackToFilenameWhenNoDisplayName() throws {
         let (model, store) = try tempModel()
         let f1 = try store.addSource(filename: "report.pdf", data: Data("pdf".utf8))
         model.reloadFromStore()
         #expect(model.tabTitle(for: .source(f1.id)) == "report.pdf")
+    }
+
+    @Test func tabTitleForSourcePrefersDisplayNameOverFilename() throws {
+        let (model, store) = try tempModel()
+        let f1 = try store.addSource(filename: "report.pdf", data: Data("pdf".utf8))
+        model.reloadFromStore()
+        model.renameSource(id: f1.id, to: "My Custom Title")
+        #expect(model.tabTitle(for: .source(f1.id)) == "My Custom Title")
+    }
+
+    @Test func sourceTabTitleUpdatesOnRename() throws {
+        let (model, store) = try tempModel()
+        let f1 = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
+        model.reloadFromStore()
+        model.openTab(.source(f1.id))
+        #expect(model.tabs[0].title == "doc.pdf")
+
+        model.renameSource(id: f1.id, to: "Annual Report")
+        #expect(model.tabs[0].title == "Annual Report")
     }
 
     // MARK: - tabIcon helper

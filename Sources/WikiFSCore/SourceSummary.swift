@@ -34,6 +34,13 @@ public struct SourceSummary: Identifiable, Hashable, Sendable {
     /// resolution and sidebar/file-provider presentation.
     public let displayName: String?
 
+    /// Best human-readable name: `displayName` when set and non-empty, otherwise `filename`.
+    /// Use this everywhere a label is needed instead of branching on `displayName` at the call site.
+    public var effectiveName: String {
+        if let name = displayName, !name.isEmpty { return name }
+        return filename
+    }
+
     public init(
         id: PageID,
         filename: String,
