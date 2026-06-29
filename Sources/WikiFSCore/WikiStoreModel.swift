@@ -1298,15 +1298,15 @@ public final class WikiStoreModel {
 
         if isMiniLM {
             // MiniLM/MLX is safe off-main (NSLock serializes model access).
-            // Fetch work arrays here on @MainActor, then detach so inference
-            // never blocks the run loop.
-            let pageWork   = store.missingPageEmbeddingWork()
-            let sourceWork = store.missingSourceEmbeddingWork()
+            // Capture only the store reference here (@MainActor); fetch work arrays
+            // inside the task so large page-text loads don't stall the run loop.
             let capturedStore = store
 
             Task.detached(priority: .utility) { [weak self] in
                 guard let self else { return }
                 await EmbeddingService.configure()
+                let pageWork   = capturedStore.missingPageEmbeddingWork()
+                let sourceWork = capturedStore.missingSourceEmbeddingWork()
                 self.backfillBackground(kind: "page", work: pageWork) { id, chunks in
                     try capturedStore.storePageChunks(id: id, chunks: chunks)
                 }
