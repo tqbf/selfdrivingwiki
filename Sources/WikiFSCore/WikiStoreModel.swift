@@ -1294,18 +1294,41 @@ public final class WikiStoreModel {
     /// semantic search fills in as chunks land. (The per-chunk jank goes away
     /// once we switch to MLX MiniLM, which is safe off-main on Metal/GPU.)
     public func backfillMissingEmbeddings() {
-        Task { [weak self] in
-            guard let self else { return }
-            await EmbeddingService.configure()
-            await self.backfill(
-                kind: "page",
-                work: self.store.missingPageEmbeddingWork(),
-                store: { id, chunks in try? self.store.storePageChunks(id: id, chunks: chunks) })
-            await self.backfill(
-                kind: "source",
-                work: self.store.missingSourceEmbeddingWork(),
-                store: { id, chunks in try? self.store.storeSourceChunks(id: id, chunks: chunks) })
-            DebugLog.store("backfill: complete")
+        let isMiniLM = EmbeddingService.selectedEmbedderIdentifier() == MiniLMEmbedder.identifier
+
+        if isMiniLM {
+            // MiniLM/MLX is safe off-main (NSLock serializes model access).
+            // Fetch work arrays here on @MainActor, then detach so inference
+            // never blocks the run loop.
+            let pageWork   = store.missingPageEmbeddingWork()
+            let sourceWork = store.missingSourceEmbeddingWork()
+            let capturedStore = store
+
+            Task.detached(priority: .utility) { [weak self] in
+                guard let self else { return }
+                await EmbeddingService.configure()
+                self.backfillBackground(kind: "page", work: pageWork) { id, chunks in
+                    try capturedStore.storePageChunks(id: id, chunks: chunks)
+                }
+                self.backfillBackground(kind: "source", work: sourceWork) { id, chunks in
+                    try capturedStore.storeSourceChunks(id: id, chunks: chunks)
+                }
+            }
+        } else {
+            // NLEmbedder fallback: must stay @MainActor (BNNSFilterApplyBatch crashes off-main).
+            Task { [weak self] in
+                guard let self else { return }
+                await EmbeddingService.configure()
+                await self.backfill(
+                    kind: "page",
+                    work: self.store.missingPageEmbeddingWork(),
+                    store: { id, chunks in try? self.store.storePageChunks(id: id, chunks: chunks) })
+                await self.backfill(
+                    kind: "source",
+                    work: self.store.missingSourceEmbeddingWork(),
+                    store: { id, chunks in try? self.store.storeSourceChunks(id: id, chunks: chunks) })
+                DebugLog.store("backfill: complete")
+            }
         }
     }
 
