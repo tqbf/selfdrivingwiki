@@ -41,7 +41,7 @@ prints ranked `id<TAB>name` lines (display name, filename fallback), read-only
 that source *content* is searchable (complementing `sources.jsonl` metadata and
 `source cat` raw bytes).
 
-**Tests:** new `SourceEmbeddingSearchTests` (12 tests) covering the v12
+**Tests:** new `SourceEmbeddingSearchTests` (17 tests) covering the v12
 migration, the LIKE fallback (find/limit/display-name/empty/no-`SELECT *`
 regression), recompute/re-embed no-op behavior without vec, the `ON DELETE
 CASCADE`, and the CLI TSV output + arg validation. The model-gated cosine path
