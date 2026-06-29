@@ -177,12 +177,13 @@ struct SidebarView: View {
 
             Button {
                 _ = store.recomputeMissingEmbeddings()
+                _ = store.recomputeMissingSourceEmbeddings()
             } label: {
                 SidebarModeRow(title: "Reindex Search", subtitle: "Rebuild semantic embeddings",
                     systemImage: "arrow.triangle.2.circlepath")
             }
             .buttonStyle(.plain)
-            .help("Recompute embeddings for all missing pages for semantic search")
+            .help("Recompute embeddings for all missing pages and sources for semantic search")
 
             SidebarModeRow(title: "Activity", subtitle: "Operation log",
                 systemImage: "clock.arrow.circlepath")

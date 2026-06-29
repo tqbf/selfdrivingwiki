@@ -92,6 +92,8 @@ public enum ArgumentParser {
                                               materialize a source to disk, print its path
       source edit-markdown (--id X | --name N) (--content <md> | --file <path|->)
                                               replace the processed-markdown HEAD
+      source search --query X [--limit N]    semantic search of sources (cosine;
+                                              falls back to LIKE name match)
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -229,6 +231,21 @@ public enum ArgumentParser {
                 throw Failure.usage("source rename: --to <new-display-name> is required")
             }
             return .sourceRename(selector, to: newName)
+
+        case "search":
+            guard let query = options.value("--query") else {
+                throw Failure.usage("source search: --query is required")
+            }
+            let limit: Int
+            if let raw = options.value("--limit") {
+                guard let n = Int(raw), n > 0, n <= 100 else {
+                    throw Failure.usage("source search: --limit must be 1–100")
+                }
+                limit = n
+            } else {
+                limit = 10
+            }
+            return .source(.search(query: query, limit: limit))
 
         default:
             throw Failure.usage("source: unknown subcommand \(sub.debugDescription)")

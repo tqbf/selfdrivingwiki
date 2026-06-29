@@ -169,4 +169,21 @@ public protocol WikiStore {
     /// count of newly-embedded pages. Per‑page failures are logged and skipped so
     /// one bad page doesn't abort the batch.
     func recomputeMissingEmbeddings() -> Int
+
+    // MARK: - Semantic source search (v12 source embeddings)
+
+    /// Store or replace a source's embedding BLOB (512 × Float32). Mirrors
+    /// `storePageEmbedding` for sources.
+    func storeSourceEmbedding(id: PageID, blob: Data) throws
+
+    /// Search sources semantically (cosine similarity via `vec_distance_cosine`).
+    /// Falls back to a `LIKE` filename/display-name match when the vec extension
+    /// or embedding model is unavailable. Mirrors `searchSimilar`.
+    func searchSimilarSources(query: String, limit: Int) throws -> [SourceSummary]
+
+    /// Compute + store embeddings for every source missing one. Embeds each on
+    /// its processed-markdown HEAD body + name; name-only when no processed
+    /// markdown exists yet. Returns the count of newly-embedded sources. Mirrors
+    /// `recomputeMissingEmbeddings`.
+    func recomputeMissingSourceEmbeddings() -> Int
 }

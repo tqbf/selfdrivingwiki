@@ -36,6 +36,28 @@ struct SourcesSectionView: View {
         }
     }
 
+    /// Sources shown in the list: search results when a source search query is
+    /// active, otherwise the filter-picker-filtered list (mirrors the Pages
+    /// section's `searchQuery`/`searchResults` swap).
+    private var visibleSources: [SourceSummary] {
+        store.sourceSearchQuery.isEmpty ? filteredSources : store.sourceSearchResults
+    }
+
+    /// Debounced semantic source search bar (mirrors `SidebarView.searchBar`).
+    private var sourceSearchBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary).font(.callout)
+            TextField("Search sources…", text: $store.sourceSearchQuery)
+                .textFieldStyle(.plain).font(.callout).disableAutocorrection(true)
+            if !store.sourceSearchQuery.isEmpty {
+                Button { store.sourceSearchQuery = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }.buttonStyle(.borderless)
+            }
+        }
+    }
+
     private var selectedSourceIDs: Set<PageID> {
         Set(listSelection.compactMap { sel in
             if case .source(let id) = sel { return id }
@@ -111,8 +133,18 @@ struct SourcesSectionView: View {
             .padding(.horizontal, 4)
             .padding(.vertical, 2)
 
-            ForEach(filteredSources) { source in
-                sourceRow(source)
+            sourceSearchBar
+                .padding(.horizontal, 4)
+                .padding(.vertical, 6)
+
+            if visibleSources.isEmpty && !store.sourceSearchQuery.isEmpty {
+                Text("No matching sources")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+            } else {
+                ForEach(visibleSources) { source in
+                    sourceRow(source)
+                }
             }
         } header: {
             Text("Sources").font(.headline).foregroundStyle(.primary)

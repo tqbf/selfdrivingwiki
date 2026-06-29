@@ -41,6 +41,7 @@ public enum SourceCommand {
         case export(Selector, out: String?)
         case editMarkdown(Selector, content: String)
         case rename(Selector, to: String)
+        case search(query: String, limit: Int)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -68,6 +69,8 @@ public enum SourceCommand {
             return try editMarkdown(selector, content: content, in: store)
         case .rename(let selector, let to):
             return try rename(selector, to: to, in: store)
+        case .search(let query, let limit):
+            return try search(query: query, limit: limit, in: store)
         }
     }
 
@@ -199,5 +202,24 @@ public enum SourceCommand {
         let id = try resolve(selector, in: store)
         try store.renameSource(id: id, to: newName)
         return Result(payload: .text("Renamed source to \"\(newName)\"."), didCommit: true)
+    }
+
+    // MARK: - search
+
+    /// Semantic source search (cosine ranking, LIKE fallback). Prints one
+    /// `id<TAB>name` line per result, most relevant first — mirroring
+    /// `PageCommand.search`. `name` is the display name, falling back to the
+    /// filename (mirrors how sources are surfaced elsewhere). Read-only.
+    private static func search(
+        query: String, limit: Int, in store: WikiStore
+    ) throws -> Result {
+        let results = try store.searchSimilarSources(query: query, limit: limit)
+        let output = results.map { summary in
+            // `effectiveName` falls back to filename on nil OR empty display_name,
+            // matching how sources are labeled app-wide (sidebar/file-provider).
+            let name = summary.effectiveName.replacingOccurrences(of: "\t", with: " ")
+            return "\(summary.id.rawValue)\t\(name)"
+        }.joined(separator: "\n")
+        return Result(payload: .text(output), didCommit: false)
     }
 }

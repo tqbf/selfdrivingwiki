@@ -360,6 +360,21 @@ public final class SQLiteWikiStore: WikiStore {
             try exec("PRAGMA user_version=11;")
             version = 11
         }
+
+        // v11 → v12: source embeddings for semantic source search (sqlite-vec).
+        // Mirrors page_embeddings (v7). ON DELETE CASCADE: removing a source
+        // removes its embedding. FK target is sources(id) (renamed from
+        // ingested_files in v10). `foreign_keys=ON` is set in configurePragmas().
+        if version < 12 {
+            try exec("""
+            CREATE TABLE source_embeddings (
+                source_id TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                embedding BLOB NOT NULL
+            );
+            """)
+            try exec("PRAGMA user_version=12;")
+            version = 12
+        }
     }
 
     // MARK: - vec extension loading
@@ -1023,6 +1038,12 @@ public final class SQLiteWikiStore: WikiStore {
             try updatePage(id: pageID, title: page.title, body: rewritten)
             try replaceLinks(from: pageID, parsedLinks: WikiLinkParser.parse(rewritten))
         }
+
+        // The title changed, so re-embed. Use the current processed-markdown HEAD
+        // (if any) so the embedding reflects both the new name and the content;
+        // embed name-only when there is no markdown yet.
+        let headBody = (try? processedMarkdownHead(sourceID: id)?.content) ?? ""
+        reembedSource(sourceID: id, body: headBody)
     }
 
     /// Stamp a source as summarized-into-the-wiki. Idempotent and a no-op
@@ -1450,6 +1471,129 @@ public final class SQLiteWikiStore: WikiStore {
         return count
     }
 
+    // MARK: - Source embeddings (v12, semantic source search)
+
+    /// Store/replace one source embedding. Mirrors `storePageEmbedding`.
+    public func storeSourceEmbedding(id: PageID, blob: Data) throws {
+        let stmt = try statement("""
+        INSERT OR REPLACE INTO source_embeddings (source_id, embedding)
+        VALUES (?1, ?2);
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        try stmt.bind(blob, at: 2)
+        _ = try stmt.step()
+    }
+
+    /// Semantic search over sources. Tries cosine ranking on `source_embeddings`
+    /// first; falls back to a `LIKE` filename/display-name match when sqlite-vec
+    /// or the embedding model is unavailable. Mirrors `searchSimilar`.
+    ///
+    /// Columns are enumerated explicitly — NEVER `SELECT s.*`: the physical
+    /// `sources` table (originally `ingested_files`, v2) has a `content` BLOB
+    /// positioned between `byte_size` and `created_at`; `SELECT s.*` would emit
+    /// it at index 5 and shift every later column, so `sourceSummary(from:)`
+    /// (which reads index 5 as `created_at`) would dereference the BLOB as a
+    /// Double. `listSources()` already names its columns for the same reason.
+    public func searchSimilarSources(query: String, limit: Int) throws -> [SourceSummary] {
+        if isVecAvailable(), let queryBlob = EmbeddingService.embeddingBlob(for: query) {
+            let sql = """
+            SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size, s.created_at, s.updated_at,
+                   s.version, s.zotero_item_key, s.zotero_item_title, s.display_name
+            FROM sources s
+            JOIN source_embeddings se ON se.source_id = s.id
+            ORDER BY vec_distance_cosine(se.embedding, ?1) ASC
+            LIMIT ?2;
+            """
+            let stmt = try statement(sql)
+            defer { stmt.reset() }
+            try stmt.bind(queryBlob, at: 1)
+            try stmt.bind(Int64(limit), at: 2)
+            var out: [SourceSummary] = []
+            while try stmt.step() { out.append(sourceSummary(from: stmt)) }
+            return out
+        }
+
+        // LIKE fallback.
+        let pattern = "%\(query)%"
+        let sql = """
+        SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size, s.created_at, s.updated_at,
+               s.version, s.zotero_item_key, s.zotero_item_title, s.display_name
+        FROM sources s
+        WHERE s.filename LIKE ?1 OR s.display_name LIKE ?1
+        ORDER BY s.updated_at DESC
+        LIMIT ?2;
+        """
+        let stmt = try statement(sql)
+        defer { stmt.reset() }
+        try stmt.bind(pattern, at: 1)
+        try stmt.bind(Int64(limit), at: 2)
+        var out: [SourceSummary] = []
+        while try stmt.step() { out.append(sourceSummary(from: stmt)) }
+        return out
+    }
+
+    /// Backfill `source_embeddings` rows for sources that lack one. Embeds each
+    /// source on its processed-markdown HEAD body + name; name-only when no
+    /// processed markdown exists yet (un-extracted PDF / binary file). Mirrors
+    /// `recomputeMissingEmbeddings`. No-op (returns 0) when vec is unavailable.
+    public func recomputeMissingSourceEmbeddings() -> Int {
+        guard isVecAvailable() else { return 0 }
+        var count = 0
+        do {
+            let stmt = try statement("""
+            SELECT s.id, s.display_name, s.filename,
+                   (SELECT content FROM source_markdown_versions smv
+                    WHERE smv.file_id = s.id ORDER BY smv.id DESC LIMIT 1) AS body
+            FROM sources s
+            LEFT JOIN source_embeddings se ON se.source_id = s.id
+            WHERE se.source_id IS NULL;
+            """)
+            defer { stmt.reset() }
+            while try stmt.step() {
+                let id = PageID(rawValue: stmt.text(at: 0))
+                let displayName = sqlite3_column_type(stmt.handle, 1) == SQLITE_NULL
+                    ? nil : stmt.text(at: 1)
+                let filename = stmt.text(at: 2)
+                let body = sqlite3_column_type(stmt.handle, 3) == SQLITE_NULL
+                    ? "" : stmt.text(at: 3)
+                let title = displayName ?? filename
+                if let blob = EmbeddingService.embeddingBlob(title: title, body: body) {
+                    try? storeSourceEmbedding(id: id, blob: blob)
+                    count += 1
+                }
+            }
+        } catch {
+            FileHandle.standardError.write(Data("SQLiteWikiStore.recomputeMissingSourceEmbeddings: \(error)\n".utf8))
+        }
+        return count
+    }
+
+    /// Best-effort re-embed of a source after its content/name changed. No-op
+    /// when vec is unavailable (the version still commits; the embedding is
+    /// backfilled by `recomputeMissingSourceEmbeddings` on the next Reindex).
+    /// Called from `appendProcessedMarkdown` (covers extraction seeding,
+    /// raw-text seeding, user edits, and revert) and `renameSource`.
+    private func reembedSource(sourceID: PageID, body: String) {
+        guard isVecAvailable() else { return }
+        guard let stmt = try? statement(
+            "SELECT display_name, filename FROM sources WHERE id = ?1;") else { return }
+        defer { stmt.reset() }
+        do {
+            try stmt.bind(sourceID.rawValue, at: 1)
+            guard try stmt.step() else { return }
+            let displayName = sqlite3_column_type(stmt.handle, 0) == SQLITE_NULL
+                ? nil : stmt.text(at: 0)
+            let filename = stmt.text(at: 1)
+            let title = displayName ?? filename
+            if let blob = EmbeddingService.embeddingBlob(title: title, body: body) {
+                try? storeSourceEmbedding(id: sourceID, blob: blob)
+            }
+        } catch {
+            FileHandle.standardError.write(Data("SQLiteWikiStore.reembedSource: \(error)\n".utf8))
+        }
+    }
+
     // MARK: - Processed markdown versions (v8, renamed v10)
 
     /// Read one `source_markdown_versions` row from the current statement position
@@ -1544,6 +1688,11 @@ public final class SQLiteWikiStore: WikiStore {
         if let note { try stmt.bind(note, at: 6) }
         try stmt.bind(now.timeIntervalSince1970, at: 7)
         _ = try stmt.step()
+
+        // Re-embed the source from the just-written content + its name so content
+        // search finds it immediately (covers extraction seeding, raw-text
+        // seeding, user edits, and revert — revert routes through this method).
+        reembedSource(sourceID: sourceID, body: content)
 
         return SourceMarkdownVersion(
             id: id, sourceID: sourceID, parentID: parentID,

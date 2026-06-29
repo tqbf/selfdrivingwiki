@@ -30,6 +30,15 @@ public final class WikiStoreModel {
     /// Results of the last search (empty when searchQuery is empty).
     public private(set) var searchResults: [WikiPageSummary] = []
     @ObservationIgnored private var searchTask: Task<Void, Never>?
+
+    /// Live SOURCES search query from the Sources search bar. Debounced 300ms.
+    /// Mirrors the page `searchQuery` (semantic cosine, LIKE fallback).
+    public var sourceSearchQuery: String = "" {
+        didSet { scheduleSourceSearch() }
+    }
+    /// Results of the last sources search (empty when sourceSearchQuery is empty).
+    public private(set) var sourceSearchResults: [SourceSummary] = []
+    @ObservationIgnored private var sourceSearchTask: Task<Void, Never>?
     /// The sidebar selection: a page, the system-prompt document, or nothing.
     public var selection: WikiSelection?
     public private(set) var backStack: [WikiSelection] = []
@@ -240,6 +249,12 @@ public final class WikiStoreModel {
     /// `[]` on any error so the menu never throws.
     public func searchSimilar(query: String, limit: Int = 8) -> [WikiPageSummary] {
         (try? store.searchSimilar(query: query, limit: limit)) ?? []
+    }
+
+    /// Semantic source search wrapper for the Sources sidebar search bar and
+    /// context menus. Best-effort: returns `[]` on any error.
+    public func searchSimilarSources(query: String, limit: Int = 20) -> [SourceSummary] {
+        (try? store.searchSimilarSources(query: query, limit: limit)) ?? []
     }
 
     /// Resolve a page title to its id (lowest-ULID on a duplicate-title
@@ -1289,6 +1304,38 @@ public final class WikiStoreModel {
             )) ?? []
             guard !Task.isCancelled else { return }
             self.searchResults = results
+        }
+    }
+
+    /// Backfill source embeddings. First seeds markdown-native sources that have
+    /// not been viewed yet (calling `processedMarkdownHead` v1-seeds them, which
+    /// triggers the `appendProcessedMarkdown` re-embed hook → content embedding),
+    /// then the store fills the remaining gaps (name-only for PDFs/binaries).
+    /// Returns the count of newly-embedded sources from the store pass.
+    @discardableResult
+    public func recomputeMissingSourceEmbeddings() -> Int {
+        for file in sources where file.mimeType?.hasPrefix("text/") == true {
+            // Idempotent: returns the existing head without writing if present;
+            // only seeds v1 for un-viewed markdown-native sources.
+            _ = processedMarkdownHead(for: file)
+        }
+        return store.recomputeMissingSourceEmbeddings()
+    }
+
+    private func scheduleSourceSearch() {
+        sourceSearchTask?.cancel()
+        guard !sourceSearchQuery.isEmpty else {
+            sourceSearchResults = []
+            return
+        }
+        sourceSearchTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, let self else { return }
+            let results = (try? self.store.searchSimilarSources(
+                query: self.sourceSearchQuery, limit: 20
+            )) ?? []
+            guard !Task.isCancelled else { return }
+            self.sourceSearchResults = results
         }
     }
 

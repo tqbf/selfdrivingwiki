@@ -174,6 +174,7 @@ public struct SystemPrompt: Equatable, Sendable {
     $WIKICTL source cat --id I | --name N       write raw source bytes to stdout
     $WIKICTL source export --id I | --name N [--out <path>]
                                                 materialize a source to disk, print its path
+    $WIKICTL source search --query "…" [--limit N]   semantic search of sources — find source material by meaning; defaults to 10, max 100
     ```
 
     **Read back what you just wrote with `$WIKICTL page get`** — the mount lags a
@@ -188,7 +189,9 @@ public struct SystemPrompt: Equatable, Sendable {
     text first; if it references figures you need, view those images separately.
     `sources.jsonl` includes a `has_markdown` flag — sources with processed markdown
     have a `<id>.md` sibling in `sources/by-id/` holding the latest conversion or
-    edit; prefer it over the raw PDF when reading.
+    edit; prefer it over the raw PDF when reading. `sources.jsonl` gives metadata
+    and `source cat` the raw bytes; to find source **content** by meaning, use
+    `$WIKICTL source search --query "…"` (semantic — works across PDFs and text).
 
     ## Workflows
 
