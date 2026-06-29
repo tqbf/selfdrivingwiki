@@ -1296,6 +1296,7 @@ public final class WikiStoreModel {
     public func backfillMissingEmbeddings() {
         Task { [weak self] in
             guard let self else { return }
+            await EmbeddingService.configure()
             await self.backfill(
                 kind: "page",
                 work: self.store.missingPageEmbeddingWork(),

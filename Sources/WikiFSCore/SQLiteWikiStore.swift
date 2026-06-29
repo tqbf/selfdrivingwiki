@@ -1990,7 +1990,34 @@ public final class SQLiteWikiStore: WikiStore {
     /// into `source_search` and the embedding), then backfill any remaining
     /// `source_search` gaps, rebuild any FTS index that lags its content table,
     /// and finally embed every page/source still missing one.
+    /// Check the stored embedder identifier in `embedding_meta` against the
+    /// currently selected embedder. On mismatch, wipes `page_chunks` and
+    /// `source_chunks` so the async backfill re-embeds everything with the new
+    /// embedder. Called as step 0 of `ensureSearchIndexesPopulated()`.
+    ///
+    /// `activeIdentifierOverride` is injected by tests; production passes `nil`
+    /// and the live `EmbeddingService.selectedEmbedderIdentifier()` is used.
+    func ensureEmbedderConsistency(activeIdentifierOverride: String? = nil) {
+        let activeIdentifier = activeIdentifierOverride ?? EmbeddingService.selectedEmbedderIdentifier()
+        do {
+            let stored = (try? queryScalarText("SELECT embedder FROM embedding_meta WHERE id = 1;")) ?? ""
+            guard stored != activeIdentifier else { return }
+            try exec("DELETE FROM page_chunks;")
+            try exec("DELETE FROM source_chunks;")
+            let stmt = try statement("INSERT OR REPLACE INTO embedding_meta(id, embedder) VALUES (1, ?1);")
+            defer { stmt.reset() }
+            try stmt.bind(activeIdentifier, at: 1)
+            _ = try stmt.step()
+            DebugLog.store("ensureEmbedderConsistency: \(stored.isEmpty ? "(empty)" : stored) -> \(activeIdentifier), chunks wiped")
+        } catch {
+            DebugLog.store("ensureEmbedderConsistency: failed — \(error)")
+        }
+    }
+
     private func ensureSearchIndexesPopulated() {
+        // 0. Wipe chunks if the active embedder changed since the last open.
+        ensureEmbedderConsistency()
+
         // 1. Seed a v1 processed-markdown version for markdown-native sources
         //    that have none, so their body is searchable (name-only otherwise).
         //    appendProcessedMarkdown also fires the re-embed + upsertSourceSearch
