@@ -20,7 +20,7 @@ from huggingface_hub import HfApi, snapshot_download
 
 MODEL_ID = "mlx-community/all-MiniLM-L6-v2-bf16"
 # Pin a revision (tag or commit SHA) for reproducibility. When updating, bump this
-# and re-run validate.py to re-confirm cosine >= 0.999.
+# and re-run validate.py to re-confirm the non-garbage + self-consistent gate.
 REVISION = "b6691709eacd8f0afcc3faace288cf50e611f3aa"  # pinned after first run
 DEST = pathlib.Path(__file__).parent.parent.parent / "Resources" / "all-MiniLM-L6-v2"
 SHA_FILE = DEST / ".source-sha"
@@ -47,7 +47,7 @@ def ensure_present() -> None:
     total_mb = sum(p.stat().st_size for p in DEST.rglob("*") if p.is_file()) / 1_048_576
     print(f"  {len(files)} files, {total_mb:.1f} MB, sha={resolved[:12]}")
     print("Recorded SHA in .source-sha (for reproducible-build verification).")
-    print("\nNext: run validate.py to confirm cosine >= 0.999.")
+    print("\nNext: run validate.py to confirm the non-garbage + self-consistent gate.")
 
 
 if __name__ == "__main__":

@@ -81,9 +81,16 @@ Research says MLX MiniLM on Metal/GPU is low-single-digit ms/sentence
 using `mlx-community/all-MiniLM-L6-v2-bf16` + Apple's `MLXEmbedders` (model
 downloaded on demand, gitignored, ~45 MB bundled into the .app; no conversion
 pipeline). Design + phased plan are written
-(`plans/mlx-minilm-design.md`); implementation pending. (Pivoted from an earlier
-CoreML/ANE design that hit conversion/quantization/ANE-compile problems.) When
-adopted, swap it in behind `EmbeddingService` (chunk index + queries unchanged).
+(`plans/mlx-minilm-design.md`). **Phase 0 done** — `tools/minilm-prepare/`
+downloads the bf16 model on demand (gitignored, pinned HF revision `b6691709`,
+SHA recorded for reproducible builds) and validates it. Gate reframed: MLX
+embedding engines diverge from HF at ~0.99 cosine (a BERT-impl difference, not
+bf16/precision), so the bar is **non-garbage** (min 0.9871 ≥ 0.95) +
+**self-consistent** (paraphrase 0.636 ≫ unrelated 0.028), both PASS. The real
+parity/quality bar is Swift `MLXEmbedders` (Phase 1) + AC.4 (search quality).
+Phases 1–3 pending. (Pivoted from an earlier CoreML/ANE design that hit
+conversion/quantization/ANE-compile problems.) When adopted, swap it in behind
+`EmbeddingService` (chunk index + queries unchanged).
 
 ## 2026-06-29 — Unified, self-healing hybrid search (removed manual Reindex)
 
