@@ -33,6 +33,7 @@ struct WikiFSApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        AppStateObserver.shared.start()
         let warning = LaunchLocationWarning.current()
         launchLocationWarning = warning
         _showingLaunchLocationWarning = State(initialValue: warning != nil)
