@@ -323,16 +323,28 @@ The model is **not committed** — `build.sh` ensures it's present by running th
 prepare step, then copies it into the .app bundle (offline shipped app):
 
 ```bash
-# MLX MiniLM model dir — downloaded on demand (gitignored), bundled into the .app.
-if [ ! -d "Resources/all-MiniLM-L6-v2" ]; then
-  echo "  Model absent — running prepare step (tools/minilm-prepare/download.py) ..."
+# MLX runtime — model dir + metallib, both downloaded on demand (gitignored),
+# bundled into the .app. The metallib is REQUIRED: swift build can't build MLX's
+# Metal shaders, so the prebuilt version-matched one (fetched by download.py) must
+# ship next to the binary (MLX's loader finds it via the bundle Resources path).
+if [ ! -d "Resources/all-MiniLM-L6-v2" ] || [ ! -f "Resources/mlx.metallib" ]; then
+  echo "  MLX runtime absent — running prepare step (tools/minilm-prepare/download.py) ..."
   ( cd tools/minilm-prepare && uv run python download.py )
 fi
 if [ -d "Resources/all-MiniLM-L6-v2" ]; then
   echo "  Bundling all-MiniLM-L6-v2 ..."
   cp -r "Resources/all-MiniLM-L6-v2" "${RESOURCES_DIR}/all-MiniLM-L6-v2"
 fi
+if [ -f "Resources/mlx.metallib" ]; then
+  echo "  Bundling mlx.metallib ..."
+  cp "Resources/mlx.metallib" "${RESOURCES_DIR}/mlx.metallib"
+fi
 ```
+
+> The metallib version MUST match mlx-swift's vendored MLX C++ version
+> (`METAL_VERSION` in `download.py` tracks `Source/Cmlx/mlx/mlx/version.h`). A
+> mismatch silently corrupts GPU output. `download.py` handles the match; if
+> mlx-swift is bumped, re-run `download.py` and re-check the Phase 0/1 gate.
 
 > The prepare step needs Python 3.12 + `uv` (Apple Silicon only). On a build
 > machine without it, run `tools/minilm-prepare/download.py` manually first, or

@@ -50,6 +50,17 @@ so this is a swap behind `EmbeddingService` — no search/query architecture cha
   self-consistent (paraphrase pairs ~0.66 ≫ unrelated pairs ~0.03). The real
   parity/quality bar is the **Swift `MLXEmbedders`** check (Phase 1 — a *different*
   implementation from the Python proxy) and **AC.4** (empirical search quality).
+  **Measured (Phase 1, Swift MLXEmbedders):** non-garbage ✓ (cosine ≥ 0.95 vs HF),
+  self-consistent ✓, latency **median ~8–9 ms / max ~13 ms** on Metal (AC.2 ✓).
+- **Metallib requirement (critical, measured 2026-06-29):** `swift build` CANNOT
+  build MLX's Metal shaders — only `xcodebuild` can (mlx-swift README / issue
+  #36). This repo is SwiftPM-only, so a **prebuilt, version-matched metallib**
+  must be bundled. mlx-swift 0.31.4 vendors MLX C++ 0.31.1, so we ship the
+  `mlx-metal==0.31.1` wheel's `mlx.metallib` (~107 MB; gitignored, fetched by
+  `tools/minilm-prepare/download.py`). The version MUST match exactly — a
+  mismatched metallib silently corrupts GPU output. `swift test` finds it via a
+  repo-root `default.metallib` (CWD fallback); the app bundles it from
+  `Resources/mlx.metallib`. **Bumping mlx-swift requires re-matching the metallib.**
 - MiniLM outputs **token embeddings** → mean-pool + L2-normalize must be applied
   to match `sentence-transformers`. With MLX this pooling is provided by the
   library (not hand-rolled).
@@ -259,6 +270,15 @@ so chunks aren't silently truncated — revisit after benchmarking recall.
 - **MLX dependency footprint:** `mlx-swift-lm` adds to app size vs CoreML's
   runtime that ships with macOS. Accepted tradeoff for removing the conversion
   pipeline.
+- **Metallib (top operational risk):** `swift build` can't build MLX's Metal
+  shaders (needs xcodebuild), so a prebuilt version-matched metallib (~107 MB)
+  is bundled. Mitigation: `download.py` fetches `mlx-metal` matched to mlx-swift's
+  vendored C++ version; CI/build verifies presence. **Risk:** bumping mlx-swift
+  without re-matching the metallib → silent GPU corruption. Mitigation: the
+  version pin in `download.py` (`METAL_VERSION`) is documented to track
+  `Source/Cmlx/mlx/mlx/version.h`; a mismatch is caught by the Phase 0/1 gate
+  (cosine sanity) — but a subtle mismatch could pass the gate, so treat the pin
+  as load-bearing.
 - **Decision (made):** use `mlx-community/all-MiniLM-L6-v2-bf16` — the requested
   non-quantized `all-MiniLM-L6-v2` does not exist in MLX format; bf16 is the
   best-parity variant.

@@ -320,6 +320,11 @@ private func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
 ```
 
 ```bash
+# Prerequisite: the model + version-matched metallib must be present (gitignored).
+# tools/minilm-prepare/download.py fetches both; swift test finds the metallib via
+# the repo-root default.metallib (CWD fallback). Without it: "Failed to load the
+# default metallib".
+( cd tools/minilm-prepare && uv run python download.py )
 swift test --filter MiniLMEmbedderTests
 ```
 
