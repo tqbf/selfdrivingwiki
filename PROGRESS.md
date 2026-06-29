@@ -2,6 +2,29 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-28 — Reveal in Finder for pages and sources
+
+Added a "Reveal in Finder" action on every page and source surface so users can
+locate the File Provider-mounted file in Finder (to drag to other apps, open in
+Terminal, etc.).
+
+**New methods on `FileProviderSpike`.**  `revealPageInFinder(id:)` and
+`revealSourceInFinder(id:)` resolve the item's user-visible URL via the daemon
+(reusing the existing `resolvePageByTitleURL` / `resolveSourceByNameURL` helpers)
+then call `NSWorkspace.shared.activateFileViewerSelecting([url])` — the same
+call used by `VerificationPopover` for the wiki root.
+
+**Surfaces:**
+- **Page sidebar context menu** — "Reveal in Finder" after Share, single-select
+  only (multi-select would open N Finder windows).
+- **Page detail view** — button in the view-mode header row, after Share.
+- **Source sidebar context menu** — wired via a new `onRevealInFinder` closure on
+  `SourceRow`; single-select only.
+- **Source detail view** — button in the view-mode header row, after Share.
+
+All surfaces are guarded by `fileProvider.path != nil` so the item is hidden
+until the domain is mounted. Branch `feature/add-reveal-in-finder`, PR #90.
+
 ## 2026-06-28 — Dirty-editor protection and edit-mode persistence
 
 Three editor-UX gaps closed. See [`plans/dirty-editor-protection.md`](plans/dirty-editor-protection.md) for the design.
