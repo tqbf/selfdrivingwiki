@@ -123,7 +123,7 @@ public final class SQLiteWikiStore: WikiStore {
         // (version >= 1) — and fresh dbs forced onto the ladder by tests — run
         // `migrate(from:)` so every prior upgrade path is preserved.
         if version == 0 && !forceLadderMigration {
-            try createFreshSchemaV14()
+            try createFreshSchemaV15()
             return
         }
         try migrate(from: &version)
@@ -136,7 +136,7 @@ public final class SQLiteWikiStore: WikiStore {
     /// names (`ingested_files_created`, `file_markdown_versions_file`) are
     /// reproduced verbatim — they survive the table renames in the ladder, so a
     /// fresh db must match.
-    private func createFreshSchemaV14() throws {
+    private func createFreshSchemaV15() throws {
         // Core page model + attachments/links.
         try exec("""
         CREATE TABLE pages (
@@ -342,7 +342,14 @@ public final class SQLiteWikiStore: WikiStore {
         END;
         """)
 
-        try exec("PRAGMA user_version=14;")
+        try exec("""
+        CREATE TABLE embedding_meta (
+            id INTEGER PRIMARY KEY CHECK(id = 1),
+            embedder TEXT NOT NULL
+        );
+        """)
+        try exec("INSERT INTO embedding_meta(id, embedder) VALUES (1, 'nlembedding-512');")
+        try exec("PRAGMA user_version=15;")
     }
 
     /// The stepwise, idempotent migration ladder keyed on `PRAGMA user_version`.
@@ -737,6 +744,18 @@ public final class SQLiteWikiStore: WikiStore {
             try exec("DROP TABLE IF EXISTS source_embeddings;")
             try exec("PRAGMA user_version=14;")
             version = 14
+        }
+
+        if version < 15 {
+            try exec("""
+            CREATE TABLE embedding_meta (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                embedder TEXT NOT NULL
+            );
+            """)
+            try exec("INSERT INTO embedding_meta(id, embedder) VALUES (1, 'nlembedding-512');")
+            try exec("PRAGMA user_version=15;")
+            version = 15
         }
     }
 
