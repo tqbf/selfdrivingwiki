@@ -49,6 +49,10 @@ public final class WikiStoreModel {
     public var activeTabID: UUID?
     /// Stack of recently-closed tabs for Cmd+Shift+T reopen. Max 10.
     public private(set) var recentlyClosedTabs: [EditorTab] = []
+    /// Non-nil when a tab close was deferred because the tab is in edit mode.
+    /// The view shows a confirmation alert, then calls `confirmCloseTab()` or
+    /// `cancelCloseTab()`.
+    public private(set) var pendingCloseTabID: UUID? = nil
 
     /// View-layer convenience: the active tab's position. Computed from
     /// `activeTabID`, never stored — so it can't go stale on a close/reorder.
@@ -366,12 +370,49 @@ public final class WikiStoreModel {
         setActiveTab(id)
     }
 
+    /// Persist the editor's edit-mode state to the given tab so that
+    /// switching back to it can restore the mode.
+    public func setTabEditing(tabID: UUID, isEditing: Bool) {
+        guard let i = tabs.firstIndex(where: { $0.id == tabID }) else { return }
+        tabs[i].isEditing = isEditing
+    }
+
     /// Close one tab by ID. Preserves it in `recentlyClosedTabs` for Cmd+Shift+T.
-    /// If the closed tab was active, activates the tab now at the same position
-    /// (right neighbor), or the last tab. Closing the final tab → empty state.
-    /// Closing a non-active tab leaves the active tab untouched.
+    /// If the closed tab is the active tab AND is in edit mode, the close is
+    /// deferred: `pendingCloseTabID` is set and the view shows a confirmation
+    /// alert before calling `confirmCloseTab()` or `cancelCloseTab()`.
+    /// If the closed tab was active (and confirmed), activates the tab now at
+    /// the same position (right neighbor), or the last tab. Closing the final
+    /// tab → empty state. Closing a non-active tab leaves the active tab untouched.
     public func closeTab(id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        if tabs[index].isEditing, id == activeTabID {
+            pendingCloseTabID = id
+            return
+        }
+        applyCloseTab(id: id, at: index)
+    }
+
+    /// Apply the deferred tab close after the user confirms. Page drafts are
+    /// saved by the `setActiveTab` call inside. For source edits the view must
+    /// call its own save before invoking this method (while `file.id` is still
+    /// the source being closed).
+    public func confirmCloseTab() {
+        guard let id = pendingCloseTabID,
+              let index = tabs.firstIndex(where: { $0.id == id }) else {
+            pendingCloseTabID = nil
+            return
+        }
+        pendingCloseTabID = nil
+        applyCloseTab(id: id, at: index)
+    }
+
+    /// Cancel the deferred close — user chose to keep editing.
+    public func cancelCloseTab() {
+        pendingCloseTabID = nil
+    }
+
+    private func applyCloseTab(id: UUID, at index: Int) {
         let closed = tabs.remove(at: index)
         pushRecentlyClosed(closed)
         if tabs.isEmpty {

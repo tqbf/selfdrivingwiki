@@ -11,6 +11,11 @@ struct PageDetailView: View {
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
     @State private var isEditing = false
+    /// Tracks the active tab ID at the end of the last resolved update cycle.
+    /// Used to distinguish tab switches (activeTabID changes) from in-tab
+    /// navigation (activeTabID stays, selection changes) when deciding whether
+    /// to reset or restore edit mode.
+    @State private var lastKnownActiveTabID: UUID? = nil
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @AppStorage("isOutlineExpanded") private var isOutlineExpanded = false
@@ -51,6 +56,13 @@ struct PageDetailView: View {
                             isEditing = false
                         }
                         .keyboardShortcut(.escape, modifiers: [])
+
+                        Button {
+                            isOutlineExpanded.toggle()
+                        } label: {
+                            Image(systemName: "sidebar.right")
+                        }
+                        .help("Toggle Outline")
                     } else {
                         Button(store.isAgentRunning ? "Agent updating wiki…" : "Edit",
                                systemImage: "pencil") { isEditing = true }
@@ -148,8 +160,24 @@ struct PageDetailView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
+        .onAppear { lastKnownActiveTabID = store.activeTabID }
         .onChange(of: store.selection) {
-            isEditing = false
+            // In-tab navigation (wiki-link click, sidebar navigation within the
+            // same tab): exit edit mode. Tab switches are detected below via
+            // activeTabID and restore per-tab state instead of always resetting.
+            if store.activeTabID == lastKnownActiveTabID {
+                isEditing = false
+            }
+        }
+        .onChange(of: store.activeTabID) { _, newID in
+            lastKnownActiveTabID = newID
+            let tab = store.tabs.first(where: { $0.id == newID })
+            isEditing = tab?.isEditing ?? false
+        }
+        .onChange(of: isEditing) { _, newValue in
+            if let id = store.activeTabID {
+                store.setTabEditing(tabID: id, isEditing: newValue)
+            }
         }
         .onChange(of: store.isAgentRunning) { _, isRunning in
             if isRunning { isEditing = false }

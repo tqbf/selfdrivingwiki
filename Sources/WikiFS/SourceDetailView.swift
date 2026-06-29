@@ -42,6 +42,14 @@ struct SourceDetailView: View {
     @State private var isEditing = false
     @State private var editBuffer = ""
     @State private var isExtracting = false
+    /// Tracks the active tab ID as of the last resolved update cycle — used to
+    /// distinguish tab switches from in-tab file navigation.
+    @State private var lastKnownActiveTabID: UUID? = nil
+    /// Set when a tab switch targets a tab that was in edit mode but whose
+    /// headVersion has not yet loaded. Cleared once headVersion arrives or
+    /// the user navigates to a different file.
+    @State private var shouldRestoreEditing = false
+    @State private var showCloseTabAlert = false
     /// Raised when the user taps Ingest on a document that has already been
     /// ingested — prompts before re-ingesting, since that may create duplicate
     /// pages. (Replaces the old always-on "already ingested" warning banner.)
@@ -127,7 +135,10 @@ struct SourceDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .textBackgroundColor))
-        .onAppear { headVersion = store.processedMarkdownHead(for: file) }
+        .onAppear {
+            headVersion = store.processedMarkdownHead(for: file)
+            lastKnownActiveTabID = store.activeTabID
+        }
         .onChange(of: file.id) {
             // Navigating between ingested files REUSES this view instance (same
             // type/position), so SwiftUI preserves `@State` across the switch.
@@ -142,6 +153,9 @@ struct SourceDetailView: View {
             headVersion = nil
             selectedTab = .markdown
             pdfQuote = nil
+            // Cancel any pending edit-mode restoration so it doesn't apply to
+            // the new file when its headVersion loads.
+            shouldRestoreEditing = false
         }
         .task(id: file.id) { headVersion = store.processedMarkdownHead(for: file) }
         .task(id: PDFTaskKey(sourceID: file.id, anchorVersion: store.pendingScrollAnchorVersion)) {
@@ -173,6 +187,59 @@ struct SourceDetailView: View {
         .onChange(of: findModel.currentMatchIndex) { _, _ in
             guard findModel.currentMatchIndex > 0 else { return }
             findVersion &+= 1
+        }
+        .onChange(of: store.activeTabID) { _, newID in
+            lastKnownActiveTabID = newID
+            let tab = store.tabs.first(where: { $0.id == newID })
+            guard tab?.isEditing == true else {
+                shouldRestoreEditing = false
+                return
+            }
+            // Restore edit mode for the returning tab. If headVersion is already
+            // loaded (same file, different tab), restore immediately; otherwise
+            // defer until the async load completes.
+            if let content = headVersion?.content {
+                editBuffer = content
+                isEditing = true
+            } else {
+                shouldRestoreEditing = true
+            }
+        }
+        .onChange(of: headVersion) { _, newVersion in
+            guard shouldRestoreEditing, let content = newVersion?.content else { return }
+            editBuffer = content
+            isEditing = true
+            shouldRestoreEditing = false
+        }
+        .onChange(of: isEditing) { _, newValue in
+            if let id = store.activeTabID {
+                store.setTabEditing(tabID: id, isEditing: newValue)
+            }
+            if !newValue { shouldRestoreEditing = false }
+        }
+        .onChange(of: store.pendingCloseTabID) { _, id in
+            guard let id,
+                  let tab = store.tabs.first(where: { $0.id == id }),
+                  case .source = tab.selection else {
+                showCloseTabAlert = false
+                return
+            }
+            showCloseTabAlert = true
+        }
+        .onChange(of: showCloseTabAlert) { _, showing in
+            if !showing { store.cancelCloseTab() }
+        }
+        // Close-while-editing guard for source tabs. The save is called here —
+        // before confirmCloseTab() changes selection — so file.id is still the
+        // source being edited, not the incoming neighbor's file.
+        .alert("Close Tab?", isPresented: $showCloseTabAlert) {
+            Button("Close Tab", role: .destructive) {
+                flushEditIfDirty()
+                store.confirmCloseTab()
+            }
+            Button("Keep Editing", role: .cancel) {}
+        } message: {
+            Text("You're in edit mode. Your changes will be saved before closing.")
         }
     }
 
@@ -219,6 +286,13 @@ struct SourceDetailView: View {
                         isEditing = false
                     }
                     .keyboardShortcut(.escape, modifiers: [])
+
+                    Button {
+                        isOutlineExpanded.toggle()
+                    } label: {
+                        Image(systemName: "sidebar.right")
+                    }
+                    .help("Toggle Outline")
                 } else {
                     Button(isIngesting ? "Ingesting…" : "Ingest into Wiki",
                            systemImage: "text.badge.plus") {
