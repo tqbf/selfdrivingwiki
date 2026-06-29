@@ -1333,6 +1333,35 @@ public final class WikiStoreModel {
         }
     }
 
+    /// Off-main backfill for MiniLMEmbedder. Thread-safe; no Task.yield (MLX is
+    /// fast enough that yields just add overhead). Pauses before each inference
+    /// while the app is backgrounded to avoid the Metal `Insufficient Permission`
+    /// crash that MLX triggers when the GPU is suspended.
+    nonisolated private func backfillBackground(
+        kind: String,
+        work: [(id: PageID, text: String)],
+        storeChunks: (PageID, [Data]) throws -> Void
+    ) {
+        guard EmbeddingService.isAvailable else { return }
+        var embedded = 0
+        for (id, text) in work {
+            while !AppStateObserver.shared.isActive {
+                Thread.sleep(forTimeInterval: 0.5)
+            }
+            let blobs = EmbeddingService.chunks(for: text).compactMap {
+                EmbeddingService.embeddingBlob(for: $0)
+            }
+            guard !blobs.isEmpty else { continue }
+            do {
+                try storeChunks(id, blobs)
+                embedded += 1
+            } catch {
+                DebugLog.store("backfill[\(kind)][\(id.rawValue)] store failed — \(error)")
+            }
+        }
+        DebugLog.store("backfill[\(kind)]: embedded \(embedded) of \(work.count) docs (off-main)")
+    }
+
     private func scheduleSearch() {
         searchTask?.cancel()
         guard !searchQuery.isEmpty else {
