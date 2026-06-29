@@ -13,3 +13,7 @@ tools/markdownlint-vendor/node_modules/
 # into the .app. See plans/mlx-minilm-design.md.
 Resources/all-MiniLM-L6-v2/
 Resources/all-MiniLM-L6-v2-reference-embeddings.json
+# MLX metallib (Metal shaders) — swift build can't build it (needs xcodebuild),
+# so a prebuilt, version-matched one is fetched by download.py. Not committed.
+Resources/mlx.metallib
+/default.metallib
