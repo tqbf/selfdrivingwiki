@@ -70,64 +70,91 @@ uv run python -c "import mlx; import mlx_embeddings; import sentence_transformer
 
 Expected: `OK` with no errors.
 
-**Step 4: Remove the boilerplate `main.py` uv init creates, then commit skeleton**
+**Step 4: Remove the boilerplate `main.py` uv init creates; gitignore the model; commit skeleton**
+
+Add the model + reference-embeddings gitignore entries (the model is downloaded,
+never committed):
 
 ```bash
 rm -f main.py
-git add tools/minilm-prepare/pyproject.toml tools/minilm-prepare/uv.lock tools/minilm-prepare/.python-version
-git commit -m "chore: add minilm-prepare Python project skeleton"
+cat >> ../../.gitignore <<'EOF'
+# MLX MiniLM model — downloaded on demand (not committed). Regenerate via
+# tools/minilm-prepare/download.py (pinned HF revision); build.sh bundles it.
+Resources/all-MiniLM-L6-v2/
+Resources/all-MiniLM-L6-v2-reference-embeddings.json
+EOF
+git add tools/minilm-prepare/pyproject.toml tools/minilm-prepare/uv.lock tools/minilm-prepare/.python-version ../../.gitignore
+git commit -m "chore: add minilm-prepare Python project skeleton + gitignore model"
 ```
 
 ---
 
-## Task 2: Write download.py — fetch the bf16 model dir
+## Task 2: Write download.py — idempotent "ensure present" (pinned revision)
 
 **Files:**
 - Create: `tools/minilm-prepare/download.py`
 
+This is the **prepare/regen step** for dev, tests, and the build. It is
+idempotent: if the model dir already exists at the pinned revision, it does
+nothing; otherwise it downloads. The model dir is **gitignored — never committed.**
+Pinning the HF `revision` + recording the resolved SHA makes the build
+reproducible.
+
 ```python
 #!/usr/bin/env python3
 """
-Download mlx-community/all-MiniLM-L6-v2-bf16 into Resources/all-MiniLM-L6-v2/.
+Ensure mlx-community/all-MiniLM-L6-v2-bf16 is present in Resources/.
 
-MLX loads these weights directly in Swift (Phase 1) — no conversion step. The
-non-quantized mlx-community/all-MiniLM-L6-v2 does NOT exist; bf16 is the best-
-parity variant (no quantization loss, ~45 MB).
+Idempotent prepare step (run before tests/build). The model dir is gitignored —
+it is NOT committed. Pinning REVISION makes the build reproducible; the resolved
+commit SHA is recorded in DEST/.source-sha for verification. The non-quantized
+mlx-community/all-MiniLM-L6-v2 does NOT exist; bf16 is the best-parity variant.
 """
 import os
 
-# Disable hf_transfer unless it's actually installed (the user's shell may export
-# HF_HUB_ENABLE_HF_TRANSFER=1, which raises at download time otherwise).
+# Disable hf_transfer unless it's actually installed.
 try:
     import hf_transfer  # noqa: F401
 except ImportError:
     os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 
 import pathlib
-from huggingface_hub import snapshot_download
+from huggingface_hub import HfApi, snapshot_download
 
 MODEL_ID = "mlx-community/all-MiniLM-L6-v2-bf16"
+# Pin a revision (tag or commit SHA) for reproducibility. When updating, bump this
+# and re-run validate.py to re-confirm cosine >= 0.999.
+REVISION = "main"  # TODO Phase 0: replace with a concrete tag/SHA after first run
 DEST = pathlib.Path(__file__).parent.parent.parent / "Resources" / "all-MiniLM-L6-v2"
+SHA_FILE = DEST / ".source-sha"
 
 
-def download() -> None:
+def _recorded_sha() -> str | None:
+    return SHA_FILE.read_text().strip() if SHA_FILE.exists() else None
+
+
+def ensure_present() -> None:
+    api = HfApi()
+    resolved = api.model_info(MODEL_ID, revision=REVISION).sha  # the pinned revision's SHA
+
+    if _recorded_sha() == resolved and DEST.exists():
+        print(f"Already present at {resolved[:12]} — nothing to do.")
+        return
+
     DEST.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading {MODEL_ID} -> {DEST} ...")
-    snapshot_download(
-        MODEL_ID,
-        local_dir=str(DEST),
-        # all model + tokenizer files (safetensors, config.json, tokenizer.json, ...)
-    )
+    print(f"Downloading {MODEL_ID}@{REVISION} ({resolved[:12]}) -> {DEST} ...")
+    snapshot_download(MODEL_ID, revision=REVISION, local_dir=str(DEST))
+    SHA_FILE.write_text(resolved + "\n")
+
     files = sorted(p.name for p in DEST.iterdir() if p.is_file())
     total_mb = sum(p.stat().st_size for p in DEST.rglob("*") if p.is_file()) / 1_048_576
-    print(f"  {len(files)} files, {total_mb:.1f} MB total")
-    for f in files:
-        print(f"    {f}")
+    print(f"  {len(files)} files, {total_mb:.1f} MB, sha={resolved[:12]}")
+    print("Recorded SHA in .source-sha (for reproducible-build verification).")
     print("\nNext: run validate.py to confirm cosine >= 0.999.")
 
 
 if __name__ == "__main__":
-    download()
+    ensure_present()
 ```
 
 **Step 1: Run download (~45 MB on first run)**
@@ -139,14 +166,22 @@ uv run python download.py
 
 Expected: `Resources/all-MiniLM-L6-v2/` populated with `config.json`,
 `model.safetensors`, `tokenizer.json`, `tokenizer_config.json`, `vocab.txt`,
-`special_tokens_map.json` (file set may vary slightly).
+`special_tokens_map.json`, and a `.source-sha` recording the resolved revision
+SHA. A second run prints "already present — nothing to do."
 
-**Step 2: Commit script**
+**Step 2: Pin the revision** — after the first successful run, read the SHA from
+`.source-sha` and set `REVISION` in `download.py` to that concrete SHA (replacing
+`"main"`), so future downloads are reproducible. Re-run to confirm.
+
+**Step 3: Commit the script (NOT the model)**
 
 ```bash
 git add tools/minilm-prepare/download.py
-git commit -m "feat: add MLX MiniLM download script"
+git commit -m "feat: add MLX MiniLM ensure-present download (pinned revision, gitignored)"
 ```
+
+> **The model dir is gitignored** (`.gitignore` → `Resources/all-MiniLM-L6-v2/`).
+> `git status` must show it as ignored, not untracked.
 
 ---
 
@@ -290,17 +325,23 @@ git commit -m "feat: add MLX MiniLM validation script (cosine gate)"
 
 ---
 
-## Task 4: Decide on model-dir git storage
+## Task 4: Confirm the model dir is gitignored (NEVER committed)
+
+The model is **never committed** — it's gitignored and downloaded on demand by
+`download.py`. Verify `.gitignore` excludes it and that `git status` does not
+show it as untracked/addable:
 
 ```bash
 du -sh ../../Resources/all-MiniLM-L6-v2
+git check-ignore Resources/all-MiniLM-L6-v2   # must print the path (it's ignored)
+git status --porcelain | grep -i minilm || echo "OK: model not staged/tracked"
 ```
 
-- If **< 50 MB** (bf16 ≈ 45 MB — expected): commit it for offline determinism.
-- If **≥ 50 MB**: gitignore it and document `download.py` as the regen step.
+`Resources/all-MiniLM-L6-v2/` and
+`Resources/all-MiniLM-L6-v2-reference-embeddings.json` are both in `.gitignore`
+(the `.gitignore` edit is part of this phase). If `git check-ignore` returns
+nothing, the gitignore entry is missing — add it before proceeding.
 
-```bash
-# < 50 MB path:
-git add ../../Resources/all-MiniLM-L6-v2
-git commit -m "feat: bundle all-MiniLM-L6-v2-bf16 MLX weights (Phase 0 gate passed)"
-```
+The build (`build.sh`, Phase 2) runs `download.py` to ensure the model is present
+locally, then copies it into the .app bundle — so the **shipped app is
+self-contained/offline** while the **source repo stays lean**.

@@ -78,8 +78,9 @@ for the MLX MiniLM move (Metal inference is safe off-main).
 bottleneck — ~5 s / 100k chars, so a full-corpus first backfill takes minutes.
 Research says MLX MiniLM on Metal/GPU is low-single-digit ms/sentence
 (100-1000× faster), better quality, no crash, predictable 512-token truncation —
-using `mlx-community/all-MiniLM-L6-v2-bf16` + Apple's `MLXEmbedders` (~45 MB
-bundle, no conversion pipeline). Design + phased plan are written
+using `mlx-community/all-MiniLM-L6-v2-bf16` + Apple's `MLXEmbedders` (model
+downloaded on demand, gitignored, ~45 MB bundled into the .app; no conversion
+pipeline). Design + phased plan are written
 (`plans/mlx-minilm-design.md`); implementation pending. (Pivoted from an earlier
 CoreML/ANE design that hit conversion/quantization/ANE-compile problems.) When
 adopted, swap it in behind `EmbeddingService` (chunk index + queries unchanged).

@@ -8,3 +8,8 @@ signing/*.provisionprofile
 signing/local.config
 # Vendored JS tooling — reproduction is `npm ci` from the pinned lockfile.
 tools/markdownlint-vendor/node_modules/
+# MLX MiniLM model — downloaded on demand (not committed). Regenerate via
+# tools/minilm-prepare/download.py (pinned HF revision); build.sh bundles it
+# into the .app. See plans/mlx-minilm-design.md.
+Resources/all-MiniLM-L6-v2/
+Resources/all-MiniLM-L6-v2-reference-embeddings.json

@@ -87,10 +87,16 @@ public protocol Embedder: Sendable {
 ```
 
 `EmbeddingService` holds the active `Embedder` (selected at launch):
-- `MiniLMEmbedder` when the bundled model dir (`Resources/all-MiniLM-L6-v2/`) is
-  present;
-- `NLEmbedder` (current behavior) as the fallback (e.g. dev builds without the
-  model bundle).
+- `MiniLMEmbedder` when the model dir (`Resources/all-MiniLM-L6-v2/`) is present;
+- `NLEmbedder` (current behavior) as the fallback (e.g. a build where the prepare
+  step hasn't downloaded the model yet).
+
+**Model sourcing (not committed):** the model dir is **gitignored** and fetched
+on demand by `tools/minilm-prepare/download.py` (an idempotent "ensure present"
+step pinned to a HF revision, recording the resolved SHA for reproducibility).
+`build.sh` runs/depends on that prepare step and copies the model dir into the
+.app bundle, so the **shipped app is self-contained/offline** while the **source
+repo stays lean**.
 
 `EmbeddingService.embeddingBlob(for:)` / `chunkedEmbeddings(for:)` / `chunks(for:)`
 delegate to the active embedder and serialize its `[Float]` to a Float32 BLOB.
@@ -138,31 +144,37 @@ so chunks aren't silently truncated — revisit after benchmarking recall.
 - `uv` env (Python 3.12) in `tools/minilm-prepare/` with `mlx`, `mlx-embeddings`
   (or `mlx-transformers`), `sentence-transformers`, `numpy`, `scipy`,
   `huggingface_hub`. Guard `HF_HUB_ENABLE_HF_TRANSFER`.
-- Download `mlx-community/all-MiniLM-L6-v2-bf16` → `Resources/all-MiniLM-L6-v2/`
-  (all files: safetensors, config, tokenizer JSON).
+- `download.py` (idempotent "ensure present") fetches
+  `mlx-community/all-MiniLM-L6-v2-bf16` → `Resources/all-MiniLM-L6-v2/`, pinned to
+  a HF `revision` and recording the resolved SHA. **The model dir is gitignored —
+  never committed.** It is the prepare/regen step for dev, tests, and the build.
 - **Validate** against `sentence-transformers` reference: mean-pool + L2 the MLX
   embeddings, assert min cosine ≥ 0.999 on a probe set. **Gate — do not proceed
   until it passes.**
-- Deliverables: validation report (cosine numbers), `Resources/all-MiniLM-L6-v2/`.
+- Deliverables: validation report (cosine numbers + resolved SHA),
+  `Resources/all-MiniLM-L6-v2/` (local, gitignored).
 
 ### Phase 1 — Swift inference, isolated (no app wiring)
 - Add `mlx-swift-lm` + `MLXEmbedders` to `Package.swift` (`WikiFSCore`).
-- `MiniLMEmbedder` (async init loads the container from the bundled model dir;
+- `MiniLMEmbedder` (async init loads the container from the local model dir;
   `vector(for:)` runs `container.perform { ... pooler(output, normalize:true) ... }`).
 - **First task: a throwaway compile check** that the `MLXEmbedders` API matches
   the snippet above (loadModelContainer / perform / pooler); adjust to the real
   installed signatures if they differ.
 - Tests: output dim = 384, L2-norm (‖v‖₂ ≈ 1), cosine ≥ 0.999 vs the Phase-0
-  reference vectors, latency ≤ ~20 ms (warm). De-risks inference before touching
+  reference vectors, latency ≤ ~20 ms (warm). **Tests require the Phase 0 prepare
+  step to have run** (model downloaded locally). De-risks inference before touching
   the store.
 
 ### Phase 2 — Wire into `EmbeddingService`
 - Add `Embedder` protocol + `NLEmbedder` (wrap current code) + `MiniLMEmbedder`.
-- Select at launch (MiniLM if model dir bundled, else NLEmbedder).
+- Select at launch (MiniLM if model dir present, else NLEmbedder).
 - Add `embedding_meta` + the cutover wipe in `ensureSearchIndexesPopulated()`
   (schema v15 via the raw-C migration ladder).
 - `vec_distance_cosine` queries unchanged (same-dim operands guaranteed).
-- `build.sh`: conditional copy of `Resources/all-MiniLM-L6-v2/` into the bundle.
+- `build.sh`: ensure the prepare step has downloaded the model (run
+  `tools/minilm-prepare/download.py` if `Resources/all-MiniLM-L6-v2/` is absent),
+  then conditionally copy it into the .app bundle.
 
 ### Phase 3 — Off-main backfill (the payoff) + Metal backgrounding safety
 - MiniLM is safe off-main → move the per-chunk embedding work off the main actor
@@ -225,18 +237,22 @@ so chunks aren't silently truncated — revisit after benchmarking recall.
   the snippet compiles verbatim.
 - **Metal backgrounding crash (new vs CoreML):** genuine new risk. Mitigation:
   Phase 3 pauses/resumes the backfill on app-state changes. Documented in AC.5.
-- **Bundle size:** +~45 MB (bf16 model dir). Acceptable for this app; under the
-  50 MB commit threshold. The model dir is committed for offline determinism.
+- **App bundle size:** +~45 MB (bf16 model dir) in the **shipped .app**. The
+  model is **not committed to the repo** (gitignored); it's downloaded at
+  build/prepare time from a pinned HF revision + recorded SHA, so the source repo
+  stays lean and the build is reproducible. The shipped app is self-contained/offline.
 - **MLX dependency footprint:** `mlx-swift-lm` adds to app size vs CoreML's
   runtime that ships with macOS. Accepted tradeoff for removing the conversion
   pipeline.
 - **Decision (made):** use `mlx-community/all-MiniLM-L6-v2-bf16` — the requested
   non-quantized `all-MiniLM-L6-v2` does not exist in MLX format; bf16 is the
   best-parity variant.
-- **Decision (made):** bundle the model dir rather than download on first launch,
-  matching the original "bundle present → MiniLM" selection and offline
-  determinism. (Download on first launch via MLX `HubClient` is a noted future
-  alternative.)
+- **Decision (made):** download the model on demand (gitignored, pinned HF
+  revision + recorded SHA) and bundle it into the .app at build time — not commit
+  it to the repo. This keeps the repo lean + the build reproducible while leaving
+  the shipped app offline and the "model present → MiniLM" selection unchanged.
+  (First-launch download via MLX `HubClient` is a noted future alternative if app
+  size ever matters more than offline-first.)
 - **Cutover data cost:** first MiniLM backfill re-embeds the whole corpus — but
   at MiniLM speed that's seconds-to-a-minute, not minutes. One-time.
 - **Embedder-agnostic index is the key enabler:** because chunks are opaque BLOBs
