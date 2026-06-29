@@ -60,6 +60,8 @@ struct SourceRow: View {
     var onExtractSelected: (() -> Void)? = nil
     var extractCount: Int = 0
     var canExtract: Bool = false
+    /// Reveal this source file in a Finder window. Shown only for single selection.
+    var onRevealInFinder: (() -> Void)? = nil
 
     /// The trailing status the row shows for a source, mirroring the two phases in
     /// `AgentLauncher`. Extracted as a pure static function so the precedence
@@ -147,6 +149,9 @@ struct SourceRow: View {
                        action: onShareSelected)
             } else if let onShare {
                 Button("Share", systemImage: "square.and.arrow.up", action: onShare)
+            }
+            if !isMulti, let onRevealInFinder {
+                Button("Reveal in Finder", systemImage: "folder", action: onRevealInFinder)
             }
             if isMulti, let onIngestSelected {
                 Divider()

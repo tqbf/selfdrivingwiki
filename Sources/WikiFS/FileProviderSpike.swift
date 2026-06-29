@@ -353,6 +353,16 @@ final class FileProviderSpike {
         }
     }
 
+    func revealPageInFinder(id: PageID) async {
+        guard let url = await resolvePageByTitleURL(id: id) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func revealSourceInFinder(id: PageID) async {
+        guard let url = await resolveSourceByNameURL(id: id) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
     /// Resolve the user-visible URL for sharing a source via its `source-by-name`
     /// identifier.  Uses `getUserVisibleURL` — the daemon returns the canonical
     /// URL directly, so no path construction and no cold-cache race.  The filename

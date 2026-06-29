@@ -100,6 +100,10 @@ struct PageDetailView: View {
                                 }
                             }
                             .help("Share this page")
+                            Button("Reveal in Finder", systemImage: "folder") {
+                                Task { await fileProvider.revealPageInFinder(id: pageID) }
+                            }
+                            .help("Reveal this page file in Finder")
                         }
 
                         Button {

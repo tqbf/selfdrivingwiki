@@ -341,6 +341,10 @@ struct SourceDetailView: View {
                             }
                         }
                         .help("Share this source file")
+                        Button("Reveal in Finder", systemImage: "folder") {
+                            Task { await fileProvider.revealSourceInFinder(id: file.id) }
+                        }
+                        .help("Reveal this source file in Finder")
                     }
                     if isMarkdownEditable {
                         Button {

@@ -295,7 +295,8 @@ struct SourcesSectionView: View {
                 return true
             }.count,
             canExtract: source.mimeType == "application/pdf"
-                && store.processedMarkdownHead(for: source) == nil
+                && store.processedMarkdownHead(for: source) == nil,
+            onRevealInFinder: { Task { await fileProvider.revealSourceInFinder(id: source.id) } }
         )
         .tag(WikiSelection.source(source.id))
     }

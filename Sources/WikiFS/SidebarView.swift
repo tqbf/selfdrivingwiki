@@ -328,6 +328,11 @@ struct SidebarView: View {
                                 }
                             }
                         }
+                        if selectedPageIDs.count <= 1, fileProvider.path != nil {
+                            Button("Reveal in Finder", systemImage: "folder") {
+                                Task { await fileProvider.revealPageInFinder(id: pageID) }
+                            }
+                        }
                         Divider()
                         let isBatchLint = selectedPageIDs.count > 1 && selectedPageIDs.contains(summary.id)
                         Button(isBatchLint ? "Lint \(selectedPageIDs.count) Pages" : "Lint Page",
