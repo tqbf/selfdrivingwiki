@@ -89,15 +89,15 @@ struct WikiLinkNavigationTests {
         #expect(model.selection == .page(to.id))
     }
 
-    @Test func selectPageByTitleFlushesPendingEditsToOutgoingPage() throws {
+    @Test func selectPageByTitleDoesNotAutoSavePendingEditsToOutgoingPage() throws {
         let (model, store) = try tempModel()
         let from = try store.createPage(title: "From")
         let to = try store.createPage(title: "To")
         model.reloadFromStore()
 
-        // Open `from`, type into the body, then click a link to `to`. The
-        // navigation must flush the in-flight edit to `from` (it goes through
-        // select(_:), which flushes first), not lose it.
+        // Open `from`, type into the body, then navigate to `to`. Edits are
+        // only committed by an explicit save (flushPendingSave); navigating
+        // away must NOT auto-save to the database.
         model.select(.page(from.id))
         model.draftBody = "edited body before clicking a link"
         model.bodyChanged()
@@ -106,7 +106,7 @@ struct WikiLinkNavigationTests {
         #expect(model.selection == .page(to.id))
 
         let reloaded = try store.getPage(id: from.id)
-        #expect(reloaded.bodyMarkdown == "edited body before clicking a link")
+        #expect(reloaded.bodyMarkdown == "")  // not auto-saved
     }
 
     // MARK: - selectSource(byDisplayName:) (Phase B)
