@@ -13,6 +13,10 @@ let package = Package(
         // AST (tables, footnotes, task lists); we walk it with a MarkupVisitor to
         // emit HTML for the WKWebView reader that replaced the vendored Textual.
         .package(url: "https://github.com/apple/swift-markdown", from: "0.8.0"),
+        // MLX on-device embeddings (all-MiniLM-L6-v2, Metal/GPU). MLXEmbedders
+        // bundles its own tokenizer + pooling. Needs >= 2.31.3 (MLXEmbedders was
+        // added after the 0.x line). See plans/mlx-minilm-design.md.
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", from: "2.31.3"),
     ],
     targets: [
         // Statically-linked sqlite-vec (semantic vector search). The amalgamation
@@ -38,7 +42,10 @@ let package = Package(
         // running app (SWIFTUI-RULES §9.1 — model logic in its own target).
         .target(
             name: "WikiFSCore",
-            dependencies: ["CSqliteVec"],
+            dependencies: [
+                "CSqliteVec",
+                .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
+            ],
             path: "Sources/WikiFSCore",
             // NaturalLanguage: semantic-search embeddings. JavaScriptCore: the
             // MermaidValidator runs the vendored merval bundle in a JSContext
