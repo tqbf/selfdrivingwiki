@@ -2,22 +2,22 @@ import Foundation
 import Testing
 @testable import WikiFSCore
 
-/// The mandated SWIFTUI-RULES §3.5 / §9.4 regression: switching pages while an
-/// autosave debounce is pending must flush the OUTGOING page's CURRENT draft
-/// (read live at save time), not a stale snapshot — and `summaries` must be
-/// rebuilt from the store, never patched. Locks in:
-///   1. page-switch flush (select() flushes synchronously first)
-///   2. live-read-at-fire-time (save reads draftBody at call time)
-///   3. summaries rebuilt from source
+/// Regression suite for in-app navigation save semantics (§3.5 / §9.4).
+/// Tab switches (setActiveTab) stash drafts without saving; sidebar clicks
+/// (handleSelectionChange) and programmatic navigation (select()) flush the
+/// draft to the database before loading the incoming page. Locks in:
+///   1. select() flushes synchronously before loading the new page
+///   2. handleSelectionChange() (sidebar click) flushes and loads
+///   3. summaries are rebuilt from the store after mutations, never patched
 @MainActor
-struct AutosaveStaleSnapshotTests {
+struct NavigationSaveTests {
 
     private func tempURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-autosave-\(UUID().uuidString).sqlite")
     }
 
-    @Test func pageSwitchFlushesCurrentDraftThenLoadsNewPage() throws {
+    @Test func selectFlushesCurrentDraftThenLoadsNewPage() throws {
         let url = tempURL()
         let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: url))
 
@@ -27,25 +27,24 @@ struct AutosaveStaleSnapshotTests {
         model.newPage(title: "B")
         let bID = model.selection!
 
-        // Select A, type into the body, schedule (but DON'T await) the debounce.
+        // Select A, type into the body (no autosave — only explicit save).
         model.select(aID)
         model.draftBody = "A-edit"
-        model.bodyChanged()  // 500ms debounce now pending, not yet fired
+        model.bodyChanged()
 
-        // Switch to B BEFORE the debounce fires. This must flush A's CURRENT
-        // draft synchronously and then load B.
+        // select() flushes the outgoing draft synchronously before loading B.
         model.select(bID)
 
-        // B is now loaded with its (empty) body; A's edit was flushed.
+        // B is now loaded with its (empty) body; A's edit was flushed to DB.
         #expect(model.selection == bID)
         #expect(model.draftBody == "")
 
-        // Reload A from the store and confirm the live draft persisted.
+        // Reload A from the store and confirm the draft was persisted.
         model.select(aID)
         #expect(model.draftBody == "A-edit")
 
-        // Now mutate B, flush, reopen the store at the same URL, and confirm
-        // BOTH pages persisted their latest text.
+        // Now mutate B, flush explicitly, reopen the store at the same URL,
+        // and confirm BOTH pages persisted their latest text.
         model.select(bID)
         model.draftBody = "B-edit"
         model.bodyChanged()
@@ -73,9 +72,9 @@ struct AutosaveStaleSnapshotTests {
         #expect(model.summaries.allSatisfy { $0.title != "First" })
     }
 
-    /// The List-driven path: SwiftUI writes `selection` directly, then the view
-    /// calls `handleSelectionChange(to:)`. This must flush the outgoing page's
-    /// live draft and load the incoming page — the same guarantee as `select`.
+    /// The sidebar / List-driven path: SwiftUI writes `selection` directly, then
+    /// the view calls `handleSelectionChange(to:)`. This must flush the outgoing
+    /// page's draft and load the incoming page — the same guarantee as `select`.
     @Test func listSelectionChangeFlushesAndLoads() throws {
         let url = tempURL()
         let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: url))
