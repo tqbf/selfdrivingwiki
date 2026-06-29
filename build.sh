@@ -144,6 +144,23 @@ if [ -f "${MARKDOWNLINT_JS}" ]; then
 else
   echo "  (markdownlint.bundle.js not found at ${MARKDOWNLINT_JS} — markdown save-time auto-fix will be skipped)"
 fi
+# MLX runtime — model dir + metallib, both downloaded on demand (gitignored),
+# bundled into the .app. The metallib is REQUIRED: swift build can't build MLX's
+# Metal shaders, so the prebuilt version-matched one (fetched by download.py) must
+# ship next to the binary (MLX's loader finds it via the bundle Resources path).
+if [ ! -d "Resources/all-MiniLM-L6-v2" ] || [ ! -f "Resources/mlx.metallib" ]; then
+  echo "  MLX runtime absent — running prepare step (tools/minilm-prepare/download.py) ..."
+  ( cd tools/minilm-prepare && uv run python download.py )
+fi
+if [ -d "Resources/all-MiniLM-L6-v2" ]; then
+  echo "  Bundling all-MiniLM-L6-v2 ..."
+  cp -r "Resources/all-MiniLM-L6-v2" "${RESOURCES_DIR}/all-MiniLM-L6-v2"
+fi
+if [ -f "Resources/mlx.metallib" ]; then
+  echo "  Bundling mlx.metallib ..."
+  cp "Resources/mlx.metallib" "${RESOURCES_DIR}/mlx.metallib"
+fi
+
 [ -f "${APP_ICON}" ] && cp "${APP_ICON}" "${RESOURCES_DIR}/AppIcon.icns"
 
 cat > "${CONTENTS}/Info.plist" <<PLIST
