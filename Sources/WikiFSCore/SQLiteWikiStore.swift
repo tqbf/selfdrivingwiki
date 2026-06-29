@@ -17,7 +17,14 @@ public final class SQLiteWikiStore: WikiStore {
     /// Open (creating if needed) the database at `databaseURL`.
     /// Tests inject a temp-dir or `:memory:` URL; the app injects
     /// `DatabaseLocation.appGroupContainerURL()`.
-    public init(databaseURL: URL) throws {
+    public convenience init(databaseURL: URL) throws {
+        try self.init(databaseURL: databaseURL, forceLadderMigration: false)
+    }
+
+    /// Designated open. `forceLadderMigration` (test-only) makes a FRESH db run
+    /// the full stepwise ladder instead of the consolidated fast path, so a test
+    /// can parity-check the two produce identical schemas.
+    internal init(databaseURL: URL, forceLadderMigration: Bool) throws {
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         let rc = sqlite3_open_v2(databaseURL.path, &handle, flags, nil)
@@ -30,7 +37,7 @@ public final class SQLiteWikiStore: WikiStore {
 
         do {
             try configurePragmas()
-            try bootstrapSchema()
+            try bootstrapSchema(forceLadderMigration: forceLadderMigration)
             // Register the statically-linked sqlite-vec on THIS connection
             // (connection-scoped). Non-fatal: FTS5 (v13) remains the fallback.
             registerVec(on: db)
@@ -107,8 +114,245 @@ public final class SQLiteWikiStore: WikiStore {
     ///   * an EXISTING v1 DB (the live one already holds pages) runs ONLY the
     ///     v1→2 step — its page data is preserved untouched.
     /// `user_version` is bumped at the end of each step so re-opening is a no-op.
-    private func bootstrapSchema() throws {
+    private func bootstrapSchema(forceLadderMigration: Bool = false) throws {
         var version = Int(try queryScalarText("PRAGMA user_version;")) ?? 0
+        // Fresh DB: build the complete current schema in ONE consolidated block,
+        // skipping the stepwise ladder's historical create→rename→drop churn
+        // (e.g. v7/v12 create single-row embeddings that v14 drops; v2 creates
+        // `ingested_files` which v10 renames to `sources`). EXISTING dbs
+        // (version >= 1) — and fresh dbs forced onto the ladder by tests — run
+        // `migrate(from:)` so every prior upgrade path is preserved.
+        if version == 0 && !forceLadderMigration {
+            try createFreshSchemaV14()
+            return
+        }
+        try migrate(from: &version)
+    }
+
+    /// Build the complete current (v14) schema for a fresh database in one
+    /// consolidated block. MUST stay schema-identical to the end state of
+    /// `migrate(from:)`; the `freshFastPathMatchesStepwiseLadder` test enforces
+    /// that by forcing a fresh db through the ladder and comparing. Legacy index
+    /// names (`ingested_files_created`, `file_markdown_versions_file`) are
+    /// reproduced verbatim — they survive the table renames in the ladder, so a
+    /// fresh db must match.
+    private func createFreshSchemaV14() throws {
+        // Core page model + attachments/links.
+        try exec("""
+        CREATE TABLE pages (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            slug TEXT NOT NULL,
+            body_markdown TEXT NOT NULL DEFAULT '',
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1
+        );
+        """)
+        try exec("CREATE UNIQUE INDEX pages_slug_unique ON pages(slug);")
+        try exec("""
+        CREATE TABLE attachments (
+            id TEXT PRIMARY KEY,
+            page_id TEXT,
+            filename TEXT NOT NULL,
+            mime_type TEXT,
+            data BLOB NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY(page_id) REFERENCES pages(id)
+        );
+        """)
+        try exec("""
+        CREATE TABLE page_links (
+            from_page_id TEXT NOT NULL,
+            to_page_id TEXT NOT NULL,
+            link_text TEXT NOT NULL,
+            PRIMARY KEY (from_page_id, to_page_id),
+            FOREIGN KEY(from_page_id) REFERENCES pages(id),
+            FOREIGN KEY(to_page_id) REFERENCES pages(id)
+        );
+        """)
+
+        // Sources — final shape: ingested_files (v2) + ingested_at (v6) +
+        // zotero columns (v9) + display_name (v10).
+        try exec("""
+        CREATE TABLE sources (
+            id TEXT PRIMARY KEY,
+            filename TEXT NOT NULL,
+            ext TEXT NOT NULL DEFAULT '',
+            mime_type TEXT,
+            byte_size INTEGER NOT NULL,
+            content BLOB NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            ingested_at REAL,
+            zotero_item_key TEXT,
+            zotero_item_title TEXT,
+            display_name TEXT
+        );
+        """)
+        try exec("CREATE INDEX ingested_files_created ON sources(created_at);")
+
+        // Processed-markdown version chain (v8, v10 rename). The legacy index
+        // name `file_markdown_versions_file` survives the table rename.
+        try exec("""
+        CREATE TABLE source_markdown_versions (
+            id          TEXT PRIMARY KEY,
+            file_id     TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+            parent_id   TEXT,
+            content     TEXT NOT NULL,
+            origin      TEXT NOT NULL,
+            note        TEXT,
+            created_at  REAL NOT NULL
+        );
+        """)
+        try exec("""
+        CREATE INDEX file_markdown_versions_file
+            ON source_markdown_versions(file_id, id);
+        """)
+
+        // source_links with cascade (v10 create, v11 cascade rebuild).
+        try exec("""
+        CREATE TABLE source_links (
+            from_page_id TEXT NOT NULL REFERENCES pages(id),
+            to_source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+            link_text    TEXT NOT NULL,
+            PRIMARY KEY (from_page_id, to_source_id)
+        );
+        """)
+
+        // Singleton documents (seeded) + the append-only log.
+        try exec("""
+        CREATE TABLE system_prompt (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            body_markdown TEXT NOT NULL DEFAULT '',
+            updated_at REAL NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1
+        );
+        """)
+        try exec("""
+        CREATE TABLE log (
+            id TEXT PRIMARY KEY,
+            ts REAL NOT NULL,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            note TEXT
+        );
+        """)
+        try exec("""
+        CREATE TABLE wiki_index (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            body_markdown TEXT NOT NULL DEFAULT '',
+            updated_at REAL NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1
+        );
+        """)
+        let now = Date().timeIntervalSince1970
+        let sp = try statement("""
+        INSERT INTO system_prompt (id, body_markdown, updated_at, version)
+        VALUES (1, ?1, ?2, 1);
+        """)
+        sp.reset(); try sp.bind(SystemPrompt.defaultBody, at: 1); try sp.bind(now, at: 2); _ = try sp.step()
+        let wi = try statement("""
+        INSERT INTO wiki_index (id, body_markdown, updated_at, version)
+        VALUES (1, ?1, ?2, 1);
+        """)
+        wi.reset(); try wi.bind(WikiIndex.defaultBody, at: 1); try wi.bind(now, at: 2); _ = try wi.step()
+
+        // Per-chunk embeddings (v14); supersedes the dropped v7/v12 single-row tables.
+        try exec("""
+        CREATE TABLE page_chunks (
+            page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+            chunk_idx INTEGER NOT NULL,
+            embedding BLOB NOT NULL,
+            PRIMARY KEY (page_id, chunk_idx)
+        ) WITHOUT ROWID;
+        """)
+        try exec("""
+        CREATE TABLE source_chunks (
+            source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+            chunk_idx INTEGER NOT NULL,
+            embedding BLOB NOT NULL,
+            PRIMARY KEY (source_id, chunk_idx)
+        ) WITHOUT ROWID;
+        """)
+
+        // FTS5/BM25 (v13): pages (external-content over `pages`) + sources (via
+        // the `source_search` sidecar), each kept in sync by AFTER
+        // INSERT/UPDATE/DELETE triggers.
+        try exec("""
+        CREATE VIRTUAL TABLE pages_fts USING fts5(
+            title, body_markdown,
+            content='pages', content_rowid='rowid',
+            tokenize='porter');
+        """)
+        try exec("""
+        CREATE TRIGGER pages_fts_ai AFTER INSERT ON pages BEGIN
+          INSERT INTO pages_fts(rowid, title, body_markdown)
+            VALUES (new.rowid, new.title, new.body_markdown);
+        END;
+        """)
+        try exec("""
+        CREATE TRIGGER pages_fts_ad AFTER DELETE ON pages BEGIN
+          INSERT INTO pages_fts(pages_fts, rowid, title, body_markdown)
+            VALUES ('delete', old.rowid, old.title, old.body_markdown);
+        END;
+        """)
+        try exec("""
+        CREATE TRIGGER pages_fts_au AFTER UPDATE ON pages BEGIN
+          INSERT INTO pages_fts(pages_fts, rowid, title, body_markdown)
+            VALUES ('delete', old.rowid, old.title, old.body_markdown);
+          INSERT INTO pages_fts(rowid, title, body_markdown)
+            VALUES (new.rowid, new.title, new.body_markdown);
+        END;
+        """)
+        try exec("""
+        CREATE TABLE source_search (
+            source_id TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+            title     TEXT NOT NULL,
+            body      TEXT NOT NULL
+        );
+        """)
+        try exec("""
+        CREATE VIRTUAL TABLE sources_fts USING fts5(
+            title, body,
+            content='source_search', content_rowid='rowid',
+            tokenize='porter');
+        """)
+        try exec("""
+        CREATE TRIGGER sources_fts_ai AFTER INSERT ON source_search BEGIN
+          INSERT INTO sources_fts(rowid, title, body)
+            VALUES (new.rowid, new.title, new.body);
+        END;
+        """)
+        try exec("""
+        CREATE TRIGGER sources_fts_ad AFTER DELETE ON source_search BEGIN
+          INSERT INTO sources_fts(sources_fts, rowid, title, body)
+            VALUES ('delete', old.rowid, old.title, old.body);
+        END;
+        """)
+        try exec("""
+        CREATE TRIGGER sources_fts_au AFTER UPDATE ON source_search BEGIN
+          INSERT INTO sources_fts(sources_fts, rowid, title, body)
+            VALUES ('delete', old.rowid, old.title, old.body);
+          INSERT INTO sources_fts(rowid, title, body)
+            VALUES (new.rowid, new.title, new.body);
+        END;
+        """)
+
+        try exec("PRAGMA user_version=14;")
+    }
+
+    /// The stepwise, idempotent migration ladder keyed on `PRAGMA user_version`.
+    /// Runs for any EXISTING db (version >= 1) up to the head version, and — when
+    /// a test forces it — for a fresh db, so the fresh-DB fast path can be
+    /// parity-checked against it. Each step is guarded by `if version < N` so a
+    /// re-open is a no-op. **Do not collapse these steps**: they perform
+    /// irreversible data migrations (renames, column adds, table rebuilds) that
+    /// existing dbs at every intermediate version depend on.
+    private func migrate(from version: inout Int) throws {
 
         // Step 0 → 1: the original v0 schema (INITIAL §3 verbatim) — pages, the
         // unique slug index, attachments, page_links. UNCHANGED from the v0 cut.
