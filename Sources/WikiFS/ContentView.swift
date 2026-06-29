@@ -133,28 +133,18 @@ struct ContentView: View {
         .onChange(of: agentLauncher.extractingSourceIDs) { _, newValue in
             if !newValue.isEmpty { isTranscriptExpanded = true }
         }
-        // Close-while-editing guard: fires for page/instruction/other tabs.
-        // Source tabs handle their own alert so they can flush editBuffer first.
+        // Close-while-editing guard: fires for any tab with isEditing set.
         .onChange(of: store.pendingCloseTabID) { _, id in
-            guard let id, let tab = store.tabs.first(where: { $0.id == id }) else {
-                showCloseTabAlert = false
-                return
-            }
-            // Source tabs are handled by SourceDetailView's alert.
-            if case .source = tab.selection {
-                showCloseTabAlert = false
-            } else {
-                showCloseTabAlert = true
-            }
+            showCloseTabAlert = id != nil
         }
         .onChange(of: showCloseTabAlert) { _, showing in
             if !showing { store.cancelCloseTab() }
         }
         .alert("Close Tab?", isPresented: $showCloseTabAlert) {
-            Button("Close Tab", role: .destructive) { store.confirmCloseTab() }
+            Button("Close & Discard", role: .destructive) { store.confirmCloseTab() }
             Button("Keep Editing", role: .cancel) {}
         } message: {
-            Text("You're in edit mode. Your changes will be saved automatically.")
+            Text("You're in edit mode. Unsaved changes will be discarded.")
         }
     }
 

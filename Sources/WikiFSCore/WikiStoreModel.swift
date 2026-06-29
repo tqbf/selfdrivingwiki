@@ -316,7 +316,13 @@ public final class WikiStoreModel {
     /// `onChange(of: selection)` bridge no-ops while the switch is mid-flight.
     /// Pass `nil` to enter the empty state.
     private func setActiveTab(_ id: UUID?) {
-        flushPendingSaves()
+        // Stash the outgoing tab's draft rather than auto-saving to DB.
+        if let outgoingID = activeTabID,
+           let i = tabs.firstIndex(where: { $0.id == outgoingID }),
+           tabs[i].isEditing {
+            tabs[i].pendingDraftTitle = draftTitle
+            tabs[i].pendingDraftBody = draftBody
+        }
         isApplyingTabSelection = true
         activeTabID = id
         let sel = tabs.first { $0.id == id }?.selection
@@ -386,23 +392,24 @@ public final class WikiStoreModel {
     /// tab → empty state. Closing a non-active tab leaves the active tab untouched.
     public func closeTab(id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
-        if tabs[index].isEditing, id == activeTabID {
+        if tabs[index].isEditing {
             pendingCloseTabID = id
             return
         }
         applyCloseTab(id: id, at: index)
     }
 
-    /// Apply the deferred tab close after the user confirms. Page drafts are
-    /// saved by the `setActiveTab` call inside. For source edits the view must
-    /// call its own save before invoking this method (while `file.id` is still
-    /// the source being closed).
+    /// Apply the deferred tab close after the user confirms. Unsaved drafts are
+    /// discarded — the user chose "Close & Discard."
     public func confirmCloseTab() {
         guard let id = pendingCloseTabID,
               let index = tabs.firstIndex(where: { $0.id == id }) else {
             pendingCloseTabID = nil
             return
         }
+        // Discard any stashed draft (user chose to close without saving).
+        tabs[index].pendingDraftTitle = nil
+        tabs[index].pendingDraftBody = nil
         pendingCloseTabID = nil
         applyCloseTab(id: id, at: index)
     }
@@ -410,6 +417,15 @@ public final class WikiStoreModel {
     /// Cancel the deferred close — user chose to keep editing.
     public func cancelCloseTab() {
         pendingCloseTabID = nil
+    }
+
+    /// Discard the stashed draft for `tabID` and reload the page from the
+    /// database. Called when the user cancels an in-progress edit.
+    public func discardPendingDraft(tabID: UUID) {
+        guard let i = tabs.firstIndex(where: { $0.id == tabID }) else { return }
+        tabs[i].pendingDraftTitle = nil
+        tabs[i].pendingDraftBody = nil
+        loadDrafts(for: selection)
     }
 
     private func applyCloseTab(id: UUID, at index: Int) {
@@ -488,6 +504,7 @@ public final class WikiStoreModel {
         // A page switch invalidates the prior page's mermaid warning so a stale
         // banner doesn't bleed onto an unrelated page (it's recomputed on save).
         mermaidSaveWarning = nil
+        var restoredFromPendingDraft = false
         switch newValue {
         case .ask, .edit, .lint:
             draftTitle = ""
@@ -504,6 +521,15 @@ public final class WikiStoreModel {
             draftTitle = page.title
             draftBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
             loadedPage = id
+            // Restore stashed draft when returning to an editing tab.
+            if let tabID = activeTabID,
+               let i = tabs.firstIndex(where: { $0.id == tabID }),
+               let pendingTitle = tabs[i].pendingDraftTitle,
+               let pendingBody = tabs[i].pendingDraftBody {
+                draftTitle = pendingTitle
+                draftBody = pendingBody
+                restoredFromPendingDraft = true
+            }
         case .systemPrompt:
             draftSystemPrompt = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
             loadedPage = nil
@@ -520,7 +546,7 @@ public final class WikiStoreModel {
             draftBody = ""
             loadedPage = nil
         }
-        isDraftDirty = false
+        isDraftDirty = restoredFromPendingDraft
         isSystemPromptDirty = false
     }
 
@@ -560,8 +586,8 @@ public final class WikiStoreModel {
 
     /// Called on each keystroke in the title or body. Cancels and restarts a
     /// 500ms debounce; when it fires it reads the live drafts and saves.
-    public func bodyChanged() { isDraftDirty = true; scheduleAutosave() }
-    public func titleChanged() { isDraftDirty = true; scheduleAutosave() }
+    public func bodyChanged() { isDraftDirty = true }
+    public func titleChanged() { isDraftDirty = true }
 
     private func scheduleAutosave() {
         // Paused while an agent runs (decision #6): an in-app autosave must never
@@ -746,6 +772,11 @@ public final class WikiStoreModel {
         autosaveTask = nil
         guard isDraftDirty else { return }
         save()
+        // Clear the per-tab stash — content is now committed to the database.
+        if let tabID = activeTabID, let i = tabs.firstIndex(where: { $0.id == tabID }) {
+            tabs[i].pendingDraftTitle = nil
+            tabs[i].pendingDraftBody = nil
+        }
     }
 
     // MARK: - System prompt editing (singleton document)

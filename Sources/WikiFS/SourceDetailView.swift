@@ -49,7 +49,6 @@ struct SourceDetailView: View {
     /// headVersion has not yet loaded. Cleared once headVersion arrives or
     /// the user navigates to a different file.
     @State private var shouldRestoreEditing = false
-    @State private var showCloseTabAlert = false
     /// Raised when the user taps Ingest on a document that has already been
     /// ingested — prompts before re-ingesting, since that may create duplicate
     /// pages. (Replaces the old always-on "already ingested" warning banner.)
@@ -216,30 +215,6 @@ struct SourceDetailView: View {
                 store.setTabEditing(tabID: id, isEditing: newValue)
             }
             if !newValue { shouldRestoreEditing = false }
-        }
-        .onChange(of: store.pendingCloseTabID) { _, id in
-            guard let id,
-                  let tab = store.tabs.first(where: { $0.id == id }),
-                  case .source = tab.selection else {
-                showCloseTabAlert = false
-                return
-            }
-            showCloseTabAlert = true
-        }
-        .onChange(of: showCloseTabAlert) { _, showing in
-            if !showing { store.cancelCloseTab() }
-        }
-        // Close-while-editing guard for source tabs. The save is called here —
-        // before confirmCloseTab() changes selection — so file.id is still the
-        // source being edited, not the incoming neighbor's file.
-        .alert("Close Tab?", isPresented: $showCloseTabAlert) {
-            Button("Close Tab", role: .destructive) {
-                flushEditIfDirty()
-                store.confirmCloseTab()
-            }
-            Button("Keep Editing", role: .cancel) {}
-        } message: {
-            Text("You're in edit mode. Your changes will be saved before closing.")
         }
     }
 

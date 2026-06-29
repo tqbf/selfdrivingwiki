@@ -53,7 +53,7 @@ struct PageDetailView: View {
                                   || store.draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                         Button("Cancel", systemImage: "xmark.circle") {
-                            isEditing = false
+                            cancelEdit()
                         }
                         .keyboardShortcut(.escape, modifiers: [])
 
@@ -295,6 +295,13 @@ struct PageDetailView: View {
 
     private func commitEdit() {
         store.flushPendingSave()
+        isEditing = false
+    }
+
+    private func cancelEdit() {
+        if let id = store.activeTabID {
+            store.discardPendingDraft(tabID: id)
+        }
         isEditing = false
     }
 

@@ -5,21 +5,24 @@
 
 ## Goal
 
-Three related gaps in the in-app editor experience:
+Four related gaps in the in-app editor experience:
 
 1. **Outline button missing in edit mode.** `PageDetailView` and `SourceDetailView`
-   both have an "Toggle Outline" (`sidebar.right`) button, but only in their
+   both have a "Toggle Outline" (`sidebar.right`) button, but only in their
    read-mode toolbar. Switching to edit mode hid the button even though the
    outline panel itself was still visible.
 
 2. **Edit mode lost on tab switch.** Clicking away to another tab while editing
    a page or source reset `isEditing = false`. Returning to the original tab
-   showed the page in read mode — the user had to click Edit again even though
-   their changes had been auto-saved.
+   showed the page in read mode.
 
-3. **No warning on close-while-editing.** Clicking the × on a tab (or pressing
-   ⌘W) while in edit mode silently exited editing. For source tabs the edit
-   buffer might not have flushed in time.
+3. **Page edits auto-saved on tab switch.** Switching away from an editing tab
+   flushed the page draft to the database immediately, even before the user
+   clicked "Save Changes." The user wants explicit save control.
+
+4. **No warning on close-while-editing.** Clicking × (or pressing ⌘W) on any
+   tab — focused or unfocused — while that tab was in edit mode silently
+   discarded the editing session.
 
 ## Changes
 
@@ -50,11 +53,7 @@ this whenever its local `isEditing` changes, persisting the value to the tab.
 - `onChange(of: store.activeTabID)` updates `lastKnownActiveTabID` and restores
   `isEditing` from the new tab's `EditorTab.isEditing` flag.
 - `onChange(of: isEditing)` calls `store.setTabEditing` to persist every
-  enter/exit-edit-mode event back to the tab. Because SwiftUI batches state
-  changes, this fires in the *next* update cycle — by then `store.activeTabID`
-  already points to the *new* active tab, so a tab-switch-induced `isEditing =
-  false` writes to the new tab (no-op, it was already false) rather than
-  accidentally clearing the old tab's persisted `true` state.
+  enter/exit-edit-mode event back to the tab.
 
 **`SourceDetailView`** applies the same pattern plus a deferred-restore path:
 when switching to a source tab that was in edit mode, `headVersion` may be `nil`
@@ -62,41 +61,45 @@ when switching to a source tab that was in edit mode, `headVersion` may be `nil`
 `editBuffer` repopulation and `isEditing = true` until `onChange(of: headVersion)`
 fires once the async `.task(id: file.id)` load completes.
 
+### Explicit-save-only for pages (`EditorTab.pendingDraftTitle/Body`)
+
+`WikiStoreModel` previously called `flushPendingSaves()` inside `setActiveTab`,
+committing page edits to the database on every tab switch. The user's model is
+"Save Changes button = save; switching tabs = don't save."
+
+**New stash mechanism:**
+- `setActiveTab` now stashes the outgoing `draftTitle`/`draftBody` into
+  `EditorTab.pendingDraftTitle`/`pendingDraftBody` instead of flushing to DB.
+- `loadDrafts(for:)` restores from the stash when switching back to a tab that
+  has unsaved content (`pendingDraftTitle != nil`).
+- `bodyChanged()` and `titleChanged()` no longer call `scheduleAutosave()` —
+  the 500ms debounced autosave is removed. Only the explicit "Save Changes"
+  button (⌘S) commits to the database.
+- `flushPendingSave()` clears the stash after writing to DB.
+- **Cancel** now calls `discardPendingDraft(tabID:)`, which clears the stash and
+  reloads from DB — so Cancel actually reverts to the last saved state.
+
 ### Close-tab confirmation (`pendingCloseTabID`)
 
-`WikiStoreModel.closeTab(id:)` now checks `tabs[index].isEditing && id ==
-activeTabID`. When both are true the close is deferred: `pendingCloseTabID` is
-set and the method returns early. Two new public methods apply or cancel it:
+`WikiStoreModel.closeTab(id:)` checks `tabs[index].isEditing` for any tab
+(focused or not). When true, the close is deferred: `pendingCloseTabID` is
+set and the method returns early. Two public methods apply or cancel it:
 
 ```swift
-public func confirmCloseTab()   // removes the tab, calls setActiveTab(neighbor)
+public func confirmCloseTab()   // discards stash, removes tab, activates neighbor
 public func cancelCloseTab()    // clears pendingCloseTabID
 ```
 
-`confirmCloseTab()` does not need to flush page drafts explicitly — the
-`setActiveTab(neighbor)` call inside `applyCloseTab` already calls
-`flushPendingSave()`, which saves any `isDraftDirty` content.
+`confirmCloseTab()` clears `pendingDraftTitle/Body` (discard) and calls
+`applyCloseTab`. No save is performed — the user chose "Close & Discard."
 
-**Two separate alerts, one per content type:**
-
-- **`ContentView`** — watches `store.pendingCloseTabID` and shows a "Close
-  Tab? / Keep Editing" alert for non-source tabs (pages, Ask, Instructions, etc.)
-  where page drafts are guaranteed saved by `flushPendingSave`.
-
-- **`SourceDetailView`** — shows its own alert for source tabs and calls
-  `flushEditIfDirty()` *before* `store.confirmCloseTab()`. This ordering is
-  critical: by the time `confirmCloseTab()` changes `selection`, `file.id`
-  inside `flushEditIfDirty()` is still the source being closed, not the incoming
-  neighbor's file. Both alerts are driven by `@State private var showCloseTabAlert`
-  updated via `onChange(of: store.pendingCloseTabID)` to avoid complex
-  `Binding` closures that exceed the Swift type-checker's expression limit.
+**Single alert in `ContentView`** covers all tab types. Source tabs no longer
+have their own alert; since close = discard, there is nothing to flush.
 
 ## What is NOT guarded
 
-- **`closeOtherTabs` / `closeTabsAfter`** — these never close the active tab
-  (the anchor tab remains focused), and only the active tab can hold `isEditing
-  = true` at any given moment.
-- **Non-active tabs with stale `isEditing = true`** — a tab's editing state is
-  saved when the user leaves it, but the edits themselves were already flushed
-  by `setActiveTab`'s `flushPendingSave` call at switch time. No data is at risk;
-  the flag is cosmetic for restoration purposes.
+- **`closeOtherTabs` / `closeTabsAfter`** — these close only non-active tabs
+  silently. Only `closeTab` checks `isEditing`.
+- **In-tab navigation while editing** (clicking a `[[wiki-link]]`) — the
+  `handleSelectionChange` path still calls `flushPendingSaves()`, so navigating
+  within a tab continues to save to DB. This is a separate, out-of-scope concern.
