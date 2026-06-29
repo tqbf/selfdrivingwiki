@@ -9,7 +9,7 @@ import CSqliteVec
 /// connection; all access in Phase 1 is main-thread-synchronous. Phase 2 will
 /// add short-lived read connections inside the File Provider extension (the
 /// app stays the only writer; WAL mode makes concurrent reads safe).
-public final class SQLiteWikiStore: WikiStore {
+public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     private let db: OpaquePointer
     /// Prepared-statement cache keyed by SQL text; reused via `reset()`.
     private var statements: [String: SQLiteStatement] = [:]

@@ -22,7 +22,7 @@ public enum WikiStoreError: Error, CustomStringConvertible {
 /// Read/write storage interface for wiki pages (INITIAL.md §3). The SQLite
 /// implementation is the source of truth; the Phase 2 File Provider extension
 /// will adopt a read-only subset (`WikiReadStore`) of this.
-public protocol WikiStore {
+public protocol WikiStore: Sendable {
     /// Page summaries ordered by the given sort criterion.
     func listPages(sortBy: PageSortOrder) throws -> [WikiPageSummary]
     func getPage(id: PageID) throws -> WikiPage
