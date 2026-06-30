@@ -33,6 +33,13 @@ struct WikiFSApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        // Install the app-only PDFKit title extractor into Core's injectable
+        // seam. Core must not import PDFKit (it pulls AppKit into the File
+        // Provider extension on macOS 26), so the real implementation lives in
+        // this app target and is injected here. Non-app contexts (the
+        // extension, wikictl, tests) keep the nil-returning default.
+        DisplayNameResolver.installPDFTitleExtractor()
+
         let warning = LaunchLocationWarning.current()
         launchLocationWarning = warning
         _showingLaunchLocationWarning = State(initialValue: warning != nil)

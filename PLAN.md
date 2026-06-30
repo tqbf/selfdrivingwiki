@@ -226,6 +226,20 @@ gate's evidence and the known v0 gaps.
 - **M5 — Change signaling** ✅ edits increment version; Terminal reads see updates (no relaunch).
 - **M6 — Agent launch** ✅ spawn agent with `WIKI_ROOT` env pointing at the projection.
 
+### Target-linking constraint (File Provider extension)
+
+The `WikiFSFileProvider` extension is `com.apple.fileprovider-nonui` and
+**must not link AppKit** (or PDFKit/AVFoundation/Metal/Accelerate/CoreML) —
+macOS 26 asserts against it and the extension crashes on launch in
+`_EXRunningExtension._start`. The extension links `WikiFSCore` read-only as its
+sole dependency, so **`WikiFSCore` itself must stay free of those frameworks**.
+Anything framework-backed that `WikiFSCore` needs (currently PDF-title extraction
+via PDFKit) is exposed behind an injectable seam (`DisplayNameResolver.pdfTitle-
+Extractor`) whose default is framework-free; the real implementation lives in the
+**app** target (`Sources/WikiFS/`), which the extension does not link, and is
+installed at launch. Verified by `otool -L` on the built extension binary.
+See `plans/file-provider.md`.
+
 ## Build quick reference
 
 ```sh

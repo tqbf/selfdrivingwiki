@@ -1,5 +1,4 @@
 import Foundation
-import PDFKit
 
 /// Resolves the best human-readable display name for a source at ingest time.
 /// Returns `nil` when no richer metadata is available — the caller falls back to
@@ -9,12 +8,25 @@ import PDFKit
 /// Priority order:
 /// 1. Zotero item title (when the source came from Zotero)
 /// 2. Markdown front matter `title` (for `.md` / `text/markdown` files)
-/// 3. PDF document title (from PDFKit metadata)
+/// 3. PDF document title (via PDFKit metadata)
 /// 4. `nil` — caller uses the filename
 ///
-/// Pure and dependency-free (PDFKit is the only import), so the resolve function
-/// is unit-testable with in-memory Data.
+/// The Zotero + markdown paths are pure Foundation. The PDF-title step needs
+/// PDFKit, which transitively links **AppKit** — forbidden in the read-only
+/// File Provider extension (`WikiFSFileProvider`) that also links `WikiFSCore`
+/// on macOS 26 (`com.apple.fileprovider-nonui`). So PDF extraction is
+/// **injectable**: ``pdfTitleExtractor`` defaults to a `nil`-returning closure
+/// (used by the extension, `wikictl`, and tests by default) and the app installs
+/// the real PDFKit implementation at launch. This keeps `WikiFSCore` — and
+/// therefore the extension — free of PDFKit/AppKit at link time.
 public enum DisplayNameResolver {
+
+    /// PDF document-title extractor. Defaults to "no metadata" (`{ _ in nil }`)
+    /// so this type stays free of PDFKit/AppKit. The app installs the real PDFKit
+    /// implementation at launch (`WikiFS.PDFTitleExtractor.extract`); every
+    /// non-app context (extension, CLI, tests) leaves the default and simply
+    /// falls through to the filename.
+    public nonisolated(unsafe) static var pdfTitleExtractor: (Data) -> String? = { _ in nil }
 
     /// Resolve a display name from the available metadata and file bytes.
     /// - Parameters:
@@ -44,9 +56,10 @@ public enum DisplayNameResolver {
             return title
         }
 
-        // 3. PDF document title.
+        // 3. PDF document title (via the injectable extractor — nil-returning
+        //    unless the app installed the PDFKit implementation).
         if isPDF(filename: filename, mimeType: mimeType),
-           let title = extractPDFTitle(from: data) {
+           let title = pdfTitleExtractor(data) {
             return title
         }
 
@@ -154,14 +167,10 @@ public enum DisplayNameResolver {
 
     // MARK: - PDF title
 
-    /// Extract the document title from a PDF via PDFKit's document attributes.
-    static func extractPDFTitle(from data: Data) -> String? {
-        guard let document = PDFDocument(data: data),
-              let attrs = document.documentAttributes,
-              let title = attrs[PDFDocumentAttribute.titleAttribute] as? String
-        else { return nil }
-        return title.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-    }
+    // PDF title extraction is injected via ``pdfTitleExtractor`` so that this
+    // target does not import PDFKit (which pulls AppKit into the File Provider
+    // extension). The PDFKit implementation lives in the app target
+    // (`WikiFS.PDFTitleExtractor`) and is installed at launch.
 }
 
 // MARK: - String helper
