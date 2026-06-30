@@ -712,6 +712,10 @@ internal struct WikiReaderRep: NSViewRepresentable {
         var appliedFindVersion = 0
         private var convertTask: Task<Void, Never>?
         private var loadStart: DispatchTime?
+        /// Timestamp captured right before `loadHTMLString`, to split
+        /// `appear-to-painted` into the async hop (startLoad→loadHTMLString) vs.
+        /// the pure WKWebView parse/layout (loadHTMLString→didFinish).
+        private var htmlLoadStart: DispatchTime?
         private var isLoadingBinding: Binding<Bool>?
 
         func startLoad(markdown: String, isLoading: Binding<Bool>) {
@@ -721,6 +725,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
             isLoadingBinding = isLoading
             isLoading.wrappedValue = true
             loadStart = DispatchTime.now()
+            // Measure the synchronous click→startLoad window: openTab →
+            // loadDrafts (getPage + stripped) → SwiftUI re-render → this
+            // updateNSView→startLoad dispatch. This is the gap NOT covered by
+            // "webview.convert" / "webview.appear-to-painted".
+            if let click = store?.clickStartedAt {
+                ReaderTiming.point("click.to-startLoad", ms: Self.elapsedMs(since: click))
+            }
 
             // Build existence sets on the main actor (the store is @MainActor)
             // so the off-main convert can resolve links without crossing actor
@@ -737,8 +748,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     return (names + stripped).map { $0.lowercased() }
                 })
 
+            let loadStartVal = loadStart
             convertTask = Task.detached(priority: .userInitiated) { [weak self] in
                 let t0 = DispatchTime.now()
+                // How long did Task.detached take to start after startLoad?
+                if let ls = loadStartVal {
+                    ReaderTiming.point("webview.task-start", ms: Self.elapsedMs(since: ls))
+                }
                 // Shared pre-pass (footnotes + wiki links) + swift-markdown HTML
                 // render, both off the main actor. isResolved resolves against
                 // the precomputed existence sets so missing links style as ghosts.
@@ -749,10 +765,15 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 let body = MarkdownHTMLRenderer.render(prepared)
                 let html = WikiReaderView.documentHTML(body)
                 let convertMs = Self.elapsedMs(since: t0)
+                let convertDone = DispatchTime.now()
                 await MainActor.run { [weak self] in
                     guard let self, let webView = self.webView,
                           self.loadedMarkdown == markdown else { return }
+                    // How long did MainActor.run wait to get back on the main
+                    // actor? Large value ⇒ main thread is busy (SwiftUI layout).
+                    ReaderTiming.point("webview.main-hop", ms: Self.elapsedMs(since: convertDone))
                     ReaderTiming.point("webview.convert", ms: convertMs)
+                    htmlLoadStart = DispatchTime.now()
                     webView.loadHTMLString(html, baseURL: URL(string: "about:blank"))
                 }
             }
@@ -864,6 +885,19 @@ internal struct WikiReaderRep: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             if let start = loadStart {
                 ReaderTiming.point("webview.appear-to-painted", ms: Self.elapsedMs(since: start))
+            }
+            // Split the WKWebView cost: async hop (startLoad→loadHTMLString) vs.
+            // pure WKWebView parse/layout (loadHTMLString→didFinish). Tells us
+            // whether a navigation-free innerHTML swap would actually help.
+            if let html = htmlLoadStart {
+                ReaderTiming.point("webview.html-load", ms: Self.elapsedMs(since: html))
+            }
+            // Full click→painted latency (user perception): click → convert →
+            // WKWebView parse/layout → didFinish. Splits vs. the startLoad window
+            // above ("click.to-startLoad") so we know if the stall is in the
+            // synchronous SwiftUI path or in the WKWebView load itself.
+            if let click = store?.clickStartedAt {
+                ReaderTiming.point("click.to-painted", ms: Self.elapsedMs(since: click))
             }
             pageLoaded = true
             isLoadingBinding?.wrappedValue = false

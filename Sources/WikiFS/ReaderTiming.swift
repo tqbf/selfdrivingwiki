@@ -52,7 +52,7 @@ enum ReaderTiming {
 
     private static func emit(_ name: StaticString, ms: Double) {
         let label = "\(name)"
-        logger.notice("\(label, privacy: .public) \(String(format: "%.1f", ms)) ms")
+        logger.notice("\(label, privacy: .public) \(String(format: "%.1f", ms), privacy: .public) ms")
         // Write via a raw write() (FileHandle.write) instead of `print()`: when
         // stdout is redirected to a file it's fully buffered, so `print` lines
         // never flush for sparse events. This makes timings appear immediately.

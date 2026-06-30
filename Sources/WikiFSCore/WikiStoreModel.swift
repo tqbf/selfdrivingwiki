@@ -121,6 +121,11 @@ public final class WikiStoreModel {
     /// after `selection` has advanced (§3.5 read-state-at-save-time).
     private var loadedSelection: WikiSelection?
     private var isApplyingHistorySelection = false
+    /// Debug timing: when the latest user-initiated navigation began (set in
+    /// `openTab`). The reader's `Coordinator` reads this to log the synchronous
+    /// click→startLoad window and the full click→painted latency. `internal` so
+    /// the app module can read it; `nil` until the first navigation.
+    public var clickStartedAt: DispatchTime?
     /// True when the page drafts differ from the last persisted state. Cleared on
     /// save and on load. Prevents `flushPendingSaves()` from bumping `updated_at`
     /// on a tab switch when the user only viewed a page without editing.
@@ -243,18 +248,19 @@ public final class WikiStoreModel {
         (try? store.resolveSourceByName(displayName)) != nil
     }
 
-    /// Semantic search for pages matching `query` (sqlite-vec + NLEmbedding, with
-    /// a `LIKE` fallback). Powers the right-click link context menu's "Suggest…"
-    /// (missing links) and "Find Similar…" (any wiki link). Best-effort: returns
-    /// `[]` on any error so the menu never throws.
+    /// Semantic search for pages matching `query`. **Currently a no-op** — the
+    /// real implementation ran `NLEmbedding` inference on the main thread, and the
+    /// sidebar's context menu called it for every page row on every render,
+    /// freezing the UI (~0.4–2 s per render). Disabled until embedding inference
+    /// is moved off the main actor. Returns `[]`.
     public func searchSimilar(query: String, limit: Int = 8) -> [WikiPageSummary] {
-        (try? store.searchSimilar(query: query, limit: limit)) ?? []
+        []
     }
 
-    /// Semantic source search wrapper for the Sources sidebar search bar and
-    /// context menus. Best-effort: returns `[]` on any error.
+    /// Semantic source search wrapper. **No-op** for the same main-thread
+    /// NLEmbedding reason as `searchSimilar` (see above). Returns `[]`.
     public func searchSimilarSources(query: String, limit: Int = 20) -> [SourceSummary] {
-        (try? store.searchSimilarSources(query: query, limit: limit)) ?? []
+        []
     }
 
     /// Resolve a page title to its id (lowest-ULID on a duplicate-title
@@ -364,6 +370,7 @@ public final class WikiStoreModel {
     /// `[[wiki-link]]` that's already open returns to its tab instead of spawning
     /// a copy.
     public func openTab(_ selection: WikiSelection, title: String? = nil) {
+        clickStartedAt = DispatchTime.now()
         if let existing = tabs.first(where: { $0.selection == selection }) {
             DebugLog.store("[tabs] openTab: focus existing tab for \(selection) (id=\(existing.id))")
             setActiveTab(existing.id)
@@ -1316,6 +1323,11 @@ public final class WikiStoreModel {
         work: [(id: PageID, text: String)],
         store: @escaping @MainActor (PageID, [Data]) -> Void
     ) async {
+        // Short-circuit BEFORE touching NLEmbedding: `EmbeddingService.isAvailable`
+        // lazily LOADS the model (NLEmbedding.sentenceEmbedding — ~0.3 s on the
+        // main thread). On a warm DB there is no missing work, so loading the
+        // model at every launch just to find nothing to do was the startup stall.
+        guard !work.isEmpty else { return }
         guard EmbeddingService.isAvailable else { return }
         for (id, text) in work {
             var blobs: [Data] = []

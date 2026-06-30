@@ -21,23 +21,53 @@ public enum EmbeddingService {
     private static func model() -> NLEmbedding? {
         lock.lock()
         defer { lock.unlock() }
-        if let m = _model { return m }
-        guard Bundle.main.bundlePath.hasSuffix(".app") else { return nil }
-        guard #available(macOS 15, *) else { return nil }
+        if let m = _model {
+            DebugLog.store("embed.model cached hit")
+            return m
+        }
+        guard Bundle.main.bundlePath.hasSuffix(".app") else {
+            DebugLog.store("embed.model skip (not .app bundle)")
+            return nil
+        }
+        guard #available(macOS 15, *) else {
+            DebugLog.store("embed.model skip (macOS < 15)")
+            return nil
+        }
+        let t0 = DispatchTime.now()
         let m = NLEmbedding.sentenceEmbedding(for: .english)
+        let loadMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
         _model = m
+        DebugLog.store("embed.model LOAD \(String(format: "%.1f", loadMs)) ms main=\(Thread.isMainThread) loaded=\(m != nil)")
         return m
     }
 
     /// True when the `NLEmbedding` model is usable (app bundle + macOS 15+).
-    /// Cheap to call after first load (the model is cached).
-    public static var isAvailable: Bool { model() != nil }
+    /// NOTE: first call LOADS the model (~0.3 s on the main thread).
+    public static var isAvailable: Bool {
+        let available = model() != nil
+        DebugLog.store("embed.isAvailable → \(available)")
+        return available
+    }
 
     /// One 512-dim Float32 BLOB for a short string (a search query). Returns
     /// `nil` when the model is unavailable.
     public static func embeddingBlob(for text: String) -> Data? {
-        guard let m = model() else { return nil }
-        guard let doubles = m.vector(for: text) else { return nil }
+        let t0 = DispatchTime.now()
+        guard let m = model() else {
+            DebugLog.store("embed.blob nil (no model) len=\(text.count)")
+            return nil
+        }
+        guard let doubles = m.vector(for: text) else {
+            DebugLog.store("embed.blob nil (vector returned nil) len=\(text.count)")
+            return nil
+        }
+        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
+        // Diagnostic: log every NLEmbedding inference with its cost + input size.
+        DebugLog.store("embed.call \(String(format: "%.1f", elapsedMs)) ms len=\(text.count) main=\(Thread.isMainThread)")
+        // Log a concise caller chain for every call so we can identify the
+        // trigger when filtered by time (e.g. a page click).
+        let stack = Thread.callStackSymbols.dropFirst(2).prefix(5).joined(separator: " << ")
+        DebugLog.store("embed.STACK \(stack)")
         let floats = doubles.map { Float32($0) }
         return floats.withUnsafeBytes { Data($0) }
     }
@@ -49,6 +79,7 @@ public enum EmbeddingService {
     public static func chunks(for text: String, maxChunks: Int = 64) -> [String] {
         var c = TextChunker.chunk(text)
         if c.count > maxChunks { c = evenlySample(c, max: maxChunks) }
+        DebugLog.store("embed.chunks → \(c.count) chunk(s) from len=\(text.count)")
         return c
     }
 
@@ -62,12 +93,18 @@ public enum EmbeddingService {
     /// document** (not just the prefix) so a passage deep in the file is still
     /// represented in the index.
     public static func chunkedEmbeddings(for text: String, maxChunks: Int = 64) -> [Data] {
-        guard model() != nil else { return [] }
+        DebugLog.store("embed.chunked ENTER len=\(text.count) maxChunks=\(maxChunks)")
+        guard model() != nil else {
+            DebugLog.store("embed.chunked EXIT (no model)")
+            return []
+        }
         var chunks = TextChunker.chunk(text)
         if chunks.count > maxChunks {
             chunks = evenlySample(chunks, max: maxChunks)
         }
-        return chunks.compactMap { embeddingBlob(for: $0) }
+        let result = chunks.compactMap { embeddingBlob(for: $0) }
+        DebugLog.store("embed.chunked EXIT → \(result.count) blob(s) from \(chunks.count) chunk(s)")
+        return result
     }
 
     /// Pick up to `max` elements evenly spaced across `items` (always including

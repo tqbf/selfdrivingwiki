@@ -347,19 +347,7 @@ struct SidebarView: View {
                             }
                         }
                         .disabled(store.isAgentRunning)
-                        let similarTitle = summary.title
-                        let similar = store.searchSimilar(query: similarTitle, limit: 8)
-                            .filter { $0.id != summary.id }
-                        if !similar.isEmpty {
-                            Divider()
-                            Menu("Find Similar…", systemImage: "magnifyingglass") {
-                                ForEach(similar) { page in
-                                    Button(page.title) {
-                                        store.openTab(.page(page.id))
-                                    }
-                                }
-                            }
-                        }
+
                         if selectedPageIDs.count <= 1 {
                             Divider()
                             Button("Rename", systemImage: "pencil") { beginRename(summary) }
