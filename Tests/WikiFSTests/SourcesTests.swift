@@ -3,6 +3,7 @@ import CoreGraphics
 import Foundation
 import SQLite3
 import Testing
+import WikiFS
 @testable import WikiFSCore
 
 /// Phase 5 file-ingestion tests: ingest/list/get/delete, byte-identical content
@@ -331,6 +332,12 @@ struct SourcesTests {
     }
 
     @Test func displayNameFromPDFTitle() throws {
+        // Core no longer links PDFKit (it would pull AppKit into the File
+        // Provider extension). Install the app-only extractor so this test
+        // exercises the real PDF-title path, then restore the nil default.
+        DisplayNameResolver.pdfTitleExtractor = PDFTitleExtractor.extract
+        defer { DisplayNameResolver.pdfTitleExtractor = { _ in nil } }
+
         // Build a minimal valid PDF with a /Title entry.
         let title = "My PDF Document"
         let pdfData = try minimalPDF(title: title)
