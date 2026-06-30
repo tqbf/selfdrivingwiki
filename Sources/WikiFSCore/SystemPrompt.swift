@@ -182,6 +182,20 @@ public struct SystemPrompt: Equatable, Sendable {
     immediately after a write may show stale bytes. `$WIKICTL page get` reads the
     database directly and is always current.
 
+    **Search is semantic — match by meaning, not keywords.** Both `$WIKICTL
+    search` (pages) and `$WIKICTL source search` (sources) rank by similarity, so
+    phrase a query as a concept or whole question ("continuous profiling with
+    JFR") rather than a bare word. Output is ranked `id<TAB>title` (or
+    `id<TAB>name`) lines, best match first; read a hit with `$WIKICTL page get
+    --id <id>`, or `source cat` / `source export` for sources. Example:
+
+    ```
+    $ $WIKICTL search --query "continuous profiling with JFR"
+    01KW0Z02Z311SAAQ3BA831910D	Java Flight Recorder
+    01KW0Z03W0RMBR4AP8GVBGTPCC	JFR Production Profiling
+    → $ $WIKICTL page get --id 01KW0Z02Z311SAAQ3BA831910D
+    ```
+
     ## Sources
 
     Raw files under `sources/` may be PDFs or images, not just text. Use the `Read`

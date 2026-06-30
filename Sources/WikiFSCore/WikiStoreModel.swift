@@ -2,6 +2,21 @@ import Foundation
 import Observation
 import UniformTypeIdentifiers
 
+/// Progress of the blocking search-index upgrade (see
+/// `WikiStoreModel.searchUpgrade`). Shown in a non-dismissible sheet while the
+/// upgrade runs; `nil`-ing `searchUpgrade` dismisses it.
+public struct SearchUpgradeState: Identifiable {
+    public let id = UUID()
+    public let total: Int
+    public var done: Int
+    public var phase: Phase
+    public enum Phase { case pages, sources }
+
+    public init(total: Int, done: Int, phase: Phase) {
+        self.total = total; self.done = done; self.phase = phase
+    }
+}
+
 /// The app's single source of truth for wiki state and the in-flight editing
 /// session. `@MainActor @Observable` (uses `Observation`, NOT SwiftUI — this
 /// type is UI-framework-agnostic so it can be unit-tested directly).
@@ -30,6 +45,21 @@ public final class WikiStoreModel {
     /// Results of the last search (empty when searchQuery is empty).
     public private(set) var searchResults: [WikiPageSummary] = []
     @ObservationIgnored private var searchTask: Task<Void, Never>?
+
+    /// Progress of the one-time, blocking search-index upgrade (nil when idle).
+    /// When non-nil the app shows a non-dismissible sheet that blocks all UX:
+    /// the upgrade is the SOLE owner of the store while it runs (SQLite is never
+    /// touched off-main), so there can be no concurrent-statement race. It only
+    /// runs when MiniLM is the selected embedder AND there is missing content
+    /// (first run, an NLEmbedding→MiniLM cutover, or `wikictl`-written content);
+    /// the common launch is an instant no-op and shows nothing.
+    public private(set) var searchUpgrade: SearchUpgradeState?
+    /// Synchronous single-flight guard for ``upgradeSearchIndex``. Set BEFORE any
+    /// `await` (unlike `searchUpgrade`, which is only set after `configure()`),
+    /// so a second trigger that fires during the configure() suspension window
+    /// sees it true and bails. The check-and-set is main-actor and contains no
+    /// suspension, so it is atomic against the scenePhase/activeWikiID hooks.
+    @ObservationIgnored private var isUpgrading = false
 
     /// Live SOURCES search query from the Sources search bar. Debounced 300ms.
     /// Mirrors the page `searchQuery` (semantic cosine, LIKE fallback).
@@ -248,19 +278,21 @@ public final class WikiStoreModel {
         (try? store.resolveSourceByName(displayName)) != nil
     }
 
-    /// Semantic search for pages matching `query`. **Currently a no-op** — the
-    /// real implementation ran `NLEmbedding` inference on the main thread, and the
-    /// sidebar's context menu called it for every page row on every render,
-    /// freezing the UI (~0.4–2 s per render). Disabled until embedding inference
-    /// is moved off the main actor. Returns `[]`.
+    /// Semantic search for pages matching `query`. Delegates to the store's
+    /// hybrid search (FTS5 bm25 always; +MiniLM cosine fused via RRF when the
+    /// model is available). Runs the query embedding + SQLite on the main actor
+    /// — fine for the one-shot callers (the "Find Similar…" link menu builds its
+    /// submenu once per right-click, not per render). The old per-row sidebar
+    /// caller that froze the UI was removed; MiniLM inference is now ms, not the
+    /// ~5 s/100k chars NLEmbedding cliff that motivated disabling this.
     public func searchSimilar(query: String, limit: Int = 8) -> [WikiPageSummary] {
-        []
+        (try? store.searchSimilar(query: query, limit: limit)) ?? []
     }
 
-    /// Semantic source search wrapper. **No-op** for the same main-thread
-    /// NLEmbedding reason as `searchSimilar` (see above). Returns `[]`.
+    /// Semantic source search wrapper — same hybrid store search as
+    /// `searchSimilar`, over sources.
     public func searchSimilarSources(query: String, limit: Int = 20) -> [SourceSummary] {
-        []
+        (try? store.searchSimilarSources(query: query, limit: limit)) ?? []
     }
 
     /// Resolve a page title to its id (lowest-ULID on a duplicate-title
@@ -1291,57 +1323,85 @@ public final class WikiStoreModel {
 
     // MARK: - Search
 
-    /// Background chunk-embedding backfill. NLEmbedding's inference (CoreNLP →
-    /// BNNS) is **not safe off the main thread** — calling it from a detached
-    /// Task crashes with EXC_BAD_ACCESS inside `BNNSFilterApplyBatch`. So this
-    /// runs ON the main actor, but embeds chunk-by-chunk with a `Task.yield()`
-    /// between chunks so the run loop can service the UI between NLEmbedding
-    /// calls (each ~0.3 s). Fire-and-forget; safe to call repeatedly (only
-    /// embeds documents still missing chunks). FTS search works immediately;
-    /// semantic search fills in as chunks land. (The per-chunk jank goes away
-    /// once we switch to CoreML MiniLM, which is safe off-main on the ANE.)
-    public func backfillMissingEmbeddings() {
-        Task { [weak self] in
-            guard let self else { return }
-            await self.backfill(
-                kind: "page",
-                work: self.store.missingPageEmbeddingWork(),
-                store: { id, chunks in try? self.store.storePageChunks(id: id, chunks: chunks) })
-            await self.backfill(
-                kind: "source",
-                work: self.store.missingSourceEmbeddingWork(),
-                store: { id, chunks in try? self.store.storeSourceChunks(id: id, chunks: chunks) })
-            DebugLog.store("backfill: complete")
+    /// One-time, blocking search-index upgrade. Replaces the old detached
+    /// background backfill, which raced the main thread on the store's cached,
+    /// non-thread-safe prepared statements (the launch `EXC_BREAKPOINT` in
+    /// `String(cString:)`).
+    ///
+    /// Invariant: **SQLite is never touched off-main.** All store reads/writes
+    /// happen here on the main actor; only the MLX/Metal inference hops to a
+    /// detached task (pure compute, no SQLite). While `searchUpgrade != nil` the
+    /// UI shows a non-dismissible sheet, so the upgrade is the sole owner of the
+    /// store — there is no second thread and no race.
+    ///
+    /// Only runs when MiniLM is the selected embedder (fast, ~ms/sentence) AND
+    /// there is missing content. On builds without the bundled model
+    /// (`selectedEmbedderIdentifier()` ≠ MiniLM) it is a no-op so we never block
+    /// launch on the slow NLEmbedder path; search falls back to FTS. The common
+    /// warm-DB launch has no missing work → no sheet, instant.
+    public func upgradeSearchIndex() async {
+        // Single-flight: set BEFORE any `await`. The scenePhase `.active` and
+        // `activeWikiID` hooks can both fire at launch; without this synchronous
+        // guard a second call enters during the configure() suspension and the
+        // upgrade runs twice (harmless to data, wasteful, and it confuses the
+        // progress counter). `searchUpgrade` itself is set too late to gate on.
+        guard !isUpgrading else { return }
+        isUpgrading = true
+        defer { isUpgrading = false }
+
+        guard EmbeddingService.selectedEmbedderIdentifier() == EmbeddingService.miniLMIdentifier else {
+            return                                            // no MiniLM model → FTS-only
         }
+        await EmbeddingService.configure()
+        guard EmbeddingService.isAvailable else { return }
+
+        let pageWork   = store.missingPageEmbeddingWork()     // main-thread SQLite read
+        let sourceWork = store.missingSourceEmbeddingWork()   // main-thread SQLite read
+        let total = pageWork.count + sourceWork.count
+        guard total > 0 else { return }                       // nothing missing → no sheet
+
+        searchUpgrade = SearchUpgradeState(total: total, done: 0, phase: .pages)
+        DebugLog.store("searchUpgrade: begin — \(pageWork.count) page(s), \(sourceWork.count) source(s)")
+
+        var done = 0
+        done = await embedAndStore(pageWork, into: { try? store.storePageChunks(id: $0, chunks: $1) }, running: done)
+        searchUpgrade?.phase = .sources
+        done = await embedAndStore(sourceWork, into: { try? store.storeSourceChunks(id: $0, chunks: $1) }, running: done)
+
+        DebugLog.store("searchUpgrade: complete — \(done) of \(total)")
+        searchUpgrade = nil                                   // dismisses the sheet
     }
 
-    /// Embed each document's chunks on the main actor, yielding between chunks
-    /// (and between documents) so the UI stays responsive. Writes via `store`.
-    @MainActor
-    private func backfill(
-        kind: String,
-        work: [(id: PageID, text: String)],
-        store: @escaping @MainActor (PageID, [Data]) -> Void
-    ) async {
-        // Short-circuit BEFORE touching NLEmbedding: `EmbeddingService.isAvailable`
-        // lazily LOADS the model (NLEmbedding.sentenceEmbedding — ~0.3 s on the
-        // main thread). On a warm DB there is no missing work, so loading the
-        // model at every launch just to find nothing to do was the startup stall.
-        guard !work.isEmpty else { return }
-        guard EmbeddingService.isAvailable else { return }
+    /// Shared body of the page + source embed loops. **Stays on `@MainActor`**:
+    /// only the `await embedChunksOffMain` suspension hops off-main (pure MLX,
+    /// no SQLite); the `store` closure runs the SQLite write on the main actor.
+    /// Do NOT parallelize this — two threads on the store's cached statements is
+    /// the race that crashed launch (`docs/skills/sqlite-concurrency/SKILL.md`).
+    /// Returns the updated running count (for `searchUpgrade.done`).
+    private func embedAndStore(
+        _ work: [(id: PageID, text: String)],
+        into store: (PageID, [Data]) throws -> Void,
+        running done: Int
+    ) async -> Int {
+        var done = done
         for (id, text) in work {
-            var blobs: [Data] = []
-            for chunk in EmbeddingService.chunks(for: text) {
-                if let blob = EmbeddingService.embeddingBlob(for: chunk) {
-                    blobs.append(blob)
-                }
-                await Task.yield()   // let the run loop keep the UI alive between calls
-            }
-            guard !blobs.isEmpty else { continue }
-            store(id, blobs)
-            DebugLog.store("backfill: \(kind) \(id.rawValue) ← \(blobs.count) chunk(s)")
-            await Task.yield()
+            let blobs = await embedChunksOffMain(text)
+            if !blobs.isEmpty { try? store(id, blobs) }       // main-thread SQLite write
+            done += 1
+            searchUpgrade?.done = done
+            await Task.yield()                                // keep the sheet's spinner animating
         }
+        return done
+    }
+
+    /// Chunk + embed a document's text on a background thread (MLX/Metal is
+    /// safe off-main and is pure compute — it touches NO SQLite). Returns one
+    /// Float32 BLOB per chunk. The surrounding `upgradeSearchIndex` does all
+    /// SQLite I/O on the main actor.
+    private nonisolated func embedChunksOffMain(_ text: String) async -> [Data] {
+        await Task.detached(priority: .utility) {
+            EmbeddingService.chunkedEmbeddings(for: text)
+        }.value
     }
 
     private func scheduleSearch() {

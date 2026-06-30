@@ -29,74 +29,7 @@ struct ContentView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView(store: store, manager: manager, fileProvider: fileProvider,
-                        launcher: agentLauncher,
-                        ingestingSourceIDs: agentLauncher.ingestingSourceIDs,
-                        extractingSourceIDs: agentLauncher.extractingSourceIDs,
-                        showingAddFromZotero: $showingAddFromZotero,
-                        showingImportMarkdown: $showingImportMarkdown,
-                        onAddFromURL: { pendingAddURL = PendingAddURL(url: "") },
-                        onNewPage: { store.newPageInNewTab() },
-                        isZoteroConfigured: isZoteroConfigured)
-        } detail: {
-            HStack(spacing: 0) {
-                // Main column: tab bar + content. The transcript lives INSIDE the
-                // detail column (not a separate inspector layer) so opening it
-                // compresses the content INWARDS — matching how the leading
-                // navigation sidebar subdivides the window — instead of growing the
-                // window. It shares the detail column's full height, so it sits at
-                // the same height as the leading sidebar rather than under the tab bar.
-                VStack(spacing: 0) {
-                    TabBarView(store: store)
-                    wikiDetailPane
-                }
-
-                if isTranscriptExpanded {
-                    Divider()
-                    AgentTranscriptSidebar(launcher: agentLauncher, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
-            }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isTranscriptExpanded)
-            // Hidden buttons for keyboard shortcuts.
-            .background { keyboardShortcutButtons }
-        }
-        // Drop a file anywhere on the window to ingest it (raw bytes → SQLite →
-        // the read-only `files/` projection). The whole content is the target.
-        .dropDestination(for: URL.self) { urls, _ in
-            Task { await store.ingest(fileURLs: urls) }
-            return true
-        } isTargeted: { targeted in
-            // Fade, not bounce; skip the animation entirely under Reduce Motion.
-            if reduceMotion {
-                isDropTargeted = targeted
-            } else {
-                withAnimation(.easeInOut(duration: 0.15)) { isDropTargeted = targeted }
-            }
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(Color.accentColor, lineWidth: 2)
-                .opacity(isDropTargeted ? 1 : 0)
-                .allowsHitTesting(false)
-                .ignoresSafeArea()
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .navigation) {
-                Button("Back", systemImage: "chevron.left", action: navigateBack)
-                    .disabled(!store.canNavigateBack)
-                    .keyboardShortcut("[", modifiers: .command)
-                    .help("Go back")
-
-                Button("Forward", systemImage: "chevron.right", action: navigateForward)
-                    .disabled(!store.canNavigateForward)
-                    .keyboardShortcut("]", modifiers: .command)
-                    .help("Go forward")
-            }
-
-            primaryToolbarItems()
-        }
+        baseContent
         .sheet(item: $pendingAddURL) { pending in
             AddFromURLSheet(store: store, initialURL: pending.url)
         }
@@ -110,6 +43,14 @@ struct ContentView: View {
         .sheet(isPresented: $showingImportMarkdown) { ImportMarkdownSheet(store: store) }
         .sheet(isPresented: $showingAddFromZotero) {
             AddFromZoteroSheet(store: store, containerDirectory: zoteroContainerDirectory)
+        }
+        // Non-dismissible while the search-index upgrade runs — the upgrade is the
+        // sole owner of the store during it, so SQLite is never touched off-main.
+        // The binding's setter is a no-op: only the model nils `searchUpgrade` on
+        // completion (the user cannot dismiss; `interactiveDismissDisabled` blocks
+        // the gesture and the no-op setter blocks a programmatic clear).
+        .sheet(isPresented: Binding(get: { store.searchUpgrade != nil }, set: { _ in })) {
+            SearchUpgradeView(store: store).interactiveDismissDisabled()
         }
         // List(selection:) writes store.selection directly; observe it here so
         // the model flushes the outgoing page and loads the incoming one
@@ -145,6 +86,61 @@ struct ContentView: View {
             Button("Keep Editing", role: .cancel) {}
         } message: {
             Text("You're in edit mode. Unsaved changes will be discarded.")
+        }
+    }
+
+    /// NavigationSplitView + drop / overlay / toolbar. Split out of `body` so the
+    /// full modifier chain stays under the SwiftUI type-checker's complexity
+    /// budget (adding the search-upgrade sheet tipped the single expression over).
+    @ViewBuilder
+    private var baseContent: some View {
+        NavigationSplitView {
+            SidebarView(store: store, manager: manager, fileProvider: fileProvider,
+                        launcher: agentLauncher,
+                        ingestingSourceIDs: agentLauncher.ingestingSourceIDs,
+                        extractingSourceIDs: agentLauncher.extractingSourceIDs,
+                        showingAddFromZotero: $showingAddFromZotero,
+                        showingImportMarkdown: $showingImportMarkdown,
+                        onAddFromURL: { pendingAddURL = PendingAddURL(url: "") },
+                        onNewPage: { store.newPageInNewTab() },
+                        isZoteroConfigured: isZoteroConfigured)
+        } detail: {
+            detailColumn
+        }
+        // Drop a file anywhere on the window to ingest it (raw bytes → SQLite →
+        // the read-only `files/` projection). The whole content is the target.
+        .dropDestination(for: URL.self) { urls, _ in
+            Task { await store.ingest(fileURLs: urls) }
+            return true
+        } isTargeted: { targeted in
+            // Fade, not bounce; skip the animation entirely under Reduce Motion.
+            if reduceMotion {
+                isDropTargeted = targeted
+            } else {
+                withAnimation(.easeInOut(duration: 0.15)) { isDropTargeted = targeted }
+            }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.accentColor, lineWidth: 2)
+                .opacity(isDropTargeted ? 1 : 0)
+                .allowsHitTesting(false)
+                .ignoresSafeArea()
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .navigation) {
+                Button("Back", systemImage: "chevron.left", action: navigateBack)
+                    .disabled(!store.canNavigateBack)
+                    .keyboardShortcut("[", modifiers: .command)
+                    .help("Go back")
+
+                Button("Forward", systemImage: "chevron.right", action: navigateForward)
+                    .disabled(!store.canNavigateForward)
+                    .keyboardShortcut("]", modifiers: .command)
+                    .help("Go forward")
+            }
+
+            primaryToolbarItems()
         }
     }
 
@@ -191,6 +187,34 @@ struct ContentView: View {
 
     /// The selected-document/source detail pane, extracted so the `HStack`'s
     /// view builder stays under the type-checker's complexity budget.
+    // MARK: - Detail column (extracted so `body` stays type-checkable; the
+    // NavigationSplitView + its full modifier chain is otherwise too large for
+    // the SwiftUI type-checker once the search-upgrade sheet was added).
+    @ViewBuilder
+    private var detailColumn: some View {
+        HStack(spacing: 0) {
+            // Main column: tab bar + content. The transcript lives INSIDE the
+            // detail column (not a separate inspector layer) so opening it
+            // compresses the content INWARDS — matching how the leading
+            // navigation sidebar subdivides the window — instead of growing the
+            // window. It shares the detail column's full height, so it sits at
+            // the same height as the leading sidebar rather than under the tab bar.
+            VStack(spacing: 0) {
+                TabBarView(store: store)
+                wikiDetailPane
+            }
+
+            if isTranscriptExpanded {
+                Divider()
+                AgentTranscriptSidebar(launcher: agentLauncher, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isTranscriptExpanded)
+        // Hidden buttons for keyboard shortcuts.
+        .background { keyboardShortcutButtons }
+    }
+
     private var wikiDetailPane: some View {
         WikiDetailView(
             store: store,

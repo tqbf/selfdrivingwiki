@@ -773,7 +773,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     // actor? Large value ⇒ main thread is busy (SwiftUI layout).
                     ReaderTiming.point("webview.main-hop", ms: Self.elapsedMs(since: convertDone))
                     ReaderTiming.point("webview.convert", ms: convertMs)
-                    htmlLoadStart = DispatchTime.now()
+                    self.htmlLoadStart = DispatchTime.now()
                     webView.loadHTMLString(html, baseURL: URL(string: "about:blank"))
                 }
             }

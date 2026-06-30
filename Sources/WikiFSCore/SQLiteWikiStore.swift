@@ -9,7 +9,7 @@ import CSqliteVec
 /// connection; all access in Phase 1 is main-thread-synchronous. Phase 2 will
 /// add short-lived read connections inside the File Provider extension (the
 /// app stays the only writer; WAL mode makes concurrent reads safe).
-public final class SQLiteWikiStore: WikiStore {
+public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     private let db: OpaquePointer
     /// Prepared-statement cache keyed by SQL text; reused via `reset()`.
     private var statements: [String: SQLiteStatement] = [:]
@@ -123,7 +123,7 @@ public final class SQLiteWikiStore: WikiStore {
         // (version >= 1) — and fresh dbs forced onto the ladder by tests — run
         // `migrate(from:)` so every prior upgrade path is preserved.
         if version == 0 && !forceLadderMigration {
-            try createFreshSchemaV14()
+            try createFreshSchemaV15()
             return
         }
         try migrate(from: &version)
@@ -136,7 +136,7 @@ public final class SQLiteWikiStore: WikiStore {
     /// names (`ingested_files_created`, `file_markdown_versions_file`) are
     /// reproduced verbatim — they survive the table renames in the ladder, so a
     /// fresh db must match.
-    private func createFreshSchemaV14() throws {
+    private func createFreshSchemaV15() throws {
         // Core page model + attachments/links.
         try exec("""
         CREATE TABLE pages (
@@ -342,7 +342,14 @@ public final class SQLiteWikiStore: WikiStore {
         END;
         """)
 
-        try exec("PRAGMA user_version=14;")
+        try exec("""
+        CREATE TABLE embedding_meta (
+            id INTEGER PRIMARY KEY CHECK(id = 1),
+            embedder TEXT NOT NULL
+        );
+        """)
+        try exec("INSERT INTO embedding_meta(id, embedder) VALUES (1, 'nlembedding-512');")
+        try exec("PRAGMA user_version=15;")
     }
 
     /// The stepwise, idempotent migration ladder keyed on `PRAGMA user_version`.
@@ -737,6 +744,18 @@ public final class SQLiteWikiStore: WikiStore {
             try exec("DROP TABLE IF EXISTS source_embeddings;")
             try exec("PRAGMA user_version=14;")
             version = 14
+        }
+
+        if version < 15 {
+            try exec("""
+            CREATE TABLE embedding_meta (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                embedder TEXT NOT NULL
+            );
+            """)
+            try exec("INSERT INTO embedding_meta(id, embedder) VALUES (1, 'nlembedding-512');")
+            try exec("PRAGMA user_version=15;")
+            version = 15
         }
     }
 
@@ -1783,57 +1802,6 @@ public final class SQLiteWikiStore: WikiStore {
         return out
     }
 
-    public func recomputeMissingEmbeddings() -> Int {
-        do {
-            let stmt = try statement("""
-            SELECT p.id, p.title, p.body_markdown
-            FROM pages p
-            LEFT JOIN page_chunks pc ON pc.page_id = p.id
-            WHERE pc.page_id IS NULL;
-            """)
-            defer { stmt.reset() }
-            var rows: [(id: PageID, title: String, body: String)] = []
-            while try stmt.step() {
-                rows.append((PageID(rawValue: stmt.text(at: 0)),
-                             stmt.text(at: 1), stmt.text(at: 2)))
-            }
-            return chunkEmbedMissing(kind: "pages", rows,
-                                     store: { try storePageChunks(id: $0, chunks: $1) })
-        } catch {
-            FileHandle.standardError.write(Data("SQLiteWikiStore.recomputeMissingEmbeddings: \(error)\n".utf8))
-            return 0
-        }
-    }
-
-    /// Shared inner of page + source embedding backfill. For each document the
-    /// caller has already determined is missing from its chunk table, chunk the
-    /// text via `EmbeddingService.chunkedEmbeddings(for:)` and store every chunk
-    /// through the caller's store closure. No-op when vec is unavailable;
-    /// per-doc failures are logged + skipped so one bad document can't abort the
-    /// batch. Returns the count of documents embedded.
-    @discardableResult
-    private func chunkEmbedMissing(
-        kind: String,
-        _ rows: [(id: PageID, title: String, body: String)],
-        store: (PageID, [Data]) throws -> Void
-    ) -> Int {
-        guard isVecAvailable() else { return 0 }
-        var n = 0
-        for (id, title, body) in rows {
-            let text = body.isEmpty ? title : "\(title)\n\n\(body)"
-            let chunks = EmbeddingService.chunkedEmbeddings(for: text)
-            if chunks.isEmpty {
-                DebugLog.store("recompute[\(kind)][\(id.rawValue)] no chunks (model unavailable?) bodyLen=\(body.count)")
-                continue
-            }
-            DebugLog.store("recompute[\(kind)][\(id.rawValue)] bodyLen=\(body.count) chunks=\(chunks.count)")
-            do { try store(id, chunks); n += 1 }
-            catch { DebugLog.store("recompute[\(kind)][\(id.rawValue)] store failed — \(error)") }
-        }
-        DebugLog.store("recompute[\(kind)]: embedded \(n) of \(rows.count) doc(s)")
-        return n
-    }
-
     // MARK: - Full-text search (FTS5/BM25, v13)
 
     /// Turn free text into a safe FTS5 MATCH expression: keep alphanumerics and
@@ -1971,7 +1939,34 @@ public final class SQLiteWikiStore: WikiStore {
     /// into `source_search` and the embedding), then backfill any remaining
     /// `source_search` gaps, rebuild any FTS index that lags its content table,
     /// and finally embed every page/source still missing one.
+    /// Check the stored embedder identifier in `embedding_meta` against the
+    /// currently selected embedder. On mismatch, wipes `page_chunks` and
+    /// `source_chunks` so the async backfill re-embeds everything with the new
+    /// embedder. Called as step 0 of `ensureSearchIndexesPopulated()`.
+    ///
+    /// `activeIdentifierOverride` is injected by tests; production passes `nil`
+    /// and the live `EmbeddingService.selectedEmbedderIdentifier()` is used.
+    func ensureEmbedderConsistency(activeIdentifierOverride: String? = nil) {
+        let activeIdentifier = activeIdentifierOverride ?? EmbeddingService.selectedEmbedderIdentifier()
+        do {
+            let stored = (try? queryScalarText("SELECT embedder FROM embedding_meta WHERE id = 1;")) ?? ""
+            guard stored != activeIdentifier else { return }
+            try exec("DELETE FROM page_chunks;")
+            try exec("DELETE FROM source_chunks;")
+            let stmt = try statement("INSERT OR REPLACE INTO embedding_meta(id, embedder) VALUES (1, ?1);")
+            defer { stmt.reset() }
+            try stmt.bind(activeIdentifier, at: 1)
+            _ = try stmt.step()
+            DebugLog.store("ensureEmbedderConsistency: \(stored.isEmpty ? "(empty)" : stored) -> \(activeIdentifier), chunks wiped")
+        } catch {
+            DebugLog.store("ensureEmbedderConsistency: failed — \(error)")
+        }
+    }
+
     private func ensureSearchIndexesPopulated() {
+        // 0. Wipe chunks if the active embedder changed since the last open.
+        ensureEmbedderConsistency()
+
         // 1. Seed a v1 processed-markdown version for markdown-native sources
         //    that have none, so their body is searchable (name-only otherwise).
         //    appendProcessedMarkdown also fires the re-embed + upsertSourceSearch
@@ -1995,31 +1990,37 @@ public final class SQLiteWikiStore: WikiStore {
             DebugLog.store("ensureSearchIndexes: source_search backfill failed — \(error)")
         }
 
-        // 3. Rebuild an FTS index only when it lags its content table (a full
-        //    rebuild on every open of a healthy DB is wasteful).
-        if rowCount("pages") > 0 && rowCount("pages_fts") < rowCount("pages") {
+        // 3. Rebuild an FTS index only when its term index is empty. NOTE: a bare
+        //    `count(*)` on an *external-content* FTS5 table is optimized to read
+        //    the CONTENT table, so `count(*) FROM pages_fts` always equals
+        //    `count(*) FROM pages` — a rowid-count health check can NEVER detect
+        //    an empty index. The launch ranking bug: a DB whose pages predated the
+        //    FTS triggers reported pages_fts=232/232 (looked healthy) but had ZERO
+        //    indexed terms → MATCH returned nothing → search degraded to
+        //    semantic-only and ranked short queries arbitrarily. The `_idx` shadow
+        //    b-tree holds the actual terms; 0 there means "never built" → rebuild.
+        if rowCount("pages") > 0 && ftsIndexRowCount("pages_fts") == 0 {
             do { try exec("INSERT INTO pages_fts(pages_fts) VALUES ('rebuild');")
             } catch { DebugLog.store("ensureSearchIndexes: pages_fts rebuild failed — \(error)") }
         }
-        if rowCount("sources") > 0 && rowCount("sources_fts") < rowCount("sources") {
+        if rowCount("sources") > 0 && ftsIndexRowCount("sources_fts") == 0 {
             do { try exec("INSERT INTO sources_fts(sources_fts) VALUES ('rebuild');")
             } catch { DebugLog.store("ensureSearchIndexes: sources_fts rebuild failed — \(error)") }
         }
 
-        // 4. Chunk embeddings are NOT computed here. NLEmbedding is too slow to
-        //    run synchronously at launch (~5 s / 100k chars; minutes for a full
-        //    corpus), so embedding backfill runs in the background via
-        //    ``backfillMissingEmbeddings()`` (compute off-main, DB writes on the
-        //    calling actor). FTS search works immediately; semantic search fills
-        //    in as the background job completes.
+        // 4. Chunk embeddings are NOT computed here. The bulk embed is a one-time,
+        //    blocking, main-thread-only upgrade (`WikiStoreModel.upgradeSearchIndex`)
+        //    driven by the app layer; new content embeds inline at write time. FTS
+        //    search works immediately; semantic search fills in once the upgrade
+        //    has run. See `docs/skills/sqlite-concurrency/SKILL.md`.
 
         DebugLog.store("ensureSearchIndexes: pages_fts=\(rowCount("pages_fts"))/\(rowCount("pages")) sources_fts=\(rowCount("sources_fts"))/\(rowCount("sources")) pageChunks=\(rowCount("page_chunks")) sourceChunks=\(rowCount("source_chunks"))")
     }
 
     /// Snapshot of pages that have no chunk embeddings yet: `(id, embeddable
     /// text)`. The text is `title\n\nbody` (title-only when the body is empty).
-    /// Read on the caller's thread (main); the expensive embedding runs off-main
-    /// in ``backfillMissingEmbeddings``.
+    /// Read on the main actor by `upgradeSearchIndex`; the MLX inference runs
+    /// off-main but the SQLite read/write stays on main.
     public func missingPageEmbeddingWork() -> [(id: PageID, text: String)] {
         var out: [(id: PageID, text: String)] = []
         guard let stmt = try? statement("""
@@ -2090,6 +2091,35 @@ public final class SQLiteWikiStore: WikiStore {
         (Int((try? queryScalarText("SELECT count(*) FROM \(table);")) ?? "")) ?? 0
     }
 
+    /// Row count of an FTS5 table's `_idx` shadow segment b-tree. This is NOT the
+    /// distinct-term count (that's the `fts5vocab` virtual table) — but it IS a
+    /// reliable emptiness probe: `_idx == 0` iff the index was never built, while
+    /// `_idx > 0` iff it holds at least one segment. Unlike `rowCount` (which on
+    /// an *external-content* FTS5 table reads the content table and so can never
+    /// be 0 while content exists), this reflects the REAL index state. Used by
+    /// `ensureSearchIndexes` step 3 to detect content rows that predate the FTS
+    /// triggers (the launch ranking bug) and trigger a rebuild.
+    private func ftsIndexRowCount(_ table: String) -> Int {
+        (Int((try? queryScalarText("SELECT count(*) FROM \(table)_idx;")) ?? "")) ?? 0
+    }
+
+    #if DEBUG
+    /// Test-only: recreate `pages_fts` as an external-content table with an
+    /// EMPTY term index, reproducing the launch ranking bug (content rows that
+    /// predate the FTS triggers). The triggers remain; the index simply has no
+    /// terms until `ensureSearchIndexes` rebuilds it on the next open. Used by
+    /// `FullTextSearchTests.emptyFtsTermIndexIsHealedOnOpen`.
+    internal func _breakPagesFtsIndexForTesting() throws {
+        try exec("DROP TABLE pages_fts;")
+        try exec("""
+            CREATE VIRTUAL TABLE pages_fts USING fts5(
+                title, body_markdown,
+                content='pages', content_rowid='rowid',
+                tokenize='porter');
+            """)
+    }
+    #endif
+
     // MARK: - Source embeddings (v12, semantic source search)
 
     /// Store/replace all chunk embeddings for a source. Public so tests + the
@@ -2141,43 +2171,10 @@ public final class SQLiteWikiStore: WikiStore {
         return out
     }
 
-    /// Backfill `source_chunks` for sources that lack any. Chunk-embeds each
-    /// source on its processed-markdown HEAD body + name; name-only when no
-    /// processed markdown exists yet (un-extracted PDF / binary file). Mirrors
-    /// `recomputeMissingEmbeddings`. No-op (returns 0) when vec is unavailable.
-    public func recomputeMissingSourceEmbeddings() -> Int {
-        do {
-            let stmt = try statement("""
-            SELECT s.id, s.display_name, s.filename,
-                   (SELECT content FROM source_markdown_versions smv
-                    WHERE smv.file_id = s.id ORDER BY smv.id DESC LIMIT 1) AS body
-            FROM sources s
-            LEFT JOIN source_chunks sc ON sc.source_id = s.id
-            WHERE sc.source_id IS NULL;
-            """)
-            defer { stmt.reset() }
-            var rows: [(id: PageID, title: String, body: String)] = []
-            while try stmt.step() {
-                let id = PageID(rawValue: stmt.text(at: 0))
-                let displayName = sqlite3_column_type(stmt.handle, 1) == SQLITE_NULL
-                    ? nil : stmt.text(at: 1)
-                let filename = stmt.text(at: 2)
-                let body = sqlite3_column_type(stmt.handle, 3) == SQLITE_NULL
-                    ? "" : stmt.text(at: 3)
-                rows.append((id, displayName ?? filename, body))
-            }
-            return chunkEmbedMissing(kind: "sources", rows,
-                                     store: { try storeSourceChunks(id: $0, chunks: $1) })
-        } catch {
-            FileHandle.standardError.write(Data("SQLiteWikiStore.recomputeMissingSourceEmbeddings: \(error)\n".utf8))
-            return 0
-        }
-    }
-
     /// Best-effort re-chunk + re-embed of a source after its content/name
     /// changed. No-op when vec is unavailable (the version still commits; the
-    /// chunks are backfilled by `recomputeMissingSourceEmbeddings` on the next
-    /// open). Called from `appendProcessedMarkdown` (covers extraction seeding,
+    /// chunks are filled in by the next search-index upgrade). Called from
+    /// `appendProcessedMarkdown` (covers extraction seeding,
     /// raw-text seeding, user edits, and revert) and `renameSource`.
     private func reembedSource(sourceID: PageID, body: String) {
         guard isVecAvailable() else { return }

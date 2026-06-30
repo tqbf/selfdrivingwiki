@@ -9,10 +9,9 @@ import Testing
 /// now statically linked and registered; see
 /// `vecScalarIsRegisteredAfterStaticLink`), so these tests exercise: the v13 schema migration,
 /// the `storeSourceEmbedding` write path, the **LIKE fallback** search, the
-/// `reembedSource`/`recomputeMissingSourceEmbeddings` no-op behavior without
-/// vec, the `wikictl source search` CLI (TSV output + arg validation), and the
-/// `ON DELETE CASCADE` on `source_embeddings`. Mirrors `SourcesTests` /
-/// `WikiCtlCommandTests`.
+/// `reembedSource` no-op behavior without vec, the `wikictl source search` CLI
+/// (TSV output + arg validation), and the `ON DELETE CASCADE` on
+/// `source_embeddings`. Mirrors `SourcesTests` / `WikiCtlCommandTests`.
 struct SourceEmbeddingSearchTests {
 
     private func tempDatabaseURL() -> URL {
@@ -50,7 +49,7 @@ struct SourceEmbeddingSearchTests {
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
         defer { sqlite3_close(db) }
 
-        #expect(scalarInt(db, "PRAGMA user_version;") == 14)
+        #expect(scalarInt(db, "PRAGMA user_version;") == 15)
         #expect(tableExists(db, "source_chunks"))
         // page chunk table mirrors the source one.
         #expect(tableExists(db, "page_chunks"))
@@ -135,17 +134,7 @@ struct SourceEmbeddingSearchTests {
         #expect(created.timeIntervalSince1970 > 1_700_000_000)  // a 2023+ timestamp
     }
 
-    // MARK: - recompute / re-embed hooks (vec-unavailable no-ops)
-
-    @Test func recomputeMissingSourceEmbeddingsIsNoOpWithoutVec() throws {
-        let store = try tempStore()
-        _ = try store.addSource(filename: "a.pdf", data: Data("%PDF".utf8))
-        // vec is unavailable under swift test → returns 0, never throws.
-        let first = store.recomputeMissingSourceEmbeddings()
-        let second = store.recomputeMissingSourceEmbeddings()
-        #expect(first == 0)
-        #expect(second == 0)
-    }
+    // MARK: - Re-embed hooks (vec-unavailable no-op)
 
     @Test func appendProcessedMarkdownDoesNotThrowWithoutVec() throws {
         let store = try tempStore()

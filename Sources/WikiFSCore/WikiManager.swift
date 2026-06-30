@@ -78,9 +78,17 @@ public final class WikiManager {
     // MARK: - Launch
 
     /// Load the registry, migrating the single v0 wiki into it as #1 on first
-    /// run, then open the most-recently-used wiki as the active store. Idempotent:
-    /// re-running just reloads + reopens.
-    public func bootstrap() {
+    /// run, and optionally open the most-recently-used wiki as the active store.
+    ///
+    /// Pass `activateNow: false` when calling from `App.init()` so that only
+    /// `wikis` is set before SwiftUI's first render.  The initial NSTableView
+    /// load (reloadData) then runs with data but no selection — avoiding an
+    /// NSTableView reentrant-delegate warning (the log says it "will become an
+    /// assert in the future") that fires when `activeWikiID` is set in the same
+    /// SwiftUI transaction as `wikis`.  Call `activateMostRecent()` from `.task`
+    /// to select the wiki after the first render completes (only selectRow, not a
+    /// concurrent reloadData).
+    public func bootstrap(activateNow: Bool = true) {
         var registry = WikiRegistry.load(from: containerDirectory)
         // The v0 legacy import is strictly first-run-only: it runs ONLY while the
         // registry is still empty. Once any wiki exists, a stray legacy
@@ -99,6 +107,16 @@ public final class WikiManager {
             try? registry.save(to: containerDirectory)
         }
         wikis = registry.wikis
+        if activateNow, let first = registry.mostRecentlyUsed {
+            openActive(first.id)
+        }
+    }
+
+    /// Open the most-recently-used wiki as the active store.  Call after
+    /// `bootstrap(activateNow: false)` once NSTableView has completed its
+    /// initial reloadData — i.e. from `.task` in the app's root view.
+    public func activateMostRecent() {
+        let registry = WikiRegistry.load(from: containerDirectory)
         if let first = registry.mostRecentlyUsed {
             openActive(first.id)
         }
@@ -259,11 +277,24 @@ public final class WikiManager {
         activeWikiID = id
         activeStore = model
         onActiveStoreDidChange?()
-        // Build chunk embeddings for any content the open-time self-heal left
-        // unembedded (NLEmbedding is too slow to run synchronously at open).
-        // Runs in the background: FTS search works immediately; semantic search
-        // fills in as chunks are written.
-        model.backfillMissingEmbeddings()
+        // The search-index upgrade is NOT triggered here. It is a one-time,
+        // blocking, main-thread-only operation (the sole owner of the store while
+        // it runs — see `docs/skills/sqlite-concurrency/SKILL.md`) driven by the
+        // app layer via ``WikiManager/upgradeActiveStoreSearchIndex()`` from
+        // `scenePhase == .active` and on wiki switch. Running it inline here would
+        // race the launch first-render window (an NSTableView reentrant-delegate
+        // warning); new content embeds inline at write time, so the upgrade is
+        // rarely needed.
+    }
+
+    /// Run the blocking search-index upgrade for the active store (a no-op
+    /// unless MiniLM is selected AND there is missing content). Safe to call
+    /// repeatedly — `upgradeSearchIndex` is single-flight and idempotent. Driven
+    /// by the app layer (scenePhase `.active` / wiki switch), never from the
+    /// launch `.task`. While it runs a non-dismissible sheet blocks all UX so the
+    /// upgrade is the sole owner of the store (no off-main SQLite).
+    public func upgradeActiveStoreSearchIndex() async {
+        await activeStore?.upgradeSearchIndex()
     }
 
     /// Create the wiki's DB file if absent by opening it once (which runs the

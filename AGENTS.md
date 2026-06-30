@@ -38,6 +38,27 @@ Code and other agents — NOT Polytoken — included for provenance:
   read the real data, host the real view in an `NSWindow` test, instrument every
   seam via `os_log`, and read the trace back with `log show`.
 
+* When the app quits with **no crash report** (no new `.ips`, just an exit
+  code — e.g. a silent `exit()`/`abort()` from a C/C++ dependency, or a failure
+  that reproduces only via `open`/LaunchServices), `os_log` is structurally
+  blind to it. Follow
+  [`docs/skills/debugging-with-lldb/SKILL.md`](docs/skills/debugging-with-lldb/SKILL.md):
+  attach to the `open`-launched process with `process attach -n <NAME> -w`,
+  break on `exit`/`abort`/`__assert_rtn` (scoped to `libsystem_c.dylib`), and
+  read the stack at the moment of death. Reach for this *before* rebuild-and-
+  guess when there's no `.ips`.
+
+* **SQLite is single-threaded in this app: all `SQLiteWikiStore` access happens
+  on the main actor — never on a background task/queue.** The store keeps one
+  connection with a statement cache keyed by SQL; two threads running the same
+  query share one `sqlite3_stmt*` and race (`EXC_BREAKPOINT` in `String(cString:)`).
+  `SQLITE_OPEN_FULLMUTEX` does NOT save you — it serializes C calls, not app-level
+  statement reuse. Follow
+  [`docs/skills/sqlite-concurrency/SKILL.md`](docs/skills/sqlite-concurrency/SKILL.md):
+  bulk store work is a blocking modal upgrade (sole owner while it runs), new
+  content embeds inline at write time, and off-main work is pure compute (MLX)
+  only — no `store.*` calls. There is no background "backfill."
+
 * Never use `print` for diagnostics — route all logging through `DebugLog`
   (`os_log` → Console.app, subsystem `com.selfdrivingwiki.debug`) so it's visible
   no matter how the app launched. The only exception is real CLI stdout (e.g.
