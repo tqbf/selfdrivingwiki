@@ -28,6 +28,48 @@ struct WikiManagerTests {
         #expect(manager.activeStore?.summaries.contains { $0.title == "Home" } == true)
     }
 
+    // MARK: - Deferred activation (launch reentrancy sequencing)
+
+    /// Guards the macOS-26 launch sequencing: `App.init()` calls
+    /// `bootstrap(activateNow: false)` so the first SwiftUI render populates
+    /// `wikis` WITHOUT setting `activeWikiID` — keeping the initial NSTableView
+    /// `reloadData` free of a concurrent selection change (a reentrant-delegate
+    /// warning). If this regresses, the app re-introduces the launch-time
+    /// NSTableView reentrancy.
+    @Test func deferredBootstrapPopulatesWikisButActivatesNothing() {
+        let manager = WikiManager(containerDirectory: tempDirectory())
+        manager.bootstrap(activateNow: false)
+        #expect(manager.wikis.count == 1)
+        #expect(manager.activeWikiID == nil)
+        #expect(manager.activeStore == nil)
+    }
+
+    /// `activateMostRecent()` (called from the root `.task`, after the first
+    /// render) is what selects the wiki. Pairs with the test above: the launch
+    /// path reaches an active store only via this second step.
+    @Test func activateMostRecentSelectsWikiAfterDeferredBootstrap() {
+        let manager = WikiManager(containerDirectory: tempDirectory())
+        manager.bootstrap(activateNow: false)
+        #expect(manager.activeWikiID == nil)
+        manager.activateMostRecent()
+        #expect(manager.activeWikiID != nil)
+        #expect(manager.activeStore != nil)
+    }
+
+    /// The search-index upgrade is deliberately NOT triggered by store
+    /// activation inline (it used to run in `openActive`, racing the first render
+    /// and — via MLX's metallib load — `exit()`-ing the process). It is now driven
+    /// by the app layer via `upgradeActiveStoreSearchIndex()`. This guards that it
+    /// is the entry point and is safe to call (a no-op in tests: no app bundle, so
+    /// no MiniLM model → it returns without blocking or touching SQLite off-main).
+    @Test func searchUpgradeEntryPointIsSafeAfterActivation() async {
+        let manager = WikiManager(containerDirectory: tempDirectory())
+        manager.bootstrap()
+        #expect(manager.activeStore != nil)
+        await manager.upgradeActiveStoreSearchIndex()
+        #expect(manager.activeStore != nil)
+    }
+
     // MARK: - Per-wiki DB isolation (the gate's core claim)
 
     @Test func pagesInOneWikiNeverAppearInAnother() async {

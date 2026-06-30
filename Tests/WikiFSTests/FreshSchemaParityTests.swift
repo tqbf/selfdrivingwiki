@@ -120,8 +120,8 @@ import SQLite3
         let ladder = try fingerprint(at: ladderURL)
 
         // Both must report head version 14.
-        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "14")
-        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "14")
+        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "15")
+        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "15")
 
         if fast != ladder {
             Issue.record("fresh fast-path schema drifted from the stepwise ladder:\n--- fast ---\n\(fast)\n--- ladder ---\n\(ladder)")
@@ -139,7 +139,7 @@ import SQLite3
         for expected in ["pages", "attachments", "page_links", "sources",
                          "source_markdown_versions", "source_links", "system_prompt",
                          "log", "wiki_index", "page_chunks", "source_chunks",
-                         "source_search", "pages_fts", "sources_fts"] {
+                         "source_search", "pages_fts", "sources_fts", "embedding_meta"] {
             #expect(tables.contains(expected), "missing table: \(expected)")
         }
         // The historical single-row embedding tables must NOT exist on a fresh db

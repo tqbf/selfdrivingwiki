@@ -144,6 +144,34 @@ if [ -f "${MARKDOWNLINT_JS}" ]; then
 else
   echo "  (markdownlint.bundle.js not found at ${MARKDOWNLINT_JS} — markdown save-time auto-fix will be skipped)"
 fi
+# MLX runtime — model dir + metallib, both downloaded on demand (gitignored),
+# bundled into the .app. The metallib is REQUIRED: swift build can't build MLX's
+# Metal shaders, so the prebuilt version-matched one (fetched by download.py) must
+# ship next to the binary (MLX's loader finds it via the bundle Resources path).
+if [ ! -d "Resources/all-MiniLM-L6-v2" ] || [ ! -f "Resources/mlx.metallib" ]; then
+  echo "  MLX runtime absent — running prepare step (tools/minilm-prepare/download.py) ..."
+  ( cd tools/minilm-prepare && uv run python download.py )
+fi
+if [ -d "Resources/all-MiniLM-L6-v2" ]; then
+  echo "  Bundling all-MiniLM-L6-v2 ..."
+  cp -r "Resources/all-MiniLM-L6-v2" "${RESOURCES_DIR}/all-MiniLM-L6-v2"
+fi
+if [ -f "Resources/mlx.metallib" ]; then
+  echo "  Bundling mlx.metallib ..."
+  cp "Resources/mlx.metallib" "${RESOURCES_DIR}/mlx.metallib"
+  # MLX's C++ load_default_library searches for the metallib RELATIVE TO THE
+  # BINARY (<binary_dir>/mlx.metallib, then <binary_dir>/Resources/mlx.metallib)
+  # — NOT via NSBundle resource lookup. The binary lives in Contents/MacOS/, so
+  # a Contents/Resources/mlx.metallib (the macOS-standard, properly-signed-as-a-
+  # resource location) is NEVER found → MLX's default error handler calls exit()
+  # and silently kills the app at first GPU use. A real file in Contents/MacOS/
+  # breaks codesign (a metallib there is an unsigned code subobject), so symlink
+  # it from next to the binary back into Resources. Metal's library loader follows
+  # the symlink; codesign seals it by reference. (.build/debug already has the
+  # metallib adjacent to the executable, which is why running it directly worked.)
+  ln -sf "../Resources/mlx.metallib" "${MACOS_DIR}/mlx.metallib"
+fi
+
 [ -f "${APP_ICON}" ] && cp "${APP_ICON}" "${RESOURCES_DIR}/AppIcon.icns"
 
 cat > "${CONTENTS}/Info.plist" <<PLIST

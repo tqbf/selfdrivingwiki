@@ -279,9 +279,18 @@ enum PdfExtractionService {
             process.terminationHandler = { proc in
                 processRegistry.untrack(proc)
                 stderrPipe.fileHandleForReading.readabilityHandler = nil
-                // Drain any bytes still in the kernel pipe buffer before taking.
-                if let tail = try? stderrPipe.fileHandleForReading.readToEnd() {
-                    stderrBuffer.append(tail)
+                // Drain the final stderr RELIABLY. `readToEnd()` after a
+                // readabilityHandler races with it: a handler callback already
+                // dispatched can still land after we nil the handler, and
+                // Foundation can drop those bytes — which intermittently lost the
+                // error line ("boom") under load and left an empty message. Give
+                // any in-flight callback a moment to land, then loop
+                // `availableData` (non-blocking) until the pipe is empty.
+                Thread.sleep(forTimeInterval: 0.05)
+                while true {
+                    let data = stderrPipe.fileHandleForReading.availableData
+                    if data.isEmpty { break }
+                    stderrBuffer.append(data)
                 }
                 if proc.terminationStatus == 0 {
                     continuation.resume()
@@ -408,14 +417,23 @@ enum PdfExtractionService {
                     processRegistry.untrack(proc)
                     // Stop the continuous handlers, then drain whatever is still in
                     // the kernel pipe buffers so no bytes are lost between the last
-                    // handler invocation and now.
+                    // handler invocation and now. NOTE: do NOT use `readToEnd()`
+                    // here — after a readabilityHandler it races with a queued
+                    // handler callback and can drop the final bytes (the same bug
+                    // that flaked `streamProcessThrowsOnFailure`). Nil the handler,
+                    // let any in-flight callback land, then loop `availableData`.
                     stdoutPipe.fileHandleForReading.readabilityHandler = nil
                     stderrPipe.fileHandleForReading.readabilityHandler = nil
-                    if let tail = try? stdoutPipe.fileHandleForReading.readToEnd() {
-                        stdoutBuffer.append(tail)
+                    Thread.sleep(forTimeInterval: 0.05)
+                    while true {
+                        let data = stdoutPipe.fileHandleForReading.availableData
+                        if data.isEmpty { break }
+                        stdoutBuffer.append(data)
                     }
-                    if let tail = try? stderrPipe.fileHandleForReading.readToEnd() {
-                        stderrBuffer.append(tail)
+                    while true {
+                        let data = stderrPipe.fileHandleForReading.availableData
+                        if data.isEmpty { break }
+                        stderrBuffer.append(data)
                     }
                     let status = proc.terminationStatus
                     guard status == 0 else {

@@ -1,5 +1,6 @@
 import SwiftUI
 import WikiFSCore
+import WikiFSMLX
 
 /// Entry point for the WikiFS macOS app.
 ///
@@ -30,6 +31,12 @@ struct WikiFSApp: App {
     /// Built lazily after `bootstrap` (it needs the registered wikis) — see the
     /// `.task` below. The change bridge observes `wikictl`'s Darwin notifications.
     @State private var changeBridge: WikiChangeBridge?
+    /// Tracks whether the main window scene is active, so wiki switches (which
+    /// fire `onActiveStoreDidChange`) only kick off the Metal embedding backfill
+    /// once the window is up. The launch-time store activation happens during
+    /// the first-render `.task`, before the scene is active; backfill for that
+    /// case is driven by the `scenePhase == .active` transition instead.
+    @State private var isSceneActive = false
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -39,7 +46,12 @@ struct WikiFSApp: App {
         // this app target and is injected here. Non-app contexts (the
         // extension, wikictl, tests) keep the nil-returning default.
         DisplayNameResolver.installPDFTitleExtractor()
-
+        // Install the app-only MiniLM (MLX/Metal) embedder into Core's seam.
+        // Core must not link MLX (it would pull Metal into the File Provider
+        // extension on macOS 26); the real MiniLM implementation lives in the
+        // WikiFSMLX target and is injected here. This also starts the AppKit
+        // foreground observer that gates the off-main backfill.
+        EmbedderBootstrap.install()
         let warning = LaunchLocationWarning.current()
         launchLocationWarning = warning
         _showingLaunchLocationWarning = State(initialValue: warning != nil)
@@ -57,7 +69,16 @@ struct WikiFSApp: App {
             DatabaseLocation.migrateFromApplicationSupportIfNeeded()
         }
         containerDirectory = directory
-        _manager = State(initialValue: WikiManager(containerDirectory: directory))
+        // Populate wikis BEFORE handing the manager to @State so SwiftUI's
+        // first render sees a non-empty list.  activateNow: false means
+        // activeWikiID stays nil for that render — NSTableView's initial
+        // reloadData runs with data but no selection, which is safe.
+        // activateMostRecent() in .task sets the selection AFTER the first
+        // render; that update is selectRow-only (no concurrent reloadData),
+        // avoiding an NSTableView reentrant-delegate warning on macOS 26.
+        let m = WikiManager(containerDirectory: directory)
+        m.bootstrap(activateNow: false)
+        _manager = State(initialValue: m)
         let coordinator = ExtractionCoordinator(containerDirectory: directory)
         _extractionCoordinator = State(initialValue: coordinator)
         // All three launchers share one GenerationGate so ingest, ask-turn, and
@@ -104,15 +125,15 @@ struct WikiFSApp: App {
                     Text(warning.message)
                 }
                 .task {
+                    fileProvider.wire(into: manager)
+                    // First render already loaded the wiki list (reloadData, no
+                    // selection).  Now set the active store: only triggers selectRow
+                    // (not reloadData), so no NSTableView reentrancy on macOS 26.
+                    manager.activateMostRecent()
                     if let warning = await FileProviderSetupVerifier.verifyAndRepairInstalledProvider() {
                         fileProviderSetupWarning = warning
                         showingFileProviderSetupWarning = true
                     }
-                    // Wire the File Provider side effects into the manager: it
-                    // imports no FileProvider symbols (testable core), so the app
-                    // injects domain registration/removal + per-store signaling.
-                    fileProvider.wire(into: manager)
-                    manager.bootstrap()
                     await fileProvider.migrateDomainsIfNeeded(
                         wikiIDs: manager.wikis.map(\.id))
                     await manager.registerAllDomains()
@@ -133,12 +154,21 @@ struct WikiFSApp: App {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { manager.activeStore?.flushPendingSaves() }
+            isSceneActive = (phase == .active)
+            if phase == .active { Task { await manager.upgradeActiveStoreSearchIndex() } }
         }
         // Keep the bridge's Darwin observations in lockstep with the wiki set:
         // a freshly-created wiki's CLI writes must be heard; a deleted wiki's
         // notification name released.
         .onChange(of: manager.wikis) { _, _ in
             changeBridge?.refreshObservations()
+        }
+        // Backfill embeddings for a freshly-selected store, but only once the
+        // window is up. The launch-time activation (in the root `.task`) sets
+        // `activeWikiID` before the scene becomes active, so this is skipped at
+        // launch — the `scenePhase == .active` transition covers that case.
+        .onChange(of: manager.activeWikiID) { _, _ in
+            if isSceneActive { Task { await manager.upgradeActiveStoreSearchIndex() } }
         }
 
         Window("Claude Prompt Templates", id: "claudePromptHelp") {

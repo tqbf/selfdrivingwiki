@@ -2,6 +2,27 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-06-30 — MiniLM (Metal) embeddings shipped; search index hardened
+
+- **MiniLM/MLX embeddings now run in the bundled app.** It had been crashing
+  immediately on launch (a silent `exit()`): MLX couldn't find its `metallib` (it
+  searches next to the binary, not via the bundle) and its default error handler
+  `exit()`s. Fixed the bundle layout so MLX finds it, and moved `MLXEmbedders`
+  off `WikiFSCore` so the File Provider extension no longer transitively links
+  Metal.
+- **Search ranking fixed.** The launch self-heal never rebuilt the FTS5 index for
+  wikis migrated through the schema ladder — a `count(*)`-based health check is
+  always satisfied for external-content FTS5 tables — so search degraded to
+  semantic-only and ranked poorly. The check now detects an unbuilt index and
+  rebuilds.
+- **Embedding is a one-time, blocking, single-threaded upgrade** — no background
+  "backfill." All `SQLiteWikiStore` access is main-thread only (a blocking modal
+  sheet makes the upgrade the sole owner of the store); only MLX inference runs
+  off-main. New content embeds inline at write time, so the upgrade is usually an
+  instant no-op.
+- **`searchSimilar` / "Find Similar…" restored** (it had been a no-op since the
+  NLEmbedding main-thread freeze); MiniLM is cheap enough to run on demand.
+
 ## 2026-06-29 — Embedding inference stopped blocking the main thread
 
 Clicking a page (and app startup) had a ~0.4–2 s stall introduced by the
@@ -137,14 +158,25 @@ the UI stays responsive between the ~0.3 s NLEmbedding calls. Re-verified: app r
 60 s through active backfill with no crash (newest `.ips` unchanged). Known minor
 warning (non-fatal): "reentrant operation in NSTableView delegate" during backfill
 writes — to revisit. The per-chunk main-actor jank is itself the strongest argument
-for the CoreML MiniLM move (ANE inference is safe off-main).
+for the MLX MiniLM move (Metal inference is safe off-main).
 
-**Deferred (recommended separately): CoreML all-MiniLM-L6-v2.** NLEmbedding is the
+**Deferred (recommended separately): MLX all-MiniLM-L6-v2.** NLEmbedding is the
 bottleneck — ~5 s / 100k chars, so a full-corpus first backfill takes minutes.
-Research (see below) says CoreML MiniLM on the Neural Engine is ~5-15 ms/sentence
-(100-1000× faster), better quality, no crash, predictable 512-token truncation — at
-the cost of ~100 MB bundle + a tokenizer + Swift mean-pooling (~2-5 days). When
-adopted, swap it in behind `EmbeddingService` (chunk index + queries unchanged).
+Research says MLX MiniLM on Metal/GPU is low-single-digit ms/sentence
+(100-1000× faster), better quality, no crash, predictable 512-token truncation —
+using `mlx-community/all-MiniLM-L6-v2-bf16` + Apple's `MLXEmbedders` (model
+downloaded on demand, gitignored, ~45 MB bundled into the .app; no conversion
+pipeline). Design + phased plan are written
+(`plans/mlx-minilm-design.md`). **Phase 0 done** — `tools/minilm-prepare/`
+downloads the bf16 model on demand (gitignored, pinned HF revision `b6691709`,
+SHA recorded for reproducible builds) and validates it. Gate reframed: MLX
+embedding engines diverge from HF at ~0.99 cosine (a BERT-impl difference, not
+bf16/precision), so the bar is **non-garbage** (min 0.9871 ≥ 0.95) +
+**self-consistent** (paraphrase 0.636 ≫ unrelated 0.028), both PASS. The real
+parity/quality bar is Swift `MLXEmbedders` (Phase 1) + AC.4 (search quality).
+Phases 1–3 pending. (Pivoted from an earlier CoreML/ANE design that hit
+conversion/quantization/ANE-compile problems.) When adopted, swap it in behind
+`EmbeddingService` (chunk index + queries unchanged).
 
 ## 2026-06-29 — Unified, self-healing hybrid search (removed manual Reindex)
 

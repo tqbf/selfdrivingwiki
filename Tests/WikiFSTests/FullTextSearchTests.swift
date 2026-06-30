@@ -106,4 +106,35 @@ struct FullTextSearchTests {
         #expect(again.pages == counts.pages)
         #expect(again.sources == counts.sources)
     }
+
+    // MARK: - Launch self-heal of an empty term index (the ranking bug)
+
+    /// Regression test for the search-ranking bug: an external-content FTS5
+    /// table reports `count(*) == pages.count` (it reads the content table), so
+    /// the launch health check (`pages_fts < pages`) was ALWAYS false and the
+    /// rebuild never ran. A DB whose pages predated the FTS triggers ended up
+    /// with pages_fts "232/232" but ZERO indexed terms → MATCH returned nothing
+    /// → the hybrid search degraded to semantic-only and ranked short queries
+    /// ("scala", "java") arbitrarily. Opening the store must detect the empty
+    /// term index and rebuild it.
+    @Test func emptyFtsTermIndexIsHealedOnOpen() throws {
+        let url = tempDatabaseURL()
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let page = try store.createPage(title: "Claim Notes")
+        try store.updatePage(id: page.id, title: "Claim Notes",
+                             body: "Details about the insurance claim and appeal process.")
+        // Baseline: a healthy index finds the body term.
+        #expect(try store.searchSimilar(query: "insurance", limit: 10).contains { $0.id == page.id })
+
+        // Reproduce the broken state: pages exist, but the FTS term index is
+        // empty (as when pages predate the FTS triggers).
+        try store._breakPagesFtsIndexForTesting()
+        #expect(try store.searchSimilar(query: "insurance", limit: 10).isEmpty)
+
+        // Re-opening runs ensureSearchIndexes, which must now see zero terms and
+        // rebuild → the body term is findable again.
+        let reopened = try SQLiteWikiStore(databaseURL: url)
+        let hits = try reopened.searchSimilar(query: "insurance", limit: 10)
+        #expect(hits.contains { $0.id == page.id })
+    }
 }

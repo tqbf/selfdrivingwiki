@@ -74,8 +74,16 @@ final class SQLiteStatement {
     // MARK: - Column readers (0-based)
 
     func text(at column: Int32) -> String {
-        guard let c = sqlite3_column_text(handle, column) else { return "" }
-        return String(cString: c)
+        guard let base = sqlite3_column_text(handle, column) else { return "" }
+        // `String(cString:)` TRAPS on invalid UTF-8 and stops at an embedded NUL.
+        // DB text (e.g. processed source markdown) can carry arbitrary bytes —
+        // either genuinely bad data or garbage from a racing statement read — so
+        // decode by explicit byte length and fall back to a lossy decode (U+FFFD)
+        // rather than crashing the process.
+        let byteCount = Int(sqlite3_column_bytes(handle, column))
+        guard byteCount > 0 else { return "" }
+        let buffer = UnsafeBufferPointer(start: base, count: byteCount)
+        return String(bytes: buffer, encoding: .utf8) ?? String(decoding: buffer, as: UTF8.self)
     }
 
     func double(at column: Int32) -> Double {
