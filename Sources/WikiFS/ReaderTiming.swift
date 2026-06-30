@@ -29,8 +29,8 @@ enum ReaderTiming {
     /// recorder is attached, so this is safe to leave in production builds.
     static let signposter = OSSignposter(logHandle: osLog)
 
-    /// Time a synchronous block: emits a signpost interval + a persisted `.notice`
-    /// ms line (+ stdout). Returns the block's result unchanged.
+    /// Time a synchronous block: emits a signpost interval + a `.debug` ms line
+    /// (+ stdout). Returns the block's result unchanged.
     @discardableResult
     static func measure<T>(_ name: StaticString, _ body: () throws -> T) rethrows -> T {
         let state = signposter.beginInterval(name)
@@ -45,14 +45,21 @@ enum ReaderTiming {
 
     /// Emit a single point measurement (ms) — for phases timed across async hops
     /// where a `measure` interval won't span the work, e.g. WKWebView appear →
-    /// content painted.
+    /// content painted. Fires a signpost EVENT (always-on in Instruments,
+    /// Points-of-Interest) so the per-click phase timeline is visible without the
+    /// `.debug` text log; the precise ms lives in the `.debug` line / stdout.
     static func point(_ name: StaticString, ms: Double) {
+        signposter.emitEvent(name)
         emit(name, ms: ms)
     }
 
     private static func emit(_ name: StaticString, ms: Double) {
         let label = "\(name)"
-        logger.notice("\(label, privacy: .public) \(String(format: "%.1f", ms), privacy: .public) ms")
+        // `.debug` — these fire on every page click, so they'd spam the persisted
+        // (notice) log. Capture with `log show --debug` or read the stdout line
+        // when launched from a terminal. The signpost interval (in `measure`)
+        // remains the always-on, Instruments-visible signal.
+        logger.debug("\(label, privacy: .public) \(String(format: "%.1f", ms), privacy: .public) ms")
         // Write via a raw write() (FileHandle.write) instead of `print()`: when
         // stdout is redirected to a file it's fully buffered, so `print` lines
         // never flush for sparse events. This makes timings appear immediately.
