@@ -1,160 +1,143 @@
+import AppKit
 import SwiftUI
 import WikiFSCore
 
-/// A browser-style address bar at the top of the detail pane. Serves two roles
-/// depending on focus state — no explicit mode switch required:
+/// A Safari-style omnibox that lives in the window's **toolbar** (a principal
+/// toolbar item), replacing the window title. Serves two roles depending on
+/// focus state — no explicit mode switch required:
 ///
-/// 1. **Idle (not focused):** displays the active page's wikilink
-///    (`[[Page Title]]`), read-only — the "where am I" indicator, like a
-///    browser URL bar.
-/// 2. **Focused / typing:** becomes a semantic search field. Typing debounces
-///    into `store.searchSimilar(query:)` and shows a ranked dropdown of matching
-///    pages. Selecting a result (or pressing Enter) navigates to it.
+/// 1. **Idle (not focused):** shows the active page's wikilink (`[[Page Title]]`)
+///    as the field's text — the "where am I" indicator, like a browser URL bar.
+/// 2. **Focused / typing:** semantic search. Typing debounces into
+///    `store.searchSimilar(query:)` and shows a ranked suggestions panel below
+///    the field. Selecting a result (or pressing Enter) navigates to it.
 ///
-/// No agent query in v1 — pure location display + fast ranked search.
+/// The editable field is an AppKit `NSSearchField` (`OmniboxSearchField`) —
+/// SwiftUI `TextField` can't take first responder inside an `NSToolbar` item —
+/// and the suggestions live in a non-activating child panel.
 struct AddressBarView: View {
     @Bindable var store: WikiStoreModel
     @Binding var isFocused: Bool
+    /// When the sidebar is open it consumes width; the omnibox shrinks by the
+    /// sidebar's width so the back/forward buttons still fit in the toolbar.
+    var sidebarVisible: Bool
 
     @State private var queryText = ""
     @State private var results: [WikiPageSummary] = []
     @State private var searchTask: Task<Void, Never>?
-    @FocusState private var fieldFocused: Bool
+    @State private var focusToken = 0
+    /// Pointer is over the omnibox — reveals the trailing "add to bookmarks" plus.
+    @State private var isHovering = false
+    @State private var showReaderMenu = false
+    /// Host window width, reported by the field; drives the flexible field width.
+    @State private var windowWidth: CGFloat = 0
+
+    // The reader/page zoom is a persisted global (`@AppStorage`), so the toolbar
+    // can drive the same value the detail views read — no binding to thread.
+    @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
 
     var body: some View {
-        bar
-            .overlay(alignment: .top) {
-                if fieldFocused && !results.isEmpty {
-                    resultsDropdown
-                        .padding(.top, AddressBarMetrics.height)
-                }
-            }
-            // Cmd-L drives `isFocused` from the parent; sync it into the real
-            // `@FocusState`. Only the parent→field direction — the field→parent
-            // direction is handled in the `fieldFocused` observer below.
-            .onChange(of: isFocused) { _, focused in
-                if focused { fieldFocused = true }
-            }
-            .onChange(of: fieldFocused) { _, focused in
-                if focused {
-                    // Clear on focus so typing starts a fresh search (the
-                    // wikilink display was just for the idle state).
-                    queryText = ""
-                    results = []
-                } else {
-                    isFocused = false
-                    queryText = ""
-                    results = []
-                }
-            }
-    }
-
-    // MARK: - Bar
-
-    @ViewBuilder
-    private var bar: some View {
-        ZStack {
-            // Idle: read-only wikilink label.
-            if !fieldFocused {
-                idleLabel
-            }
-            // Editable field — always present so focus can be driven externally.
-            TextField("Search pages…", text: $queryText)
-            .textFieldStyle(.plain)
-            .font(.system(.callout, design: .monospaced))
-            .focused($fieldFocused)
-            .opacity(fieldFocused ? 1 : 0)
-            .onSubmit { submitTopResult() }
-            .onChange(of: queryText) { _, _ in runSearch() }
-            .onKeyPress(.escape) {
-                cancel()
-                return .handled
-            }
-        }
-        .padding(.horizontal, AddressBarMetrics.horizontalPadding)
-        .frame(height: AddressBarMetrics.height)
-        .frame(maxWidth: .infinity)
-        .background(.regularMaterial)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            fieldFocused = true
-        }
-        .overlay(alignment: .bottom) {
-            Divider().opacity(PageEditorMetrics.dividerOpacity)
-        }
-    }
-
-    /// The read-only wikilink display shown when the bar is not focused.
-    @ViewBuilder
-    private var idleLabel: some View {
-        HStack(spacing: 0) {
-            if addressString.isEmpty {
-                Text("Search pages…")
-                    .foregroundStyle(.tertiary)
-            } else {
-                Image(systemName: "link")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .padding(.trailing, 4)
-                Text(addressString)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: 0)
-        }
-    }
-
-    // MARK: - Results dropdown
-
-    private var resultsDropdown: some View {
-        VStack(spacing: 0) {
-            ForEach(results) { result in
-                resultRow(result)
-                if result.id != results.last?.id {
-                    Divider()
-                        .padding(.horizontal, 8)
-                        .opacity(0.3)
-                }
-            }
-        }
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(.secondary.opacity(0.2), lineWidth: 1)
+        OmniboxSearchField(
+            text: $queryText,
+            locationText: addressString,
+            results: results,
+            focusToken: focusToken,
+            onTextChange: { runSearch(query: $0) },
+            onSubmit: submitTopResult,
+            onEscape: cancel,
+            onBlur: handleBlur,
+            onSelect: navigate,
+            onWindowWidth: { windowWidth = $0 },
+            // Reserve the "+" gap whenever a page/source is shown (not just on
+            // hover) so the text has a stable position and the "+" fades into
+            // the reserved space.
+            textLeadingInset: bookmarkTarget != nil
+                ? AddressBarMetrics.textLeadingInsetWithBookmark
+                : AddressBarMetrics.textLeadingInset
         )
-        .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
-        .padding(.horizontal, 4)
-        .zIndex(1)
+        // Explicit width derived from the window: the principal toolbar item
+        // won't stretch on its own, so we size the field to fill the gap up to a
+        // cap and let it shrink when the window narrows.
+        .frame(width: fieldWidth)
+        // The Page Menu icon and add-bookmark "+" live inside the pill on the
+        // leading edge (Safari-style), inset from the rounded left edge. The
+        // field's text is inset to match (see `AddressSearchFieldCell`).
+        .overlay(alignment: .leading) {
+            HStack(spacing: 4) {
+                readerMenuButton
+                // Reserve the "+" slot whenever a page/source is showing so the
+                // text doesn't jump; reveal it on hover.
+                if let target = bookmarkTarget {
+                    addBookmarkButton(target)
+                        .opacity(isHovering ? 1 : 0)
+                        .allowsHitTesting(isHovering)
+                }
+            }
+            .padding(.leading, AddressBarMetrics.iconLeadingInset)
+        }
+        // Hover anywhere in the pill so moving onto the "+" keeps it visible.
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.12)) { isHovering = hovering }
+        }
+        // Cmd-L flips `isFocused`; turn that into a focus request for the field.
+        .onChange(of: isFocused) { _, focused in
+            if focused { focusToken &+= 1 }
+        }
     }
 
-    @ViewBuilder
-    private func resultRow(_ result: WikiPageSummary) -> some View {
+    // MARK: - Reader menu (Safari-style page controls)
+
+    /// The leading page-menu button (Safari's "Page Menu" glyph); opens a
+    /// dropdown with Zoom and Find on Page.
+    private var readerMenuButton: some View {
         Button {
-            navigate(to: result)
+            showReaderMenu.toggle()
         } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "doc.text")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(result.title)
-                    .lineLimit(1)
-                    .font(.callout)
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Image(systemName: "text.page.badge.magnifyingglass")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .frame(width: 18, height: 22)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help("Page controls")
+        .popover(isPresented: $showReaderMenu, arrowEdge: .bottom) {
+            ReaderControlsMenu(zoom: $readerZoom, onFind: findOnPage)
+        }
+    }
+
+    /// The "+" affordance shown on hover when a bookmarkable page or source is
+    /// showing. Click adds it to the Bookmarks root.
+    private func addBookmarkButton(_ target: BookmarkTarget) -> some View {
+        Button {
+            addToBookmarks(target)
+        } label: {
+            Image(systemName: "plus.circle")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Add to Bookmarks")
+        .transition(.opacity)
+    }
+
+    /// The field width for the current window: fills the toolbar gap (window
+    /// width minus the fixed leading/trailing toolbar chrome) up to a cap, and
+    /// compresses to a floor when the window is narrow.
+    private var fieldWidth: CGFloat {
+        guard windowWidth > 0 else { return AddressBarMetrics.fieldWidth }
+        let sidebar = sidebarVisible ? AddressBarMetrics.sidebarWidthReserve : 0
+        let available = windowWidth - AddressBarMetrics.reservedChrome - sidebar
+        return min(max(available, AddressBarMetrics.minFieldWidth), AddressBarMetrics.maxFieldWidth)
     }
 
     // MARK: - Actions
 
-    private func runSearch() {
+    private func runSearch(query: String) {
         searchTask?.cancel()
-        let trimmed = queryText.trimmingCharacters(in: .whitespaces)
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else {
             results = []
             return
@@ -173,11 +156,58 @@ struct AddressBarView: View {
 
     private func navigate(to result: WikiPageSummary) {
         store.selectPage(byTitle: result.title)
-        fieldFocused = false
+        queryText = ""
+        results = []
+        isFocused = false
     }
 
     private func cancel() {
-        fieldFocused = false
+        queryText = ""
+        results = []
+        isFocused = false
+    }
+
+    /// The field lost focus to another responder — snap back to the idle
+    /// location display.
+    private func handleBlur() {
+        queryText = ""
+        results = []
+        isFocused = false
+    }
+
+    // MARK: - Bookmark / find actions
+
+    private enum BookmarkTarget {
+        case page(PageID)
+        case source(PageID)
+    }
+
+    /// The current selection, when it's something that can be bookmarked (a page
+    /// or a source). Non-bookmarkable selections (log, ask, …) return `nil` so no
+    /// plus appears.
+    private var bookmarkTarget: BookmarkTarget? {
+        switch store.activeTab?.selection {
+        case .page(let id): return .page(id)
+        case .source(let id): return .source(id)
+        default: return nil
+        }
+    }
+
+    private func addToBookmarks(_ target: BookmarkTarget) {
+        switch target {
+        case .page(let id): store.addPageRef(parentID: nil, pageID: id)
+        case .source(let id): store.addSourceRef(parentID: nil, sourceID: id)
+        }
+    }
+
+    /// Show the system find bar by sending the standard Text Finder action down
+    /// the responder chain (`to: nil`) to the focused view. Works in the text
+    /// editors today; the web reader depends on macOS's built-in support.
+    private func findOnPage() {
+        showReaderMenu = false
+        let sender = NSMenuItem()
+        sender.tag = Int(NSTextFinder.Action.showFindInterface.rawValue)
+        NSApp.sendAction(#selector(NSResponder.performTextFinderAction(_:)), to: nil, from: sender)
     }
 
     // MARK: - Address string
@@ -210,11 +240,197 @@ struct AddressBarView: View {
     }
 }
 
+// MARK: - Suggestions list
+
+/// The ranked results list shown in the omnibox suggestions panel. Rows
+/// highlight on hover (accent tint) and the top row shows a `↩` glyph — the
+/// Enter target.
+struct AddressResultsList: View {
+    let results: [WikiPageSummary]
+    /// The arrow-key-selected row, pushed in from the AppKit coordinator. `nil`
+    /// means nothing is explicitly selected and Enter targets the top row.
+    let selectedIndex: Int?
+    let onSelect: (WikiPageSummary) -> Void
+
+    @State private var hoveredResultID: PageID?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
+                row(result, index: index)
+                if result.id != results.last?.id {
+                    Divider()
+                        .padding(.leading, 34)
+                        .opacity(0.25)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func row(_ result: WikiPageSummary, index: Int) -> some View {
+        let hovered = hoveredResultID == result.id
+        let keyboardSelected = selectedIndex == index
+        // The keyboard highlight yields to the mouse: once the pointer is over a
+        // row, that row wins, so hover and arrow selection don't fight.
+        let highlighted = hovered || (hoveredResultID == nil && keyboardSelected)
+        // Enter targets the arrow-selected row, or the top row when nothing is.
+        let isEnterTarget = keyboardSelected || (selectedIndex == nil && index == 0)
+        Button {
+            onSelect(result)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.text")
+                    .font(.caption)
+                    .foregroundStyle(highlighted ? Color.accentColor : .secondary)
+                    .frame(width: 16)
+                Text(result.title)
+                    .lineLimit(1)
+                    .font(.callout)
+                Spacer(minLength: 8)
+                if isEnterTarget {
+                    Image(systemName: "return")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(highlighted ? Color.accentColor.opacity(0.14) : Color.clear)
+                    .padding(.horizontal, 4)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { inside in
+            if inside {
+                hoveredResultID = result.id
+            } else if hoveredResultID == result.id {
+                hoveredResultID = nil
+            }
+        }
+    }
+}
+
 // MARK: - Metrics
 
 enum AddressBarMetrics {
-    /// Matches the tab bar height for visual rhythm.
-    static let height: CGFloat = 30
-    /// Horizontal padding inside the bar.
-    static let horizontalPadding: CGFloat = 10
+    /// Fallback width before the window width is known.
+    static let fieldWidth: CGFloat = 460
+    /// The maximum width the field grows to on wide windows.
+    static let maxFieldWidth: CGFloat = 820
+    /// The floor it compresses to when the window is narrow.
+    static let minFieldWidth: CGFloat = 260
+    /// Approximate fixed width consumed by the leading (traffic lights, sidebar
+    /// toggle, back/forward) and trailing (wiki switcher, transcript toggle)
+    /// toolbar items. The field fills whatever remains, up to `maxFieldWidth`.
+    static let reservedChrome: CGFloat = 470
+    /// How much the omnibox shrinks when the sidebar is open — enough to keep the
+    /// back/forward buttons from overflowing, but small enough that the omnibox
+    /// still widens leftward toward them (rather than floating in the middle of
+    /// the detail region).
+    static let sidebarWidthReserve: CGFloat = 140
+    /// Left padding from the pill's rounded edge to the Page Menu icon, so the
+    /// icon sits inside the omnibox rather than hugging the edge.
+    static let iconLeadingInset: CGFloat = 8
+    /// Where the field's editable text begins when nothing bookmarkable is shown
+    /// — clears just the Page Menu icon.
+    static let textLeadingInset: CGFloat = 28
+    /// Text inset while a page/source is shown: leaves a persistent gap after the
+    /// Page Menu icon for the add-bookmark "+" (revealed on hover), so the text
+    /// doesn't shift when it appears.
+    static let textLeadingInsetWithBookmark: CGFloat = 54
+}
+
+// MARK: - Reader controls popover
+
+/// Safari-style page-controls dropdown: a Zoom row (with a −/+ stepper) and a
+/// highlightable "Find on Page…" row, styled like the reader menu in Safari.
+/// Zoom writes the shared `reader.zoom` value the detail views render from.
+private struct ReaderControlsMenu: View {
+    @Binding var zoom: Double
+    let onFind: () -> Void
+
+    @State private var findHovered = false
+
+    private var percent: Int { Int((zoom * 100).rounded()) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            // Zoom row — leading icon, label, and a stepper on the trailing edge.
+            HStack(spacing: 0) {
+                menuIcon("plus.magnifyingglass")
+                Text("Zoom")
+                Spacer(minLength: 16)
+                HStack(spacing: 2) {
+                    stepButton("minus", help: "Zoom Out") {
+                        zoom = Double(ZoomScale.zoomedOut(CGFloat(zoom)))
+                    }
+                    // Tap the percentage to snap back to Actual Size.
+                    Button { zoom = Double(ZoomScale.defaultScale) } label: {
+                        Text("\(percent)%")
+                            .monospacedDigit()
+                            .frame(minWidth: 42)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Actual Size")
+                    stepButton("plus", help: "Zoom In") {
+                        zoom = Double(ZoomScale.zoomedIn(CGFloat(zoom)))
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+
+            Divider()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+
+            // Find on Page row — a full-width menu item that highlights on hover.
+            Button(action: onFind) {
+                HStack(spacing: 0) {
+                    menuIcon("text.magnifyingglass")
+                    Text("Find on Page…")
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(findHovered ? Color.accentColor : Color.clear))
+                .foregroundStyle(findHovered ? Color.white : Color.primary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { findHovered = $0 }
+        }
+        .font(.system(size: 13))
+        .padding(6)
+        .frame(width: 260)
+    }
+
+    /// A fixed-width leading glyph so labels align in a column, menu-style.
+    private func menuIcon(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
+            .frame(width: 26, alignment: .leading)
+    }
+
+    private func stepButton(_ symbol: String, help: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .semibold))
+                .frame(width: 24, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help(help)
+    }
 }

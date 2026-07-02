@@ -29,6 +29,10 @@ struct ContentView: View {
     /// Drives address-bar focus from the Cmd-L shortcut. The bar observes this
     /// via a `@Binding` and mirrors it into its own `@FocusState`.
     @State private var addressBarFocused = false
+    /// Tracks the sidebar's visibility so the omnibox can shrink to leave room
+    /// for the back/forward buttons when the sidebar is open (otherwise the wide
+    /// omnibox pushes Forward into the toolbar overflow).
+    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -97,7 +101,7 @@ struct ContentView: View {
     /// budget (adding the search-upgrade sheet tipped the single expression over).
     @ViewBuilder
     private var baseContent: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(store: store, manager: manager, fileProvider: fileProvider,
                         launcher: agentLauncher,
                         ingestingSourceIDs: agentLauncher.ingestingSourceIDs,
@@ -143,8 +147,25 @@ struct ContentView: View {
                     .help("Go forward")
             }
 
+            // Safari-style: the omnibox lives centered in the toolbar where the
+            // window title used to be (the title itself is suppressed below via
+            // `.navigationTitle("")`).
+            ToolbarItem(placement: .principal) {
+                AddressBarView(store: store, isFocused: $addressBarFocused,
+                               sidebarVisible: columnVisibility != .detailOnly)
+            }
+
+            // The wiki switcher moves out of the sidebar header into the toolbar,
+            // trailing the omnibox (like a browser account / profile control).
+            ToolbarItem(placement: .primaryAction) {
+                WikiSwitcher(manager: manager)
+            }
+
             primaryToolbarItems()
         }
+        // Suppress the "Self Driving Wiki" window title so the principal omnibox
+        // owns the center of the toolbar (Safari has no title text).
+        .navigationTitle("")
     }
 
     /// The agent is doing work — running, or in a local pdf2md extraction / an
@@ -203,7 +224,6 @@ struct ContentView: View {
             // window. It shares the detail column's full height, so it sits at
             // the same height as the leading sidebar rather than under the tab bar.
             VStack(spacing: 0) {
-                AddressBarView(store: store, isFocused: $addressBarFocused)
                 TabBarView(store: store)
                 wikiDetailPane
             }
