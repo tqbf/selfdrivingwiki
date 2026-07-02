@@ -114,6 +114,22 @@ public final class WikiStoreModel {
     /// projection leaf, or path in either the log title or note.
     private var sourceIngestedStatus: [PageID: Bool] = [:]
 
+    // MARK: - Bookmark nodes (v16 — Bookmarks sidebar tree)
+
+    /// Flat bookmark nodes, rebuilt from store after mutation (§3.1 pattern).
+    public private(set) var bookmarkNodes: [BookmarkNode] = []
+
+    /// Computed tree for the Bookmarks section.
+    public var bookmarkTree: [BookmarkTreeItem] {
+        let t0 = DispatchTime.now()
+        let tree = buildBookmarkTree(nodes: bookmarkNodes)
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
+        if ms > 5 {
+            DebugLog.tabs("bookmarkTree: built in \(String(format: "%.1f", ms)) ms (\(bookmarkNodes.count) nodes)")
+        }
+        return tree
+    }
+
     /// Invoked on the main actor after any successful persisted mutation
     /// (save / new / rename / delete). The app wires this to the File Provider
     /// `signalChange()` so Terminal reads see edits without relaunch (INITIAL
@@ -174,6 +190,7 @@ public final class WikiStoreModel {
         self.store = store
         reloadSummaries()
         reloadSources()
+        reloadBookmarkNodes()
         // Preload the system-prompt draft so its editor has content immediately;
         // selecting it later reloads fresh from the store.
         draftSystemPrompt = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
@@ -560,7 +577,7 @@ public final class WikiStoreModel {
         mermaidSaveWarning = nil
         var restoredFromPendingDraft = false
         switch newValue {
-        case .ask, .edit, .lint:
+        case .ask, .edit, .lint, .bookmark:
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
@@ -1468,6 +1485,97 @@ public final class WikiStoreModel {
         })
     }
 
+    // MARK: - Bookmark nodes (v16)
+
+    /// Reload all bookmark nodes from the store.
+    /// Called on init and after every bookmark-node mutation (§3.1 rebuild-from-source).
+    public func reloadBookmarkNodes() {
+        bookmarkNodes = (try? store.listBookmarkNodes()) ?? []
+    }
+
+    // MARK: - Bookmark node mutations
+
+    /// Create a folder at root or inside another folder. Returns the new node id,
+    /// or `nil` on failure.
+    @discardableResult
+    public func createFolder(parentID: String?, name: String) -> String? {
+        // Determine the position (append at end of siblings).
+        let position = bookmarkNodes.filter { $0.parentID == parentID }.count
+        do {
+            let node = try store.createBookmarkNode(
+                parentID: parentID, position: position, kind: .folder,
+                label: name, targetID: nil)
+            reloadBookmarkNodes()
+            return node.id
+        } catch {
+            DebugLog.store("WikiStoreModel.createFolder failed: \(error)")
+            return nil
+        }
+    }
+
+    /// Add a page reference to a folder.
+    public func addPageRef(parentID: String?, pageID: PageID) {
+        let t0 = DispatchTime.now()
+        let position = bookmarkNodes.filter { $0.parentID == parentID }.count
+        do {
+            _ = try store.createBookmarkNode(
+                parentID: parentID, position: position, kind: .pageRef,
+                label: nil, targetID: pageID)
+            reloadBookmarkNodes()
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
+            DebugLog.tabs("addPageRef: done in \(String(format: "%.1f", ms)) ms")
+        } catch {
+            DebugLog.store("WikiStoreModel.addPageRef failed: \(error)")
+        }
+    }
+
+    /// Add a source reference to a folder.
+    public func addSourceRef(parentID: String?, sourceID: PageID) {
+        let position = bookmarkNodes.filter { $0.parentID == parentID }.count
+        do {
+            _ = try store.createBookmarkNode(
+                parentID: parentID, position: position, kind: .sourceRef,
+                label: nil, targetID: sourceID)
+            reloadBookmarkNodes()
+        } catch {
+            DebugLog.store("WikiStoreModel.addSourceRef failed: \(error)")
+        }
+    }
+
+    /// Rename a folder.
+    public func renameBookmarkNode(id: String, to label: String) {
+        do {
+            try store.updateBookmarkNode(id: id, label: label)
+            reloadBookmarkNodes()
+        } catch {
+            DebugLog.store("WikiStoreModel.renameBookmarkNode failed: \(error)")
+        }
+    }
+
+    /// Delete a bookmark node (cascade-deletes children for folders).
+    public func deleteBookmarkNode(id: String) {
+        do {
+            try store.deleteBookmarkNode(id: id)
+            reloadBookmarkNodes()
+        } catch {
+            DebugLog.store("WikiStoreModel.deleteBookmarkNode failed: \(error)")
+        }
+    }
+
+    /// Move a node to a new parent and/or position. Returns `false` (and logs)
+    /// if the store rejects the move — e.g. it would create a parent cycle.
+    @discardableResult
+    public func moveBookmarkNode(id: String, toParentID: String?, position: Int) -> Bool {
+        do {
+            try store.moveBookmarkNode(id: id, toParentID: toParentID, position: position)
+            reloadBookmarkNodes()
+            return true
+        } catch {
+            DebugLog.store("WikiStoreModel.moveBookmarkNode failed: \(error)")
+            return false
+        }
+    }
+
     private func pruneHistoryToCurrentStore() {
         let pageIDs = Set(summaries.map(\.id))
         let sourceIDs = Set(sources.map(\.id))
@@ -1485,7 +1593,7 @@ public final class WikiStoreModel {
             pageIDs.contains(id)
         case .source(let id):
             sourceIDs.contains(id)
-        case .ask, .edit, .systemPrompt, .changeLog, .lint:
+        case .ask, .edit, .systemPrompt, .changeLog, .lint, .bookmark:
             true
         }
     }

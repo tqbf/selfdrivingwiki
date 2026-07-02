@@ -42,6 +42,8 @@ extension WikiStoreModel {
         case .source(let id):
             guard let source = sources.first(where: { $0.id == id }) else { return "Source" }
             return source.effectiveName.nonEmpty ?? "Source"
+        case .bookmark(let id):
+            return bookmarkNodes.first(where: { $0.id == id })?.label ?? "Bookmark"
         }
     }
 
@@ -61,6 +63,7 @@ extension WikiStoreModel {
             if source.mimeType == "application/pdf" { return "doc.richtext" }
             if let mime = source.mimeType, mime.hasPrefix("text/") { return "doc.plaintext" }
             return "doc"
+        case .bookmark: return "bookmark"
         }
     }
 }

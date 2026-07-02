@@ -40,6 +40,7 @@ struct WikiDetailView: View {
                     VStack(alignment: .leading, spacing: 20) {
                         introRow(title: "Pages", description: "Create and edit markdown notes with deep wiki-linking.", systemImage: "doc.text")
                         introRow(title: "Sources", description: "Manage and ingest raw material from URLs, folders, or Zotero.", systemImage: "tray.full")
+                        introRow(title: "Bookmarks", description: "Organize pages and sources into a custom folder tree for quick access.", systemImage: "bookmark")
                         introRow(title: "Agent", description: "Query the agent, check wiki health, and view system logs.", systemImage: "sparkles")
                     }
                     .frame(maxWidth: 400)
@@ -164,6 +165,12 @@ struct WikiDetailView: View {
                 } description: {
                     Text("This ingested file is no longer available.")
                 }
+            }
+        case .bookmark:
+            ContentUnavailableView {
+                Label("Bookmarks", systemImage: "bookmark")
+            } description: {
+                Text("Bookmark folders are managed in the sidebar.")
             }
         }
     }

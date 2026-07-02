@@ -28,6 +28,10 @@ struct SidebarView: View {
 
     @State private var renameTarget: WikiPageSummary?
     @State private var renameText: String = ""
+    @State private var bookmarkPickerContext: PickerContext?
+    @State private var editBookmarkNodeID: EditBookmarkContext?
+    @State private var showingNewBookmarkFolder = false
+    @State private var newBookmarkFolderName = ""
 
     /// Which section is currently shown. Like Xcode's navigator, the icon bar at
     /// the top of the sidebar is a mutually-exclusive selector — exactly one
@@ -37,7 +41,7 @@ struct SidebarView: View {
     /// The sidebar's sections. Each gets an icon in the selector bar and, when
     /// selected, fills the list below.
     enum SidebarSection: String, CaseIterable, Identifiable {
-        case pages, sources, agent
+        case pages, sources, bookmarks, agent
 
         var id: String { rawValue }
 
@@ -45,6 +49,7 @@ struct SidebarView: View {
             switch self {
             case .pages: "Pages"
             case .sources: "Sources"
+            case .bookmarks: "Bookmarks"
             case .agent: "Agent"
             }
         }
@@ -53,6 +58,7 @@ struct SidebarView: View {
             switch self {
             case .pages: "doc.text"
             case .sources: "tray.full"
+            case .bookmarks: "bookmark"
             case .agent: "sparkles"
             }
         }
@@ -80,9 +86,7 @@ struct SidebarView: View {
             sectionSelectorBar
                 .padding(.top, 8)
             Divider()
-            listContent
-                .listStyle(.inset)
-                .scrollContentBackground(.hidden)
+            bookmarksOrList
         }
         .navigationTitle(activeWikiName)
         .onChange(of: listSelection) { _, newValue in selectionDidChange(newValue) }
@@ -95,6 +99,23 @@ struct SidebarView: View {
             TextField("Title", text: $renameText)
             Button("Cancel", role: .cancel) { renameTarget = nil }
             Button("Rename") { commitRename() }
+        }
+        .modifier(BookmarkPickerSheetModifier(
+            context: $bookmarkPickerContext,
+            store: store))
+        .sheet(item: $editBookmarkNodeID) { ctx in
+            EditBookmarkSheet(store: store, nodeID: ctx.nodeID) { newName in
+                store.renameBookmarkNode(id: ctx.nodeID, to: newName)
+            }
+        }
+        .alert("New Folder", isPresented: $showingNewBookmarkFolder) {
+            TextField("Folder name", text: $newBookmarkFolderName)
+            Button("Cancel", role: .cancel) { }
+            Button("Create") {
+                let name = newBookmarkFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { return }
+                store.createFolder(parentID: nil, name: name)
+            }
         }
     }
 
@@ -132,6 +153,23 @@ struct SidebarView: View {
         .help(section.title)
     }
 
+    @ViewBuilder
+    private var bookmarksOrList: some View {
+        if selectedSection == .bookmarks {
+            BookmarksContainerView(store: store,
+                onShowPicker: { bookmarkPickerContext = $0 },
+                onEdit: { editBookmarkNodeID = EditBookmarkContext(nodeID: $0) },
+                onNewFolder: {
+                    showingNewBookmarkFolder = true
+                    newBookmarkFolderName = ""
+                })
+        } else {
+            listContent
+                .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+        }
+    }
+
     private var listContent: some View {
         List(selection: $listSelection) {
             switch selectedSection {
@@ -146,6 +184,7 @@ struct SidebarView: View {
                     onAddFromURL: onAddFromURL,
                     isZoteroConfigured: isZoteroConfigured,
                     listSelection: $listSelection, activeSection: $activeSection)
+            case .bookmarks: EmptyView()
             case .agent: toolsSection()
             }
         }
@@ -385,7 +424,13 @@ struct SidebarView: View {
             switch first {
             case .page: activeSection = .pages
             case .source: activeSection = .sources
+            case .bookmark: break  // stay on current section
             default: break
+            }
+            // Bookmark folders just highlight — don't open a tab.
+            if case .bookmark = first {
+                DebugLog.tabs("selectionDidChange: .bookmark(\(first)) — highlight only, no openTab")
+                return
             }
             // The `listSelection` set is also written programmatically by the
             // `.onChange(of: store.selection)` sync below whenever the model
@@ -431,6 +476,40 @@ struct SidebarView: View {
             get: { renameTarget != nil },
             set: { if !$0 { renameTarget = nil } }
         )
+    }
+}
+
+/// Presents the bookmark item-picker sheet. Lives as a `ViewModifier` on
+/// `SidebarView`'s outer body (outside the `List`) so the sheet isn't
+/// virtualized by the List's row recycling.
+private struct BookmarkPickerSheetModifier: ViewModifier {
+    @Binding var context: PickerContext?
+    let store: WikiStoreModel
+
+    func body(content: Content) -> some View {
+        content.sheet(item: $context) { ctx in
+            ItemPickerSheet(
+                allItems: pickerItems(for: ctx.kind),
+                onConfirm: { selectedIDs in
+                    let parentID = ctx.parentID
+                    for id in selectedIDs {
+                        switch ctx.kind {
+                        case .pages: store.addPageRef(parentID: parentID, pageID: id)
+                        case .sources: store.addSourceRef(parentID: parentID, sourceID: id)
+                        }
+                    }
+                }
+            )
+        }
+    }
+
+    private func pickerItems(for kind: ItemPickerKind) -> [PickerItem] {
+        switch kind {
+        case .pages:
+            return store.summaries.map { PickerItem(id: $0.id, title: $0.title, isPage: true) }
+        case .sources:
+            return store.sources.map { PickerItem(id: $0.id, title: $0.effectiveName, isPage: false) }
+        }
     }
 }
 

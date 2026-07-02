@@ -123,20 +123,20 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // (version >= 1) — and fresh dbs forced onto the ladder by tests — run
         // `migrate(from:)` so every prior upgrade path is preserved.
         if version == 0 && !forceLadderMigration {
-            try createFreshSchemaV15()
+            try createFreshSchemaV17()
             return
         }
         try migrate(from: &version)
     }
 
-    /// Build the complete current (v14) schema for a fresh database in one
+    /// Build the complete current (v17) schema for a fresh database in one
     /// consolidated block. MUST stay schema-identical to the end state of
     /// `migrate(from:)`; the `freshFastPathMatchesStepwiseLadder` test enforces
     /// that by forcing a fresh db through the ladder and comparing. Legacy index
     /// names (`ingested_files_created`, `file_markdown_versions_file`) are
     /// reproduced verbatim — they survive the table renames in the ladder, so a
     /// fresh db must match.
-    private func createFreshSchemaV15() throws {
+    private func createFreshSchemaV17() throws {
         // Core page model + attachments/links.
         try exec("""
         CREATE TABLE pages (
@@ -349,7 +349,22 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         );
         """)
         try exec("INSERT INTO embedding_meta(id, embedder) VALUES (1, 'nlembedding-512');")
-        try exec("PRAGMA user_version=15;")
+
+        // Bookmark nodes: the user-defined Bookmarks sidebar tree — folders, page
+        // refs, and source refs.
+        try exec("""
+        CREATE TABLE bookmark_nodes (
+            id            TEXT PRIMARY KEY,
+            parent_id     TEXT REFERENCES bookmark_nodes(id) ON DELETE CASCADE,
+            position      INTEGER NOT NULL DEFAULT 0,
+            kind          TEXT NOT NULL,
+            label         TEXT,
+            target_id     TEXT
+        );
+        """)
+        try exec("CREATE INDEX bookmark_nodes_parent ON bookmark_nodes(parent_id, position);")
+
+        try exec("PRAGMA user_version=17;")
     }
 
     /// The stepwise, idempotent migration ladder keyed on `PRAGMA user_version`.
@@ -756,6 +771,31 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try exec("INSERT INTO embedding_meta(id, embedder) VALUES (1, 'nlembedding-512');")
             try exec("PRAGMA user_version=15;")
             version = 15
+        }
+
+        if version < 16 {
+            try exec("""
+            CREATE TABLE view_nodes (
+                id            TEXT PRIMARY KEY,
+                parent_id     TEXT REFERENCES view_nodes(id) ON DELETE CASCADE,
+                position      INTEGER NOT NULL DEFAULT 0,
+                kind          TEXT NOT NULL,
+                label         TEXT,
+                target_id     TEXT
+            );
+            """)
+            try exec("CREATE INDEX view_nodes_parent ON view_nodes(parent_id, position);")
+            try exec("PRAGMA user_version=16;")
+            version = 16
+        }
+
+        if version < 17 {
+            // Rename view_nodes → bookmark_nodes.
+            try exec("ALTER TABLE view_nodes RENAME TO bookmark_nodes;")
+            try exec("DROP INDEX IF EXISTS view_nodes_parent;")
+            try exec("CREATE INDEX bookmark_nodes_parent ON bookmark_nodes(parent_id, position);")
+            try exec("PRAGMA user_version=17;")
+            version = 17
         }
     }
 
@@ -1646,6 +1686,283 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try stmt.bind(slug, at: 1)
         try stmt.bind(id.rawValue, at: 2)
         return try stmt.step()
+    }
+
+    // MARK: - Bookmark nodes
+
+    public func listBookmarkNodes() throws -> [BookmarkNode] {
+        // Order root nodes (parent_id IS NULL) first, then by position within
+        // each parent. SQLite lacks NULLS FIRST, so `parent_id IS NULL DESC`
+        // sorts NULL parents before non-NULL.
+        let stmt = try statement("""
+        SELECT id, parent_id, position, kind, label, target_id
+        FROM bookmark_nodes
+        ORDER BY parent_id IS NULL DESC, parent_id, position;
+        """)
+        defer { stmt.reset() }
+        var out: [BookmarkNode] = []
+        while try stmt.step() {
+            out.append(BookmarkNode(
+                id: stmt.text(at: 0),
+                parentID: sqlite3_column_type(stmt.handle, 1) == SQLITE_NULL ? nil : stmt.text(at: 1),
+                position: Int(stmt.int(at: 2)),
+                kind: BookmarkNodeKind(rawValue: stmt.text(at: 3)) ?? .folder,
+                label: sqlite3_column_type(stmt.handle, 4) == SQLITE_NULL ? nil : stmt.text(at: 4),
+                targetID: sqlite3_column_type(stmt.handle, 5) == SQLITE_NULL ? nil : PageID(rawValue: stmt.text(at: 5))
+            ))
+        }
+        return out
+    }
+
+    public func createBookmarkNode(
+        parentID: String?,
+        position: Int,
+        kind: BookmarkNodeKind,
+        label: String?,
+        targetID: PageID?
+    ) throws -> BookmarkNode {
+        let id = ULID.generate()
+        try exec("BEGIN IMMEDIATE;")
+        do {
+            // Shift siblings at >= position up by 1 within the same parent.
+            // SQLite's `IS` operator matches NULL=NULL (unlike `=`), so
+            // `parent_id IS ?1` correctly groups root siblings.
+            let shift = try statement("""
+            UPDATE bookmark_nodes SET position = position + 1
+            WHERE parent_id IS ?1 AND position >= ?2;
+            """)
+            shift.reset()
+            if let parentID {
+                try shift.bind(parentID, at: 1)
+            } else {
+                sqlite3_bind_null(shift.handle, 1)
+            }
+            try shift.bind(Int64(position), at: 2)
+            _ = try shift.step()
+
+            let ins = try statement("""
+            INSERT INTO bookmark_nodes (id, parent_id, position, kind, label, target_id)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6);
+            """)
+            ins.reset()
+            try ins.bind(id, at: 1)
+            if let parentID {
+                try ins.bind(parentID, at: 2)
+            } else {
+                sqlite3_bind_null(ins.handle, 2)
+            }
+            try ins.bind(Int64(position), at: 3)
+            try ins.bind(kind.rawValue, at: 4)
+            if let label {
+                try ins.bind(label, at: 5)
+            } else {
+                sqlite3_bind_null(ins.handle, 5)
+            }
+            if let targetID {
+                try ins.bind(targetID.rawValue, at: 6)
+            } else {
+                sqlite3_bind_null(ins.handle, 6)
+            }
+            _ = try ins.step()
+
+            // Defense-in-depth: renumber siblings so positions stay contiguous
+            // even if a caller passes a stale or out-of-range position.
+            if let parentID {
+                try renumberSiblings(parentID: parentID)
+            } else {
+                try renumberRootSiblings()
+            }
+
+            try exec("COMMIT;")
+        } catch {
+            try? exec("ROLLBACK;")
+            throw error
+        }
+        return BookmarkNode(id: id, parentID: parentID, position: position, kind: kind,
+                        label: label, targetID: targetID)
+    }
+
+    public func updateBookmarkNode(id: String, label: String?) throws {
+        let stmt = try statement("""
+        UPDATE bookmark_nodes SET label = ?2 WHERE id = ?1;
+        """)
+        stmt.reset()
+        try stmt.bind(id, at: 1)
+        if let label {
+            try stmt.bind(label, at: 2)
+        } else {
+            sqlite3_bind_null(stmt.handle, 2)
+        }
+        _ = try stmt.step()
+    }
+
+    public func deleteBookmarkNode(id: String) throws {
+        try exec("BEGIN IMMEDIATE;")
+        do {
+            // Capture the parent for sibling renumbering after the delete.
+            let info = try statement(
+                "SELECT parent_id FROM bookmark_nodes WHERE id = ?1;")
+            info.reset()
+            try info.bind(id, at: 1)
+            var oldParent: String? = nil
+            if try info.step() {
+                oldParent = sqlite3_column_type(info.handle, 0) == SQLITE_NULL ? nil : info.text(at: 0)
+            }
+
+            let del = try statement("DELETE FROM bookmark_nodes WHERE id = ?1;")
+            del.reset()
+            try del.bind(id, at: 1)
+            _ = try del.step()
+
+            // Renumber old siblings to be contiguous.
+            if let oldParent {
+                try renumberSiblings(parentID: oldParent)
+            } else {
+                try renumberRootSiblings()
+            }
+            try exec("COMMIT;")
+        } catch {
+            try? exec("ROLLBACK;")
+            throw error
+        }
+    }
+
+    public func moveBookmarkNode(id: String, toParentID: String?, position: Int) throws {
+        try exec("BEGIN IMMEDIATE;")
+        do {
+            // Read the node's current parent + position.
+            let info = try statement(
+                "SELECT parent_id, position FROM bookmark_nodes WHERE id = ?1;")
+            info.reset()
+            try info.bind(id, at: 1)
+            guard try info.step() else {
+                throw WikiStoreError.unexpected("moveBookmarkNode: node \(id) not found")
+            }
+            let oldParent = sqlite3_column_type(info.handle, 0) == SQLITE_NULL ? nil : info.text(at: 0)
+
+            // Cycle prevention: reject moving a node into itself or any of its
+            // descendants. Walk up the parent chain from toParentID — if we
+            // encounter `id`, it's a descendant (or the node itself).
+            if let toParentID {
+                var ancestor: String? = toParentID
+                let ancestorStmt = try statement(
+                    "SELECT parent_id FROM bookmark_nodes WHERE id = ?1;")
+                while let current = ancestor {
+                    if current == id {
+                        throw WikiStoreError.unexpected(
+                            "moveBookmarkNode: cannot move \(id) into its own descendant \(toParentID)")
+                    }
+                    ancestorStmt.reset()
+                    try ancestorStmt.bind(current, at: 1)
+                    if try ancestorStmt.step() {
+                        ancestor = sqlite3_column_type(ancestorStmt.handle, 0) == SQLITE_NULL
+                            ? nil : ancestorStmt.text(at: 0)
+                    } else {
+                        break
+                    }
+                }
+            }
+
+            let sameParent: Bool
+            if let oldParent, let toParentID {
+                sameParent = oldParent == toParentID
+            } else {
+                sameParent = oldParent == nil && toParentID == nil
+            }
+
+            // Step 1: Shift siblings at >= position up by 1 in the NEW parent
+            // (excluding the moving node itself). This is REQUIRED, not
+            // redundant: without it, setting the moved node's position creates a
+            // tie with an existing sibling, and the subsequent renumber's
+            // `ORDER BY position` has ambiguous ordering for tied rows.
+            let shift = try statement("""
+            UPDATE bookmark_nodes SET position = position + 1
+            WHERE parent_id IS ?1 AND position >= ?2 AND id != ?3;
+            """)
+            shift.reset()
+            if let toParentID {
+                try shift.bind(toParentID, at: 1)
+            } else {
+                sqlite3_bind_null(shift.handle, 1)
+            }
+            try shift.bind(Int64(position), at: 2)
+            try shift.bind(id, at: 3)
+            _ = try shift.step()
+
+            // Step 2: Update the node's parent + position.
+            let upd = try statement("""
+            UPDATE bookmark_nodes SET parent_id = ?2, position = ?3 WHERE id = ?1;
+            """)
+            upd.reset()
+            try upd.bind(id, at: 1)
+            if let toParentID {
+                try upd.bind(toParentID, at: 2)
+            } else {
+                sqlite3_bind_null(upd.handle, 2)
+            }
+            try upd.bind(Int64(position), at: 3)
+            _ = try upd.step()
+
+            // Step 3: Renumber siblings on both old and new parent (or root) so
+            // positions are contiguous. The shift in step 1 may leave a gap at
+            // the old position.
+            if let toParentID {
+                try renumberSiblings(parentID: toParentID)
+            } else {
+                try renumberRootSiblings()
+            }
+            if !sameParent {
+                if let oldParent {
+                    try renumberSiblings(parentID: oldParent)
+                } else {
+                    try renumberRootSiblings()
+                }
+            }
+            try exec("COMMIT;")
+        } catch {
+            try? exec("ROLLBACK;")
+            throw error
+        }
+    }
+
+    /// Renumber all children of `parentID` so their positions are contiguous
+    /// (0, 1, 2, …), preserving their current order.
+    private func renumberSiblings(parentID: String) throws {
+        let sel = try statement("""
+        SELECT id FROM bookmark_nodes WHERE parent_id = ?1 ORDER BY position ASC;
+        """)
+        sel.reset()
+        try sel.bind(parentID, at: 1)
+        var ids: [String] = []
+        while try sel.step() {
+            ids.append(sel.text(at: 0))
+        }
+        let upd = try statement("UPDATE bookmark_nodes SET position = ?2 WHERE id = ?1;")
+        for (i, childID) in ids.enumerated() {
+            upd.reset()
+            try upd.bind(childID, at: 1)
+            try upd.bind(Int64(i), at: 2)
+            _ = try upd.step()
+        }
+    }
+
+    /// Renumber all root-level (parent_id IS NULL) nodes to be contiguous.
+    private func renumberRootSiblings() throws {
+        let sel = try statement("""
+        SELECT id FROM bookmark_nodes WHERE parent_id IS NULL ORDER BY position ASC;
+        """)
+        sel.reset()
+        var ids: [String] = []
+        while try sel.step() {
+            ids.append(sel.text(at: 0))
+        }
+        let upd = try statement("UPDATE bookmark_nodes SET position = ?2 WHERE id = ?1;")
+        for (i, childID) in ids.enumerated() {
+            upd.reset()
+            try upd.bind(childID, at: 1)
+            try upd.bind(Int64(i), at: 2)
+            _ = try upd.step()
+        }
     }
 
     // MARK: - Statement helpers
