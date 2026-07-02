@@ -26,6 +26,9 @@ struct ContentView: View {
     @State private var showingImportMarkdown = false
     @State private var showingAddFromZotero = false
     @State private var showCloseTabAlert = false
+    /// Drives address-bar focus from the Cmd-L shortcut. The bar observes this
+    /// via a `@Binding` and mirrors it into its own `@FocusState`.
+    @State private var addressBarFocused = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -200,6 +203,7 @@ struct ContentView: View {
             // window. It shares the detail column's full height, so it sits at
             // the same height as the leading sidebar rather than under the tab bar.
             VStack(spacing: 0) {
+                AddressBarView(store: store, isFocused: $addressBarFocused)
                 TabBarView(store: store)
                 wikiDetailPane
             }
@@ -249,8 +253,9 @@ struct ContentView: View {
 
     // MARK: - Keyboard shortcuts
 
-    /// Hidden buttons that provide Cmd+W, Cmd+Shift+T, and Cmd+1–9 shortcuts.
-    /// Placed in the detail background so they're always in the responder chain.
+    /// Hidden buttons that provide Cmd+W, Cmd+Shift+T, Cmd+1–9, and Cmd+L
+    /// shortcuts. Placed in the detail background so they're always in the
+    /// responder chain.
     @ViewBuilder
     private var keyboardShortcutButtons: some View {
         // Cmd+W: Close active tab
@@ -264,6 +269,14 @@ struct ContentView: View {
             .keyboardShortcut("t", modifiers: [.command, .shift])
             .opacity(0).allowsHitTesting(false)
             .disabled(store.recentlyClosedTabs.isEmpty)
+
+        // Cmd+L: Focus the address bar (always focus, never toggle — browser
+        // convention: repeated Cmd-L keeps focus).
+        Button("") {
+            if !addressBarFocused { addressBarFocused = true }
+        }
+        .keyboardShortcut("l", modifiers: .command)
+        .opacity(0).allowsHitTesting(false)
 
         // Cmd+1 through Cmd+9: Switch to tab by position (first 9 tabs only)
         ForEach(Array(store.tabs.prefix(9).enumerated()), id: \.element.id) { i, tab in
