@@ -33,6 +33,47 @@ Code and other agents — NOT Polytoken — included for provenance:
 > express values in CSS/web terms — translate to SwiftUI
 > (`.regularMaterial`, points, `Font`, system faces).
 
+## Engineering skills — sources
+
+The following engineering skills are also vendored under `docs/skills/`. Same
+provenance convention as above (the `npx` / `/plugin` commands are for other
+agents, NOT Polytoken):
+
+- **swift-concurrency-pro** —
+  https://github.com/twostraws/Swift-Concurrency-Agent-Skill
+- **swift-testing-pro** —
+  https://github.com/twostraws/Swift-Testing-Agent-Skill
+- **swiftui-ui-patterns** — https://github.com/Dimillian/Skills
+- **swiftui-performance-audit** — https://github.com/Dimillian/Skills
+- **macos-spm-app-packaging** — https://github.com/Dimillian/Skills
+
+> Same caveat: these target recent iOS/macOS toolchains. Filter
+> version-gated guidance to macOS 15 / Swift 6.0. The `macos-spm-app-packaging`
+> **release/notarize** references and `assets/templates/` are for a future
+> shipping path — this project is local-only / dev signing today, so only its
+> **scaffold** reference is immediately actionable.
+
+* When touching anything that crosses the main actor — background tasks,
+  `Sendable` boundaries, `AsyncStream`, or any off-main compute (e.g. MLX
+  embeddings) — consult
+  [`docs/skills/swift-concurrency-pro/SKILL.md`](docs/skills/swift-concurrency-pro/SKILL.md)
+  (see its `actors`, `structured`/`unstructured`, `cancellation`, and
+  `bug-patterns` references). This is the skill behind the SQLite
+  single-threaded invariant below.
+
+* When writing or reviewing tests, follow
+  [`docs/skills/swift-testing-pro/SKILL.md`](docs/skills/swift-testing-pro/SKILL.md)
+  (core-rules, async-tests, migrating-from-xctest). Prefer Swift Testing over
+  XCTest for new tests.
+
+* When a SwiftUI view is slow, janky, or you suspect unnecessary diffing /
+  re-rendering, run the audit in
+  [`docs/skills/swiftui-performance-audit/SKILL.md`](docs/skills/swiftui-performance-audit/SKILL.md)
+  (code-smells, profiling-intake, Instruments, hangs) **before** guessing.
+  For the concrete view/containers involved (NavigationStack, sheets, forms,
+  split views, async-state), cross-reference
+  [`docs/skills/swiftui-ui-patterns/SKILL.md`](docs/skills/swiftui-ui-patterns/SKILL.md).
+
 * When a feature passes tests but fails in the running app (and you can't see the
   screen), follow [`docs/skills/reproducing-live-ui-bugs/SKILL.md`](docs/skills/reproducing-live-ui-bugs/SKILL.md):
   read the real data, host the real view in an `NSWindow` test, instrument every
