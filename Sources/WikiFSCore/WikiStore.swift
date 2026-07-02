@@ -185,4 +185,31 @@ public protocol WikiStore: Sendable {
     /// ranked by each source's best-matching chunk). Falls back to FTS5 only when
     /// the vec extension or embedding model is unavailable. Mirrors `searchSimilar`.
     func searchSimilarSources(query: String, limit: Int) throws -> [SourceSummary]
+
+    // MARK: - Bookmark nodes (Bookmarks sidebar tree)
+
+    /// All bookmark nodes (flat), ordered so that parents precede children and
+    /// siblings sort by position. The tree is assembled by `BookmarkTreeBuilder`.
+    func listBookmarkNodes() throws -> [BookmarkNode]
+
+    /// Insert a new bookmark node, shifting sibling positions ≥ `position` up by 1.
+    /// Returns the inserted node with its generated id.
+    @discardableResult
+    func createBookmarkNode(
+        parentID: String?,
+        position: Int,
+        kind: BookmarkNodeKind,
+        label: String?,
+        targetID: PageID?
+    ) throws -> BookmarkNode
+
+    /// Update the label of a bookmark node (folders only).
+    func updateBookmarkNode(id: String, label: String?) throws
+
+    /// Delete a bookmark node by id. `ON DELETE CASCADE` removes descendants.
+    func deleteBookmarkNode(id: String) throws
+
+    /// Move a node to a new parent and/or position. Renumber siblings of both
+    /// the old and new parent so positions stay contiguous (0, 1, 2, …).
+    func moveBookmarkNode(id: String, toParentID: String?, position: Int) throws
 }

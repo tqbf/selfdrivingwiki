@@ -55,17 +55,17 @@ struct SQLiteWikiStoreTests {
         #expect(tables.isSuperset(of:
             ["pages", "attachments", "page_links", "sources", "source_links",
              "system_prompt", "log", "wiki_index", "page_chunks",
-             "source_markdown_versions"]))
+             "source_markdown_versions", "bookmark_nodes"]))
 
         let indexes = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='index';"))
         #expect(indexes.contains("pages_slug_unique"))
         #expect(indexes.contains("ingested_files_created"))
 
-        // user_version guard: a fresh DB runs all migration steps → version 15.
+        // user_version guard: a fresh DB runs all migration steps → version 16.
         // Reopening must not re-run DDL (no-op bootstrap).
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "15")
+        #expect(userVersion == "17")
         let reopened = try SQLiteWikiStore(databaseURL: url)
         // If bootstrap weren't guarded, the CREATE TABLE would throw here.
         #expect((try? reopened.listPages(sortBy: .lastUpdated)) != nil)
@@ -316,7 +316,7 @@ struct SQLiteWikiStoreTests {
         defer { sqlite3_close(db) }
 
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "15")
+        #expect(userVersion == "17")
 
         let tables = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))
@@ -358,9 +358,9 @@ struct SQLiteWikiStoreTests {
         #expect(scalarText(db, "SELECT count(*) FROM source_links WHERE to_source_id = '\(source.id.rawValue)';") == "0")
     }
 
-    @Test func freshDBReachesUserVersion15() throws {
+    @Test func freshDBReachesUserVersion17() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
-        #expect(store.pragmaValue("user_version") == "15")
+        #expect(store.pragmaValue("user_version") == "17")
     }
 
     @Test func v11SourceLinksHasDeleteCascade() throws {

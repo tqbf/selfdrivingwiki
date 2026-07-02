@@ -49,7 +49,7 @@ struct SourceEmbeddingSearchTests {
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
         defer { sqlite3_close(db) }
 
-        #expect(scalarInt(db, "PRAGMA user_version;") == 15)
+        #expect(scalarInt(db, "PRAGMA user_version;") == 17)
         #expect(tableExists(db, "source_chunks"))
         // page chunk table mirrors the source one.
         #expect(tableExists(db, "page_chunks"))

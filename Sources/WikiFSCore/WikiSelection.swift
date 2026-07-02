@@ -18,4 +18,7 @@ public enum WikiSelection: Hashable, Sendable {
     case page(PageID)
     /// A raw source stored in the wiki, by id.
     case source(PageID)
+    /// A bookmark node (folder, page ref, source ref) — by node id. Selecting
+    /// a bookmark folder highlights it but does not open a tab.
+    case bookmark(String)
 }

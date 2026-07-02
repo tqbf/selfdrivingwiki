@@ -23,6 +23,7 @@ struct PageDetailView: View {
     // Find bar state.
     @State private var findModel = FindModel()
     @State private var findVersion = 0
+    @State private var bookmarkDestPageID: PageID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -100,6 +101,10 @@ struct PageDetailView: View {
                                 }
                             }
                             .help("Share this page")
+                            Button("Add to Bookmarks", systemImage: "bookmark") {
+                                bookmarkDestPageID = pageID
+                            }
+                            .help("Add this page to Bookmarks")
                             Button("Reveal in Finder", systemImage: "folder") {
                                 Task { await fileProvider.revealPageInFinder(id: pageID) }
                             }
@@ -164,6 +169,11 @@ struct PageDetailView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
+        .sheet(item: $bookmarkDestPageID) { pageID in
+            BookmarkDestinationSheet(store: store) { parentID in
+                store.addPageRef(parentID: parentID, pageID: pageID)
+            }
+        }
         .onAppear { lastKnownActiveTabID = store.activeTabID }
         .onChange(of: store.selection) {
             // In-tab navigation (wiki-link click, sidebar navigation within the

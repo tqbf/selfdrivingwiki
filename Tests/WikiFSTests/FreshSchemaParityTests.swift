@@ -3,7 +3,7 @@ import Foundation
 import SQLite3
 @testable import WikiFSCore
 
-/// Guards the fresh-DB fast path (`createFreshSchemaV14`) against the stepwise
+/// Guards the fresh-DB fast path (`createFreshSchemaV17`) against the stepwise
 /// `migrate(from:)` ladder. The fast path duplicates the schema definition, so
 /// any drift (a forgotten table/column/index/FK/trigger) would silently make
 /// fresh dbs differ from upgraded ones. This forces a fresh db through the FULL
@@ -119,9 +119,9 @@ import SQLite3
         let fast = try fingerprint(at: fastURL)
         let ladder = try fingerprint(at: ladderURL)
 
-        // Both must report head version 14.
-        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "15")
-        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "15")
+        // Both must report head version 16.
+        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "17")
+        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "17")
 
         if fast != ladder {
             Issue.record("fresh fast-path schema drifted from the stepwise ladder:\n--- fast ---\n\(fast)\n--- ladder ---\n\(ladder)")
@@ -139,7 +139,8 @@ import SQLite3
         for expected in ["pages", "attachments", "page_links", "sources",
                          "source_markdown_versions", "source_links", "system_prompt",
                          "log", "wiki_index", "page_chunks", "source_chunks",
-                         "source_search", "pages_fts", "sources_fts", "embedding_meta"] {
+                         "source_search", "pages_fts", "sources_fts", "embedding_meta",
+                         "bookmark_nodes"] {
             #expect(tables.contains(expected), "missing table: \(expected)")
         }
         // The historical single-row embedding tables must NOT exist on a fresh db
@@ -151,6 +152,7 @@ import SQLite3
             "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%';"))
         #expect(indexes.contains("ingested_files_created"))
         #expect(indexes.contains("file_markdown_versions_file"))
+        #expect(indexes.contains("bookmark_nodes_parent"))
         // Seeded singletons present.
         #expect(texts(db, "SELECT body_markdown FROM system_prompt WHERE id=1;") == [SystemPrompt.defaultBody])
         #expect(texts(db, "SELECT body_markdown FROM wiki_index WHERE id=1;") == [WikiIndex.defaultBody])
