@@ -274,12 +274,12 @@ struct AgentExtractionLockTests {
 
     // MARK: - Row label predicate (Extracting… vs Ingesting…)
 
-    /// `SourceRow.rowStatus` is the pure predicate backing the row's
+    /// `SourceRowStatus.status` is the pure predicate backing the source row's
     /// trailing status icon. Extraction phase beats agent phase beats the idle
     /// glyphs — a pure extraction shows "Extracting…", never "Ingesting…".
     @Test func rowStatusPrecedence() {
-        func s(_ e: Bool, _ i: Bool, _ ingested: Bool) -> SourceRow.RowStatus {
-            SourceRow.rowStatus(isExtracting: e, isIngesting: i, hasBeenIngested: ingested)
+        func s(_ e: Bool, _ i: Bool, _ ingested: Bool) -> SourceRowStatus {
+            SourceRowStatus.status(isExtracting: e, isIngesting: i, hasBeenIngested: ingested)
         }
         // Idle states.
         #expect(s(false, false, false) == .ready)
