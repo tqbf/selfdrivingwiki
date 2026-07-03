@@ -502,34 +502,29 @@ block extends in parity, enforced by the existing test:
 
 1. **Phase 0 — no schema step.** (Concurrency is code-only; `user_version`
    stays 17.)
-2. **v18: `blobs`, `provider_runs`, `source_versions`, `refs`** created empty;
-   then the backfill: for each source, hash `content` → `INSERT OR IGNORE`
-   blob → insert v1 version row (`parent_id NULL`, `fetched_at = created_at`)
-   → *leave `sources.content` in place*. This is the draft's "keep a nullable
-   copy during a transition build" answer to its highest-risk open question
-   #1: the column is dropped only in a later step (table rebuild) after a
-   release has soaked. Two rules make the soak safe against **binary skew**
-   (three separately compiled processes, plus stale binaries, share the file):
-   - **Dual-write during the soak:** new code keeps writing the full bytes to
-     `sources.content` on every source insert (the column is `NOT NULL`
-     regardless), so pre-migration readers — an old FP extension binary or a
-     stale `wikictl` — keep serving correct bytes. "Unread by new code" means
-     unread, not unwritten.
-   - **Read fallback / self-heal:** if a source has zero `source_versions`
-     rows (written by an old binary after the migration), `sourceContent(id:)`
-     falls back to `sources.content` and lazily backfills the v1 blob+version
-     row — the default-active rule extended one step down. Rows written by
-     *any* old binary stay visible to the new read path.
+2. **v18: `blobs`, `provider_runs`, `source_versions`, `refs`** — create the
+   tables, then a **one-shot migration**: for each source, hash `content` →
+   `INSERT OR IGNORE` blob → insert a v1 version row (`parent_id NULL`,
+   `fetched_at = created_at`) → write the `source-content` ref → **drop the
+   `sources.content` column** in the same step (table rebuild). 
 
-   Reads go through `sourceContent(id:)` which resolves ref → version → blob
-   (→ content fallback), so the call-site surface (wikictl `cat`/`export`, FP
-   projection, agent staging) doesn't change signatures. Hardening (optional,
-   not required once the two rules hold): give `migrate(from:)` a
-   `user_version` ceiling so a stale binary refuses to write to a schema newer
-   than it knows.
+   **No soak, no dual-write, no read-fallback.** The defensive soak machinery
+   this plan once carried existed for *binary skew across live users* — three
+   separately-compiled processes (app, `wikictl`, FP extension) plus stale
+   binaries sharing one file at different schema versions. The app is
+   **pre-launch**: there are no users with stale binaries, and "skew" during
+   development means "rebuild all three," the normal dev loop, not something to
+   design migrations around. So `sources.content` is dropped outright in v18, not
+   kept nullable through a transition release. The developer's own existing DB
+   (real data) migrates once, in place, via this step; it is restorable from
+   VCS if the one-shot ever misbehaves during development. Byteless sources
+   (`blob_hash IS NULL`) are legal from v18 onward — no gating.
+
+   Reads go through `sourceContent(id:)` which resolves ref → version → blob, so
+   the call-site surface (wikictl `cat`/`export`, FP projection, agent staging)
+   doesn't change signatures.
 3. **v19: extraction columns** (`extraction_technique`, `source_version_id`,
-   `blob_hash`, `mime_type`) + backfills (`'legacy'`, v1 version id). Optional
-   one-time content→blob backfill for old rows.
+   `blob_hash`, `mime_type`) + backfills (`'legacy'`, v1 version id).
 4. **v20: `source_links` rebuild** as the rowid table + `COALESCE`'d unique
    index of §4.4 (copy-over `role='cite'`, `pinned_version_id=NULL` — still
    unique, byte-identical behavior), **plus**
@@ -539,31 +534,15 @@ block extends in parity, enforced by the existing test:
 5. **Link canonicalization** (Phase D) is a *data* migration, not schema: a
    guarded one-time body rewrite (dry-runnable via lint), then the save-path
    normalizer keeps it invariant.
-6. **Pre-migration readers** (FP extension binary skew): every new fold and
-   read falls back via `try?` exactly like the existing token fields; new
-   tables absent → fold 0. The projection's size==content invariant holds in
-   both skew directions: old binaries read `sources.content`/`byte_size`,
-   which the dual-write rule keeps correct; new binaries derive `documentSize`
-   and `contents(for:)` from the same resolution — `blobs.byte_size` joined
-   through the active version. **Byteless sources** (active version
-   `blob_hash IS NULL`) get an interim rule until the late-phase projection
-   overhaul: they project as a **zero-byte verbatim node** —
-   `sourceContent(id:)` returns empty `Data` (never throws), the enumerator
-   reports size 0 from the same resolution, and the legacy
-   `content`/`byte_size` columns are written empty/0 at insert so old binaries
-   agree; size==content holds trivially, and the `.md` transcript sibling is
-   the useful surface. The overhaul later replaces this with projecting the
-   active derived alternative.
 
-   **Byteless sources are gated strictly after the `sources.content` drop**
-   (the late table-rebuild step that ends the soak). During the dual-write
-   window every source MUST carry bytes: an old `wikictl`/FP binary cannot
-   distinguish a byteless (zero-byte) source from a genuinely empty file, and
-   the dual-write contract is "old binaries read correct bytes." Letting
-   byteless sources be creatable during the soak would violate that contract.
-   Byteless is a **post-soak** feature; the "interim zero-byte" rule above
-   describes how the *projection* copes if it ever sees one (defensive), not a
-   license to create them mid-soak.
+**File Provider projection.** The projection's size==content invariant holds
+trivially: with `sources.content` gone, `documentSize` and `contents(for:)` both
+derive from the active version's blob (`blobs.byte_size` joined through the ref).
+**Byteless sources** (active version `blob_hash IS NULL`) project as a
+**zero-byte verbatim node** — `sourceContent(id:)` returns empty `Data` (never
+throws), the enumerator reports size 0 — and the `.md` transcript sibling is the
+useful surface. The late-phase projection overhaul later replaces this with
+projecting the active derived alternative.
 
 ## 10. changeToken & File Provider
 
@@ -614,7 +593,7 @@ Ordered by dependency; each gate is demoable.
 | Phase | Contents | Gate |
 |-------|----------|------|
 | **0 — Concurrency substrate** *(this branch)* | Method-atomic store, `withTransaction` savepoints, atomic `renameSource`, `WikiReadPool`, off-main search, skill/AGENTS update | Full suite green; concurrent hammer test passes; searches don't touch the main-thread store |
-| **1 — Objects & versions** | `blobs`, `source_versions`, `provider_runs` (empty), `refs`, content backfill, ref-resolved reads, byteless support, refresh-append write path | Re-ingesting an identical file adds one version row + zero new blob bytes; rollback = repoint; byteless YouTube source renders via transcript |
+| **1 — Objects & versions** | `blobs`, `source_versions`, `provider_runs` (empty), `refs`, one-shot content migration (drop `sources.content`), ref-resolved reads, byteless support, refresh-append write path | Re-ingesting an identical file adds one version row + zero new blob bytes; rollback = repoint; byteless YouTube source renders via transcript |
 | **2 — Extraction alternatives** | technique + source-version columns, CAS extraction content, `source-derived` ref, compare/nominate UI, re-extract path (today none exists) | Two backends' extractions coexist; switch active; revert is a pointer copy |
 | **3 — Providers & provenance** | `SourceProvider` protocol, four paths unified, runs recorded (URL provenance!), refresh verb, credentials UX, **website provider writes disambiguated `original_path` per sibling rule (§7)** | Drag-drop/URL/Zotero/folder all flow through providers; `wikictl source refresh` appends a version |
 | **4 — Media & roles** | `source_links` rebuild (role/pin), `![[…]]` embeds, render-by-content-type, sibling `original_path` resolution, media filtering | Website snapshot renders with inline images; a YouTube embed plays; a json-render spec mounts |

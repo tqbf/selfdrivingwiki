@@ -21,11 +21,13 @@ or schema change — five amendments hardening the design of record:
   `page-content` ref makes it triply polymorphic. Added an explicit trigger:
   re-evaluate (split per-kind, or add a discriminator + CHECK) when a third kind
   lands or any non-repoint path writes `refs`. Don't let it decay silently.
-- **§9 — byteless sources gated strictly post-soak.** The "interim zero-byte
-  projection" rule is defensive, not a license to *create* byteless sources
-  during the dual-write window: an old `wikictl`/FP binary can't distinguish
-  byteless from a genuinely empty file, violating the "old binaries read correct
-  bytes" contract. Byteless is a post-`sources.content`-drop feature.
+- **§9 — migration simplified for pre-launch.** The app has no live users, so
+  the soak/dual-write/read-fallback machinery that existed for binary skew
+  across stale binaries is unnecessary. v18 is now a clean one-shot migration:
+  create tables → hash `content` into blobs + v1 versions + refs → **drop
+  `sources.content` in the same step**. Byteless sources are legal from v18 with
+  no gating (the byteless sequencing caveat added earlier is superseded). The
+  developer's own DB migrates once in place; restorable from VCS.
 - **§10 — changeToken is monotone non-decreasing by design.** All three new
   folds grow monotonically (`generation` only increments), so a rollback moves
   the token *forward*, never back. Recorded as an explicit constraint: any
