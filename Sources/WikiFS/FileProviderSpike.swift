@@ -249,10 +249,6 @@ final class FileProviderSpike {
                 timeout: .seconds(5))
             path = url.path
             status = "Mounted"
-            let rootURL = url
-            Task.detached(priority: .background) { [weak self] in
-                await self?.warmCaches(root: rootURL)
-            }
         } catch {
             status = "Resolving mount timed out; retrying domain registration…"
             if await registerDomain(id: id, displayName: displayName) {
@@ -264,55 +260,12 @@ final class FileProviderSpike {
                         timeout: .seconds(5))
                     path = url.path
                     status = "Mounted"
-                    let rootURL = url
-                    Task.detached(priority: .background) { [weak self] in
-                        await self?.warmCaches(root: rootURL)
-                    }
                     return
                 } catch {
                     status = "Mount unavailable: \(error.localizedDescription)"
                 }
             } else {
                 status = "Mount unavailable: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    /// Force the File Provider daemon to enumerate the directory hierarchy
-    /// top-down so the leaf container cache is warm before the share sheet
-    /// or Finder needs to resolve a path inside it.  The daemon enumerates
-    /// lazily; a cold parent means the child directory doesn't exist yet.
-    /// Listing each level with `FileManager` triggers synchronous
-    /// enumeration.  Best-effort — failures are logged.
-    private func warmCaches(root url: URL) async {
-        // List the root first — the daemon may have an incomplete cache
-        // from a previous enumeration and needs a fresh one that includes
-        // every container.  Then walk top-down so each parent is
-        // enumerated before its children.
-        DebugLog.fileprovider("warmCaches: listing root…")
-        if let rootItems = try? FileManager.default.contentsOfDirectory(
-            at: url, includingPropertiesForKeys: nil) {
-            let names = rootItems.map { $0.lastPathComponent }.sorted()
-            DebugLog.fileprovider("warmCaches: root → \(rootItems.count) items: \(names)")
-        } else {
-            DebugLog.fileprovider("warmCaches: root listing failed")
-        }
-
-        let walks: [(containers: [String], label: String)] = [
-            (["sources", "sources/by-name"], "source share"),
-            (["pages",   "pages/by-title"],   "page share"),
-        ]
-        for (containers, _) in walks {
-            for relative in containers {
-                let dirURL = url.appendingPathComponent(relative, isDirectory: true)
-                DebugLog.fileprovider("warmCaches: listing \(relative)…")
-                do {
-                    let contents = try FileManager.default.contentsOfDirectory(
-                        at: dirURL, includingPropertiesForKeys: nil)
-                    DebugLog.fileprovider("warmCaches: \(relative) → \(contents.count) items")
-                } catch {
-                    DebugLog.fileprovider("warmCaches: \(relative) error=\(error.localizedDescription)")
-                }
             }
         }
     }

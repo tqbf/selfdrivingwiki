@@ -34,15 +34,29 @@ History:
 - **v2** — `files` container renamed to `sources`; `source-by-name:` prefix shared via `WikiFSContainerID`
 - **v1** — initial schema
 
-## Cache warming (`FileProviderSpike.warmCaches(root:)`)
+## Cache warming — REMOVED (caused launch-time TCC prompt)
 
-Called from `resolvePath` after the mount URL is resolved. Lists directories top-down with `FileManager.default.contentsOfDirectory`:
+`FileProviderSpike.warmCaches(root:)` and its calls in `resolvePath` were
+**removed**. The method listed the File Provider mount top-down with
+`FileManager.default.contentsOfDirectory`. Because the File Provider runs in the
+sandboxed **extension** process (a separate bundle id from the host app), reading
+the domain's directory data tripped `kTCCServiceSystemPolicyAppData` — the
+**"Self Driving Wiki would like to access data from other apps"** privacy prompt
+— on every cold launch. That pending prompt also **held the app in the
+background** at startup (the app never reached the front until the user dealt
+with the prompt).
 
-1. List `sources/` — daemon enumerates the `sources` container, discovers `by-id` and `by-name` children
-2. List `sources/by-name/` — daemon enumerates all source file nodes, caches filenames
-3. Same for `pages/` → `pages/by-title/`
+`warmCaches` was written for an older path-traversal share flow, but the current
+leaf-resolution methods (`openSource`, `resolveSourceByNameURL`,
+`resolvePageByTitleURL`) all resolve via `getUserVisibleURL` by **identifier**,
+which goes straight through the daemon and does **not** require the parent
+container to be pre-enumerated. So removing `warmCaches` does not regress those
+paths (verified: launch foregrounds, no prompt, `FileProviderSpikeMountPathTests`
+pass).
 
-Errors are logged but never surfaced to the user — the cache warming is best-effort; the share button's `resourceValues(forKeys:)` call is the safety net for individual file access.
+If a future path-*traversal* access (e.g. Finder resolving a path by walking the
+hierarchy) needs a warm cache, reintroduce warming **lazily at that user-initiated
+call site** — never eagerly from `resolvePath`/launch.
 
 ## Source mount path (`FileProviderSpike.sourceMountPath(for:)`)
 
