@@ -6,13 +6,32 @@ import CSqliteVec
 
 /// SQLite-backed `WikiStore`. Hand-wraps the system `SQLite3` C API — no
 /// third-party dependency (per the BRINGUP decision). Owns one serial
-/// connection; all access in Phase 1 is main-thread-synchronous. Phase 2 will
-/// add short-lived read connections inside the File Provider extension (the
-/// app stays the only writer; WAL mode makes concurrent reads safe).
+/// connection with a prepared-statement cache.
+///
+/// **Concurrency contract (graph-model Phase 0):** every public entry point is
+/// method-atomic — it acquires `lock` (recursive, so public methods may compose)
+/// for its whole body. That closes the two app-level races `FULLMUTEX` cannot:
+/// two callers of byte-identical SQL sharing one cached `sqlite3_stmt*` (the
+/// historical `String(cString:)` crash), and unguarded mutation of the
+/// `statements` dictionary. The store is therefore safe to *call* from any
+/// thread; UI writes still flow through the `@MainActor` model because they
+/// mutate observable state, and off-main reads should prefer `WikiReadPool`
+/// (separate snapshot connections) so they never contend with the writer.
+/// See `plans/graph-model-and-versioning.md` §8 and
+/// `.claude/skills/sqlite-concurrency/SKILL.md`.
 public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     private let db: OpaquePointer
     /// Prepared-statement cache keyed by SQL text; reused via `reset()`.
     private var statements: [String: SQLiteStatement] = [:]
+    /// Serializes whole method bodies (bind → step → column reads) against the
+    /// single connection. Recursive because public methods call each other
+    /// (`renameSource` → `updatePage` → …). Guarded state: `statements`,
+    /// `transactionDepth`, every `sqlite3_*` call on `db`, and connection-global
+    /// values like `sqlite3_changes`.
+    private let lock = NSRecursiveLock()
+    /// Current `withTransaction` nesting depth. 0 = no open transaction.
+    /// Only ever touched while holding `lock`.
+    private var transactionDepth = 0
 
     /// Open (creating if needed) the database at `databaseURL`.
     /// Tests inject a temp-dir or `:memory:` URL; the app injects
@@ -839,6 +858,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     // MARK: - WikiStore
 
     public func listPages(sortBy: PageSortOrder) throws -> [WikiPageSummary] {
+        lock.lock(); defer { lock.unlock() }
         let orderClause: String
         switch sortBy {
         case .lastUpdated:
@@ -869,6 +889,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// `pages/by-title` deterministically (INITIAL §6). Not on the `WikiStore`
     /// protocol — it is a read-projection helper, not part of the editing API.
     public func listAllPagesOrderedByID() throws -> [WikiPage] {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         SELECT id, title, slug, body_markdown, created_at, updated_at, version
         FROM pages ORDER BY id ASC;
@@ -927,6 +948,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// like `system_prompt`). Both fall back to `0` on a not-yet-migrated read
     /// connection (the v4/v5 tables absent), exactly like the `spVersion` fold.
     public func changeToken() throws -> String {
+        lock.lock(); defer { lock.unlock() }
         let pages = try statement("SELECT COUNT(*), COALESCE(SUM(version), 0) FROM pages;")
         defer { pages.reset() }
         guard try pages.step() else { return "0:0:0:0:0:0:0:0" }
@@ -1001,6 +1023,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func getPage(id: PageID) throws -> WikiPage {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         SELECT id, title, slug, body_markdown, created_at, updated_at, version
         FROM pages WHERE id = ?1;
@@ -1020,6 +1043,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func createPage(title: String) throws -> WikiPage {
+        lock.lock(); defer { lock.unlock() }
         let id = PageID(rawValue: ULID.generate())
         let slug = try uniqueSlug(from: title, id: id)
         let now = Date()
@@ -1040,6 +1064,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func updatePage(id: PageID, title: String, body: String) throws {
+        lock.lock(); defer { lock.unlock() }
         // Recompute slug from the (possibly renamed) title, then bump version
         // and updated_at. version bumps support Phase 3 change signaling.
         let slug = try uniqueSlug(from: title, id: id)
@@ -1060,14 +1085,14 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func deletePage(id: PageID) throws {
+        lock.lock(); defer { lock.unlock() }
         // FK safety (Phase 4): `page_links` has FKs onto `pages(id)` for BOTH
         // `from_page_id` and `to_page_id`, and `foreign_keys=ON`. Once links are
         // populated, deleting a page referenced as a link SOURCE or TARGET would
         // throw a constraint violation. So clear every link touching this page
         // first, then delete the row — in ONE transaction so a failure can't
         // leave dangling link rows.
-        try exec("BEGIN IMMEDIATE;")
-        do {
+        try withTransaction {
             let unlink = try statement(
                 "DELETE FROM page_links WHERE from_page_id = ?1 OR to_page_id = ?1;")
             unlink.reset()
@@ -1078,16 +1103,13 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             stmt.reset()
             try stmt.bind(id.rawValue, at: 1)
             _ = try stmt.step()
-            try exec("COMMIT;")
-        } catch {
-            try? exec("ROLLBACK;")
-            throw error
         }
     }
 
     // MARK: - Wiki links (Phase 4)
 
     public func resolveTitleToID(_ title: String) throws -> PageID? {
+        lock.lock(); defer { lock.unlock() }
         // Lowest ULID == oldest page on a duplicate-title collision.
         // COLLATE NOCASE: case-insensitive ASCII folding so [[home]] → "Home".
         let stmt = try statement(
@@ -1108,6 +1130,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// name with its last extension removed, so `[[source:Some Paper]]` still
     /// resolves a row named `Some Paper.pdf`.
     public func resolveSourceByName(_ displayName: String) throws -> PageID? {
+        lock.lock(); defer { lock.unlock() }
         let exact = try statement("""
         SELECT id FROM sources
         WHERE COALESCE(display_name, filename) = ?1 COLLATE NOCASE
@@ -1134,13 +1157,13 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
     public func replaceLinks(from pageID: PageID,
                              parsedLinks: [WikiLinkParser.ParsedLink]) throws {
+        lock.lock(); defer { lock.unlock() }
         // One transaction: wipe this page's outgoing links in BOTH tables, then
         // insert the resolved subsets. Unresolved targets are OMITTED.
         // `INSERT OR IGNORE` collapses duplicate (from,to) pairs.
         // `source_links` inherits the same alias-collapsing behavior as
         // `page_links` via its PRIMARY KEY (from_page_id, to_source_id).
-        try exec("BEGIN IMMEDIATE;")
-        do {
+        try withTransaction {
             let delPage = try statement("DELETE FROM page_links WHERE from_page_id = ?1;")
             delPage.reset()
             try delPage.bind(pageID.rawValue, at: 1)
@@ -1177,10 +1200,6 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                     _ = try insSource.step()
                 }
             }
-            try exec("COMMIT;")
-        } catch {
-            try? exec("ROLLBACK;")
-            throw error
         }
     }
 
@@ -1189,6 +1208,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// the `WikiStore` protocol — like `listAllPagesOrderedByID`, it is a
     /// read-projection helper, not part of the editing API.
     public func listAllLinks() throws -> [IndexGenerators.LinkRow] {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         SELECT from_page_id, to_page_id, link_text
         FROM page_links ORDER BY from_page_id, to_page_id;
@@ -1210,6 +1230,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// shape as `listAllLinks` so the projection merges them into a unified
     /// `links.jsonl` (page rows first, then source rows).
     public func listAllSourceLinks() throws -> [IndexGenerators.LinkRow] {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         SELECT from_page_id, to_source_id, link_text
         FROM source_links ORDER BY from_page_id, to_source_id;
@@ -1231,6 +1252,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// stable across renames). Used by `renameSource` to find candidate pages for
     /// link rewriting. One query, zero false positives.
     public func sourceLinkingPages(to sourceID: PageID) throws -> [PageID] {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         SELECT DISTINCT from_page_id FROM source_links WHERE to_source_id = ?1;
         """)
@@ -1265,6 +1287,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         zoteroItemTitle: String? = nil,
         mimeType: String? = nil
     ) throws -> SourceSummary {
+        lock.lock(); defer { lock.unlock() }
         guard data.count <= Self.ingestByteCap else {
             throw WikiStoreError.unexpected(
                 "source \(data.count) bytes exceeds cap \(Self.ingestByteCap)")
@@ -1314,6 +1337,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// All source summaries (NO content blob), most-recent-first for the
     /// management list. `id` is a ULID so `created_at DESC` orders by ingest.
     public func listSources() throws -> [SourceSummary] {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         SELECT id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
                zotero_item_key, zotero_item_title, display_name
@@ -1329,6 +1353,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
     /// One source summary (NO content blob). Throws `.notFound` if absent.
     public func getSource(id: PageID) throws -> SourceSummary {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         SELECT id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
                zotero_item_key, zotero_item_title, display_name
@@ -1343,6 +1368,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// The verbatim content bytes for one source, fetched on demand (never
     /// held in the summary list). Throws `.notFound` if absent.
     public func sourceContent(id: PageID) throws -> Data {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement("SELECT content FROM sources WHERE id = ?1;")
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
@@ -1351,6 +1377,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func deleteSource(id: PageID) throws {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement("DELETE FROM sources WHERE id = ?1;")
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
@@ -1365,34 +1392,46 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// fallback). Filename-form links keep resolving (filename is immutable).
     /// Fragment and alias are preserved byte-for-byte.
     ///
-    /// The source UPDATE happens first; then each linking page is updated
-    /// individually via the existing `updatePage` + `replaceLinks` methods.
-    /// If a crash occurs mid-loop, remaining pages still resolve (old name is
-    /// a filename fallback) — the rename is eventually consistent.
+    /// **Atomic** (graph-model Phase 0): the old-name read, the source UPDATE,
+    /// and every page rewrite commit in ONE `withTransaction` — the nested
+    /// `replaceLinks` transactions become savepoints, which is what the phase-d
+    /// design wanted but raw `BEGIN IMMEDIATE` couldn't nest. Reading `oldBase`
+    /// INSIDE the transaction matters: `wikictl` is a second writer process, and
+    /// a rename it commits between our read and our `BEGIN IMMEDIATE` would make
+    /// the rewrite loop match a stale base and rewrite nothing (cross-process
+    /// TOCTOU). The embedding + FTS side effects run AFTER the commit
+    /// (best-effort, and MLX inference must never run under an open write
+    /// transaction — it would stall `wikictl`).
     public func renameSource(id: PageID, to newDisplayName: String) throws {
-        let old = try getSource(id: id)
-        let oldBase = old.displayName ?? old.filename
-        guard oldBase != newDisplayName else { return }
+        lock.lock(); defer { lock.unlock() }
+        let renamed = try withTransaction { () -> Bool in
+            // Read the old name under the write lock's snapshot.
+            let old = try getSource(id: id)
+            let oldBase = old.displayName ?? old.filename
+            guard oldBase != newDisplayName else { return false }
 
-        // Update the source row first.
-        let stmt = try statement("""
-        UPDATE sources SET display_name = ?2, updated_at = ?3, version = version + 1 WHERE id = ?1;
-        """)
-        defer { stmt.reset() }
-        try stmt.bind(id.rawValue, at: 1)
-        try stmt.bind(newDisplayName, at: 2)
-        try stmt.bind(Date().timeIntervalSince1970, at: 3)
-        _ = try stmt.step()
+            // Update the source row first.
+            let stmt = try statement("""
+            UPDATE sources SET display_name = ?2, updated_at = ?3, version = version + 1 WHERE id = ?1;
+            """)
+            defer { stmt.reset() }
+            try stmt.bind(id.rawValue, at: 1)
+            try stmt.bind(newDisplayName, at: 2)
+            try stmt.bind(Date().timeIntervalSince1970, at: 3)
+            _ = try stmt.step()
 
-        // Rewrite links in every page that points at this source.
-        for pageID in try sourceLinkingPages(to: id) {
-            let page = try getPage(id: pageID)
-            guard let rewritten = WikiLinkRewriter.rewriteSourceBase(
-                in: page.bodyMarkdown, matching: oldBase,
-                to: newDisplayName) else { continue }
-            try updatePage(id: pageID, title: page.title, body: rewritten)
-            try replaceLinks(from: pageID, parsedLinks: WikiLinkParser.parse(rewritten))
+            // Rewrite links in every page that points at this source.
+            for pageID in try sourceLinkingPages(to: id) {
+                let page = try getPage(id: pageID)
+                guard let rewritten = WikiLinkRewriter.rewriteSourceBase(
+                    in: page.bodyMarkdown, matching: oldBase,
+                    to: newDisplayName) else { continue }
+                try updatePage(id: pageID, title: page.title, body: rewritten)
+                try replaceLinks(from: pageID, parsedLinks: WikiLinkParser.parse(rewritten))
+            }
+            return true
         }
+        guard renamed else { return }   // no-op rename: skip re-embed/FTS work
 
         // The title changed, so re-embed. Use the current processed-markdown HEAD
         // (if any) so the embedding reflects both the new name and the content;
@@ -1406,6 +1445,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// Stamp a source as summarized-into-the-wiki. Idempotent and a no-op
     /// for an unknown id. Called from `wikictl log append --kind ingest --source`.
     public func markSourceIngested(id: PageID) throws {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement(
             "UPDATE sources SET ingested_at = ?2 WHERE id = ?1;")
         defer { stmt.reset() }
@@ -1417,6 +1457,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// IDs of sources the agent has marked ingested — the authoritative
     /// status the UI's "Processed" badge reads.
     public func markedSourceIDs() throws -> Set<String> {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement(
             "SELECT id FROM sources WHERE ingested_at IS NOT NULL;")
         defer { stmt.reset() }
@@ -1429,6 +1470,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// ingest order) for the deterministic `indexes/sources.jsonl` generator.
     /// Read-side projection helper (like `listAllPagesOrderedByID`).
     public func listAllSourcesOrderedByID() throws -> [IndexGenerators.SourceIndexRow] {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size,
                s.created_at, s.updated_at, s.version, s.display_name,
@@ -1493,6 +1535,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// (read projection) wraps this in `try?` and falls back to the default if
     /// the table itself is absent on a not-yet-migrated read connection.
     public func getSystemPrompt() throws -> SystemPrompt {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement(
             "SELECT body_markdown, updated_at, version FROM system_prompt WHERE id = 1;")
         defer { stmt.reset() }
@@ -1512,6 +1555,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// `updated_at`. UPSERT so it works even if the singleton row is somehow
     /// missing (creates it at version 1; otherwise increments).
     public func updateSystemPrompt(body: String) throws {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         INSERT INTO system_prompt (id, body_markdown, updated_at, version)
         VALUES (1, ?1, ?2, 1)
@@ -1534,6 +1578,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// id). Append-only: this never updates or UPSERTs.
     @discardableResult
     public func appendLog(kind: LogEntry.Kind, title: String, note: String?) throws -> LogEntry {
+        lock.lock(); defer { lock.unlock() }
         let id = PageID(rawValue: ULID.generate())
         let now = Date()
         let stmt = try statement("""
@@ -1561,6 +1606,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// flaky `log.md` ordering). `ts` is sub-millisecond and `rowid` is monotonic
     /// per insert, so this is fully deterministic insertion order.
     public func listAllLogEntriesOrderedByID() throws -> [LogEntry] {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         SELECT id, ts, kind, title, note FROM log ORDER BY ts ASC, rowid ASC;
         """)
@@ -1586,6 +1632,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// so the rendered tail matches `log.md`'s `tail`. A non-positive `limit`, or an
     /// empty log, yields `[]`.
     public func recentLogEntries(limit: Int) throws -> [LogEntry] {
+        lock.lock(); defer { lock.unlock() }
         guard limit > 0 else { return [] }
         let stmt = try statement("""
         SELECT id, ts, kind, title, note FROM log ORDER BY ts DESC, rowid DESC LIMIT ?1;
@@ -1614,6 +1661,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// itself is absent on a not-yet-migrated read connection. Mirrors
     /// `getSystemPrompt()`.
     public func getWikiIndex() throws -> WikiIndex {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement(
             "SELECT body_markdown, updated_at, version FROM wiki_index WHERE id = 1;")
         defer { stmt.reset() }
@@ -1633,6 +1681,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// it works even if the singleton row is somehow missing (creates it at version
     /// 1; otherwise increments). Mirrors `updateSystemPrompt(body:)`.
     public func updateWikiIndex(body: String) throws {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         INSERT INTO wiki_index (id, body_markdown, updated_at, version)
         VALUES (1, ?1, ?2, 1)
@@ -1691,6 +1740,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     // MARK: - Bookmark nodes
 
     public func listBookmarkNodes() throws -> [BookmarkNode] {
+        lock.lock(); defer { lock.unlock() }
         // Order root nodes (parent_id IS NULL) first, then by position within
         // each parent. SQLite lacks NULLS FIRST, so `parent_id IS NULL DESC`
         // sorts NULL parents before non-NULL.
@@ -1721,9 +1771,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         label: String?,
         targetID: PageID?
     ) throws -> BookmarkNode {
+        lock.lock(); defer { lock.unlock() }
         let id = ULID.generate()
-        try exec("BEGIN IMMEDIATE;")
-        do {
+        try withTransaction {
             // Shift siblings at >= position up by 1 within the same parent.
             // SQLite's `IS` operator matches NULL=NULL (unlike `=`), so
             // `parent_id IS ?1` correctly groups root siblings.
@@ -1772,17 +1822,13 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             } else {
                 try renumberRootSiblings()
             }
-
-            try exec("COMMIT;")
-        } catch {
-            try? exec("ROLLBACK;")
-            throw error
         }
         return BookmarkNode(id: id, parentID: parentID, position: position, kind: kind,
                         label: label, targetID: targetID)
     }
 
     public func updateBookmarkNode(id: String, label: String?) throws {
+        lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         UPDATE bookmark_nodes SET label = ?2 WHERE id = ?1;
         """)
@@ -1797,8 +1843,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func deleteBookmarkNode(id: String) throws {
-        try exec("BEGIN IMMEDIATE;")
-        do {
+        lock.lock(); defer { lock.unlock() }
+        try withTransaction {
             // Capture the parent for sibling renumbering after the delete.
             let info = try statement(
                 "SELECT parent_id FROM bookmark_nodes WHERE id = ?1;")
@@ -1820,16 +1866,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             } else {
                 try renumberRootSiblings()
             }
-            try exec("COMMIT;")
-        } catch {
-            try? exec("ROLLBACK;")
-            throw error
         }
     }
 
     public func moveBookmarkNode(id: String, toParentID: String?, position: Int) throws {
-        try exec("BEGIN IMMEDIATE;")
-        do {
+        lock.lock(); defer { lock.unlock() }
+        try withTransaction {
             // Read the node's current parent + position.
             let info = try statement(
                 "SELECT parent_id, position FROM bookmark_nodes WHERE id = ?1;")
@@ -1918,10 +1960,6 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                     try renumberRootSiblings()
                 }
             }
-            try exec("COMMIT;")
-        } catch {
-            try? exec("ROLLBACK;")
-            throw error
         }
     }
 
@@ -1965,6 +2003,48 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    // MARK: - Transactions
+
+    /// Run `body` atomically. The outermost call issues `BEGIN IMMEDIATE`
+    /// (grab the write lock up front — the discipline the six historical raw
+    /// transaction sites used); nested calls issue `SAVEPOINT`s, so public
+    /// methods that own transactions compose (`renameSource` wraps
+    /// `replaceLinks`, an outer batch may wrap `storePageChunks`, …). A nested
+    /// failure rolls back only its savepoint and rethrows — best-effort callers
+    /// (`try?`) keep exactly their old semantics; an outermost failure rolls
+    /// back everything.
+    ///
+    /// Internal (not private) so tests can exercise nesting directly.
+    func withTransaction<T>(_ body: () throws -> T) throws -> T {
+        lock.lock(); defer { lock.unlock() }
+        let depth = transactionDepth
+        let savepoint = "wiki_txn_\(depth)"
+        if depth == 0 {
+            try exec("BEGIN IMMEDIATE;")
+        } else {
+            try exec("SAVEPOINT \(savepoint);")
+        }
+        transactionDepth += 1
+        defer { transactionDepth -= 1 }
+        do {
+            let result = try body()
+            if depth == 0 {
+                try exec("COMMIT;")
+            } else {
+                try exec("RELEASE \(savepoint);")
+            }
+            return result
+        } catch {
+            if depth == 0 {
+                try? exec("ROLLBACK;")
+            } else {
+                try? exec("ROLLBACK TO \(savepoint);")
+                try? exec("RELEASE \(savepoint);")
+            }
+            throw error
+        }
+    }
+
     // MARK: - Statement helpers
 
     private func statement(_ sql: String) throws -> SQLiteStatement {
@@ -1990,7 +2070,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// like `foreign_keys` are per-connection, so they can't be observed from a
     /// separately-opened connection — tests must ask the live store.
     func pragmaValue(_ name: String) -> String {
-        (try? queryScalarText("PRAGMA \(name);")) ?? ""
+        lock.lock(); defer { lock.unlock() }
+        return (try? queryScalarText("PRAGMA \(name);")) ?? ""
     }
 
     /// Run a one-row PRAGMA/SELECT and return column 0 as text.
@@ -2016,8 +2097,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// `source_chunks(source_id)` are structurally identical. Internal callers
     /// only; table/column names are never user input.
     private func replaceChunks(table: String, idColumn: String, id: PageID, chunks: [Data]) throws {
-        try exec("BEGIN IMMEDIATE;")
-        do {
+        try withTransaction {
             let del = try statement("DELETE FROM \(table) WHERE \(idColumn) = ?1;")
             defer { del.reset() }
             try del.bind(id.rawValue, at: 1)
@@ -2033,16 +2113,13 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 _ = try ins.step()
                 ins.reset()
             }
-            try exec("COMMIT;")
-        } catch {
-            try? exec("ROLLBACK;")
-            throw error
         }
     }
 
     /// Store/replace all chunk embeddings for a page. Public so tests + the
     /// embedding maintenance path can drive it directly.
     public func storePageChunks(id: PageID, chunks: [Data]) throws {
+        lock.lock(); defer { lock.unlock() }
         try replaceChunks(table: "page_chunks", idColumn: "page_id", id: id, chunks: chunks)
     }
 
@@ -2081,7 +2158,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func searchSimilar(query: String, limit: Int) throws -> [WikiPageSummary] {
-        try hybridSearch(
+        lock.lock(); defer { lock.unlock() }
+        return try hybridSearch(
             kind: "pages", query: query, limit: limit, id: \.id,
             fts: { try searchPagesFTS(query: query, limit: $0) },
             semantic: { try searchPagesSemantic(blob: $0, limit: $1) })
@@ -2222,6 +2300,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// `pages` via the FTS5 'rebuild' command; sources first backfill `source_search`
     /// from the HEAD of each version chain, then rebuild. Idempotent. Returns counts.
     public func rebuildFTS() -> (pages: Int, sources: Int) {
+        lock.lock(); defer { lock.unlock() }
         do {
             try exec("INSERT INTO pages_fts(pages_fts) VALUES ('rebuild');")
         } catch { DebugLog.store("rebuildFTS: pages rebuild failed — \(error)") }
@@ -2264,6 +2343,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// `activeIdentifierOverride` is injected by tests; production passes `nil`
     /// and the live `EmbeddingService.selectedEmbedderIdentifier()` is used.
     func ensureEmbedderConsistency(activeIdentifierOverride: String? = nil) {
+        lock.lock(); defer { lock.unlock() }
         let activeIdentifier = activeIdentifierOverride ?? EmbeddingService.selectedEmbedderIdentifier()
         do {
             let stored = (try? queryScalarText("SELECT embedder FROM embedding_meta WHERE id = 1;")) ?? ""
@@ -2339,6 +2419,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// Read on the main actor by `upgradeSearchIndex`; the MLX inference runs
     /// off-main but the SQLite read/write stays on main.
     public func missingPageEmbeddingWork() -> [(id: PageID, text: String)] {
+        lock.lock(); defer { lock.unlock() }
         var out: [(id: PageID, text: String)] = []
         guard let stmt = try? statement("""
         SELECT p.id, p.title, p.body_markdown
@@ -2361,6 +2442,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// (title-only for un-extracted PDFs/binaries). Mirrors
     /// ``missingPageEmbeddingWork``.
     public func missingSourceEmbeddingWork() -> [(id: PageID, text: String)] {
+        lock.lock(); defer { lock.unlock() }
         var out: [(id: PageID, text: String)] = []
         guard let stmt = try? statement("""
         SELECT s.id, COALESCE(s.display_name, s.filename),
@@ -2427,6 +2509,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// terms until `ensureSearchIndexes` rebuilds it on the next open. Used by
     /// `FullTextSearchTests.emptyFtsTermIndexIsHealedOnOpen`.
     internal func _breakPagesFtsIndexForTesting() throws {
+        lock.lock(); defer { lock.unlock() }
         try exec("DROP TABLE pages_fts;")
         try exec("""
             CREATE VIRTUAL TABLE pages_fts USING fts5(
@@ -2443,6 +2526,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// embedding maintenance path can drive it directly. Mirrors
     /// `storePageChunks` — both route through the generic `replaceChunks`.
     public func storeSourceChunks(id: PageID, chunks: [Data]) throws {
+        lock.lock(); defer { lock.unlock() }
         try replaceChunks(table: "source_chunks", idColumn: "source_id", id: id, chunks: chunks)
     }
 
@@ -2457,7 +2541,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// (which reads index 5 as `created_at`) would dereference the BLOB as a
     /// Double. `listSources()` already names its columns for the same reason.
     public func searchSimilarSources(query: String, limit: Int) throws -> [SourceSummary] {
-        try hybridSearch(
+        lock.lock(); defer { lock.unlock() }
+        return try hybridSearch(
             kind: "sources", query: query, limit: limit, id: \.id,
             fts: { try searchSourcesFTS(query: query, limit: $0) },
             semantic: { try searchSourcesSemantic(blob: $0, limit: $1) })
@@ -2539,6 +2624,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func processedMarkdownHead(sourceID: PageID) throws -> SourceMarkdownVersion? {
+        lock.lock(); defer { lock.unlock() }
         guard let stmt = try? statement("""
         SELECT id, file_id, parent_id, content, origin, note, created_at
         FROM source_markdown_versions WHERE file_id = ?1 ORDER BY id DESC LIMIT 1;
@@ -2550,6 +2636,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func hasProcessedMarkdown(sourceID: PageID) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
         guard let stmt = try? statement("""
         SELECT 1 FROM source_markdown_versions WHERE file_id = ?1 LIMIT 1;
         """) else { return false }
@@ -2559,6 +2646,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func processedMarkdownHistory(sourceID: PageID) throws -> [SourceMarkdownVersion] {
+        lock.lock(); defer { lock.unlock() }
         guard let stmt = try? statement("""
         SELECT id, file_id, parent_id, content, origin, note, created_at
         FROM source_markdown_versions WHERE file_id = ?1 ORDER BY id DESC;
@@ -2577,6 +2665,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// never errors — the sources list simply has no markdown siblings.
     /// Single GROUP BY query avoids N+1 across the full source enumeration.
     public func processedMarkdownHeadsBySource() throws -> [String: SourceMarkdownVersion] {
+        lock.lock(); defer { lock.unlock() }
         guard let stmt = try? statement("""
         SELECT id, file_id, parent_id, content, origin, note, created_at
         FROM source_markdown_versions
@@ -2594,6 +2683,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     @discardableResult
     public func appendProcessedMarkdown(sourceID: PageID, content: String,
                                         origin: String, note: String?) throws -> SourceMarkdownVersion {
+        lock.lock(); defer { lock.unlock() }
         let id = PageID(rawValue: ULID.generate())
         let parentID = try processedMarkdownHead(sourceID: sourceID)?.id
         let now = Date()
@@ -2629,6 +2719,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
     @discardableResult
     public func revertProcessedMarkdown(sourceID: PageID, to versionID: PageID) throws -> SourceMarkdownVersion {
+        lock.lock(); defer { lock.unlock() }
         // Read the target version's content — must exist and belong to sourceID.
         guard let stmt = try? statement("""
         SELECT content FROM source_markdown_versions WHERE id = ?1 AND file_id = ?2;

@@ -159,6 +159,12 @@ public final class WikiStoreModel {
     public private(set) var isAgentRunning = false
 
     private let store: WikiStore
+    /// Read-only snapshot connections for OFF-MAIN reads (debounced search).
+    /// Injected by `WikiManager.openActive` for file-backed wikis; `nil` for
+    /// in-memory stores (a separate connection to `:memory:` would see a
+    /// different, empty database) and in tests — callers fall back to the
+    /// main-actor store. See `WikiReadPool` for the safety argument.
+    @ObservationIgnored public var readPool: WikiReadPool?
     private var autosaveTask: Task<Void, Never>?
     private var systemPromptAutosaveTask: Task<Void, Never>?
     /// The page whose text currently lives in the draft buffers.
@@ -1430,9 +1436,18 @@ public final class WikiStoreModel {
         searchTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, let self else { return }
-            let results = (try? self.store.searchSimilar(
-                query: self.searchQuery, limit: 20
-            )) ?? []
+            // Prefer an off-main snapshot read (Phase 0 reader pool) so typing
+            // never contends with the main-actor write store; fall back to the
+            // main store when no pool exists (in-memory wiki, tests).
+            let query = self.searchQuery
+            let results: [WikiPageSummary]
+            if let pool = self.readPool {
+                results = (try? await pool.asyncRead { reader in
+                    try reader.searchSimilar(query: query, limit: 20)
+                }) ?? []
+            } else {
+                results = (try? self.store.searchSimilar(query: query, limit: 20)) ?? []
+            }
             guard !Task.isCancelled else { return }
             self.searchResults = results
         }
@@ -1447,9 +1462,15 @@ public final class WikiStoreModel {
         sourceSearchTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, let self else { return }
-            let results = (try? self.store.searchSimilarSources(
-                query: self.sourceSearchQuery, limit: 20
-            )) ?? []
+            let query = self.sourceSearchQuery
+            let results: [SourceSummary]
+            if let pool = self.readPool {
+                results = (try? await pool.asyncRead { reader in
+                    try reader.searchSimilarSources(query: query, limit: 20)
+                }) ?? []
+            } else {
+                results = (try? self.store.searchSimilarSources(query: query, limit: 20)) ?? []
+            }
             guard !Task.isCancelled else { return }
             self.sourceSearchResults = results
         }

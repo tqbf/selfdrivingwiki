@@ -2,6 +2,117 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-03 — Graph-model design: adversarial review hardening (doc-only)
+
+Second-pass adversarial review of [`plans/graph-model-and-versioning.md`](plans/graph-model-and-versioning.md),
+prompted by the "should sources and pages be one data model?" question. No code
+or schema change — five amendments hardening the design of record:
+
+- **New §4.6 — why `pages` and `sources` stay distinct.** Records the verdict
+  that the convergence the unification challenge senses is real but belongs at
+  the addressing/link layer (§6, already done via ULID-canonical links), *not*
+  the node-storage layer. The three rebuttals: opposite mutability models
+  (page bodies through `blobs` would destroy dedup), table-per-class
+  unification is worse than two tables (a JOIN on every read for four shared
+  columns), and page versioning is a forward-compatibility hook (§14) not a
+  commitment. Edge tables stay separate too — FK integrity beats DRY.
+- **§4.3 — `refs.version_id` polymorphism trigger condition.** The un-FK'd
+  polymorphic column is justified only by the single-writer invariant; Phase 6's
+  `page-content` ref makes it triply polymorphic. Added an explicit trigger:
+  re-evaluate (split per-kind, or add a discriminator + CHECK) when a third kind
+  lands or any non-repoint path writes `refs`. Don't let it decay silently.
+- **§9 — migration simplified for pre-launch.** The app has no live users, so
+  the soak/dual-write/read-fallback machinery that existed for binary skew
+  across stale binaries is unnecessary. v18 is now a clean one-shot migration:
+  create tables → hash `content` into blobs + v1 versions + refs → **drop
+  `sources.content` in the same step**. Byteless sources are legal from v18 with
+  no gating (the byteless sequencing caveat added earlier is superseded). The
+  developer's own DB migrates once in place; restorable from VCS.
+- **§10 — changeToken is monotone non-decreasing by design.** All three new
+  folds grow monotonically (`generation` only increments), so a rollback moves
+  the token *forward*, never back. Recorded as an explicit constraint: any
+  future "changed since snapshot X" feature that needs rollback-to-prior to
+  *decrease* the token is foreclosed and would need a different mechanism.
+- **§12 Phase 3 — `original_path` disambiguation is a Phase-3 deliverable.**
+  §7's sibling-resolution collision rule (suffixing on `original_path`) was
+  forward-referencing the unimplemented website provider. Added it to Phase 3's
+  contents (the website provider writes disambiguated `original_path`); Phase 4's
+  rendering consumes it.
+- **§11/§12 — Apple Podcasts added as a tracked provider (PR #106).** Podcast
+  transcript ingest already exists as a URL-path special case (`PodcastEpisodeURL`
+  → `ApplePodcastTranscriptService`) against the flat source model. Added to the
+  provider list (§11) with a note on how it re-models when Phase 1–3 land
+  (byteless source, transcript as derived alternative, recognizer+service become
+  a `SourceProvider`), and to Phase 7's leaf providers. Ships independently.
+- **§4.7 + A5 — W3C PROV-DM provenance vocabulary (Full alignment).** Adopted
+  the PROV-DM core types/relations as schema: new **`agents`** table (PROV
+  Agent; normalizes the `provider_kind`/`extraction_technique` strings into
+  first-class agents) and **`activities`** table (PROV Activity; generalizes
+  `provider_runs`, broadens `kind` to `fetch|extract|edit|import` so extraction
+  becomes a real Activity). Relations mapped: `wasGeneratedBy`
+  (`activity_id` on both version tables), `wasDerivedFrom` (`parent_id` /
+  `source_version_id`), `wasAssociatedWith` (`activities.agent_id`), `used`
+  (derivable from derivation+generation, §4.7). Closes the run-level provenance
+  gap (an extraction's run is now recoverable, not just implied). Token fold
+  renamed `runCount`→`actCount`; §5 graph, §9 migration, §11/§12 phases, and
+  all `provider_run`/`extraction_technique` references updated to match.
+- **§4.8 — PROV–Dublin Core boundary (context note, no schema).** Recorded the
+  [PROV-DC](https://www.w3.org/TR/prov-dc/) mapping as orientation for Phase 3
+  provider design: DC responsibility terms (creator/publisher/contributor/
+  rightsHolder) → `wasAttributedTo` (already the `agents` table); derivation
+  terms → `wasDerivedFrom` (already `parent_id`/`source_version_id`); date terms
+  → distinct Create/Publish activities. The "not mapped" descriptive residue
+  (title/type/identifier/isPartOf/language/…) is what a provider must capture as
+  plain attributes — the high-value ones for determining sources are canonical
+  identifiers, type/subtype, isPartOf, title, language. Non-normative context
+  for `SourceProvider.materialize`'s return shape.
+
+## 2026-07-03 — Graph-model Phase 0: method-atomic store, savepoint transactions, `WikiReadPool`
+
+Concurrency substrate for [`plans/graph-model-and-versioning.md`](plans/graph-model-and-versioning.md)
+(the design of record superseding the `source-versioning-and-providers.md`
+draft; also records the "no CozoDB" decision). The "one connection,
+main-thread-only" store convention is replaced by structural safety — no
+schema change, no `WikiStore` protocol change, zero call-site churn.
+
+- **`SQLiteWikiStore` is method-atomic.** New internal `NSRecursiveLock`;
+  all 50 public/internal entry points acquire it for their whole body
+  (`lock.lock(); defer { lock.unlock() }`). This closes the two app-level races
+  `FULLMUTEX` never covered: byte-identical SQL sharing one cached
+  `sqlite3_stmt*` (the historical `String(cString:)` `EXC_BREAKPOINT`), and the
+  unguarded `statements` dictionary.
+- **`withTransaction` (savepoint nesting).** Outermost = `BEGIN IMMEDIATE`,
+  nested = `SAVEPOINT`s; the six raw transaction sites (deletePage,
+  replaceLinks, createBookmarkNode, deleteBookmarkNode, moveBookmarkNode,
+  replaceChunks) converted. Transaction-owning methods now compose.
+- **`renameSource` is atomic** — source row + every page rewrite in one
+  transaction (retires phase-d's "eventually consistent" caveat). Embedding +
+  FTS side effects run after commit so MLX inference never holds the write
+  lock against `wikictl`.
+- **New `WikiReadPool`** (`Sources/WikiFSCore/WikiReadPool.swift`): lazily
+  opened, reusable read-only snapshot connections (`init(readOnlyURL:)`,
+  `query_only=ON`, own statement cache each). `WikiManager.openActive` injects
+  one per file-backed wiki; `WikiStoreModel`'s debounced page/source searches
+  now run **off-main** through it (main-store fallback kept for in-memory/tests).
+- **Docs/invariant updated**: `docs/skills/sqlite-concurrency/SKILL.md`
+  rewritten for the new discipline; AGENTS.md invariant bullet replaced.
+- Gate: full suite green — **1269 tests / 99 suites** (10 new in
+  `StoreConcurrencyTests`: concurrent reader/writer hammer, savepoint
+  commit/rollback semantics, nested transaction-owning methods, atomic rename,
+  pool visibility/read-only/reuse/async/concurrency).
+- **Adversarial review pass** (5 lenses × skeptic verification; 12 confirmed
+  of 17 raised): two code fixes — `checkpointDatabase` now steps
+  `wal_checkpoint(TRUNCATE)` as a query with a 5s busy wait and fails the
+  export loudly when the `busy` column is set (a pooled reader could
+  previously make an export silently stale), and `renameSource` reads the
+  old name *inside* its transaction (cross-process TOCTOU vs `wikictl`
+  rename) — plus ten design-doc amendments (pin-distinct `source_links`
+  edges via a `COALESCE`'d unique index, `refs.owner_id` cascade +
+  polymorphic-`version_id` integrity note, dual-write/read-fallback rules for
+  binary skew during the `sources.content` soak, byteless zero-byte
+  projection interim rule, `sources.role` added in v20, §3 sweep pinned to
+  `92124bd`).
+
 ## 2026-07-02 — Remove configurable sandbox config (`sandbox-config.json`)
 
 The sandbox is **not configurable**. Confinement is fixed by spawn type —

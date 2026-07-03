@@ -89,16 +89,17 @@ agents, NOT Polytoken):
   read the stack at the moment of death. Reach for this *before* rebuild-and-
   guess when there's no `.ips`.
 
-* **SQLite is single-threaded in this app: all `SQLiteWikiStore` access happens
-  on the main actor — never on a background task/queue.** The store keeps one
-  connection with a statement cache keyed by SQL; two threads running the same
-  query share one `sqlite3_stmt*` and race (`EXC_BREAKPOINT` in `String(cString:)`).
-  `SQLITE_OPEN_FULLMUTEX` does NOT save you — it serializes C calls, not app-level
-  statement reuse. Follow
-  [`docs/skills/sqlite-concurrency/SKILL.md`](docs/skills/sqlite-concurrency/SKILL.md):
-  bulk store work is a blocking modal upgrade (sole owner while it runs), new
-  content embeds inline at write time, and off-main work is pure compute (MLX)
-  only — no `store.*` calls. There is no background "backfill."
+* **SQLite concurrency (graph-model Phase 0): the store is method-atomic —
+  every `SQLiteWikiStore` entry point holds an internal recursive lock; writes
+  still flow through the `@MainActor` model; off-main reads go through
+  `WikiReadPool`.** Multi-step writes compose via `withTransaction` (savepoint
+  nesting — never raw `BEGIN`), and no statement handle or column pointer may
+  cross a method boundary. Never run inference/network inside a transaction,
+  and never pool `init(databaseURL:)` connections (that init writes; read-only
+  pools use `init(readOnlyURL:)`). Follow
+  [`docs/skills/sqlite-concurrency/SKILL.md`](docs/skills/sqlite-concurrency/SKILL.md)
+  and `plans/graph-model-and-versioning.md` §8; regression suite:
+  `swift test --filter StoreConcurrencyTests`.
 
 * Never use `print` for diagnostics — route all logging through `DebugLog`
   (`os_log` → Console.app, subsystem `com.selfdrivingwiki.debug`) so it's visible
