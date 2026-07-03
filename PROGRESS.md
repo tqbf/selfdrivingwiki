@@ -2,6 +2,41 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-03 — Graph-model design: adversarial review hardening (doc-only)
+
+Second-pass adversarial review of [`plans/graph-model-and-versioning.md`](plans/graph-model-and-versioning.md),
+prompted by the "should sources and pages be one data model?" question. No code
+or schema change — five amendments hardening the design of record:
+
+- **New §4.6 — why `pages` and `sources` stay distinct.** Records the verdict
+  that the convergence the unification challenge senses is real but belongs at
+  the addressing/link layer (§6, already done via ULID-canonical links), *not*
+  the node-storage layer. The three rebuttals: opposite mutability models
+  (page bodies through `blobs` would destroy dedup), table-per-class
+  unification is worse than two tables (a JOIN on every read for four shared
+  columns), and page versioning is a forward-compatibility hook (§14) not a
+  commitment. Edge tables stay separate too — FK integrity beats DRY.
+- **§4.3 — `refs.version_id` polymorphism trigger condition.** The un-FK'd
+  polymorphic column is justified only by the single-writer invariant; Phase 6's
+  `page-content` ref makes it triply polymorphic. Added an explicit trigger:
+  re-evaluate (split per-kind, or add a discriminator + CHECK) when a third kind
+  lands or any non-repoint path writes `refs`. Don't let it decay silently.
+- **§9 — byteless sources gated strictly post-soak.** The "interim zero-byte
+  projection" rule is defensive, not a license to *create* byteless sources
+  during the dual-write window: an old `wikictl`/FP binary can't distinguish
+  byteless from a genuinely empty file, violating the "old binaries read correct
+  bytes" contract. Byteless is a post-`sources.content`-drop feature.
+- **§10 — changeToken is monotone non-decreasing by design.** All three new
+  folds grow monotonically (`generation` only increments), so a rollback moves
+  the token *forward*, never back. Recorded as an explicit constraint: any
+  future "changed since snapshot X" feature that needs rollback-to-prior to
+  *decrease* the token is foreclosed and would need a different mechanism.
+- **§12 Phase 3 — `original_path` disambiguation is a Phase-3 deliverable.**
+  §7's sibling-resolution collision rule (suffixing on `original_path`) was
+  forward-referencing the unimplemented website provider. Added it to Phase 3's
+  contents (the website provider writes disambiguated `original_path`); Phase 4's
+  rendering consumes it.
+
 ## 2026-07-03 — Graph-model Phase 0: method-atomic store, savepoint transactions, `WikiReadPool`
 
 Concurrency substrate for [`plans/graph-model-and-versioning.md`](plans/graph-model-and-versioning.md)

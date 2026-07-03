@@ -207,6 +207,15 @@ so `deleteSource` needs no new code. `version_id` is **polymorphic**
 `owner_id` is enforced by the store's single UPSERT write path inside the
 repoint transaction — no other code ever writes `refs`.
 
+> **Polymorphism trigger condition (adversarial hardening).** The un-FK'd
+> `version_id` is justified *only* by the single-writer invariant. Today two
+> kinds exist (`source-content`, `source-derived`); Phase 6 adds `page-content`
+> → triply polymorphic. Phase-by-phase the "only one writer" guarantee erodes.
+> **Trigger:** when a third ref kind lands, or when any non-repoint path needs
+> to write `refs`, evaluate splitting `refs` per-kind into typed tables or
+> adding a discriminator + `CHECK`-enforced `(kind, version_id)` consistency
+> rule. Do not let the invariant decay silently past three kinds.
+
 - `source-content` → the active content version (draft's
   `active_content_version_id`). `source-derived` → the active extraction
   alternative (draft's `active_markdown_version_id`).
@@ -275,6 +284,52 @@ content version). Two amendments:
 
 HEAD determination changes from `MAX(id)` to "the `source-derived` ref if
 present, else `MAX(id)`" — one query, default-compatible.
+
+### 4.6 Why `pages` and `sources` stay distinct (adversarial review)
+
+A natural challenge to this schema is "pages and sources are both graph nodes
+(§5); why not one storage table with a `type` discriminator?" The convergence
+the challenge senses is real, but it belongs at the **addressing layer (§6), not
+the node-storage layer**. Recorded here so it isn't relitigated without new
+facts:
+
+- **Opposite mutability models.** The organizing idea (§intro) is git's storage
+  discipline — immutable content-addressed blobs, append-only versions, one
+  mutation seam in `refs`. That discipline is for *fetched bytes*. A page is the
+  inverse: authored text that changes on every save. Routing page bodies through
+  `blobs` would mint a new SHA-256 on every keystroke-save — the *destruction*
+  of dedup, not its generalization.
+- **Table-per-class is the only honest unification, and it's worse than two
+  tables.** A flat `nodes` merge is a mostly-NULL sparse table (pages need
+  `slug`/`title`/`body_markdown`; sources need `filename`/`ext`/`mime_type`/
+  `byte_size`/`role`/`zotero_*`/`ingested_at`). A subtype split (`nodes` +
+  `pages` + `sources`) buys four shared columns (`id`, `created_at`,
+  `updated_at`, `version`) at the cost of a JOIN on every read. The dedup isn't
+  worth the join.
+- **Page versioning is a hook, not a commitment.** §14's "pages become owners of
+  version rows with a `page-content` ref kind… nearly free when wanted" means the
+  architecture *accommodates* page versioning later — not that it is imminent,
+  wanted, or shaped this way. Page history may never ship, or may ship only for
+  agent-vs-human conflict (divergent versions), not full provenance. Paying the
+  storage-unification tax now for a maybe-future is a bad trade; the
+  `refs`/`blobs` design defers it cheaply and additively.
+
+**Where they *do* converge — and already have:** the addressing layer. §6 makes
+both `[[page:01H…|Title]]` and `[[source:01J…|Name]]` ULID-canonical. This is the
+correct unification point: it is where the two node types are semantically
+identical (linkable, addressable targets), and it kills the bug class §3
+catalogs (divergent tiebreaks, rename-drops-links, full-table scans in write
+transactions) — bugs that existed because display names were identity, *not*
+because storage was split. A reviewer reaching for storage unification is
+correctly sensing convergence but mislocating it; it is captured at the link
+layer.
+
+**Edge tables stay separate too** (`page_links` vs `source_links`): merging into
+one `edges(from_node, to_node)` table would lose the FK to the parent table. The
+plan accepts exactly one polymorphic column (`refs.version_id`, §4.3) because it
+has a single write path; edge rows are written from body-parsing at many call
+sites, where the single-writer justification is weaker. FK integrity wins over
+DRY here.
 
 ## 5. The graph, named
 
@@ -500,6 +555,16 @@ block extends in parity, enforced by the existing test:
    the useful surface. The overhaul later replaces this with projecting the
    active derived alternative.
 
+   **Byteless sources are gated strictly after the `sources.content` drop**
+   (the late table-rebuild step that ends the soak). During the dual-write
+   window every source MUST carry bytes: an old `wikictl`/FP binary cannot
+   distinguish a byteless (zero-byte) source from a genuinely empty file, and
+   the dual-write contract is "old binaries read correct bytes." Letting
+   byteless sources be creatable during the soak would violate that contract.
+   Byteless is a **post-soak** feature; the "interim zero-byte" rule above
+   describes how the *projection* copes if it ever sees one (defensive), not a
+   license to create them mid-soak.
+
 ## 10. changeToken & File Provider
 
 The token grows three folds (11 fields):
@@ -510,6 +575,17 @@ serves for `sources/by-*` and the `.md` sibling); version appends must move it
 (new rows change `sources.jsonl`). Tests hard-coding the 8-field literal
 (`LogIndexTests`, `SystemPromptTests`, `SQLiteWikiStoreTests`) update in the
 same commit as the fold.
+
+> **Token is monotone non-decreasing by design (adversarial hardening).** All
+> three new folds grow monotonically: `source_versions`/`provider_runs` are
+> append-only counts, and `refs.generation` only increments — so a *rollback*
+> (a repoint) moves the token *forward* (generation+1), never back. This is
+> intentional: rollback changes the bytes the projection serves, so consumers
+> must refresh. Consequence: the token can never express "the wiki returned to a
+> previous state" (a decrease). Any future feature wanting "changed since
+> snapshot X" semantics where rollback-to-prior should *decrease* the token is
+> foreclosed by this design and would need a different change-detection
+> mechanism. Not a bug; recorded so the constraint is explicit.
 
 Projection changes (deferred to late phases, per the draft): serve the
 *active* content version (ref-resolved) for source nodes; byteless sources
@@ -540,7 +616,7 @@ Ordered by dependency; each gate is demoable.
 | **0 — Concurrency substrate** *(this branch)* | Method-atomic store, `withTransaction` savepoints, atomic `renameSource`, `WikiReadPool`, off-main search, skill/AGENTS update | Full suite green; concurrent hammer test passes; searches don't touch the main-thread store |
 | **1 — Objects & versions** | `blobs`, `source_versions`, `provider_runs` (empty), `refs`, content backfill, ref-resolved reads, byteless support, refresh-append write path | Re-ingesting an identical file adds one version row + zero new blob bytes; rollback = repoint; byteless YouTube source renders via transcript |
 | **2 — Extraction alternatives** | technique + source-version columns, CAS extraction content, `source-derived` ref, compare/nominate UI, re-extract path (today none exists) | Two backends' extractions coexist; switch active; revert is a pointer copy |
-| **3 — Providers & provenance** | `SourceProvider` protocol, four paths unified, runs recorded (URL provenance!), refresh verb, credentials UX | Drag-drop/URL/Zotero/folder all flow through providers; `wikictl source refresh` appends a version |
+| **3 — Providers & provenance** | `SourceProvider` protocol, four paths unified, runs recorded (URL provenance!), refresh verb, credentials UX, **website provider writes disambiguated `original_path` per sibling rule (§7)** | Drag-drop/URL/Zotero/folder all flow through providers; `wikictl source refresh` appends a version |
 | **4 — Media & roles** | `source_links` rebuild (role/pin), `![[…]]` embeds, render-by-content-type, sibling `original_path` resolution, media filtering | Website snapshot renders with inline images; a YouTube embed plays; a json-render spec mounts |
 | **5 — Link canonicalization** | Save-time ULID normalization, display-at-render, one-time body migration, `?id=` URL contract, rename = metadata-only | Rename a page with 50 inbound links: zero bodies rewritten, zero ghosts |
 | **6 — Pinning** | `@vN` parse/resolve, `pinned_version_id`, quote-against-pinned-version | `[[source:X@v3#"quote"]]` highlights after X is reprocessed |
