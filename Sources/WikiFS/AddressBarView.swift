@@ -69,6 +69,12 @@ struct AddressBarView: View {
         .onChange(of: isFocused) { _, focused in
             if focused { focusToken &+= 1 }
         }
+        // Empty state (no content loaded): focus the field so the user can type
+        // a search immediately — at launch and whenever the last tab closes.
+        .onAppear { focusIfEmpty() }
+        .onChange(of: hasContentLoaded) { _, loaded in
+            if !loaded { focusIfEmpty() }
+        }
     }
 
     /// The search field itself, sized to fill from its leading edge to the switcher.
@@ -98,13 +104,19 @@ struct AddressBarView: View {
         // field's text is inset to match (see `AddressSearchFieldCell`).
         .overlay(alignment: .leading) {
             HStack(spacing: 4) {
-                readerMenuButton
-                // Reserve the "+" slot whenever a page/source is showing so the
-                // text doesn't jump; reveal it on hover.
-                if let target = bookmarkTarget {
-                    addBookmarkButton(target)
-                        .opacity(isHovering ? 1 : 0)
-                        .allowsHitTesting(isHovering)
+                if hasContentLoaded {
+                    readerMenuButton
+                    // Reserve the "+" slot whenever a page/source is showing so the
+                    // text doesn't jump; reveal it on hover.
+                    if let target = bookmarkTarget {
+                        addBookmarkButton(target)
+                            .opacity(isHovering ? 1 : 0)
+                            .allowsHitTesting(isHovering)
+                    }
+                } else {
+                    // Empty state (no content loaded): a plain search glyph in the
+                    // slot the Page Menu would occupy, signalling the bar's role.
+                    searchGlyph
                 }
             }
             .padding(.leading, AddressBarMetrics.iconLeadingInset)
@@ -153,6 +165,15 @@ struct AddressBarView: View {
         }
     }
 
+    /// The leading glyph shown in the empty state (no content loaded): a plain
+    /// magnifier where the Page Menu would sit, signalling the bar is a search.
+    private var searchGlyph: some View {
+        Image(systemName: "magnifyingglass")
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
+            .frame(width: 18, height: 22)
+    }
+
     /// The "+" affordance shown on hover when a bookmarkable page or source is
     /// showing. Click adds it to the Bookmarks root.
     private func addBookmarkButton(_ target: BookmarkTarget) -> some View {
@@ -194,6 +215,13 @@ struct AddressBarView: View {
     }
 
     // MARK: - Actions
+
+    /// In the empty state (no content loaded), request field focus so the user
+    /// can begin typing a search immediately.
+    private func focusIfEmpty() {
+        guard !hasContentLoaded else { return }
+        focusToken &+= 1
+    }
 
     private func runSearch(query: String) {
         searchTask?.cancel()
@@ -271,6 +299,14 @@ struct AddressBarView: View {
     }
 
     // MARK: - Address string
+
+    /// Whether readable content (a page, source, or document) is loaded in the
+    /// active tab. When false (no tab, or a non-content selection), the bar is in
+    /// its empty / search-first state: a leading search glyph, auto-focus, and the
+    /// "Search for pages" placeholder.
+    private var hasContentLoaded: Bool {
+        !addressString.isEmpty
+    }
 
     /// Resolves the active selection to its wikilink notation. Non-page
     /// selections show a best-effort pseudo-wikilink so the bar is never blank
