@@ -326,6 +326,16 @@ public final class WikiManager {
 
     /// Force any committed WAL pages back into the main database file so backup
     /// export can be a single portable `.sqlite` file.
+    ///
+    /// A TRUNCATE checkpoint blocked by a concurrent reader reports `busy = 1`
+    /// in its result ROW while `sqlite3_exec` still returns `SQLITE_OK` — so the
+    /// pragma must be stepped as a query and the busy column checked, or a
+    /// blocked checkpoint silently exports a `.sqlite` missing the newest
+    /// commits (no `-wal` sidecar is copied). Phase 0's `WikiReadPool` made an
+    /// in-flight in-process reader possible for the first time (a debounced
+    /// search read racing an export); the 5s busy wait comfortably outlasts any
+    /// pooled search statement, and if the checkpoint is STILL blocked we fail
+    /// the export loudly rather than write a stale backup.
     private func checkpointDatabase(at url: URL) throws {
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
@@ -336,10 +346,21 @@ public final class WikiManager {
             throw WikiManagerError.sqlite(message)
         }
         defer { sqlite3_close(handle) }
+        sqlite3_busy_timeout(handle, 5000)
 
-        let checkpoint = sqlite3_exec(handle, "PRAGMA wal_checkpoint(TRUNCATE);", nil, nil, nil)
-        guard checkpoint == SQLITE_OK else {
+        var stmt: OpaquePointer?
+        let prep = sqlite3_prepare_v2(handle, "PRAGMA wal_checkpoint(TRUNCATE);", -1, &stmt, nil)
+        guard prep == SQLITE_OK, stmt != nil else {
             throw WikiManagerError.sqlite(String(cString: sqlite3_errmsg(handle)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else {
+            throw WikiManagerError.sqlite(String(cString: sqlite3_errmsg(handle)))
+        }
+        // Result row: (busy, wal frames, frames checkpointed).
+        guard sqlite3_column_int(stmt, 0) == 0 else {
+            throw WikiManagerError.sqlite(
+                "wal_checkpoint(TRUNCATE) blocked by a concurrent reader; export aborted to avoid a stale backup")
         }
     }
 

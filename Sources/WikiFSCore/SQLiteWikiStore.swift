@@ -1392,19 +1392,24 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// fallback). Filename-form links keep resolving (filename is immutable).
     /// Fragment and alias are preserved byte-for-byte.
     ///
-    /// **Atomic** (graph-model Phase 0): the source UPDATE and every page
-    /// rewrite commit in ONE `withTransaction` — the nested `replaceLinks`
-    /// transactions become savepoints, which is what the phase-d design wanted
-    /// but raw `BEGIN IMMEDIATE` couldn't nest. The embedding + FTS side
-    /// effects run AFTER the commit (best-effort, and MLX inference must never
-    /// run under an open write transaction — it would stall `wikictl`).
+    /// **Atomic** (graph-model Phase 0): the old-name read, the source UPDATE,
+    /// and every page rewrite commit in ONE `withTransaction` — the nested
+    /// `replaceLinks` transactions become savepoints, which is what the phase-d
+    /// design wanted but raw `BEGIN IMMEDIATE` couldn't nest. Reading `oldBase`
+    /// INSIDE the transaction matters: `wikictl` is a second writer process, and
+    /// a rename it commits between our read and our `BEGIN IMMEDIATE` would make
+    /// the rewrite loop match a stale base and rewrite nothing (cross-process
+    /// TOCTOU). The embedding + FTS side effects run AFTER the commit
+    /// (best-effort, and MLX inference must never run under an open write
+    /// transaction — it would stall `wikictl`).
     public func renameSource(id: PageID, to newDisplayName: String) throws {
         lock.lock(); defer { lock.unlock() }
-        let old = try getSource(id: id)
-        let oldBase = old.displayName ?? old.filename
-        guard oldBase != newDisplayName else { return }
+        let renamed = try withTransaction { () -> Bool in
+            // Read the old name under the write lock's snapshot.
+            let old = try getSource(id: id)
+            let oldBase = old.displayName ?? old.filename
+            guard oldBase != newDisplayName else { return false }
 
-        try withTransaction {
             // Update the source row first.
             let stmt = try statement("""
             UPDATE sources SET display_name = ?2, updated_at = ?3, version = version + 1 WHERE id = ?1;
@@ -1424,7 +1429,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 try updatePage(id: pageID, title: page.title, body: rewritten)
                 try replaceLinks(from: pageID, parsedLinks: WikiLinkParser.parse(rewritten))
             }
+            return true
         }
+        guard renamed else { return }   // no-op rename: skip re-embed/FTS work
 
         // The title changed, so re-embed. Use the current processed-markdown HEAD
         // (if any) so the embedding reflects both the new name and the content;

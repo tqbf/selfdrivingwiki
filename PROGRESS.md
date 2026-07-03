@@ -35,6 +35,18 @@ schema change, no `WikiStore` protocol change, zero call-site churn.
   `StoreConcurrencyTests`: concurrent reader/writer hammer, savepoint
   commit/rollback semantics, nested transaction-owning methods, atomic rename,
   pool visibility/read-only/reuse/async/concurrency).
+- **Adversarial review pass** (5 lenses × skeptic verification; 12 confirmed
+  of 17 raised): two code fixes — `checkpointDatabase` now steps
+  `wal_checkpoint(TRUNCATE)` as a query with a 5s busy wait and fails the
+  export loudly when the `busy` column is set (a pooled reader could
+  previously make an export silently stale), and `renameSource` reads the
+  old name *inside* its transaction (cross-process TOCTOU vs `wikictl`
+  rename) — plus ten design-doc amendments (pin-distinct `source_links`
+  edges via a `COALESCE`'d unique index, `refs.owner_id` cascade +
+  polymorphic-`version_id` integrity note, dual-write/read-fallback rules for
+  binary skew during the `sources.content` soak, byteless zero-byte
+  projection interim rule, `sources.role` added in v20, §3 sweep pinned to
+  `92124bd`).
 
 ## 2026-07-02 — Remove configurable sandbox config (`sandbox-config.json`)
 

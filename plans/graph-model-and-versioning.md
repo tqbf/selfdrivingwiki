@@ -2,9 +2,10 @@
 
 **Status:** design accepted; Phase 0 (concurrency substrate) implemented on branch
 `graph-model-and-versioning`. Successor to
-[`source-versioning-and-providers.md`](source-versioning-and-providers.md)
-(draft at `tqbf/selfdrivingwiki@c80e566`) — every decision locked there is
-preserved unless explicitly amended in §2.
+`source-versioning-and-providers.md` (draft at `c80e566` on branch
+`docs/source-versioning-and-providers` — view with
+`git show c80e566:plans/source-versioning-and-providers.md`) — every decision
+locked there is preserved unless explicitly amended in §2.
 
 **The organizing idea:** import git's storage discipline into the wiki's SQLite.
 Immutable, content-addressed **blobs** (git's objects) need no locks and no
@@ -70,7 +71,10 @@ ingests) and the current store crashes under a second thread.
 
 ## 3. Current state (grounded)
 
-What the sweep of the code established — the facts the schema must respect:
+What the sweep of the code established, taken against the **pre-Phase-0 tree
+(`92124bd`)** — line numbers below refer to that tree. Phase 0 (implemented
+with this doc) changed the concurrency facts; those bullets are marked and §8
+states the new reality.
 
 - `sources.content` is `BLOB NOT NULL` (`SQLiteWikiStore.swift:186`): there is
   no byteless concept, no dedup (re-dropping a file makes a new ULID row), a
@@ -89,9 +93,10 @@ What the sweep of the code established — the facts the schema must respect:
   pages' `[[Old Title]]` go ghost, and on their next save `replaceLinks`
   **silently drops** the row (unresolved targets are omitted, line 1165) — the
   `save()` comment's "self-heal" claim is wrong in the harmful direction.
-  Source rename does rewrite bodies (`renameSource`, line 1372) but is
-  deliberately non-transactional because `updatePage`/`replaceLinks` each own
-  `BEGIN IMMEDIATE` and raw `BEGIN` doesn't nest.
+  Source rename does rewrite bodies (`renameSource`, line 1372) and **was**
+  deliberately non-transactional because `updatePage`/`replaceLinks` each owned
+  `BEGIN IMMEDIATE` and raw `BEGIN` doesn't nest *(fixed by Phase 0, §8: now
+  atomic via savepoint nesting)*.
 - Two resolution tiebreaks coexist: pages pick lowest ULID (oldest), sources
   pick `updated_at DESC` (newest). `resolveSourceByName`'s fallback pass is a
   full-table scan run *inside* `replaceLinks`' write transaction.
@@ -101,11 +106,12 @@ What the sweep of the code established — the facts the schema must respect:
 - `changeToken()` is an 8-field fold (`pages` count+sum, `sources` count+sum,
   `system_prompt` version, `log` count, `wiki_index` version,
   `source_markdown_versions` count). Tests hard-code the 8-field literal.
-- The store is one connection + a prepared-statement cache keyed by SQL text,
-  `@unchecked Sendable`, main-thread-only **by convention**; the six
-  transaction sites use raw `BEGIN IMMEDIATE` and are not re-entrant.
-  `init(databaseURL:)` performs writes at open (migrations, search self-heal);
-  only `init(readOnlyURL:)` is side-effect-free.
+- The store **was** one connection + a prepared-statement cache keyed by SQL
+  text, `@unchecked Sendable`, main-thread-only **by convention**; the six
+  transaction sites used raw `BEGIN IMMEDIATE` and were not re-entrant
+  *(all superseded by Phase 0, §8: method-atomic lock + `withTransaction`)*.
+  Still true: `init(databaseURL:)` performs writes at open (migrations, search
+  self-heal); only `init(readOnlyURL:)` is side-effect-free.
 
 ## 4. The schema
 
@@ -169,26 +175,37 @@ CREATE INDEX source_versions_source ON source_versions(source_id, id);
   (`external_identity`, `provider_run_id`) + optional thumbnail. Their working
   material is the active derived alternative (transcript), exactly per the
   draft.
-- `provider_run_id` lives on the **version** (each fetch is a run), while
-  `role` lives on the **source** (§4.4) — a media child is media in every
-  version. Sibling resolution joins versions through their shared run.
+- `provider_run_id` lives on the **version** (each fetch is a run), while the
+  source-level `role` (`'primary' | 'media'`, §7 — distinct from the *edge*
+  role on `source_links`, §4.4) lives on the **source** — a media child is
+  media in every version. Sibling resolution joins versions through their
+  shared run.
 - `sources` keeps identity + presentation: `id`, `filename`, `ext`,
-  `display_name`, `role`, zotero columns (legacy provenance, retained),
-  timestamps, `version` counter. `content`, `byte_size`, `mime_type` migrate
-  into v1 version rows (migration in §9).
+  `display_name`, zotero columns (legacy provenance, retained), timestamps,
+  `version` counter — and **gains** `role TEXT NOT NULL DEFAULT 'primary'`
+  (`'primary' | 'media'`, added in the v20 step, §9). `content`, `byte_size`,
+  `mime_type` migrate into v1 version rows (migration in §9).
 
 ### 4.3 `refs` — the only mutable pointer state (A2)
 
 ```sql
 CREATE TABLE refs (
     kind       TEXT NOT NULL,     -- 'source-content' | 'source-derived'
-    owner_id   TEXT NOT NULL,     -- sources.id
+    owner_id   TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
     version_id TEXT NOT NULL,     -- source_versions.id | source_markdown_versions.id
     generation INTEGER NOT NULL DEFAULT 1,   -- bumped on every repoint (changeToken fold)
     updated_at REAL NOT NULL,
     PRIMARY KEY (kind, owner_id)
 );
 ```
+
+Integrity: `owner_id` cascades on source delete via the existing
+`foreign_keys=ON` discipline (matching `source_versions` and `source_links`),
+so `deleteSource` needs no new code. `version_id` is **polymorphic**
+(`source_versions` for `kind='source-content'`, `source_markdown_versions` for
+`kind='source-derived'`), so it carries no FK; its consistency with `kind` and
+`owner_id` is enforced by the store's single UPSERT write path inside the
+repoint transaction — no other code ever writes `refs`.
 
 - `source-content` → the active content version (draft's
   `active_content_version_id`). `source-derived` → the active extraction
@@ -214,10 +231,19 @@ CREATE TABLE source_links (
     to_source_id      TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
     link_text         TEXT NOT NULL,
     role              TEXT NOT NULL DEFAULT 'cite',   -- 'cite' | 'embed' | 'render'
-    pinned_version_id TEXT,                           -- NULL = follow the active ref
-    PRIMARY KEY (from_page_id, to_source_id, role)
+    pinned_version_id TEXT                            -- NULL = follow the active ref
 );
+CREATE UNIQUE INDEX source_links_edge
+    ON source_links(from_page_id, to_source_id, role, COALESCE(pinned_version_id, ''));
 ```
+
+The **pin is part of edge identity**: `[[source:X@v1|then]]` and
+`[[source:X@v3|now]]` on one page are two distinct edges (without this, §5's
+pin queries would collapse them and return wrong answers). A rowid table + a
+`COALESCE`'d unique index is used instead of a wider PRIMARY KEY because
+SQLite treats NULLs as distinct in unique constraints — the `COALESCE` makes
+duplicate *unpinned* links to one source still collapse under the existing
+`INSERT OR IGNORE` replaceLinks convention, byte-identical to today.
 
 - `cite` — today's `[[source:…]]`: a reference, rendered as a link.
 - `embed` — `![[source:…]]` (Obsidian's embed sigil): the renderer inlines the
@@ -316,10 +342,13 @@ The shape that keeps authoring ergonomic *and* storage stable:
 **Pinning** composes here, per the draft's `@` sigil:
 `[[source:01J…@v3|Name]]`, `![[source:01J…@v3#"quote"|Name]]`. `@vN` (ordinal
 within the chain, human-writable) resolves to a version ULID at save time and
-lands in `source_links.pinned_version_id`. No `@` = follow the ref. Quote
-fragments resolve against the *pinned* version's content — fixing today's
-silent highlight loss on reprocess for pinned links, and giving "the webpage
-as I read it" reproducibility.
+lands in `source_links.pinned_version_id` (pin-distinct edges, §4.4). No `@` =
+follow the ref. Render-time pin/quote resolution uses each occurrence's own
+`@vN` **as stored in the canonical body** — the body is the per-occurrence
+source of truth; `source_links` is the graph *index*, never the resolver
+input. Quote fragments resolve against the *pinned* version's content —
+fixing today's silent highlight loss on reprocess for pinned links, and
+giving "the webpage as I read it" reproducibility.
 
 **Costs, named honestly:** raw markdown in the editor shows
 `[[page:01H…|Title]]` — noisier than `[[Title]]`. Mitigations: the alias keeps
@@ -416,30 +445,60 @@ go through the main-actor model; never hold connection state across calls."*
 Additive ladder steps (v18…), each independently shippable; the fresh-path
 block extends in parity, enforced by the existing test:
 
-1. **v18 — Phase 0 has no schema.** (Concurrency is code-only.)
+1. **Phase 0 — no schema step.** (Concurrency is code-only; `user_version`
+   stays 17.)
 2. **v18: `blobs`, `provider_runs`, `source_versions`, `refs`** created empty;
    then the backfill: for each source, hash `content` → `INSERT OR IGNORE`
    blob → insert v1 version row (`parent_id NULL`, `fetched_at = created_at`)
-   → *leave `sources.content` in place*, unread by new code. This is the
-   draft's "keep a nullable copy during a transition build" answer to its
-   highest-risk open question #1: the column is dropped only in a later step
-   (table rebuild) after a release has soaked. Reads go through
-   `sourceContent(id:)` which now resolves ref → version → blob, so the
-   call-site surface (wikictl `cat`/`export`, FP projection, agent staging)
-   doesn't change signatures.
+   → *leave `sources.content` in place*. This is the draft's "keep a nullable
+   copy during a transition build" answer to its highest-risk open question
+   #1: the column is dropped only in a later step (table rebuild) after a
+   release has soaked. Two rules make the soak safe against **binary skew**
+   (three separately compiled processes, plus stale binaries, share the file):
+   - **Dual-write during the soak:** new code keeps writing the full bytes to
+     `sources.content` on every source insert (the column is `NOT NULL`
+     regardless), so pre-migration readers — an old FP extension binary or a
+     stale `wikictl` — keep serving correct bytes. "Unread by new code" means
+     unread, not unwritten.
+   - **Read fallback / self-heal:** if a source has zero `source_versions`
+     rows (written by an old binary after the migration), `sourceContent(id:)`
+     falls back to `sources.content` and lazily backfills the v1 blob+version
+     row — the default-active rule extended one step down. Rows written by
+     *any* old binary stay visible to the new read path.
+
+   Reads go through `sourceContent(id:)` which resolves ref → version → blob
+   (→ content fallback), so the call-site surface (wikictl `cat`/`export`, FP
+   projection, agent staging) doesn't change signatures. Hardening (optional,
+   not required once the two rules hold): give `migrate(from:)` a
+   `user_version` ceiling so a stale binary refuses to write to a schema newer
+   than it knows.
 3. **v19: extraction columns** (`extraction_technique`, `source_version_id`,
    `blob_hash`, `mime_type`) + backfills (`'legacy'`, v1 version id). Optional
    one-time content→blob backfill for old rows.
-4. **v20: `source_links` rebuild** with `role`/`pinned_version_id`
-   (copy-over `role='cite'`).
+4. **v20: `source_links` rebuild** as the rowid table + `COALESCE`'d unique
+   index of §4.4 (copy-over `role='cite'`, `pinned_version_id=NULL` — still
+   unique, byte-identical behavior), **plus**
+   `ALTER TABLE sources ADD COLUMN role TEXT NOT NULL DEFAULT 'primary'`
+   (`'primary' | 'media'`, per the draft's provenance grouping) — the default
+   is the backfill; only new provider fetches ever write `'media'`.
 5. **Link canonicalization** (Phase D) is a *data* migration, not schema: a
    guarded one-time body rewrite (dry-runnable via lint), then the save-path
    normalizer keeps it invariant.
-6. **Pre-migration readers** (FP extension binary skew — three separately
-   compiled processes share the file): every new fold and read falls back via
-   `try?` exactly like the existing token fields; new tables absent → fold 0.
-   The projection's size==content invariant is preserved because
-   `documentSize` and `contents(for:)` both derive from the same version row.
+6. **Pre-migration readers** (FP extension binary skew): every new fold and
+   read falls back via `try?` exactly like the existing token fields; new
+   tables absent → fold 0. The projection's size==content invariant holds in
+   both skew directions: old binaries read `sources.content`/`byte_size`,
+   which the dual-write rule keeps correct; new binaries derive `documentSize`
+   and `contents(for:)` from the same resolution — `blobs.byte_size` joined
+   through the active version. **Byteless sources** (active version
+   `blob_hash IS NULL`) get an interim rule until the late-phase projection
+   overhaul: they project as a **zero-byte verbatim node** —
+   `sourceContent(id:)` returns empty `Data` (never throws), the enumerator
+   reports size 0 from the same resolution, and the legacy
+   `content`/`byte_size` columns are written empty/0 at insert so old binaries
+   agree; size==content holds trivially, and the `.md` transcript sibling is
+   the useful surface. The overhaul later replaces this with projecting the
+   active derived alternative.
 
 ## 10. changeToken & File Provider
 
