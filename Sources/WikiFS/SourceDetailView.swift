@@ -61,7 +61,6 @@ struct SourceDetailView: View {
     // Find bar state.
     @State private var findModel = FindModel()
     @State private var findVersion = 0
-    @State private var bookmarkDestSourceID: PageID?
 
     private enum FileContentTab: String, CaseIterable {
         case markdown = "Markdown"
@@ -136,11 +135,6 @@ struct SourceDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .textBackgroundColor))
-        .sheet(item: $bookmarkDestSourceID) { sourceID in
-            BookmarkDestinationSheet(store: store) { parentID in
-                store.addSourceRef(parentID: parentID, sourceID: sourceID)
-            }
-        }
         .onAppear {
             headVersion = store.processedMarkdownHead(for: file)
             lastKnownActiveTabID = store.activeTabID
@@ -347,10 +341,6 @@ struct SourceDetailView: View {
                             }
                         }
                         .help("Share this source file")
-                        Button("Add to Bookmarks", systemImage: "bookmark") {
-                            bookmarkDestSourceID = file.id
-                        }
-                        .help("Add this source to Bookmarks")
                         Button("Reveal in Finder", systemImage: "folder") {
                             Task { await fileProvider.revealSourceInFinder(id: file.id) }
                         }
