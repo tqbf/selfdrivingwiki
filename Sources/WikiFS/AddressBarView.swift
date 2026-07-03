@@ -18,8 +18,20 @@ import WikiFSCore
 struct AddressBarView: View {
     @Bindable var store: WikiStoreModel
     @Binding var isFocused: Bool
-    /// When the sidebar is open it consumes width; the omnibox shrinks by the
-    /// sidebar's width so the back/forward buttons still fit in the toolbar.
+    /// The active wiki's display name, shown in the trailing switcher. A longer
+    /// name widens that switcher, so the omnibox reserves extra room for it and
+    /// shrinks — keeping the switcher on-screen instead of overflowing.
+    var wikiName: String
+    /// The width of the detail column (the region the toolbar spans), measured by a
+    /// `GeometryReader` in `ContentView`. This shrinks when the left sidebar opens
+    /// and is unaffected by the right transcript panel — exactly the omnibox's
+    /// usable toolbar span. Measuring the detail region (never in toolbar overflow)
+    /// instead of the field's own leading edge (which overflow strands) is what
+    /// keeps the width from getting stuck. See `OmniboxLayout`.
+    var detailWidth: CGFloat
+    /// Whether the left sidebar is shown. Selects the fixed leading chrome ahead of
+    /// the field (`OmniboxLayout.leadingChrome`): with the sidebar hidden the detail
+    /// region spans the whole window and includes the traffic-light + toggle zone.
     var sidebarVisible: Bool
 
     @State private var queryText = ""
@@ -29,14 +41,38 @@ struct AddressBarView: View {
     /// Pointer is over the omnibox — reveals the trailing "add to bookmarks" plus.
     @State private var isHovering = false
     @State private var showReaderMenu = false
-    /// Host window width, reported by the field; drives the flexible field width.
-    @State private var windowWidth: CGFloat = 0
 
     // The reader/page zoom is a persisted global (`@AppStorage`), so the toolbar
     // can drive the same value the detail views read — no binding to thread.
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
 
     var body: some View {
+        // Back / Forward + the omnibox are one `.navigation` group, flush-left in
+        // the detail region. The nav buttons are fixed-width; the field is given an
+        // explicit width (`fieldWidth`) so it stretches from just after them to the
+        // trailing wiki switcher, shrinking as the window narrows / the wiki name
+        // grows and expanding once the switcher overflows (see `OmniboxLayout`).
+        HStack(spacing: 6) {
+            navButton("chevron.left", help: "Go back", enabled: store.canNavigateBack) {
+                store.navigateBack()
+            }
+            .keyboardShortcut("[", modifiers: .command)
+
+            navButton("chevron.right", help: "Go forward", enabled: store.canNavigateForward) {
+                store.navigateForward()
+            }
+            .keyboardShortcut("]", modifiers: .command)
+
+            omniboxField
+        }
+        // Cmd-L flips `isFocused`; turn that into a focus request for the field.
+        .onChange(of: isFocused) { _, focused in
+            if focused { focusToken &+= 1 }
+        }
+    }
+
+    /// The search field itself, sized to fill from its leading edge to the switcher.
+    private var omniboxField: some View {
         OmniboxSearchField(
             text: $queryText,
             locationText: addressString,
@@ -47,7 +83,6 @@ struct AddressBarView: View {
             onEscape: cancel,
             onBlur: handleBlur,
             onSelect: navigate,
-            onWindowWidth: { windowWidth = $0 },
             // Reserve the "+" gap whenever a page/source is shown (not just on
             // hover) so the text has a stable position and the "+" fades into
             // the reserved space.
@@ -55,9 +90,8 @@ struct AddressBarView: View {
                 ? AddressBarMetrics.textLeadingInsetWithBookmark
                 : AddressBarMetrics.textLeadingInset
         )
-        // Explicit width derived from the window: the principal toolbar item
-        // won't stretch on its own, so we size the field to fill the gap up to a
-        // cap and let it shrink when the window narrows.
+        // Explicit, measurement-driven width: stretches to the switcher and
+        // reclaims its space when it overflows.
         .frame(width: fieldWidth)
         // The Page Menu icon and add-bookmark "+" live inside the pill on the
         // leading edge (Safari-style), inset from the rounded left edge. The
@@ -79,10 +113,23 @@ struct AddressBarView: View {
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.12)) { isHovering = hovering }
         }
-        // Cmd-L flips `isFocused`; turn that into a focus request for the field.
-        .onChange(of: isFocused) { _, focused in
-            if focused { focusToken &+= 1 }
+    }
+
+    /// A toolbar-styled chevron button for Back / Forward, rendered inside the
+    /// principal group (so it needs its own borderless styling to read as a
+    /// toolbar control rather than a bordered push button).
+    private func navButton(_ symbol: String, help: String, enabled: Bool,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .medium))
+                .frame(width: 22, height: 28)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.borderless)
+        .foregroundStyle(enabled ? Color.primary : Color.secondary.opacity(0.35))
+        .disabled(!enabled)
+        .help(help)
     }
 
     // MARK: - Reader menu (Safari-style page controls)
@@ -123,14 +170,27 @@ struct AddressBarView: View {
         .transition(.opacity)
     }
 
-    /// The field width for the current window: fills the toolbar gap (window
-    /// width minus the fixed leading/trailing toolbar chrome) up to a cap, and
-    /// compresses to a floor when the window is narrow.
+    /// The omnibox field's width, from the measured detail-region width, the sidebar
+    /// state, and the wiki name. The arithmetic (stretch, shrink, overflow-expand)
+    /// lives in `OmniboxLayout` so it can be unit-tested; here we only supply the
+    /// measurements. `switcherExtra` is how much wider the current wiki name renders
+    /// than the baseline name — the switcher's fixed icon/chevron overhead cancels
+    /// out, so only text width matters.
     private var fieldWidth: CGFloat {
-        guard windowWidth > 0 else { return AddressBarMetrics.fieldWidth }
-        let sidebar = sidebarVisible ? AddressBarMetrics.sidebarWidthReserve : 0
-        let available = windowWidth - AddressBarMetrics.reservedChrome - sidebar
-        return min(max(available, AddressBarMetrics.minFieldWidth), AddressBarMetrics.maxFieldWidth)
+        let switcherExtra = headlineTextWidth(wikiName)
+            - headlineTextWidth(AddressBarMetrics.baselineSwitcherName)
+        return OmniboxLayout.fieldWidth(
+            detailWidth: detailWidth,
+            sidebarVisible: sidebarVisible,
+            switcherExtra: switcherExtra)
+    }
+
+    /// Rendered width of `text` in the switcher's font (`.headline`). Only the
+    /// *difference* from the baseline name is used, so the switcher's fixed
+    /// icon/chevron overhead cancels out and this need only be accurate for the text.
+    private func headlineTextWidth(_ text: String) -> CGFloat {
+        let font = NSFont.preferredFont(forTextStyle: .headline)
+        return (text as NSString).size(withAttributes: [.font: font]).width
     }
 
     // MARK: - Actions
@@ -319,21 +379,11 @@ struct AddressResultsList: View {
 // MARK: - Metrics
 
 enum AddressBarMetrics {
-    /// Fallback width before the window width is known.
-    static let fieldWidth: CGFloat = 460
-    /// The maximum width the field grows to on wide windows.
-    static let maxFieldWidth: CGFloat = 820
-    /// The floor it compresses to when the window is narrow.
-    static let minFieldWidth: CGFloat = 260
-    /// Approximate fixed width consumed by the leading (traffic lights, sidebar
-    /// toggle, back/forward) and trailing (wiki switcher, transcript toggle)
-    /// toolbar items. The field fills whatever remains, up to `maxFieldWidth`.
-    static let reservedChrome: CGFloat = 470
-    /// How much the omnibox shrinks when the sidebar is open — enough to keep the
-    /// back/forward buttons from overflowing, but small enough that the omnibox
-    /// still widens leftward toward them (rather than floating in the middle of
-    /// the detail region).
-    static let sidebarWidthReserve: CGFloat = 140
+    /// The wiki-switcher name the trailing reservation is tuned against. A name
+    /// wider than this reserves the extra width (the omnibox yields it); a narrower
+    /// one lets the omnibox reclaim it. Only the width *difference* is used, so the
+    /// switcher's fixed icon/chevron overhead cancels out. See `OmniboxLayout`.
+    static let baselineSwitcherName = "My Wiki"
     /// Left padding from the pill's rounded edge to the Page Menu icon, so the
     /// icon sits inside the omnibox rather than hugging the edge.
     static let iconLeadingInset: CGFloat = 8

@@ -21,11 +21,6 @@ struct OmniboxSearchField: NSViewRepresentable {
     var onEscape: () -> Void
     var onBlur: () -> Void
     var onSelect: (WikiPageSummary) -> Void
-    /// Reports the host window's width whenever it changes. The principal toolbar
-    /// item proposes an unbounded width to its content, so SwiftUI frames can't
-    /// make the field fill the toolbar gap — instead we measure the window and
-    /// drive an explicit field width from it (see `AddressBarView`).
-    var onWindowWidth: (CGFloat) -> Void
     /// Leading inset for the editable text, so it clears the overlaid Page Menu
     /// and add-bookmark icons. Varies with hover (the "+" only needs room when
     /// it's shown), so it's applied live in `updateNSView`.
@@ -51,6 +46,10 @@ struct OmniboxSearchField: NSViewRepresentable {
         var leadingTextInset: CGFloat = AddressBarMetrics.textLeadingInset
 
         override func searchButtonRect(forBounds rect: NSRect) -> NSRect { .zero }
+
+        // Suppress the trailing circular "clear" (✕) button — the omnibox is an
+        // address bar, not a search box, so it carries no built-in glyphs.
+        override func cancelButtonRect(forBounds rect: NSRect) -> NSRect { .zero }
 
         override func searchTextRect(forBounds rect: NSRect) -> NSRect {
             var r = super.searchTextRect(forBounds: rect)
@@ -78,7 +77,6 @@ struct OmniboxSearchField: NSViewRepresentable {
     func updateNSView(_ field: NSSearchField, context: Context) {
         let coord = context.coordinator
         coord.parent = self
-        coord.startObservingWindowIfNeeded(field: field)
 
         // Apply the (hover-dependent) text inset live so the text reflows to
         // clear the icons as the "+" appears/disappears.
@@ -112,15 +110,12 @@ struct OmniboxSearchField: NSViewRepresentable {
 
     static func dismantleNSView(_ field: NSSearchField, coordinator: Coordinator) {
         coordinator.hidePanel()
-        coordinator.stopObservingWindow()
     }
 
     final class Coordinator: NSObject, NSSearchFieldDelegate {
         var parent: OmniboxSearchField
         var lastFocusToken = 0
         private var panel: SuggestionsPanel?
-        private var resizeObserver: NSObjectProtocol?
-        private weak var observedWindow: NSWindow?
 
         // Keyboard-driven highlight. The arrow keys arrive here (the field editor
         // has first responder, not the non-key panel), so the "which row is
@@ -217,31 +212,6 @@ struct OmniboxSearchField: NSViewRepresentable {
                 anchor?.window?.makeFirstResponder(nil)
             }
             panel.present(under: anchor)
-        }
-
-        /// Begin reporting the host window's width (once the field is in a
-        /// window). Fires on every live resize so the field can track it.
-        @MainActor
-        func startObservingWindowIfNeeded(field: NSSearchField) {
-            guard let window = field.window, observedWindow !== window else { return }
-            stopObservingWindow()
-            observedWindow = window
-            resizeObserver = NotificationCenter.default.addObserver(
-                forName: NSWindow.didResizeNotification, object: window, queue: .main
-            ) { [weak self] _ in
-                guard let self, let w = self.observedWindow else { return }
-                self.parent.onWindowWidth(w.frame.width)
-            }
-            // Report the current width now — but async, so we don't mutate
-            // SwiftUI state during the view-update pass.
-            let width = window.frame.width
-            DispatchQueue.main.async { [weak self] in self?.parent.onWindowWidth(width) }
-        }
-
-        func stopObservingWindow() {
-            if let resizeObserver { NotificationCenter.default.removeObserver(resizeObserver) }
-            resizeObserver = nil
-            observedWindow = nil
         }
 
         @MainActor
