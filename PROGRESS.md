@@ -56,6 +56,16 @@ or schema change — five amendments hardening the design of record:
   gap (an extraction's run is now recoverable, not just implied). Token fold
   renamed `runCount`→`actCount`; §5 graph, §9 migration, §11/§12 phases, and
   all `provider_run`/`extraction_technique` references updated to match.
+- **§4.8 — PROV–Dublin Core boundary (context note, no schema).** Recorded the
+  [PROV-DC](https://www.w3.org/TR/prov-dc/) mapping as orientation for Phase 3
+  provider design: DC responsibility terms (creator/publisher/contributor/
+  rightsHolder) → `wasAttributedTo` (already the `agents` table); derivation
+  terms → `wasDerivedFrom` (already `parent_id`/`source_version_id`); date terms
+  → distinct Create/Publish activities. The "not mapped" descriptive residue
+  (title/type/identifier/isPartOf/language/…) is what a provider must capture as
+  plain attributes — the high-value ones for determining sources are canonical
+  identifiers, type/subtype, isPartOf, title, language. Non-normative context
+  for `SourceProvider.materialize`'s return shape.
 
 ## 2026-07-03 — Graph-model Phase 0: method-atomic store, savepoint transactions, `WikiReadPool`
 

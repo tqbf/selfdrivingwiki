@@ -408,6 +408,52 @@ today.)
 (`kind='fetch'`) per existing `provider_run`, then repoints `source_versions`
 and `source_markdown_versions` at them. No provenance is lost in the move.
 
+### 4.8 Descriptive metadata & the PROV–Dublin Core boundary (context, not schema)
+
+[PROV-DC](https://www.w3.org/TR/prov-dc/) is the W3C mapping between Dublin Core
+and PROV. It clarifies exactly where the provenance substrate (§4.7) stops and
+where descriptive metadata — the "what is this thing" a provider must capture —
+begins. This orients source-provider design (Phase 3); **nothing here is a
+schema commitment**, only context for `SourceProvider.materialize`'s return
+shape and the fields a provider should extract.
+
+**Already covered by the PROV substrate — no new modeling needed:**
+- *Responsibility terms* — `dc:creator`, `dc:contributor`, `dc:publisher`,
+  `dc:rightsHolder` — all map to **`wasAttributedTo`**, distinguished only by
+  agent *role*. The §4.7 `agents` table + attribution is the home for all four;
+  providers populate agents with roles, not new relation tables.
+- *Derivation terms* — `dc:source`, `dc:references`, `dc:isFormatOf`,
+  `dc:isVersionOf` — map to **`wasDerivedFrom`** / `alternateOf`, which
+  `parent_id` and `source_version_id` already express. Notably `dc:isFormatOf` →
+  `alternateOf` is the "same resource, another format" relation — precisely a
+  PDF ↔ its extracted markdown, or a video ↔ its transcript (validating the
+  derived-alternative model).
+- *Date terms* — `dc:created`, `dc:issued`, `dc:modified` — map to
+  **`generatedAtTime`**, each implying a *distinct* activity (Create / Publish /
+  Modify). Lesson for providers: "date published" is not one timestamp; creation
+  and publication are separate activities, recorded as such.
+
+**The descriptive residue PROV does not cover** (PROV-DC lists these as "not
+mapped" — they answer *what*, not *how*): `title`, `description`, `subject`,
+`type`, `format`, `identifier`, `language`, `coverage`, `extent`,
+`isPartOf`/`hasPart`, `bibliographicCitation`. These are plain attributes a
+provider extracts and attaches to the entity. The high-value ones for
+*determining* sources (identity, dedup, grouping, citation): canonical
+**identifier(s)** (DOI/ISBN/URL/arXiv/episode-id — a source can have several),
+**type/subtype** (Article, VideoObject, Thesis… — drives §7 rendering and
+citation formatting), **isPartOf** (chapter-in-book, episode-in-show — feeds §7
+provenance grouping), **title**, and **language**.
+
+**Pragmatic lesson from PROV-DC's complex-mapping caveat:** mechanically
+expanding a DC record into full PROV n-ary form is lossy and mints blank nodes
+for every resource state. The takeaway: keep descriptive metadata as
+*attributes*; model only the provenance relations (attribution, derivation,
+generation) as first-class — exactly the split §4.7 already makes. When Phase 3
+designs `SourceProvider.materialize`, its returned `MaterializedSource` should
+carry the descriptive fields above as plain properties, and the store maps the
+responsibility / derivation / date fields onto the existing `agents` /
+`activities`.
+
 ## 5. The graph, named
 
 With the tables above, the wiki *is* this typed property graph — queryable
