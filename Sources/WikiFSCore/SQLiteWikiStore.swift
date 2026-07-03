@@ -1086,18 +1086,30 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
     public func deletePage(id: PageID) throws {
         lock.lock(); defer { lock.unlock() }
-        // FK safety (Phase 4): `page_links` has FKs onto `pages(id)` for BOTH
-        // `from_page_id` and `to_page_id`, and `foreign_keys=ON`. Once links are
-        // populated, deleting a page referenced as a link SOURCE or TARGET would
-        // throw a constraint violation. So clear every link touching this page
-        // first, then delete the row — in ONE transaction so a failure can't
-        // leave dangling link rows.
+        // FK safety: `page_links`, `attachments`, and `source_links` all have
+        // FKs onto `pages(id)` WITHOUT `ON DELETE CASCADE` (unlike `page_chunks`
+        // which cascades). With `foreign_keys=ON`, deleting a page that still has
+        // rows in any of those tables throws a constraint violation. So clear
+        // every dependent row first, then delete the page — all in ONE
+        // transaction so a failure can't leave dangling rows.
         try withTransaction {
             let unlink = try statement(
                 "DELETE FROM page_links WHERE from_page_id = ?1 OR to_page_id = ?1;")
             unlink.reset()
             try unlink.bind(id.rawValue, at: 1)
             _ = try unlink.step()
+
+            let deleteSourceLinks = try statement(
+                "DELETE FROM source_links WHERE from_page_id = ?1;")
+            deleteSourceLinks.reset()
+            try deleteSourceLinks.bind(id.rawValue, at: 1)
+            _ = try deleteSourceLinks.step()
+
+            let deleteAttachments = try statement(
+                "DELETE FROM attachments WHERE page_id = ?1;")
+            deleteAttachments.reset()
+            try deleteAttachments.bind(id.rawValue, at: 1)
+            _ = try deleteAttachments.step()
 
             let stmt = try statement("DELETE FROM pages WHERE id = ?1;")
             stmt.reset()

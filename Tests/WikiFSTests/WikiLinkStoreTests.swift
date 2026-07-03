@@ -143,4 +143,45 @@ struct WikiLinkStoreTests {
         try store.deletePage(id: a.id)
         #expect(try store.listPages(sortBy: .lastUpdated).isEmpty)
     }
+
+    @Test func deletePageCleansUpSourceLinks() throws {
+        let store = try tempStore()
+
+        // Create page A (independent, should survive)
+        let pageA = try store.createPage(title: "A")
+
+        // Ingest a source file
+        let source = try store.addSource(filename: "test.txt", data: Data("test content".utf8))
+
+        // Create page B that links to the source
+        let pageB = try store.createPage(title: "B")
+
+        // Create a source link from B to the source
+        try store.replaceLinks(from: pageB.id, parsedLinks: [
+            .init(linkType: .source, target: source.filename, linkText: source.filename)
+        ])
+
+        // Verify the source link was created
+        let sourceLinksBefore = try store.listAllSourceLinks()
+        #expect(sourceLinksBefore.count == 1)
+        #expect(sourceLinksBefore[0].from == pageB.id.rawValue)
+        #expect(sourceLinksBefore[0].to == source.id.rawValue)
+
+        // Delete page B — this must NOT throw (this was the bug: FK constraint on source_links.from_page_id)
+        try store.deletePage(id: pageB.id)
+
+        // Verify the source link was cleaned up
+        #expect(try store.listAllSourceLinks().isEmpty)
+
+        // Verify page A still exists
+        let remainingPages = try store.listPages(sortBy: .lastUpdated)
+        #expect(remainingPages.count == 1)
+        #expect(remainingPages[0].id == pageA.id)
+
+        // Verify the source still exists (deletePage should only clean source_links, not sources table)
+        let sources = try store.listSources()
+        #expect(sources.count == 1)
+        #expect(sources[0].id == source.id)
+        #expect(sources[0].filename == "test.txt")
+    }
 }

@@ -53,6 +53,15 @@ public final class WikiStoreModel {
     /// runs when MiniLM is the selected embedder AND there is missing content
     /// (first run, an NLEmbedding→MiniLM cutover, or `wikictl`-written content);
     /// the common launch is an instant no-op and shows nothing.
+    /// A user-facing error from a store mutation (e.g. a delete that violated a
+    /// foreign-key constraint). Surfaced via an alert in `ContentView`; `nil`-ing
+    /// it dismisses the alert.
+    public struct StoreError: Identifiable {
+        public let id = UUID()
+        public let message: String
+    }
+    public private(set) var storeError: StoreError?
+
     public private(set) var searchUpgrade: SearchUpgradeState?
     /// Synchronous single-flight guard for ``upgradeSearchIndex``. Set BEFORE any
     /// `await` (unlike `searchUpgrade`, which is only set after `configure()`),
@@ -1024,7 +1033,13 @@ public final class WikiStoreModel {
             onPageDidChange?()
         } catch {
             DebugLog.store("WikiStoreModel.delete failed: \(error)")
+            storeError = StoreError(message: "Could not delete the page: \(error.localizedDescription)")
         }
+    }
+
+    /// Dismiss the current store error (called when the user taps OK on the alert).
+    public func dismissStoreError() {
+        storeError = nil
     }
 
     // MARK: - File ingestion (Phase 5)

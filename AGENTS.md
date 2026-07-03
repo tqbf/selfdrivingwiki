@@ -1,3 +1,6 @@
+* For all coding tasks use your judgement to decide an appropriate lower
+  power model and run that in a subagent.
+
 * Keep a master PLAN.md as an index to the documentation you make for this codebase.
 
 * Store specific in-depth documentation in plans/whatever.md.
