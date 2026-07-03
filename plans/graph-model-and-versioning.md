@@ -63,6 +63,7 @@ sigil, and byteless sources all stand. Four amendments:
 | A2 | **`refs` table** for active-version pointers | `sources.active_content_version_id` / `active_markdown_version_id` columns | One uniform mutation shape (kind, owner, version) → one changeToken fold, one audit surface, one CAS discipline; adding a new pointer kind is a row, not a migration |
 | A3 | **Roles + pins on reference edges** (`cite` / `embed` / `render`), `![[source:…]]` embed sigil | `source_links` as untyped edges | The whole rich-media story (embed video/image, render generative UI) is edge metadata, not new tables; Obsidian-compatible embed syntax |
 | A4 | **ULID-canonical link targets, normalized at save time**, display resolved at render time | Phase B locked Decision 1 (`?title=`, name-canonical bodies) | Renames become one-row metadata updates; see §6 for why Decision 1's premises no longer hold |
+| A5 | **PROV-DM provenance vocabulary** — `agents` + `activities` (generalizing `provider_runs`); extraction becomes an Activity | `provider_runs` + string-typed `provider_kind` / `extraction_technique` | First-class Agents (`wasAssociatedWith`/`wasAttributedTo`) and a real extraction Activity (`used`/`wasGeneratedBy`) close the run-level provenance gap; "everything pdf2md produced" becomes a join; see §4.7 |
 
 And one addition the draft explicitly deferred that this design treats as a
 **prerequisite**, not a phase: the concurrency substrate (§8), because every
@@ -88,7 +89,7 @@ states the new reality.
 - **No extraction provenance exists**: which backend/model produced an
   `extraction` version lives only in debug logs. **URL-ingested sources do not
   persist their origin URL at all** — the filename stem is the only trace.
-  `provider_runs` has nothing to backfill from; provenance starts at zero.
+  `activities` has nothing to backfill from; provenance starts at zero.
 - Links are name-canonical in bodies. Page rename rewrites nothing; other
   pages' `[[Old Title]]` go ghost, and on their next save `replaceLinks`
   **silently drops** the row (unresolved targets are omitted, line 1165) — the
@@ -142,44 +143,61 @@ CREATE TABLE blobs (
   Nothing depends on eager GC.
 - The 100 MB `ingestByteCap` stays, enforced at ingest before hashing.
 
-### 4.2 `source_versions` + `provider_runs` — the append-only history
+### 4.2 `agents` + `activities` + `source_versions` — the append-only history
 
 ```sql
-CREATE TABLE provider_runs (
-    id            TEXT PRIMARY KEY,          -- ULID
-    provider_kind TEXT NOT NULL,             -- 'local' | 'url' | 'zotero' | 'folder' | 'git' | …
-    query         TEXT,                      -- what was asked (URL, search string, item key)
-    external_ref  TEXT,                      -- provider-scoped stable identity of the fetched thing
-    fetched_at    REAL NOT NULL
+CREATE TABLE agents (
+    id           TEXT PRIMARY KEY,        -- ULID
+    kind         TEXT NOT NULL,           -- 'software' | 'person' | 'organization'
+    name         TEXT NOT NULL,           -- 'pdf2md', 'claude-opus-4-8', 'Apple Podcasts', 'Zotero', 'user'
+    version      TEXT,                    -- tool/model version ('0.3.1', model-card id)
+    external_ref TEXT                     -- provider identity, model-card URL, …
+);
+
+CREATE TABLE activities (
+    id           TEXT PRIMARY KEY,        -- ULID
+    kind         TEXT NOT NULL,           -- 'fetch' | 'extract' | 'edit' | 'import'
+    agent_id     TEXT NOT NULL REFERENCES agents(id),  -- wasAssociatedWith
+    plan         TEXT,                    -- the recipe: URL, query, model config, prompt template
+    external_ref TEXT,                    -- provider-scoped stable identity of the fetched/used thing
+    started_at   REAL NOT NULL,           -- activity startTime
+    ended_at     REAL                     -- endTime (nullable; a single-shot fetch may set = started_at)
 );
 
 CREATE TABLE source_versions (
     id              TEXT PRIMARY KEY,        -- ULID; chain order = ULID order (existing convention)
     source_id       TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-    parent_id       TEXT,                    -- lineage, informational (matches smv convention)
+    parent_id       TEXT,                    -- wasDerivedFrom (lineage; matches smv convention)
     blob_hash       TEXT REFERENCES blobs(hash),   -- NULL = byteless/external
     mime_type       TEXT,
     original_path   TEXT,                    -- path within the fetch (sibling resolution, §7)
-    thumbnail_hash  TEXT REFERENCES blobs(hash),   -- presentation only
-    provider_run_id TEXT REFERENCES provider_runs(id),
+    thumbnail_hash  TEXT REFERENCES blobs(hash),    -- presentation only
+    activity_id     TEXT REFERENCES activities(id), -- wasGeneratedBy (the fetch activity)
     external_identity TEXT,                  -- e.g. the YouTube video id, the canonical URL
-    fetched_at      REAL NOT NULL
+    fetched_at      REAL NOT NULL            -- generation time
 );
 CREATE INDEX source_versions_source ON source_versions(source_id, id);
 ```
+
+`activities` **generalizes** the draft's `provider_runs` into the W3C PROV-DM
+**Activity** type, and `agents` is the PROV **Agent** type (§4.7 has the full
+mapping). This pulls two things out of opaque strings: the draft's
+`provider_kind` and `extraction_technique` both become an `agents` row reached
+through the activity's `agent_id` (`wasAssociatedWith`), so "everything pdf2md
+produced" or "what claude-opus-4-8 extracted" is a join, not a string scan.
 
 - **Refresh appends; nothing updates.** A re-fetch whose bytes are unchanged
   appends a version row pointing at the *same* `blob_hash` — history records
   "checked at T, unchanged" for the cost of a row.
 - **Byteless sources** are `blob_hash IS NULL` + provenance
-  (`external_identity`, `provider_run_id`) + optional thumbnail. Their working
+  (`external_identity`, `activity_id`) + optional thumbnail. Their working
   material is the active derived alternative (transcript), exactly per the
-  draft.
-- `provider_run_id` lives on the **version** (each fetch is a run), while the
-  source-level `role` (`'primary' | 'media'`, §7 — distinct from the *edge*
-  role on `source_links`, §4.4) lives on the **source** — a media child is
-  media in every version. Sibling resolution joins versions through their
-  shared run.
+  draft — the Apple Podcasts case (§11) is the canonical example.
+- `activity_id` lives on the **version** (`wasGeneratedBy` — each fetch is an
+  activity), while the source-level `role` (`'primary' | 'media'`, §7 — distinct
+  from the *edge* role on `source_links`, §4.4) lives on the **source** — a
+  media child is media in every version. Sibling resolution joins versions
+  through their shared activity's `plan` / `external_ref`.
 - `sources` keeps identity + presentation: `id`, `filename`, `ext`,
   `display_name`, zotero columns (legacy provenance, retained), timestamps,
   `version` counter — and **gains** `role TEXT NOT NULL DEFAULT 'primary'`
@@ -227,7 +245,7 @@ repoint transaction — no other code ever writes `refs`.
   means "track latest". This makes migration free (no ref backfill) and keeps
   `wikictl`-written chains live-tracking by default.
 - changeToken gains one fold: `COALESCE(SUM(generation), 0)` over `refs`
-  (plus a `source_versions` count fold and a `provider_runs` count fold; §10).
+  (plus a `source_versions` count fold and an `activities` count fold; §10).
 
 ### 4.4 Edges — roles and pins (A3)
 
@@ -265,11 +283,17 @@ duplicate *unpinned* links to one source still collapse under the existing
 
 ### 4.5 Extraction alternatives (draft Layer 2, + CAS)
 
-`source_markdown_versions` keeps its table name (three renames is enough) and
-gains, per the draft: `extraction_technique TEXT` (backfilled `'legacy'`;
-new writes record `pdf2md`, `claude-opus-4-8`, `whisper-large-v3`,
-`user-edit`, …) and `source_version_id TEXT` (backfilled to the source's v1
-content version). Two amendments:
+`source_markdown_versions` keeps its table name (three renames is enough). It
+gains `source_version_id TEXT` (`wasDerivedFrom` — backfilled to the source's
+v1 content version) and `activity_id TEXT REFERENCES activities(id)`
+(`wasGeneratedBy` — the extraction activity that produced it). The draft's
+`extraction_technique` string is **superseded**: the technique is now the
+extraction activity's associated **agent** (`activities.agent_id → agents`,
+e.g. the `pdf2md` / `claude-opus-4-8` / `whisper-large-v3` / `apple-ttml` /
+`user` agent) — see §4.7. PROV gain: an extraction is now a real Activity that
+**used** the content version (`source_version_id`) and generated the markdown
+version, so "which run extracted this, and when" is recoverable — today it is
+lost. Two amendments:
 
 - `content TEXT` is joined by `blob_hash TEXT REFERENCES blobs(hash)`; new
   rows write the blob and leave `content = ''`; readers prefer the blob.
@@ -331,26 +355,83 @@ has a single write path; edge rows are written from body-parsing at many call
 sites, where the single-writer justification is weaker. FK integrity wins over
 DRY here.
 
+### 4.7 PROV-DM alignment (A5)
+
+The provenance tables adopt the W3C PROV-DM core vocabulary
+([prov-dm](https://www.w3.org/TR/prov-dm/)) — types and relations as schema,
+without the qualified/n-ary machinery (overkill for a wiki). This makes
+agent-responsibility first-class and closes the single biggest provenance gap
+today: an extraction's *run* is recoverable, not just implied.
+
+**Type mapping:**
+
+| PROV type | Table / column | Notes |
+|---|---|---|
+| **Entity** | `source_versions`, `source_markdown_versions` | versioned artifacts with fixed aspects |
+| **Activity** | `activities` | `kind ∈ {fetch, extract, edit, import}` |
+| **Agent** | `agents` | `kind ∈ {software, person, organization}` |
+| **Plan** | `activities.plan` | the recipe (URL, query, model config, prompt) |
+
+**Relation mapping** (denormalized into columns — one write path per relation,
+the same discipline as `refs`):
+
+| PROV relation | Column | Where |
+|---|---|---|
+| **wasGeneratedBy** | `source_versions.activity_id`, `source_markdown_versions.activity_id` | entity → the activity that created it |
+| **used** | *derivable* (see below) | activity ↔ the input entity it consumed |
+| **wasDerivedFrom** | `source_versions.parent_id`, `source_markdown_versions.source_version_id` | entity → entity lineage |
+| **wasAssociatedWith** | `activities.agent_id` | activity → responsible agent |
+| **wasAttributedTo** | derivable (generation + association); optional explicit `source_versions.attributed_to_agent_id` for content *origin* (author/publisher), distinct from the fetcher | entity → agent responsible for the content |
+| **actedOnBehalfOf** | deferred | provider-on-behalf-of-user; expressible later if needed |
+
+**Why `used` is derivable, not stored.** PROV's
+`wasDerivedFrom(e2, e1, a, …)` already names the activity `a`, the input `e1`,
+and the output `e2`. For an extraction, `e2` = the smv (`activity_id` → `a`),
+`e1` = `source_version_id`. So `used(a, e1)` is the join `smv.activity_id` ∩
+`smv.source_version_id` — no redundant column. (A future activity that consumes
+*multiple* inputs would need an explicit `used` relation table; none exists
+today.)
+
+**What PROV needs that is NOT yet captured** (metadata gaps, by phase):
+
+- **URL/source provenance** — lost entirely today (§3); starts when the website
+  provider lands (`activities.plan` = the URL). Phase 3.
+- **Content attribution** (`wasAttributedTo` to author/publisher) — not captured;
+  the publisher/author of a fetched source is metadata a provider must extract,
+  distinct from the software that fetched it. Phase 3+.
+- **Activity duration** — `ended_at` is nullable; a fast fetch sets it =
+  `started_at`. A long extraction that should record its runtime writes both.
+  Phase 2.
+
+**Backfill:** the migration (§9) seeds one `agents` row per distinct legacy
+`extraction_technique` / `provider_kind` string and one `activities` row
+(`kind='fetch'`) per existing `provider_run`, then repoints `source_versions`
+and `source_markdown_versions` at them. No provenance is lost in the move.
+
 ## 5. The graph, named
 
 With the tables above, the wiki *is* this typed property graph — queryable
 with plain SQL and recursive CTEs, no engine required:
 
 ```
-nodes:  page · source · source_version · smv (derived alternative) · provider_run · blob
+nodes:  page · source · source_version · smv (derived alternative) · activity · agent · blob
 edges:  page        —links(link_text)→                    page          (page_links)
         page        —refers(role, pin)→                   source        (source_links)
         source      —has-version→                          source_version (FK)
-        source_ver  —derived-from(lineage)→                source_version (parent_id)
-        smv         —extracted-from(technique)→            source_version (source_version_id)
-        source_ver  —produced-by→                          provider_run  (FK)
+        source_ver  —wasDerivedFrom(lineage)→             source_version (parent_id)
+        smv         —wasDerivedFrom→                      source_version (source_version_id)
+        activity    —used→                                source_version (the extraction input; derivable, §4.7)
+        source_ver  —wasGeneratedBy→                      activity      (FK)
+        smv         —wasGeneratedBy→                      activity      (FK)
+        activity    —wasAssociatedWith→                   agent         (FK)
         refs        —active→                               version rows   (the only mutable edges)
         version/smv —content→                              blob          (hash)
 ```
 
 Example queries this unlocks (candidates for a `wikictl graph` verb, later):
-"pages citing any version derived from this provider run" (join through
-`provider_run_id`), "orphan sources" (anti-join on `source_links`), "what did
+"pages citing any version derived from this activity" (join through
+`activity_id`), "everything the pdf2md agent produced" (`wasAssociatedWith` +
+`wasGeneratedBy`), "orphan sources" (anti-join on `source_links`), "what did
 this page's embedded video look like when the page was written" (pin +
 version), "everything downstream of this blob" (hash back-joins).
 
@@ -502,11 +583,14 @@ block extends in parity, enforced by the existing test:
 
 1. **Phase 0 — no schema step.** (Concurrency is code-only; `user_version`
    stays 17.)
-2. **v18: `blobs`, `provider_runs`, `source_versions`, `refs`** — create the
-   tables, then a **one-shot migration**: for each source, hash `content` →
+2. **v18: `blobs`, `agents`, `activities`, `source_versions`, `refs`** — create
+   the tables, then a **one-shot migration**: for each source, hash `content` →
    `INSERT OR IGNORE` blob → insert a v1 version row (`parent_id NULL`,
    `fetched_at = created_at`) → write the `source-content` ref → **drop the
-   `sources.content` column** in the same step (table rebuild). 
+   `sources.content` column** in the same step (table rebuild). PROV backfill:
+   seed one `agents` row per distinct legacy `extraction_technique` /
+   `provider_kind` and one `activities` row (`kind='fetch'`) per source's
+   origin, repointing the new version rows at them (§4.7).
 
    **No soak, no dual-write, no read-fallback.** The defensive soak machinery
    this plan once carried existed for *binary skew across live users* — three
@@ -523,8 +607,10 @@ block extends in parity, enforced by the existing test:
    Reads go through `sourceContent(id:)` which resolves ref → version → blob, so
    the call-site surface (wikictl `cat`/`export`, FP projection, agent staging)
    doesn't change signatures.
-3. **v19: extraction columns** (`extraction_technique`, `source_version_id`,
-   `blob_hash`, `mime_type`) + backfills (`'legacy'`, v1 version id).
+3. **v19: extraction columns** (`activity_id REFERENCES activities(id)`,
+   `source_version_id`, `blob_hash`, `mime_type`) + backfills (one
+   `kind='extract'` activity per legacy row, associated with the matching agent;
+   v1 version id).
 4. **v20: `source_links` rebuild** as the rowid table + `COALESCE`'d unique
    index of §4.4 (copy-over `role='cite'`, `pinned_version_id=NULL` — still
    unique, byte-identical behavior), **plus**
@@ -547,8 +633,9 @@ projecting the active derived alternative.
 ## 10. changeToken & File Provider
 
 The token grows three folds (11 fields):
-`… : svCount : refsGenSum : runCount` — `COUNT(*)` of `source_versions`,
-`COALESCE(SUM(generation),0)` of `refs`, `COUNT(*)` of `provider_runs`. A
+`… : svCount : refsGenSum : actCount` — `COUNT(*)` of `source_versions`,
+`COALESCE(SUM(generation),0)` of `refs`, `COUNT(*)` of `activities`. (`agents`
+are slowly-changing reference data and need no fold.) A
 ref repoint *must* move the token (it changes the bytes the projection
 serves for `sources/by-*` and the `.md` sibling); version appends must move it
 (new rows change `sources.jsonl`). Tests hard-coding the 8-field literal
@@ -556,7 +643,7 @@ serves for `sources/by-*` and the `.md` sibling); version appends must move it
 same commit as the fold.
 
 > **Token is monotone non-decreasing by design (adversarial hardening).** All
-> three new folds grow monotonically: `source_versions`/`provider_runs` are
+> three new folds grow monotonically: `source_versions`/`activities` are
 > append-only counts, and `refs.generation` only increments — so a *rollback*
 > (a repoint) moves the token *forward* (generation+1), never back. This is
 > intentional: rollback changes the bytes the projection serves, so consumers
@@ -582,7 +669,7 @@ verbs) carry over from the draft verbatim. Two grounding notes:
   four already funnel through the single `addSource` seam, which becomes
   "create source + run + v1 version + blob" in one transaction.
 - **URL provenance starts being recorded** the day the website provider
-  lands (`provider_runs.query` = the URL) — today it is lost entirely, which
+  lands (`activities.plan` = the URL) — today it is lost entirely, which
   is reason enough to sequence providers before "refresh" ships (refresh
   needs to know what to re-fetch).
 
@@ -591,10 +678,10 @@ verbs) carry over from the draft verbatim. Two grounding notes:
 > `ApplePodcastTranscriptService`), built against today's flat source model: it
 > stores the transcript `.md` as source `content` and bakes the episode ID into
 > the filename. When Phase 1–3 land it re-models cleanly — a **byteless source**
-> (`external_identity` = episode ID, `provider_run.query` = the URL) whose
-> **derived alternative** is the TTML→markdown transcript
-> (`extraction_technique='apple-ttml'`); the recognizer + service become a
-> `SourceProvider` (provider_kind `apple-podcast`), and refresh appends a
+> (`external_identity` = episode ID, `activities.plan` = the URL) whose
+> **derived alternative** is the TTML→markdown transcript (an extract activity
+> associated with the `apple-ttml` agent, §4.7); the recognizer + service
+> become a `SourceProvider` (the `apple-podcast` agent), and refresh appends a
 > version instead of overwriting. The risky private-API bits (`PodcastsFoundation`
 > dlopen, forked helper, signed requests) are compiled out for App Store builds
 > (`#if PODCAST_TRANSCRIPTS`) and stay on the user-initiated UI path — they do
@@ -608,8 +695,8 @@ Ordered by dependency; each gate is demoable.
 | Phase | Contents | Gate |
 |-------|----------|------|
 | **0 — Concurrency substrate** *(this branch)* | Method-atomic store, `withTransaction` savepoints, atomic `renameSource`, `WikiReadPool`, off-main search, skill/AGENTS update | Full suite green; concurrent hammer test passes; searches don't touch the main-thread store |
-| **1 — Objects & versions** | `blobs`, `source_versions`, `provider_runs` (empty), `refs`, one-shot content migration (drop `sources.content`), ref-resolved reads, byteless support, refresh-append write path | Re-ingesting an identical file adds one version row + zero new blob bytes; rollback = repoint; byteless YouTube source renders via transcript |
-| **2 — Extraction alternatives** | technique + source-version columns, CAS extraction content, `source-derived` ref, compare/nominate UI, re-extract path (today none exists) | Two backends' extractions coexist; switch active; revert is a pointer copy |
+| **1 — Objects & versions** | `blobs`, `agents`, `activities`, `source_versions`, `refs`, one-shot content migration (drop `sources.content`), ref-resolved reads, byteless support, refresh-append write path | Re-ingesting an identical file adds one version row + zero new blob bytes; rollback = repoint; byteless YouTube source renders via transcript |
+| **2 — Extraction alternatives** | extraction-as-Activity (`activity_id` on smv + `used` the content version, §4.7), CAS extraction content, `source-derived` ref, compare/nominate UI, re-extract path (today none exists) | Two backends' extractions coexist; switch active; revert is a pointer copy |
 | **3 — Providers & provenance** | `SourceProvider` protocol, four paths unified, runs recorded (URL provenance!), refresh verb, credentials UX, **website provider writes disambiguated `original_path` per sibling rule (§7)** | Drag-drop/URL/Zotero/folder all flow through providers; `wikictl source refresh` appends a version |
 | **4 — Media & roles** | `source_links` rebuild (role/pin), `![[…]]` embeds, render-by-content-type, sibling `original_path` resolution, media filtering | Website snapshot renders with inline images; a YouTube embed plays; a json-render spec mounts |
 | **5 — Link canonicalization** | Save-time ULID normalization, display-at-render, one-time body migration, `?id=` URL contract, rename = metadata-only | Rename a page with 50 inbound links: zero bodies rewritten, zero ghosts |

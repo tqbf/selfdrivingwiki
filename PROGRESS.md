@@ -44,6 +44,18 @@ or schema change — five amendments hardening the design of record:
   provider list (§11) with a note on how it re-models when Phase 1–3 land
   (byteless source, transcript as derived alternative, recognizer+service become
   a `SourceProvider`), and to Phase 7's leaf providers. Ships independently.
+- **§4.7 + A5 — W3C PROV-DM provenance vocabulary (Full alignment).** Adopted
+  the PROV-DM core types/relations as schema: new **`agents`** table (PROV
+  Agent; normalizes the `provider_kind`/`extraction_technique` strings into
+  first-class agents) and **`activities`** table (PROV Activity; generalizes
+  `provider_runs`, broadens `kind` to `fetch|extract|edit|import` so extraction
+  becomes a real Activity). Relations mapped: `wasGeneratedBy`
+  (`activity_id` on both version tables), `wasDerivedFrom` (`parent_id` /
+  `source_version_id`), `wasAssociatedWith` (`activities.agent_id`), `used`
+  (derivable from derivation+generation, §4.7). Closes the run-level provenance
+  gap (an extraction's run is now recoverable, not just implied). Token fold
+  renamed `runCount`→`actCount`; §5 graph, §9 migration, §11/§12 phases, and
+  all `provider_run`/`extraction_technique` references updated to match.
 
 ## 2026-07-03 — Graph-model Phase 0: method-atomic store, savepoint transactions, `WikiReadPool`
 
