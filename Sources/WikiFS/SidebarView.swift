@@ -78,11 +78,9 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            WikiSwitcher(manager: manager)
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
-            Divider()
+            // The wiki switcher moved into the window toolbar (Safari-style,
+            // trailing the omnibox); the sidebar now starts at the section
+            // selector.
             sectionSelectorBar
                 .padding(.top, 8)
             Divider()

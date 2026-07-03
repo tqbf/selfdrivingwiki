@@ -26,6 +26,19 @@ struct ContentView: View {
     @State private var showingImportMarkdown = false
     @State private var showingAddFromZotero = false
     @State private var showCloseTabAlert = false
+    /// Drives address-bar focus from the Cmd-L shortcut. The bar observes this
+    /// via a `@Binding` and mirrors it into its own `@FocusState`.
+    @State private var addressBarFocused = false
+    /// Tracks the sidebar's visibility so the omnibox can shrink to leave room
+    /// for the back/forward buttons when the sidebar is open (otherwise the wide
+    /// omnibox pushes Forward into the toolbar overflow).
+    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    /// Width of the detail column, measured by a `GeometryReader` on it. Drives the
+    /// toolbar omnibox width: the region the toolbar spans, so it shrinks with the
+    /// left sidebar and is unaffected by the right transcript panel. Measuring this
+    /// (never in toolbar overflow) instead of the omnibox field's own leading edge
+    /// is what keeps the width from getting stranded. See `OmniboxLayout`.
+    @State private var detailWidth: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -94,7 +107,7 @@ struct ContentView: View {
     /// budget (adding the search-upgrade sheet tipped the single expression over).
     @ViewBuilder
     private var baseContent: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(store: store, manager: manager, fileProvider: fileProvider,
                         launcher: agentLauncher,
                         ingestingSourceIDs: agentLauncher.ingestingSourceIDs,
@@ -126,21 +139,6 @@ struct ContentView: View {
                 .opacity(isDropTargeted ? 1 : 0)
                 .allowsHitTesting(false)
                 .ignoresSafeArea()
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .navigation) {
-                Button("Back", systemImage: "chevron.left", action: navigateBack)
-                    .disabled(!store.canNavigateBack)
-                    .keyboardShortcut("[", modifiers: .command)
-                    .help("Go back")
-
-                Button("Forward", systemImage: "chevron.right", action: navigateForward)
-                    .disabled(!store.canNavigateForward)
-                    .keyboardShortcut("]", modifiers: .command)
-                    .help("Go forward")
-            }
-
-            primaryToolbarItems()
         }
     }
 
@@ -177,12 +175,14 @@ struct ContentView: View {
         isTranscriptExpanded.toggle()
     }
 
-    private func navigateBack() {
-        store.navigateBack()
-    }
-
-    private func navigateForward() {
-        store.navigateForward()
+    /// The active wiki's display name (as shown in the toolbar's `WikiSwitcher`),
+    /// passed to the omnibox so it can reserve room for a long switcher and shrink
+    /// instead of pushing the switcher into overflow. Mirrors `WikiSwitcher`'s
+    /// `activeDescriptor`.
+    private var activeWikiName: String {
+        guard let id = manager.activeWikiID,
+              let wiki = manager.wikis.first(where: { $0.id == id }) else { return "No Wiki" }
+        return wiki.displayName
     }
 
     /// The selected-document/source detail pane, extracted so the `HStack`'s
@@ -211,8 +211,53 @@ struct ContentView: View {
             }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isTranscriptExpanded)
+        // Measure the detail column's width — the span the toolbar covers — and
+        // feed it to the omnibox. Measuring here is reliable in every state the
+        // field's own leading edge is not: this view never lands in toolbar
+        // overflow, so the omnibox width can't get stranded (see
+        // `AddressBarView`/`OmniboxLayout`).
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { detailWidth = $0 }
         // Hidden buttons for keyboard shortcuts.
         .background { keyboardShortcutButtons }
+        // The toolbar is declared on the DETAIL column (not the split-view root)
+        // on purpose: a `.principal` item on the root centers across the whole
+        // window and overlaps the open sidebar, which makes NSToolbar dump the
+        // whole group into the `»` overflow. Declared here it centers within the
+        // detail region, so it survives the sidebar opening.
+        .toolbar {
+            // The omnibox group (Back / Forward + search field) is placed
+            // `.navigation` so it flows flush-left from the leading edge of the
+            // detail region (no centering gap). `AddressBarView` sizes the group
+            // to an explicit width that fills up to the trailing wiki switcher —
+            // the empty title space that would otherwise sit between them is
+            // reclaimed by hiding the window title (see `OmniboxSearchField`'s
+            // `viewDidMoveToWindow`). Declared on the detail column so it survives
+            // the sidebar opening.
+            ToolbarItem(placement: .navigation) {
+                AddressBarView(store: store, isFocused: $addressBarFocused,
+                               wikiName: activeWikiName,
+                               detailWidth: detailWidth,
+                               sidebarVisible: columnVisibility != .detailOnly)
+            }
+
+            // The wiki switcher moves out of the sidebar header into the toolbar,
+            // trailing the omnibox (like a browser account / profile control).
+            ToolbarItem(placement: .primaryAction) {
+                WikiSwitcher(manager: manager)
+            }
+
+            primaryToolbarItems()
+        }
+        // Suppress the window title so the omnibox owns the toolbar. `.navigationTitle("")`
+        // alone only empties the *text* — the toolbar still reserves ~160pt for the
+        // title item, dead space between the omnibox and the switcher that (with a long
+        // wiki name) shoves the whole omnibox group into the `»` overflow. `.toolbar(
+        // removing: .title)` drops the title item itself, reclaiming that width — the
+        // supported API for this, unlike the fragile `titleVisibility = .hidden` hack
+        // (which doesn't reclaim the slot here and can't be applied once the omnibox is
+        // in the overflow panel anyway).
+        .navigationTitle("")
+        .toolbar(removing: .title)
     }
 
     private var wikiDetailPane: some View {
@@ -249,8 +294,9 @@ struct ContentView: View {
 
     // MARK: - Keyboard shortcuts
 
-    /// Hidden buttons that provide Cmd+W, Cmd+Shift+T, and Cmd+1–9 shortcuts.
-    /// Placed in the detail background so they're always in the responder chain.
+    /// Hidden buttons that provide Cmd+W, Cmd+Shift+T, Cmd+1–9, and Cmd+L
+    /// shortcuts. Placed in the detail background so they're always in the
+    /// responder chain.
     @ViewBuilder
     private var keyboardShortcutButtons: some View {
         // Cmd+W: Close active tab
@@ -264,6 +310,14 @@ struct ContentView: View {
             .keyboardShortcut("t", modifiers: [.command, .shift])
             .opacity(0).allowsHitTesting(false)
             .disabled(store.recentlyClosedTabs.isEmpty)
+
+        // Cmd+L: Focus the address bar (always focus, never toggle — browser
+        // convention: repeated Cmd-L keeps focus).
+        Button("") {
+            if !addressBarFocused { addressBarFocused = true }
+        }
+        .keyboardShortcut("l", modifiers: .command)
+        .opacity(0).allowsHitTesting(false)
 
         // Cmd+1 through Cmd+9: Switch to tab by position (first 9 tabs only)
         ForEach(Array(store.tabs.prefix(9).enumerated()), id: \.element.id) { i, tab in
