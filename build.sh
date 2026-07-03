@@ -257,6 +257,17 @@ if [ "${REAL_SIGNING}" = "1" ]; then
 	<string>${TEAM_ID}.${BUNDLE_ID}</string>
 	<key>com.apple.developer.team-identifier</key>
 	<string>${TEAM_ID}</string>
+	<!-- App Group container holds the SQLite DB shared with the sandboxed File
+	     Provider extension. The app accesses it via a LITERAL path (see
+	     DatabaseLocation.appGroupContainerDirectory), but WITHOUT this entitlement
+	     macOS treats the group container as "another app's data" and shows a
+	     "would like to access data from other apps" privacy prompt at every cold
+	     launch — which also holds the app in the background until dismissed. The
+	     app's provisioning profile already authorizes this group. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>${APP_GROUP}</string>
+	</array>
 </dict>
 </plist>
 PLIST
