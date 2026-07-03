@@ -200,9 +200,18 @@ struct ContentView: View {
             // window. It shares the detail column's full height, so it sits at
             // the same height as the leading sidebar rather than under the tab bar.
             VStack(spacing: 0) {
-                TabBarView(store: store)
+                // Safari-style: the tab strip is only shown when there are 2+
+                // tabs. With 0 or 1 tabs there's nothing to switch, so the strip
+                // is removed (the detail pane reclaims the vertical space). New
+                // tabs are still created from the sidebar / shortcuts, which
+                // crosses the 1→2 threshold and re-shows the strip.
+                if store.tabs.count > 1 {
+                    TabBarView(store: store)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
                 wikiDetailPane
             }
+            .animation(.easeInOut(duration: 0.18), value: store.tabs.count > 1)
 
             if isTranscriptExpanded {
                 Divider()
