@@ -21,50 +21,6 @@ The agent query path is deliberately **excluded** in v1. Semantic search is fast
 (ms), predictable, and browser-like. Agent escalation can be added later as an
 opt-in entry at the bottom of the dropdown.
 
-## How the implementation differs from the original design
-
-The original design placed a SwiftUI `AddressBarView` *inside the detail
-`VStack`, above the tab strip*. Shipping instead moved the bar into the **window
-toolbar** and introduced three supporting pieces. The reasons, and what changed:
-
-- **Toolbar placement, not in-content VStack.** A browser address bar belongs in
-  the toolbar. The omnibox is a `.navigation` toolbar item on the **detail
-  column** (not the split-view root — a `.principal`/root item centers across the
-  whole window, overlaps the open sidebar, and dumps the group into the `»`
-  overflow). Declared on the detail column it centers within the detail region
-  and survives the sidebar opening.
-- **Window title removed.** `.navigationTitle("")` alone only empties the text;
-  the toolbar still reserves ~160pt for the title item. `.toolbar(removing:
-  .title)` drops the title item itself so the omnibox reclaims that width.
-- **Back/Forward moved into the omnibox group.** The nav buttons left their
-  standalone toolbar items and now sit flush-left in the omnibox's
-  `.navigation` group (`chevron.left`/`chevron.right`, Cmd-[ / Cmd-]).
-- **WikiSwitcher moved out of the sidebar header** into the toolbar as a
-  `.primaryAction`, trailing the omnibox (like a browser profile control).
-- **AppKit `NSSearchField`, not SwiftUI `TextField`.** SwiftUI `TextField`
-  cannot accept first responder inside an `NSToolbar` item (the toolbar hosts
-  items in a separate view tree, isolated from the window's responder chain). So
-  the field is a real `NSSearchField` wrapped in `NSViewRepresentable`.
-- **Suggestions in a non-activating child `NSPanel`, not a SwiftUI
-  overlay/popover.** The panel never becomes key, so the search field keeps first
-  responder while the user types to refine. It is attached as a child window of
-  the main window so it tracks window moves.
-- **`OmniboxLayout` sizing engine.** Toolbar overflow is the hard part: when the
-  window narrows (or the wiki name lengthens) the switcher must drop into the `»`
-  overflow and the field must *expand* to reclaim the freed space — and the width
-  can't be driven by the field's own leading edge, which the toolbar yanks out of
-  the window on overflow, stranding the measurement. Instead the detail column's
-  width is measured with `onGeometryChange` (never in overflow) and the pure-math
-  `OmniboxLayout` derives the field width from it.
-- **Safari-style leading chrome.** The field carries a leading Page Menu glyph
-  (Zoom + Find on Page popover) and an add-bookmark "+" that fades in on hover
-  when a bookmarkable page/source is showing. These are in an `.overlay` over the
-  AppKit field; the field's text is inset (`leadingTextInset`) to clear them.
-- **System font, not monospaced.** The idle wikilink renders in the field's
-  regular system font. `[[…]]` notation is still shown literally, but the
-  monospaced "address" treatment from the original D1 was dropped in favor of
-  matching the toolbar's native type.
-
 ## Non-goals (v1)
 
 - **No URL display.** Wikilinks are the internal addressing scheme.
