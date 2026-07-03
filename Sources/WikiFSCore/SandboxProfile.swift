@@ -11,8 +11,7 @@ import Foundation
 ///
 /// - the per-run scratch dir (a directory tree → `subpath`),
 /// - the active wiki's `<ulid>.sqlite` + its SQLite `-wal` / `-shm` / `-journal`
-///   sidecars (exact files → `literal`),
-/// - any user `extraAllowedPaths`.
+///   sidecars (exact files → `literal`).
 ///
 /// This is provider-agnostic: the profile never names a provider; it fences the write
 /// channel only. See `plans/sandbox-agent.md` for the threat model and the
@@ -56,12 +55,9 @@ public enum SandboxProfile {
     /// - Parameters:
     ///   - scratchDir: the per-run scratch directory absolute path (the writable cwd).
     ///   - wikiDBPath: the active wiki's `<ulid>.sqlite` absolute file path.
-    ///   - extraAllowedPaths: additional absolute paths to allow writes to (already
-    ///     tilde-expanded and absolute-filtered by `SandboxConfig`).
     public static func generate(
         scratchDir: String,
-        wikiDBPath: String,
-        extraAllowedPaths: [String] = []
+        wikiDBPath: String
     ) -> String {
         var lines: [String] = [
             "(version 1)",
@@ -87,15 +83,6 @@ public enum SandboxProfile {
             lines.append(
                 "(allow file-write* (literal (string-append (param \"WIKI_DB\") \"\(suffix)\")))"
             )
-        }
-        // User-widened paths. A path that is an existing directory is matched as a
-        // subtree; anything else is matched as an exact file. Non-absolute entries
-        // are dropped defensively (the caller already filters them, but this stays
-        // robust if invoked directly).
-        for path in extraAllowedPaths {
-            guard path.hasPrefix("/") else { continue }
-            let kind = isDirectory(path) ? "subpath" : "literal"
-            lines.append("(allow file-write* (\(kind) \"\(escape(path))\"))")
         }
         return lines.joined(separator: "\n") + "\n"
     }
@@ -153,18 +140,16 @@ public enum SandboxProfile {
         )
     }
 
-    /// Build a `SandboxInvocation` from the three spawn-time paths. The scratch dir,
-    /// DB path, and extra-allowed paths are **symlink-resolved** here, because the
-    /// seatbelt `subpath`/`literal` matchers match the CANONICAL path — a symlinked
-    /// component (e.g. `/tmp` → `/private/tmp`) makes an allow rule silently fail and
-    /// writes get denied. Keeping this resolution in the (tested) core layer guards
-    /// against a launcher regression dropping it. `extraAllowedPaths` should already
-    /// be absolute (tilde-expanded); non-absolute entries are dropped by `generate`.
+    /// Build a `SandboxInvocation` from the three spawn-time paths. The scratch dir and
+    /// DB path are **symlink-resolved** here, because the seatbelt `subpath`/`literal`
+    /// matchers match the CANONICAL path — a symlinked component (e.g. `/tmp` →
+    /// `/private/tmp`) makes an allow rule silently fail and writes get denied. Keeping
+    /// this resolution in the (tested) core layer guards against a launcher regression
+    /// dropping it.
     public static func invocation(
         homePath: String,
         scratchDir: String,
         wikiDBPath: String,
-        extraAllowedPaths: [String] = [],
         claudeTempBase: String = defaultClaudeTempBase()
     ) -> SandboxInvocation {
         func realPath(_ s: String) -> String {
@@ -178,11 +163,9 @@ public enum SandboxProfile {
         let resolvedScratch = realPath(scratchDir)
         let resolvedDB = realPath(wikiDBPath)
         let resolvedClaudeTemp = realPath(claudeTempBase)
-        let resolvedExtra = extraAllowedPaths.map(realPath)
         let profile = generate(
             scratchDir: resolvedScratch,
-            wikiDBPath: resolvedDB,
-            extraAllowedPaths: resolvedExtra
+            wikiDBPath: resolvedDB
         )
         // NOTE: these are profile parameters, NOT child env vars. `-D WIKI_DB=<path>`
         // is consumed by `(param "WIKI_DB")`; it does not touch the `WIKI_DB=<ulid>`
@@ -238,13 +221,6 @@ public enum SandboxProfile {
         "/private/tmp/claude-\(getuid())"
     }
 
-    /// `true` if `path` exists and is a directory. Used to pick `subpath` (tree) vs
-    /// `literal` (exact file) for an extra-allowed path.
-    private static func isDirectory(_ path: String) -> Bool {
-        var isDir: ObjCBool = false
-        return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
-    }
-
     /// `realpath(3)` — the kernel's own canonical-path resolution, which is exactly
     /// what the seatbelt `subpath`/`literal` matchers resolve against. Foundation's
     /// `URL.resolvingSymlinksInPath()` is unreliable for this (it does NOT resolve
@@ -255,11 +231,5 @@ public enum SandboxProfile {
         var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
         guard let resolved = realpath(path, &buf) else { return path }
         return String(cString: resolved)
-    }
-
-    /// Escape a path for a double-quoted SBPL string literal (backslash + quote).
-    private static func escape(_ path: String) -> String {
-        path.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 }

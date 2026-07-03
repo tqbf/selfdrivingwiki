@@ -1248,12 +1248,15 @@ final class AgentLauncher {
 
     // MARK: - Seatbelt sandbox
 
-    /// Resolve the seatbelt sandbox invocation for this spawn, or `nil` to run
-    /// un-sandboxed. Loads `SandboxConfig` FRESH at spawn (so Settings changes apply
-    /// on the next run, mirroring `AgentCommandConfig`). When enabled, resolves the
-    /// per-run scratch path + the active wiki's DB path. Returns `nil` (fail-open)
-    /// when disabled OR when a required path can't be resolved — logged. Fail-open is
-    /// acceptable because the feature is opt-in and default-off.
+    /// Resolve the write-confinement seatbelt sandbox for an Ingest or Edit spawn.
+    /// The sandbox is **always on** for these paths — it confines the agent's
+    /// filesystem writes to the wiki DB + scratch + `~/.claude` (reads, network, and
+    /// process execution stay open; see `SandboxProfile`). Returns `nil` (fail-open,
+    /// logged) only when a required path can't be resolved, so a misconfiguration
+    /// never blocks agent work entirely.
+    ///
+    /// This does NOT affect the Ask session, which is always forced into the stricter
+    /// read-only sandbox by `selectQuerySandbox` regardless of this result.
     ///
     /// This function ONLY resolves the invocation; it does NOT create any directories.
     /// Each spawn site that receives a non-nil result MUST call `createSandboxTmpDir(in:)`
@@ -1264,9 +1267,6 @@ final class AgentLauncher {
         scratch: URL,
         dir: URL
     ) -> SandboxProfile.SandboxInvocation? {
-        let sandboxConfig = SandboxConfig.load(from: dir)
-        guard sandboxConfig.enabled else { return nil }
-
         // HOME for the `-D HOME` profile param. Read from the environment the child
         // will inherit (fall back to the process home). Forwarded for forward-compat
         // and debugging; the current whitelist profile does not reference it.
@@ -1288,10 +1288,9 @@ final class AgentLauncher {
         let invocation = SandboxProfile.invocation(
             homePath: homePath,
             scratchDir: scratch.path,
-            wikiDBPath: dbPath,
-            extraAllowedPaths: sandboxConfig.parsedExtraAllowedPaths()
+            wikiDBPath: dbPath
         )
-        DebugLog.agent("sandbox: enabled — confining agent writes to scratch + \(dbPath)")
+        DebugLog.agent("sandbox: confining Ingest/Edit agent writes to scratch + \(dbPath)")
         return invocation
     }
 

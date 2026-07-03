@@ -4,18 +4,16 @@ import Testing
 
 /// Tests for the pure seatbelt profile generator — the exact `(version 1)` /
 /// `(allow default)` / `(deny file-write*)` skeleton, the SCRATCH_DIR subpath allow,
-/// the four WIKI_DB literal allows (base + wal/shm/journal), and extra-path splicing
-/// with tilde expansion + relative junk dropping. Pure; no shell, no IO.
+/// and the four WIKI_DB literal allows (base + wal/shm/journal). Pure; no shell, no IO.
 struct SandboxProfileTests {
 
   static let scratchDir = "/Users/me/Library/Caches/Self Driving Wiki-agent/UUID"
   static let wikiDB = "/Users/me/Library/Group Containers/group.x/01WIKI.sqlite"
 
-  private func profile(_ extra: [String] = []) -> String {
+  private func profile() -> String {
     SandboxProfile.generate(
       scratchDir: Self.scratchDir,
-      wikiDBPath: Self.wikiDB,
-      extraAllowedPaths: extra)
+      wikiDBPath: Self.wikiDB)
   }
 
   // MARK: - Skeleton
@@ -104,31 +102,6 @@ struct SandboxProfileTests {
     #expect(SandboxProfile.defaultClaudeTempBase() == "/private/tmp/claude-\(getuid())")
   }
 
-  // MARK: - Extra allowed paths
-
-  @Test func splicesInValidAbsolutePathAsLiteral() {
-    // A non-existent path (not a directory) → `literal`.
-    let p = profile(["/Users/me/some-file.txt"])
-    #expect(p.contains("(allow file-write* (literal \"/Users/me/some-file.txt\"))"))
-  }
-
-  @Test func splicesInExistingDirectoryAsSubpath() {
-    // `/tmp` exists and is a directory → `subpath`.
-    let p = profile(["/tmp"])
-    #expect(p.contains("(allow file-write* (subpath \"/tmp\"))"))
-  }
-
-  @Test func dropsRelativeAndNonAbsoluteExtraPaths() {
-    let p = profile(["relative/path", "just-a-name"])
-    #expect(!p.contains("relative/path"))
-    #expect(!p.contains("just-a-name"))
-  }
-
-  @Test func escapesQuotesAndBackslashesInExtraPaths() {
-    let p = profile(["/path/with\"quote"])
-    #expect(p.contains("\\\"quote"))
-  }
-
   // MARK: - generateReadOnly
 
   private func readOnlyProfile() -> String {
@@ -176,7 +149,7 @@ struct SandboxProfileTests {
     // the input (same behaviour the other defines rely on for non-existent paths).
     #expect(inv.defines[3].0 == "CLAUDE_TMP")
     #expect(inv.defines[3].1 == "/private/tmp/claude-999")
-    #expect(inv.profile == profile([]))
+    #expect(inv.profile == profile())
   }
 
   @Test func readOnlyInvocationCarriesHomeScratchAndClaudeTempDefines() {
@@ -230,21 +203,5 @@ struct SandboxProfileTests {
     // The profile references SCRATCH_DIR by param; the resolved canonical value
     // flows in via the -D define (asserted above).
     #expect(inv.profile.contains("(subpath (param \"SCRATCH_DIR\"))"))
-  }
-
-  @Test func invocationResolvesExtraAllowedSymlinksToo() throws {
-    let symlinkPath = "/tmp/sdw-extra-probe-\(UUID().uuidString)"
-    try FileManager.default.createDirectory(
-      atPath: symlinkPath, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(atPath: symlinkPath) }
-
-    let inv = SandboxProfile.invocation(
-      homePath: "/Users/me",
-      scratchDir: "/Users/me/scratch",
-      wikiDBPath: "/Users/me/db.sqlite",
-      extraAllowedPaths: [symlinkPath])
-    // The canonical /private/tmp path must appear as the allow, not the /tmp form.
-    #expect(inv.profile.contains("/private/tmp/sdw-extra-probe-"))
-    #expect(!inv.profile.contains("(subpath \"\(symlinkPath)\"))"))
   }
 }

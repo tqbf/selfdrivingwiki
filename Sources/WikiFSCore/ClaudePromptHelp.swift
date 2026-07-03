@@ -97,18 +97,14 @@ public enum ClaudePromptHelp {
     return lines.joined(separator: "\n")
   }
 
-  /// The seatbelt sandbox invocation that reflects the user's current SandboxConfig
-  /// (loaded from the App Group container), built with placeholder paths so the Help
-  /// → Command Template previews the real argv shape. `nil` when the sandbox is off.
+  /// The seatbelt sandbox invocation for the write (Ingest/Edit) mode, built with
+  /// placeholder paths so the Help → Command Template previews the real argv shape.
+  /// The sandbox is always on for these spawns — it is not user-configurable.
   private static func currentSandboxInvocation() -> SandboxProfile.SandboxInvocation? {
-    guard let dir = try? DatabaseLocation.appGroupContainerDirectory() else { return nil }
-    let config = SandboxConfig.load(from: dir)
-    guard config.enabled else { return nil }
     return SandboxProfile.invocation(
       homePath: "<HOME>",
       scratchDir: scratchDirectoryPlaceholder,
-      wikiDBPath: "<container>/\(wikiIDPlaceholder).sqlite",
-      extraAllowedPaths: config.parsedExtraAllowedPaths())
+      wikiDBPath: "<container>/\(wikiIDPlaceholder).sqlite")
   }
 
   /// Render the argv for the Command Template, abbreviating the (long) seatbelt
