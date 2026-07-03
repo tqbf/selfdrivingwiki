@@ -38,6 +38,12 @@ or schema change — five amendments hardening the design of record:
   forward-referencing the unimplemented website provider. Added it to Phase 3's
   contents (the website provider writes disambiguated `original_path`); Phase 4's
   rendering consumes it.
+- **§11/§12 — Apple Podcasts added as a tracked provider (PR #106).** Podcast
+  transcript ingest already exists as a URL-path special case (`PodcastEpisodeURL`
+  → `ApplePodcastTranscriptService`) against the flat source model. Added to the
+  provider list (§11) with a note on how it re-models when Phase 1–3 land
+  (byteless source, transcript as derived alternative, recognizer+service become
+  a `SourceProvider`), and to Phase 7's leaf providers. Ships independently.
 
 ## 2026-07-03 — Graph-model Phase 0: method-atomic store, savepoint transactions, `WikiReadPool`
 

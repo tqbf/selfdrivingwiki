@@ -574,7 +574,7 @@ group. The in-app reader is the primary surface first — confirmed.
 ## 11. Provider protocol (draft Layer 3, unchanged shape)
 
 The `SourceProvider` protocol, `MaterializedSource`, provider list
-(local/website/Zotero/git/Tavily/Slack/archive), config-in-JSON +
+(local/website/Zotero/git/Tavily/Slack/archive/Apple Podcasts), config-in-JSON +
 secrets-in-Keychain, and the two surfaces (UI panel + `wikictl provider`
 verbs) carry over from the draft verbatim. Two grounding notes:
 
@@ -585,6 +585,21 @@ verbs) carry over from the draft verbatim. Two grounding notes:
   lands (`provider_runs.query` = the URL) — today it is lost entirely, which
   is reason enough to sequence providers before "refresh" ships (refresh
   needs to know what to re-fetch).
+
+> **Apple Podcasts provider (PR #106).** Podcast transcript ingest already
+> exists as a special case on the URL path (`PodcastEpisodeURL.parse` →
+> `ApplePodcastTranscriptService`), built against today's flat source model: it
+> stores the transcript `.md` as source `content` and bakes the episode ID into
+> the filename. When Phase 1–3 land it re-models cleanly — a **byteless source**
+> (`external_identity` = episode ID, `provider_run.query` = the URL) whose
+> **derived alternative** is the TTML→markdown transcript
+> (`extraction_technique='apple-ttml'`); the recognizer + service become a
+> `SourceProvider` (provider_kind `apple-podcast`), and refresh appends a
+> version instead of overwriting. The risky private-API bits (`PodcastsFoundation`
+> dlopen, forked helper, signed requests) are compiled out for App Store builds
+> (`#if PODCAST_TRANSCRIPTS`) and stay on the user-initiated UI path — they do
+> not move into the agent surface. Ships independently of this plan; tracked
+> here so it is unified when providers land.
 
 ## 12. Phases
 
@@ -599,7 +614,7 @@ Ordered by dependency; each gate is demoable.
 | **4 — Media & roles** | `source_links` rebuild (role/pin), `![[…]]` embeds, render-by-content-type, sibling `original_path` resolution, media filtering | Website snapshot renders with inline images; a YouTube embed plays; a json-render spec mounts |
 | **5 — Link canonicalization** | Save-time ULID normalization, display-at-render, one-time body migration, `?id=` URL contract, rename = metadata-only | Rename a page with 50 inbound links: zero bodies rewritten, zero ghosts |
 | **6 — Pinning** | `@vN` parse/resolve, `pinned_version_id`, quote-against-pinned-version | `[[source:X@v3#"quote"]]` highlights after X is reprocessed |
-| **7 — New providers** | git@SHA, Tavily, Slack, archives — each a leaf | Each materializes a frozen, provenance-carrying source |
+| **7 — New providers** | git@SHA, Tavily, Slack, archives, Apple Podcasts — each a leaf | Each materializes a frozen, provenance-carrying source |
 
 Phase 5 depends only on 0 (it can move earlier if rename pain dominates);
 6 depends on 1+5; everything else is ordered as listed.
