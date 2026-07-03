@@ -268,6 +268,12 @@ public final class WikiManager {
             let store = try makeStore(url)
             model = WikiStoreModel(store: store)
             if model.summaries.isEmpty { model.newPage(title: "Home") }
+            // Off-main snapshot reads (debounced search) go through a read-only
+            // pool over the same file. Only for real file-backed DBs — a second
+            // connection to `:memory:` would see a different, empty database.
+            if FileManager.default.fileExists(atPath: url.path) {
+                model.readPool = WikiReadPool(databaseURL: url)
+            }
         } catch {
             DebugLog.store("WikiManager: failed to open wiki \(id), using in-memory: \(error)")
             // swiftlint:disable:next force_try
