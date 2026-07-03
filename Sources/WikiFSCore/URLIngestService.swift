@@ -41,10 +41,11 @@ public struct URLIngestService {
         public let kind: Kind
 
         public enum Kind: Sendable, Equatable {
-            case htmlConverted   // HTML → Markdown
-            case pdf             // verbatim PDF
-            case text            // verbatim text
-            case binary          // verbatim other bytes
+            case htmlConverted       // HTML → Markdown
+            case pdf                 // verbatim PDF
+            case text                // verbatim text
+            case binary              // verbatim other bytes
+            case podcastTranscript   // Apple Podcasts episode → TTML transcript markdown
         }
 
         public init(filename: String, byteSize: Int, kind: Kind) {

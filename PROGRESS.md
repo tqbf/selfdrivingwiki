@@ -2,6 +2,52 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-03 — Apple Podcasts episode URLs → transcript sources
+
+Add-from-URL now recognizes a `podcasts.apple.com` **episode** link (numeric `i`
+query param) and ingests the episode's Apple-hosted TTML transcript as a markdown
+source, instead of fetching the useless web-player HTML. Built TDD; design in
+[`plans/podcast-transcripts.md`](plans/podcast-transcripts.md).
+
+The private-API crux (Apple signs the transcript token with a FairPlay/Mescal
+`X-Apple-ActionSignature` only `PodcastsFoundation` can produce) is isolated in a
+new **ObjC executable target `podcast-token-helper`** (`Sources/PodcastTokenHelper/`),
+adapted from the vendored reference. It runs in its own forked process (the signing
+call can segfault on cleanup), so a failure costs one fetch, never the app. Built
+MRC (`-fno-objc-arc`, `-Wno-objc-method-access`) and linked against private
+`AppleMediaServices`. Everything else is Swift in `WikiFSCore`.
+
+- **New (`WikiFSCore`):** `PodcastEpisodeURL` (pure recognizer), `TTMLTranscript`
+  (pure `XMLParser` — joins `podcasts:unit="word"` spans with spaces, keeps
+  speakers/timing), `ApplePodcastAMP` (pure request-build + response decode incl.
+  the `40012` mapping), `ApplePodcastTranscriptService` (orchestrator with the
+  one-forced-refresh-retry on 40012), `HelperPodcastTokenProvider` (spawns the
+  helper, caches the JWT ~30 days in Application Support, resolves the bundled
+  helper URL), plus new `PodcastTranscriptError` and
+  `IngestOutcome.Kind.podcastTranscript`.
+- **Wiring:** `WikiStoreModel.ingestURL` checks `PodcastEpisodeURL.parse` first and
+  routes to an injected `PodcastTranscriptFetching` (default
+  `ApplePodcastTranscriptService.bundled()`); stores `<slug>-<id>-transcript.md`
+  through the normal source path. Add-from-URL subtitle updated.
+- **build.sh:** bundles + signs `podcast-token-helper` under `Contents/Helpers`
+  beside `wikictl` (optional — absent helper just disables the feature).
+- **Build flag (`WIKIFS_APP_STORE`):** the whole feature is gated so an App Store
+  build can drop the private API. **Included by default**; `WIKIFS_APP_STORE=1`
+  drops the `podcast-token-helper` target (filtered out of `Package.swift`) and
+  compiles the feature out via the `PODCAST_TRANSCRIPTS` condition (all podcast
+  source + test files are `#if`-wrapped; `ingestURL` has flagged overloads).
+  Verified both configs build; App Store mode excludes the podcast tests and the
+  helper product entirely.
+- **Tests:** pure suites for the recognizer, TTML parser (fixture trimmed from the
+  real capture), AMP decode, and service orchestration (40012 retry, error
+  propagation); ingest-routing test proving a podcast URL never hits the HTML
+  fetcher; and a `WIKIFS_LIVE_PODCAST_TESTS=1`-gated end-to-end test that fetched
+  the real ChinaTalk transcript (verified passing on macOS 15 / Darwin 25.5).
+- **Vendored:** reference `FetchTranscript.m` + README + `PROVENANCE.md` under
+  `docs/vendor/apple-podcast-transcript-downloader/` (upstream `535e0ce`).
+- **Caveat:** private API — dev/local signing only, not App Store shippable,
+  brittle across macOS releases (fails loudly via `.signatureUnavailable`).
+
 ## 2026-07-02 — Remove configurable sandbox config (`sandbox-config.json`)
 
 The sandbox is **not configurable**. Confinement is fixed by spawn type —

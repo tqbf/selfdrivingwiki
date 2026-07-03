@@ -1079,16 +1079,44 @@ public final class WikiStoreModel {
     /// user-readable `URLIngestService.IngestError` on a bad URL, non-2xx, empty
     /// body, or store failure (the caller surfaces it in the sheet). The store write
     /// hops to the main actor (this type is `@MainActor`); the fetch runs off it.
+    #if PODCAST_TRANSCRIPTS
+    @discardableResult
+    public func ingestURL(
+        _ rawInput: String,
+        fetcher: any URLIngestService.URLResourceFetcher = URLSessionFetcher(),
+        podcastFetcher: (any PodcastTranscriptFetching)? = ApplePodcastTranscriptService.bundled()
+    ) async throws -> URLIngestService.IngestOutcome {
+        // An Apple Podcasts EPISODE link isn't a fetchable document — its HTML is the
+        // web player, not the transcript. Recognize it first and route to the
+        // transcript pipeline (signed token → AMP → TTML → markdown), storing the
+        // result through the SAME source path as every other ingest.
+        if let episode = PodcastEpisodeURL.parse(rawInput) {
+            return try await ingestPodcastTranscript(episode, using: podcastFetcher)
+        }
+        return try await ingestWebURL(rawInput, fetcher: fetcher)
+    }
+    #else
     @discardableResult
     public func ingestURL(
         _ rawInput: String,
         fetcher: any URLIngestService.URLResourceFetcher = URLSessionFetcher()
     ) async throws -> URLIngestService.IngestOutcome {
-        // Validate + fetch OFF the main actor (the GET shouldn't stall the UI);
-        // `fetch` is `Sendable` and the service is stateless. Then store the result
-        // back HERE on the main actor, where we own `store`. Splitting fetch (async,
-        // off-actor) from store (main-actor) keeps the @Sendable boundary honest —
-        // no `assumeIsolated` gamble on which thread a continuation resumes.
+        try await ingestWebURL(rawInput, fetcher: fetcher)
+    }
+    #endif
+
+    /// The web-fetch ingest path (HTML→md / PDF / text / binary), shared by both
+    /// `ingestURL` overloads.
+    ///
+    /// Validate + fetch OFF the main actor (the GET shouldn't stall the UI);
+    /// `fetch` is `Sendable` and the service is stateless. Then store the result
+    /// back HERE on the main actor, where we own `store`. Splitting fetch (async,
+    /// off-actor) from store (main-actor) keeps the @Sendable boundary honest —
+    /// no `assumeIsolated` gamble on which thread a continuation resumes.
+    private func ingestWebURL(
+        _ rawInput: String,
+        fetcher: any URLIngestService.URLResourceFetcher
+    ) async throws -> URLIngestService.IngestOutcome {
         guard let url = URLIngestService.normalizeURL(rawInput) else {
             throw URLIngestService.IngestError.invalidURL(
                 rawInput.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -1107,6 +1135,36 @@ public final class WikiStoreModel {
         return URLIngestService.IngestOutcome(
             filename: plan.filename, byteSize: plan.data.count, kind: plan.kind)
     }
+
+    #if PODCAST_TRANSCRIPTS
+    /// Fetch an Apple Podcasts episode transcript and store it as a markdown source.
+    /// The transcript fetch (token signing + two GETs) runs off the main actor via
+    /// the `Sendable` service; the store write happens HERE on the main actor. When
+    /// no transcript fetcher is available (a build without the signing helper), fail
+    /// with a clear, user-readable message instead of silently fetching the useless
+    /// player HTML.
+    private func ingestPodcastTranscript(
+        _ episode: PodcastEpisodeURL.EpisodeRef,
+        using fetcher: (any PodcastTranscriptFetching)?
+    ) async throws -> URLIngestService.IngestOutcome {
+        guard let fetcher else {
+            throw URLIngestService.IngestError.network(
+                "Apple Podcasts transcripts need the signing helper, which isn't available in this build.")
+        }
+        let transcript = try await fetcher.transcript(for: episode)
+        let data = Data(transcript.markdown.utf8)
+        guard !data.isEmpty else { throw PodcastTranscriptError.noTranscriptAvailable }
+
+        let summary = try store.addSource(
+            filename: transcript.filename, data: data,
+            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: "text/markdown")
+        reloadSources()
+        openTab(.source(summary.id))
+        onPageDidChange?()
+        return URLIngestService.IngestOutcome(
+            filename: transcript.filename, byteSize: data.count, kind: .podcastTranscript)
+    }
+    #endif
 
     /// Synchronous ingest seam used by tests/verifiers (no drag gesture). Stores
     /// the bytes, rebuilds the list, and signals the daemon.

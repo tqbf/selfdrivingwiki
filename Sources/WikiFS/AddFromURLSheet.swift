@@ -55,11 +55,21 @@ struct AddFromURLSheet: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Add from URL")
                 .font(.headline)
-            Text("Fetch a web page and add it as source material")
+            Text(Self.subtitle)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// The subtitle mentions podcast transcripts only when the feature is compiled
+    /// in (off for WIKIFS_APP_STORE=1 builds).
+    private static var subtitle: String {
+        #if PODCAST_TRANSCRIPTS
+        "Fetch a web page — or an Apple Podcasts episode transcript — and add it as source material"
+        #else
+        "Fetch a web page and add it as source material"
+        #endif
     }
 
     // MARK: - URL field
