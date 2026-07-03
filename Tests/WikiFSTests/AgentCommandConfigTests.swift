@@ -150,6 +150,77 @@ struct AgentCommandConfigTests {
         #expect(env["comment"] == nil)
     }
 
+    @Test func parsedExtraEnvStripsExportKeyword() {
+        let config = AgentCommandConfig(extraEnvironment: "export FOO=bar\nexport   BAZ=qux")
+        let env = config.parsedExtraEnv()
+        #expect(env["FOO"] == "bar")
+        #expect(env["BAZ"] == "qux")
+    }
+
+    @Test func parsedExtraEnvExportWithoutEqualsIsSkipped() {
+        // `export FOO` (no assignment) is not a key=value line.
+        let config = AgentCommandConfig(extraEnvironment: "export FOO\nBAR=1")
+        let env = config.parsedExtraEnv()
+        #expect(env["FOO"] == nil)
+        #expect(env["BAR"] == "1")
+    }
+
+    @Test func parsedExtraEnvDoesNotMangleKeyNamedExport() {
+        // `export=foo` is a normal assignment to a key literally named "export".
+        let config = AgentCommandConfig(extraEnvironment: "export=foo")
+        let env = config.parsedExtraEnv()
+        #expect(env["export"] == "foo")
+    }
+
+    @Test func parsedExtraEnvStripsDoubleQuotes() {
+        let config = AgentCommandConfig(extraEnvironment: #"export CLAUDE_MODEL="sonnet""#)
+        let env = config.parsedExtraEnv()
+        #expect(env["CLAUDE_MODEL"] == "sonnet")
+    }
+
+    @Test func parsedExtraEnvExpandsBraceVar() {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
+        let config = AgentCommandConfig(extraEnvironment: "DOCS=${HOME}/docs")
+        let env = config.parsedExtraEnv()
+        #expect(env["DOCS"] == "\(home)/docs")
+    }
+
+    @Test func parsedExtraEnvExpandsBareVar() {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
+        let config = AgentCommandConfig(extraEnvironment: "DOCS=$HOME/docs")
+        let env = config.parsedExtraEnv()
+        #expect(env["DOCS"] == "\(home)/docs")
+    }
+
+    @Test func parsedExtraEnvExpandsVarInsideDoubleQuotes() {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
+        let config = AgentCommandConfig(extraEnvironment: #"DOCS="$HOME/docs""#)
+        let env = config.parsedExtraEnv()
+        #expect(env["DOCS"] == "\(home)/docs")
+    }
+
+    @Test func parsedExtraEnvSingleQuotesAreLiteral() {
+        // Single quotes suppress expansion, like bash.
+        let config = AgentCommandConfig(extraEnvironment: "DOCS='$HOME/docs'")
+        let env = config.parsedExtraEnv()
+        #expect(env["DOCS"] == "$HOME/docs")
+    }
+
+    @Test func parsedExtraEnvUnsetVarExpandsToEmpty() {
+        let config = AgentCommandConfig(extraEnvironment: "X=${WIKI_TEST_UNSET_VAR_42}/y\nZ=$WIKI_TEST_UNSET_VAR_42")
+        let env = config.parsedExtraEnv()
+        #expect(env["X"] == "/y")
+        #expect(env["Z"] == "")
+    }
+
+    @Test func parsedExtraEnvLoneDollarIsLiteral() {
+        // `$1` is not a valid name (names can't start with a digit), so the `$`
+        // is kept literally rather than treated as a variable reference.
+        let config = AgentCommandConfig(extraEnvironment: "FOO=$1")
+        let env = config.parsedExtraEnv()
+        #expect(env["FOO"] == "$1")
+    }
+
     // MARK: - expandTilde
 
     @Test func expandTildeReturnsNonTildePathsUnchanged() {

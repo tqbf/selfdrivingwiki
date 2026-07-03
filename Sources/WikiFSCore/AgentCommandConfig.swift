@@ -83,20 +83,117 @@ public struct AgentCommandConfig: Codable, Equatable, Sendable {
         AgentCommandConfig.tokenize(prefixArguments)
     }
 
-    /// Parse `extraEnvironment` into a `[String: String]` dictionary. Lines
-    /// without `=` are skipped; blank lines are skipped.
+    /// Parse `extraEnvironment` into a `[String: String]` dictionary, accepting
+    /// bash-style assignment lines:
+    ///
+    /// - A leading `export ` keyword is stripped (`export FOO=bar` ≡ `FOO=bar`).
+    /// - One surrounding layer of quotes is removed: double quotes (`FOO="a b"`)
+    ///   or unquoted values get `$VAR`/`${VAR}` expansion; single quotes
+    ///   (`FOO='$HOME'`) are taken literally (no expansion), like bash.
+    /// - `$NAME` and `${NAME}` references expand against the app process
+    ///   environment (bash-style: a referenced-but-unset variable → empty string).
+    /// - Lines without `=` and blank lines are skipped.
+    ///
+    /// App-owned keys (`WIKI_ROOT`, `WIKI_DB`) are not filtered here — the spawn
+    /// site merges this dictionary under the app-owned keys so they always win.
     public func parsedExtraEnv() -> [String: String] {
         var env: [String: String] = [:]
-        for line in extraEnvironment.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+        for rawLine in extraEnvironment.components(separatedBy: "\n") {
+            var trimmed = rawLine.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { continue }
+            // Strip a leading `export` keyword. Require whitespace after it so a
+            // key literally named `export` (e.g. `export=foo`, a normal
+            // assignment) is not mangled.
+            if trimmed.hasPrefix("export"),
+               let firstAfter = trimmed.dropFirst("export".count).first,
+               firstAfter.isWhitespace {
+                trimmed = trimmed.dropFirst("export".count)
+                    .trimmingCharacters(in: .whitespaces)
+            }
             guard let eq = trimmed.firstIndex(of: "=") else { continue }
             let key = String(trimmed[..<eq]).trimmingCharacters(in: .whitespaces)
-            let value = String(trimmed[trimmed.index(after: eq)...])
             guard !key.isEmpty else { continue }
+            var value = String(trimmed[trimmed.index(after: eq)...])
+                .trimmingCharacters(in: .whitespaces)
+            // One layer of surrounding quotes. Single-quoted → literal; double-
+            // quoted / unquoted → expand variable references.
+            let expand: Bool
+            if value.count >= 2, value.first == "'", value.last == "'" {
+                value = String(value.dropFirst().dropLast())
+                expand = false
+            } else if value.count >= 2, value.first == "\"", value.last == "\"" {
+                value = String(value.dropFirst().dropLast())
+                expand = true
+            } else {
+                expand = true
+            }
+            if expand {
+                value = Self.expandEnvironmentVariables(in: value)
+            }
             env[key] = value
         }
         return env
+    }
+
+    /// Expand `$NAME` and `${NAME}` references against the current process
+    /// environment, bash-style. A reference whose variable is unset expands to
+    /// the empty string (matching `export FOO=$UNSET` → `FOO=`). Names follow the
+    /// shell rule: start with a letter or `_`, continue with letters/digits/`_`.
+    private static func expandEnvironmentVariables(in value: String) -> String {
+        let env = ProcessInfo.processInfo.environment
+        var output = ""
+        var i = value.startIndex
+        while i < value.endIndex {
+            let ch = value[i]
+            guard ch == "$" else {
+                output.append(ch)
+                i = value.index(after: i)
+                continue
+            }
+            let afterDollar = value.index(after: i)
+            if afterDollar < value.endIndex, value[afterDollar] == "{" {
+                // ${NAME}
+                let nameStart = value.index(after: afterDollar)
+                var nameEnd = nameStart
+                while nameEnd < value.endIndex, isShellNameChar(value[nameEnd], isStart: false) {
+                    nameEnd = value.index(after: nameEnd)
+                }
+                if nameEnd < value.endIndex, value[nameEnd] == "}", nameStart < nameEnd {
+                    let name = String(value[nameStart..<nameEnd])
+                    output.append(env[name] ?? "")
+                    i = value.index(after: nameEnd)   // consume the '}'
+                } else {
+                    // Malformed `${…` — emit the '$' literally and continue.
+                    output.append("$")
+                    i = afterDollar
+                }
+            } else {
+                // $NAME (greedy run of name chars)
+                var nameEnd = afterDollar
+                while nameEnd < value.endIndex, isShellNameChar(value[nameEnd], isStart: nameEnd == afterDollar) {
+                    nameEnd = value.index(after: nameEnd)
+                }
+                if nameEnd > afterDollar {
+                    let name = String(value[afterDollar..<nameEnd])
+                    output.append(env[name] ?? "")
+                    i = nameEnd
+                } else {
+                    // Lone '$' not followed by a name char (e.g. `$$`, `$1`) — literal.
+                    output.append("$")
+                    i = afterDollar
+                }
+            }
+        }
+        return output
+    }
+
+    /// Shell variable-name character test: first char is ASCII letter or `_`;
+    /// subsequent chars may also be ASCII digits.
+    private static func isShellNameChar(_ c: Character, isStart: Bool) -> Bool {
+        guard c.isASCII else { return false }
+        if c == "_" { return true }
+        if c.isLetter { return true }
+        return !isStart && c.isNumber
     }
 
     // MARK: - Tokenizer (public for testing)
