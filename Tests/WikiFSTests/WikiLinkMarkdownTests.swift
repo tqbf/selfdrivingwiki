@@ -43,7 +43,7 @@ struct WikiLinkMarkdownTests {
     @Test func queryMetacharactersInTitleAreEncoded() {
         // The first `#` splits fragment from base (markdown-anchors §1).
         // "A&B=C?D#E+F" → base:"A&B=C?D", fragment:"E+F".
-        let out = WikiLinkMarkdown.linkified("[[A&B=C?D#E+F]]")
+        let out = WikiLinkMarkdown.linkified("[[A&B=C?D#E+F]]") { name, _ in name == "A&B=C?D" }
         let url = URL(string: extractURL(out))!
         let title = WikiLinkMarkdown.target(from: url)
         let frag = WikiLinkMarkdown.fragment(from: url)
@@ -206,17 +206,17 @@ struct WikiLinkMarkdownTests {
     // MARK: - Fragment / anchor rendering (markdown-anchors)
 
     @Test func pageLinkWithHeadingFragmentRendersFragmentInURL() {
-        let out = WikiLinkMarkdown.linkified("[[Overview#Methodology]]") { _, _ in true }
+        let out = WikiLinkMarkdown.linkified("[[Overview#Methodology]]") { name, _ in name == "Overview" }
         #expect(out == "[Overview](wiki://page?title=Overview#Methodology)")
     }
 
     @Test func sourceLinkWithQuoteFragmentRendersFragmentInURL() {
-        let out = WikiLinkMarkdown.linkified("[[source:Paper#the results]]") { _, _ in true }
+        let out = WikiLinkMarkdown.linkified("[[source:Paper#the results]]") { name, _ in name == "Paper" }
         #expect(out == "[Paper](wiki://source?title=Paper#the%20results)")
     }
 
     @Test func fragmentRoundTripsThroughURL() {
-        let out = WikiLinkMarkdown.linkified("[[source:Smith#\"exact passage\"]]") { _, _ in true }
+        let out = WikiLinkMarkdown.linkified("[[source:Smith#\"exact passage\"]]") { name, _ in name == "Smith" }
         let url = URL(string: extractURL(out))!
         let frag = WikiLinkMarkdown.fragment(from: url)
         #expect(frag == "\"exact passage\"")
@@ -229,7 +229,7 @@ struct WikiLinkMarkdownTests {
         // dump the rest as literal text (breaking the renderer). They must be
         // percent-encoded — and still round-trip back to the original fragment.
         let quote = "it is 1.) outside, 2.) uncontrollable (Bargh, 1994)"
-        let out = WikiLinkMarkdown.linkified("[[source:Paper#\"\(quote)\"]]") { _, _ in true }
+        let out = WikiLinkMarkdown.linkified("[[source:Paper#\"\(quote)\"]]") { name, _ in name == "Paper" }
         // No literal parens survive in the emitted link destination.
         #expect(!extractURL(out).contains("("))
         #expect(!extractURL(out).contains(")"))
@@ -282,10 +282,84 @@ struct WikiLinkMarkdownTests {
 
     @Test func fragmentWithInnerHashIsEncoded() {
         // "C# is sharp" → inner # is percent-encoded in the URL.
-        let out = WikiLinkMarkdown.linkified("[[source:Note#C# is sharp]]") { _, _ in true }
+        let out = WikiLinkMarkdown.linkified("[[source:Note#C# is sharp]]") { name, _ in name == "Note" }
         let url = URL(string: extractURL(out))!
         let frag = WikiLinkMarkdown.fragment(from: url)
         #expect(frag == "C# is sharp")
+    }
+
+    // MARK: - `#` inside the NAME
+
+    @Test func sourceNameContainingHashWithQuoteAnchorDisplaysFullName() {
+        // The "C#" in the name no longer truncates the citation to
+        // "…Analysis for C" — the resolver finds the real name.
+        let out = WikiLinkMarkdown.linkified(
+            "[[source:Agentic Static Analysis for C# Security Auditing (2026)#\"the results\"]]"
+        ) { name, _ in name == "Agentic Static Analysis for C# Security Auditing (2026)" }
+        #expect(out.hasPrefix("[Agentic Static Analysis for C# Security Auditing (2026)]"))
+        let url = URL(string: extractURL(out))!
+        #expect(WikiLinkMarkdown.target(from: url)
+                == "Agentic Static Analysis for C# Security Auditing (2026)")
+        #expect(WikiLinkMarkdown.fragment(from: url) == "\"the results\"")
+    }
+
+    @Test func pageTitleContainingHashResolvesViaFullTitleFallback() {
+        // No quote anchor, so the parse splits at the `#` in "C#" — but the
+        // FULL target names an existing page, so the fallback links it whole.
+        let out = WikiLinkMarkdown.linkified("[[C# Guide]]") { name, kind in
+            name == "C# Guide" && kind == .page
+        }
+        #expect(out.hasPrefix("[C# Guide]"))
+        let url = URL(string: extractURL(out))!
+        #expect(WikiLinkMarkdown.target(from: url) == "C# Guide")
+        #expect(WikiLinkMarkdown.resolvedKind(from: url) == .page)
+        #expect(url.fragment == nil) // the "# Guide" tail is title, not anchor
+    }
+
+    @Test func sourceNameContainingHashWithoutAnchorResolvesViaFallback() {
+        let out = WikiLinkMarkdown.linkified("[[source:C# Notes]]") { name, kind in
+            name == "C# Notes" && kind == .source
+        }
+        #expect(out.hasPrefix("[C# Notes]"))
+        let url = URL(string: extractURL(out))!
+        #expect(WikiLinkMarkdown.target(from: url) == "C# Notes")
+        #expect(WikiLinkMarkdown.resolvedKind(from: url) == .source)
+    }
+
+    @Test func hashTitleFallbackKeepsAliasDisplay() {
+        let out = WikiLinkMarkdown.linkified("[[C# Guide|the guide]]") { name, _ in
+            name == "C# Guide"
+        }
+        #expect(out.hasPrefix("[the guide]"))
+    }
+
+    @Test func unresolvedHashTitleKeepsBaseAndFragment() {
+        // Neither the base nor the full target resolves → unchanged legacy
+        // shape: base title + fragment, missing host.
+        let out = WikiLinkMarkdown.linkified("[[C# Ghost]]") { _, _ in false }
+        #expect(out == "[C](wiki://missing?title=C#%20Ghost)")
+    }
+
+    @Test func hashTitleWithRealAnchorResolvesLongestName() {
+        // A `#`-containing title AND a real section anchor after it: the
+        // longest known name wins, the rest is the anchor.
+        let out = WikiLinkMarkdown.linkified("[[C# Guide#Methods]]") { name, _ in
+            name == "C# Guide"
+        }
+        let url = URL(string: extractURL(out))!
+        #expect(WikiLinkMarkdown.target(from: url) == "C# Guide")
+        #expect(WikiLinkMarkdown.fragment(from: url) == "Methods")
+        #expect(out.hasPrefix("[C# Guide]"))
+    }
+
+    @Test func exactFullTitleBeatsAnchorReading() {
+        // A page literally titled "Page#Section" wins over Page + anchor.
+        let out = WikiLinkMarkdown.linkified("[[Page#Section]]") { name, _ in
+            name == "Page#Section" || name == "Page"
+        }
+        let url = URL(string: extractURL(out))!
+        #expect(WikiLinkMarkdown.target(from: url) == "Page#Section")
+        #expect(url.fragment == nil)
     }
 
     // MARK: - Code-span protection for source links

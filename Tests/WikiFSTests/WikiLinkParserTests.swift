@@ -202,12 +202,28 @@ struct WikiLinkParserTests {
         #expect(links.isEmpty)
     }
 
-    @Test func fragmentDoesNotAffectDedup() {
-        // [[Page#A]] and [[Page#B]] dedup to one entry (first alias wins).
+    @Test func distinctFragmentsDedupSeparately() {
+        // [[Page#A]] and [[Page#B]] are DIFFERENT raw targets — they may be
+        // two distinct `#`-containing titles — so both survive parse. When
+        // they resolve to one page, the store's (from,to) primary key
+        // collapses them (first link text wins, as before).
         let links = WikiLinkParser.parse("[[Page#A|first]] and [[Page#B|second]]")
+        #expect(links.count == 2)
+        #expect(links[0].fragment == "A")
+        #expect(links[1].fragment == "B")
+    }
+
+    @Test func identicalRawTargetsStillDedup() {
+        let links = WikiLinkParser.parse("[[Page#A|first]] and [[Page#A|second]]")
         #expect(links.count == 1)
         #expect(links[0].linkText == "first")
-        #expect(links[0].fragment == "A")
+    }
+
+    @Test func hashTitlesWithSharedMisSplitBaseBothSurvive() {
+        // "C# Guide" and "C# Notes" both mis-split to base "C" — they must not
+        // collapse into one parsed link (each may name a real `#`-title).
+        let links = WikiLinkParser.parse("[[C# Guide]] and [[C# Notes]]")
+        #expect(links.count == 2)
     }
 
     @Test func sourcePrefixFragmentPreservesInnerHash() {
@@ -216,5 +232,42 @@ struct WikiLinkParserTests {
         #expect(links[0].linkType == .source)
         #expect(links[0].target == "Paper")
         #expect(links[0].fragment == "C# is sharp")
+    }
+
+    // MARK: - `#` inside the NAME (quote anchor is the delimiter)
+
+    @Test func splitFragmentQuoteAnchorWinsOverHashInName() {
+        // The NAME contains a bare `#` ("C#"); the quote anchor `#"…"` is the
+        // real delimiter, so the name survives intact.
+        let (base, fragment) = WikiLinkParser.splitFragment(
+            "source:Agentic Static Analysis for C# Security Auditing (2026)#\"the results show\"")
+        #expect(base == "source:Agentic Static Analysis for C# Security Auditing (2026)")
+        #expect(fragment == "\"the results show\"")
+    }
+
+    @Test func splitFragmentBareHashWithoutAnchorStillSplitsAtFirstHash() {
+        // With no `#"` there is nothing to disambiguate — the first `#` splits.
+        // Resolution retries with the fragment re-attached (replaceLinks /
+        // linkified), so a title containing `#` still resolves.
+        let (base, fragment) = WikiLinkParser.splitFragment(
+            "Agentic Static Analysis for C# Security Auditing")
+        #expect(base == "Agentic Static Analysis for C")
+        #expect(fragment == " Security Auditing")
+    }
+
+    @Test func parsesSourceCitationWithHashInName() {
+        let links = WikiLinkParser.parse(
+            "[[source:Agentic Static Analysis for C# Security Auditing (2026)#\"as we show\"]]")
+        #expect(links.count == 1)
+        #expect(links[0].linkType == .source)
+        #expect(links[0].target == "Agentic Static Analysis for C# Security Auditing (2026)")
+        #expect(links[0].fragment == "\"as we show\"")
+    }
+
+    @Test func quotedSamePageAnchorStillHasEmptyBase() {
+        // `#"` at position 0 — quote-anchor preference must not break `[[#"…"]]`.
+        let (base, fragment) = WikiLinkParser.splitFragment("#\"a quote\"")
+        #expect(base == "")
+        #expect(fragment == "\"a quote\"")
     }
 }

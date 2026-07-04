@@ -3,6 +3,31 @@
 Running list of known limitations / rough edges. Not bugs to fix right now —
 things we've decided to live with, with enough context to revisit later.
 
+## `[[wiki-link]]` delimiter collisions (residual edges)
+
+The link grammar reserves `#`, `|`, `]`, and the `source:`/`page:` prefixes,
+with no escape syntax. As of 2026-07-04 (v18) this is handled by two
+mechanisms — `WikiLinkResolver` (lookup-driven splitting: every `#` reading of
+a target is tried against the real namespace, longest name first, exact match
+wins) and `WikiNameRules` (names that can NEVER be linked — `|`, `[`/`]`,
+leading `#` — are sanitized at every write boundary and were swept once by the
+v17→18 migration). So `#` anywhere inside a name now just works, including
+with a real anchor after it. What remains:
+
+- **Reserved characters inside a QUOTED PASSAGE:** a `#"…"` fragment containing
+  `]]` terminates the span early, and one containing `|` mis-parses the rest as
+  an alias. Names are sanitized; quote contents can't be (they must match the
+  source text verbatim). Agents' quotes are short prose so this is rare — the
+  fix, if ever needed, is an escape/quoting syntax.
+- **Inherent `#` ambiguity when both readings exist:** if pages "C" AND
+  "C# Guide" both exist, `[[C# Guide]]` links "C# Guide" (longest name wins);
+  there is no way to express "page C, anchor ' Guide'". Contrived, and the
+  longest-name tiebreak is the intended reading in practice.
+- **Ghost links keep the heuristic split:** a target that resolves to nothing
+  renders via the old first-`#`/`#"` split (there's no namespace to consult),
+  so an unresolved `#`-name displays truncated until its page/source exists.
+  Cosmetic only.
+
 ## Read-after-write latency: ~5s replica-invalidation window
 
 **Symptom.** After an in-app edit (page body, system prompt, ingest/remove), a

@@ -123,6 +123,143 @@ struct WikiLinkStoreTests {
         #expect(links.map { "\($0.from)->\($0.to)" } == expected)
     }
 
+    // MARK: - `#` inside a page title / source name
+
+    @Test func replaceLinksResolvesPageTitleContainingHash() throws {
+        let store = try tempStore()
+        let a = try store.createPage(title: "A")
+        let sharp = try store.createPage(title: "Agentic Static Analysis for C# Security Auditing")
+
+        // Parsing splits the title at the `#` in "C#"; replaceLinks must retry
+        // with the fragment re-attached and land the row on the real page.
+        try store.replaceLinks(from: a.id, parsedLinks:
+            WikiLinkParser.parse("[[Agentic Static Analysis for C# Security Auditing]]"))
+
+        let links = try store.listAllLinks()
+        #expect(links.count == 1)
+        #expect(links.first?.to == sharp.id.rawValue)
+    }
+
+    @Test func replaceLinksResolvesSourceCitationWithHashInName() throws {
+        let store = try tempStore()
+        let a = try store.createPage(title: "A")
+        let src = try store.addSource(filename: "C# Notes.md", data: Data("hi".utf8))
+
+        // The `#"` quote anchor is the delimiter, so the citation's name keeps
+        // its "C#" and resolves (via the extension-stripping fallback).
+        try store.replaceLinks(from: a.id, parsedLinks:
+            WikiLinkParser.parse("[[source:C# Notes#\"a passage\"]]"))
+
+        #expect(try store.sourceLinkingPages(to: src.id) == [a.id])
+    }
+
+    @Test func replaceLinksResolvesHashTitleWithRealAnchor() throws {
+        let store = try tempStore()
+        let a = try store.createPage(title: "A")
+        let guide = try store.createPage(title: "C# Guide")
+
+        // `#`-containing title PLUS a real section anchor — the longest name
+        // that resolves wins ("C# Guide"), the rest is the anchor.
+        try store.replaceLinks(from: a.id, parsedLinks:
+            WikiLinkParser.parse("[[C# Guide#Methods]]"))
+
+        let links = try store.listAllLinks()
+        #expect(links.count == 1)
+        #expect(links.first?.to == guide.id.rawValue)
+    }
+
+    @Test func replaceLinksBothHashTitlesLand() throws {
+        let store = try tempStore()
+        let a = try store.createPage(title: "A")
+        let guide = try store.createPage(title: "C# Guide")
+        let notes = try store.createPage(title: "C# Notes")
+
+        // Two `#`-titles sharing the mis-split base "C" — parse keeps both
+        // (raw-target dedup) and each resolves to its own page.
+        try store.replaceLinks(from: a.id, parsedLinks:
+            WikiLinkParser.parse("[[C# Guide]] and [[C# Notes]]"))
+
+        let targets = Set(try store.listAllLinks().map(\.to))
+        #expect(targets == [guide.id.rawValue, notes.id.rawValue])
+    }
+
+    @Test func replaceLinksResolvesSourceNameWithHashWithoutQuoteAnchor() throws {
+        let store = try tempStore()
+        let a = try store.createPage(title: "A")
+        let src = try store.addSource(filename: "C# Notes.md", data: Data("hi".utf8))
+
+        // No quote anchor → the name mis-splits at "C#"; the fragment-re-attach
+        // fallback must still resolve the source.
+        try store.replaceLinks(from: a.id, parsedLinks:
+            WikiLinkParser.parse("[[source:C# Notes]]"))
+
+        #expect(try store.sourceLinkingPages(to: src.id) == [a.id])
+    }
+
+    // MARK: - Lenient source-name resolution (pass 3)
+
+    @Test func nearMissCitationResolvesUniqueLooseMatch() throws {
+        let store = try tempStore()
+        let src = try store.addSource(
+            filename: "Agentic Static Analysis for C# Security Auditing.pdf",
+            data: Data("%PDF".utf8))
+        // Cited with a "(2026)" suffix the stored name doesn't have, and
+        // without the ".pdf" the stored name does have.
+        let resolved = try store.resolveSourceByName(
+            "Agentic Static Analysis for C# Security Auditing (2026)")
+        #expect(resolved == src.id)
+    }
+
+    @Test func ambiguousLooseMatchDoesNotResolve() throws {
+        let store = try tempStore()
+        _ = try store.addSource(filename: "Report (2025).pdf", data: Data("%PDF".utf8))
+        _ = try store.addSource(filename: "Report (2026).pdf", data: Data("%PDF".utf8))
+        // "Report" loose-matches both → refuse to guess.
+        #expect(try store.resolveSourceByName("Report") == nil)
+    }
+
+    @Test func exactMatchBeatsLooseMatch() throws {
+        let store = try tempStore()
+        _ = try store.addSource(filename: "Paper.pdf", data: Data("%PDF".utf8))
+        let exact = try store.addSource(filename: "Paper (2026).md", data: Data("hi".utf8))
+        // "Paper (2026)" extension-strip-matches the second source exactly;
+        // the loose tier (which would see both) must not be consulted.
+        #expect(try store.resolveSourceByName("Paper (2026)") == exact.id)
+    }
+
+    // MARK: - LinkReconciler (startup self-heal)
+
+    @Test func reconcileHealsCitationSavedBeforeSourceExisted() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "P")
+        let body = "cites [[source:Agentic Static Analysis for C# Security Auditing (2026)#\"q\"]]"
+        try store.updatePage(id: page.id, title: "P", body: body)
+        try store.replaceLinks(from: page.id, parsedLinks: WikiLinkParser.parse(body))
+
+        // Source ingested AFTER the page was saved → no link row yet.
+        let src = try store.addSource(
+            filename: "Agentic Static Analysis for C# Security Auditing.pdf",
+            data: Data("%PDF".utf8))
+        #expect(try store.sourceLinkingPages(to: src.id).isEmpty)
+
+        try LinkReconciler.reconcileAll(in: store)
+        #expect(try store.sourceLinkingPages(to: src.id) == [page.id])
+    }
+
+    @Test func reconcileIsIdempotent() throws {
+        let store = try tempStore()
+        let a = try store.createPage(title: "A")
+        _ = try store.createPage(title: "B")
+        try store.updatePage(id: a.id, title: "A", body: "see [[B]]")
+        try store.replaceLinks(from: a.id, parsedLinks: WikiLinkParser.parse("see [[B]]"))
+
+        try LinkReconciler.reconcileAll(in: store)
+        try LinkReconciler.reconcileAll(in: store)
+        let links = try store.listAllLinks()
+        #expect(links.count == 1)
+        #expect(links.first?.from == a.id.rawValue)
+    }
+
     // MARK: - deletePage FK safety (the Phase-4 regression)
 
     @Test func deletePageCleansUpLinksAsSourceAndTarget() throws {

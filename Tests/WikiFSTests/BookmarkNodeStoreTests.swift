@@ -19,7 +19,7 @@ import SQLite3
     @Test func freshDBHasBookmarkNodesTable() throws {
         let url = tempDatabaseURL()
         let store = try SQLiteWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "17")
+        #expect(store.pragmaValue("user_version") == "18")
 
         // The table exists.
         let nodes = try store.listBookmarkNodes()
@@ -37,7 +37,7 @@ import SQLite3
 
         // Reopen — triggers migration to v16.
         let reopened = try SQLiteWikiStore(databaseURL: url)
-        #expect(reopened.pragmaValue("user_version") == "17")
+        #expect(reopened.pragmaValue("user_version") == "18")
 
         // Existing data is intact.
         let pages = try reopened.listPages(sortBy: .lastUpdated)
