@@ -52,14 +52,6 @@ struct WikiDetailView: View {
 
                         FlowLayout(spacing: 12) {
                             Button {
-                                store.newPageInNewTab()
-                            } label: {
-                                Label("New Page", systemImage: "plus")
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.large)
-
-                            Button {
                                 addURLHandler?("")
                             } label: {
                                 Label("Add from URL", systemImage: "link.badge.plus")
