@@ -271,11 +271,12 @@ final class FileProviderSpike {
     }
 
     /// Open an ingested file in its default app (e.g. Preview for a PDF), in the
-    /// ACTIVE wiki's domain. Resolves the file's user-visible URL from the daemon
-    /// by its `by-id` leaf identifier (built from the shared prefix so it can't
-    /// drift), then hands it to `NSWorkspace`. URL asked at click time.
-    func openSource(id: PageID) async {
-        DebugLog.agent("openSource: id=\(id.rawValue) activeWiki=\(activeWikiID ?? "nil")")
+    /// ACTIVE wiki’s domain. Resolves the file’s user-visible URL from the daemon
+    /// by its `by-id` leaf identifier (built from the shared prefix so it can’t
+    /// drift), then hands it to `NSWorkspace`. URL asked at click time. Pass
+    /// `appURL` to launch a specific app instead of the default handler.
+    func openSource(id: PageID, with appURL: URL? = nil) async {
+        DebugLog.agent("openSource: id=\(id.rawValue) activeWiki=\(activeWikiID ?? "nil") app=\(appURL?.lastPathComponent ?? "default")")
         status = ""   // clear any stale error from a prior attempt
         guard let wikiID = activeWikiID else {
             DebugLog.agent("openSource: ABORT — no active wiki")
@@ -295,11 +296,7 @@ final class FileProviderSpike {
                 itemIdentifier: identifier,
                 timeout: .seconds(5))
             DebugLog.agent("openSource: resolved url=\(url.path)")
-            let opened = NSWorkspace.shared.open(url)
-            DebugLog.agent("openSource: NSWorkspace.open returned \(opened)")
-            if !opened {
-                status = "macOS couldn’t open \(url.lastPathComponent)."
-            }
+            await launch(url: url, with: appURL)
         } catch {
             DebugLog.agent("openSource: FAILED resolving URL — \(error.localizedDescription)")
             status = "open file failed: \(error.localizedDescription)"
@@ -309,6 +306,45 @@ final class FileProviderSpike {
     func revealPageInFinder(id: PageID) async {
         guard let url = await resolvePageByTitleURL(id: id) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    /// Open a page in its default app (e.g. a Markdown editor), in the ACTIVE
+    /// wiki’s domain. Resolves the page’s user-visible URL via its
+    /// `page-by-title` identifier (the same resolution `share`/`reveal` use) and
+    /// hands it to `NSWorkspace`. URL asked at click time. Pass `appURL` to
+    /// launch a specific app instead of the default handler.
+    func openPage(id: PageID, with appURL: URL? = nil) async {
+        guard let url = await resolvePageByTitleURL(id: id) else {
+            DebugLog.agent("openPage: FAILED resolving URL for id=\(id.rawValue)")
+            status = "Couldn’t resolve page for open."
+            return
+        }
+        DebugLog.agent("openPage: resolved url=\(url.path) app=\(appURL?.lastPathComponent ?? "default")")
+        await launch(url: url, with: appURL)
+    }
+
+    /// Hand a resolved mount URL to `NSWorkspace`. With `appURL == nil` this is
+    /// the default-handler launch (sync `open(_:)`); otherwise it launches the
+    /// chosen app with `open(_:withApplicationAt:configuration:)`. Updates
+    /// `status` on failure.
+    private func launch(url: URL, with appURL: URL?) async {
+        if let appURL {
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            do {
+                _ = try await NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: config)
+                DebugLog.agent("launch: opened \(url.lastPathComponent) with \(appURL.lastPathComponent)")
+            } catch {
+                DebugLog.agent("launch: open with \(appURL.lastPathComponent) failed — \(error.localizedDescription)")
+                status = "Open with \(appURL.lastPathComponent) failed: \(error.localizedDescription)"
+            }
+        } else {
+            let opened = NSWorkspace.shared.open(url)
+            DebugLog.agent("launch: NSWorkspace.open returned \(opened)")
+            if !opened {
+                status = "macOS couldn’t open \(url.lastPathComponent)."
+            }
+        }
     }
 
     func revealSourceInFinder(id: PageID) async {

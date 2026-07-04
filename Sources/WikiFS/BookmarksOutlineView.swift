@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import WikiFSCore
 
 // MARK: - SwiftUI bridge
@@ -9,6 +10,7 @@ import WikiFSCore
 /// on macOS (see plans/bookmark-drag-drop-performance.md).
 struct BookmarksOutlineView: NSViewControllerRepresentable {
     let store: WikiStoreModel
+    let fileProvider: FileProviderSpike
     var onOpen: (WikiSelection) -> Void
     var onEdit: (String) -> Void
     var onDelete: (String) -> Void
@@ -20,6 +22,7 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
     func makeNSViewController(context: Context) -> BookmarksOutlineViewController {
         let vc = BookmarksOutlineViewController()
         vc.store = store
+        vc.fileProvider = fileProvider
         vc.callbacks = .init(
             onOpen: onOpen, onEdit: onEdit, onDelete: onDelete,
             onAddPage: onAddPage, onAddSource: onAddSource,
@@ -32,6 +35,7 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
 
     func updateNSViewController(_ vc: BookmarksOutlineViewController, context: Context) {
         vc.store = store
+        vc.fileProvider = fileProvider
         vc.callbacks = .init(
             onOpen: onOpen, onEdit: onEdit, onDelete: onDelete,
             onAddPage: onAddPage, onAddSource: onAddSource,
@@ -58,12 +62,25 @@ struct BookmarksCallbacks {
     var onNewSubfolder: (String) -> Void
 }
 
+/// Payload for "Open With" app items on a bookmark row. Carries the chosen app
+/// URL (or `nil` for "Other…") and the bookmark node. A class so it round-trips
+/// through `NSMenuItem.representedObject`.
+final class OpenWithBookmarkRef {
+    let appURL: URL?
+    let node: BookmarkNode
+    init(appURL: URL?, node: BookmarkNode) {
+        self.appURL = appURL
+        self.node = node
+    }
+}
+
 // MARK: - View controller
 
 final class BookmarksOutlineViewController: NSViewController {
     var scrollView: NSScrollView!
     var outlineView: NSOutlineView!
     var store: WikiStoreModel?
+    var fileProvider: FileProviderSpike?
     var callbacks: BookmarksCallbacks?
 
     /// Snapshot for change detection — covers all fields that affect rendering
@@ -279,7 +296,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
                      item: Any?,
                      childIndex index: Int) -> Bool {
         DebugLog.tabs("BookmarksOutlineView.acceptDrop: item=\((item as? BookmarkNode)?.id ?? "root") index=\(index)")
-        guard let store, let callbacks else { return false }
+        guard let store else { return false }
         let pb = info.draggingPasteboard
         guard let draggedID = pb.string(forType: .string) else { return false }
 
@@ -364,6 +381,31 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
             openBgItem.target = self
             openBgItem.representedObject = node
             menu.addItem(openBgItem)
+
+            if fileProvider?.path != nil {
+                let type: UTType
+                switch node.kind {
+                case .pageRef:
+                    type = OpenWithMenu.pageContentType
+                case .sourceRef:
+                    let src = store?.sources.first { $0.id == node.targetID }
+                    type = OpenWithMenu.contentType(mimeType: src?.mimeType, filename: src?.filename)
+                case .folder:
+                    type = .data
+                }
+                let submenu = OpenWithMenu.build(
+                    contentType: type,
+                    target: self,
+                    action: #selector(openWithAppAction(_:)),
+                    payload: { appURL in
+                        OpenWithBookmarkRef(appURL: appURL, node: node)
+                    })
+                let parent = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
+                parent.image = NSImage(systemSymbolName: "rectangle.portrait.and.arrow.right",
+                                       accessibilityDescription: nil)
+                parent.submenu = submenu
+                menu.addItem(parent)
+            }
             menu.addItem(.separator())
         }
 
@@ -407,6 +449,28 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
               let targetID = node.targetID, let store else { return }
         let sel: WikiSelection = node.kind == .pageRef ? .page(targetID) : .source(targetID)
         store.openTabInBackground(sel)
+    }
+
+    @objc private func openWithAppAction(_ sender: NSMenuItem) {
+        guard let ref = sender.representedObject as? OpenWithBookmarkRef,
+              let targetID = ref.node.targetID, let fileProvider else { return }
+        Task {
+            let picked: URL?
+            if let appURL = ref.appURL {
+                picked = appURL
+            } else {
+                picked = await AppPicker.pick()
+            }
+            guard let appURL = picked else { return }
+            switch ref.node.kind {
+            case .pageRef:
+                await fileProvider.openPage(id: targetID, with: appURL)
+            case .sourceRef:
+                await fileProvider.openSource(id: targetID, with: appURL)
+            case .folder:
+                break
+            }
+        }
     }
 
     @objc private func editAction(_ sender: NSMenuItem) {

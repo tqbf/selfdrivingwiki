@@ -147,7 +147,7 @@ struct SidebarView: View {
                                  onAddFromURL: onAddFromURL,
                                  isZoteroConfigured: isZoteroConfigured)
         case .bookmarks:
-            BookmarksContainerView(store: store,
+            BookmarksContainerView(store: store, fileProvider: fileProvider,
                 onShowPicker: { bookmarkPickerContext = $0 },
                 onEdit: { editBookmarkNodeID = EditBookmarkContext(nodeID: $0) },
                 onNewFolder: {

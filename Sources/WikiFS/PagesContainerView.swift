@@ -108,6 +108,9 @@ struct PagesContainerView: View {
             onOpen: { ids in
                 for id in ids { store.openTab(.page(id)) }
             },
+            onOpenExternal: { ids, appURL in
+                for id in ids { Task { await fileProvider.openPage(id: id, with: appURL) } }
+            },
             onOpenBackground: { ids in
                 for id in ids { store.openTabInBackground(.page(id)) }
             },

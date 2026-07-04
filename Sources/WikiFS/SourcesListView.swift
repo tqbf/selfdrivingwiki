@@ -9,8 +9,9 @@ import WikiFSCore
 /// SwiftUI gesture arbitration. Cell adds byte size + an
 /// extracting/ingesting/ingested status indicator; the context menu carries
 /// Ingest / Extract (with re-ingest confirmation) on top of the shared
-/// open/share/rename/delete actions. Double-click opens externally via the
-/// File Provider (`fileProvider.openSource`), unchanged from the SwiftUI row.
+/// open/share/rename/delete actions. Double-click opens an in-app source tab
+/// (mirroring pages/bookmarks); the "Open In…" item routes through the File
+/// Provider for an external launch.
 struct SourcesListView: NSViewControllerRepresentable {
     let store: WikiStoreModel
     let fileProvider: FileProviderSpike
@@ -63,8 +64,12 @@ struct SourceExtractItem {
 }
 
 struct SourcesListCallbacks {
-    /// Open externally via the File Provider (single or batch).
+    /// Open an in-app source tab (single or batch), foreground.
     var onOpen: ([PageID]) -> Void
+    /// Open externally via the File Provider (single or batch). Pass an app URL
+    /// to launch a specific editor (chosen from the "Open With" submenu), or nil
+    /// for the default handler.
+    var onOpenExternal: (_ ids: [PageID], _ appURL: URL?) -> Void
     /// Open an in-app background tab.
     var onOpenBackground: ([PageID]) -> Void
     var onShare: ([PageID]) -> Void
@@ -371,6 +376,23 @@ extension SourcesListViewController {
             systemImage: "dock.arrow.down.rectangle", action: #selector(openBackgroundAction(_:)),
             payload: payload))
 
+        if fileProvider?.path != nil {
+            let type = OpenWithMenu.contentType(mimeType: clicked.mimeType,
+                                                filename: clicked.filename)
+            let submenu = OpenWithMenu.build(
+                contentType: type,
+                target: self,
+                action: #selector(openWithAppAction(_:)),
+                payload: { appURL in
+                    OpenWithIDsRef(appURL: appURL, ids: payload.effective.map(\.id))
+                })
+            let parent = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
+            parent.image = NSImage(systemSymbolName: "rectangle.portrait.and.arrow.right",
+                                   accessibilityDescription: nil)
+            parent.submenu = submenu
+            menu.addItem(parent)
+        }
+
         if isMulti {
             menu.addItem(item(title: "Share \(count) Sources", systemImage: "square.and.arrow.up",
                               action: #selector(shareAction(_:)), payload: payload))
@@ -430,6 +452,20 @@ extension SourcesListViewController {
 
     @objc private func openAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? SourcesMenuPayload { callbacks?.onOpen(p.effective.map(\.id)) }
+    }
+    @objc private func openWithAppAction(_ sender: NSMenuItem) {
+        guard let ref = sender.representedObject as? OpenWithIDsRef else { return }
+        Task { [weak self] in
+            // nil appURL = the "Other…" item → present an app picker.
+            let picked: URL?
+            if let appURL = ref.appURL {
+                picked = appURL
+            } else {
+                picked = await AppPicker.pick()
+            }
+            guard let appURL = picked else { return }
+            self?.callbacks?.onOpenExternal(ref.ids, appURL)
+        }
     }
     @objc private func openBackgroundAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? SourcesMenuPayload { callbacks?.onOpenBackground(p.effective.map(\.id)) }

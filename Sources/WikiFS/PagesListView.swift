@@ -54,6 +54,10 @@ struct PagesListCallbacks {
     /// Open (foreground tab). Single-click-double passes one id; context-menu
     /// "Open N" passes the effective selection.
     var onOpen: ([PageID]) -> Void
+    /// Open externally via the File Provider (single or batch). Pass an app URL
+    /// to launch a specific editor (chosen from the "Open With" submenu), or nil
+    /// for the default handler.
+    var onOpenExternal: (_ ids: [PageID], _ appURL: URL?) -> Void
     var onOpenBackground: ([PageID]) -> Void
     var onShare: ([PageID]) -> Void
     var onReveal: (PageID) -> Void
@@ -273,6 +277,21 @@ extension PagesListViewController {
             systemImage: "dock.arrow.down.rectangle", action: #selector(openBackgroundAction(_:)),
             payload: payload))
 
+        if pathMounted {
+            let submenu = OpenWithMenu.build(
+                contentType: OpenWithMenu.pageContentType,
+                target: self,
+                action: #selector(openWithAppAction(_:)),
+                payload: { appURL in
+                    OpenWithIDsRef(appURL: appURL, ids: payload.effectiveIDs)
+                })
+            let parent = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
+            parent.image = NSImage(systemSymbolName: "rectangle.portrait.and.arrow.right",
+                                   accessibilityDescription: nil)
+            parent.submenu = submenu
+            menu.addItem(parent)
+        }
+
         if isBatch {
             menu.addItem(menuItem(
                 title: "Share \(count) Pages",
@@ -322,6 +341,19 @@ extension PagesListViewController {
 
     @objc private func openAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onOpen(p.effectiveIDs) }
+    }
+    @objc private func openWithAppAction(_ sender: NSMenuItem) {
+        guard let ref = sender.representedObject as? OpenWithIDsRef else { return }
+        Task { [weak self] in
+            let picked: URL?
+            if let appURL = ref.appURL {
+                picked = appURL
+            } else {
+                picked = await AppPicker.pick()
+            }
+            guard let appURL = picked else { return }
+            self?.callbacks?.onOpenExternal(ref.ids, appURL)
+        }
     }
     @objc private func openBackgroundAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onOpenBackground(p.effectiveIDs) }
