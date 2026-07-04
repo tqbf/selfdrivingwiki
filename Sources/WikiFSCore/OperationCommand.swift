@@ -117,7 +117,11 @@ public struct OperationCommand: Equatable, Sendable {
             "--verbose",
             "--include-partial-messages",
             "--append-system-prompt", systemPrompt,
-            "--dangerously-skip-permissions",
+            // Scope the agent to wikictl + read-only inspection tools (issue #116 item 3).
+            // This replaces the old --dangerously-skip-permissions bypass: non-sanctioned
+            // Bash (uv/python/curl/...) is denied by Claude Code before exec.
+            "--allowed-tools", Self.allowedToolsValue(includeFileWrites: true),
+            "--disallowed-tools", Self.disallowedTools.joined(separator: ","),
         ])
 
         if let agentsJSON = operation.agentsJSON {
@@ -166,6 +170,12 @@ public struct OperationCommand: Equatable, Sendable {
         let model = command.modelOverride.isEmpty
             ? operation.topLevelModelAlias : command.modelOverride
 
+        // The read-only interactive query variant (allowWikiEdits == false) omits
+        // Write/Edit from the allow-list — its prompt forbids file creation and the
+        // seatbelt blocks writes anyway, so a cooperative agent shouldn't even attempt
+        // them (and won't trip the repeated-denial abort on them).
+        let allowWikiEdits = Self.queryConversationAllowsEdits(operation)
+
         var arguments = command.tokenizedPrefixArgs()
         arguments.append(contentsOf: [
             "-p",
@@ -174,7 +184,10 @@ public struct OperationCommand: Equatable, Sendable {
             "--verbose",
             "--model", model,
             "--append-system-prompt", systemPrompt + "\n\n" + operation.prompt(wikiRoot: wikiRoot),
-            "--dangerously-skip-permissions",
+            // Scope the agent to wikictl + read-only inspection tools (issue #116 item 3),
+            // replacing the old --dangerously-skip-permissions bypass.
+            "--allowed-tools", Self.allowedToolsValue(includeFileWrites: allowWikiEdits),
+            "--disallowed-tools", Self.disallowedTools.joined(separator: ","),
         ])
 
         let (executable, wrappedArguments) = applySandbox(
@@ -231,6 +244,69 @@ public struct OperationCommand: Equatable, Sendable {
     /// both the env-var writer (`applySandbox`) and the directory creator
     /// (`createSandboxTmpDir`) always agree on the same leaf name without duplication.
     public static let tmpRelocationLeaf = ".tmp"
+
+    // MARK: - Permission scoping (replaces `--dangerously-skip-permissions`)
+
+    /// The sanctioned exec + tool surface a spawned agent may use WITHOUT prompting.
+    /// Replaces the old `--dangerously-skip-permissions` bypass (issue #116 item 3): the
+    /// agent's only sanctioned job is calling `wikictl`, so any other Bash — interpreters,
+    /// network tools, shells — is denied by Claude Code BEFORE exec, not just by the OS
+    /// seatbelt. In headless `-p`, tools not in `--allowed-tools` are denied (the model
+    /// receives a `permission-denied` tool_result and adapts); repeated denials abort the
+    /// session, which self-terminates a prompt-injected attack.
+    ///
+    /// The read-only inspection commands (`cat`/`grep`/`sed`/`head`/`tail`/`wc`/`find`)
+    /// are allowed because the prompts already instruct them and they add no exfiltration
+    /// capability beyond the already-unrestricted `Read` tool — and `sed -i` writes
+    /// outside scratch are still blocked by the seatbelt write fence. `pdftotext`/`strings`
+    /// are deliberately NOT here: pdf2md pre-extracts markdown at ingest, and
+    /// `plans/pdf-extraction.md` already directed their removal from the prompts.
+    static let baseAllowedTools: [String] = [
+        "Bash(wikictl:*)",
+        "Bash(cat:*)", "Bash(grep:*)", "Bash(sed:*)",
+        "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)", "Bash(find:*)",
+        "Read", "Grep", "Glob", "Task", "TodoWrite",
+    ]
+
+    /// File-creation/modification tools. Included ONLY for read-write spawns (Ingest /
+    /// Lint / edit-enabled interactive Query). OMITTED for the read-only interactive
+    /// query variant (`allowWikiEdits == false`), whose prompt forbids Write/Edit and
+    /// whose seatbelt profile blocks writes at the kernel anyway — this is the semantic
+    /// match at the Claude Code layer so a cooperative read-only agent doesn't even
+    /// attempt them (and can't trip the repeated-denial abort on them).
+    static let fileWritingTools: [String] = ["Write", "Edit"]
+
+    /// The exec/network surface explicitly DENIED even if a permissive user
+    /// `~/.claude/settings.json` would allow it (Claude Code resolves deny over allow;
+    /// CLI flags also outrank user settings). Targets the demonstrated attack vector
+    /// (`uv run`), the other interpreter chains, network tools, and the AppleScript
+    /// automation escape — none of which a wikictl-only agent ever legitimately needs.
+    /// This is a backstop; the positive `--allowed-tools` list is the primary gate.
+    static let disallowedTools: [String] = [
+        "Bash(uv:*)", "Bash(uv)",
+        "Bash(python:*)", "Bash(python3:*)",
+        "Bash(ruby:*)", "Bash(node:*)",
+        "Bash(curl:*)", "Bash(wget:*)",
+        "Bash(sh:*)", "Bash(bash:*)", "Bash(zsh:*)", "Bash(osascript:*)",
+        "WebFetch", "WebSearch",
+    ]
+
+    /// Build the comma-separated `--allowed-tools` value. `includeFileWrites` is `false`
+    /// for the read-only interactive query variant.
+    static func allowedToolsValue(includeFileWrites: Bool) -> String {
+        var tools = baseAllowedTools
+        if includeFileWrites { tools.append(contentsOf: fileWritingTools) }
+        return tools.joined(separator: ",")
+    }
+
+    /// Extract `allowWikiEdits` from a `.queryConversation` operation. Defensive default
+    /// `true` (read-write) if `buildInteractiveQuery` is ever handed a non-conversation
+    /// operation — fail-open for tool access, since the read-only seatbelt remains the
+    /// authoritative write gate regardless.
+    static func queryConversationAllowsEdits(_ operation: WikiOperation) -> Bool {
+        if case .queryConversation(_, let allowWikiEdits) = operation { return allowWikiEdits }
+        return true
+    }
 
     /// When `sandbox` is non-nil, rewrite the invocation so the provider runs inside
     /// `/usr/bin/sandbox-exec -p <profile> -D … -- <provider>`, and relocate the

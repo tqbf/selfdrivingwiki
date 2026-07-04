@@ -24,7 +24,8 @@ struct ClaudePromptHelpTests {
     #expect(template.contains("--output-format"))
     #expect(template.contains("stream-json"))
     #expect(template.contains("--append-system-prompt"))
-    #expect(template.contains("--dangerously-skip-permissions"))
+    #expect(template.contains("--allowed-tools"))      // item 3: scoped allowlist
+    #expect(!template.contains("--dangerously-skip-permissions"))
     #expect(template.contains("--agents"))
     #expect(template.contains("WIKI_ROOT=<resolved WIKI_ROOT mount path>"))
     #expect(template.contains("WIKI_DB=<active wiki ULID>"))

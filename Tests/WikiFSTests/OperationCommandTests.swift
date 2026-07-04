@@ -59,11 +59,12 @@ struct OperationCommandTests {
     #expect(build().executable == "/opt/homebrew/bin/claude")
   }
 
-  @Test func argumentsCarryPromptModelStreamFlagsAppendSystemPromptAndSkipPermissions() {
+  @Test func argumentsCarryPromptModelStreamFlagsAndScopedAllowlist() {
     let cmd = build(operation: Self.tinyIngest())
     // -p <prompt> --model <alias> --output-format stream-json --verbose
     //   --include-partial-messages --append-system-prompt <prompt>
-    //   --dangerously-skip-permissions
+    //   --allowed-tools <curated list> --disallowed-tools <dangerous backstop>
+    // The old --dangerously-skip-permissions bypass was removed (issue #116 item 3).
     #expect(cmd.arguments[0] == "-p")
     #expect(cmd.arguments[1] == Self.tinyIngest().prompt(wikiRoot: Self.resolvedRoot))
     #expect(cmd.arguments[2] == "--model")
@@ -74,8 +75,17 @@ struct OperationCommandTests {
     #expect(cmd.arguments[7] == "--include-partial-messages")
     #expect(cmd.arguments[8] == "--append-system-prompt")
     #expect(cmd.arguments[9] == "You are the maintainer.")
-    #expect(cmd.arguments[10] == "--dangerously-skip-permissions")
-    #expect(!cmd.arguments.contains("--allowedTools"))
+    #expect(cmd.arguments[10] == "--allowed-tools")
+    // Split on "," for exact membership so `Write` isn't matched by `TodoWrite`.
+    let allowEntries = Set(cmd.arguments[11].split(separator: ",").map(String.init))
+    #expect(allowEntries.contains("Bash(wikictl:*)"))
+    #expect(allowEntries.contains("Read"))
+    #expect(allowEntries.contains("Write"))  // build() is read-write
+    #expect(cmd.arguments[12] == "--disallowed-tools")
+    #expect(cmd.arguments[13].contains("Bash(uv:*)"))
+    #expect(cmd.arguments[13].contains("Bash(python3:*)"))
+    #expect(cmd.arguments[13].contains("WebFetch"))
+    #expect(!cmd.arguments.contains("--dangerously-skip-permissions"))
   }
 
   // MARK: - Model tiering (problem #3) — Opus always writes; Sonnet only digests
@@ -144,11 +154,59 @@ struct OperationCommandTests {
     let outputIndex = cmd.arguments.firstIndex(of: "--output-format")!
     #expect(cmd.arguments[outputIndex + 1] == "stream-json")
     #expect(cmd.arguments.contains("--verbose"))
-    #expect(cmd.arguments.contains("--dangerously-skip-permissions"))
+    #expect(cmd.arguments.contains("--allowed-tools"))
+    #expect(!cmd.arguments.contains("--dangerously-skip-permissions"))
     #expect(!cmd.arguments.contains { $0.hasPrefix("Question:") })
     #expect(cmd.environment["WIKI_ROOT"] == Self.resolvedRoot)
     #expect(cmd.environment["WIKI_DB"] == "01WIKIULID")
     #expect(cmd.environment["PATH"] == "/Apps/Self Driving Wiki.app/Contents/Helpers:/usr/bin:/bin")
+  }
+
+  // MARK: - Permission scoping (issue #116 item 3)
+
+  /// The read-only interactive query variant (allowWikiEdits == false) OMITS Write/Edit
+  /// from --allowed-tools — its prompt forbids file creation and the read-only seatbelt
+  /// blocks writes anyway, so a cooperative agent shouldn't even attempt them. The
+  /// read-write variant includes them.
+  @Test func readOnlyQueryOmitsWriteEditFromAllowlistReadWriteIncludesThem() {
+    let ro = OperationCommand.buildInteractiveQuery(
+      operation: .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
+      wikiRoot: Self.resolvedRoot, wikiID: "01WIKIULID", systemPrompt: "schema",
+      scratchDirectory: "/tmp/scratch-xyz", wikictlDirectory: "/helpers",
+      resolvedExecutable: "claude", baseEnvironment: ["PATH": "/usr/bin"])
+    // Split on "," and check EXACT membership — a substring check would match
+    // `TodoWrite` for `Write`, hiding a regression.
+    let roEntries = Set((ro.arguments.firstIndex(of: "--allowed-tools").map { ro.arguments[$0 + 1] } ?? "")
+      .split(separator: ",").map(String.init))
+    #expect(roEntries.contains("Bash(wikictl:*)"))
+    #expect(roEntries.contains("Read"))
+    #expect(!roEntries.contains("Write"))      // read-only: no file writes
+    #expect(!roEntries.contains("Edit"))
+    #expect(roEntries.contains("Task"))
+    #expect(roEntries.contains("TodoWrite"))   // distinct from Write
+    // The deny backstop is identical regardless of read-only/read-write.
+    #expect(ro.arguments.contains("--disallowed-tools"))
+
+    let rw = OperationCommand.buildInteractiveQuery(
+      operation: .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: true),
+      wikiRoot: Self.resolvedRoot, wikiID: "01WIKIULID", systemPrompt: "schema",
+      scratchDirectory: "/tmp/scratch-xyz", wikictlDirectory: "/helpers",
+      resolvedExecutable: "claude", baseEnvironment: ["PATH": "/usr/bin"])
+    let rwEntries = Set((rw.arguments.firstIndex(of: "--allowed-tools").map { rw.arguments[$0 + 1] } ?? "")
+      .split(separator: ",").map(String.init))
+    #expect(rwEntries.contains("Write"))
+    #expect(rwEntries.contains("Edit"))
+  }
+
+  /// `build` (one-shot Ingest/Lint/Query) is always read-write — the query one-shot may
+  /// file an answer back as a page via wikictl, and Ingest/Lint write pages — so Write/Edit
+  /// are always in its allow-list.
+  @Test func oneShotBuildAlwaysIncludesWriteEdit() {
+    let cmd = build(operation: .query(question: "q", stateFilePath: Self.stateFile))
+    let entries = Set((cmd.arguments.firstIndex(of: "--allowed-tools").map { cmd.arguments[$0 + 1] } ?? "")
+      .split(separator: ",").map(String.init))
+    #expect(entries.contains("Write"))
+    #expect(entries.contains("Edit"))
   }
 
   @Test func interactiveQueryPromptAnswersByDefaultAndWritesOnlyOnRequest() {
@@ -237,12 +295,16 @@ struct OperationCommandTests {
     #expect(build().environment["HOME"] == "/Users/me")
   }
 
-  @Test func usesSkipPermissionsNotAFineGrainedAllowlist() {
+  @Test func usesCuratedAllowlistNotTheBypass() {
     let cmd = build()
-    #expect(cmd.arguments.contains("--dangerously-skip-permissions"))
-    #expect(!cmd.arguments.contains("--allowedTools"))
-    #expect(!cmd.arguments.contains("--allowed-tools"))
-    #expect(!cmd.arguments.contains { $0.contains("Bash(wikictl") })
+    // Issue #116 item 3: --dangerously-skip-permissions is GONE, replaced by a curated
+    // --allowed-tools (wikictl + read-only inspection + file tools) and a --disallowed-tools
+    // backstop (interpreters / network / shells).
+    #expect(!cmd.arguments.contains("--dangerously-skip-permissions"))
+    #expect(cmd.arguments.contains("--allowed-tools"))
+    #expect(cmd.arguments.contains { $0.contains("Bash(wikictl:*)") })
+    #expect(cmd.arguments.contains("--disallowed-tools"))
+    #expect(cmd.arguments.contains { $0.contains("Bash(uv:*)") })
   }
 
   // MARK: - Debug summary (redacted, secret-safe)
@@ -254,7 +316,8 @@ struct OperationCommandTests {
     // Flags survive verbatim…
     #expect(summary.contains("--model"))
     #expect(summary.contains("--output-format"))
-    #expect(summary.contains("--dangerously-skip-permissions"))
+    #expect(summary.contains("--allowed-tools"))   // item 3: scoped allowlist
+    #expect(!summary.contains("--dangerously-skip-permissions"))
     // …but the multi-thousand-char prompt is collapsed to a length marker, not dumped.
     #expect(!summary.contains(longPrompt))
     #expect(summary.contains(" chars)"))   // a truncation marker is present
@@ -305,7 +368,8 @@ struct OperationCommandTests {
       #expect(cmd.arguments[0] == "-p")
       #expect(cmd.arguments[1] == operation.prompt(wikiRoot: "/mount"))
       #expect(cmd.arguments.contains("--model"))
-      #expect(cmd.arguments.contains("--dangerously-skip-permissions"))
+      #expect(cmd.arguments.contains("--allowed-tools"))
+      #expect(!cmd.arguments.contains("--dangerously-skip-permissions"))
       #expect(cmd.environment["WIKI_DB"] == "01W")
     }
   }
@@ -452,8 +516,12 @@ struct OperationCommandTests {
     #expect(prompt.contains("wikictl source cat --id"))
     #expect(prompt.contains("wikictl source export --id"))
     #expect(prompt.contains("Read"))
-    #expect(prompt.contains("pdftotext"))
-    #expect(prompt.contains("strings"))
+    // pdf2md pre-extracts markdown at ingest; the agent Reads the PDF (or the extracted
+    // markdown) instead of running pdftotext/strings, which item 3 removes from the
+    // Bash allow-list (plans/pdf-extraction.md directed this prompt cleanup).
+    #expect(!prompt.contains("pdftotext"))
+    #expect(!prompt.contains("strings"))
+    #expect(prompt.contains("renders PDFs natively"))
     // Old mount paths should be gone.
     #expect(!prompt.contains("$WIKI_ROOT/files/by-name/"))
     #expect(!prompt.contains("$WIKI_ROOT/files/by-id/"))

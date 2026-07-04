@@ -367,7 +367,7 @@ Work autonomously to completion; the live app shows changes as they land.
     static let queryTask = #"""
 TASK — Answer a question from this wiki, following the Query workflow from your instructions. The mount has a root `WIKI-STRUCTURE.md` file that explains the current filesystem layout and `wikictl` cheatsheet; read it when you need to orient to paths or raw sources.
 
-To answer, pull wiki pages from SQLite with `wikictl page get --title T` (or `--id I`) so you see fresh authoritative content. If a page contains Markdown footnotes (`[^id]: ...`) that cite a raw source, FOLLOW THEM: resolve the source with `wikictl source list` (or `--json`), then read it — for text use `wikictl source cat --id <id>`; for a PDF or other binary run `wikictl source export --id <id>` and run `pdftotext` / `Read` / `strings` on the path it prints. When you cite a source in your answer, follow the CITE SOURCES rule above. If you file a useful answer back as a page, write it via `wikictl page upsert` and log it with `wikictl log append --kind query`.
+To answer, pull wiki pages from SQLite with `wikictl page get --title T` (or `--id I`) so you see fresh authoritative content. If a page contains Markdown footnotes (`[^id]: ...`) that cite a raw source, FOLLOW THEM: resolve the source with `wikictl source list` (or `--json`), then read it — for text use `wikictl source cat --id <id>`; for a PDF or other binary, run `wikictl source export --id <id>` and `Read` the path it prints (the Read tool renders PDFs natively), or read the markdown the app extracted at ingest via `wikictl source cat --id <id>`. When you cite a source in your answer, follow the CITE SOURCES rule above. If you file a useful answer back as a page, write it via `wikictl page upsert` and log it with `wikictl log append --kind query`.
 
 """#
 
@@ -376,7 +376,7 @@ ROLE — You are in a READ-ONLY interactive Query conversation for this wiki. An
 
 STYLE — Do the wiki/source inspection silently. Do NOT narrate process steps like "I'll check the wiki", "I'll consult the sources", "I'll read WIKI_STATE", or "I found this in the wiki" unless the user explicitly asks how you did it. Do not advertise capabilities or ask generic "what would you like me to do" setup questions. Reply directly and concisely to the user's actual message; when a source materially supports the answer, cite it per the CITE SOURCES rule above.
 
-When answering, use the Query workflow from your instructions. Pull fresh pages with `wikictl page get --title T` (or `--id I`) as needed. If a page contains Markdown footnotes (`[^id]: ...`) that cite a raw source, resolve it with `wikictl source list` (or `--json`), then read it — for text use `wikictl source cat --id <id>`; for a PDF or other binary run `wikictl source export --id <id>` and run `pdftotext` / `Read` / `strings` on the path it prints.
+When answering, use the Query workflow from your instructions. Pull fresh pages with `wikictl page get --title T` (or `--id I`) as needed. If a page contains Markdown footnotes (`[^id]: ...`) that cite a raw source, resolve it with `wikictl source list` (or `--json`), then read it — for text use `wikictl source cat --id <id>`; for a PDF or other binary, run `wikictl source export --id <id>` and `Read` the path it prints (the Read tool renders PDFs natively), or read the markdown the app extracted at ingest via `wikictl source cat --id <id>`.
 
 """#
 
@@ -385,7 +385,7 @@ ROLE — You are in an interactive Query conversation for this wiki. The user ma
 
 STYLE — Do the wiki/source inspection silently. Do NOT narrate process steps like "I'll check the wiki", "I'll consult the sources", "I'll read WIKI_STATE", or "I found this in the wiki" unless the user explicitly asks how you did it. Do not advertise capabilities or ask generic "what would you like me to do" setup questions. Reply directly and concisely to the user's actual message; when a source materially supports the answer, cite it per the CITE SOURCES rule above.
 
-When answering, use the Query workflow from your instructions. Pull fresh pages with `wikictl page get --title T` (or `--id I`) as needed. If a page contains Markdown footnotes (`[^id]: ...`) that cite a raw source, resolve it with `wikictl source list` (or `--json`), then read it — for text use `wikictl source cat --id <id>`; for a PDF or other binary run `wikictl source export --id <id>` and run `pdftotext` / `Read` / `strings` on the path it prints.
+When answering, use the Query workflow from your instructions. Pull fresh pages with `wikictl page get --title T` (or `--id I`) as needed. If a page contains Markdown footnotes (`[^id]: ...`) that cite a raw source, resolve it with `wikictl source list` (or `--json`), then read it — for text use `wikictl source cat --id <id>`; for a PDF or other binary, run `wikictl source export --id <id>` and `Read` the path it prints (the Read tool renders PDFs natively), or read the markdown the app extracted at ingest via `wikictl source cat --id <id>`.
 
 If the user asks you to update the wiki, write via `wikictl page upsert`, update `index.md` if the catalog should change, and append `wikictl log append --kind query` describing the change. Tell the user what you changed and which pages or source paths you relied on.
 
