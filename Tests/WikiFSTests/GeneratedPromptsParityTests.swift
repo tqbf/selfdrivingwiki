@@ -71,4 +71,32 @@ struct GeneratedPromptsParityTests {
     @Test func wikiTreeRenderMatchesFile() {
         #expect(GeneratedPrompts.wikiTreeRender == md("wiki-tree-render.md"))
     }
+
+    @Test func ingestSingleTaskMatchesFile() {
+        #expect(GeneratedPrompts.ingestSingleTask == md("ingest-single-task.md"))
+    }
+
+    @Test func ingestCuratorTaskMatchesFile() {
+        #expect(GeneratedPrompts.ingestCuratorTask == md("ingest-curator-task.md"))
+    }
+
+    @Test func queryTaskMatchesFile() {
+        #expect(GeneratedPrompts.queryTask == md("query-task.md"))
+    }
+
+    @Test func queryConversationReadonlyMatchesFile() {
+        #expect(GeneratedPrompts.queryConversationReadonly == md("query-conversation-readonly.md"))
+    }
+
+    @Test func queryConversationReadwriteMatchesFile() {
+        #expect(GeneratedPrompts.queryConversationReadwrite == md("query-conversation-readwrite.md"))
+    }
+
+    @Test func lintTaskMatchesFile() {
+        #expect(GeneratedPrompts.lintTask == md("lint-task.md"))
+    }
+
+    @Test func lintPageTaskMatchesFile() {
+        #expect(GeneratedPrompts.lintPageTask == md("lint-page-task.md"))
+    }
 }

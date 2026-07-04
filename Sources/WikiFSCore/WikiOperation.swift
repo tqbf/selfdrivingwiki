@@ -181,7 +181,12 @@ extension WikiOperation {
     stateFilePath: String,
     sourceIDs: [String]
   ) -> String {
-    """
+    let task = PromptTemplate.fill(GeneratedPrompts.ingestSingleTask, [
+      "fileCount": "\(sourcePaths.count)",
+      "fileNoun": sourcePaths.count == 1 ? "" : "s",
+      "sourceIds": sourceIDs.joined(separator: ", "),
+    ])
+    return """
     \(IngestWriteRule.writes)
 
     \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath, sourceFilePaths: stagedSourcePaths))
@@ -190,17 +195,7 @@ extension WikiOperation {
 
     \(sourcesSection(sourcePaths: sourcePaths, stagedSourcePaths: stagedSourcePaths))
 
-    TASK — Ingest \(sourcePaths.count) file\(sourcePaths.count == 1 ? "" : "s") into \
-    the wiki, following the Ingest workflow from your instructions. Act immediately; \
-    do not explore the mount first. Read each staged source, DECIDE what belongs in \
-    the wiki, CROSS-REFERENCE across all sources to find connections and avoid \
-    duplicates, and write one or more summary/entity/concept pages via \
-    `wikictl page upsert` (cross-linking with [[wiki links]]). Then rewrite index.md \
-    via `wikictl index set`, and for EACH ingested source record it with \
-    `wikictl log append --kind ingest --source <id> --title "<source>"`. \
-    The `--source` ids are: \(sourceIDs.joined(separator: ", ")). \
-    Each `--source` id is REQUIRED — it marks that file Ingested in the app. \
-    Work autonomously to completion; the live app shows your changes as they land.
+    \(task)
 
     \(Self.wikiRootLine(wikiRoot))
     """
@@ -218,7 +213,14 @@ extension WikiOperation {
     stateFilePath: String,
     sourceIDs: [String]
   ) -> String {
-    """
+    let task = PromptTemplate.fill(GeneratedPrompts.ingestCuratorTask, [
+      "fileCount": "\(sourcePaths.count)",
+      "fileNoun": sourcePaths.count == 1 ? "" : "s",
+      "largePhrase": sourcePaths.count == 1 ? "The source is LARGE" : "The sources are LARGE",
+      "stagedSourceList": stagedSourcePaths.joined(separator: ", "),
+      "sourceIds": sourceIDs.joined(separator: ", "),
+    ])
+    return """
     \(IngestWriteRule.writes)
 
     \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath, sourceFilePaths: stagedSourcePaths))
@@ -227,39 +229,7 @@ extension WikiOperation {
 
     \(sourcesSection(sourcePaths: sourcePaths, stagedSourcePaths: stagedSourcePaths))
 
-    TASK — Ingest \(sourcePaths.count) file\(sourcePaths.count == 1 ? "" : "s") into \
-    the wiki, following the Ingest workflow from your instructions. You are the \
-    CURATOR: you decide what goes in the wiki and you write everything. \
-    \(sourcePaths.count == 1 ? "The source is LARGE" : "The sources are LARGE") — \
-    use Sonnet `source-reader` workers, not Opus, to do the raw source ingestion: \
-    they read the bulk source chunks and return structured digests for you to \
-    synthesize. Act immediately; do not explore the mount first.
-
-    1. INSPECT each staged source's size and structure WITHOUT reading the whole bulk \
-       — e.g. `wc -l`/`head` for text, or count pages for a PDF — then split it into \
-       chunks (byte/line ranges, sections, or page ranges).
-    2. FAN OUT RAW INGESTION to Sonnet `source-reader` subagents via the Task tool — \
-       use MORE THAN 1 and FEWER THAN 20 workers (between 2 and 19). Size the fan-out \
-       to the material: do NOT spawn 15 workers for 3 pages; one worker can digest \
-       adjacent chunks. In each worker's task, give it the staged source path(s) \
-       (\(stagedSourcePaths.joined(separator: ", "))) and the exact chunk/section/page-range it must DIGEST. \
-       Each worker READS its chunk and returns a structured digest; workers do NOT \
-       write to the wiki.
-    3. SYNTHESIZE the digests, CROSS-REFERENCE across all sources to find connections \
-       and avoid duplicate pages, and DECIDE the set of wiki pages this ingest should \
-       produce (summary pages plus the entity/concept pages), reusing existing titles \
-       where they fit. You MAY fork MORE `source-reader` workers to ask follow-up \
-       QUESTIONS ("re-read section 4 and tell me X"), and you MAY pull specific \
-       existing wiki pages with `wikictl page get` to double-check facts. Keep TOTAL \
-       Sonnet worker invocations under 20 across the whole run.
-    4. WRITE every page yourself via `wikictl page upsert` (cross-linking with \
-       [[wiki links]]), then rewrite index.md wholesale via `wikictl index set` so it \
-       catalogs the new pages, and for EACH ingested source record it with \
-       `wikictl log append --kind ingest --source <id> --title "<source>"`. The \
-       `--source` ids are: \(sourceIDs.joined(separator: ", ")). Each `--source` id \
-       is REQUIRED — it marks that file Ingested in the app.
-
-    Work autonomously to completion; the live app shows changes as they land.
+    \(task)
 
     \(Self.wikiRootLine(wikiRoot))
     """
@@ -303,27 +273,14 @@ extension WikiOperation {
     question: String,
     stateFilePath: String
   ) -> String {
-    """
+    return """
     \(IngestWriteRule.writes)
 
     \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
 
     \(answerCitationRule)
 
-    TASK — Answer a question from this wiki, following the Query workflow from your \
-    instructions. The mount has a root `WIKI-STRUCTURE.md` file that explains the \
-    current filesystem layout and `wikictl` cheatsheet; read it when you need to \
-    orient to paths or raw sources.
-
-    To answer, pull wiki pages from SQLite with `wikictl page get --title T` (or \
-    `--id I`) so you see fresh authoritative content. If a page contains Markdown \
-    footnotes (`[^id]: ...`) that cite a raw source, FOLLOW THEM: resolve the source \
-    with `wikictl source list` (or `--json`), then read it — for text use \
-    `wikictl source cat --id <id>`; for a PDF or other binary run \
-    `wikictl source export --id <id>` and run `pdftotext` / `Read` / `strings` on the \
-    path it prints. When you cite a source in your answer, follow the CITE SOURCES \
-    rule above. If you file a useful answer back as a page, write it via \
-    `wikictl page upsert` and log it with `wikictl log append --kind query`.
+    \(GeneratedPrompts.queryTask)
 
     \(Self.wikiRootLine(wikiRoot))
     Question: \(question)
@@ -347,34 +304,12 @@ extension WikiOperation {
   private static func queryConversationReadOnlyPrompt(
     wikiRoot: String, stateFilePath: String
   ) -> String {
-    """
+    return """
     \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
 
     \(answerCitationRule)
 
-    ROLE — You are in a READ-ONLY interactive Query conversation for this wiki. \
-    Answer questions from the wiki's existing content ONLY. You are a reader, not \
-    a writer — you CANNOT create, edit, or modify anything: no wiki pages, no \
-    files, no HTML documents, no code, no output of any kind. Your tools can only \
-    READ from the wiki and its sources. Any attempt to create a file or write \
-    content will fail and wastes a turn. Do not offer to make changes, create \
-    documents, or build anything. Do not use Write, Edit, or any file-creation \
-    tool — you are restricted to reading and answering questions only.
-
-    STYLE — Do the wiki/source inspection silently. Do NOT narrate process steps like \
-    "I'll check the wiki", "I'll consult the sources", "I'll read WIKI_STATE", or \
-    "I found this in the wiki" unless the user explicitly asks how you did it. Do \
-    not advertise capabilities or ask generic "what would you like me to do" setup \
-    questions. Reply directly and concisely to the user's actual message; when a \
-    source materially supports the answer, cite it per the CITE SOURCES rule above.
-
-    When answering, use the Query workflow from your instructions. Pull fresh pages \
-    with `wikictl page get --title T` (or `--id I`) as needed. If a page contains \
-    Markdown footnotes (`[^id]: ...`) that cite a raw source, resolve it with \
-    `wikictl source list` (or `--json`), then read it — for text use \
-    `wikictl source cat --id <id>`; for a PDF or other binary run \
-    `wikictl source export --id <id>` and run `pdftotext` / `Read` / `strings` on \
-    the path it prints.
+    \(GeneratedPrompts.queryConversationReadonly)
 
     \(Self.wikiRootLine(wikiRoot))
     """
@@ -384,38 +319,14 @@ extension WikiOperation {
   private static func queryConversationReadWritePrompt(
     wikiRoot: String, stateFilePath: String
   ) -> String {
-    """
+    return """
     \(IngestWriteRule.writes)
 
     \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
 
     \(answerCitationRule)
 
-    ROLE — You are in an interactive Query conversation for this wiki. The user may \
-    ask questions, ask follow-ups, ask you to inspect sources, or ask you to update \
-    the wiki. Do not assume every answer should be written back. Answer in chat by \
-    default. Only change the wiki when the user explicitly asks you to save, update, \
-    add, rewrite, log, or otherwise persist something.
-
-    STYLE — Do the wiki/source inspection silently. Do NOT narrate process steps like \
-    "I'll check the wiki", "I'll consult the sources", "I'll read WIKI_STATE", or \
-    "I found this in the wiki" unless the user explicitly asks how you did it. Do \
-    not advertise capabilities or ask generic "what would you like me to do" setup \
-    questions. Reply directly and concisely to the user's actual message; when a \
-    source materially supports the answer, cite it per the CITE SOURCES rule above.
-
-    When answering, use the Query workflow from your instructions. Pull fresh pages \
-    with `wikictl page get --title T` (or `--id I`) as needed. If a page contains \
-    Markdown footnotes (`[^id]: ...`) that cite a raw source, resolve it with \
-    `wikictl source list` (or `--json`), then read it — for text use \
-    `wikictl source cat --id <id>`; for a PDF or other binary run \
-    `wikictl source export --id <id>` and run `pdftotext` / `Read` / `strings` on \
-    the path it prints.
-
-    If the user asks you to update the wiki, write via `wikictl page upsert`, update \
-    `index.md` if the catalog should change, and append `wikictl log append --kind \
-    query` describing the change. Tell the user what you changed and which pages or \
-    source paths you relied on.
+    \(GeneratedPrompts.queryConversationReadwrite)
 
     \(Self.wikiRootLine(wikiRoot))
     """
@@ -424,14 +335,12 @@ extension WikiOperation {
   /// Lint stays single-agent Opus, with the write rule (it logs and may file a
   /// report) + the staged-state / don't-rediscover directive.
   private static func lintPrompt(wikiRoot: String, stateFilePath: String) -> String {
-    """
+    return """
     \(IngestWriteRule.writes)
 
     \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
 
-    TASK — Health-check this wiki and print a clear findings report, following the \
-    Lint workflow from your instructions. Record it with \
-    `wikictl log append --kind lint`.
+    \(GeneratedPrompts.lintTask)
 
     \(Self.wikiRootLine(wikiRoot))
     """
@@ -456,27 +365,16 @@ extension WikiOperation {
         \(list)
         """
     }
-
+    let task = PromptTemplate.fill(GeneratedPrompts.lintPageTask, [
+      "pageTitle": pageTitle,
+      "linksSection": linksSection,
+    ])
     return """
       \(IngestWriteRule.writes)
 
       \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
 
-      TASK — Review and fix the page titled "\(pageTitle)".
-
-      Pre-flight already ran before this agent started:
-      - WikiLink bracket syntax (\\]]) auto-corrected if any were present.
-      - \(linksSection)
-
-      Steps:
-      1. Read the page: `wikictl page get --title "\(pageTitle)"`
-      2. For each broken link listed above: search `wikictl page list` to find the \
-         correct target, create the page if it should exist, or remove the link if \
-         spurious.
-      3. Check the page for other issues (stale content, broken external links, \
-         factual gaps) and fix what you can.
-      4. If any changes are needed, rewrite: `wikictl page upsert --title "\(pageTitle)"`
-      5. Record your findings: `wikictl log append --kind lint`
+      \(task)
 
       \(Self.wikiRootLine(wikiRoot))
       """

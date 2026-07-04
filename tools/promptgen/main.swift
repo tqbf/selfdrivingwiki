@@ -30,6 +30,13 @@ let entries: [(file: String, constant: String)] = [
     ("source-reader-description.md", "sourceReaderDescription"),
     ("dont-rediscover-leaf.md",      "dontRediscoverLeaf"),
     ("wiki-tree-render.md",          "wikiTreeRender"),
+    ("ingest-single-task.md",        "ingestSingleTask"),
+    ("ingest-curator-task.md",       "ingestCuratorTask"),
+    ("query-task.md",                "queryTask"),
+    ("query-conversation-readonly.md", "queryConversationReadonly"),
+    ("query-conversation-readwrite.md", "queryConversationReadwrite"),
+    ("lint-task.md",                 "lintTask"),
+    ("lint-page-task.md",            "lintPageTask"),
 ]
 
 // Resolve the repo root from this script's location (tools/promptgen/ → up 2).
