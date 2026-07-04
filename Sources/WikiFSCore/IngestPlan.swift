@@ -78,18 +78,7 @@ public enum IngestPlan: Equatable, Sendable {
   /// NO write rule — its only job is to read volume and hand structured facts back to
   /// the Opus curator, which does all the writing. Because a custom agent's `prompt`
   /// does NOT inherit `--append-system-prompt`, this is self-contained.
-  public static let digesterPrompt = """
-    You are a source-reader. The curator has assigned you one chunk / section / \
-    page-range of a large source document. READ ONLY that assigned chunk and return a \
-    STRUCTURED DIGEST of it — key facts, named entities, the concepts it covers, and \
-    any notable quotes WITH their location in the source. Read the assigned chunk from \
-    the staged local path (and byte/line range, or page range) the curator gives you, \
-    using the Read tool or `cat`/`sed`/`grep` on that file.
-
-    You do NOT write to the wiki. You have NO wikictl and NO write tools — do not look \
-    for one and do not touch the read-only mount. Return your digest as your final \
-    message; the curator synthesizes the digests and writes every page itself.
-    """
+  public static let digesterPrompt: String = GeneratedPrompts.digesterPrompt
 
   /// Build the `--agents` JSON object for one Sonnet `source-reader` digester. The
   /// shape was verified against the installed CLI (2.1.178): keys `description`,
@@ -101,10 +90,7 @@ public enum IngestPlan: Equatable, Sendable {
   static func agentsJSON(digesterPrompt: String) -> String {
     let agents: [String: Any] = [
       "source-reader": [
-        "description":
-          "Reads an assigned chunk/section/page-range of a large source and returns "
-          + "a structured digest (facts, entities, concepts, quotes+locations). Does "
-          + "NOT write to the wiki. Use to read source volume in parallel.",
+        "description": GeneratedPrompts.sourceReaderDescription,
         "model": "sonnet",
         "prompt": digesterPrompt,
         "tools": ["Bash", "Read"],

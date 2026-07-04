@@ -117,6 +117,15 @@ agents, NOT Polytoken):
   the shell mangles the formatting. Use plain text for the inline body, or write
   the body to a file first and use `gh pr edit --body-file <file>`.
 
+## Agent prompts
+
+Agent-facing prompts (the system prompt, write rules, extraction prompts, the
+tree-render map, etc.) are authored as real markdown in `prompts/*.md` and
+codegen'd into the checked-in `Sources/WikiFSCore/GeneratedPrompts.swift` by
+`tools/promptgen`. After editing any `.md`, run `make prompts` and commit both
+the `.md` and the regenerated `.swift`. CI runs `make check-prompts` and fails
+on drift, so a stale generated file blocks the build.
+
 ## Testing
 
 **Swift** (from repo root):

@@ -69,7 +69,7 @@ NOTES_FILE       ?=
 
 .PHONY: all deps build check test release run clean install uninstall register help prune-provider-registrations \
         check-version notary-setup sign zip-notary notarize staple zip-release \
-        checksum verify-release dist github-release print-version icon
+        checksum verify-release dist github-release print-version icon prompts check-prompts
 
 all: build
 
@@ -79,6 +79,8 @@ help:
 	@echo "                    (also builds ./build/wikictl + embeds it in the app bundle)"
 	@echo "  check             Compile only (swift build) — no bundle/sign; CI/agent gate"
 	@echo "  test              Run the SwiftPM test suite"
+	@echo "  prompts           Regenerate Sources/WikiFSCore/GeneratedPrompts.swift from prompts/*.md"
+	@echo "  check-prompts     CI gate — fail if GeneratedPrompts.swift is stale vs prompts/*.md"
 	@echo "  release           Build release into ./$(APP)"
 	@echo "  run               Install to /Applications and launch $(APP_NAME)"
 	@echo "  clean             Remove ./build/ ./.build/ ./dist/"
@@ -161,6 +163,26 @@ check: deps
 test: deps
 	swift test
 	@echo "✓ tests pass"
+
+# ---------------------------------------------------------------------------
+# Agent prompts (prompts/*.md → Sources/WikiFSCore/GeneratedPrompts.swift)
+# ---------------------------------------------------------------------------
+
+# Regenerate the checked-in Swift constants from the .md sources. The generated
+# file is committed; `swift build` / `swift test` never invoke this — run it
+# after editing a prompt, then commit both the .md and the regenerated .swift.
+prompts: ## Regenerate Sources/WikiFSCore/GeneratedPrompts.swift from prompts/*.md
+	swift tools/promptgen/main.swift
+
+# CI gate — fail if the checked-in GeneratedPrompts.swift is stale vs the .md
+# sources. Regenerates to stdout and diffs; exits non-zero on drift.
+check-prompts: ## CI gate — fail if GeneratedPrompts.swift is stale vs prompts/*.md
+	@tmp=$$(mktemp); trap 'rm -f $$tmp' EXIT; \
+	swift tools/promptgen/main.swift --stdout > $$tmp; \
+	if ! diff -u Sources/WikiFSCore/GeneratedPrompts.swift $$tmp; then \
+		echo ">> GeneratedPrompts.swift is stale. Run 'make prompts' and commit." >&2; exit 1; \
+	fi
+
 
 print-version:
 	@echo "VERSION=$(VERSION)"
