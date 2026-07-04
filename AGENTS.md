@@ -135,3 +135,4 @@ uv run pyright pdf2md tests/                             # type check
 ```
 
 Python tests are NOT in CI — run them manually when changing pdf2md or PdfExtractionService.
+- If using XcodeBuildMCP, use the installed XcodeBuildMCP skill before calling XcodeBuildMCP tools.
