@@ -17,3 +17,7 @@ Resources/all-MiniLM-L6-v2-reference-embeddings.json
 # so a prebuilt, version-matched one is fetched by download.py. Not committed.
 Resources/mlx.metallib
 /default.metallib
+
+.vscode/
+
+.xcodebuildmcp/
