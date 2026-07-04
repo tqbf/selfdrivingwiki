@@ -239,12 +239,12 @@ struct SourceDetailView: View {
             HStack(spacing: 12) {
                 statusLabel
                 Text(Self.sizeFormatter.string(fromByteCount: Int64(file.byteSize)))
-                Text("Added \(file.createdAt, style: .date)")
+                Text("Added \(file.createdAt, style: .date) at \(file.createdAt, style: .time)")
                 if file.updatedAt != file.createdAt {
-                    Text("Updated \(file.updatedAt, style: .date)")
+                    Text("Updated \(file.updatedAt, style: .date) at \(file.updatedAt, style: .time)")
                 }
-                if let head = headVersion {
-                    Text("\(Self.markdownOriginLabel(for: head.origin)) \(head.createdAt, style: .date)")
+                if let head = headVersion, let label = Self.markdownOriginLabel(for: head.origin) {
+                    Text("\(label) \(head.createdAt, style: .date) at \(head.createdAt, style: .time)")
                 }
             }
             .font(.callout)
@@ -687,13 +687,15 @@ struct SourceDetailView: View {
     }()
 
     /// Human label for a `SourceMarkdownVersion.origin` value, describing how
-    /// the currently-displayed markdown version came to exist.
-    private static func markdownOriginLabel(for origin: String) -> String {
+    /// the currently-displayed markdown version came to exist. `nil` for
+    /// "source" (the as-ingested seed version of a native markdown file,
+    /// which the added-date row above already covers) so the row is omitted.
+    private static func markdownOriginLabel(for origin: String) -> String? {
         switch origin {
         case "extraction": return "Converted"
         case "user": return "Edited"
         case "revert": return "Reverted"
-        default: return "Updated"
+        default: return nil
         }
     }
 }
