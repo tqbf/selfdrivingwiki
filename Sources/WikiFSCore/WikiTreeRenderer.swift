@@ -52,12 +52,14 @@ public enum WikiTreeRenderer {
 
         - `wikictl page list`                         — id / title / path per page.
         - `wikictl page get --title T` (or `--id I`)  — print a page body (instant, authoritative).
-        - `printf '%s' "<body>" | wikictl page upsert --title T --body-file -`  — create/update a page.
-        - `printf '%s' "<body>" | wikictl index set --body-file -`              — rewrite index.md.
+        - `wikictl page upsert --title T --body-file ./body.md`  — create/update a page.
+        - `wikictl index set --body-file ./index.md`             — rewrite index.md.
         - `wikictl log append --kind ingest|query|lint --title "…" [--note "…"]` — record an action.
 
-        After any write, read it back with `wikictl page get` — the read-only mount
-        lags a few seconds, so don't `cat` the mount to verify a fresh write.
+        Pass page/index bodies via a FILE (`--body-file <path>`), never a shell pipe
+        or heredoc — the sandbox drops a piped/heredoc'd body and `wikictl` refuses an
+        empty body. After any write, read it back with `wikictl page get` — the
+        read-only mount lags a few seconds, so don't `cat` the mount to verify a fresh write.
 
         """
     }

@@ -162,12 +162,17 @@ public struct SystemPrompt: Equatable, Sendable {
     trailing newline — automatically. You don't need to hand-format whitespace;
     focus on content and structure.
 
+    Write page and index bodies to a FILE in your current working directory, then \
+    pass `--body-file <path>`. NEVER pipe or heredoc the body (`printf '<body>' | … \
+    --body-file -`, `wikictl … <<EOF`): the sandbox blocks the heredoc's temp file, \
+    the body arrives empty, and `wikictl` refuses an empty body.
+
     ```
     $WIKICTL page list                          list id / title / path per page
     $WIKICTL page get --title T | --id I        print a page body (instant, authoritative)
-    printf '%s' "<body>" | $WIKICTL page upsert --title T --body-file -   create or update a page
+    $WIKICTL page upsert --title T --body-file ./body.md   create or update a page
     $WIKICTL page delete --id I                 delete a page
-    printf '%s' "<body>" | $WIKICTL index set --body-file -               rewrite index.md wholesale
+    $WIKICTL index set --body-file ./index.md   rewrite index.md wholesale
     $WIKICTL log append --kind ingest|query|lint --title "…" [--note "…"] [--source <file-id>]  record an action (--source marks an ingest done)
     $WIKICTL search --query "…" [--limit N]    semantic search — find pages by meaning; defaults to 10 results, max 100
     $WIKICTL source list [--json]               list all sources (TSV, or JSON lines)

@@ -30,9 +30,13 @@ public enum IngestWriteRule {
     is writable — writing the mount fails ON PURPOSE; do not probe it. The ONLY way \
     to create or update content is the `wikictl` command. It is already on your PATH \
     and already targets THIS wiki via the $WIKI_DB environment variable — do NOT \
-    pass --wiki. Write with:
-      printf '%s' "<body>" | wikictl page upsert --title T --body-file -
-      printf '%s' "<body>" | wikictl index set --body-file -
+    pass --wiki. Deliver the body via FILE, not a shell pipe or heredoc: write the \
+    body to a file in your current working directory, then pass `--body-file <path>`. \
+    Do NOT use `printf '<body>' | wikictl … --body-file -` or a `<<EOF` heredoc — \
+    under the sandbox the body can arrive empty (a heredoc stages a temp file the \
+    sandbox denies), and `wikictl` refuses an empty body. Write with:
+      wikictl page upsert --title T --body-file ./body.md
+      wikictl index set --body-file ./index.md
       wikictl log append --kind ingest --title "…" --note "…"
     After a write, read it back with `wikictl page get` (the mount lags the database \
     by ~5s, so cat-ing the mount right after a write shows stale bytes). Cross-link \

@@ -23,9 +23,9 @@ struct WikiTreeRendererTests {
         #expect(body.contains("sources/by-name/"))
         #expect(body.contains("sources/by-id/"))
         #expect(body.contains("indexes/"))
-        // The wikictl cheatsheet, including the exact stdin-piped upsert form.
-        #expect(body.contains("printf '%s' \"<body>\" | wikictl page upsert --title T --body-file -"))
-        #expect(body.contains("wikictl index set"))
+        // The wikictl cheatsheet uses the file-first body delivery form.
+        #expect(body.contains("wikictl page upsert --title T --body-file ./body.md"))
+        #expect(body.contains("wikictl index set --body-file ./index.md"))
         #expect(body.contains("wikictl log append"))
         // Mount discipline.
         #expect(body.contains("read-only"))
