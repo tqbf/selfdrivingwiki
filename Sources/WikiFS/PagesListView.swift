@@ -107,6 +107,12 @@ final class PagesListViewController: NSViewController {
         tableView.backgroundColor = .clear
         tableView.doubleAction = #selector(onDoubleClick)
         tableView.target = self
+        // Implementing `pasteboardWriterForRow` opts the table into drag-out; the
+        // source operation mask still has to be set explicitly or the default
+        // (empty/multi-bit) mask blocks the drag from starting. `.copy` because
+        // dragging a page row onto the welcome screen opens a reference, not a
+        // move (the row isn't removed).
+        tableView.setDraggingSourceOperationMask(.copy, forLocal: true)
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("page"))
         tableView.addTableColumn(column)
@@ -179,6 +185,11 @@ final class PagesListViewController: NSViewController {
 
 extension PagesListViewController: NSTableViewDataSource {
     func numberOfRows(in tableView: NSTableView) -> Int { items.count }
+
+    func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+        guard row >= 0, row < items.count else { return nil }
+        return SidebarDragPayload(kind: .page, id: items[row].id.rawValue).makePasteboardWriter()
+    }
 }
 
 // MARK: - Delegate

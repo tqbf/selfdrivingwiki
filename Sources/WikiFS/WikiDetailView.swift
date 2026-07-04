@@ -18,6 +18,10 @@ struct WikiDetailView: View {
     let isZoteroConfigured: Bool
     @Environment(\.addURLHandler) private var addURLHandler
 
+    /// Highlights the welcome screen as a drop target while an internal
+    /// sidebar row (page/source/bookmark) is dragged over it.
+    @State private var isSidebarDropTargeted = false
+
     var body: some View {
         switch store.selection {
         case .none:
@@ -95,6 +99,22 @@ struct WikiDetailView: View {
                 }
                 .padding(.horizontal, 40)
                 .frame(maxWidth: .infinity)
+            }
+            .background {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.accentColor.opacity(isSidebarDropTargeted ? 0.08 : 0))
+            }
+            // Accept an internal sidebar drag (page/source, or a bookmark
+            // resolved to its target) and open it as a tab. This is the innermost
+            // drop target, so it takes priority over the window-level URL ingest
+            // destination in ContentView for sidebar-item payloads. URL drops
+            // (external files) still fall through to ingest.
+            .dropDestination(for: SidebarDragPayload.self) { payloads, _ in
+                guard let payload = payloads.first else { return false }
+                store.openTab(payload.selection)
+                return true
+            } isTargeted: { targeted in
+                isSidebarDropTargeted = targeted
             }
         case .ask:
             QueryConversationView(
