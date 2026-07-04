@@ -21,6 +21,13 @@ import Foundation
 /// `process-exec*` and `file-read*` (`pdf2mdDenyRules()`), so a sandboxed agent can't
 /// run the bundled extractor or feed it to `uv --script`. Everything else stays
 /// allow-default. Generic `uv`/`python3` exec is NOT yet denied (issue #116 item 2).
+///
+/// `~/.claude` write narrowing (issue #116 item 4): the `~/.claude` subtree is broadly
+/// allowed (the transcript under `projects/` needs it), but `claudeHomeDenyRules()`
+/// layers narrower denies over the execution-vector / credential paths (`hooks/`,
+/// `commands/`, `agents/`, `skills/`, `plugins/`, `.credentials.json`, `settings.json`,
+/// `settings.local.json`, `CLAUDE.md`) so a sandboxed agent can't plant files a future
+/// unsandboxed session would execute.
 public enum SandboxProfile {
 
     /// The fully-resolved invocation the launcher hands to `OperationCommand` when the
@@ -77,9 +84,11 @@ public enum SandboxProfile {
             "(deny file-write*)",
             // The scratch dir is a directory tree.
             "(allow file-write* (subpath (param \"SCRATCH_DIR\")))",
-            // Claude Code writes its session transcript and config under ~/.claude/ and
-            // to ~/.claude.json — allow the subtree and the top-level file so sandboxed
-            // runs can record their transcript without EPERM.
+            // Claude Code writes its session transcript under ~/.claude/projects/ and its
+            // top-level state to ~/.claude.json. The subtree allow is deliberately broad
+            // so benign runtime paths (projects/, shell-snapshots/, sessions/, …) keep
+            // working; the execution-vector / credential subpaths are carved out by
+            // claudeHomeDenyRules() below (issue #116 item 4).
             "(allow file-write* (subpath (string-append (param \"HOME\") \"/.claude\")))",
             "(allow file-write* (literal (string-append (param \"HOME\") \"/.claude.json\")))",
             // Claude Code derives a per-session temp dir from the cwd and places it under
@@ -90,6 +99,8 @@ public enum SandboxProfile {
             // The active wiki DB and its SQLite sidecars are exact files.
             "(allow file-write* (literal (param \"WIKI_DB\")))",
         ]
+        // Layer the ~/.claude execution-vector / credential denies over the subtree allow.
+        lines.append(contentsOf: claudeHomeDenyRules())
         lines.append(contentsOf: agentRuntimeWriteRules())
         for suffix in sqliteSidecarSuffixes {
             lines.append(
@@ -126,9 +137,11 @@ public enum SandboxProfile {
             "(deny file-write*)",
             // The scratch dir is writable — the agent needs a cwd.
             "(allow file-write* (subpath (param \"SCRATCH_DIR\")))",
-            // Claude Code writes its session transcript and config under ~/.claude/ and
-            // to ~/.claude.json — allow the subtree and the top-level file so sandboxed
-            // runs can record their transcript without EPERM.
+            // Claude Code writes its session transcript under ~/.claude/projects/ and its
+            // top-level state to ~/.claude.json. The subtree allow is deliberately broad
+            // so benign runtime paths (projects/, shell-snapshots/, sessions/, …) keep
+            // working; the execution-vector / credential subpaths are carved out by
+            // claudeHomeDenyRules() below (issue #116 item 4).
             "(allow file-write* (subpath (string-append (param \"HOME\") \"/.claude\")))",
             "(allow file-write* (literal (string-append (param \"HOME\") \"/.claude.json\")))",
             // See `generate` — Claude Code's per-session temp dir lives under
@@ -136,6 +149,8 @@ public enum SandboxProfile {
             // Bash tool to function under the sandbox.
             "(allow file-write* (subpath (param \"CLAUDE_TMP\")))",
         ]
+        // Layer the ~/.claude execution-vector / credential denies over the subtree allow.
+        lines.append(contentsOf: claudeHomeDenyRules())
         lines.append(contentsOf: agentRuntimeWriteRules())
         // Mirror `generate`: deny exec/read of the resolved pdf2md script when a path
         // is supplied. The rules reference only the `PDF2MD_SCRIPT` param name.
@@ -256,6 +271,39 @@ public enum SandboxProfile {
             "(allow file-write-data (subpath \"/dev/fd\"))",
             "(allow file-write* (regex #\"^/private/tmp/claude-[A-Za-z0-9]+-cwd(/|$)\"))",
         ]
+    }
+
+    /// `~/.claude` write-deny rules layered OVER the broad `~/.claude` subtree allow, so
+    /// a sandboxed agent can't tamper files that a FUTURE, unsandboxed Claude Code session
+    /// would load and execute (issue #116 item 4). The subtree allow is kept broad for
+    /// robustness — Claude Code writes the session transcript under `~/.claude/projects/`
+    /// and touches other benign runtime paths (`shell-snapshots/`, `sessions/`, `cache/`,
+    /// …) that vary by version; carving them all out individually would be brittle. Instead
+    /// the dangerous subpaths are denied here, and a narrower filtered deny wins over the
+    /// broader allow (same specificity semantics the `(deny file-write*)` fence and
+    /// `pdf2mdDenyRules()` rely on — verified live with `sandbox-exec`).
+    ///
+    /// Two categories, both under `~/.claude/`:
+    /// - **Execution vectors** (subtree `deny`): `hooks/`, `commands/`, `agents/`,
+    ///   `skills/`, `plugins/` — each can run code or define behavior a future session
+    ///   loads. (`commands/` is denied defensively even when absent — it's a known vector.)
+    /// - **Credentials + config + memory** (literal `deny`): `.credentials.json`,
+    ///   `settings.json`, `settings.local.json`, `CLAUDE.md` — credential swap, settings
+    ///   tamper (e.g. enabling `bypassPermissions`), or user-level instruction injection.
+    ///
+    /// Emitted in BOTH profiles; references only `(param "HOME")` (already a define), so
+    /// no new `-D` parameter is threaded through the invocation builders.
+    private static func claudeHomeDenyRules() -> [String] {
+        let dirSubtrees = ["hooks", "commands", "agents", "skills", "plugins"]
+        let literalFiles = [".credentials.json", "settings.json", "settings.local.json", "CLAUDE.md"]
+        var rules: [String] = []
+        for d in dirSubtrees {
+            rules.append("(deny file-write* (subpath (string-append (param \"HOME\") \"/.claude/\(d)\")))")
+        }
+        for f in literalFiles {
+            rules.append("(deny file-write* (literal (string-append (param \"HOME\") \"/.claude/\(f)\")))")
+        }
+        return rules
     }
 
     /// The `pdf2md` exec/read deny rules, emitted by BOTH `generate` and

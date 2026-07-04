@@ -303,4 +303,50 @@ struct SandboxProfileTests {
     #expect(resolved.hasPrefix("/private/tmp/"))
     #expect(resolved.contains("sdw-pdf2md-probe-"))
   }
+
+  // MARK: - ~/.claude write-narrowing (issue #116 item 4)
+
+  /// The execution-vector / credential paths under ~/.claude are denied EVEN THOUGH the
+  /// subtree is broadly allowed — a compromised agent can't plant hooks/commands/agents/
+  /// skills/plugins or swap credentials/settings/CLAUDE.md for a future unsandboxed session.
+  @Test func bothProfilesDenyClaudeHomeExecutionAndCredentialPaths() {
+    let rw = SandboxProfile.generate(scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB)
+    let ro = SandboxProfile.generateReadOnly(scratchDir: Self.scratchDir)
+    for p in [rw, ro] {
+      // Subtree denies (execution vectors).
+      for d in ["hooks", "commands", "agents", "skills", "plugins"] {
+        #expect(p.contains("(deny file-write* (subpath (string-append (param \"HOME\") \"/.claude/\(d)\")))"))
+      }
+      // Literal denies (credentials + settings + user-level memory).
+      for f in [".credentials.json", "settings.json", "settings.local.json", "CLAUDE.md"] {
+        #expect(p.contains("(deny file-write* (literal (string-append (param \"HOME\") \"/.claude/\(f)\")))"))
+      }
+    }
+  }
+
+  /// Regression guard: the broad ~/.claude subtree allow stays (the transcript under
+  /// projects/ and other benign runtime writes still need it); only the dangerous
+  /// subpaths are carved out. Narrowing the ALLOW itself would break the transcript.
+  @Test func bothProfilesStillBroadlyAllowClaudeHomeSubtree() {
+    let rw = SandboxProfile.generate(scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB)
+    let ro = SandboxProfile.generateReadOnly(scratchDir: Self.scratchDir)
+    for p in [rw, ro] {
+      #expect(p.contains("(allow file-write* (subpath (string-append (param \"HOME\") \"/.claude\")))"))
+      // The transcript dir is NOT separately denied — it rides the broad allow.
+      #expect(!p.contains("\"/.claude/projects"))
+    }
+  }
+
+  /// Regression guard: dirs use `subpath` (whole subtree), files use `literal` (exact).
+  /// Swapping them would either over-deny (a literal on a dir misses new files) or
+  /// under-deny (a subpath on a file is equivalent but inconsistent).
+  @Test func claudeHomeDenyUsesSubpathForDirsLiteralForFiles() {
+    let p = SandboxProfile.generate(scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB)
+    // settings.json is a FILE → literal, not subpath.
+    #expect(p.contains("(deny file-write* (literal (string-append (param \"HOME\") \"/.claude/settings.json\")))"))
+    #expect(!p.contains("(deny file-write* (subpath (string-append (param \"HOME\") \"/.claude/settings.json\")))"))
+    // hooks is a DIR → subpath, not literal.
+    #expect(p.contains("(deny file-write* (subpath (string-append (param \"HOME\") \"/.claude/hooks\")))"))
+    #expect(!p.contains("(deny file-write* (literal (string-append (param \"HOME\") \"/.claude/hooks\")))"))
+  }
 }
