@@ -51,6 +51,11 @@ public enum PageUpsert {
         title: String,
         body: String
     ) throws -> Outcome {
+        // Sanitize BEFORE the title→id resolve, not just in the store's
+        // create/update (which sanitizes again as a backstop): resolving the
+        // raw title against sanitized stored titles would always miss, and
+        // every upsert of the same unlinkable title would create a new page.
+        let title = WikiNameRules.sanitized(title)
         let outcome = try writePage(in: store, id: id, title: title, body: body)
         try store.replaceLinks(from: outcome.id, parsedLinks: WikiLinkParser.parse(body))
         // Compute + store chunk embeddings for the page body. Non-fatal: a

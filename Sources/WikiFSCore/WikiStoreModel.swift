@@ -69,6 +69,7 @@ public final class WikiStoreModel {
     /// sees it true and bails. The check-and-set is main-actor and contains no
     /// suspension, so it is atomic against the scenePhase/activeWikiID hooks.
     @ObservationIgnored private var isUpgrading = false
+    @ObservationIgnored private var didReconcileLinks = false
 
     /// Live SOURCES search query from the Sources search bar. Debounced 300ms.
     /// Mirrors the page `searchQuery` (semantic cosine, LIKE fallback).
@@ -841,10 +842,19 @@ public final class WikiStoreModel {
         let body = didFix ? fixedBody : original
         let links = WikiLinkParser.parse(body)
         let knownTitles = Set(summaries.map { $0.title })
+        // Mirror replaceLinks: a link is broken only when NO candidate reading
+        // of its raw target (per WikiLinkResolver — handles `#` in titles)
+        // names an existing page. Unique the output — two parsed links can
+        // share a base since parse() de-dupes by raw target.
+        var seenBroken = Set<String>()
         let broken = links
             .filter { $0.linkType == .page }
-            .map { $0.target }
-            .filter { !knownTitles.contains($0) }
+            .compactMap { link -> String? in
+                let raw = link.fragment.map { "\(link.target)#\($0)" } ?? link.target
+                guard WikiLinkResolver.resolvedSplit(of: raw, isKnown: { knownTitles.contains($0) }) == nil
+                else { return nil }
+                return seenBroken.insert(link.target).inserted ? link.target : nil
+            }
 
         return LintPreflight(didFixLinks: didFix, brokenPageLinks: broken)
     }
@@ -1386,6 +1396,21 @@ public final class WikiStoreModel {
         guard !isUpgrading else { return }
         isUpgrading = true
         defer { isUpgrading = false }
+
+        // Link-graph self-heal, once per model lifetime, BEFORE the embedder
+        // gates below (it must run even on FTS-only builds). Main-actor SQLite
+        // like everything else here; re-resolves every page's `[[links]]` so
+        // citations that only resolve under newer rules (lookup-driven `#`
+        // splitting, lenient source-name matching) — or whose target was
+        // ingested after the page was last saved — get their link rows without
+        // waiting for the page's next edit.
+        if !didReconcileLinks {
+            didReconcileLinks = true
+            let start = DispatchTime.now()
+            let count = (try? LinkReconciler.reconcileAll(in: store)) ?? 0
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+            DebugLog.store("LinkReconciler: re-resolved links for \(count) page(s) in \(Int(ms))ms")
+        }
 
         guard EmbeddingService.selectedEmbedderIdentifier() == EmbeddingService.miniLMIdentifier else {
             return                                            // no MiniLM model → FTS-only

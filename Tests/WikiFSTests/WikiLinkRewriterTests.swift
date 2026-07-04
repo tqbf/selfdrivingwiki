@@ -57,6 +57,51 @@ struct WikiLinkRewriterTests {
         #expect(result == "[[source:New#C# is sharp]]")
     }
 
+    @Test func rewritesNameContainingHashWithQuotedFragment() {
+        // The NAME contains a bare `#` ("C#"); the `#"` quote anchor is the
+        // delimiter, so the whole name is matched and spliced.
+        let result = WikiLinkRewriter.rewriteSourceBase(
+            in: "[[source:Agentic Static Analysis for C# Security Auditing#\"a quote\"]]",
+            matching: "Agentic Static Analysis for C# Security Auditing",
+            to: "New Name")
+        #expect(result == "[[source:New Name#\"a quote\"]]")
+    }
+
+    @Test func rewritesNameContainingHashWithFragmentAndAlias() {
+        let result = WikiLinkRewriter.rewriteSourceBase(
+            in: "[[source:C# Notes#\"q\"|my alias]]",
+            matching: "C# Notes", to: "Renamed")
+        #expect(result == "[[source:Renamed#\"q\"|my alias]]")
+    }
+
+    @Test func rewritesNameContainingHashWithoutAnyFragment() {
+        // Direct string match — no quote anchor needed for a `#`-name to be
+        // recognized and rewritten whole.
+        let result = WikiLinkRewriter.rewriteSourceBase(
+            in: "[[source:C# Notes]]",
+            matching: "C# Notes", to: "Renamed")
+        #expect(result == "[[source:Renamed]]")
+    }
+
+    @Test func longerKnownNameOwnsTheSpan() {
+        // Renaming source "C" must not touch a span whose longer reading names
+        // an EXISTING other source "C# Notes" (longest-name-wins).
+        let result = WikiLinkRewriter.rewriteSourceBase(
+            in: "[[source:C# Notes]]",
+            matching: "C", to: "Renamed",
+            isNameKnown: { $0 == "C# Notes" })
+        #expect(result == nil)
+    }
+
+    @Test func shortNameSplicesWhenNoLongerNameExists() {
+        // With no other source in the namespace, `[[source:C# Notes]]` reads
+        // as source "C" + fragment — renaming "C" rewrites the base.
+        let result = WikiLinkRewriter.rewriteSourceBase(
+            in: "[[source:C# Notes]]",
+            matching: "C", to: "Renamed")
+        #expect(result == "[[source:Renamed# Notes]]")
+    }
+
     // MARK: - Alias preservation
 
     @Test func preservesAlias() {

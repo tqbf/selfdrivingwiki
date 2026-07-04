@@ -3,7 +3,7 @@ import Foundation
 import SQLite3
 @testable import WikiFSCore
 
-/// Guards the fresh-DB fast path (`createFreshSchemaV17`) against the stepwise
+/// Guards the fresh-DB fast path (`createFreshSchemaV18`) against the stepwise
 /// `migrate(from:)` ladder. The fast path duplicates the schema definition, so
 /// any drift (a forgotten table/column/index/FK/trigger) would silently make
 /// fresh dbs differ from upgraded ones. This forces a fresh db through the FULL
@@ -120,8 +120,8 @@ import SQLite3
         let ladder = try fingerprint(at: ladderURL)
 
         // Both must report head version 16.
-        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "17")
-        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "17")
+        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "18")
+        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "18")
 
         if fast != ladder {
             Issue.record("fresh fast-path schema drifted from the stepwise ladder:\n--- fast ---\n\(fast)\n--- ladder ---\n\(ladder)")

@@ -19,8 +19,8 @@ import Foundation
 ///   * empty targets (e.g. `[[ ]]`) are skipped;
 ///   * the `source:` / `page:` prefix is stripped from the target *only* (never
 ///     the alias); the remainder is re-normalized;
-///   * duplicate targets are de-duplicated per `(kind, target)`, FIRST occurrence
-///     wins (so the first alias seen for a target is the one kept);
+///   * duplicate targets are de-duplicated per `(kind, raw target)` — base plus
+///     fragment — FIRST occurrence wins (so the first alias seen is kept);
 ///   * unmatched / malformed brackets are ignored.
 public enum WikiLinkParser {
 
@@ -73,14 +73,18 @@ public enum WikiLinkParser {
         return false
     }
 
-    /// Split a raw target on the **first** `#` only. Everything before → `base`
-    /// (may be empty for `[[#Section]]`), everything after → `fragment` (kept
-    /// verbatim; inner `#` characters — e.g. `"C# is a language"` — are preserved
-    /// for substring matching). Returns `(base: "", fragment: "Section")` for a
-    /// same-page anchor `[[#Section]]`. Returns `(base: rawTarget, nil)` when there
-    /// is no `#`.
+    /// Split a raw target into `base` + `fragment`. The delimiter is the first
+    /// `#"` (the start of a quote anchor, `[[source:Name#"quote"]]`) when one is
+    /// present — so a bare `#` inside the NAME (e.g. "Agentic Static Analysis
+    /// for C# Security Auditing") stays part of the base instead of truncating
+    /// it. With no `#"`, the first `#` splits (`[[Page#Section]]`). The base may
+    /// be empty for a same-page anchor `[[#Section]]`; the fragment is kept
+    /// verbatim (inner `#` characters — e.g. `"C# is a language"` — are
+    /// preserved for substring matching). Returns `(base: rawTarget, nil)` when
+    /// there is no `#`.
     public static func splitFragment(_ rawTarget: String) -> (base: String, fragment: String?) {
-        guard let hashIndex = rawTarget.firstIndex(of: "#") else {
+        guard let hashIndex = rawTarget.range(of: "#\"")?.lowerBound
+                ?? rawTarget.firstIndex(of: "#") else {
             return (rawTarget, nil)
         }
         let base = String(rawTarget[..<hashIndex])
@@ -100,9 +104,9 @@ public enum WikiLinkParser {
     // MARK: - Parse
 
     /// Parse all wiki links from `body`, in document order, de-duplicated by
-    /// `(kind, target)` (first alias wins). Same-page anchors (`[[#…]]`, empty
-    /// base) are skipped — they don't name a page or source, so they don't belong
-    /// in the link graph.
+    /// `(kind, raw target)` (first alias wins). Same-page anchors (`[[#…]]`,
+    /// empty base) are skipped — they don't name a page or source, so they don't
+    /// belong in the link graph.
     public static func parse(_ body: String) -> [ParsedLink] {
         let ns = body as NSString
         let matches = regex.matches(in: body, range: NSRange(location: 0, length: ns.length))
@@ -130,7 +134,14 @@ public enum WikiLinkParser {
             guard !bareTarget.isEmpty else { continue } // empty target → skip
             if isEmptyPrefix(base) { continue } // `[[source:]]` → literal
 
-            let dedupKey = "\(kind.rawValue):\(bareTarget)"
+            // De-dupe by the RAW target (base + fragment), not the base alone:
+            // two `#`-containing titles (e.g. `[[C# Guide]]` / `[[C# Notes]]`)
+            // share the mis-split base "C" but are different links. Plain
+            // duplicates (`[[Home]]` twice) still collapse; `[[Page#A]]` +
+            // `[[Page#B]]` both survive and the store's (from,to) primary key
+            // collapses them if they resolve to one page.
+            let raw = fragment.map { "\(bareTarget)#\($0)" } ?? bareTarget
+            let dedupKey = "\(kind.rawValue):\(raw)"
             guard seen.insert(dedupKey).inserted else { continue }
 
             let linkText: String

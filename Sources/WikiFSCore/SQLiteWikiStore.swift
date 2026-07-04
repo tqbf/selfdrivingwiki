@@ -142,20 +142,20 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // (version >= 1) — and fresh dbs forced onto the ladder by tests — run
         // `migrate(from:)` so every prior upgrade path is preserved.
         if version == 0 && !forceLadderMigration {
-            try createFreshSchemaV17()
+            try createFreshSchemaV18()
             return
         }
         try migrate(from: &version)
     }
 
-    /// Build the complete current (v17) schema for a fresh database in one
+    /// Build the complete current (v18) schema for a fresh database in one
     /// consolidated block. MUST stay schema-identical to the end state of
     /// `migrate(from:)`; the `freshFastPathMatchesStepwiseLadder` test enforces
     /// that by forcing a fresh db through the ladder and comparing. Legacy index
     /// names (`ingested_files_created`, `file_markdown_versions_file`) are
     /// reproduced verbatim — they survive the table renames in the ladder, so a
     /// fresh db must match.
-    private func createFreshSchemaV17() throws {
+    private func createFreshSchemaV18() throws {
         // Core page model + attachments/links.
         try exec("""
         CREATE TABLE pages (
@@ -383,7 +383,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         """)
         try exec("CREATE INDEX bookmark_nodes_parent ON bookmark_nodes(parent_id, position);")
 
-        try exec("PRAGMA user_version=17;")
+        // v18 is a data-only step (name sanitization) — a fresh DB has no rows
+        // to sweep, so the fast path just stamps the version.
+        try exec("PRAGMA user_version=18;")
     }
 
     /// The stepwise, idempotent migration ladder keyed on `PRAGMA user_version`.
@@ -816,6 +818,70 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try exec("PRAGMA user_version=17;")
             version = 17
         }
+
+        // Step 17 → 18: one-time CONTENT fix, no schema change — sanitize
+        // unlinkable characters out of page titles and source display names
+        // (`|`, `[`/`]`, leading `#` — see WikiNameRules; those break the
+        // `[[wiki-link]]` grammar with no escape, so such names could never be
+        // linked/cited). New writes are sanitized at the store boundary from
+        // v18 on; this sweeps rows that predate the rule. Nothing referenced
+        // the dirty names (they were unlinkable), so no link rewriting is
+        // needed. Versions bump so the File Provider re-syncs; FTS/embeddings
+        // refresh on the row's next save (staleness only for renamed rows).
+        if version < 18 {
+            try sanitizeStoredNames()
+            try exec("PRAGMA user_version=18;")
+            version = 18
+        }
+    }
+
+    /// The v17→18 sweep: rewrite every page title and source display name that
+    /// `WikiNameRules` would change. Pages also get their slug recomputed from
+    /// the sanitized title. Sources with a NULL display_name but an unlinkable
+    /// FILENAME get the sanitized filename as their display name (the filename
+    /// itself stays verbatim — it is the file's identity on the mount).
+    private func sanitizeStoredNames() throws {
+        let now = Date().timeIntervalSince1970
+
+        var pages: [(id: String, title: String)] = []
+        let pageRows = try statement("SELECT id, title FROM pages;")
+        defer { pageRows.reset() }
+        while try pageRows.step() {
+            pages.append((pageRows.text(at: 0), pageRows.text(at: 1)))
+        }
+        for page in pages where !WikiNameRules.isLinkable(page.title) {
+            let clean = WikiNameRules.sanitized(page.title)
+            let slug = try uniqueSlug(from: clean, id: PageID(rawValue: page.id))
+            let update = try statement("""
+            UPDATE pages SET title = ?2, slug = ?3, updated_at = ?4,
+                             version = version + 1 WHERE id = ?1;
+            """)
+            defer { update.reset() }
+            try update.bind(page.id, at: 1)
+            try update.bind(clean, at: 2)
+            try update.bind(slug, at: 3)
+            try update.bind(now, at: 4)
+            _ = try update.step()
+        }
+
+        var sources: [(id: String, effectiveName: String)] = []
+        let sourceRows = try statement(
+            "SELECT id, COALESCE(display_name, filename) FROM sources;")
+        defer { sourceRows.reset() }
+        while try sourceRows.step() {
+            sources.append((sourceRows.text(at: 0), sourceRows.text(at: 1)))
+        }
+        for source in sources where !WikiNameRules.isLinkable(source.effectiveName) {
+            let update = try statement("""
+            UPDATE sources SET display_name = ?2, updated_at = ?3,
+                               version = version + 1 WHERE id = ?1;
+            """)
+            defer { update.reset() }
+            try update.bind(source.id, at: 1)
+            try update.bind(WikiNameRules.sanitized(source.effectiveName), at: 2)
+            try update.bind(now, at: 3)
+            _ = try update.step()
+        }
     }
 
     // MARK: - sqlite-vec registration (statically linked, -DSQLITE_CORE)
@@ -1044,6 +1110,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
     public func createPage(title: String) throws -> WikiPage {
         lock.lock(); defer { lock.unlock() }
+        // Titles must stay linkable (`[[title]]`) — see WikiNameRules.
+        let title = WikiNameRules.sanitized(title)
         let id = PageID(rawValue: ULID.generate())
         let slug = try uniqueSlug(from: title, id: id)
         let now = Date()
@@ -1067,6 +1135,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         // Recompute slug from the (possibly renamed) title, then bump version
         // and updated_at. version bumps support Phase 3 change signaling.
+        // Titles must stay linkable (`[[title]]`) — see WikiNameRules.
+        let title = WikiNameRules.sanitized(title)
         let slug = try uniqueSlug(from: title, id: id)
         let stmt = try statement("""
         UPDATE pages
@@ -1135,12 +1205,16 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// Resolve a `[[source:…]]` target to a source id. Case-insensitive; on a
     /// multi-match collision, the most recently updated source wins.
     ///
-    /// Two passes: an exact match on `display_name` (falling back to `filename`
-    /// when `display_name` is NULL), then — because legacy rows stored
-    /// `display_name = filename` WITH the file extension while the canonical cite
-    /// target drops it — a scan that matches the query against each candidate's
-    /// name with its last extension removed, so `[[source:Some Paper]]` still
-    /// resolves a row named `Some Paper.pdf`.
+    /// Three passes: an exact match on `display_name` (falling back to
+    /// `filename` when `display_name` is NULL); then — because legacy rows
+    /// stored `display_name = filename` WITH the file extension while the
+    /// canonical cite target drops it — a scan that matches the query against
+    /// each candidate's name with its last extension removed, so
+    /// `[[source:Some Paper]]` still resolves a row named `Some Paper.pdf`;
+    /// then a LENIENT pass on `WikiNameRules.looseMatchKey` (extension AND a
+    /// trailing "(…)" suffix stripped) that resolves ONLY when exactly one
+    /// source matches — so an agent citing `Some Paper (2026)` still finds
+    /// `Some Paper.pdf`, but a near-miss never guesses between two candidates.
     public func resolveSourceByName(_ displayName: String) throws -> PageID? {
         lock.lock(); defer { lock.unlock() }
         let exact = try statement("""
@@ -1153,6 +1227,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try exact.bind(displayName, at: 1)
         if try exact.step() { return PageID(rawValue: exact.text(at: 0)) }
 
+        let queryLooseKey = WikiNameRules.looseMatchKey(displayName)
+        var looseMatches: [PageID] = []
         let scan = try statement("""
         SELECT id, COALESCE(display_name, filename) AS name FROM sources
         ORDER BY updated_at DESC;
@@ -1163,6 +1239,25 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             if (name as NSString).deletingPathExtension.caseInsensitiveCompare(displayName) == .orderedSame {
                 return PageID(rawValue: scan.text(at: 0))
             }
+            if !queryLooseKey.isEmpty, WikiNameRules.looseMatchKey(name) == queryLooseKey {
+                looseMatches.append(PageID(rawValue: scan.text(at: 0)))
+            }
+        }
+        // Pass 3: lenient, unique-only.
+        return looseMatches.count == 1 ? looseMatches[0] : nil
+    }
+
+    /// Resolve a parsed link's target to an id, trying every candidate
+    /// (name, fragment) reading of the raw target — longest name first — via
+    /// `WikiLinkResolver`, so names containing `#` resolve whole. `resolve` is
+    /// `resolveTitleToID` for page links, `resolveSourceByName` for citations.
+    private func resolveLinkTarget(
+        _ link: WikiLinkParser.ParsedLink,
+        using resolve: (String) throws -> PageID?
+    ) throws -> PageID? {
+        let raw = link.fragment.map { "\(link.target)#\($0)" } ?? link.target
+        for split in WikiLinkResolver.candidateSplits(of: raw) {
+            if let id = try resolve(split.base) { return id }
         }
         return nil
     }
@@ -1194,17 +1289,23 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             INSERT OR IGNORE INTO source_links (from_page_id, to_source_id, link_text)
             VALUES (?1, ?2, ?3);
             """)
+            // A `#` inside a page/source NAME mis-splits into base + fragment
+            // at parse time. Resolve via WikiLinkResolver: try every reading
+            // of the raw target (longest name first) and take the first that
+            // names a real page/source.
             for link in parsedLinks {
                 switch link.linkType {
                 case .page:
-                    guard let target = try resolveTitleToID(link.target) else { continue }
+                    guard let target = try resolveLinkTarget(link, using: resolveTitleToID)
+                    else { continue }
                     insPage.reset()
                     try insPage.bind(pageID.rawValue, at: 1)
                     try insPage.bind(target.rawValue, at: 2)
                     try insPage.bind(link.linkText, at: 3)
                     _ = try insPage.step()
                 case .source:
-                    guard let target = try resolveSourceByName(link.target) else { continue }
+                    guard let target = try resolveLinkTarget(link, using: resolveSourceByName)
+                    else { continue }
                     insSource.reset()
                     try insSource.bind(pageID.rawValue, at: 1)
                     try insSource.bind(target.rawValue, at: 2)
@@ -1310,9 +1411,21 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             ?? ContentSniff.mimeType(of: data)
             ?? (ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType)
         let now = Date()
-        let displayName = DisplayNameResolver.resolve(
+        // The citable name (`[[source:name]]`) must stay linkable — see
+        // WikiNameRules. Sanitize the resolved display name; when metadata
+        // yields none and the raw FILENAME is unlinkable, store its sanitized
+        // form as the display name (the filename itself stays verbatim — it is
+        // the file's identity on the mount).
+        let displayName: String?
+        if let resolved = DisplayNameResolver.resolve(
             filename: filename, data: data, mimeType: mime,
-            zoteroItemTitle: zoteroItemTitle)
+            zoteroItemTitle: zoteroItemTitle) {
+            displayName = WikiNameRules.sanitized(resolved)
+        } else if !WikiNameRules.isLinkable(filename) {
+            displayName = WikiNameRules.sanitized(filename)
+        } else {
+            displayName = nil
+        }
 
         let stmt = try statement("""
         INSERT INTO sources
@@ -1416,6 +1529,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// transaction — it would stall `wikictl`).
     public func renameSource(id: PageID, to newDisplayName: String) throws {
         lock.lock(); defer { lock.unlock() }
+        // Display names must stay citable (`[[source:name]]`) — see WikiNameRules.
+        let newDisplayName = WikiNameRules.sanitized(newDisplayName)
         let renamed = try withTransaction { () -> Bool in
             // Read the old name under the write lock's snapshot.
             let old = try getSource(id: id)
@@ -1432,12 +1547,18 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try stmt.bind(Date().timeIntervalSince1970, at: 3)
             _ = try stmt.step()
 
-            // Rewrite links in every page that points at this source.
+            // Rewrite links in every page that points at this source. The
+            // isNameKnown closure keeps longest-name-wins intact: a span whose
+            // longer reading names some OTHER source is not this rename's to
+            // take. (The row above is already renamed, so oldBase itself
+            // resolves to nothing here — only genuinely different names
+            // answer true.)
             for pageID in try sourceLinkingPages(to: id) {
                 let page = try getPage(id: pageID)
                 guard let rewritten = WikiLinkRewriter.rewriteSourceBase(
                     in: page.bodyMarkdown, matching: oldBase,
-                    to: newDisplayName) else { continue }
+                    to: newDisplayName,
+                    isNameKnown: { (try? self.resolveSourceByName($0)) != nil }) else { continue }
                 try updatePage(id: pageID, title: page.title, body: rewritten)
                 try replaceLinks(from: pageID, parsedLinks: WikiLinkParser.parse(rewritten))
             }

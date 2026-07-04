@@ -747,6 +747,15 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     let stripped = names.map { ($0 as NSString).deletingPathExtension }
                     return (names + stripped).map { $0.lowercased() }
                 })
+            // Lenient tier, mirroring resolveSourceByName's pass 3 so ghost
+            // styling agrees with navigation: loose keys (extension + trailing
+            // "(…)" stripped) that are UNIQUE across sources.
+            var looseKeyCounts: [String: Int] = [:]
+            for source in store?.sources ?? [] {
+                let effective = source.displayName ?? source.filename
+                looseKeyCounts[WikiNameRules.looseMatchKey(effective), default: 0] += 1
+            }
+            let uniqueLooseKeys = Set(looseKeyCounts.filter { $0.value == 1 }.keys)
 
             let loadStartVal = loadStart
             convertTask = Task.detached(priority: .userInitiated) { [weak self] in
@@ -759,8 +768,10 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 // render, both off the main actor. isResolved resolves against
                 // the precomputed existence sets so missing links style as ghosts.
                 let prepared = ReaderMarkdown.prepared(markdown) { name, kind in
-                    kind == .source ? sourceNames.contains(name.lowercased())
-                                    : pageTitles.contains(name.lowercased())
+                    kind == .source
+                        ? sourceNames.contains(name.lowercased())
+                            || uniqueLooseKeys.contains(WikiNameRules.looseMatchKey(name))
+                        : pageTitles.contains(name.lowercased())
                 }
                 let body = MarkdownHTMLRenderer.render(prepared)
                 let html = WikiReaderView.documentHTML(body)

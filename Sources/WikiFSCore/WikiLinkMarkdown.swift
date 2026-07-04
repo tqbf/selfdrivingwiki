@@ -118,17 +118,27 @@ public enum WikiLinkMarkdown {
                 continue
             }
 
+            // Try every (name, fragment) reading of the target against the
+            // caller's namespace, longest name first — so a `#` INSIDE a
+            // page/source name (e.g. "… for C# …", with or without a real
+            // anchor after it) links the actual page instead of truncating at
+            // the first `#`. Ghost links keep the heuristic split.
+            let raw = fragment.map { "\(bareTarget)#\($0)" } ?? bareTarget
+            let split = WikiLinkResolver.resolvedSplit(of: raw) { isResolved($0, kind) }
+            let resolved = split != nil
+            let linkTarget = split?.base ?? bareTarget
+            let linkFragment = split.map(\.fragment) ?? fragment
+
             let display: String
             if let alias = fixed.alias {
                 let collapsedAlias = collapseWhitespace(alias)
-                display = collapsedAlias.isEmpty ? bareTarget : collapsedAlias
+                display = collapsedAlias.isEmpty ? linkTarget : collapsedAlias
             } else {
-                display = bareTarget
+                display = linkTarget
             }
 
-            let resolved = isResolved(bareTarget, kind)
-            out += markdownLink(display: display, target: bareTarget, kind: kind,
-                                resolved: resolved, fragment: fragment)
+            out += markdownLink(display: display, target: linkTarget, kind: kind,
+                                resolved: resolved, fragment: linkFragment)
         }
         // Tail after the last match.
         if cursor < ns.length {
