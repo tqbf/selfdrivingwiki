@@ -16,6 +16,11 @@ import Foundation
 /// This is provider-agnostic: the profile never names a provider; it fences the write
 /// channel only. See `plans/sandbox-agent.md` for the threat model and the
 /// `sandbox-exec` syntax research that underpins this.
+///
+/// The ONE read/exec carve-out: the resolved `pdf2md` script is denied for both
+/// `process-exec*` and `file-read*` (`pdf2mdDenyRules()`), so a sandboxed agent can't
+/// run the bundled extractor or feed it to `uv --script`. Everything else stays
+/// allow-default. Generic `uv`/`python3` exec is NOT yet denied (issue #116 item 2).
 public enum SandboxProfile {
 
     /// The fully-resolved invocation the launcher hands to `OperationCommand` when the
@@ -55,9 +60,16 @@ public enum SandboxProfile {
     /// - Parameters:
     ///   - scratchDir: the per-run scratch directory absolute path (the writable cwd).
     ///   - wikiDBPath: the active wiki's `<ulid>.sqlite` absolute file path.
+    ///   - pdf2mdScriptPath: when non-nil, the resolved absolute path to the bundled
+    ///     `pdf2md` PEP 723 script. Emits `process-exec*` + `file-read*` denies (by
+    ///     `literal` on the script file) so a sandboxed agent can't run it or feed it
+    ///     to `uv --script`. See `pdf2mdDenyRules()` for why this is `literal`, not
+    ///     `subpath`. Nil (default) emits nothing — byte-identical to the pre-denial
+    ///     profile, so call sites that don't care are unaffected.
     public static func generate(
         scratchDir: String,
-        wikiDBPath: String
+        wikiDBPath: String,
+        pdf2mdScriptPath: String? = nil
     ) -> String {
         var lines: [String] = [
             "(version 1)",
@@ -84,6 +96,13 @@ public enum SandboxProfile {
                 "(allow file-write* (literal (string-append (param \"WIKI_DB\") \"\(suffix)\")))"
             )
         }
+        // The deny rules reference only the `PDF2MD_SCRIPT` param NAME; the resolved
+        // value flows in via `-D` at sandbox-exec time. Guard just to avoid emitting
+        // rules with nothing to deny (and to keep the default-nil profile identical to
+        // the pre-denial one).
+        if let pdf2mdScriptPath, !pdf2mdScriptPath.isEmpty {
+            lines.append(contentsOf: pdf2mdDenyRules())
+        }
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -92,7 +111,15 @@ public enum SandboxProfile {
     /// Used when the query agent runs without "Allow wiki edits" — it physically
     /// prevents `wikictl page upsert` / `wikictl index set` / `wikictl log append`
     /// from writing, regardless of prompt instructions.
-    public static func generateReadOnly(scratchDir: String) -> String {
+    ///
+    /// - Parameter pdf2mdScriptPath: when non-nil, emits the same `pdf2md` exec/read
+    ///   denies as `generate(...)` so the deny holds for the read-only query path too.
+    ///   See `generate(...)` / `pdf2mdDenyRules()` for details. Nil (default) emits
+    ///   nothing.
+    public static func generateReadOnly(
+        scratchDir: String,
+        pdf2mdScriptPath: String? = nil
+    ) -> String {
         var lines: [String] = [
             "(version 1)",
             "(allow default)",
@@ -110,6 +137,11 @@ public enum SandboxProfile {
             "(allow file-write* (subpath (param \"CLAUDE_TMP\")))",
         ]
         lines.append(contentsOf: agentRuntimeWriteRules())
+        // Mirror `generate`: deny exec/read of the resolved pdf2md script when a path
+        // is supplied. The rules reference only the `PDF2MD_SCRIPT` param name.
+        if let pdf2mdScriptPath, !pdf2mdScriptPath.isEmpty {
+            lines.append(contentsOf: pdf2mdDenyRules())
+        }
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -124,20 +156,26 @@ public enum SandboxProfile {
     public static func readOnlyInvocation(
         homePath: String,
         scratchDir: String,
-        claudeTempBase: String = defaultClaudeTempBase()
+        claudeTempBase: String = defaultClaudeTempBase(),
+        pdf2mdScriptPath: String? = nil
     ) -> SandboxInvocation {
         let resolvedHome = Self.canonical(homePath)
         let resolvedScratch = Self.canonical(scratchDir)
         let resolvedClaudeTemp = Self.canonical(claudeTempBase)
-        let profile = generateReadOnly(scratchDir: resolvedScratch)
-        return SandboxInvocation(
-            profile: profile,
-            defines: [
-                ("HOME", resolvedHome),
-                ("SCRATCH_DIR", resolvedScratch),
-                ("CLAUDE_TMP", resolvedClaudeTemp),
-            ]
+        let resolvedPdf2md = pdf2mdScriptPath.map { Self.canonical($0) }
+        let profile = generateReadOnly(
+            scratchDir: resolvedScratch,
+            pdf2mdScriptPath: resolvedPdf2md
         )
+        var defines: [(String, String)] = [
+            ("HOME", resolvedHome),
+            ("SCRATCH_DIR", resolvedScratch),
+            ("CLAUDE_TMP", resolvedClaudeTemp),
+        ]
+        if let resolvedPdf2md, !resolvedPdf2md.isEmpty {
+            defines.append(("PDF2MD_SCRIPT", resolvedPdf2md))
+        }
+        return SandboxInvocation(profile: profile, defines: defines)
     }
 
     /// Build a `SandboxInvocation` from the three spawn-time paths. The scratch dir and
@@ -150,7 +188,8 @@ public enum SandboxProfile {
         homePath: String,
         scratchDir: String,
         wikiDBPath: String,
-        claudeTempBase: String = defaultClaudeTempBase()
+        claudeTempBase: String = defaultClaudeTempBase(),
+        pdf2mdScriptPath: String? = nil
     ) -> SandboxInvocation {
         func realPath(_ s: String) -> String {
             Self.canonical(s)
@@ -163,22 +202,32 @@ public enum SandboxProfile {
         let resolvedScratch = realPath(scratchDir)
         let resolvedDB = realPath(wikiDBPath)
         let resolvedClaudeTemp = realPath(claudeTempBase)
+        // The script file exists when the launcher hands it to us (it probed
+        // `isExecutableFile`), so `realpath` fully resolves it — important because
+        // the seatbelt `literal` matcher resolves the exec'd/read path the same way.
+        // A dev script under `/tmp/…` surfaces as `/private/tmp/…`, matching how the
+        // kernel resolves the agent's exec attempt.
+        let resolvedPdf2md = pdf2mdScriptPath.map { realPath($0) }
         let profile = generate(
             scratchDir: resolvedScratch,
-            wikiDBPath: resolvedDB
+            wikiDBPath: resolvedDB,
+            pdf2mdScriptPath: resolvedPdf2md
         )
         // NOTE: these are profile parameters, NOT child env vars. `-D WIKI_DB=<path>`
         // is consumed by `(param "WIKI_DB")`; it does not touch the `WIKI_DB=<ulid>`
-        // env var the agent/wikictl use.
-        return SandboxInvocation(
-            profile: profile,
-            defines: [
-                ("HOME", resolvedHome),
-                ("SCRATCH_DIR", resolvedScratch),
-                ("WIKI_DB", resolvedDB),
-                ("CLAUDE_TMP", resolvedClaudeTemp),
-            ]
-        )
+        // env var the agent/wikictl use. `PDF2MD_SCRIPT` is appended ONLY when a path
+        // was supplied, so the default-nil invocation stays byte-identical to the
+        // pre-denial build (call sites and argv-index tests unaffected).
+        var defines: [(String, String)] = [
+            ("HOME", resolvedHome),
+            ("SCRATCH_DIR", resolvedScratch),
+            ("WIKI_DB", resolvedDB),
+            ("CLAUDE_TMP", resolvedClaudeTemp),
+        ]
+        if let resolvedPdf2md, !resolvedPdf2md.isEmpty {
+            defines.append(("PDF2MD_SCRIPT", resolvedPdf2md))
+        }
+        return SandboxInvocation(profile: profile, defines: defines)
     }
 
     /// Filesystem-write allowances every spawned agent's SHELL and tools need at
@@ -206,6 +255,36 @@ public enum SandboxProfile {
             "(allow file-write-data (literal \"/dev/null\"))",
             "(allow file-write-data (subpath \"/dev/fd\"))",
             "(allow file-write* (regex #\"^/private/tmp/claude-[A-Za-z0-9]+-cwd(/|$)\"))",
+        ]
+    }
+
+    /// The `pdf2md` exec/read deny rules, emitted by BOTH `generate` and
+    /// `generateReadOnly` when a resolved script path is supplied. Shared here so the
+    /// two profiles can't drift — the deny must hold for every spawn path (Ingest /
+    /// Edit / read-only Query) regardless of "Allow wiki edits".
+    ///
+    /// **Why `literal` on the script FILE, not `subpath` on its directory.** `wikictl`
+    /// (the agent's ONLY sanctioned exec) and `pdf2md` ship in the SAME directory in
+    /// every production/dev candidate — `Contents/Helpers/` in the bundle, `build/`,
+    /// and the `swift run` exe-sibling (`HelpersLocation.wikictlDirectory` vs
+    /// `PdfExtractionService.candidateLocations()`). A `subpath` deny on that dir would
+    /// deny exec of `wikictl` too, breaking the agent. `literal` on the exact script
+    /// path denies only `pdf2md` and never collides with `wikictl`.
+    ///
+    /// **Why `file-read*` as well as `process-exec*`.** `uv run --script pdf2md` must
+    /// `open()` the script to parse its PEP 723 inline deps; denying the read closes
+    /// that angle for the bundled-script case (issue #116 item 1's "ideally deny-read").
+    /// The agent never legitimately reads `pdf2md` — only the unsandboxed APP process
+    /// (`PdfExtractionService`) does — so this is safe. This does NOT stop generic
+    /// `uv`/`python3` use (item 2, a follow-up).
+    ///
+    /// Precedence: these are filtered rules, so they win over the generic
+    /// `(allow default)` at the top of the profile — same last-specific-match-wins
+    /// semantics the `(deny file-write*)` + `(allow file-write* …)` pair relies on.
+    private static func pdf2mdDenyRules() -> [String] {
+        [
+            "(deny process-exec* (literal (param \"PDF2MD_SCRIPT\")))",
+            "(deny file-read* (literal (param \"PDF2MD_SCRIPT\")))",
         ]
     }
 
