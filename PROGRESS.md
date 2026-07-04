@@ -2,6 +2,22 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-04 — "Open in Background" focuses the tab when the bar is empty (#138)
+
+"Open in Background" appended a tab without activating it — correct when other
+tabs exist, but a no-op when the bar was empty (nothing stayed focused, so the
+user clicked and saw no visible change). Fixes
+[#138](https://github.com/tqbf/selfdrivingwiki/issues/138).
+
+- **`WikiStoreModel.openTabInBackground`** now delegates to `openTab` when
+  `tabs.isEmpty`, so the first tab is opened *and* activated instead of appended
+  to an empty bar. Non-empty-bar behavior is unchanged (background = keep current
+  focus). All five call sites (`SourcesContainerView`, `PagesContainerView`,
+  `BookmarksOutlineView`, `WikiLinkMenuNSItems`, `WikiReaderView`) route through
+  this single method, so no view changes were needed.
+- **Regression test** `backgroundOpenOnEmptyBarFocusesTheNewTab` in
+  `EditorTabTests` asserts the empty-bar path sets `activeTabID` to the new tab.
+
 ## 2026-07-04 — Sources default-open opens an in-app tab; "Open With" submenu for external editors (#139)
 
 The default-open gestures on **sources** (double-click + the "Open" / "Open N
