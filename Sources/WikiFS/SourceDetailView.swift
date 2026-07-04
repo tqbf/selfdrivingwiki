@@ -239,7 +239,13 @@ struct SourceDetailView: View {
             HStack(spacing: 12) {
                 statusLabel
                 Text(Self.sizeFormatter.string(fromByteCount: Int64(file.byteSize)))
-                Text(file.createdAt, style: .date)
+                Text("Added \(file.createdAt, style: .date)")
+                if file.updatedAt != file.createdAt {
+                    Text("Updated \(file.updatedAt, style: .date)")
+                }
+                if let head = headVersion {
+                    Text("\(Self.markdownOriginLabel(for: head.origin)) \(head.createdAt, style: .date)")
+                }
             }
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -679,6 +685,17 @@ struct SourceDetailView: View {
         formatter.countStyle = .file
         return formatter
     }()
+
+    /// Human label for a `SourceMarkdownVersion.origin` value, describing how
+    /// the currently-displayed markdown version came to exist.
+    private static func markdownOriginLabel(for origin: String) -> String {
+        switch origin {
+        case "extraction": return "Converted"
+        case "user": return "Edited"
+        case "revert": return "Reverted"
+        default: return "Updated"
+        }
+    }
 }
 
 /// Keys the PDF-only anchor consume task so it re-fires on repeat quote clicks
