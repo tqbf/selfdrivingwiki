@@ -829,4 +829,21 @@ struct EditorTabTests {
         #expect(model.tabs.count == 2)
         #expect(model.tabs.map(\.title).sorted() == ["A", "B"])
     }
+
+    @Test func backgroundOpenOnEmptyBarFocusesTheNewTab() throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        model.reloadFromStore()
+
+        // No tabs open yet — "Open in Background" has nothing to keep focused,
+        // so it must fall back to opening AND activating the tab (issue #138).
+        #expect(model.tabs.isEmpty)
+        #expect(model.activeTabID == nil)
+
+        model.openTabInBackground(.page(a.id))
+
+        #expect(model.tabs.count == 1)
+        #expect(model.tabs.first?.selection == .page(a.id))
+        #expect(model.activeTabID == model.tabs.first?.id)
+    }
 }

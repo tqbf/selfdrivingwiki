@@ -450,7 +450,16 @@ public final class WikiStoreModel {
     /// Open a tab for `selection` without switching focus to it. If a tab for
     /// `selection` is already open, this is a no-op (avoid duplicates). The
     /// active tab remains unchanged; the new tab appears at the end of the bar.
+    ///
+    /// When the tab bar is empty there is nothing to keep focused, so "background"
+    /// would leave the user on a dead surface with no signal the action fired.
+    /// Fall back to the foreground path (`openTab`) so the first tab is opened
+    /// and focused like a normal Open.
     public func openTabInBackground(_ selection: WikiSelection, title: String? = nil) {
+        if tabs.isEmpty {
+            openTab(selection, title: title)
+            return
+        }
         guard !tabs.contains(where: { $0.selection == selection }) else { return }
         let tab = EditorTab(selection: selection, title: title ?? tabTitle(for: selection))
         tabs.append(tab)
