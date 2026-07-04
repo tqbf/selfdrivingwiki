@@ -66,8 +66,10 @@ struct SourceExtractItem {
 struct SourcesListCallbacks {
     /// Open an in-app source tab (single or batch), foreground.
     var onOpen: ([PageID]) -> Void
-    /// Open externally via the File Provider (single or batch).
-    var onOpenExternal: ([PageID]) -> Void
+    /// Open externally via the File Provider (single or batch). Pass an app URL
+    /// to launch a specific editor (chosen from the "Open With" submenu), or nil
+    /// for the default handler.
+    var onOpenExternal: (_ ids: [PageID], _ appURL: URL?) -> Void
     /// Open an in-app background tab.
     var onOpenBackground: ([PageID]) -> Void
     var onShare: ([PageID]) -> Void
@@ -375,10 +377,20 @@ extension SourcesListViewController {
             payload: payload))
 
         if fileProvider?.path != nil {
-            menu.addItem(item(
-                title: isMulti ? "Open \(count) In…" : "Open In…",
-                systemImage: "rectangle.portrait.and.arrow.right",
-                action: #selector(openExternalAction(_:)), payload: payload))
+            let type = OpenWithMenu.contentType(mimeType: clicked.mimeType,
+                                                filename: clicked.filename)
+            let submenu = OpenWithMenu.build(
+                contentType: type,
+                target: self,
+                action: #selector(openWithAppAction(_:)),
+                payload: { appURL in
+                    OpenWithIDsRef(appURL: appURL, ids: payload.effective.map(\.id))
+                })
+            let parent = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
+            parent.image = NSImage(systemSymbolName: "rectangle.portrait.and.arrow.right",
+                                   accessibilityDescription: nil)
+            parent.submenu = submenu
+            menu.addItem(parent)
         }
 
         if isMulti {
@@ -441,8 +453,19 @@ extension SourcesListViewController {
     @objc private func openAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? SourcesMenuPayload { callbacks?.onOpen(p.effective.map(\.id)) }
     }
-    @objc private func openExternalAction(_ sender: NSMenuItem) {
-        if let p = sender.representedObject as? SourcesMenuPayload { callbacks?.onOpenExternal(p.effective.map(\.id)) }
+    @objc private func openWithAppAction(_ sender: NSMenuItem) {
+        guard let ref = sender.representedObject as? OpenWithIDsRef else { return }
+        Task { [weak self] in
+            // nil appURL = the "Other…" item → present an app picker.
+            let picked: URL?
+            if let appURL = ref.appURL {
+                picked = appURL
+            } else {
+                picked = await AppPicker.pick()
+            }
+            guard let appURL = picked else { return }
+            self?.callbacks?.onOpenExternal(ref.ids, appURL)
+        }
     }
     @objc private func openBackgroundAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? SourcesMenuPayload { callbacks?.onOpenBackground(p.effective.map(\.id)) }

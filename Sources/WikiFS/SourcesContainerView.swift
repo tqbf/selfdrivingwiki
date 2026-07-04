@@ -164,8 +164,8 @@ struct SourcesContainerView: View {
             onOpen: { ids in
                 for id in ids { store.openTab(.source(id)) }
             },
-            onOpenExternal: { ids in
-                for id in ids { Task { await fileProvider.openSource(id: id) } }
+            onOpenExternal: { ids, appURL in
+                for id in ids { Task { await fileProvider.openSource(id: id, with: appURL) } }
             },
             onOpenBackground: { ids in
                 for id in ids { store.openTabInBackground(.source(id)) }

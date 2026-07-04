@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import WikiFSCore
 
 // MARK: - SwiftUI bridge
@@ -59,6 +60,18 @@ struct BookmarksCallbacks {
     var onAddSource: (String?) -> Void
     var onNewFolder: () -> Void
     var onNewSubfolder: (String) -> Void
+}
+
+/// Payload for "Open With" app items on a bookmark row. Carries the chosen app
+/// URL (or `nil` for "Other…") and the bookmark node. A class so it round-trips
+/// through `NSMenuItem.representedObject`.
+final class OpenWithBookmarkRef {
+    let appURL: URL?
+    let node: BookmarkNode
+    init(appURL: URL?, node: BookmarkNode) {
+        self.appURL = appURL
+        self.node = node
+    }
 }
 
 // MARK: - View controller
@@ -370,12 +383,28 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
             menu.addItem(openBgItem)
 
             if fileProvider?.path != nil {
-                let openExternalItem = NSMenuItem(title: "Open In…", action: #selector(openExternalAction(_:)), keyEquivalent: "")
-                openExternalItem.target = self
-                openExternalItem.representedObject = node
-                openExternalItem.image = NSImage(systemSymbolName: "rectangle.portrait.and.arrow.right",
-                                                 accessibilityDescription: nil)
-                menu.addItem(openExternalItem)
+                let type: UTType
+                switch node.kind {
+                case .pageRef:
+                    type = OpenWithMenu.pageContentType
+                case .sourceRef:
+                    let src = store?.sources.first { $0.id == node.targetID }
+                    type = OpenWithMenu.contentType(mimeType: src?.mimeType, filename: src?.filename)
+                case .folder:
+                    type = .data
+                }
+                let submenu = OpenWithMenu.build(
+                    contentType: type,
+                    target: self,
+                    action: #selector(openWithAppAction(_:)),
+                    payload: { appURL in
+                        OpenWithBookmarkRef(appURL: appURL, node: node)
+                    })
+                let parent = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
+                parent.image = NSImage(systemSymbolName: "rectangle.portrait.and.arrow.right",
+                                       accessibilityDescription: nil)
+                parent.submenu = submenu
+                menu.addItem(parent)
             }
             menu.addItem(.separator())
         }
@@ -422,16 +451,25 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
         store.openTabInBackground(sel)
     }
 
-    @objc private func openExternalAction(_ sender: NSMenuItem) {
-        guard let node = sender.representedObject as? BookmarkNode,
-              let targetID = node.targetID, let fileProvider else { return }
-        switch node.kind {
-        case .pageRef:
-            Task { await fileProvider.openPage(id: targetID) }
-        case .sourceRef:
-            Task { await fileProvider.openSource(id: targetID) }
-        case .folder:
-            break
+    @objc private func openWithAppAction(_ sender: NSMenuItem) {
+        guard let ref = sender.representedObject as? OpenWithBookmarkRef,
+              let targetID = ref.node.targetID, let fileProvider else { return }
+        Task {
+            let picked: URL?
+            if let appURL = ref.appURL {
+                picked = appURL
+            } else {
+                picked = await AppPicker.pick()
+            }
+            guard let appURL = picked else { return }
+            switch ref.node.kind {
+            case .pageRef:
+                await fileProvider.openPage(id: targetID, with: appURL)
+            case .sourceRef:
+                await fileProvider.openSource(id: targetID, with: appURL)
+            case .folder:
+                break
+            }
         }
     }
 
