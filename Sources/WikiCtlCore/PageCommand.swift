@@ -145,6 +145,13 @@ public enum PageCommand {
         validator: MermaidValidator?,
         linter: MarkdownLinter?
     ) throws -> Result {
+        guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw Failure.message(
+                "refusing to upsert an empty body for \(title.debugDescription) — nothing "
+                + "was delivered. Under the sandbox a piped or heredoc'd body can arrive "
+                + "empty; write the body to a file in your cwd and pass --body-file <path>."
+            )
+        }
         // 1. Auto-fix cosmetic markdown issues BEFORE the write (trailing
         //    whitespace, hard tabs, blank-line spacing, etc.). Skipped silently
         //    when the linter is nil (no bundle → dev / swift test). If any

@@ -27,6 +27,13 @@ public enum LogIndexCommand {
             if let source { try store.markSourceIngested(id: source) }
             return PageCommand.Result(output: entry.id.rawValue, didCommit: true)
         case .indexSet(let body):
+            guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw PageCommand.Failure.message(
+                    "refusing to set an empty index body — nothing was delivered. "
+                    + "Under the sandbox a piped or heredoc'd body can arrive empty; "
+                    + "write the body to a file in your cwd and pass --body-file <path>."
+                )
+            }
             try store.updateWikiIndex(body: body)
             return PageCommand.Result(output: "", didCommit: true)
         }

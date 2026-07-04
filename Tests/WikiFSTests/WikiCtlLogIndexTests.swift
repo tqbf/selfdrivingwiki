@@ -133,4 +133,24 @@ struct WikiCtlLogIndexTests {
         #expect(index.body == "# Catalog")
         #expect(index.version == 2)  // seed 1, +1
     }
+
+    // MARK: - Empty-body refusal at the CLI boundary
+
+    @Test func testIndexSetRefusesEmptyBody() throws {
+        let store = try tempStore()
+        // Empty body is refused.
+        do {
+            _ = try LogIndexCommand.run(.indexSet(body: ""), in: store)
+            Issue.record("expected empty-body indexSet to throw")
+        } catch let PageCommand.Failure.message(text) {
+            #expect(text.contains("empty index body"))
+        }
+        // Whitespace-only body is also refused.
+        do {
+            _ = try LogIndexCommand.run(.indexSet(body: "  \n\t "), in: store)
+            Issue.record("expected whitespace-only indexSet to throw")
+        } catch let PageCommand.Failure.message(text) {
+            #expect(text.contains("empty index body"))
+        }
+    }
 }

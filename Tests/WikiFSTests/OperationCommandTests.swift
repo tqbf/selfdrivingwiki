@@ -352,8 +352,8 @@ struct OperationCommandTests {
       // prompt itself (not only the appended system prompt).
       #expect(prompt.contains("READ-ONLY BY DESIGN"))
       #expect(prompt.contains("NEVER search for a \"mutation tool\""))
-      #expect(prompt.contains("wikictl page upsert --title T --body-file -"))
-      #expect(prompt.contains("wikictl index set --body-file -"))
+      #expect(prompt.contains("wikictl page upsert --title T --body-file ./body.md"))
+      #expect(prompt.contains("wikictl index set --body-file ./index.md"))
       #expect(prompt.contains("wikictl log append --kind ingest"))
       #expect(prompt.contains("$WIKI_DB"))
       #expect(prompt.contains("[[Page Title]]"))

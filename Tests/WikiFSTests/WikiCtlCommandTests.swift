@@ -163,7 +163,7 @@ struct WikiCtlCommandTests {
 
     @Test func listTSVHasIDTitlePathPerLine() throws {
         let store = try tempStore()
-        _ = try PageCommand.run(.upsert(id: nil, title: "Alpha", body: ""), in: store)
+        _ = try PageCommand.run(.upsert(id: nil, title: "Alpha", body: "stub"), in: store)
         let result = try PageCommand.run(.list(json: false), in: store)
         #expect(!result.didCommit)
         let columns = result.output.split(separator: "\t")
@@ -174,8 +174,8 @@ struct WikiCtlCommandTests {
 
     @Test func listJSONIsOneObjectPerLine() throws {
         let store = try tempStore()
-        _ = try PageCommand.run(.upsert(id: nil, title: "One", body: ""), in: store)
-        _ = try PageCommand.run(.upsert(id: nil, title: "Two", body: ""), in: store)
+        _ = try PageCommand.run(.upsert(id: nil, title: "One", body: "stub"), in: store)
+        _ = try PageCommand.run(.upsert(id: nil, title: "Two", body: "stub"), in: store)
         let result = try PageCommand.run(.list(json: true), in: store)
         let lines = result.output.split(separator: "\n")
         #expect(lines.count == 2)
@@ -189,7 +189,7 @@ struct WikiCtlCommandTests {
 
     @Test func deleteCommitsAndRemovesPage() throws {
         let store = try tempStore()
-        let created = try PageCommand.run(.upsert(id: nil, title: "Doomed", body: ""), in: store)
+        let created = try PageCommand.run(.upsert(id: nil, title: "Doomed", body: "stub"), in: store)
         let id = PageID(rawValue: created.output)
         let result = try PageCommand.run(.delete(id: id), in: store)
         #expect(result.didCommit)
@@ -650,5 +650,29 @@ struct WikiCtlCommandTests {
         }
         // No page was written.
         #expect(try store.listPages(sortBy: .lastUpdated).isEmpty)
+    }
+
+    // MARK: - Empty-body refusal at the CLI boundary
+
+    @Test func testPageUpssertRefusesEmptyBody() throws {
+        let store = try tempStore()
+        // 1. Empty body is refused at the CLI boundary.
+        do {
+            _ = try PageCommand.run(.upsert(id: nil, title: "X", body: ""), in: store)
+            Issue.record("expected empty-body upsert to throw")
+        } catch let PageCommand.Failure.message(text) {
+            #expect(text.contains("empty body"))
+        }
+        // 2. Whitespace-only body is also refused.
+        do {
+            _ = try PageCommand.run(.upsert(id: nil, title: "X", body: "  \n\t "), in: store)
+            Issue.record("expected whitespace-only upsert to throw")
+        } catch let PageCommand.Failure.message(text) {
+            #expect(text.contains("empty body"))
+        }
+        // 3. A non-empty body succeeds, commits, and returns a non-empty id.
+        let result = try PageCommand.run(.upsert(id: nil, title: "Y", body: "hello"), in: store)
+        #expect(result.didCommit)
+        #expect(!result.output.isEmpty)
     }
 }
