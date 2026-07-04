@@ -2,6 +2,40 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-04 — Sources default-open opens an in-app tab; explicit "Open In…" for external launch (#139)
+
+The default-open gestures on **sources** (double-click + the "Open" / "Open N
+Sources" context-menu item) launched the file in an external app (Preview for a
+PDF), inconsistent with pages/bookmarks which open an in-app tab on the same
+gestures. The external launch is a legitimate workflow but belongs behind an
+explicit action, not the default. Fixes [#139](https://github.com/tqbf/selfdrivingwiki/issues/139).
+
+- **Sources default-open → in-app tab.** `SourcesContainerView.onOpen` now calls
+  `store.openTab(.source(id))` (matching `onOpenBackground` and the pages/bookmark
+  path) instead of `fileProvider.openSource(id:)`. The old external behavior
+  moves verbatim to a new `onOpenExternal` callback. `SourcesListCallbacks` gains
+  `onOpenExternal`; `SourcesListView` adds an "Open In…" menu item (single + batch,
+  gated on the File Provider mount) with a distinct `rectangle.portrait.and.arrow.right`
+  glyph and an `openExternalAction` handler. The `SourcesListView` docstring
+  (which documented the external double-click as intentional) is corrected.
+- **"Open In…" on pages.** `PagesListCallbacks` gains `onOpenExternal`;
+  `PagesContainerView` wires it to a new `FileProviderSpike.openPage(id:)`;
+  `PagesListView` adds the gated "Open In…" item + handler. Pages had no external
+  path before.
+- **`FileProviderSpike.openPage(id:)`** opens a page in its default app by
+  resolving the user-visible URL via the existing `resolvePageByTitleURL` (same
+  `page-by-title` identifier share/reveal use, so no drift) and handing it to
+  `NSWorkspace.shared.open` — mirroring `openSource`.
+- **"Open In…" on bookmarks.** `FileProviderSpike` is threaded through
+  `BookmarksContainerView` → `BookmarksOutlineView` → controller (which had no
+  file-provider access before). The pageRef/sourceRef context menu gains a gated
+  "Open In…" item; `openExternalAction` routes pageRef→`openPage`,
+  sourceRef→`openSource`.
+- **Drive-by:** dropped an unused `let callbacks` binding in
+  `BookmarksOutlineView.acceptDrop` that SourceKit surfaced during the edit.
+
+Gates: `swift build` clean; `swift test` — 1365 tests in 104 suites, all pass.
+
 ## 2026-07-04 — Robust `[[wiki-link]]` name handling: lookup-driven resolution, name rules, startup self-heal (v18)
 
 A source/page NAME containing `#` (e.g. "Agentic Static Analysis for C#

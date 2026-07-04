@@ -162,6 +162,9 @@ struct SourcesContainerView: View {
     private var callbacks: SourcesListCallbacks {
         SourcesListCallbacks(
             onOpen: { ids in
+                for id in ids { store.openTab(.source(id)) }
+            },
+            onOpenExternal: { ids in
                 for id in ids { Task { await fileProvider.openSource(id: id) } }
             },
             onOpenBackground: { ids in

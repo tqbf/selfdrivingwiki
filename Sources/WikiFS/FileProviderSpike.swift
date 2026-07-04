@@ -311,6 +311,24 @@ final class FileProviderSpike {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    /// Open a page in its default app (e.g. a Markdown editor), in the ACTIVE
+    /// wiki's domain. Resolves the page's user-visible URL via its
+    /// `page-by-title` identifier (the same resolution `share`/`reveal` use) and
+    /// hands it to `NSWorkspace`. URL asked at click time.
+    func openPage(id: PageID) async {
+        guard let url = await resolvePageByTitleURL(id: id) else {
+            DebugLog.agent("openPage: FAILED resolving URL for id=\(id.rawValue)")
+            status = "Couldn’t resolve page for open."
+            return
+        }
+        DebugLog.agent("openPage: resolved url=\(url.path)")
+        let opened = NSWorkspace.shared.open(url)
+        DebugLog.agent("openPage: NSWorkspace.open returned \(opened)")
+        if !opened {
+            status = "macOS couldn’t open \(url.lastPathComponent)."
+        }
+    }
+
     func revealSourceInFinder(id: PageID) async {
         guard let url = await resolveSourceByNameURL(id: id) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])

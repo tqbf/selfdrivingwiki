@@ -9,6 +9,7 @@ import WikiFSCore
 /// on macOS (see plans/bookmark-drag-drop-performance.md).
 struct BookmarksOutlineView: NSViewControllerRepresentable {
     let store: WikiStoreModel
+    let fileProvider: FileProviderSpike
     var onOpen: (WikiSelection) -> Void
     var onEdit: (String) -> Void
     var onDelete: (String) -> Void
@@ -20,6 +21,7 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
     func makeNSViewController(context: Context) -> BookmarksOutlineViewController {
         let vc = BookmarksOutlineViewController()
         vc.store = store
+        vc.fileProvider = fileProvider
         vc.callbacks = .init(
             onOpen: onOpen, onEdit: onEdit, onDelete: onDelete,
             onAddPage: onAddPage, onAddSource: onAddSource,
@@ -32,6 +34,7 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
 
     func updateNSViewController(_ vc: BookmarksOutlineViewController, context: Context) {
         vc.store = store
+        vc.fileProvider = fileProvider
         vc.callbacks = .init(
             onOpen: onOpen, onEdit: onEdit, onDelete: onDelete,
             onAddPage: onAddPage, onAddSource: onAddSource,
@@ -64,6 +67,7 @@ final class BookmarksOutlineViewController: NSViewController {
     var scrollView: NSScrollView!
     var outlineView: NSOutlineView!
     var store: WikiStoreModel?
+    var fileProvider: FileProviderSpike?
     var callbacks: BookmarksCallbacks?
 
     /// Snapshot for change detection — covers all fields that affect rendering
@@ -279,7 +283,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
                      item: Any?,
                      childIndex index: Int) -> Bool {
         DebugLog.tabs("BookmarksOutlineView.acceptDrop: item=\((item as? BookmarkNode)?.id ?? "root") index=\(index)")
-        guard let store, let callbacks else { return false }
+        guard let store else { return false }
         let pb = info.draggingPasteboard
         guard let draggedID = pb.string(forType: .string) else { return false }
 
@@ -364,6 +368,15 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
             openBgItem.target = self
             openBgItem.representedObject = node
             menu.addItem(openBgItem)
+
+            if fileProvider?.path != nil {
+                let openExternalItem = NSMenuItem(title: "Open In…", action: #selector(openExternalAction(_:)), keyEquivalent: "")
+                openExternalItem.target = self
+                openExternalItem.representedObject = node
+                openExternalItem.image = NSImage(systemSymbolName: "rectangle.portrait.and.arrow.right",
+                                                 accessibilityDescription: nil)
+                menu.addItem(openExternalItem)
+            }
             menu.addItem(.separator())
         }
 
@@ -407,6 +420,19 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
               let targetID = node.targetID, let store else { return }
         let sel: WikiSelection = node.kind == .pageRef ? .page(targetID) : .source(targetID)
         store.openTabInBackground(sel)
+    }
+
+    @objc private func openExternalAction(_ sender: NSMenuItem) {
+        guard let node = sender.representedObject as? BookmarkNode,
+              let targetID = node.targetID, let fileProvider else { return }
+        switch node.kind {
+        case .pageRef:
+            Task { await fileProvider.openPage(id: targetID) }
+        case .sourceRef:
+            Task { await fileProvider.openSource(id: targetID) }
+        case .folder:
+            break
+        }
     }
 
     @objc private func editAction(_ sender: NSMenuItem) {

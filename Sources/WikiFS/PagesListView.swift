@@ -54,6 +54,8 @@ struct PagesListCallbacks {
     /// Open (foreground tab). Single-click-double passes one id; context-menu
     /// "Open N" passes the effective selection.
     var onOpen: ([PageID]) -> Void
+    /// Open externally via the File Provider (single or batch).
+    var onOpenExternal: ([PageID]) -> Void
     var onOpenBackground: ([PageID]) -> Void
     var onShare: ([PageID]) -> Void
     var onReveal: (PageID) -> Void
@@ -273,6 +275,13 @@ extension PagesListViewController {
             systemImage: "dock.arrow.down.rectangle", action: #selector(openBackgroundAction(_:)),
             payload: payload))
 
+        if pathMounted {
+            menu.addItem(menuItem(
+                title: isBatch ? "Open \(count) In…" : "Open In…",
+                systemImage: "rectangle.portrait.and.arrow.right",
+                action: #selector(openExternalAction(_:)), payload: payload))
+        }
+
         if isBatch {
             menu.addItem(menuItem(
                 title: "Share \(count) Pages",
@@ -322,6 +331,9 @@ extension PagesListViewController {
 
     @objc private func openAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onOpen(p.effectiveIDs) }
+    }
+    @objc private func openExternalAction(_ sender: NSMenuItem) {
+        if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onOpenExternal(p.effectiveIDs) }
     }
     @objc private func openBackgroundAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onOpenBackground(p.effectiveIDs) }

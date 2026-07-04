@@ -9,8 +9,9 @@ import WikiFSCore
 /// SwiftUI gesture arbitration. Cell adds byte size + an
 /// extracting/ingesting/ingested status indicator; the context menu carries
 /// Ingest / Extract (with re-ingest confirmation) on top of the shared
-/// open/share/rename/delete actions. Double-click opens externally via the
-/// File Provider (`fileProvider.openSource`), unchanged from the SwiftUI row.
+/// open/share/rename/delete actions. Double-click opens an in-app source tab
+/// (mirroring pages/bookmarks); the "Open In…" item routes through the File
+/// Provider for an external launch.
 struct SourcesListView: NSViewControllerRepresentable {
     let store: WikiStoreModel
     let fileProvider: FileProviderSpike
@@ -63,8 +64,10 @@ struct SourceExtractItem {
 }
 
 struct SourcesListCallbacks {
-    /// Open externally via the File Provider (single or batch).
+    /// Open an in-app source tab (single or batch), foreground.
     var onOpen: ([PageID]) -> Void
+    /// Open externally via the File Provider (single or batch).
+    var onOpenExternal: ([PageID]) -> Void
     /// Open an in-app background tab.
     var onOpenBackground: ([PageID]) -> Void
     var onShare: ([PageID]) -> Void
@@ -371,6 +374,13 @@ extension SourcesListViewController {
             systemImage: "dock.arrow.down.rectangle", action: #selector(openBackgroundAction(_:)),
             payload: payload))
 
+        if fileProvider?.path != nil {
+            menu.addItem(item(
+                title: isMulti ? "Open \(count) In…" : "Open In…",
+                systemImage: "rectangle.portrait.and.arrow.right",
+                action: #selector(openExternalAction(_:)), payload: payload))
+        }
+
         if isMulti {
             menu.addItem(item(title: "Share \(count) Sources", systemImage: "square.and.arrow.up",
                               action: #selector(shareAction(_:)), payload: payload))
@@ -430,6 +440,9 @@ extension SourcesListViewController {
 
     @objc private func openAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? SourcesMenuPayload { callbacks?.onOpen(p.effective.map(\.id)) }
+    }
+    @objc private func openExternalAction(_ sender: NSMenuItem) {
+        if let p = sender.representedObject as? SourcesMenuPayload { callbacks?.onOpenExternal(p.effective.map(\.id)) }
     }
     @objc private func openBackgroundAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? SourcesMenuPayload { callbacks?.onOpenBackground(p.effective.map(\.id)) }

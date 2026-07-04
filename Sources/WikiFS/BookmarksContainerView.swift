@@ -7,6 +7,7 @@ import WikiFSCore
 /// `List`/`OutlineGroup` for instant selection performance on macOS.
 struct BookmarksContainerView: View {
     let store: WikiStoreModel
+    let fileProvider: FileProviderSpike
     var onShowPicker: (PickerContext) -> Void
     var onEdit: (String) -> Void
     var onNewFolder: () -> Void
@@ -22,6 +23,7 @@ struct BookmarksContainerView: View {
             // NSOutlineView — instant selection, native macOS performance
             BookmarksOutlineView(
                 store: store,
+                fileProvider: fileProvider,
                 onOpen: { sel in store.openTab(sel) },
                 onEdit: { onEdit($0) },
                 onDelete: { store.deleteBookmarkNode(id: $0) },
