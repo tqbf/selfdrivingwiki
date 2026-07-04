@@ -1,0 +1,74 @@
+name: Bug report
+description: Something in the app, the CLI, or an agent-authored edit isn't working right.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. This project runs entirely
+        locally (no server component), so the more detail you can give about
+        your machine and the exact steps, the faster this can be tracked down.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug. What did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro-steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps, starting from a fresh launch if possible.
+      placeholder: |
+        1. Open wiki '...'
+        2. Run `wikictl ...` / ask the agent to '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Where did this happen?
+      multiple: true
+      options:
+        - SwiftUI app (main window)
+        - File Provider mount (read side)
+        - wikictl (write side)
+        - Agent (Ingest / Ask / Edit / Lint)
+        - SQLite store / sync
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or error output
+      description: Paste any error text, `wikictl` output, or agent transcript. This will be rendered as a code block, so no need for backticks.
+      render: shell
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      placeholder: e.g. macOS 15.4 (24E248)
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: App version / commit
+      description: Build version shown in About, or the git commit you built from.
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Anything else that might be relevant — wiki size, whether the mount was involved, recent changes, screenshots.

@@ -1,0 +1,44 @@
+name: Feature request
+description: Suggest an idea or improvement for the app, CLI, or agent workflows.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What are you trying to do today that's awkward, missing, or impossible?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like to happen? Sketch the behavior, UI, or CLI flow if you can.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any other approaches or workarounds you've thought about.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Where does this apply?
+      multiple: true
+      options:
+        - SwiftUI app (main window)
+        - File Provider mount (read side)
+        - wikictl (write side)
+        - Agent (Ingest / Ask / Edit / Lint)
+        - SQLite store / sync
+        - Other
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Anything else — links, mockups, related issues.
