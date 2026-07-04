@@ -204,4 +204,103 @@ struct SandboxProfileTests {
     // flows in via the -D define (asserted above).
     #expect(inv.profile.contains("(subpath (param \"SCRATCH_DIR\"))"))
   }
+
+  // MARK: - pdf2md exec/read deny (issue #116 item 1)
+
+  /// Both profiles deny exec AND read of the resolved pdf2md script when a path is
+  /// supplied — closes both the direct `pdf2md` exec and the `uv run --script` angle
+  /// (uv must `open()` the script to parse its PEP 723 deps).
+  @Test func bothProfilesDenyExecAndReadOfResolvedPdf2md() {
+    let script = "/Applications/Self Driving Wiki.app/Contents/Helpers/pdf2md"
+    let rw = SandboxProfile.generate(
+      scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB, pdf2mdScriptPath: script)
+    let ro = SandboxProfile.generateReadOnly(
+      scratchDir: Self.scratchDir, pdf2mdScriptPath: script)
+    for p in [rw, ro] {
+      #expect(p.contains("(deny process-exec* (literal (param \"PDF2MD_SCRIPT\")))"))
+      #expect(p.contains("(deny file-read* (literal (param \"PDF2MD_SCRIPT\")))"))
+    }
+  }
+
+  /// Regression guard: the deny MUST be `literal` on the script file, NOT `subpath`
+  /// on its directory. `wikictl` and `pdf2md` are collocated in `Contents/Helpers/`
+  /// (and in `build/`, and beside the swift-run exe) — a `subpath` deny would block
+  /// `wikictl`, the agent's only sanctioned exec. See `SandboxProfile.pdf2mdDenyRules`.
+  @Test func pdf2mdDenyUsesLiteralNotSubpath() {
+    let script = "/Applications/Self Driving Wiki.app/Contents/Helpers/pdf2md"
+    let p = SandboxProfile.generate(
+      scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB, pdf2mdScriptPath: script)
+    #expect(!p.contains("(deny process-exec* (subpath"))
+    #expect(!p.contains("(deny file-read* (subpath"))
+    // No directory-shaped param either — the collocation trap would name a dir.
+    #expect(!p.contains("PDF2MD_DIR"))
+  }
+
+  /// Default-nil emission: when no pdf2md path is supplied, neither the deny rules
+  /// nor the `PDF2MD_SCRIPT` param reference appear — the profile is byte-identical
+  /// to the pre-denial build, so call sites and argv-index tests that don't care about
+  /// pdf2md are unaffected (the load-bearing non-breaking guard).
+  @Test func defaultNilEmitsNoPdf2mdDeny() {
+    let gen = SandboxProfile.generate(scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB)
+    let ro = SandboxProfile.generateReadOnly(scratchDir: Self.scratchDir)
+    for p in [gen, ro] {
+      #expect(!p.contains("PDF2MD_SCRIPT"))
+    }
+  }
+
+  @Test func emptyPdf2mdPathEmitsNoDeny() {
+    let p = SandboxProfile.generate(
+      scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB, pdf2mdScriptPath: "")
+    #expect(!p.contains("PDF2MD_SCRIPT"))
+  }
+
+  @Test func invocationCarriesPdf2mdDefineWhenSupplied() {
+    let inv = SandboxProfile.invocation(
+      homePath: "/Users/me",
+      scratchDir: Self.scratchDir,
+      wikiDBPath: Self.wikiDB,
+      claudeTempBase: "/private/tmp/claude-999",
+      pdf2mdScriptPath: "/Users/me/app/Contents/Helpers/pdf2md")
+    #expect(inv.defines.count == 5)
+    // Order matters for the argv emit — PDF2MD_SCRIPT is appended last.
+    #expect(inv.defines[4].0 == "PDF2MD_SCRIPT")
+    #expect(inv.defines[4].1 == "/Users/me/app/Contents/Helpers/pdf2md")
+    // The define alone is useless without the deny rules in the profile text.
+    #expect(inv.profile.contains("(deny process-exec* (literal (param \"PDF2MD_SCRIPT\")))"))
+    #expect(inv.profile.contains("(deny file-read* (literal (param \"PDF2MD_SCRIPT\")))"))
+  }
+
+  @Test func readOnlyInvocationCarriesPdf2mdDefineWhenSupplied() {
+    let inv = SandboxProfile.readOnlyInvocation(
+      homePath: "/Users/me",
+      scratchDir: Self.scratchDir,
+      claudeTempBase: "/private/tmp/claude-999",
+      pdf2mdScriptPath: "/Users/me/app/Contents/Helpers/pdf2md")
+    #expect(inv.defines.count == 4)  // HOME, SCRATCH_DIR, CLAUDE_TMP, PDF2MD_SCRIPT
+    #expect(inv.defines[3].0 == "PDF2MD_SCRIPT")
+    #expect(inv.profile.contains("(deny process-exec* (literal (param \"PDF2MD_SCRIPT\")))"))
+  }
+
+  /// `/tmp` is a symlink to `/private/tmp`. A pdf2md script resolved under `/tmp`
+  /// must surface in the define as its canonical `/private/tmp/...` path, or the
+  /// seatbelt `literal` deny would silently fail to match the agent's exec attempt
+  /// (the kernel resolves the path it execs). Mirrors the SCRATCH_DIR symlink test.
+  @Test func invocationResolvesSymlinkedPdf2mdToCanonicalPath() throws {
+    let symlinkScript = "/tmp/sdw-pdf2md-probe-\(UUID().uuidString)"
+    // Create a real file so realpath resolves it (realpath returns nil for
+    // non-existent paths, falling back to the input — which would hide the
+    // /tmp → /private/tmp resolution).
+    try "#!/bin/sh\n".write(toFile: symlinkScript, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(atPath: symlinkScript) }
+
+    let inv = SandboxProfile.invocation(
+      homePath: "/Users/me",
+      scratchDir: "/Users/me/scratch",
+      wikiDBPath: "/Users/me/db.sqlite",
+      pdf2mdScriptPath: symlinkScript)
+
+    let resolved = try #require(inv.defines.first { $0.0 == "PDF2MD_SCRIPT" }?.1)
+    #expect(resolved.hasPrefix("/private/tmp/"))
+    #expect(resolved.contains("sdw-pdf2md-probe-"))
+  }
 }

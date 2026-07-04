@@ -587,7 +587,9 @@ final class AgentLauncher {
             return
         }
 
-        let sandbox = resolveSandboxInvocation(wikiID: wikiID, scratch: scratch, dir: dir)
+        let pdf2mdScriptPath = resolvePdf2mdScriptPath()
+        let sandbox = resolveSandboxInvocation(
+            wikiID: wikiID, scratch: scratch, dir: dir, pdf2mdScriptPath: pdf2mdScriptPath)
         if sandbox != nil { createSandboxTmpDir(in: scratch) }
         let command = OperationCommand.build(
             operation: operation,
@@ -783,10 +785,12 @@ final class AgentLauncher {
         // When on, use the existing opt-in sandbox behavior (which may itself be
         // `nil`, i.e. fail-open un-sandboxed). Resolved separately then handed to the
         // pure selector so the invariant is unit-testable.
-        let editSandbox = resolveSandboxInvocation(wikiID: wikiID, scratch: scratch, dir: dir)
+        let pdf2mdScriptPath = resolvePdf2mdScriptPath()
+        let editSandbox = resolveSandboxInvocation(
+            wikiID: wikiID, scratch: scratch, dir: dir, pdf2mdScriptPath: pdf2mdScriptPath)
         let homePath = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
         let readOnlySandbox = SandboxProfile.readOnlyInvocation(
-            homePath: homePath, scratchDir: scratch.path)
+            homePath: homePath, scratchDir: scratch.path, pdf2mdScriptPath: pdf2mdScriptPath)
         let sandbox = Self.selectQuerySandbox(
             allowWikiEdits: allowWikiEdits,
             editSandbox: editSandbox,
@@ -1250,10 +1254,16 @@ final class AgentLauncher {
 
     /// Resolve the write-confinement seatbelt sandbox for an Ingest or Edit spawn.
     /// The sandbox is **always on** for these paths — it confines the agent's
-    /// filesystem writes to the wiki DB + scratch + `~/.claude` (reads, network, and
-    /// process execution stay open; see `SandboxProfile`). Returns `nil` (fail-open,
-    /// logged) only when a required path can't be resolved, so a misconfiguration
-    /// never blocks agent work entirely.
+    /// filesystem writes to the wiki DB + scratch + `~/.claude`, AND denies exec/read
+    /// of the resolved `pdf2md` script so a compromised agent can't run the bundled
+    /// extractor (reads, network, and all other exec stay open; see `SandboxProfile`).
+    /// Returns `nil` (fail-open, logged) only when a required path can't be resolved,
+    /// so a misconfiguration never blocks agent work entirely.
+    ///
+    /// - Parameter pdf2mdScriptPath: the resolved `pdf2md` script path (or nil if the
+    ///   app couldn't resolve one). Threaded into the profile as the `PDF2MD_SCRIPT`
+    ///   deny target. When nil, no exec/read deny is emitted (the agent has nothing
+    ///   bundled to run; generic `uv`/`python3` is still reachable — issue #116 item 2).
     ///
     /// This does NOT affect the Ask session, which is always forced into the stricter
     /// read-only sandbox by `selectQuerySandbox` regardless of this result.
@@ -1265,7 +1275,8 @@ final class AgentLauncher {
     private func resolveSandboxInvocation(
         wikiID: String,
         scratch: URL,
-        dir: URL
+        dir: URL,
+        pdf2mdScriptPath: String?
     ) -> SandboxProfile.SandboxInvocation? {
         // HOME for the `-D HOME` profile param. Read from the environment the child
         // will inherit (fall back to the process home). Forwarded for forward-compat
@@ -1288,10 +1299,25 @@ final class AgentLauncher {
         let invocation = SandboxProfile.invocation(
             homePath: homePath,
             scratchDir: scratch.path,
-            wikiDBPath: dbPath
+            wikiDBPath: dbPath,
+            pdf2mdScriptPath: pdf2mdScriptPath
         )
-        DebugLog.agent("sandbox: confining Ingest/Edit agent writes to scratch + \(dbPath)")
+        let pdf2mdNote = pdf2mdScriptPath.map { " + denying pdf2md @ \($0)" } ?? ""
+        DebugLog.agent("sandbox: confining Ingest/Edit agent writes to scratch + \(dbPath)\(pdf2mdNote)")
         return invocation
+    }
+
+    /// Resolve the bundled `pdf2md` script path to deny in the agent seatbelt, or nil
+    /// if no script is resolvable. Delegates to `PdfExtractionService.resolveScript()`
+    /// (the same canonical resolver the APP process uses to run the script) so the deny
+    /// always targets the exact file the agent would otherwise reach. Resolved once per
+    /// spawn and handed to BOTH the edit and read-only invocations.
+    private func resolvePdf2mdScriptPath() -> String? {
+        let path = PdfExtractionService.resolveScript()?.path
+        if path == nil {
+            DebugLog.agent("sandbox: pdf2md not resolved — no PDF2MD_SCRIPT deny rule emitted")
+        }
+        return path
     }
 
     /// Create the `scratch/.tmp` directory that `OperationCommand.applySandbox`

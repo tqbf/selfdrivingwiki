@@ -249,8 +249,11 @@ public struct OperationCommand: Equatable, Sendable {
         // Relocate temp writes into scratch so they land inside the seatbelt allowlist.
         // CLAUDE_CONFIG_DIR is intentionally NOT redirected: Claude Code reads its
         // credentials from ~/.claude/.credentials.json, and pointing it at an empty
-        // scratch dir hides those credentials. The sandbox's (deny file-write*) rule
-        // already blocks writes to ~/.claude/ — Claude Code handles the EPERM quietly.
+        // scratch dir hides those credentials. The seatbelt profile DOES allow writes
+        // to ~/.claude/ + ~/.claude.json (`SandboxProfile.generate`/`generateReadOnly`)
+        // so a sandboxed session can persist its transcript — that subtree is a known
+        // persistence vector (issue #116 item 4); narrowing it is a follow-up, not
+        // something this redirection changes.
         environment["TMPDIR"] = scratchDirectory + "/" + Self.tmpRelocationLeaf
 
         var head: [String] = ["-p", sandbox.profile]
