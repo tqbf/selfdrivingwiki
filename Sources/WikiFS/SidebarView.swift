@@ -110,9 +110,6 @@ struct SidebarView: View {
 
     private func sectionSelectorButton(_ section: SidebarSection) -> some View {
         let isSelected = selectedSection == section
-        // Nothing to show for an empty Sources list — disable rather than select
-        // an empty window.
-        let isDisabled = section == .sources && store.sources.isEmpty
         return Button {
             selectedSection = section
         } label: {
@@ -126,7 +123,6 @@ struct SidebarView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(isDisabled)
         .help(section.title)
     }
 
