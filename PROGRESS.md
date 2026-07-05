@@ -56,7 +56,7 @@ accumulated indefinitely.
   `extractionLog`/`extractionPID` — a concurrent pdf2md extraction is untouched.
 - **`QueryConversationView`** — the top-trailing controls band (renamed
   `controls` → `controlsBand`) now shows a leading "New Conversation" button
-  (`square.and.pencil`, icon-only, borderless) whenever a query session is live
+  (`trash`, icon-only, borderless) whenever a query session is live
   or a transcript is visible; the spinner/menu/stop cluster still only shows
   during an active run. Gating is a pure static predicate
   `showsNewConversationButton(isInteractiveSession:hasConversation:isRunning:runningKind:)`

@@ -62,7 +62,7 @@ struct QueryConversationView: View {
     private var controlsBand: some View {
         HStack(spacing: 8) {
             if showsNewConversation {
-                Button("New Conversation", systemImage: "square.and.pencil") {
+                Button("New Conversation", systemImage: "trash") {
                     launcher.startNewConversation()
                 }
                 .labelStyle(.iconOnly)
