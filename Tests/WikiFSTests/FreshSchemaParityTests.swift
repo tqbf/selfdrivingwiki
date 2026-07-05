@@ -120,8 +120,8 @@ import SQLite3
         let ladder = try fingerprint(at: ladderURL)
 
         // Both must report head version 19.
-        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "19")
-        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "19")
+        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "20")
+        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "20")
 
         if fast != ladder {
             Issue.record("fresh fast-path schema drifted from the stepwise ladder:\n--- fast ---\n\(fast)\n--- ladder ---\n\(ladder)")

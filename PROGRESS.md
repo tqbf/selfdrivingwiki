@@ -2,6 +2,56 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-05 — Graph-model Phase 1: objects & versioning (`blobs`/`agents`/`activities`/`source_versions`/`refs`, v20)
+
+The foundational storage migration that Phases 2–7 depend on. Moves source
+content out of the mutable `sources.content` column into immutable,
+content-addressed `blobs`, an append-only `source_versions` chain, a PROV-DM
+`agents`/`activities` provenance substrate, and a single mutable `refs` pointer
+table — all behind a ref-resolved read path. **Invisible to every caller**:
+reads (`sourceContent`, File Provider projection, `wikictl cat`/`export`) keep
+working unchanged; no `WikiStore` protocol change, no projection change, no CLI
+change. Design of record: [`plans/graph-model-and-versioning.md`](plans/graph-model-and-versioning.md)
+§4.1–4.3, §9, §10.
+
+- **New file `Sources/WikiFSCore/SourceVersioning.swift`** — value types
+  `Blob`, `ProvenanceAgent`, `ProvenanceActivity`, `SourceVersion`, `enum RefKind`.
+- **Schema v20** (`createFreshSchemaV20` + `createObjectsTablesV20` helper):
+  the fresh `sources` table drops `content`; keeps `byte_size`/`mime_type`/
+  `content_hash` as denormalized mirrors of the active version's blob (deviation
+  from §4.2, flagged — single version per source in Phase 1, so the mirror never
+  drifts; avoids reworking `SourceSummary`/`listSources`/FP size/`sources.jsonl`).
+- **Migration step 19→20** (`migrateV19ToV20`, one `withTransaction`): a
+  silent-data-loss guard asserts every source has a `content_hash`; then for
+  each source reuses that hash as the blob hash (no re-hash), writes a
+  `INSERT OR IGNORE` blob + a per-source import activity + a v1 version + a
+  `source-content` ref (generation 1), then `ALTER TABLE … DROP COLUMN content`.
+  Resilient to a DB rewound from v20 for testing (skips the data step when
+  `content` is already gone). `backfillContentHashes` guarded against a missing
+  `content` column for the same reason.
+- **`sourceContent(id:)` rewritten** — ref → version → blob, with the
+  default-active `MAX(id)` fallback (§4.3), empty `Data()` for byteless
+  (`blob_hash IS NULL`, never throws), `.notFound` only when no version rows.
+  New helpers `activeContentVersion`, `contentVersionHistory`.
+- **`addSource` rewritten** — writes the `sources` row first (FK ordering),
+  then blob + import activity + v1 version + ref in one transaction; dedup check
+  unchanged (on indexed `sources.content_hash`).
+- **Store-level versioning primitives** — `appendContentVersion` (dedup blob,
+  new version, ref UPSERT generation+1, mirror refresh) and
+  `rollbackSourceContent` (pointer repoint, append-only history). Phase 3 wires
+  the provider refresh UI/verb.
+- **`changeToken()` grew 8 → 11 fields** (+`svCount`, +`refsGenSum`, +`actCount`);
+  ~20 hardcoded literals updated across `SQLiteWikiStoreTests`/`LogIndexTests`/
+  `SystemPromptTests`; all head-version assertions bumped 19 → 20. The three new
+  folds are change-detectors (deletes legitimately lower `svCount`/`refsGenSum`;
+  activities persist — no cascade from sources); §10's monotone-non-decreasing
+  caveat corrected in the design doc.
+- Gate: full suite green — **1477 tests / 113 suites** (10 new Phase 1 tests:
+  fresh-schema objects + content-drop, raw-SQL v19→v20 migration, ref-resolved
+  read + byteless + MAX(id) fallback, append-dedup + rollback-preserves-history,
+  changeToken-on-append/rollback, delete-cascade-keeps-blobs, read-only-store
+  resolution). `StoreConcurrencyTests` (Phase 0 hammer) still green.
+
 ## 2026-07-05 — "Add Bookmark…" on internal wiki links in the link context menu (#188)
 
 Right-clicking a **resolved internal wiki link** (`[[Page]]` / `[[source:Name]]`)
