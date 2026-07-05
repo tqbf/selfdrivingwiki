@@ -236,10 +236,9 @@ struct AgentTranscriptWebView: NSViewRepresentable {
 
         /// The Query page chat look: a right-aligned capsule for the user, plain
         /// prose for the assistant (matching `QueryMessageBubble`'s prior
-        /// SwiftUI rendering), no row labels. Other event kinds never reach a
-        /// chat-styled transcript (the caller's `events` is pre-filtered to
-        /// user/assistant/result), but render nothing rather than crash if one
-        /// slips through.
+        /// SwiftUI rendering), no row labels. Tool calls render as a concise,
+        /// muted one-line progress indicator (issue #173) — independent of the
+        /// "Show internals" toggle, which still gates the full raw feed.
         static func chatRowHTML(for event: AgentEvent) -> String {
             switch event {
             case .userText(let text):
@@ -255,9 +254,29 @@ struct AgentTranscriptWebView: NSViewRepresentable {
                 return """
                 <div class="row chat-row chat-assistant"><div class="bubble">\(renderedMarkdown(text))</div></div>
                 """
-            case .systemInit, .toolUse, .toolResult, .subagent, .messageStop, .raw, .assistantTextDelta:
+            case .toolUse(let name, let summary):
+                return chatToolRowHTML(name: name, summary: summary, isError: false)
+            case .toolResult(let isError, let summary):
+                // Only error results reach a chat-styled transcript (successes are
+                // filtered out upstream in `QueryTranscriptView.visibleEvents`).
+                guard isError else { return "" }
+                return chatToolRowHTML(name: nil, summary: summary, isError: true)
+            case .systemInit, .subagent, .messageStop, .raw, .assistantTextDelta:
                 return ""
             }
+        }
+
+        /// A single muted, left-aligned progress line for a tool call — the
+        /// lightweight in-transcript indicator (issue #173). Not a chat bubble:
+        /// it reads like a status line, so it stays subordinate to the prose.
+        private static func chatToolRowHTML(name: String?, summary: String, isError: Bool) -> String {
+            let nameHTML = name.map { "<span class=\"chat-tool-name\">\(escape($0))</span>" } ?? ""
+            let body = summary.isEmpty ? (isError ? "(error)" : "") : summary
+            let summaryHTML = body.isEmpty ? "" : "<span class=\"chat-tool-summary\">\(escape(body))</span>"
+            return """
+            <div class="row chat-row chat-tool\(isError ? " is-error" : "")">\
+            \(nameHTML)\(summaryHTML)</div>
+            """
         }
 
         private static func escape(_ s: String) -> String {
@@ -326,6 +345,20 @@ struct AgentTranscriptWebView: NSViewRepresentable {
             background: var(--code-bg); border-radius: 14px;
             padding: 11px 16px; white-space: pre-wrap; font-size: 13.5px;
           }
+          .chat-tool {
+            justify-content: flex-start; align-items: baseline;
+            gap: 6px; font-size: 11.5px; color: var(--muted);
+            padding: 1px 2px;
+          }
+          .chat-tool-name {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-weight: 600; color: var(--text);
+          }
+          .chat-tool-summary {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+          }
+          .chat-tool.is-error { color: #ff453a; }
+          .chat-tool.is-error .chat-tool-name { color: #ff453a; }
           p { margin: 0 0 0.6em; }
           p:last-child { margin-bottom: 0; }
           h1, h2, h3, h4, h5, h6 { line-height: 1.25; font-weight: 600; margin: 0.7em 0 0.3em; }

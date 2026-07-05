@@ -53,4 +53,33 @@ struct AgentTranscriptLinkifyTests {
         let html = Transcript.chatRowHTML(for: .result(isError: false, text: "See [[Page]] here."))
         #expect(html.contains("wiki://"))
     }
+
+    // MARK: - Concise tool-call summaries (issue #173)
+
+    @Test func chatToolUseRowRendersConciseSummary() {
+        let html = Transcript.chatRowHTML(for: .toolUse(name: "Read", inputSummary: "page.md"))
+        #expect(html.contains("chat-tool"))
+        #expect(html.contains("Read"))
+        #expect(html.contains("page.md"))
+        // Not a chat bubble — it's a status line.
+        #expect(!html.contains("bubble"))
+    }
+
+    @Test func chatToolUseRowWithoutSummaryStillShowsName() {
+        let html = Transcript.chatRowHTML(for: .toolUse(name: "Grep", inputSummary: ""))
+        #expect(html.contains("Grep"))
+        #expect(html.contains("chat-tool"))
+    }
+
+    @Test func chatToolResultErrorRowRenders() {
+        let html = Transcript.chatRowHTML(for: .toolResult(isError: true, summary: "file not found"))
+        #expect(html.contains("chat-tool"))
+        #expect(html.contains("is-error"))
+        #expect(html.contains("file not found"))
+    }
+
+    @Test func chatToolResultSuccessRowIsEmpty() {
+        let html = Transcript.chatRowHTML(for: .toolResult(isError: false, summary: "ok"))
+        #expect(html.isEmpty)
+    }
 }
