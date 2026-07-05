@@ -116,11 +116,11 @@ struct WikiReaderView: View {
     /// and forwarded unchanged down through the intermediate views to
     /// `AgentTranscriptWebView`. Pass `nil` where navigation is impossible.
     @MainActor
-    static func onWikiLinkHandler(for store: WikiStoreModel) -> (URL) -> Void {
-        { url in
+    static func onWikiLinkHandler(for store: WikiStoreModel) -> (URL, Bool) -> Void {
+        { url, openInNewTab in
             switch WikiReaderView.linkRoute(for: url) {
-            case .page(let title, let frag):   store.selectPage(byTitle: title, anchor: frag)
-            case .source(let title, let frag): store.selectSource(byDisplayName: title, anchor: frag)
+            case .page(let title, let frag):   store.selectPage(byTitle: title, anchor: frag, openInNewTab: openInNewTab)
+            case .source(let title, let frag): store.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab)
             case .samePageAnchor, .inert:      break
             }
         }
@@ -967,7 +967,10 @@ internal struct WikiReaderRep: NSViewRepresentable {
             if navigationAction.navigationType == .linkActivated,
                let url = navigationAction.request.url {
                 if url.scheme == "wiki" {
-                    route(url)
+                    // macOS browser convention: plain click navigates the current
+                    // tab in place; ⌘-click opens the target in a new tab.
+                    let openInNewTab = navigationAction.modifierFlags.contains(.command)
+                    route(url, openInNewTab: openInNewTab)
                     decisionHandler(.cancel)
                     return
                 }
@@ -987,7 +990,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
         /// pending-anchor flow (see `consumeAndApplyPendingAnchor`): the resulting
         /// `selectPage`/`selectSource` stash the `#fragment` as a pending anchor
         /// that the *destination* reader's Coordinator later consumes + applies.
-        private func route(_ url: URL) {
+        /// `openInNewTab` mirrors the click's modifier (⌘-click → new tab).
+        private func route(_ url: URL, openInNewTab: Bool = false) {
             switch WikiReaderView.linkRoute(for: url) {
             case .samePageAnchor(let frag):
                 if let webView, let frag {
@@ -996,9 +1000,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
                         #"var e=document.getElementById("\#(s)"); if(e){e.scrollIntoView({block:"start"});}""#)
                 }
             case .page(let title, let frag):
-                store?.selectPage(byTitle: title, anchor: frag)
+                store?.selectPage(byTitle: title, anchor: frag, openInNewTab: openInNewTab)
             case .source(let title, let frag):
-                store?.selectSource(byDisplayName: title, anchor: frag)
+                store?.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab)
             case .inert:
                 break
             }

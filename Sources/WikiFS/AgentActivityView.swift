@@ -10,9 +10,9 @@ struct AgentActivityView: View {
     /// Forwards wiki-link clicks in the transcript to the detail column. Built
     /// where the store lives and threaded down; `nil` when navigation is
     /// impossible (links still render, just don't navigate).
-    var onWikiLink: ((URL) -> Void)? = nil
+    var onWikiLink: ((URL, Bool) -> Void)? = nil
 
-    init(launcher: AgentLauncher, showsResultEvents: Bool = true, showsInternals: Bool = false, onWikiLink: ((URL) -> Void)? = nil) {
+    init(launcher: AgentLauncher, showsResultEvents: Bool = true, showsInternals: Bool = false, onWikiLink: ((URL, Bool) -> Void)? = nil) {
         self.launcher = launcher
         self.showsResultEvents = showsResultEvents
         self.showsInternals = showsInternals

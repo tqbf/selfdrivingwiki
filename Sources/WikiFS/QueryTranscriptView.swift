@@ -8,7 +8,7 @@ struct QueryTranscriptView: View {
     /// Forwards wiki-link clicks in the transcript to the detail column. Built
     /// where the store lives (the parent `QueryConversationView`) and forwarded
     /// unchanged to the transcript web view.
-    var onWikiLink: ((URL) -> Void)? = nil
+    var onWikiLink: ((URL, Bool) -> Void)? = nil
 
     var body: some View {
         Group {

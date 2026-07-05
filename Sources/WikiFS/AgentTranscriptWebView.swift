@@ -42,7 +42,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
     /// is built where the store lives (two levels up) and routes to
     /// `selectPage` / `selectSource`. `nil` → links still render but don't
     /// navigate (a strict improvement over literal `[[brackets]]`).
-    var onWikiLink: ((URL) -> Void)? = nil
+    var onWikiLink: ((URL, Bool) -> Void)? = nil
 
     func makeNSView(context: Context) -> WKWebView {
         let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
@@ -70,7 +70,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
         var style: VisualStyle = .activityFeed
         /// Routes a clicked `wiki://` link out to the view's `onWikiLink`
         /// closure (built where the store lives). Refreshed each update.
-        var onWikiLink: ((URL) -> Void)?
+        var onWikiLink: ((URL, Bool) -> Void)?
         private var renderedCount = 0
         private var renderedShowsInternals: Bool?
         private var isLoaded = false
@@ -142,7 +142,9 @@ struct AgentTranscriptWebView: NSViewRepresentable {
             if navigationAction.navigationType == .linkActivated,
                let url = navigationAction.request.url {
                 if url.scheme == "wiki" {
-                    onWikiLink?(url)
+                    // ⌘-click opens a new tab; plain click navigates in place.
+                    let openInNewTab = navigationAction.modifierFlags.contains(.command)
+                    onWikiLink?(url, openInNewTab)
                     decisionHandler(.cancel)
                     return
                 }
