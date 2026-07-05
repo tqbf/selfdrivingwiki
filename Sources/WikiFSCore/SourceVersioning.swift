@@ -106,12 +106,14 @@ public struct SourceVersion: Equatable, Sendable {
     }
 }
 
-/// The kind of pointer a `refs` row holds (§4.3). Phase 1 ships only
-/// `sourceContent`; `sourceDerived` (the active extraction alternative) and
-/// `pageContent` arrive in later phases. The `version_id` a ref points at is
-/// polymorphic on `kind` and therefore carries no FK (single-writer invariant).
+/// The kind of pointer a `refs` row holds (§4.3). Phase 1 ships `sourceContent`;
+/// Phase 2 adds `sourceDerived` (the active extraction alternative). The
+/// `version_id` a ref points at is polymorphic on `kind` and therefore carries no
+/// FK (single-writer invariant: only `recordMarkdownExtraction`,
+/// `setActiveMarkdown`, and `revertProcessedMarkdown` write `source-derived`).
 public enum RefKind: String, Sendable {
     /// Active content version (`source_versions.id`).
     case sourceContent = "source-content"
-    // Phase 2: case sourceDerived = "source-derived"
+    /// Active extraction alternative (`source_markdown_versions.id`).
+    case sourceDerived = "source-derived"
 }

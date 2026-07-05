@@ -440,7 +440,10 @@ final class AgentLauncher {
                     onProgress: { line in
                         Task { @MainActor in self.extractionLog.append(line) }
                     })
-                _ = store.seedPdfMarkdown(for: id, content: markdown)
+                let cfg = extractionCoordinator.config
+                _ = store.seedPdfMarkdown(
+                    for: id, content: markdown,
+                    backend: cfg.backend, modelVersion: cfg.currentModelVersion)
                 extractionLog = "Markdown extracted — \(markdown.count) chars."
                 DebugLog.extraction("Extracted \(filename): \(markdown.count) chars")
             } catch {

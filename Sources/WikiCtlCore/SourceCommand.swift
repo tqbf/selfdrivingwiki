@@ -42,6 +42,7 @@ public enum SourceCommand {
         case editMarkdown(Selector, content: String)
         case rename(Selector, to: String)
         case search(query: String, limit: Int)
+        case setActive(Selector, versionID: PageID)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -71,6 +72,8 @@ public enum SourceCommand {
             return try rename(selector, to: to, in: store)
         case .search(let query, let limit):
             return try search(query: query, limit: limit, in: store)
+        case .setActive(let selector, let versionID):
+            return try setActive(selector, versionID: versionID, in: store)
         }
     }
 
@@ -221,5 +224,24 @@ public enum SourceCommand {
             return "\(summary.id.rawValue)\t\(name)"
         }.joined(separator: "\n")
         return Result(payload: .text(output), didCommit: false)
+    }
+
+    // MARK: - set-active
+
+    /// Nominate an existing processed-markdown version as the active HEAD for a
+    /// source (UPSERT the `source-derived` ref). Errors when the source has no
+    /// markdown chain or the version doesn't belong to it. Commits — the caller
+    /// posts the Darwin notification on `didCommit`.
+    private static func setActive(
+        _ selector: Selector, versionID: PageID, in store: WikiStore
+    ) throws -> Result {
+        let id = try resolve(selector, in: store)
+        guard try store.hasProcessedMarkdown(sourceID: id) else {
+            throw Failure.message("no processed markdown for this source")
+        }
+        try store.setActiveMarkdown(sourceID: id, to: versionID)
+        return Result(
+            payload: .text("Set active markdown to \(versionID.rawValue)."),
+            didCommit: true)
     }
 }

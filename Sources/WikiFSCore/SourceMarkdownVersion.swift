@@ -9,13 +9,17 @@ import Foundation
 /// `parentID` is nil for v1 (the seeding/extraction baseline) and points to
 /// the previous version for every subsequent edit/revert.
 public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
-    /// ULID — sorts chronologically, so MAX(id) for a given source is the head.
+    /// ULID — sorts chronologically, so MAX(id) for a given source is the head
+    /// (absent a `source-derived` ref; see the default-active rule).
     public let id: PageID
     /// The source this version belongs to.
     public let sourceID: PageID
     /// Previous version's id; nil for v1 (the lineage root).
     public let parentID: PageID?
-    /// Full markdown text of this version.
+    /// Full markdown text of this version — ALWAYS the fully-resolved body. For
+    /// CAS'd rows (v21+) this is the blob-decoded text; callers must never read
+    /// `blobHash` to obtain body text. The empty string only appears transiently
+    /// in the DB column, never on this property.
     public let content: String
     /// Who/what created this version: "extraction", "user", or "revert".
     public let origin: String
@@ -23,6 +27,17 @@ public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
     public let note: String?
     /// When this version was created.
     public let createdAt: Date
+    /// The PROV activity that produced this extraction (§4.7). nil for rows
+    /// without provenance (pre-v21 legacy rows that failed to backfill).
+    public let activityID: String?
+    /// The `source_versions.id` this extraction was derived from. nil when the
+    /// extraction predates the content chain or the source has no versions.
+    public let sourceVersionID: String?
+    /// Content-addressed hash of the markdown body (CAS, §4.5). Rows sharing a
+    /// blob hash store the bytes exactly once.
+    public let blobHash: String?
+    /// MIME type of the body (`text/markdown`).
+    public let mimeType: String
 
     public init(
         id: PageID,
@@ -31,7 +46,11 @@ public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
         content: String,
         origin: String,
         note: String?,
-        createdAt: Date
+        createdAt: Date,
+        activityID: String? = nil,
+        sourceVersionID: String? = nil,
+        blobHash: String? = nil,
+        mimeType: String = "text/markdown"
     ) {
         self.id = id
         self.sourceID = sourceID
@@ -40,5 +59,9 @@ public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
         self.origin = origin
         self.note = note
         self.createdAt = createdAt
+        self.activityID = activityID
+        self.sourceVersionID = sourceVersionID
+        self.blobHash = blobHash
+        self.mimeType = mimeType
     }
 }

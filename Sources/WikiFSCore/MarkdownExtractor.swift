@@ -90,6 +90,18 @@ public enum ExtractionBackend: String, Sendable, CaseIterable, Codable {
             return "A self-hosted Docling Serve instance. Private to your network; needs an endpoint URL."
         }
     }
+
+    /// The PROV `agents.name` this backend maps to (§4.7). Used by
+    /// `recordMarkdownExtraction` so an extraction's provenance recovers to the
+    /// backend that produced it. Stable strings, never user-facing.
+    public var agentName: String {
+        switch self {
+        case .localPdf2md: return "pdf2md"
+        case .anthropic:   return "claude"
+        case .gemini:      return "gemini"
+        case .doclingServe: return "docling-serve"
+        }
+    }
 }
 
 /// The shared extraction contract: a faithful-transcription prompt every model

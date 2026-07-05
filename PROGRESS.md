@@ -2,6 +2,69 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-05 — Graph-model Phase 2: extraction alternatives (tracks A+B, v21)
+
+Turned `source_markdown_versions` from a flat inline-content chain into CAS'd,
+provenance-carrying extraction **alternatives** that coexist. Design authority:
+`plans/graph-model-and-versioning.md` §4.5 (CAS), §4.7 (PROV-DM), §4.3 (refs +
+default-active rule), §9 step v21, §12 Phase 2 gate.
+
+**Schema v21** (`migrateV20ToV21`, one `withTransaction`; fresh-path CREATE
+extended in parity): adds `activity_id`, `source_version_id`, `blob_hash`,
+`mime_type` to `source_markdown_versions`. One-shot backfill CAS-moves each
+legacy row's inline `content` into a blob (SHA-256 hex → `INSERT OR IGNORE`),
+seeds one `legacy-extraction` agent + a per-row `extract` activity, backfills
+`source_version_id` to the source's active content version (ref→else-MAX,
+mirroring `activeContentVersion`), and clears the inline column to `''`. A
+silent-data-loss guard throws + rolls back on an empty-content legacy row; a
+table-existence guard no-ops artificial migration fixtures. Legacy rows are
+materialized into a Swift array before inner DML (sqlite-concurrency discipline
+— no live cursor stepping while inner statements run).
+
+**CAS read/write path:** every new smv row hashes its markdown → `INSERT OR
+IGNORE` blob → stores `blob_hash`, leaves `content=''` (`storeMarkdownBlob`,
+used by `appendProcessedMarkdown` + `recordMarkdownExtraction` + revert). The
+**resolved-body invariant** lives in the readers: `sourceMarkdownVersion(from:)`
+decodes `COALESCE(CAST(blobs.content AS TEXT), smv.content)` via a shared
+`smvSelectColumns`/`smvBlobJoin`, so `.content` is always the full markdown. The
+three SQL-subquery sites (`rebuildFTS`, `ensureSearchIndexes` source_search
+backfill, `missingSourceEmbeddingWork`) were rewritten inline with `smvHeadBodySQL`
+— a fragment that resolves both the blob body AND the ref-resolved HEAD, fixing
+the critical regression where `content=''` CAS rows would have silently emptied
+FTS/embedding text and MAX-id subqueries ignored a nominated ref.
+
+**Provenance write path:** `recordMarkdownExtraction(sourceID:content:backend:
+sourceVersionID:note:modelVersion:)` creates the backend's Agent (idempotent by
+name via `ensureAgent`, `backend.agentName` → pdf2md/claude/gemini/docling-serve)
++ an `extract` Activity (plan JSON) + the CAS'd smv row in one transaction. Does
+NOT write the `source-derived` ref — alternatives coexist; the first becomes HEAD
+by the default-active rule (MAX id), later ones are alternatives until nominated.
+
+**`source-derived` ref + ref-resolved HEAD + revert-as-pointer:** enabled
+`RefKind.sourceDerived`. `processedMarkdownHead` / `processedMarkdownHeadsBySource`
+(now a CTE) prefer the `source-derived` ref's `version_id`, else MAX(id) —
+byte-identical until a ref is written. `setActiveMarkdown` UPSERTs the ref
+(generation+1; changeToken already folds `refs.generation_sum`, no new fold).
+`revertProcessedMarkdown` is now a pointer copy: appends a new row reusing the
+target's `blob_hash` (zero new blob bytes) and repoints the ref.
+
+**Re-extract path (B):** `WikiStoreModel.reExtractMarkdown(for:using:backend:)`
+runs a second backend and appends a coexisting alternative. UI in
+`SourceDetailView`: an "Extractions" Menu lists each alternative (backend agent
+name + date, "Active" check) and a "Re-extract with…" submenu. All three
+extraction call sites (`SourceDetailView`, `AgentOperationRunner`,
+`AgentLauncher`) now pass the resolved backend + model version to the provenance
+recorder. `wikictl source set-active (--id|--name) --version <smv-id>` nominates
+the active HEAD (scriptable/testable switch).
+
+**Evidence (gate met):** AC.1–AC.9 covered by new tests in
+`ProcessedMarkdownTests` (CAS dedup, revert pointer copy, two-backend coexistence,
+setActive + token, provenance recovery, reExtract coexistence),
+`FreshSchemaParityTests` (v20→v21 lossless migration + ladder parity),
+`FullTextSearchTests` (search body non-empty after CAS + follows nominated ref),
+and `WikiCtlCommandTests` (`source set-active` round-trip). Full suite: **1488
+tests green.** Track C (full compare/nominate UI) deferred to a follow-on plan.
+
 ## 2026-07-05 — Graph-model Phase 1: objects & versioning (`blobs`/`agents`/`activities`/`source_versions`/`refs`, v20)
 
 The foundational storage migration that Phases 2–7 depend on. Moves source

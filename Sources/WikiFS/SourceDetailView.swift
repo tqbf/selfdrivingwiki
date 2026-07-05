@@ -318,6 +318,9 @@ struct SourceDetailView: View {
                                   || (launcher.isExtractionSlotBusy
                                       && !launcher.extractingSourceIDs.contains(file.id)))
                     }
+                    if isPDF, hasMarkdown {
+                        extractionsMenu
+                    }
                     if isMarkdownEditable {
                         Button("Edit", systemImage: "pencil") {
                             editBuffer = headVersion?.content ?? ""
@@ -588,7 +591,10 @@ struct SourceDetailView: View {
                     onProgress: { line in
                         Task { @MainActor in launcher.extractionLog.append(line) }
                     })
-                if let version = store.seedPdfMarkdown(for: file.id, content: markdown) {
+                if let version = store.seedPdfMarkdown(
+                    for: file.id, content: markdown,
+                    backend: extractionCoordinator.config.backend,
+                    modelVersion: extractionCoordinator.config.currentModelVersion) {
                     headVersion = version
                     launcher.extractionLog = "Markdown extracted — \(markdown.count) chars."
                 }
@@ -601,6 +607,137 @@ struct SourceDetailView: View {
             }
         case .needsSetup(let message), .notInstalled(let message):
             launcher.extractionLog = message
+        }
+    }
+
+    // MARK: - Extraction alternatives (Phase 2)
+
+    /// A minimal menu for the extraction-alternatives surface (track A+B; the
+    /// full compare UI is track C). Lists each extraction alternative labeled
+    /// with its backend agent name + date, marks the active one, and offers a
+    /// "Re-extract with…" submenu to run a second backend as a coexisting
+    /// alternative.
+    private var extractionsMenu: some View {
+        Menu {
+            Section("Active extraction") {
+                let history = store.processedMarkdownHistory(for: file.id)
+                let names = store.processedMarkdownAgentNames(for: file.id)
+                let headID = headVersion?.id.rawValue
+                ForEach(history) { version in
+                    let agent = names[version.id.rawValue] ?? version.origin
+                    Button {
+                        store.setActiveMarkdown(for: file.id, to: version.id)
+                        headVersion = store.processedMarkdownHead(for: file)
+                    } label: {
+                        HStack {
+                            Label {
+                                Text("\(agent) — \(version.createdAt, style: .date)")
+                            } icon: {
+                                Image(systemName: version.id.rawValue == headID
+                                      ? "checkmark.circle.fill" : "doc.text")
+                            }
+                        }
+                    }
+                }
+            }
+            Section("Re-extract with") {
+                ForEach(ExtractionBackend.allCases, id: \.self) { backend in
+                    Button(backend.displayName) {
+                        let task = Task {
+                            defer { launcher.extractTask = nil }
+                            await runReExtraction(with: backend)
+                        }
+                        launcher.extractTask = task
+                    }
+                    .disabled(isThisFileExtracting
+                              || (launcher.isExtractionSlotBusy
+                                  && !launcher.extractingSourceIDs.contains(file.id)))
+                }
+            }
+        } label: {
+            Label("Extractions", systemImage: "doc.on.doc")
+        }
+        .help("Switch the active extraction or re-extract with another backend")
+    }
+
+    /// Re-extract the source with a chosen backend, appending a coexisting
+    /// alternative (does not clobber the current head). Mirrors `runExtraction`
+    /// but always appends via `reExtractMarkdown`.
+    private func runReExtraction(with backend: ExtractionBackend) async {
+        let cfg = extractionCoordinator.config
+        let extractor = extractorFor(backend: backend, config: cfg)
+        let acquired = await launcher.awaitExtractionSlot()
+        guard acquired, !Task.isCancelled else {
+            if acquired { launcher.releaseExtractionSlot() }
+            launcher.extractionLog = "Re-extraction cancelled."
+            return
+        }
+        launcher.extractingSourceIDs.insert(file.id)
+        defer {
+            launcher.extractingSourceIDs.remove(file.id)
+            launcher.releaseExtractionSlot()
+        }
+        switch await extractor.readiness() {
+        case .ready:
+            launcher.isExtracting = true
+            launcher.extractionPID = nil
+            launcher.extractionLog = "Re-extracting with \(backend.displayName)…"
+            defer {
+                launcher.isExtracting = false
+                launcher.extractionPID = nil
+            }
+            let onProgress: (@Sendable (String) -> Void) = { line in
+                Task { @MainActor in launcher.extractionLog.append(line) }
+            }
+            if let version = await store.reExtractMarkdown(
+                for: file.id, filename: file.filename,
+                using: extractor, backend: backend,
+                modelVersion: modelVersionFor(backend: backend, config: cfg),
+                onProgress: onProgress) {
+                headVersion = version
+                launcher.extractionLog = "Re-extracted with \(backend.displayName) — \(version.content.count) chars."
+            } else {
+                launcher.extractionLog = "Re-extraction failed."
+            }
+        case .needsSetup(let message), .notInstalled(let message):
+            launcher.extractionLog = message
+        }
+    }
+
+    /// Resolve a concrete extractor for an arbitrary backend from the shared
+    /// coordinator's config + secrets. Used by the Re-extract menu so the user
+    /// can pick a backend other than the configured default.
+    private func extractorFor(backend: ExtractionBackend, config: ExtractionConfig) -> any MarkdownExtractor {
+        switch backend {
+        case .localPdf2md:
+            return extractionCoordinator.current()
+        case .anthropic:
+            let base = config.anthropicBaseURLOverride.flatMap(URL.init(string:))
+                ?? URL(string: ExtractionConfig.defaultAnthropicBaseURL)!
+            return AnthropicExtractionClient(
+                model: config.anthropicModel,
+                apiKey: extractionCoordinator.credentialStore.secret(.anthropicAPIKey) ?? "",
+                baseURL: base, fetcher: extractionCoordinator.fetcher)
+        case .gemini:
+            let base = config.geminiBaseURLOverride.flatMap(URL.init(string:))
+                ?? URL(string: ExtractionConfig.defaultGeminiBaseURL)!
+            return GeminiExtractionClient(
+                model: config.geminiModel,
+                apiKey: extractionCoordinator.credentialStore.secret(.geminiAPIKey) ?? "",
+                baseURL: base, fetcher: extractionCoordinator.fetcher)
+        case .doclingServe:
+            return DoclingServeClient(
+                endpoint: config.doclingServeEndpoint ?? "",
+                apiToken: extractionCoordinator.credentialStore.secret(.doclingServeToken),
+                fetcher: extractionCoordinator.fetcher)
+        }
+    }
+
+    private func modelVersionFor(backend: ExtractionBackend, config: ExtractionConfig) -> String? {
+        switch backend {
+        case .anthropic: return config.anthropicModel
+        case .gemini: return config.geminiModel
+        case .localPdf2md, .doclingServe: return nil
         }
     }
 

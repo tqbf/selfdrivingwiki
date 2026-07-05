@@ -87,7 +87,7 @@ struct ProcessedMarkdownTests {
 
     @Test func freshDBHasV8Schema() throws {
         let store = try tempStore()
-        #expect(store.pragmaValue("user_version") == "20")
+        #expect(store.pragmaValue("user_version") == "21")
     }
 
     @Test func v7DBUpgradesToV8PreservingData() throws {
@@ -103,7 +103,7 @@ struct ProcessedMarkdownTests {
 
         // Opening runs v7→v8→…→v15 migration.
         let store = try SQLiteWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "20")
+        #expect(store.pragmaValue("user_version") == "21")
         // Pre-existing file is intact.
         let content = try store.sourceContent(
             id: PageID(rawValue: "01J00000000000000000000000"))
@@ -346,7 +346,8 @@ struct ProcessedMarkdownTests {
         let model = WikiStoreModel(store: store)
 
         // Simulate extraction output: seed the markdown.
-        let seeded = model.seedPdfMarkdown(for: pdf.id, content: "# Extracted\ncontent")
+        let seeded = model.seedPdfMarkdown(
+            for: pdf.id, content: "# Extracted\ncontent", backend: .anthropic)
         #expect(seeded != nil)
         #expect(seeded?.content == "# Extracted\ncontent")
 
@@ -361,14 +362,14 @@ struct ProcessedMarkdownTests {
         let model = WikiStoreModel(store: store)
 
         // First seed.
-        let v1 = model.seedPdfMarkdown(for: pdf.id, content: "first extract")
+        let v1 = model.seedPdfMarkdown(for: pdf.id, content: "first extract", backend: .anthropic)
         #expect(v1 != nil)
         #expect(v1?.content == "first extract")
 
         // Second seed: double-seed guard returns the existing head, does NOT
         // append a duplicate version.
         usleep(2000)
-        let v2 = model.seedPdfMarkdown(for: pdf.id, content: "should be ignored")
+        let v2 = model.seedPdfMarkdown(for: pdf.id, content: "should be ignored", backend: .gemini)
         #expect(v2 != nil)
         #expect(v2?.id == v1?.id)
         #expect(v2?.content == "first extract")
@@ -377,5 +378,140 @@ struct ProcessedMarkdownTests {
         let head = model.processedMarkdownHead(for: pdf)
         #expect(head?.id == v1?.id)
         #expect(head?.content == "first extract")
+    }
+
+    // MARK: - Phase 2: CAS, provenance, alternatives
+
+    /// AC.1 — Identical extraction content dedups the blob: two smv rows share
+    /// one `blob_hash`, and the `blobs` row count does not increase.
+    @Test func identicalExtractionDedupsBlob() throws {
+        let store = try tempStore()
+        let file = try seedSource(in: store)
+        let v1 = try store.recordMarkdownExtraction(
+            sourceID: file.id, content: "# Same\nbody",
+            backend: .anthropic, sourceVersionID: nil, note: nil, modelVersion: nil)
+        let blobsBefore = store.scalarText("SELECT COUNT(*) FROM blobs;")
+        usleep(2000)
+        let v2 = try store.recordMarkdownExtraction(
+            sourceID: file.id, content: "# Same\nbody",
+            backend: .gemini, sourceVersionID: nil, note: nil, modelVersion: nil)
+        let blobsAfter = store.scalarText("SELECT COUNT(*) FROM blobs;")
+        #expect(v1.blobHash != nil)
+        #expect(v1.blobHash == v2.blobHash)
+        #expect(blobsBefore == blobsAfter)
+    }
+
+    /// AC.2 — Revert is a pointer copy: the revert row reuses the target's
+    /// `blob_hash`, no new blob bytes are stored, and the revert becomes HEAD.
+    @Test func revertIsPointerCopy() throws {
+        let store = try tempStore()
+        let file = try seedSource(in: store)
+        let v1 = try store.recordMarkdownExtraction(
+            sourceID: file.id, content: "original body",
+            backend: .anthropic, sourceVersionID: nil, note: nil, modelVersion: nil)
+        usleep(2000)
+        _ = try store.appendProcessedMarkdown(
+            sourceID: file.id, content: "edited body", origin: "user", note: nil)
+        let blobsBefore = store.scalarText("SELECT COUNT(*) FROM blobs;")
+        usleep(2000)
+        let reverted = try store.revertProcessedMarkdown(sourceID: file.id, to: v1.id)
+        let blobsAfter = store.scalarText("SELECT COUNT(*) FROM blobs;")
+        #expect(reverted.blobHash == v1.blobHash)
+        #expect(blobsBefore == blobsAfter)
+        let head = try store.processedMarkdownHead(sourceID: file.id)
+        #expect(head?.id == reverted.id)
+        #expect(head?.content == "original body")
+    }
+
+    /// AC.3 — Two backends' extractions coexist (distinct agents, no clobber).
+    @Test func twoBackendsCoexist() throws {
+        let store = try tempStore()
+        let file = try seedSource(in: store)
+        _ = try store.recordMarkdownExtraction(
+            sourceID: file.id, content: "claude output",
+            backend: .anthropic, sourceVersionID: nil, note: nil, modelVersion: nil)
+        usleep(2000)
+        _ = try store.recordMarkdownExtraction(
+            sourceID: file.id, content: "gemini output",
+            backend: .gemini, sourceVersionID: nil, note: nil, modelVersion: nil)
+        let history = try store.processedMarkdownHistory(sourceID: file.id)
+        #expect(history.count >= 2)
+        let names = try store.processedMarkdownAgentNames(sourceID: file.id)
+        let agentNames = Set(names.values)
+        #expect(agentNames.contains("claude"))
+        #expect(agentNames.contains("gemini"))
+    }
+
+    /// AC.4 — setActiveMarkdown repoints the source-derived ref, HEAD follows
+    /// it, and the changeToken moves.
+    @Test func setActiveMarkdownRepointsRefAndMovesToken() throws {
+        let store = try tempStore()
+        let file = try seedSource(in: store)
+        let first = try store.recordMarkdownExtraction(
+            sourceID: file.id, content: "first",
+            backend: .anthropic, sourceVersionID: nil, note: nil, modelVersion: nil)
+        usleep(2000)
+        _ = try store.recordMarkdownExtraction(
+            sourceID: file.id, content: "second",
+            backend: .gemini, sourceVersionID: nil, note: nil, modelVersion: nil)
+        // Default-active: HEAD is the latest (second).
+        #expect(try store.processedMarkdownHead(sourceID: file.id)?.content == "second")
+        let tokenBefore = try store.changeToken()
+        try store.setActiveMarkdown(sourceID: file.id, to: first.id)
+        let tokenAfter = try store.changeToken()
+        #expect(tokenBefore != tokenAfter)
+        #expect(try store.processedMarkdownHead(sourceID: file.id)?.id == first.id)
+        #expect(try store.processedMarkdownHead(sourceID: file.id)?.content == "first")
+    }
+
+    /// AC.6 — Extraction provenance is recoverable: activity→agent resolves to
+    /// the backend name, and source_version_id matches the active content version.
+    @Test func extractionProvenanceRecoverable() throws {
+        let store = try tempStore()
+        let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
+        let activeVersion = try store.activeContentVersion(sourceID: pdf.id)
+        let version = try store.recordMarkdownExtraction(
+            sourceID: pdf.id, content: "# extracted",
+            backend: .anthropic, sourceVersionID: nil, note: nil, modelVersion: "claude-x")
+        // Re-read to get the persisted activity_id.
+        let head = try store.processedMarkdownHead(sourceID: pdf.id)
+        #expect(head?.id == version.id)
+        #expect(head?.sourceVersionID == activeVersion?.id)
+        let names = try store.processedMarkdownAgentNames(sourceID: pdf.id)
+        #expect(names[version.id.rawValue] == "claude")
+    }
+
+    /// AC.8 (unit) — reExtractMarkdown appends a coexisting alternative via the
+    /// model using a fake extractor (does not clobber the existing head).
+    @Test @MainActor func reExtractCoexists() async throws {
+        let store = try tempStore()
+        let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
+        let model = WikiStoreModel(store: store)
+        // First extraction (the active head).
+        _ = model.seedPdfMarkdown(for: pdf.id, content: "first extract", backend: .anthropic)
+        // Re-extract with a fake backend that returns different markdown.
+        let extractor = FakeMarkdownExtractor(output: "second extract")
+        let alt = await model.reExtractMarkdown(
+            for: pdf.id, filename: "doc.pdf",
+            using: extractor, backend: .gemini, modelVersion: nil)
+        #expect(alt != nil)
+        let history = try store.processedMarkdownHistory(sourceID: pdf.id)
+        #expect(history.count >= 2)
+        // Both bodies are present in history.
+        let bodies = Set(history.map(\.content))
+        #expect(bodies.contains("first extract"))
+        #expect(bodies.contains("second extract"))
+    }
+}
+
+/// A trivial `MarkdownExtractor` used by tests: always ready, returns fixed
+/// markdown. Conforms to Sendable for use across actor boundaries.
+private struct FakeMarkdownExtractor: MarkdownExtractor {
+    let output: String
+    var displayName: String { "Fake" }
+    func readiness() async -> ExtractionReadiness { .ready }
+    func convert(pdfData: Data, filename: String,
+                 onProgress: (@Sendable (String) -> Void)?) async throws -> String {
+        output
     }
 }

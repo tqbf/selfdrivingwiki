@@ -57,6 +57,8 @@ public enum ArgumentParser {
         case sourceEditMarkdown(SourceCommand.Selector, contentOrFile: String, isFile: Bool)
         /// Rename a source's display name and rewrite links pointing at it.
         case sourceRename(SourceCommand.Selector, to: String)
+        /// Nominate a processed-markdown version as the active HEAD (Phase 2).
+        case sourceSetActive(SourceCommand.Selector, versionID: PageID)
     }
 
     public enum Failure: Error, Equatable, CustomStringConvertible {
@@ -94,6 +96,9 @@ public enum ArgumentParser {
                                               replace the processed-markdown HEAD
       source search --query X [--limit N]    semantic search of sources (cosine;
                                               falls back to LIKE name match)
+      source set-active (--id X | --name N) --version <smv-id>
+                                              nominate a processed-markdown version
+                                              as the active HEAD (extraction alt)
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -231,6 +236,14 @@ public enum ArgumentParser {
                 throw Failure.usage("source rename: --to <new-display-name> is required")
             }
             return .sourceRename(selector, to: newName)
+
+        case "set-active":
+            let selector = try options.requireSourceSelector()
+            guard let raw = options.value("--version") ?? options.value("--version-id"),
+                  !raw.isEmpty else {
+                throw Failure.usage("source set-active: --version <smv-id> is required")
+            }
+            return .sourceSetActive(selector, versionID: PageID(rawValue: raw))
 
         case "search":
             guard let query = options.value("--query") else {
