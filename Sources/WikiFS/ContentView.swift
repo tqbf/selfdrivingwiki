@@ -43,6 +43,10 @@ struct ContentView: View {
     /// lives here (not on `AddressBarView`) because toolbar items can't reliably
     /// present SwiftUI sheets.
     @State private var omniboxBookmarkContext: BookmarkTargetPickerContext?
+    /// Shared find-bar model. Hoisted here (out of per-view `@State`) so both the
+    /// toolbar's "Find on Page…" menu item (`AddressBarView`) and the active
+    /// detail view's Cmd+F drive the same `FindBarView` overlay (issue #157).
+    @State private var findModel = FindModel()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -125,6 +129,10 @@ struct ContentView: View {
                 }
             )
         }
+        // Inject the shared find model so the toolbar's "Find on Page…" menu item
+        // (`AddressBarView`, in a `ToolbarItem`) and the detail views' Cmd+F both
+        // reach the same `FindModel` instance (#157).
+        .environment(findModel)
     }
 
     /// NavigationSplitView + drop / overlay / toolbar. Split out of `body` so the

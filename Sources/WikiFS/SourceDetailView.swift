@@ -58,8 +58,9 @@ struct SourceDetailView: View {
     /// targets an un-extracted PDF. Consumed from `store.pendingScrollAnchor`.
     @State private var pdfQuote: String?
 
-    // Find bar state.
-    @State private var findModel = FindModel()
+    // Find bar state. Shared via environment (see `ContentView`) so the address
+    // bar's "Find on Page…" menu item and Cmd+F drive the same model (#157).
+    @Environment(FindModel.self) private var findModel
     @State private var findVersion = 0
 
     private enum FileContentTab: String, CaseIterable {

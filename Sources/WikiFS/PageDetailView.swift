@@ -20,8 +20,10 @@ struct PageDetailView: View {
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @AppStorage("isOutlineExpanded") private var isOutlineExpanded = false
 
-    // Find bar state.
-    @State private var findModel = FindModel()
+    // Find bar state. The model is shared (hoisted to `ContentView` and injected
+    // via environment) so the address bar's "Find on Page…" menu item can drive
+    // the same find bar that Cmd+F toggles here (issue #157).
+    @Environment(FindModel.self) private var findModel
     @State private var findVersion = 0
 
     var body: some View {
