@@ -2,6 +2,36 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-05 — "Add Bookmark…" on internal wiki links in the link context menu (#188)
+
+Right-clicking a **resolved internal wiki link** (`[[Page]]` / `[[source:Name]]`)
+in a reader had no way to file the target into a bookmark folder — you had to
+navigate to it and use the address-bar bookmark button. Adds an **Add
+Bookmark…** item that resolves the link's page/source id and opens
+`BookmarkTargetPickerSheet` to file it. No fetch or source creation — the
+target already exists. Implements
+[#188](https://github.com/tqbf/selfdrivingwiki/issues/188). (An earlier attempt
+targeted external http(s) links and was reverted; this is the corrected scope.)
+
+- **`WikiLinkAction.addBookmark`** + `WikiLinkMenuBuilder` — new pure action,
+  offered for resolved `wiki://page` / `wiki://source` links (not `wiki://missing`,
+  not external links). `actions(for:)` for resolved links now returns
+  `[.addBookmark]` (was `[]`).
+- **`WikiLinkMenuNSItems`** — `.addBookmark` resolves the id (same lookup as
+  `.openInBackgroundTab`: `store.pageID(forTitle:)` / `sourceID(forDisplayName:)`),
+  builds a `BookmarkTargetPickerContext`, and hands it to a new
+  `\.addBookmarkHandler` environment value (mirrors `\.addURLHandler`). Omitted
+  when no handler is wired or the link no longer resolves.
+- **`WikiReaderView`** — threads `addBookmarkHandler` (env → `WikiReaderRep` →
+  the `WKWebView` subclass) into both `WikiLinkMenuNSItems.items` call sites.
+- **`ContentView`** — wires `\.addBookmarkHandler` to set the existing
+  `omniboxBookmarkContext` (the sheet's `onConfirm` already does
+  `addPageRef`/`addSourceRef`). Attached on `baseContent` to keep `body` under
+  the type-checker budget.
+- **Tests** — `WikiLinkMenuBuilderTests` updated (resolved page/source links,
+  including fragment + encoded-title variants, now yield `[.addBookmark]`).
+  1466 tests green.
+
 ## 2026-07-05 — Stop sidebar tables stealing Cmd+A from the omnibox (#154)
 
 `PagesNSTableView` and `SourcesNSTableView` overrode `performKeyEquivalent(with:)`

@@ -17,19 +17,19 @@ struct WikiLinkMenuBuilderTests {
 
   // MARK: - actions(for:)
 
-  @Test func resolvedPageTopActionsAreEmpty() {
+  @Test func resolvedPageTopActionsAreAddBookmark() {
     // openInBackgroundTab is handled directly in willOpenMenu so it sits
     // below WebKit's "Open Link"; copyFilePath and downloadLink are removed
-    // (Share replaces both).
+    // (Share replaces both). Resolved links offer "Add Bookmark…" (#188).
     #expect(
       WikiLinkMenuBuilder.actions(for: url("wiki://page?title=Foo"))
-        == [])
+        == [.addBookmark])
   }
 
-  @Test func resolvedSourceTopActionsAreEmpty() {
+  @Test func resolvedSourceTopActionsAreAddBookmark() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("wiki://source?title=Bar"))
-        == [])
+        == [.addBookmark])
   }
 
   @Test func resolvedPageBottomActionsAreFindSimilar() {
@@ -79,13 +79,13 @@ struct WikiLinkMenuBuilderTests {
   @Test func pageLinkWithFragmentStillResolved() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("wiki://page?title=Foo#Section"))
-        == [])
+        == [.addBookmark])
   }
 
   @Test func encodedTitleIsAccepted() {
     // "Baz Q" percent-encoded in the query value still classifies as a page link.
     #expect(
       WikiLinkMenuBuilder.actions(for: url("wiki://page?title=Baz%20Q"))
-        == [])
+        == [.addBookmark])
   }
 }
