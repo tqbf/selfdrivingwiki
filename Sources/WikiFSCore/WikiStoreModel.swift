@@ -1117,7 +1117,10 @@ public final class WikiStoreModel {
 
     // MARK: - File ingestion (Phase 5)
 
-    /// Route dropped URLs to the correct ingest path (#163):
+    /// Route dropped URLs to the correct **add-source** path (#163). (This adds
+    /// a source — fetches/stores bytes so it appears under Sources — it does *not*
+    /// run the agent "ingestion" that reads a source and generates pages; that is
+    /// a separate `AgentLauncher` phase.)
     /// - An `http(s)` URL (a link dragged from a browser) **or** a `.webloc`
     ///   shortcut that resolves to one → `ingestURL` — the fetch + HTML→Markdown
     ///   "Add from URL" path. This avoids reading a `.webloc` plist's raw bytes,
@@ -1128,8 +1131,8 @@ public final class WikiStoreModel {
     /// own source. A `.webloc` whose `URL` key can't be parsed is skipped (its
     /// bytes aren't useful as a source). `fetcher` is injectable for tests; the
     /// default performs a real network GET.
-    public func ingest(
-        droppedURLs: [URL],
+    public func addDroppedURLs(
+        _ droppedURLs: [URL],
         fetcher: any URLIngestService.URLResourceFetcher = URLSessionFetcher()
     ) async {
         var remoteInputs: [String] = []
@@ -1141,7 +1144,7 @@ public final class WikiStoreModel {
                 if let resolved = await Self.resolveWeblocURL(url) {
                     remoteInputs.append(resolved)
                 } else {
-                    DebugLog.store("WikiStoreModel.ingest(droppedURLs:) could not resolve .webloc: \(url.lastPathComponent)")
+                    DebugLog.store("WikiStoreModel.addDroppedURLs could not resolve .webloc: \(url.lastPathComponent)")
                 }
             } else {
                 localFiles.append(url)
@@ -1151,7 +1154,7 @@ public final class WikiStoreModel {
             do {
                 _ = try await addURL(input, fetcher: fetcher)
             } catch {
-                DebugLog.store("WikiStoreModel.ingest(droppedURLs:) URL ingest failed for \(input): \(error)")
+                DebugLog.store("WikiStoreModel.addDroppedURLs URL ingest failed for \(input): \(error)")
             }
         }
         if !localFiles.isEmpty {

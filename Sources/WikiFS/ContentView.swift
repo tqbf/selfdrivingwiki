@@ -158,7 +158,7 @@ struct ContentView: View {
         // through the "Add from URL" fetch path; local files ingest as raw
         // bytes. The whole content is the target. (#163)
         .dropDestination(for: URL.self) { urls, _ in
-            Task { await store.ingest(droppedURLs: urls) }
+            Task { await store.addDroppedURLs(urls) }
             return true
         } isTargeted: { targeted in
             // Fade, not bounce; skip the animation entirely under Reduce Motion.

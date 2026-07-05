@@ -55,7 +55,7 @@ struct WikiStoreModelDropRoutingTests {
             contentType: "text/html",
             finalURL: URL(string: "https://example.com/article")!))
 
-        await model.ingest(droppedURLs: [webloc], fetcher: fetcher)
+        await model.addDroppedURLs([webloc], fetcher: fetcher)
 
         // Routed through ingestURL → converted markdown, NOT the raw plist bytes.
         #expect(model.sources.count == 1)
@@ -74,8 +74,8 @@ struct WikiStoreModelDropRoutingTests {
             contentType: "text/html",
             finalURL: URL(string: "https://example.com/page")!))
 
-        await model.ingest(
-            droppedURLs: [URL(string: "https://example.com/page")!],
+        await model.addDroppedURLs(
+            [URL(string: "https://example.com/page")!],
             fetcher: fetcher)
 
         #expect(model.sources.count == 1)
@@ -92,7 +92,7 @@ struct WikiStoreModelDropRoutingTests {
 
         let file = try writeLocalFile(in: dir, named: "notes.txt", contents: "plain text body")
 
-        await model.ingest(droppedURLs: [file], fetcher: FakeFetcher(response: URLIngestService.FetchResponse(
+        await model.addDroppedURLs([file], fetcher: FakeFetcher(response: URLIngestService.FetchResponse(
             data: Data(), contentType: nil, finalURL: URL(string: "https://unused.example")!)))
 
         #expect(model.sources.count == 1)
@@ -119,7 +119,7 @@ struct WikiStoreModelDropRoutingTests {
             contentType: "text/html",
             finalURL: URL(string: "https://example.com/web")!))
 
-        await model.ingest(droppedURLs: [webloc, txt], fetcher: fetcher)
+        await model.addDroppedURLs([webloc, txt], fetcher: fetcher)
 
         let names = model.sources.map(\.filename).sorted()
         #expect(names == ["Web.md", "doc.txt"])
@@ -139,7 +139,7 @@ struct WikiStoreModelDropRoutingTests {
             fromPropertyList: ["Foo": "bar"], format: .xml, options: 0)
         try data.write(to: badWebloc)
 
-        await model.ingest(droppedURLs: [badWebloc], fetcher: FakeFetcher(response: URLIngestService.FetchResponse(
+        await model.addDroppedURLs([badWebloc], fetcher: FakeFetcher(response: URLIngestService.FetchResponse(
             data: Data(), contentType: nil, finalURL: URL(string: "https://unused.example")!)))
 
         #expect(model.sources.isEmpty)
