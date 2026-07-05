@@ -156,7 +156,7 @@ struct ContentView: View {
         // Drop a file anywhere on the window to ingest it (raw bytes → SQLite →
         // the read-only `files/` projection). The whole content is the target.
         .dropDestination(for: URL.self) { urls, _ in
-            Task { await store.ingest(fileURLs: urls) }
+            Task { await store.addFiles(urls) }
             return true
         } isTargeted: { targeted in
             // Fade, not bounce; skip the animation entirely under Reduce Motion.

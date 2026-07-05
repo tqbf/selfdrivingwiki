@@ -147,7 +147,7 @@ struct AddFromURLSheet: View {
         phase = .fetching
         Task {
             do {
-                _ = try await store.ingestURL(input)
+                _ = try await store.addURL(input)
                 dismiss()  // success: the new file is already in store.sources
             } catch {
                 let message = (error as? URLIngestService.IngestError)?.errorDescription
