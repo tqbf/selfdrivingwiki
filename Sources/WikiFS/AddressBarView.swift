@@ -41,6 +41,10 @@ struct AddressBarView: View {
     /// Pointer is over the omnibox — reveals the trailing "add to bookmarks" plus.
     @State private var isHovering = false
     @State private var showReaderMenu = false
+    /// The shared find model (injected via environment by `ContentView`). The
+    /// "Find on Page…" menu item toggles this, matching Cmd+F in the detail
+    /// views — both drive the same `FindBarView` overlay (issue #157).
+    @Environment(FindModel.self) private var findModel
     /// Fired when the omnibox "+" is clicked. `ContentView` presents the
     /// `BookmarkTargetPickerSheet` (sheets can't be reliably presented from a
     /// toolbar item's SwiftUI hierarchy).
@@ -294,14 +298,13 @@ struct AddressBarView: View {
         }
     }
 
-    /// Show the system find bar by sending the standard Text Finder action down
-    /// the responder chain (`to: nil`) to the focused view. Works in the text
-    /// editors today; the web reader depends on macOS's built-in support.
+    /// Open the find bar by toggling the shared `FindModel` — the same model
+    /// Cmd+F toggles inside the active detail view. Previously this sent the
+    /// legacy `performTextFinderAction` down the responder chain, which no view
+    /// implemented, so the menu item was a no-op (issue #157).
     private func findOnPage() {
         showReaderMenu = false
-        let sender = NSMenuItem()
-        sender.tag = Int(NSTextFinder.Action.showFindInterface.rawValue)
-        NSApp.sendAction(#selector(NSResponder.performTextFinderAction(_:)), to: nil, from: sender)
+        findModel.toggle()
     }
 
     // MARK: - Address string
