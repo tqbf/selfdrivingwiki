@@ -25,9 +25,16 @@ struct BookmarksContainerView: View {
                 store: store,
                 nodes: store.bookmarkNodes,
                 fileProvider: fileProvider,
-                onOpen: { sel in store.openTab(sel) },
+                onOpen: { selections in
+                    for sel in selections { store.openTab(sel) }
+                },
+                onOpenBackground: { selections in
+                    for sel in selections { store.openTabInBackground(sel) }
+                },
                 onEdit: { onEdit($0) },
-                onDelete: { store.deleteBookmarkNode(id: $0) },
+                onDelete: { ids in
+                    for id in ids { store.deleteBookmarkNode(id: id) }
+                },
                 onAddPage: { onShowPicker(PickerContext(id: UUID(), parentID: $0, kind: .pages)) },
                 onAddSource: { onShowPicker(PickerContext(id: UUID(), parentID: $0, kind: .sources)) },
                 onNewFolder: { onNewFolder() },
