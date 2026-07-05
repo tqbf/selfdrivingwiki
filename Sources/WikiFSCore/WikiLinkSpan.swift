@@ -11,7 +11,13 @@ public enum WikiLinkSpan {
 
     /// The canonical `[[…]]` bracket-span regex (shared with `WikiLinkParser`,
     /// `WikiLinkMarkdown`). Group 1 = target, group 2 = optional alias.
-    public static let pattern = #"\[\[([^\]\|]+)(?:\|([^\]]+))?\]\]"#
+    ///
+    /// Group 1 allows a `]` when it falls inside a `"…"` quoted run (the
+    /// `#"quote"` anchor syntax) — `(?:[^\]\|"]|"[^"]*")+` consumes either an
+    /// ordinary non-delimiter character, or a whole balanced quoted span in one
+    /// bite, so an unbalanced `]` inside the quote (e.g. a bracketed aside like
+    /// `[(note)]`) can't terminate the match early (issue #118).
+    public static let pattern = #"\[\[((?:[^\]\|"]|"[^"]*")+)(?:\|([^\]]+))?\]\]"#
     public static let regex = try! NSRegularExpression(pattern: pattern)
 
     // MARK: - Code-range detection
@@ -84,6 +90,23 @@ public enum WikiLinkSpan {
     /// True when `index` falls inside any of `ranges`.
     public static func isInside(_ index: Int, _ ranges: [NSRange]) -> Bool {
         ranges.contains { NSLocationInRange(index, $0) }
+    }
+
+    /// True when `span` (a `[[…]]` or `[^id]` match) should be treated as
+    /// literal code, because it is nested INSIDE a code span/fence — i.e. a
+    /// code range that starts at or before `span` and ends at or after it.
+    ///
+    /// A plain `NSIntersectionRange(...).length > 0` check (the original
+    /// implementation) can't distinguish that case from the reverse nesting —
+    /// a code span written INSIDE a link's anchor text, e.g. a citation quoting
+    /// `` `.minimize` `` — which also has non-zero intersection but should NOT
+    /// suppress the link (issue #117). Full containment is unambiguous: only
+    /// the code-outside-link case satisfies it.
+    public static func isProtected(_ span: NSRange, by codeRanges: [NSRange]) -> Bool {
+        codeRanges.contains { codeRange in
+            codeRange.location <= span.location
+                && (codeRange.location + codeRange.length) >= (span.location + span.length)
+        }
     }
 
     private static let backtick: unichar = 0x60 // `

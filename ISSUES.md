@@ -14,11 +14,15 @@ leading `#` — are sanitized at every write boundary and were swept once by the
 v17→18 migration). So `#` anywhere inside a name now just works, including
 with a real anchor after it. What remains:
 
-- **Reserved characters inside a QUOTED PASSAGE:** a `#"…"` fragment containing
-  `]]` terminates the span early, and one containing `|` mis-parses the rest as
-  an alias. Names are sanitized; quote contents can't be (they must match the
-  source text verbatim). Agents' quotes are short prose so this is rare — the
-  fix, if ever needed, is an escape/quoting syntax.
+- ~~Reserved characters inside a QUOTED PASSAGE~~ — fixed 2026-07-04.
+  `WikiLinkSpan.pattern`/`WikiLinkParser.pattern` now treat a `"…"` run as one
+  opaque unit (`(?:[^\]\|"]|"[^"]*")+`), so a `]` (GH #118) or a `|` inside the
+  quote no longer terminates the match early or gets misread as the alias
+  delimiter — the quoted alternative absorbs both. Likewise, backtick-formatted
+  code nested inside a quoted anchor — e.g.
+  `` [[source:X#"the `.foo` behavior"]] `` — no longer suppresses the whole
+  link: the code-span/link overlap check now requires the code span to fully
+  CONTAIN the link, not merely intersect it (GH #117).
 - **Inherent `#` ambiguity when both readings exist:** if pages "C" AND
   "C# Guide" both exist, `[[C# Guide]]` links "C# Guide" (longest name wins);
   there is no way to express "page C, anchor ' Guide'". Contrived, and the

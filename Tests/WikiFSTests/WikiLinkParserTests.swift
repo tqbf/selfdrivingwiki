@@ -270,4 +270,52 @@ struct WikiLinkParserTests {
         #expect(base == "")
         #expect(fragment == "\"a quote\"")
     }
+
+    // MARK: - unbalanced `]` inside a quoted fragment (issue #118)
+
+    @Test func parsesSourceCitationWithUnbalancedBracketInQuotedFragment() {
+        // A bracketed aside like `[(parenthetical) note]` inside the quoted
+        // anchor text has an unmatched `]` — the old `[^\]\|]+` target grammar
+        // can't consume past it to reach the real closing `]]`, so the whole
+        // link failed to match at all. The quoted-run alternative in the
+        // shared pattern treats `"…"` as one opaque unit.
+        let links = WikiLinkParser.parse(
+            "[[source:Some Page#\"Some text with [(parenthetical) note] in it\"]]")
+        #expect(links.count == 1)
+        #expect(links[0].linkType == .source)
+        #expect(links[0].target == "Some Page")
+        #expect(links[0].fragment == "\"Some text with [(parenthetical) note] in it\"")
+    }
+
+    @Test func parsesFootnoteDefinitionSourceCitationWithUnbalancedBracket() {
+        let links = WikiLinkParser.parse(
+            "[[source:SwiftUI New Toolbar Features#\"The `.minimize` behavior renders "
+            + "the search field as a button-like control [1] that expands when tapped.\"]]")
+        #expect(links.count == 1)
+        #expect(links[0].target == "SwiftUI New Toolbar Features")
+    }
+
+    // MARK: - `|` inside a quoted fragment (documented alongside #118)
+
+    @Test func parsesSourceCitationWithPipeInsideQuotedFragment() {
+        // A `|` in the quoted anchor text used to be read as the alias
+        // delimiter, truncating the fragment and turning the rest into a bogus
+        // alias. The same quoted-run alternative that fixed #118 (`]` inside
+        // quotes) also absorbs `|` — it's one opaque unit until the closing `"`.
+        let links = WikiLinkParser.parse(
+            "[[source:Some Page#\"first option | second option\"]]")
+        #expect(links.count == 1)
+        #expect(links[0].target == "Some Page")
+        #expect(links[0].fragment == "\"first option | second option\"")
+        #expect(links[0].linkText == "Some Page")
+    }
+
+    @Test func parsesSourceCitationWithPipeInQuoteAndARealAlias() {
+        let links = WikiLinkParser.parse(
+            "[[source:Some Page#\"first option | second option\"|My Label]]")
+        #expect(links.count == 1)
+        #expect(links[0].target == "Some Page")
+        #expect(links[0].fragment == "\"first option | second option\"")
+        #expect(links[0].linkText == "My Label")
+    }
 }
