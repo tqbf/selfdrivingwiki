@@ -3,6 +3,7 @@ import SQLite3
 import UniformTypeIdentifiers
 import Darwin
 import CSqliteVec
+import CryptoKit
 
 /// SQLite-backed `WikiStore`. Hand-wraps the system `SQLite3` C API — no
 /// third-party dependency (per the BRINGUP decision). Owns one serial
@@ -142,20 +143,20 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // (version >= 1) — and fresh dbs forced onto the ladder by tests — run
         // `migrate(from:)` so every prior upgrade path is preserved.
         if version == 0 && !forceLadderMigration {
-            try createFreshSchemaV18()
+            try createFreshSchemaV19()
             return
         }
         try migrate(from: &version)
     }
 
-    /// Build the complete current (v18) schema for a fresh database in one
+    /// Build the complete current (v19) schema for a fresh database in one
     /// consolidated block. MUST stay schema-identical to the end state of
     /// `migrate(from:)`; the `freshFastPathMatchesStepwiseLadder` test enforces
     /// that by forcing a fresh db through the ladder and comparing. Legacy index
     /// names (`ingested_files_created`, `file_markdown_versions_file`) are
     /// reproduced verbatim — they survive the table renames in the ladder, so a
     /// fresh db must match.
-    private func createFreshSchemaV18() throws {
+    private func createFreshSchemaV19() throws {
         // Core page model + attachments/links.
         try exec("""
         CREATE TABLE pages (
@@ -194,7 +195,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         """)
 
         // Sources — final shape: ingested_files (v2) + ingested_at (v6) +
-        // zotero columns (v9) + display_name (v10).
+        // zotero columns (v9) + display_name (v10) + content_hash (v19).
         try exec("""
         CREATE TABLE sources (
             id TEXT PRIMARY KEY,
@@ -209,10 +210,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             ingested_at REAL,
             zotero_item_key TEXT,
             zotero_item_title TEXT,
-            display_name TEXT
+            display_name TEXT,
+            content_hash TEXT
         );
         """)
         try exec("CREATE INDEX ingested_files_created ON sources(created_at);")
+        try exec("CREATE INDEX sources_content_hash ON sources(content_hash);")
 
         // Processed-markdown version chain (v8, v10 rename). The legacy index
         // name `file_markdown_versions_file` survives the table rename.
@@ -384,8 +387,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try exec("CREATE INDEX bookmark_nodes_parent ON bookmark_nodes(parent_id, position);")
 
         // v18 is a data-only step (name sanitization) — a fresh DB has no rows
-        // to sweep, so the fast path just stamps the version.
-        try exec("PRAGMA user_version=18;")
+        // to sweep, so the fast path just stamps the version. v19 adds
+        // content_hash (above, in the table def) — also no rows to backfill.
+        try exec("PRAGMA user_version=19;")
     }
 
     /// The stepwise, idempotent migration ladder keyed on `PRAGMA user_version`.
@@ -833,6 +837,51 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try exec("PRAGMA user_version=18;")
             version = 18
         }
+
+        // Step 18 → 19: add content_hash for duplicate-content detection at
+        // addSource time (issue #126). Backfilled here so existing rows are
+        // immediately eligible for dedup matching against newly-added sources.
+        // Column/index existence is checked first: a db built by the fresh-schema
+        // fast path (which already includes content_hash) and then rewound to an
+        // older `user_version` for ladder testing would otherwise hit "duplicate
+        // column name" here.
+        if version < 19 {
+            let hasColumn = try queryScalarText("SELECT COUNT(*) FROM pragma_table_info('sources') WHERE name='content_hash';") != "0"
+            if !hasColumn {
+                try exec("ALTER TABLE sources ADD COLUMN content_hash TEXT;")
+            }
+            let hasIndex = try queryScalarText("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='sources_content_hash';") != "0"
+            if !hasIndex {
+                try exec("CREATE INDEX sources_content_hash ON sources(content_hash);")
+            }
+            try backfillContentHashes()
+            try exec("PRAGMA user_version=19;")
+            version = 19
+        }
+    }
+
+    /// One-time backfill for the v18→19 step: hash every existing source's
+    /// `content` (SHA-256, hex) into the new `content_hash` column. Content is a
+    /// pure function of the stored bytes, so this is safe to compute once and
+    /// never touch again — new rows get their hash at insert time in `addSource`.
+    private func backfillContentHashes() throws {
+        let select = try statement("SELECT id, content FROM sources;")
+        defer { select.reset() }
+        var rows: [(id: String, hash: String)] = []
+        while try select.step() {
+            let id = select.text(at: 0)
+            let data = select.blob(at: 1)
+            let digest = SHA256.hash(data: data)
+            rows.append((id: id, hash: digest.map { String(format: "%02x", $0) }.joined()))
+        }
+        let update = try statement("UPDATE sources SET content_hash = ?1 WHERE id = ?2;")
+        for row in rows {
+            update.reset()
+            try update.bind(row.hash, at: 1)
+            try update.bind(row.id, at: 2)
+            _ = try update.step()
+        }
+        update.reset()
     }
 
     /// The v17→18 sweep: rewrite every page title and source display name that
@@ -1392,6 +1441,13 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// (sortable == ingest order). Throws if `data` exceeds `ingestByteCap`.
     /// The optional Zotero provenance is written to `zotero_item_key`/
     /// `zotero_item_title` (NULL when nil).
+    ///
+    /// Before inserting, `data` is hashed (SHA-256) and checked against every
+    /// existing source's `content_hash`. A byte-identical match throws
+    /// `WikiStoreError.duplicateContent(existing:)` instead of inserting a
+    /// second copy — this is the ONE seam every ingest entry point (drag-drop,
+    /// URL fetch, Zotero, folder import) funnels through, so the check applies
+    /// everywhere automatically (issue #126).
     @discardableResult
     public func addSource(
         filename: String,
@@ -1405,6 +1461,21 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             throw WikiStoreError.unexpected(
                 "source \(data.count) bytes exceeds cap \(Self.ingestByteCap)")
         }
+        let contentHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let dupStmt = try statement("""
+        SELECT id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
+               zotero_item_key, zotero_item_title, display_name
+        FROM sources WHERE content_hash = ?1 LIMIT 1;
+        """)
+        dupStmt.reset()
+        try dupStmt.bind(contentHash, at: 1)
+        if try dupStmt.step() {
+            let existing = sourceSummary(from: dupStmt)
+            dupStmt.reset()
+            throw WikiStoreError.duplicateContent(existing: existing)
+        }
+        dupStmt.reset()
+
         let id = PageID(rawValue: ULID.generate())
         let ext = (filename as NSString).pathExtension.lowercased()
         let mime = mimeType
@@ -1430,8 +1501,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let stmt = try statement("""
         INSERT INTO sources
           (id, filename, ext, mime_type, byte_size, content, created_at, updated_at, version,
-           zotero_item_key, zotero_item_title, display_name)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, 1, ?8, ?9, ?10);
+           zotero_item_key, zotero_item_title, display_name, content_hash)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, 1, ?8, ?9, ?10, ?11);
         """)
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
@@ -1444,6 +1515,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         if let zoteroItemKey { try stmt.bind(zoteroItemKey, at: 8) }  // else leave NULL
         if let zoteroItemTitle { try stmt.bind(zoteroItemTitle, at: 9) }  // else leave NULL
         if let displayName { try stmt.bind(displayName, at: 10) }  // else leave NULL
+        try stmt.bind(contentHash, at: 11)
         _ = try stmt.step()
 
         // Name-only full-text index entry so an un-extracted source is still

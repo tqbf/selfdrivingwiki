@@ -1062,6 +1062,7 @@ public final class WikiStoreModel {
     /// daemon re-enumerates the `sources/` tree exactly once for the whole batch.
     public func ingest(fileURLs: [URL]) async {
         var lastSourceID: PageID?
+        var duplicateNames: [String] = []
         for url in fileURLs {
             // Skip directories — only flat files are ingested.
             let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
@@ -1080,7 +1081,7 @@ public final class WikiStoreModel {
                 DebugLog.store("WikiStoreModel.ingest read failed for \(filename): \(error)")
                 continue
             }
-            
+
             let ext = (filename as NSString).pathExtension.lowercased()
             let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
             let response = URLIngestService.FetchResponse(data: data, contentType: mimeType, finalURL: url)
@@ -1090,6 +1091,11 @@ public final class WikiStoreModel {
                 let summary = try store.addSource(
                     filename: plan.filename, data: plan.data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: mimeType)
                 lastSourceID = summary.id
+            } catch WikiStoreError.duplicateContent(let existing) {
+                // Byte-identical to an already-stored source — skip rather than
+                // abort the rest of the drop batch; report it so the user isn't
+                // left wondering why the file didn't show up.
+                duplicateNames.append("\(filename) (already added as \(existing.effectiveName))")
             } catch {
                 DebugLog.store("WikiStoreModel.ingest store failed for \(filename): \(error)")
             }
@@ -1098,6 +1104,9 @@ public final class WikiStoreModel {
         if let sourceID = lastSourceID {
             openTab(.source(sourceID))
             onPageDidChange?()
+        }
+        if !duplicateNames.isEmpty {
+            storeError = StoreError(message: "Skipped duplicate content: " + duplicateNames.joined(separator: ", "))
         }
     }
 
@@ -1147,6 +1156,8 @@ public final class WikiStoreModel {
                 filename: filename, data: data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil)
             reloadSources()
             onPageDidChange?()
+        } catch WikiStoreError.duplicateContent(let existing) {
+            storeError = StoreError(message: "\(filename) is byte-identical to \(existing.effectiveName) — not added again.")
         } catch {
             DebugLog.store("WikiStoreModel.addSource failed: \(error)")
         }
@@ -1194,7 +1205,11 @@ public final class WikiStoreModel {
     /// Import every `.md` / `.markdown` file in `directory` (recursively) as an
     /// ingested file — a one-shot migration of an Obsidian vault, LogSeq graph, or
     /// any folder of Markdown notes. Hidden files/directories are skipped.
-    /// Duplicate filenames get a disambiguating suffix (`Note.md`, `Note-1.md`, …).
+    /// Duplicate FILENAMES get a disambiguating suffix (`Note.md`, `Note-1.md`, …);
+    /// duplicate CONTENT (byte-identical to a file already in the store, from this
+    /// import or an earlier one) is skipped and folded into `errors` rather than
+    /// blocking the rest of the batch — a folder import is often large, so a
+    /// modal-per-duplicate would be disruptive (issue #126).
     ///
     /// All files land via the shared `store.addSource(filename:data:)` seam —
     /// exactly the same path as drag-drop, URL fetch, and Zotero ingest.
@@ -1220,6 +1235,8 @@ public final class WikiStoreModel {
                     filename: file.filename, data: file.data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: mimeType)
                 if firstSourceID == nil { firstSourceID = summary.id }
                 imported += 1
+            } catch WikiStoreError.duplicateContent(let existing) {
+                errorMessages.append("\(file.filename): duplicate of \(existing.effectiveName), skipped")
             } catch {
                 errorMessages.append("\(file.filename): \(error.localizedDescription)")
             }
