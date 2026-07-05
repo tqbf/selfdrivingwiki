@@ -14,6 +14,8 @@ struct PagesContainerView: View {
 
     @State private var renameTarget: WikiPageSummary?
     @State private var renameText = ""
+    /// Non-nil while the bookmark-target picker is open for a page selection.
+    @State private var addToBookmarksContext: BookmarkTargetPickerContext?
 
     private var visible: [WikiPageSummary] {
         store.searchQuery.isEmpty ? store.summaries : store.searchResults
@@ -38,6 +40,18 @@ struct PagesContainerView: View {
             TextField("Title", text: $renameText)
             Button("Cancel", role: .cancel) { renameTarget = nil }
             Button("Rename") { commitRename() }
+        }
+        .sheet(item: $addToBookmarksContext) { ctx in
+            BookmarkTargetPickerSheet(
+                store: store,
+                kind: ctx.kind,
+                ids: ctx.ids,
+                onConfirm: { parentID in
+                    for id in ctx.ids {
+                        store.addPageRef(parentID: parentID, pageID: id)
+                    }
+                }
+            )
         }
     }
 
@@ -144,6 +158,9 @@ struct PagesContainerView: View {
             onRename: { summary in beginRename(summary) },
             onDelete: { ids in
                 for id in ids { store.delete(id) }
+            },
+            onAddToBookmarks: { ids in
+                addToBookmarksContext = BookmarkTargetPickerContext(kind: .pages, ids: ids)
             })
     }
 
