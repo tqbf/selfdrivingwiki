@@ -153,10 +153,12 @@ struct ContentView: View {
         } detail: {
             detailColumn
         }
-        // Drop a file anywhere on the window to ingest it (raw bytes → SQLite →
-        // the read-only `files/` projection). The whole content is the target.
+        // Drop a file or link anywhere on the window. Remote links (an http(s)
+        // URL dragged from a browser, or a `.webloc` resolved to one) route
+        // through the "Add from URL" fetch path; local files ingest as raw
+        // bytes. The whole content is the target. (#163)
         .dropDestination(for: URL.self) { urls, _ in
-            Task { await store.addFiles(urls) }
+            Task { await store.ingest(droppedURLs: urls) }
             return true
         } isTargeted: { targeted in
             // Fade, not bounce; skip the animation entirely under Reduce Motion.

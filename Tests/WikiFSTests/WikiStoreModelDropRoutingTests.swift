@@ -1,0 +1,147 @@
+import Foundation
+import Testing
+@testable import WikiFSCore
+
+/// Verifies the window-wide drop routing (#163): an `http(s)` URL dragged from
+/// a browser, and a `.webloc` shortcut that resolves to one, flow through the
+/// "Add from URL" fetch path (`ingestURL` → HTML→Markdown), while genuine local
+/// files still ingest as raw bytes (`ingest(fileURLs:)`). Uses a fake fetcher —
+/// no real network.
+@MainActor
+struct WikiStoreModelDropRoutingTests {
+
+    struct FakeFetcher: URLIngestService.URLResourceFetcher {
+        let response: URLIngestService.FetchResponse
+        func fetch(_ url: URL) async throws -> URLIngestService.FetchResponse { response }
+    }
+
+    private func tempStore() throws -> SQLiteWikiStore {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-droproute-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+    }
+
+    /// Write a real `.webloc` plist (XML) wrapping `urlString` and return its URL.
+    private func writeWebloc(in dir: URL, named: String, urlString: String) throws -> URL {
+        let fileURL = dir.appendingPathComponent("\(named).webloc")
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: ["URL": urlString], format: .xml, options: 0)
+        try data.write(to: fileURL)
+        return fileURL
+    }
+
+    /// Write a plain local file and return its URL.
+    private func writeLocalFile(in dir: URL, named: String, contents: String) throws -> URL {
+        let fileURL = dir.appendingPathComponent(named)
+        try Data(contents.utf8).write(to: fileURL)
+        return fileURL
+    }
+
+    @Test func weblocRoutesThroughURLIngestAsMarkdown() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-droproute-files-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let webloc = try writeWebloc(
+            in: dir, named: "Link",
+            urlString: "https://example.com/article")
+
+        let fetcher = FakeFetcher(response: URLIngestService.FetchResponse(
+            data: Data("<title>Article</title><body><p>Body.</p></body>".utf8),
+            contentType: "text/html",
+            finalURL: URL(string: "https://example.com/article")!))
+
+        await model.ingest(droppedURLs: [webloc], fetcher: fetcher)
+
+        // Routed through ingestURL → converted markdown, NOT the raw plist bytes.
+        #expect(model.sources.count == 1)
+        #expect(model.sources.first?.filename == "Article.md")
+        let id = model.sources.first!.id
+        let bytes = try store.sourceContent(id: id)
+        #expect(String(data: bytes, encoding: .utf8) == "Body.")
+    }
+
+    @Test func remoteHTTPURLRoutesThroughURLIngest() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+
+        let fetcher = FakeFetcher(response: URLIngestService.FetchResponse(
+            data: Data("<title>Page</title><body><h1>Hi</h1></body>".utf8),
+            contentType: "text/html",
+            finalURL: URL(string: "https://example.com/page")!))
+
+        await model.ingest(
+            droppedURLs: [URL(string: "https://example.com/page")!],
+            fetcher: fetcher)
+
+        #expect(model.sources.count == 1)
+        #expect(model.sources.first?.filename == "Page.md")
+    }
+
+    @Test func localFileStillIngestsAsRawBytes() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-droproute-files-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let file = try writeLocalFile(in: dir, named: "notes.txt", contents: "plain text body")
+
+        await model.ingest(droppedURLs: [file], fetcher: FakeFetcher(response: URLIngestService.FetchResponse(
+            data: Data(), contentType: nil, finalURL: URL(string: "https://unused.example")!)))
+
+        #expect(model.sources.count == 1)
+        #expect(model.sources.first?.filename == "notes.txt")
+        let id = model.sources.first!.id
+        #expect(String(data: try store.sourceContent(id: id), encoding: .utf8) == "plain text body")
+    }
+
+    @Test func mixedBatchRoutesEachURLCorrectly() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-droproute-files-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let webloc = try writeWebloc(
+            in: dir, named: "Web",
+            urlString: "https://example.com/web")
+        let txt = try writeLocalFile(in: dir, named: "doc.txt", contents: "file bytes")
+
+        let fetcher = FakeFetcher(response: URLIngestService.FetchResponse(
+            data: Data("<title>Web</title><body><p>Web body.</p></body>".utf8),
+            contentType: "text/html",
+            finalURL: URL(string: "https://example.com/web")!))
+
+        await model.ingest(droppedURLs: [webloc, txt], fetcher: fetcher)
+
+        let names = model.sources.map(\.filename).sorted()
+        #expect(names == ["Web.md", "doc.txt"])
+    }
+
+    @Test func unresolvableWeblocIsSkippedNotIngestedAsBytes() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-droproute-files-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // A .webloc whose plist has no URL key — must NOT be ingested as raw bytes.
+        let badWebloc = dir.appendingPathComponent("Broken.webloc")
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: ["Foo": "bar"], format: .xml, options: 0)
+        try data.write(to: badWebloc)
+
+        await model.ingest(droppedURLs: [badWebloc], fetcher: FakeFetcher(response: URLIngestService.FetchResponse(
+            data: Data(), contentType: nil, finalURL: URL(string: "https://unused.example")!)))
+
+        #expect(model.sources.isEmpty)
+    }
+}
