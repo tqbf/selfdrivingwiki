@@ -19,9 +19,10 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
     /// never refreshes (no SwiftUI state change to force `updateNSViewController`).
     let nodes: [BookmarkNode]
     let fileProvider: FileProviderSpike
-    var onOpen: (WikiSelection) -> Void
+    var onOpen: ([WikiSelection]) -> Void
+    var onOpenBackground: ([WikiSelection]) -> Void
     var onEdit: (String) -> Void
-    var onDelete: (String) -> Void
+    var onDelete: ([String]) -> Void
     var onAddPage: (String?) -> Void
     var onAddSource: (String?) -> Void
     var onNewFolder: () -> Void
@@ -32,7 +33,8 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
         vc.store = store
         vc.fileProvider = fileProvider
         vc.callbacks = .init(
-            onOpen: onOpen, onEdit: onEdit, onDelete: onDelete,
+            onOpen: onOpen, onOpenBackground: onOpenBackground,
+            onEdit: onEdit, onDelete: onDelete,
             onAddPage: onAddPage, onAddSource: onAddSource,
             onNewFolder: onNewFolder, onNewSubfolder: onNewSubfolder
         )
@@ -45,7 +47,8 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
         vc.store = store
         vc.fileProvider = fileProvider
         vc.callbacks = .init(
-            onOpen: onOpen, onEdit: onEdit, onDelete: onDelete,
+            onOpen: onOpen, onOpenBackground: onOpenBackground,
+            onEdit: onEdit, onDelete: onDelete,
             onAddPage: onAddPage, onAddSource: onAddSource,
             onNewFolder: onNewFolder, onNewSubfolder: onNewSubfolder
         )
@@ -60,13 +63,22 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
 // MARK: - Callbacks
 
 struct BookmarksCallbacks {
-    var onOpen: (WikiSelection) -> Void
+    var onOpen: ([WikiSelection]) -> Void
+    var onOpenBackground: ([WikiSelection]) -> Void
     var onEdit: (String) -> Void
-    var onDelete: (String) -> Void
+    var onDelete: ([String]) -> Void
     var onAddPage: (String?) -> Void
     var onAddSource: (String?) -> Void
     var onNewFolder: () -> Void
     var onNewSubfolder: (String) -> Void
+}
+
+/// Carries the right-clicked node + the effective selection (all selected if
+/// the right-click is inside the selection, otherwise just the clicked node)
+/// to the `@objc` menu handlers. Mirrors `PagesMenuPayload`.
+private struct BookmarksMenuPayload {
+    let clicked: BookmarkNode
+    let effectiveNodes: [BookmarkNode]
 }
 
 /// Payload for "Open With" app items on a bookmark row. Carries the chosen app
@@ -244,7 +256,7 @@ final class BookmarksOutlineViewController: NSViewController {
         // Open page/source ref.
         if let targetID = item.targetID {
             let sel: WikiSelection = item.kind == .pageRef ? .page(targetID) : .source(targetID)
-            callbacks?.onOpen(sel)
+            callbacks?.onOpen([sel])
         }
     }
 }
@@ -420,27 +432,46 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
 
     // Context menu via right-click
     func outlineView(_ outlineView: NSOutlineView, menuFor item: Any) -> NSMenu? {
-        guard let node = item as? BookmarkNode else { return nil }
+        guard let clicked = item as? BookmarkNode else { return nil }
+
+        // Standard macOS semantics: right-click inside the selection acts on
+        // the whole selection; right-click outside it acts on the clicked row only.
+        let clickedRow = outlineView.row(forItem: clicked)
+        let selectedRows = outlineView.selectedRowIndexes
+        let inSelection = selectedRows.contains(clickedRow)
+        let effectiveNodes: [BookmarkNode] = inSelection
+            ? selectedRows.compactMap { outlineView.item(atRow: $0) as? BookmarkNode }
+            : [clicked]
+        let payload = BookmarksMenuPayload(clicked: clicked, effectiveNodes: effectiveNodes)
+
+        let isBatch = effectiveNodes.count > 1
+        let count = effectiveNodes.count
+
+        // Leaf nodes (pageRef / sourceRef) that can be opened as tabs.
+        let openableNodes = effectiveNodes.filter { $0.kind == .pageRef || $0.kind == .sourceRef }
+        let openCount = openableNodes.count
+
         let menu = NSMenu()
 
-        if node.kind == .pageRef || node.kind == .sourceRef {
-            let openItem = NSMenuItem(title: "Open", action: #selector(openAction(_:)), keyEquivalent: "")
-            openItem.target = self
-            openItem.representedObject = node
-            menu.addItem(openItem)
+        // Open / Open in Background — only when there are openable leaves.
+        if !openableNodes.isEmpty {
+            menu.addItem(menuItem(
+                isBatch ? "Open \(openCount)" : "Open",
+                systemImage: "arrow.up.forward.app",
+                action: #selector(openAction(_:)), payload: payload))
+            menu.addItem(menuItem(
+                isBatch ? "Open \(openCount) in Background" : "Open in Background",
+                systemImage: "dock.arrow.down.rectangle",
+                action: #selector(openBackgroundAction(_:)), payload: payload))
 
-            let openBgItem = NSMenuItem(title: "Open in Background", action: #selector(openBackgroundAction(_:)), keyEquivalent: "")
-            openBgItem.target = self
-            openBgItem.representedObject = node
-            menu.addItem(openBgItem)
-
-            if fileProvider?.path != nil {
+            // Open With — single item only (batch open-with is ambiguous).
+            if !isBatch, fileProvider?.path != nil {
                 let type: UTType
-                switch node.kind {
+                switch clicked.kind {
                 case .pageRef:
                     type = OpenWithMenu.pageContentType
                 case .sourceRef:
-                    let src = store?.sources.first { $0.id == node.targetID }
+                    let src = store?.sources.first { $0.id == clicked.targetID }
                     type = OpenWithMenu.contentType(mimeType: src?.mimeType, filename: src?.filename)
                 case .folder:
                     type = .data
@@ -450,7 +481,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
                     target: self,
                     action: #selector(openWithAppAction(_:)),
                     payload: { appURL in
-                        OpenWithBookmarkRef(appURL: appURL, node: node)
+                        OpenWithBookmarkRef(appURL: appURL, node: clicked)
                     })
                 let parent = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
                 parent.image = NSImage(systemSymbolName: "rectangle.portrait.and.arrow.right",
@@ -461,46 +492,61 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
             menu.addItem(.separator())
         }
 
-        let editItem = NSMenuItem(title: "Edit…", action: #selector(editAction(_:)), keyEquivalent: "")
-        editItem.target = self
-        editItem.representedObject = node
-        menu.addItem(editItem)
-
-        if node.kind == .folder {
-            menu.addItem(.separator())
-            let addPageItem = NSMenuItem(title: "Add Page…", action: #selector(addPageAction(_:)), keyEquivalent: "")
-            addPageItem.target = self
-            addPageItem.representedObject = node
-            menu.addItem(addPageItem)
-
-            let addSourceItem = NSMenuItem(title: "Add Source…", action: #selector(addSourceAction(_:)), keyEquivalent: "")
-            addSourceItem.target = self
-            addSourceItem.representedObject = node
-            menu.addItem(addSourceItem)
+        // Edit — single item only.
+        if !isBatch {
+            menu.addItem(menuItem("Edit…", systemImage: "pencil",
+                                  action: #selector(editAction(_:)), payload: payload))
         }
 
+        // Add Page / Add Source — folder, single item only.
+        if !isBatch && clicked.kind == .folder {
+            menu.addItem(.separator())
+            menu.addItem(menuItem("Add Page…", systemImage: "doc.text",
+                                  action: #selector(addPageAction(_:)), payload: payload))
+            menu.addItem(menuItem("Add Source…", systemImage: "doc",
+                                  action: #selector(addSourceAction(_:)), payload: payload))
+        }
+
+        // Delete — always available, operates on all effective nodes.
         menu.addItem(.separator())
-        let deleteItem = NSMenuItem(title: "Delete", action: #selector(deleteAction(_:)), keyEquivalent: "")
-        deleteItem.target = self
-        deleteItem.representedObject = node
-        menu.addItem(deleteItem)
+        menu.addItem(menuItem(
+            isBatch ? "Delete \(count)" : "Delete",
+            systemImage: "trash",
+            action: #selector(deleteAction(_:)), payload: payload))
 
         return menu
+    }
+
+    private func menuItem(_ title: String, systemImage: String,
+                          action: Selector, payload: BookmarksMenuPayload) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        item.target = self
+        item.representedObject = payload
+        return item
     }
 
     // MARK: - Menu actions
 
     @objc private func openAction(_ sender: NSMenuItem) {
-        guard let node = sender.representedObject as? BookmarkNode,
-              let targetID = node.targetID else { return }
-        callbacks?.onOpen(node.kind == .pageRef ? .page(targetID) : .source(targetID))
+        guard let payload = sender.representedObject as? BookmarksMenuPayload else { return }
+        let selections = openableSelections(from: payload.effectiveNodes)
+        if !selections.isEmpty { callbacks?.onOpen(selections) }
     }
 
     @objc private func openBackgroundAction(_ sender: NSMenuItem) {
-        guard let node = sender.representedObject as? BookmarkNode,
-              let targetID = node.targetID, let store else { return }
-        let sel: WikiSelection = node.kind == .pageRef ? .page(targetID) : .source(targetID)
-        store.openTabInBackground(sel)
+        guard let payload = sender.representedObject as? BookmarksMenuPayload else { return }
+        let selections = openableSelections(from: payload.effectiveNodes)
+        if !selections.isEmpty { callbacks?.onOpenBackground(selections) }
+    }
+
+    /// Filters effective nodes to openable leaves and maps them to `WikiSelection`.
+    private func openableSelections(from nodes: [BookmarkNode]) -> [WikiSelection] {
+        nodes.compactMap { node -> WikiSelection? in
+            guard node.kind == .pageRef || node.kind == .sourceRef,
+                  let targetID = node.targetID else { return nil }
+            return node.kind == .pageRef ? .page(targetID) : .source(targetID)
+        }
     }
 
     @objc private func openWithAppAction(_ sender: NSMenuItem) {
@@ -526,23 +572,23 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
     }
 
     @objc private func editAction(_ sender: NSMenuItem) {
-        guard let node = sender.representedObject as? BookmarkNode else { return }
-        callbacks?.onEdit(node.id)
+        guard let payload = sender.representedObject as? BookmarksMenuPayload else { return }
+        callbacks?.onEdit(payload.clicked.id)
     }
 
     @objc private func addPageAction(_ sender: NSMenuItem) {
-        guard let node = sender.representedObject as? BookmarkNode else { return }
-        callbacks?.onAddPage(node.id)
+        guard let payload = sender.representedObject as? BookmarksMenuPayload else { return }
+        callbacks?.onAddPage(payload.clicked.id)
     }
 
     @objc private func addSourceAction(_ sender: NSMenuItem) {
-        guard let node = sender.representedObject as? BookmarkNode else { return }
-        callbacks?.onAddSource(node.id)
+        guard let payload = sender.representedObject as? BookmarksMenuPayload else { return }
+        callbacks?.onAddSource(payload.clicked.id)
     }
 
     @objc private func deleteAction(_ sender: NSMenuItem) {
-        guard let node = sender.representedObject as? BookmarkNode else { return }
-        callbacks?.onDelete(node.id)
+        guard let payload = sender.representedObject as? BookmarksMenuPayload else { return }
+        callbacks?.onDelete(payload.effectiveNodes.map(\.id))
     }
 }
 
