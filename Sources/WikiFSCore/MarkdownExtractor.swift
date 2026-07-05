@@ -102,6 +102,19 @@ public enum ExtractionBackend: String, Sendable, CaseIterable, Codable {
         case .doclingServe: return "docling-serve"
         }
     }
+
+    /// Reverse of `agentName`: resolve the backend that produced an extraction
+    /// from its PROV agent name. Returns nil for `"legacy-extraction"` (pre-v21
+    /// rows) and any unknown agent — callers fall back to a "Legacy"/raw label.
+    public static func from(agentName: String) -> ExtractionBackend? {
+        switch agentName {
+        case ExtractionBackend.localPdf2md.agentName: return .localPdf2md
+        case ExtractionBackend.anthropic.agentName:   return .anthropic
+        case ExtractionBackend.gemini.agentName:      return .gemini
+        case ExtractionBackend.doclingServe.agentName: return .doclingServe
+        default: return nil
+        }
+    }
 }
 
 /// The shared extraction contract: a faithful-transcription prompt every model

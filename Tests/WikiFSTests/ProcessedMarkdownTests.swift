@@ -502,6 +502,146 @@ struct ProcessedMarkdownTests {
         #expect(bodies.contains("first extract"))
         #expect(bodies.contains("second extract"))
     }
+
+    // MARK: - Track C: alternatives query + provenance + nominate
+
+    /// AC.1/AC.4 — `processedMarkdownAlternatives` returns each alternative with
+    /// resolved backend display name, model version, char count, and the active
+    /// HEAD flagged; the first extraction is active by the default-active rule.
+    @Test func processedMarkdownAlternativesCarriesProvenance() throws {
+        let store = try tempStore()
+        let file = try seedSource(in: store)
+        let first = try store.recordMarkdownExtraction(
+            sourceID: file.id, content: "claude body",
+            backend: .anthropic, sourceVersionID: nil, note: nil,
+            modelVersion: "claude-opus-4-1")
+        usleep(2000)
+        _ = try store.recordMarkdownExtraction(
+            sourceID: file.id, content: "gemini body",
+            backend: .gemini, sourceVersionID: nil, note: nil,
+            modelVersion: "gemini-2.5-pro")
+
+        let alts = try store.processedMarkdownAlternatives(sourceID: file.id)
+        #expect(alts.count == 2)
+        // Newest first.
+        #expect(alts[0].agentName == "gemini")
+        #expect(alts[0].backendDisplayName == "Gemini (Google AI)")
+        #expect(alts[0].modelVersion == "gemini-2.5-pro")
+        #expect(alts[0].charCount == "gemini body".count)
+        #expect(alts[1].backendDisplayName == "Claude (Anthropic API)")
+        #expect(alts[1].modelVersion == "claude-opus-4-1")
+        // Default-active rule: no ref written yet → MAX(id) is active (the gemini row).
+        #expect(alts[0].isActive)
+        #expect(!alts[1].isActive)
+        // The resolved body is carried (not the empty CAS column).
+        #expect(alts[1].version.content == "claude body")
+        #expect(first.blobHash != nil)
+    }
+
+    /// AC.4 — legacy/unknown agents resolve to a graceful label, not a crash.
+    @Test func alternativeBackendDisplayFallbacks() {
+        #expect(ExtractionAlternative.backendDisplayName(agentName: "claude")
+               == "Claude (Anthropic API)")
+        #expect(ExtractionAlternative.backendDisplayName(agentName: "pdf2md")
+               == "Local pdf2md")
+        #expect(ExtractionAlternative.backendDisplayName(agentName: "legacy-extraction")
+               == "Legacy")
+        #expect(ExtractionAlternative.backendDisplayName(agentName: "future-tool")
+               == "Future-tool")
+    }
+
+    /// AC.4 — `ExtractionBackend.from(agentName:)` round-trip incl. nil cases.
+    @Test func extractionBackendFromAgentName() {
+        #expect(ExtractionBackend.from(agentName: "claude") == .anthropic)
+        #expect(ExtractionBackend.from(agentName: "gemini") == .gemini)
+        #expect(ExtractionBackend.from(agentName: "pdf2md") == .localPdf2md)
+        #expect(ExtractionBackend.from(agentName: "docling-serve") == .doclingServe)
+        #expect(ExtractionBackend.from(agentName: "legacy-extraction") == nil)
+        #expect(ExtractionBackend.from(agentName: "nope") == nil)
+    }
+
+    /// AC.3 — after `setActiveMarkdown`, `processedMarkdownAlternatives` reports
+    /// the nominated row as active (the badge the sheet reads live).
+    @Test func setActiveUpdatesAlternativeBadge() throws {
+        let store = try tempStore()
+        let file = try seedSource(in: store)
+        let first = try store.recordMarkdownExtraction(
+            sourceID: file.id, content: "first",
+            backend: .anthropic, sourceVersionID: nil, note: nil, modelVersion: nil)
+        usleep(2000)
+        _ = try store.recordMarkdownExtraction(
+            sourceID: file.id, content: "second",
+            backend: .gemini, sourceVersionID: nil, note: nil, modelVersion: nil)
+
+        // Nominate the OLDER (first) row as active.
+        try store.setActiveMarkdown(sourceID: file.id, to: first.id)
+        let alts = try store.processedMarkdownAlternatives(sourceID: file.id)
+        let active = alts.first { $0.isActive }
+        #expect(active?.id == first.id)
+        #expect(active?.backendDisplayName == "Claude (Anthropic API)")
+    }
+}
+
+/// Pure unit tests for the line-diff used by the compare sheet's Diff mode.
+struct MarkdownDiffTests {
+    @Test func identicalBodiesAreAllEqual() {
+        let d = MarkdownDiff.lineDiff("a\nb\nc", "a\nb\nc")
+        #expect(d.count == 3)
+        #expect(d.allSatisfy { $0.kind == .equal })
+    }
+
+    @Test func pureAddition() {
+        let d = MarkdownDiff.lineDiff("a\nc", "a\nb\nc")
+        // 'a' equal, 'b' added, 'c' equal.
+        #expect(d.count == 3)
+        #expect(d[0].kind == .equal && d[0].text == "a")
+        #expect(d[1].kind == .added && d[1].text == "b")
+        #expect(d[2].kind == .equal && d[2].text == "c")
+    }
+
+    @Test func pureRemoval() {
+        let d = MarkdownDiff.lineDiff("a\nb\nc", "a\nc")
+        #expect(d.count == 3)
+        #expect(d[1].kind == .removed && d[1].text == "b")
+    }
+
+    @Test func replacementGroupsRemovalsBeforeAdditions() {
+        let d = MarkdownDiff.lineDiff("x", "y")
+        // Single replacement: removed 'x' then added 'y'.
+        #expect(d.count == 2)
+        #expect(d[0] == DiffLine(kind: .removed, text: "x"))
+        #expect(d[1] == DiffLine(kind: .added, text: "y"))
+    }
+
+    @Test func emptyInputs() {
+        #expect(MarkdownDiff.lineDiff("", "").isEmpty)
+        let fromEmpty = MarkdownDiff.lineDiff("", "a\nb")
+        #expect(fromEmpty.count == 2)
+        #expect(fromEmpty.allSatisfy { $0.kind == .added })
+        let toEmpty = MarkdownDiff.lineDiff("a\nb", "")
+        #expect(toEmpty.allSatisfy { $0.kind == .removed })
+    }
+
+    @Test func handlesTrailingNewline() {
+        // No spurious empty trailing line from a terminating newline.
+        let d = MarkdownDiff.lineDiff("a\n", "a\n")
+        #expect(d.count == 1)
+        #expect(d[0].text == "a")
+    }
+
+    /// Above the DP cap, the diff degrades to all-removed-then-all-added (the
+    /// safety valve that keeps the UI responsive on huge bodies). Correct, just
+    /// non-minimal.
+    @Test func degradesAboveCellCap() {
+        // (n+1)*(m+1) must exceed maxCells (4_000_000): 2003*2003 ≈ 4.01M.
+        let n = 2002
+        let left = (0..<n).map { "L\($0)" }.joined(separator: "\n")
+        let right = (0..<n).map { "R\($0)" }.joined(separator: "\n")
+        let d = MarkdownDiff.lineDiff(left, right)
+        #expect(d.count == n * 2)
+        #expect(d.prefix(n).allSatisfy { $0.kind == .removed })
+        #expect(d.suffix(n).allSatisfy { $0.kind == .added })
+    }
 }
 
 /// A trivial `MarkdownExtractor` used by tests: always ready, returns fixed

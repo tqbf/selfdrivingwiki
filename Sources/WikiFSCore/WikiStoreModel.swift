@@ -1576,6 +1576,12 @@ public final class WikiStoreModel {
         (try? store.processedMarkdownAgentNames(sourceID: sourceID)) ?? [:]
     }
 
+    /// All extraction alternatives for a source with provenance + active flag,
+    /// for the compare/nominate sheet (track C). Empty if none.
+    public func processedMarkdownAlternatives(for sourceID: PageID) -> [ExtractionAlternative] {
+        (try? store.processedMarkdownAlternatives(sourceID: sourceID)) ?? []
+    }
+
     // MARK: - Source-of-truth rebuild
 
     /// Rebuild the sidebar lists from the store — used by the Phase A change

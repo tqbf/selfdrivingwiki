@@ -2,6 +2,50 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-05 — Graph-model Phase 2 track C: extraction compare & nominate UI
+
+Closes the "compare" half of the §4.5 "keep both, compare, nominate" loop that
+tracks A+B left as a flat header `Menu`. Design of record:
+[`plans/track-c-extraction-compare.md`](plans/track-c-extraction-compare.md)
+(implemented). No schema change, no migration, no `changeToken` change — it
+reuses the A+B storage (CAS'd alternatives, PROV provenance, `source-derived`
+ref) verbatim.
+
+- **`MarkdownDiff`** (`Sources/WikiFSCore/MarkdownDiff.swift`, new) — a pure
+  LCS line-diff producing `[DiffLine]` (`equal`/`added`/`removed`), removals
+  grouped before additions. Capped DP table (`maxCells = 4M`) with a degraded
+  whole-document fallback so huge bodies can't starve the UI. Trailing-newline
+  safe.
+- **`ExtractionAlternative`** (`Sources/WikiFSCore/ExtractionAlternative.swift`,
+  new) — presentation-layer bundle over `SourceMarkdownVersion`: resolved
+  backend display name, raw agent name, model version, char count, `isActive`.
+  `backendDisplayName(agentName:)` resolves via a new reverse map
+  `ExtractionBackend.from(agentName:)` (`MarkdownExtractor.swift`) with graceful
+  "Legacy"/first-capital fallbacks for unknown agents.
+- **Consolidated provenance query** — `processedMarkdownAlternatives(sourceID:)`
+  on `SQLiteWikiStore` (one join smv→activity→agent over the resolved-body
+  SELECT, `isActive` via the existing ref→else-MAX HEAD id) + `WikiStore`
+  protocol + `WikiStoreModel` wrapper. Replaces the A+B two-call pattern
+  (`history` + `agentNames`) for the sheet.
+- **`ExtractionCompareSheet`** (`Sources/WikiFS/ExtractionCompareSheet.swift`,
+  new) — a modal sheet from `SourceDetailView`: an alternatives list with
+  Kaleidoscope-style **assign A/B** targets, two compare panes, a toolbar
+  **Rendered ↔ Diff** toggle, and a per-pane **Set Active** that nominates the
+  `source-derived` ref and moves the Active badge live (sheet stays open).
+  Rendered mode reuses `WikiReaderView` (no new rendering code); Diff mode
+  renders a unified monospaced line-diff with a +/− legend. Defaults: left =
+  active HEAD, right = most-recent other.
+- **`SourceDetailView`** — a "Compare Extractions…" header button (PDFs with
+  markdown, disabled when fewer than 2 alternatives) + `.sheet(item:)`; the
+  detail reader's `headVersion` refreshes on sheet dismiss. The A+B quick-switch
+  `extractionsMenu` is retained.
+
+**Evidence:** new `MarkdownDiffTests` (6 cases) + track-C cases in
+`ProcessedMarkdownTests` (alternatives provenance, backend-name fallbacks,
+`from(agentName:)` round-trip, Set-Active badge update). Full suite:
+**1498 tests green.** Tracks A+B+C now complete (the deferred compare UI lands
+in v1 with the diff toggle included).
+
 ## 2026-07-05 — Graph-model Phase 2: extraction alternatives (tracks A+B, v21)
 
 Turned `source_markdown_versions` from a flat inline-content chain into CAS'd,

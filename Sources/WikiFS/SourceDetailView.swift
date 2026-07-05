@@ -57,6 +57,8 @@ struct SourceDetailView: View {
     /// Quote to highlight in the PDF view, set when a `[[source:Name#"…"]]` link
     /// targets an un-extracted PDF. Consumed from `store.pendingScrollAnchor`.
     @State private var pdfQuote: String?
+    /// Presented to show the extraction compare/nominate sheet (track C).
+    @State private var compareContext: ExtractionCompareContext?
 
     // Find bar state. Shared via environment (see `ContentView`) so the address
     // bar's "Find on Page…" menu item and Cmd+F drive the same model (#157).
@@ -81,6 +83,12 @@ struct SourceDetailView: View {
     private var hasMarkdown: Bool { headVersion != nil }
 
     private var showTabs: Bool { isPDF && hasMarkdown }
+
+    /// `true` when this source has ≥2 extraction alternatives — the gate for the
+    /// "Compare Extractions…" button (compare is meaningless with one).
+    private var hasMultipleExtractions: Bool {
+        store.processedMarkdownHistory(for: file.id).count >= 2
+    }
 
     private var isMarkdownEditable: Bool {
         isMarkdownNative || hasMarkdown
@@ -218,6 +226,11 @@ struct SourceDetailView: View {
             }
             if !newValue { shouldRestoreEditing = false }
         }
+        .sheet(item: $compareContext) { ctx in
+            ExtractionCompareSheet(
+                store: store, sourceID: ctx.sourceID, filename: ctx.filename)
+                .onDisappear { headVersion = store.processedMarkdownHead(for: file) }
+        }
     }
 
     // MARK: - Header
@@ -319,6 +332,14 @@ struct SourceDetailView: View {
                                       && !launcher.extractingSourceIDs.contains(file.id)))
                     }
                     if isPDF, hasMarkdown {
+                        Button("Compare Extractions…", systemImage: "arrow.left.and.right.square") {
+                            compareContext = ExtractionCompareContext(
+                                sourceID: file.id, filename: file.filename)
+                        }
+                        .disabled(!hasMultipleExtractions)
+                        .help(hasMultipleExtractions
+                              ? "Compare and switch between extraction alternatives"
+                              : "Re-extract with another backend to enable compare")
                         extractionsMenu
                     }
                     if isMarkdownEditable {
