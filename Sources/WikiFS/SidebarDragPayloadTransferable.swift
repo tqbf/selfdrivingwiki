@@ -27,12 +27,19 @@ extension UTType {
     /// Internal pasteboard identifier for a sidebar drag payload. The AppKit
     /// drag source writes JSON under this identifier; the SwiftUI
     /// `.dropDestination(for: SidebarDragPayload.self)` reads it back via the
-    /// matching `CodableRepresentation`. Both sides reference the same identifier
-    /// string, so it round-trips within the process without an Info.plist
-    /// `UTExportedTypeDeclarations` entry.
+    /// matching `CodableRepresentation`.
+    ///
+    /// Conforms to `public.item` (the root), NOT `public.data`: WKWebView and its
+    /// private internal subviews auto-register broad types like `public.data` and
+    /// re-register them asynchronously after load. Since AppKit routes a drag to
+    /// the deepest descendant whose registered types the drag conforms to, a
+    /// `public.data`-conforming payload gets intercepted by the WKWebView
+    /// rendering the markdown body. A sibling under `public.item` doesn't conform
+    /// to any of those broad types, so the drag bubbles past the WKWebView to the
+    /// SwiftUI drop target (#133).
     static let wikiSidebarItem = UTType(
         exportedAs: "com.selfdrivingwiki.sidebar-item",
-        conformingTo: .data
+        conformingTo: .item
     )
 }
 

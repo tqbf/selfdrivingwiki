@@ -280,6 +280,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
             let kind: SidebarDragPayload.Kind = (node.kind == .pageRef) ? .page : .source
             payload = SidebarDragPayload(kind: kind, id: targetID.rawValue)
         }
+        DebugLog.tabs("[drag] bookmark pasteboardWriterForItem node=\(node.id) kind=\(node.kind) hasPayload=\(payload != nil)")
         return SidebarDragPasteboardItem(payload: payload, bookmarkNodeID: node.id)
     }
 
