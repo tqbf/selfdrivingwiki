@@ -41,6 +41,10 @@ struct AddressBarView: View {
     /// Pointer is over the omnibox — reveals the trailing "add to bookmarks" plus.
     @State private var isHovering = false
     @State private var showReaderMenu = false
+    /// Fired when the omnibox "+" is clicked. `ContentView` presents the
+    /// `BookmarkTargetPickerSheet` (sheets can't be reliably presented from a
+    /// toolbar item's SwiftUI hierarchy).
+    var onAddToBookmarks: (BookmarkTargetPickerContext) -> Void
 
     // The reader/page zoom is a persisted global (`@AppStorage`), so the toolbar
     // can drive the same value the detail views read — no binding to thread.
@@ -283,8 +287,10 @@ struct AddressBarView: View {
 
     private func addToBookmarks(_ target: BookmarkTarget) {
         switch target {
-        case .page(let id): store.addPageRef(parentID: nil, pageID: id)
-        case .source(let id): store.addSourceRef(parentID: nil, sourceID: id)
+        case .page(let id):
+            onAddToBookmarks(BookmarkTargetPickerContext(kind: .pages, ids: [id]))
+        case .source(let id):
+            onAddToBookmarks(BookmarkTargetPickerContext(kind: .sources, ids: [id]))
         }
     }
 

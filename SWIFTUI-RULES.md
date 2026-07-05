@@ -200,6 +200,52 @@ save it 600ms later — a concurrent change clobbers it on save. Read
 fresh at the click handler, mutate, write. This is the "stale-snapshot
 autosave" lesson from Moves' Phase-5 gate.
 
+### 3.6 `NSViewRepresentable` / `NSViewControllerRepresentable` that read `@Observable` model state must receive that data as an explicit parameter from the parent view's body — never read it only inside `updateNSView` / `updateNSViewController`.
+
+```swift
+// BAD — observation gap: the parent never accesses bookmarkNodes,
+// so SwiftUI never re-renders, so updateNSViewController is never
+// called when bookmarks change. The outline silently goes stale.
+struct BookmarksOutlineView: NSViewControllerRepresentable {
+    let store: WikiStoreModel          // ← passed but not observed
+    func updateNSViewController(_ vc: ...) {
+        let nodes = store.bookmarkNodes // ← read here, but this method
+        // isn't called unless the parent re-renders!
+    }
+}
+// Parent: BookmarksContainerView.body passes `store` but never reads
+// store.bookmarkNodes → no @Observable tracking → no re-render.
+
+// GOOD — data passed through the parent's body establishes tracking
+struct BookmarksOutlineView: NSViewControllerRepresentable {
+    let store: WikiStoreModel
+    let nodes: [BookmarkNode]          // ← explicit data parameter
+    func updateNSViewController(_ vc: ...) {
+        let needs = vc.needsReload(nodes: nodes) // ← uses the parameter
+    }
+}
+// Parent: BookmarksContainerView.body reads store.bookmarkNodes to
+// build the nodes parameter → @Observable tracking established →
+// re-renders when bookmarkNodes changes → updateNSViewController fires.
+```
+
+**Why.** SwiftUI's `@Observable` tracking registers dependencies only
+for properties accessed *during a view's `body` evaluation*. An
+`NSViewControllerRepresentable` has no `body` — its
+`updateNSViewController` is called only when the *parent* SwiftUI view
+re-renders. If the parent passes the model object but never reads the
+specific property in its body, no tracking is registered, and the
+representable silently stops receiving updates. The data is correct in
+the database; the UI just never refreshes.
+
+**The fix is always the same.** Pass the observable data as an explicit
+`let` parameter from the parent's body. This forces the parent to
+access the property during body evaluation, establishing the tracking.
+The bug that taught us: the omnibox "Add Bookmark" "+" created a
+bookmark in SQLite, but the `BookmarksOutlineView` never refreshed
+because `BookmarksContainerView` passed `store` without reading
+`store.bookmarkNodes` in its body.
+
 ---
 
 ## 4. Lists, scrolling, and rows

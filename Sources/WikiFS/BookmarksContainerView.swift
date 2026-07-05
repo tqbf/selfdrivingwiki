@@ -23,6 +23,7 @@ struct BookmarksContainerView: View {
             // NSOutlineView — instant selection, native macOS performance
             BookmarksOutlineView(
                 store: store,
+                nodes: store.bookmarkNodes,
                 fileProvider: fileProvider,
                 onOpen: { sel in store.openTab(sel) },
                 onEdit: { onEdit($0) },

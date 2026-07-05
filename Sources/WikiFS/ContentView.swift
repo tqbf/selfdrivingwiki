@@ -39,6 +39,10 @@ struct ContentView: View {
     /// (never in toolbar overflow) instead of the omnibox field's own leading edge
     /// is what keeps the width from getting stranded. See `OmniboxLayout`.
     @State private var detailWidth: CGFloat = 0
+    /// Drives the `BookmarkTargetPickerSheet` from the omnibox "+". The sheet
+    /// lives here (not on `AddressBarView`) because toolbar items can't reliably
+    /// present SwiftUI sheets.
+    @State private var omniboxBookmarkContext: BookmarkTargetPickerContext?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -105,6 +109,21 @@ struct ContentView: View {
             if let error = store.storeError {
                 StoreErrorSheet(error: error) { store.dismissStoreError() }
             }
+        }
+        .sheet(item: $omniboxBookmarkContext) { ctx in
+            BookmarkTargetPickerSheet(
+                store: store,
+                kind: ctx.kind,
+                ids: ctx.ids,
+                onConfirm: { parentID in
+                    for id in ctx.ids {
+                        switch ctx.kind {
+                        case .pages: store.addPageRef(parentID: parentID, pageID: id)
+                        case .sources: store.addSourceRef(parentID: parentID, sourceID: id)
+                        }
+                    }
+                }
+            )
         }
     }
 
@@ -252,7 +271,8 @@ struct ContentView: View {
                 AddressBarView(store: store, isFocused: $addressBarFocused,
                                wikiName: activeWikiName,
                                detailWidth: detailWidth,
-                               sidebarVisible: columnVisibility != .detailOnly)
+                               sidebarVisible: columnVisibility != .detailOnly,
+                               onAddToBookmarks: { omniboxBookmarkContext = $0 })
             }
 
             // The wiki switcher moves out of the sidebar header into the toolbar,
