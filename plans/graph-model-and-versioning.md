@@ -794,6 +794,22 @@ Phase 5 depends only on 0 (it can move earlier if rename pain dominates);
    model-coordination design (who reloads, when) before any change.
 5. **json-render runtime choice** — which renderer/spec dialect the WKWebView
    mounts; the schema is agnostic (it's a mime + a blob).
+6. **Activity lifecycle on source delete (revisit at Phase 2/3).** `activities`
+   has no FK to `sources` (it references `agents`), so `deleteSource` cascades
+   `source_versions` + `refs` but **leaves activities orphaned** — they persist
+   as durable PROV-DM history (Model A, §4.7). Consequence: `activities` grows
+   unbounded on source deletes, and the `actCount` changeToken fold is monotone
+   (only `svCount`/`refsGenSum` drop on delete — see the §10 caveat). In Phase 1
+   this is harmless: every activity is a synthetic `'legacy-import'`/`'import'`/
+   `'fetch'` stub carrying no real provenance (§3), so the orphans are pure dead
+   weight. **Revisit when real provenance lands (Phase 2 extraction activities,
+   Phase 3 provider fetches):** if provenance turns out worth keeping, keep Model
+   A and add an activity-GC pass that sweeps only synthetic legacy activities; if
+   not, add an explicit cascade in `deleteSource` (delete activities referenced
+   solely by the source's versions — a 5–10 line explicit delete, *not* a FK
+   change, since the FK runs `source_versions → activities` child→parent and
+   SQLite cannot auto-cascade it; a future multi-input extraction activity also
+   makes a single `activities.source_id` FK wrong).
 
 ## 14. Explicitly deferred (unchanged from the draft)
 
