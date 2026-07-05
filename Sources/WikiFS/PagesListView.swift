@@ -45,6 +45,14 @@ struct PagesListView: NSViewControllerRepresentable {
         if needs { vc.reloadData(from: visible) }
         // Always reconcile highlight to the active tab (cheap; guarded inside).
         vc.reconcileHighlight(activeSelection: store.activeTab?.selection)
+        // Explicit "Show In List" reveal (issue #183): the pending target is
+        // read here so SwiftUI re-invokes this method when it changes. When the
+        // target matches this section, scroll to + select the row (bypassing the
+        // multi-select guard) and consume so it fires once.
+        if let pending = store.pendingSidebarReveal, case .page(let id) = pending {
+            _ = vc.revealAndSelect(id: id)
+            store.consumePendingSidebarReveal()
+        }
     }
 }
 
@@ -172,6 +180,22 @@ final class PagesListViewController: NSViewController {
                 isReconcilingHighlight = false
             }
         }
+    }
+
+    // MARK: - Reveal ("Show In List")
+
+    /// Explicit "Show In List" reveal: select the target row and scroll it into
+    /// view. Unlike ``reconcileHighlight``, this bypasses the multi-select guard
+    /// (an explicit user action should win over a Cmd/Shift selection) and always
+    /// scrolls. Returns whether the row was found in the current items.
+    @discardableResult
+    func revealAndSelect(id: PageID) -> Bool {
+        guard let row = items.firstIndex(where: { $0.id == id }) else { return false }
+        isReconcilingHighlight = true
+        tableView.selectRowIndexes(IndexSet([row]), byExtendingSelection: false)
+        isReconcilingHighlight = false
+        tableView.scrollRowToVisible(row)
+        return true
     }
 
     // MARK: - Double-click

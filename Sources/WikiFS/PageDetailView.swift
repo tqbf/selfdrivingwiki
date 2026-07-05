@@ -85,6 +85,12 @@ struct PageDetailView: View {
                             .disabled(store.isAgentRunning)
                             .help("Fix [[wiki-link]] syntax and run LLM lint on this page")
                         }
+                        if case .page(let pageID) = store.selection {
+                            Button("Show in List", systemImage: "sidebar.left") {
+                                store.requestSidebarReveal(.page(pageID))
+                            }
+                            .help("Reveal this page in the sidebar")
+                        }
                         if fileProvider.path != nil, case .page(let pageID) = store.selection {
                             Button("Share", systemImage: "square.and.arrow.up") {
                                 Task {
@@ -107,7 +113,6 @@ struct PageDetailView: View {
                             }
                             .help("Reveal this page file in Finder")
                         }
-
                         Button {
                             isOutlineExpanded.toggle()
                         } label: {

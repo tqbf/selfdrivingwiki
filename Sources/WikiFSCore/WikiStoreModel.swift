@@ -411,6 +411,35 @@ public final class WikiStoreModel {
         return pending.fragment
     }
 
+    // MARK: - Sidebar reveal ("Show In List")
+
+    /// The pending "Show In List" reveal target set by a detail view's button
+    /// (`requestSidebarReveal(_:)`) and consumed by the sidebar list view once it
+    /// has scrolled to + selected the row. Follows the same "set once, consume
+    /// once" producer/consumer discipline as `pendingScrollAnchor` (issue #183).
+    public private(set) var pendingSidebarReveal: WikiSelection?
+
+    /// Monotonic counter bumped each time `pendingSidebarReveal` is assigned. The
+    /// sidebar host (`SidebarView`) and `ContentView` observe it via `.onChange`
+    /// so a repeat request for an already-mounted section still fires the switch
+    /// / un-collapse / scroll path (the value itself may be identical to the
+    /// previous one).
+    public private(set) var pendingSidebarRevealVersion: Int = 0
+
+    /// Request that the sidebar reveal `selection` in its list: open the sidebar
+    /// if collapsed, switch to the matching section (Pages vs. Sources), clear any
+    /// active search that would hide the target, then scroll to + select the row.
+    public func requestSidebarReveal(_ selection: WikiSelection) {
+        pendingSidebarReveal = selection
+        pendingSidebarRevealVersion += 1
+    }
+
+    /// Called by the sidebar list view AFTER it has scrolled to + selected the
+    /// target row, so the reveal fires exactly once. Clears the pending target.
+    public func consumePendingSidebarReveal() {
+        pendingSidebarReveal = nil
+    }
+
     // MARK: - Tab operations
 
     /// The single seam every tab switch routes through: flush the outgoing tab's
