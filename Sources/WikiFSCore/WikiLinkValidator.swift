@@ -47,7 +47,7 @@ public enum WikiLinkFixer {
         for match in matches {
             let full = match.range
 
-            if codeRanges.contains(where: { NSIntersectionRange($0, full).length > 0 }) {
+            if WikiLinkSpan.isProtected(full, by: codeRanges) {
                 continue
             }
 

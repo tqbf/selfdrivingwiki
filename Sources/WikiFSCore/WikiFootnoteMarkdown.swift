@@ -141,7 +141,7 @@ public enum WikiFootnoteMarkdown {
         var seen = Set<String>()
         var ids: [String] = []
 
-        for match in matches where !codeRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) {
+        for match in matches where !WikiLinkSpan.isProtected(match.range, by: codeRanges) {
             let id = ns.substring(with: match.range(at: 1))
             guard knownIDs.contains(id), !seen.contains(id) else { continue }
             seen.insert(id)

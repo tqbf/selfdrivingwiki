@@ -62,7 +62,7 @@ public enum WikiLinkMarkdown {
             let full = match.range
 
             // Skip — copy verbatim — any match inside a code span/fence.
-            if codeRanges.contains(where: { NSIntersectionRange($0, full).length > 0 }) {
+            if WikiLinkSpan.isProtected(full, by: codeRanges) {
                 continue
             }
 

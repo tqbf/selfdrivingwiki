@@ -378,6 +378,29 @@ struct WikiLinkMarkdownTests {
         #expect(out.contains("wiki://source?title=Notes")) // outside fence → linkified
     }
 
+    // MARK: - Backticks nested INSIDE the link anchor text (issue #117)
+
+    @Test func sourceLinkWithBacktickCodeInQuotedFragmentStillLinkifies() {
+        // The old check flagged the link as "inside a code span" whenever its
+        // range merely INTERSECTED a backtick span, which is also true of the
+        // opposite nesting (code inside the link's quoted anchor text). Only
+        // full containment (code span wraps the whole link) should suppress it.
+        let out = WikiLinkMarkdown.linkified(
+            "[^minimize]: [[source:SwiftUI New Toolbar Features#\"The `.minimize` behavior "
+            + "renders the search field as a button-like control.\"]]"
+        ) { _, _ in true }
+        #expect(out.contains("wiki://source?title=SwiftUI%20New%20Toolbar%20Features"))
+        #expect(!out.contains("[[source:"))
+    }
+
+    @Test func linkStillProtectedWhenTrulyNestedInsideCodeSpan() {
+        // The reverse nesting — a link written inside backticks — must still
+        // stay literal; only the containment direction flips the outcome.
+        let out = WikiLinkMarkdown.linkified("Use `[[Home]]` literally.") { _, _ in true }
+        #expect(out.contains("`[[Home]]`"))
+        #expect(!out.contains("wiki://page?title=Home"))
+    }
+
     // Pull the URL substring out of a single `[text](url)` for assertions.
     private func extractURL(_ markdownLink: String) -> String {
         guard let open = markdownLink.lastIndex(of: "("),

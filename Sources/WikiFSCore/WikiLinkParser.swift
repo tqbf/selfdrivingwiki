@@ -45,8 +45,10 @@ public enum WikiLinkParser {
         }
     }
 
-    // [[ target (no ] or |) ( | alias (no ]) )? ]]
-    private static let pattern = #"\[\[([^\]\|]+)(?:\|([^\]]+))?\]\]"#
+    // [[ target (no ] or | outside a "quoted" run) ( | alias (no ]) )? ]]
+    // Kept in sync with WikiLinkSpan.pattern (shared grammar, two copies so
+    // WikiLinkSpan doesn't need to depend on this parser).
+    private static let pattern = #"\[\[((?:[^\]\|"]|"[^"]*")+)(?:\|([^\]]+))?\]\]"#
     private static let regex = try! NSRegularExpression(pattern: pattern)
 
     // MARK: - Prefix classification
