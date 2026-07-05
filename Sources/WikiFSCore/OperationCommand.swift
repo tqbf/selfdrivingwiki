@@ -182,6 +182,7 @@ public struct OperationCommand: Equatable, Sendable {
             "--input-format", "stream-json",
             "--output-format", "stream-json",
             "--verbose",
+            "--include-partial-messages",
             "--model", model,
             "--append-system-prompt", systemPrompt + "\n\n" + operation.prompt(wikiRoot: wikiRoot),
             // Scope the agent to wikictl + read-only inspection tools (issue #116 item 3),

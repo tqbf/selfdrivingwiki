@@ -109,16 +109,31 @@ struct AgentEventParserTests {
     }
 
     @Test func unmodeledEventTypesAreSkipped() {
-        // stream_event deltas, status, rate_limit_event, post_turn_summary carry no
-        // line of their own — they return nil rather than cluttering the feed.
+        // status, rate_limit_event, post_turn_summary, and non-text-delta
+        // stream_events carry no line of their own — they return nil rather than
+        // cluttering the feed. (Text deltas ARE modeled — see
+        // `contentBlockTextDeltaBecomesAssistantTextDelta` below, issue #121.)
         for line in [
-            #"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"he"}}}"#,
+            #"{"type":"stream_event","event":{"type":"content_block_start"}}"#,
+            #"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{"}}}"#,
             #"{"type":"rate_limit_event"}"#,
             #"{"type":"system","subtype":"status"}"#,
             #"{"type":"system","subtype":"post_turn_summary"}"#,
         ] {
             #expect(AgentEventParser.parse(line: line) == nil)
         }
+    }
+
+    // MARK: - Partial-message streaming (issue #121)
+
+    @Test func contentBlockTextDeltaBecomesAssistantTextDelta() {
+        let line = #"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"he"}}}"#
+        #expect(AgentEventParser.parse(line: line) == .assistantTextDelta("he"))
+    }
+
+    @Test func emptyTextDeltaIsSkipped() {
+        let line = #"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":""}}}"#
+        #expect(AgentEventParser.parse(line: line) == nil)
     }
 
     @Test func assistantWithNoRenderableBlockIsSkipped() {

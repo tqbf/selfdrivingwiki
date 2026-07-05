@@ -232,7 +232,7 @@ struct QueryConversationView: View {
                 return true
             case .assistantText(let text), .result(_, let text):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .systemInit, .toolUse, .toolResult, .subagent, .messageStop, .raw:
+            case .systemInit, .toolUse, .toolResult, .subagent, .messageStop, .raw, .assistantTextDelta:
                 return false
             }
         }
