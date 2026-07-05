@@ -54,4 +54,37 @@ struct EmbeddingMetaCutoverTests {
         #expect(afterMissing.contains(where: { $0.id == summary.id }),
                 "source should reappear in missing-work after cutover wipe")
     }
+
+    // MARK: - Non-app open must not wipe (issue #165)
+
+    /// A non-app process (`wikictl`, the File Provider extension, tests) opening
+    /// the store writable must NOT wipe chunks or rewrite `embedding_meta`, even
+    /// when the stored identifier mismatches what `selectedEmbedderIdentifier()`
+    /// returns in that context (the NLEmbedder fallback). Only the app owns
+    /// embeddings; letting the CLI assert its fallback was the per-launch
+    /// tug-of-war that wiped every chunk on each app launch.
+    @Test func nonAppOpenDoesNotWipeChunksOnIdentifierMismatch() throws {
+        let store = try tempStore()
+
+        // Fresh seed is nlemmbedding-512. Switch meta to minilm-384 via the
+        // override path while there are no chunks to wipe (simulates the app
+        // having embedded with MiniLM on a prior launch).
+        store.ensureEmbedderConsistency(activeIdentifierOverride: EmbeddingService.miniLMIdentifier)
+
+        // "App" embeds a source's chunks.
+        let summary = try store.addSource(filename: "report.pdf", data: Data("%PDF".utf8))
+        try store.storeSourceChunks(id: summary.id, chunks: [Data(repeating: 0, count: 384 * 4)])
+        #expect(!store.missingSourceEmbeddingWork().contains(where: { $0.id == summary.id }),
+                "source should have chunks after the app embeds")
+
+        // wikictl (CLI) opens the same DB writable. Tests run outside an .app
+        // bundle, so this no-override call is exactly the CLI path:
+        // `selectedEmbedderIdentifier()` returns nlemmbedding-512, which MISMATCHES
+        // the stored minilm-384. Without the ownership gate this would wipe; the
+        // gate must make it a no-op so the app's chunks survive.
+        store.ensureEmbedderConsistency()
+
+        #expect(!store.missingSourceEmbeddingWork().contains(where: { $0.id == summary.id }),
+                "non-app open must not wipe chunks the app embedded")
+    }
 }

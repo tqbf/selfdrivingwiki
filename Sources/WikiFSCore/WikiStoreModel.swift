@@ -1493,7 +1493,7 @@ public final class WikiStoreModel {
         if !didReconcileLinks {
             didReconcileLinks = true
             let start = DispatchTime.now()
-            let count = (try? LinkReconciler.reconcileAll(in: store)) ?? 0
+            let count = (try? await LinkReconciler.reconcileAll(in: store)) ?? 0
             let ms = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
             DebugLog.store("LinkReconciler: re-resolved links for \(count) page(s) in \(Int(ms))ms")
         }
