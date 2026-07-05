@@ -1036,11 +1036,18 @@ final class AgentLauncher {
         stopAgent()
     }
 
-    /// Clear the visible activity feed so a freshly-opened surface (e.g. the ingest
-    /// sheet for a different file) doesn't show the previous run's events. No-op
-    /// while a run is in flight, so we never wipe a live transcript.
-    func resetActivityIfIdle() {
-        guard !isRunning && !isExtracting else { return }
+    /// End the interactive query session (if any) and clear the visible transcript,
+    /// so the page returns to its empty state and the next send spawns a fresh
+    /// claude process with a clean context. Guarded so it can never kill a
+    /// non-query run (ingest/lint) that happens to be streaming into this launcher.
+    /// Clears only agent-run artifacts — a concurrently running pdf2md extraction
+    /// keeps its extractionLog/extractionPID.
+    func startNewConversation() {
+        DebugLog.agent(
+            "startNewConversation() requested: isRunning=\(isRunning) "
+            + "runningKind=\(String(describing: runningKind))")
+        if isRunning && runningKind != .query { return }
+        stopAgent()
         events = []
         isStreamingAssistantRow = false
         rawTranscript = ""
@@ -1048,8 +1055,6 @@ final class AgentLauncher {
         stdoutLineBuffer = ""
         exitStatus = nil
         preflightError = nil
-        extractionLog = ""
-        extractionPID = nil
     }
 
     // MARK: - Stream ingestion (main actor)

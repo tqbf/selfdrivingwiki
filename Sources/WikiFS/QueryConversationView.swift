@@ -26,8 +26,8 @@ struct QueryConversationView: View {
         VStack(spacing: 0) {
             ZStack(alignment: .topTrailing) {
                 content
-                if showsDebugControls {
-                    controls
+                if showsDebugControls || showsNewConversation {
+                    controlsBand
                         .padding(.top, QueryConversationMetrics.debugTopInset)
                         .padding(.trailing, QueryConversationMetrics.contentInset)
                 }
@@ -51,40 +51,50 @@ struct QueryConversationView: View {
         // only READS `isGenerating` now (banner, debug cluster, send gating).
     }
 
-    private var controls: some View {
-        // Only shown during an active query run or while awaiting the gate
-        // (gated by `showsDebugControls`). The spinner shows only while generating;
-        // the stop button shows in both states.
+    /// The floating top-trailing cluster. "New Conversation" leads and shows
+    /// whenever there's a live session or a transcript to clear; the spinner/menu/
+    /// stop controls only show during an active run (`showsDebugControls`).
+    private var controlsBand: some View {
         HStack(spacing: 8) {
-            if launcher.isGenerating {
-                ProgressView()
-                    .controlSize(.small)
-            }
-            Menu {
-                Toggle("Show internals", isOn: $showsInternals)
-                if let status = launcher.exitStatus {
-                    Label(status == 0 ? "Ended" : "Exited \(status)", systemImage: status == 0 ? "checkmark.circle" : "xmark.circle")
+            if showsNewConversation {
+                Button("New Conversation", systemImage: "square.and.pencil") {
+                    launcher.startNewConversation()
                 }
-                if let logURL = launcher.logFileURL {
-                    Button("Reveal Log", systemImage: "doc.text.magnifyingglass") {
-                        NSWorkspace.shared.activateFileViewerSelecting([logURL])
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .help("New conversation — end this session and clear the chat")
+            }
+            if showsDebugControls {
+                if launcher.isGenerating {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Menu {
+                    Toggle("Show internals", isOn: $showsInternals)
+                    if let status = launcher.exitStatus {
+                        Label(status == 0 ? "Ended" : "Exited \(status)", systemImage: status == 0 ? "checkmark.circle" : "xmark.circle")
                     }
+                    if let logURL = launcher.logFileURL {
+                        Button("Reveal Log", systemImage: "doc.text.magnifyingglass") {
+                            NSWorkspace.shared.activateFileViewerSelecting([logURL])
+                        }
+                    }
+                } label: {
+                    Label("Activity", systemImage: "ellipsis.circle")
                 }
-            } label: {
-                Label("Activity", systemImage: "ellipsis.circle")
+                .labelStyle(.iconOnly)
+                .menuStyle(.borderlessButton)
+                .help("Show activity and transcript internals")
+                // Stop button: visible while generating OR awaiting the generation slot.
+                // Wired to stopAgent() which cancels any pending send and terminates the process.
+                Button(action: { launcher.stopAgent() }) {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Color.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Stop the current response")
             }
-            .labelStyle(.iconOnly)
-            .menuStyle(.borderlessButton)
-            .help("Show activity and transcript internals")
-            // Stop button: visible while generating OR awaiting the generation slot.
-            // Wired to stopAgent() which cancels any pending send and terminates the process.
-            Button(action: { launcher.stopAgent() }) {
-                Image(systemName: "stop.circle.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.secondary)
-            }
-            .buttonStyle(.borderless)
-            .help("Stop the current response")
         }
     }
 
@@ -93,6 +103,28 @@ struct QueryConversationView: View {
         // the generation slot (stop only — the session is live but waiting its turn).
         (launcher.isGenerating || launcher.isAwaitingGenerationSlot)
             && launcher.runningKind == .query
+    }
+
+    /// Pure predicate: whether the "New Conversation" control shows. True when an
+    /// interactive query session is live or a conversation transcript is visible —
+    /// but never while a non-query run (ingest/lint) is streaming into the shared
+    /// launcher, so the button can never offer to kill someone else's run.
+    static func showsNewConversationButton(
+        isInteractiveSession: Bool,
+        hasConversation: Bool,
+        isRunning: Bool,
+        runningKind: WikiOperation.Kind?
+    ) -> Bool {
+        if isRunning && runningKind != .query { return false }
+        return isInteractiveSession || hasConversation
+    }
+
+    private var showsNewConversation: Bool {
+        Self.showsNewConversationButton(
+            isInteractiveSession: launcher.isInteractiveSession,
+            hasConversation: hasVisibleConversation,
+            isRunning: launcher.isRunning,
+            runningKind: launcher.runningKind)
     }
 
     @ViewBuilder
@@ -147,7 +179,7 @@ struct QueryConversationView: View {
     /// Top space the banner reserves so it clears the floating controls cluster,
     /// which is overlaid in the same top-trailing band. Zero when no controls show.
     private var bannerTopReservation: CGFloat {
-        showsDebugControls
+        (showsDebugControls || showsNewConversation)
             ? QueryConversationMetrics.debugTopInset + QueryConversationMetrics.controlsBandHeight
             : 0
     }
@@ -296,9 +328,10 @@ private enum QueryConversationMetrics {
     static let contentInset: CGFloat = 28
     static let sectionSpacing: CGFloat = 16
     static let debugTopInset: CGFloat = 18
-    /// Vertical room the floating controls cluster (spinner/menu/stop) occupies at
-    /// the top-trailing corner. The editing banner reserves this much top space when
-    /// the controls are visible so the two never overlap in the top band.
+    /// Vertical room the floating controls cluster (New Conversation + spinner/menu/
+    /// stop) occupies at the top-trailing corner. The editing banner reserves this
+    /// much top space when the cluster is visible so the two never overlap in the
+    /// top band.
     static let controlsBandHeight: CGFloat = 28
     static let conversationHorizontalInset: CGFloat = 48
     static let conversationTopInset: CGFloat = 56

@@ -2,6 +2,40 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-05 — "New Conversation" button on the Ask/Edit chat page
+
+The Ask/Edit page keeps one long-lived interactive `claude` session open, but
+there was no way to end it or clear the transcript: the stop button only shows
+mid-generation, and `launcher.events` only cleared when the *next* run spawned.
+The conversation (and its aging wiki-state snapshot from session start)
+accumulated indefinitely.
+
+- **`AgentLauncher.startNewConversation()`** — stops the interactive session
+  (`stopAgent()` is a safe no-op when idle) and clears the visible transcript
+  artifacts (`events`, `rawTranscript`, `stderr`, `exitStatus`,
+  `preflightError`, …) so the page returns to its empty state and the next send
+  spawns a fresh `claude` process with a clean context. Guarded on
+  `isRunning && runningKind != .query` so it can never kill a non-query run
+  (ingest/lint) streaming into the shared launcher. Replaces the orphaned
+  `resetActivityIfIdle()` (zero callers); unlike that method it does NOT touch
+  `extractionLog`/`extractionPID` — a concurrent pdf2md extraction is untouched.
+- **`QueryConversationView`** — the top-trailing controls band (renamed
+  `controls` → `controlsBand`) now shows a leading "New Conversation" button
+  (`square.and.pencil`, icon-only, borderless) whenever a query session is live
+  or a transcript is visible; the spinner/menu/stop cluster still only shows
+  during an active run. Gating is a pure static predicate
+  `showsNewConversationButton(isInteractiveSession:hasConversation:isRunning:runningKind:)`
+  mirroring the `showsEditingBanner` pattern. `bannerTopReservation` reserves
+  top space on the combined visibility so the editing banner never overlaps.
+- **Tests** — `QueryNewConversationTests` (6 cases): predicate matrix
+  (idle/leftover-transcript/live-query/running-ingest/nil-kind) + idle-launcher
+  no-op behavior. No seam exists to seed `events` without a real process
+  (`private(set)`, only mutator is private `ingestStdout`), so transcript-clear
+  is pinned at the predicate level; noted in the test file.
+- **Not yet verified live** — needs a human to click through: start an Ask
+  conversation, click the compose button, page resets to the empty state, next
+  message starts a fresh session (no memory of the prior chat).
+
 ## 2026-07-05 — Stop sidebar tables stealing Cmd+A from the omnibox (#154)
 
 `PagesNSTableView` and `SourcesNSTableView` overrode `performKeyEquivalent(with:)`
