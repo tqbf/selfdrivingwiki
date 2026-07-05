@@ -11,12 +11,12 @@ import FoundationNetworking
 /// directly). This keeps the picker's search-as-you-type loop to one cheap JSON
 /// round trip per keystroke, with no file transfer in the hot path.
 ///
-/// Design for testability, mirroring `URLIngestService`: the network is behind an
+/// Design for testability, mirroring `URLFetchService`: the network is behind an
 /// injected `RequestFetcher`, and every decode/request-building step is a pure
 /// static function — the actual unit-test target.
 public struct ZoteroClient: Sendable {
 
-    /// Abstracts the network call. Unlike `URLIngestService.URLResourceFetcher`
+    /// Abstracts the network call. Unlike `URLFetchService.URLResourceFetcher`
     /// (which takes a bare `URL`), this takes a fully-formed `URLRequest` because
     /// every Zotero call needs `Zotero-API-Key` / `Zotero-API-Version` headers
     /// attached by THIS client, not by the fetcher — the fetcher stays

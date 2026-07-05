@@ -3,7 +3,7 @@ import Testing
 @testable import WikiFSCore
 
 /// Direct tests for the shared `ContentSniff.mimeType(of:)` helper. Previously
-/// these were only exercised through `URLIngestService.sniffContentType`, but
+/// these were only exercised through `URLFetchService.sniffContentType`, but
 /// `addSource` now depends on `ContentSniff` directly for the MIME-first path
 /// (content-type-over-extension plan).
 struct ContentSniffTests {
