@@ -57,6 +57,18 @@ enum PdfExtractionService {
 
     private static nonisolated let processRegistry = ProcessRegistry()
 
+    /// Directories prepended to a subprocess PATH so the `pdf2md` shebang
+    /// (`env -S uv run --script`) can find `uv`. A Finder-launched app inherits
+    /// the bare system PATH (`/usr/bin:/bin:…`), so cover every place uv
+    /// actually lands: `~/.local/bin` (the official installer),
+    /// `/opt/homebrew/bin` (Homebrew on Apple silicon), and `/usr/local/bin`
+    /// (Homebrew on Intel).
+    static nonisolated var uvSearchPATH: String {
+        let localBin = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/bin", isDirectory: true).path
+        return "\(localBin):/opt/homebrew/bin:/usr/local/bin"
+    }
+
     /// Thread-safe byte accumulator for a pipe drained on a background queue.
     /// The pipe `readabilityHandler` fires off-actor, so the buffer it appends to
     /// must be its own lock-guarded box (not actor state).
@@ -88,10 +100,7 @@ enum PdfExtractionService {
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
             var env = ProcessInfo.processInfo.environment
-            let localBin = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".local/bin", isDirectory: true).path
-            let existing = env["PATH"] ?? ""
-            env["PATH"] = "\(localBin):\(existing)"
+            env["PATH"] = "\(uvSearchPATH):\(env["PATH"] ?? "")"
             process.environment = env
             process.terminationHandler = { proc in
                 processRegistry.untrack(proc)
@@ -131,9 +140,7 @@ enum PdfExtractionService {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         var env = ProcessInfo.processInfo.environment
-        let localBin = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".local/bin", isDirectory: true).path
-        env["PATH"] = "\(localBin):\(env["PATH"] ?? "")"
+        env["PATH"] = "\(uvSearchPATH):\(env["PATH"] ?? "")"
         process.environment = env
 
         return await withTaskGroup(of: Bool.self) { group in
@@ -222,20 +229,17 @@ enum PdfExtractionService {
         guard let script = resolveScript() else {
             throw ExtractionError.scriptNotFound
         }
-        let localBin = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".local/bin", isDirectory: true).path
-
         onProgress("Installing Python packages (docling, torch, spacy)…\n")
         try await streamProcess(
             executable: script, arguments: ["--help"],
-            extraPATH: localBin, onProgress: onProgress)
+            extraPATH: uvSearchPATH, onProgress: onProgress)
 
         onProgress("\nDownloading model weights (\(graniteModelRepoID))…\n")
         try await streamProcess(
             executable: URL(fileURLWithPath: "/usr/bin/env"),
             arguments: ["uv", "run", "--quiet", "--with", "huggingface_hub",
                         "python", "-c", modelDownloadProgram, graniteModelRepoID],
-            extraPATH: localBin, onProgress: onProgress)
+            extraPATH: uvSearchPATH, onProgress: onProgress)
     }
 
     /// Inline Python that fetches a repo into the HF hub cache, emitting tqdm
@@ -371,14 +375,8 @@ enum PdfExtractionService {
         process.arguments = [input.path]
         process.currentDirectoryURL = input.deletingLastPathComponent()
 
-        // Prepend ~/.local/bin to PATH so the pdf2md shebang can find `uv`.
-        // The system PATH (used when the app is launched from Finder) does not
-        // include ~/.local/bin, but that is where `uv` installs itself.
         var env = ProcessInfo.processInfo.environment
-        let localBin = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".local/bin", isDirectory: true).path
-        let existing = env["PATH"] ?? ""
-        env["PATH"] = "\(localBin):\(existing)"
+        env["PATH"] = "\(uvSearchPATH):\(env["PATH"] ?? "")"
         process.environment = env
 
         let stdoutPipe = Pipe()
