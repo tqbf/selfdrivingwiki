@@ -10,6 +10,14 @@ import WikiFSCore
 /// on macOS (see plans/bookmark-drag-drop-performance.md).
 struct BookmarksOutlineView: NSViewControllerRepresentable {
     let store: WikiStoreModel
+    /// The live bookmark-node snapshot. Passed explicitly (rather than read
+    /// inside `updateNSViewController`) so that the **parent** view
+    /// (`BookmarksContainerView`) accesses `store.bookmarkNodes` during its
+    /// `body` evaluation — establishing the `@Observable` dependency that
+    /// triggers a re-render when bookmarks change. Without this, mutations from
+    /// the omnibox "+", context menus, etc. update the database but the outline
+    /// never refreshes (no SwiftUI state change to force `updateNSViewController`).
+    let nodes: [BookmarkNode]
     let fileProvider: FileProviderSpike
     var onOpen: (WikiSelection) -> Void
     var onEdit: (String) -> Void
@@ -41,7 +49,6 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
             onAddPage: onAddPage, onAddSource: onAddSource,
             onNewFolder: onNewFolder, onNewSubfolder: onNewSubfolder
         )
-        let nodes = store.bookmarkNodes
         let needs = vc.needsReload(nodes: nodes)
         DebugLog.tabs("BookmarksOutlineView.updateNSVC: nodes=\(nodes.count) needsReload=\(needs)")
         if needs {
