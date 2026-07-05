@@ -156,7 +156,7 @@ struct SourcesContainerView: View {
 
     private func addFile() {
         if let url = WikiFilePanels.chooseFile(title: "Add File", prompt: "Import") {
-            Task { await store.ingest(fileURLs: [url]) }
+            Task { await store.addFiles([url]) }
         }
     }
 

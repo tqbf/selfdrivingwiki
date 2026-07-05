@@ -1117,20 +1117,24 @@ public final class WikiStoreModel {
 
     // MARK: - File ingestion (Phase 5)
 
-    /// Ingest dropped files. For each URL: reject directories (a recursive
-    /// directory ingest is out of scope), read the bytes OFF the main thread
-    /// (big files shouldn't stall the UI), then hop back to the main actor to
-    /// store + reload. Per-file failures are logged and skipped so one bad drop
+    /// Add dropped/imported files as sources. For each URL: reject directories
+    /// (a recursive directory add is out of scope), read the bytes OFF the main
+    /// thread (big files shouldn't stall the UI), then hop back to the main actor
+    /// to store + reload. Per-file failures are logged and skipped so one bad drop
     /// doesn't abort the batch. `onPageDidChange?()` fires ONCE at the end so the
     /// daemon re-enumerates the `sources/` tree exactly once for the whole batch.
-    public func ingest(fileURLs: [URL]) async {
+    ///
+    /// Named `addFiles` (not `ingest`) because it only adds sources — it does NOT
+    /// run the agent "Ingest into wiki" phase (see `AgentLauncher` /
+    /// `ingestingSourceIDs`). Issue #178.
+    public func addFiles(_ fileURLs: [URL]) async {
         var lastSourceID: PageID?
         var duplicateNames: [String] = []
         for url in fileURLs {
             // Skip directories — only flat files are ingested.
             let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
             if isDir {
-                DebugLog.store("WikiStoreModel.ingest skipping directory: \(url.lastPathComponent)")
+                DebugLog.store("WikiStoreModel.addFiles skipping directory: \(url.lastPathComponent)")
                 continue
             }
             let filename = url.lastPathComponent
@@ -1141,7 +1145,7 @@ public final class WikiStoreModel {
                     try Data(contentsOf: url)
                 }.value
             } catch {
-                DebugLog.store("WikiStoreModel.ingest read failed for \(filename): \(error)")
+                DebugLog.store("WikiStoreModel.addFiles read failed for \(filename): \(error)")
                 continue
             }
 
@@ -1160,7 +1164,7 @@ public final class WikiStoreModel {
                 // left wondering why the file didn't show up.
                 duplicateNames.append("\(filename) (already added as \(existing.effectiveName))")
             } catch {
-                DebugLog.store("WikiStoreModel.ingest store failed for \(filename): \(error)")
+                DebugLog.store("WikiStoreModel.addFiles store failed for \(filename): \(error)")
             }
         }
         reloadSources()
@@ -1177,17 +1181,21 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Ingest a resource by URL: fetch it, convert HTML→Markdown (or store a PDF /
-    /// text / binary verbatim), and land it as an ingested file — exactly like a
-    /// drag-dropped file, so the existing "Ingest into wiki" `claude -p` operation
-    /// can summarize it afterward. Lands through the SAME `store.ingestFile` path as
-    /// drag-ingest, so it appears under Sources + `sources/by-{id,name}` immediately and
-    /// is pickable in Operations → Ingest. Returns the outcome on success; throws a
-    /// user-readable `URLIngestService.IngestError` on a bad URL, non-2xx, empty
-    /// body, or store failure (the caller surfaces it in the sheet). The store write
-    /// hops to the main actor (this type is `@MainActor`); the fetch runs off it.
+    /// Add a resource by URL as a source: fetch it, convert HTML→Markdown (or
+    /// store a PDF / text / binary verbatim), and land it as a source file —
+    /// exactly like a drag-dropped file, so the existing **"Ingest into wiki"**
+    /// `claude -p` operation can summarize it afterward. Lands through the SAME
+    /// `store.addSource` path as `addFiles`, so it appears under Sources +
+    /// `sources/by-{id,name}` immediately and is pickable in Operations → Ingest.
+    /// Returns the outcome on success; throws a user-readable
+    /// `URLIngestService.IngestError` on a bad URL, non-2xx, empty body, or store
+    /// failure (the caller surfaces it in the sheet). The store write hops to the
+    /// main actor (this type is `@MainActor`); the fetch runs off it.
+    ///
+    /// Named `addURL` (not `ingestURL`) because it only adds a source — the agent
+    /// "Ingest into wiki" phase is a separate, later step. Issue #178.
     @discardableResult
-    public func ingestURL(
+    public func addURL(
         _ rawInput: String,
         fetcher: any URLIngestService.URLResourceFetcher = URLSessionFetcher()
     ) async throws -> URLIngestService.IngestOutcome {
@@ -1249,7 +1257,7 @@ public final class WikiStoreModel {
     ) async throws {
         switch ZoteroLocalStorage.resolve(attachment, zoteroDir: zoteroDir) {
         case .local(let path):
-            // Read off the main actor — same rationale as `ingest(fileURLs:)`:
+            // Read off the main actor — same rationale as `addFiles(_:)`:
             // `Data(contentsOf:)` is blocking I/O and shouldn't stall the UI.
             let data = try await Task.detached(priority: .userInitiated) {
                 try Data(contentsOf: path)
