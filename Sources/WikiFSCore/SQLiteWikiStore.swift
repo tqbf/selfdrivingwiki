@@ -2549,6 +2549,15 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// and the live `EmbeddingService.selectedEmbedderIdentifier()` is used.
     func ensureEmbedderConsistency(activeIdentifierOverride: String? = nil) {
         lock.lock(); defer { lock.unlock() }
+        // Only the app owns embeddings — it's the sole producer of chunk vectors —
+        // so only it reconciles `embedding_meta`. The CLI (`wikictl`) and the File
+        // Provider extension open the store writable too, but they never embed; in
+        // those contexts `selectedEmbedderIdentifier()` returns the NLEmbedder
+        // fallback (no bundled model). Letting them assert that fallback would
+        // create an app⇄CLI tug-of-war that wipes every chunk on each launch
+        // (issue #165). Tests inject `activeIdentifierOverride` to bypass this gate.
+        guard activeIdentifierOverride != nil
+                || Bundle.main.bundlePath.hasSuffix(".app") else { return }
         let activeIdentifier = activeIdentifierOverride ?? EmbeddingService.selectedEmbedderIdentifier()
         do {
             let stored = (try? queryScalarText("SELECT embedder FROM embedding_meta WHERE id = 1;")) ?? ""
