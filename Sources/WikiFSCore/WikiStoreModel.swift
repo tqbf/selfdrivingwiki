@@ -1660,13 +1660,14 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Add a page reference to a folder.
-    public func addPageRef(parentID: String?, pageID: PageID) {
+    /// Add a page reference to a folder. Pass `position` to insert at a specific
+    /// sibling index (the store shifts later siblings down); omit it to append.
+    public func addPageRef(parentID: String?, pageID: PageID, position: Int? = nil) {
         let t0 = DispatchTime.now()
-        let position = bookmarkNodes.filter { $0.parentID == parentID }.count
+        let pos = position ?? bookmarkNodes.filter { $0.parentID == parentID }.count
         do {
             _ = try store.createBookmarkNode(
-                parentID: parentID, position: position, kind: .pageRef,
+                parentID: parentID, position: pos, kind: .pageRef,
                 label: nil, targetID: pageID)
             reloadBookmarkNodes()
             let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
@@ -1676,12 +1677,13 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Add a source reference to a folder.
-    public func addSourceRef(parentID: String?, sourceID: PageID) {
-        let position = bookmarkNodes.filter { $0.parentID == parentID }.count
+    /// Add a source reference to a folder. Pass `position` to insert at a specific
+    /// sibling index (the store shifts later siblings down); omit it to append.
+    public func addSourceRef(parentID: String?, sourceID: PageID, position: Int? = nil) {
+        let pos = position ?? bookmarkNodes.filter { $0.parentID == parentID }.count
         do {
             _ = try store.createBookmarkNode(
-                parentID: parentID, position: position, kind: .sourceRef,
+                parentID: parentID, position: pos, kind: .sourceRef,
                 label: nil, targetID: sourceID)
             reloadBookmarkNodes()
         } catch {

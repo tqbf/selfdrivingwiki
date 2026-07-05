@@ -128,7 +128,9 @@ final class BookmarksOutlineViewController: NSViewController {
         outlineView.delegate = self
         // Required for the outline view to act as a drop target at all — without
         // this, validateDrop/acceptDrop are never called and no highlight shows.
-        outlineView.registerForDraggedTypes([.string])
+        // `.string` powers intra-tree reorder (a node id); `.url` lets a
+        // `wiki://` link dragged out of a page/source body land here (issue #169).
+        outlineView.registerForDraggedTypes([.string, .init("public.url")])
         // NSTableView/NSOutlineView is its own NSDraggingSource; there is no
         // delegate callback for this — the mask is configured imperatively.
         // Without it, the default local-drag mask is a multi-bit value that
@@ -325,11 +327,84 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
         }
     }
 
+    // MARK: - Wiki-link drop (issue #169)
+
+    /// Read the first `wiki://…` href from a drag pasteboard. WebKit's default
+    /// link drag may offer the href under `.url`, `.string`, or both, so check
+    /// each. Returns nil for an intra-tree bookmark reorder (whose `.string` is a
+    /// node id, not a `wiki://` URL).
+    private static func firstWikiLinkURL(from pb: NSPasteboard) -> URL? {
+        let schemePrefix = "\(WikiLinkMarkdown.scheme)://"
+        for type in [NSPasteboard.PasteboardType("public.url"), NSPasteboard.PasteboardType.string] {
+            guard let raw = pb.string(forType: type),
+                  raw.hasPrefix(schemePrefix),
+                  let url = URL(string: raw) else { continue }
+            return url
+        }
+        return nil
+    }
+
+    /// Resolve a dropped `wiki://` link to a page/source and insert a bookmark
+    /// node for it at the drop position. Mirrors `WikiReaderView.linkRoute(for:)`'s
+    /// resolution: title from `WikiLinkMarkdown.target`, kind from `resolvedKind`,
+    /// then the same `pageID(forTitle:)` / `sourceID(forDisplayName:)` lookups the
+    /// click handler uses. The insertion position follows the same rules as the
+    /// intra-tree reorder: a precise `index >= 0` lands between siblings (the
+    /// store shifts later siblings down); `-1` (drop *on* an item) appends.
+    @discardableResult
+    private func acceptWikiLinkDrop(url: URL, onto item: Any?, atIndex index: Int,
+                                    store: WikiStoreModel) -> Bool {
+        guard let title = WikiLinkMarkdown.target(from: url),
+              let kind = WikiLinkMarkdown.resolvedKind(from: url) else {
+            DebugLog.tabs("[drop] wiki-link bookmark drop: not a resolvable wiki URL \(url.absoluteString)")
+            return false
+        }
+        let targetID: PageID? = (kind == .page)
+            ? store.pageID(forTitle: title)
+            : store.sourceID(forDisplayName: title)
+        guard let resolved = targetID else {
+            DebugLog.tabs("[drop] wiki-link bookmark drop: title \"\(title)\" did not resolve to a \(kind) id")
+            return false
+        }
+        // Resolve parent + insertion index. `index == -1` (NSOutlineViewDropOnItemIndex)
+        // means "drop on the item", so append inside it (or, for a leaf, at the
+        // leaf's own slot); `index >= 0` means "insert between siblings".
+        let parentID: String?
+        let position: Int
+        if let folder = item as? BookmarkNode, folder.kind == .folder {
+            parentID = folder.id
+            position = index >= 0 ? index : children(of: folder.id).count
+        } else if let leaf = item as? BookmarkNode {
+            parentID = leaf.parentID
+            position = index >= 0 ? index : leaf.position
+        } else {
+            // Root.
+            parentID = nil
+            position = index >= 0 ? index : children(of: nil).count
+        }
+        switch kind {
+        case .page:   store.addPageRef(parentID: parentID, pageID: resolved, position: position)
+        case .source: store.addSourceRef(parentID: parentID, sourceID: resolved, position: position)
+        }
+        DebugLog.tabs("[drop] wiki-link bookmark created: kind=\(kind) title=\"\(title)\" parentID=\(parentID ?? "root") position=\(position)")
+        return true
+    }
+
     func outlineView(_ outlineView: NSOutlineView,
                      validateDrop info: NSDraggingInfo,
                      proposedItem item: Any?,
                      proposedChildIndex index: Int) -> NSDragOperation {
         DebugLog.tabs("BookmarksOutlineView.validateDrop: mask=\(info.draggingSourceOperationMask.rawValue) item=\((item as? BookmarkNode)?.id ?? "root") index=\(index)")
+        // Wiki-link drop: a `wiki://page?title=…` / `wiki://source?title=…`
+        // anchor dragged out of rendered page/source content (issue #169). The
+        // default WKWebView link drag vends the href as `.url`/`.string`; accept
+        // it as `.copy` so `acceptDrop` creates a bookmark at the target.
+        if Self.firstWikiLinkURL(from: info.draggingPasteboard) != nil {
+            if item == nil { return .copy }                       // root
+            if (item as? BookmarkNode)?.kind == .folder { return .copy }
+            if item is BookmarkNode { return .copy }              // leaf → sibling
+            return []
+        }
         guard info.draggingSourceOperationMask.contains(.move) else { return [] }
         // Allow drop onto folders or between rows.
         if let folder = item as? BookmarkNode, folder.kind == .folder {
@@ -351,6 +426,14 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
                      childIndex index: Int) -> Bool {
         DebugLog.tabs("BookmarksOutlineView.acceptDrop: item=\((item as? BookmarkNode)?.id ?? "root") index=\(index)")
         guard let store else { return false }
+
+        // Wiki-link drop → create a bookmark pointing at the link's target
+        // (issue #169). Resolved before the intra-tree reorder path, which reads
+        // `.string` as a bookmark *node id* and would no-op on a `wiki://` URL.
+        if let url = Self.firstWikiLinkURL(from: info.draggingPasteboard) {
+            return acceptWikiLinkDrop(url: url, onto: item, atIndex: index, store: store)
+        }
+
         // Multi-selection is allowed, so a reorder drag can carry more than one
         // node id — one pasteboard item per dragged row.
         let draggedIDs = (info.draggingPasteboard.pasteboardItems ?? [])
