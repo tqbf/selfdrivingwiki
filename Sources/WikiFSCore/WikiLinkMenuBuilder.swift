@@ -37,6 +37,13 @@ public enum WikiLinkAction: Sendable, Equatable {
     /// pre-filled with the URL). Offered only for http/https links; other
     /// external schemes (mailto:, etc.) can't be ingested and are skipped.
     case addAsSource
+    /// Resolved internal wiki link (`wiki://page` / `wiki://source`) — file the
+    /// target page/source into a bookmark folder via `BookmarkTargetPickerSheet`.
+    /// The target already exists, so this is just a shortcut for the existing
+    /// "add page/source ref to a folder" path, surfaced inline on the link's
+    /// context menu. Not offered for unresolved (`wiki://missing`) links (no
+    /// existing id to file) or external links. Issue #188.
+    case addBookmark
 }
 
 public enum WikiLinkMenuBuilder {
@@ -64,7 +71,9 @@ public enum WikiLinkMenuBuilder {
         // sits right below WebKit's "Open Link".
         switch WikiLinkMarkdown.resolvedKind(from: url) {
         case .page?, .source?:
-            return []
+            // Resolved link — the target page/source exists, so offer to file it
+            // into a bookmark folder directly (issue #188).
+            return [.addBookmark]
         case nil:
             // `wiki://missing` — unresolved. Suggest closest matches.
             return [.suggest]

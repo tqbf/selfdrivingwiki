@@ -20,7 +20,8 @@ enum WikiLinkMenuNSItems {
         actions: [WikiLinkAction]? = nil,
         store: WikiStoreModel,
         fileProvider: FileProviderSpike?,
-        addURL: ((String) -> Void)? = nil
+        addURL: ((String) -> Void)? = nil,
+        addBookmark: ((BookmarkTargetPickerContext) -> Void)? = nil
     ) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
         for action in actions ?? WikiLinkMenuBuilder.actions(for: url) {
@@ -32,6 +33,29 @@ enum WikiLinkMenuNSItems {
                 // itself without a File Provider spike.
                 guard let addURL else { continue }
                 items.append(.wikiItem("Add as Source") { addURL(url.absoluteString) })
+            case .addBookmark:
+                // Resolved internal wiki link — file the target page/source into a
+                // bookmark folder. The target already exists, so we resolve its id
+                // (same lookup as `.openInBackgroundTab`) and hand a
+                // `BookmarkTargetPickerContext` to the handler, which presents the
+                // folder picker. Omitted when no handler is wired or the link no
+                // longer resolves (e.g. the page was just deleted). Issue #188.
+                guard let addBookmark else { continue }
+                let kind = WikiLinkMarkdown.resolvedKind(from: url)
+                let target = WikiLinkMarkdown.target(from: url) ?? ""
+                let ctx: BookmarkTargetPickerContext?
+                switch kind {
+                case .page:
+                    guard let id = store.pageID(forTitle: target) else { continue }
+                    ctx = BookmarkTargetPickerContext(kind: .pages, ids: [id])
+                case .source:
+                    guard let id = store.sourceID(forDisplayName: target) else { continue }
+                    ctx = BookmarkTargetPickerContext(kind: .sources, ids: [id])
+                case nil:
+                    continue
+                }
+                guard let ctx else { continue }
+                items.append(.wikiItem("Add Bookmark…") { addBookmark(ctx) })
             case .suggest:
                 items.append(
                     similarPagesItem(
@@ -125,4 +149,10 @@ extension EnvironmentValues {
     /// threading a closure through every detail view. Mirrors how the reader
     /// already injects behavior via `\.openURL`.
     @Entry var addURLHandler: ((String) -> Void)? = nil
+
+    /// Presents `BookmarkTargetPickerSheet` for the given context — set once by
+    /// `ContentView` and read deep in the reader tree via `WikiLinkMenuNSItems`,
+    /// so a right-clicked internal wiki link can be filed into a bookmark folder
+    /// without threading a closure through every detail view. Issue #188.
+    @Entry var addBookmarkHandler: ((BookmarkTargetPickerContext) -> Void)? = nil
 }

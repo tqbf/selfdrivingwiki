@@ -183,6 +183,14 @@ struct ContentView: View {
                 .allowsHitTesting(false)
                 .ignoresSafeArea()
         }
+        // Right-click "Add Bookmark…" on a resolved internal wiki link: the
+        // menu item (WikiLinkMenuNSItems) already resolved the page/source id,
+        // so we just hand the context to the existing bookmark-picker sheet.
+        // Attached on `baseContent` (not `body`) so the `body` modifier chain
+        // stays under the SwiftUI type-checker's complexity budget. Issue #188.
+        .environment(\.addBookmarkHandler) { ctx in
+            omniboxBookmarkContext = ctx
+        }
     }
 
     /// The agent is doing work — running, or in a local pdf2md extraction / an
