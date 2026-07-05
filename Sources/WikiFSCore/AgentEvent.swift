@@ -20,6 +20,15 @@ public enum AgentEvent: Equatable, Sendable {
     /// A block of assistant prose (`assistant` message → `text` content block).
     case assistantText(String)
 
+    /// One incremental chunk of assistant prose (`stream_event` →
+    /// `content_block_delta` → `text_delta`), emitted only when the run requests
+    /// `--include-partial-messages`. Never stored in `AgentLauncher.events` directly —
+    /// `AgentLauncher` merges each delta into the in-progress `.assistantText` row (or
+    /// starts one) so the transcript keeps its "one row per turn" shape while still
+    /// growing incrementally (issue #121). Not rendered on its own; treated as
+    /// internal/not-directly-renderable like `.messageStop`.
+    case assistantTextDelta(String)
+
     /// The agent invoked a tool (`assistant` message → `tool_use` content block).
     /// `inputSummary` is a concise human-readable rendering of the tool's input
     /// (e.g. a `Bash` command, a `Read` path) so the line reads like
@@ -69,6 +78,8 @@ public enum AgentEvent: Equatable, Sendable {
             return "Started · \(model)"
         case .assistantText(let text):
             return text
+        case .assistantTextDelta:
+            return ""  // internal — merged into `.assistantText` before it's rendered
         case .toolUse(let name, let inputSummary):
             return inputSummary.isEmpty ? name : "\(name)  \(inputSummary)"
         case .toolResult(let isError, let summary):
@@ -112,9 +123,11 @@ public enum AgentEvent: Equatable, Sendable {
 /// not a guess: a `system`/`init` event, `assistant` messages whose `content` holds
 /// `text` and `tool_use` blocks, `user` messages whose `content` holds
 /// `tool_result` blocks, and a final `result` event with `is_error`. Partial-message
-/// `stream_event` deltas and other bookkeeping types (`rate_limit_event`,
-/// `system`/`status`) are intentionally NOT surfaced — the complete `assistant`/`user`
-/// events carry the same content cleanly, so deltas would only duplicate noise.
+/// `stream_event` → `content_block_delta` → `text_delta` chunks are surfaced as
+/// `.assistantTextDelta` (issue #121 — the interactive chat path needs them to
+/// stream incrementally instead of buffering); other bookkeeping types
+/// (`rate_limit_event`, `system`/`status`, non-text-delta `stream_event`s) are still
+/// NOT surfaced.
 public enum AgentEventParser {
     /// Parse one NDJSON line into an `AgentEvent`. Never throws: an empty line
     /// returns `nil` (skip it); anything that fails to decode into a known shape
@@ -167,11 +180,27 @@ public enum AgentEventParser {
         case "message_stop":
             return .messageStop
 
+        case "stream_event":
+            return streamEventDelta(from: envelope)
+
         default:
-            // Unmodeled event types (stream_event deltas, status, rate_limit_event,
-            // post_turn_summary, …) are not rendered as their own lines.
+            // Unmodeled event types (status, rate_limit_event, post_turn_summary, …)
+            // are not rendered as their own lines.
             return nil
         }
+    }
+
+    /// Map a `stream_event` envelope to a text delta. Only `content_block_delta` →
+    /// `text_delta` is modeled — other inner event kinds (`message_start`,
+    /// `content_block_start`/`_stop`, `input_json_delta` for streamed tool input,
+    /// `message_delta`) carry nothing the transcript renders, so they fall through
+    /// to `nil` same as any other unmodeled line.
+    private static func streamEventDelta(from envelope: Envelope) -> AgentEvent? {
+        guard let inner = envelope.event, inner.type == "content_block_delta",
+              let delta = inner.delta, delta.type == "text_delta",
+              let text = delta.text, !text.isEmpty
+        else { return nil }
+        return .assistantTextDelta(text)
     }
 
     // MARK: - Content-block mapping
@@ -230,11 +259,26 @@ extension AgentEventParser {
         let description: String?
         let status: String?
         let summary: String?
+        // Present on `stream_event` lines: the nested partial-message event.
+        let event: StreamEvent?
 
         enum CodingKeys: String, CodingKey {
-            case type, subtype, model, message, result, description, status, summary
+            case type, subtype, model, message, result, description, status, summary, event
             case isError = "is_error"
             case subagentType = "subagent_type"
+        }
+    }
+
+    /// The `event` payload of a `stream_event` line — `{"type":"content_block_delta",
+    /// "delta":{"type":"text_delta","text":"…"}}` is the only shape we render;
+    /// other inner types decode with `delta == nil` and are ignored by the caller.
+    private struct StreamEvent: Decodable {
+        let type: String
+        let delta: Delta?
+
+        struct Delta: Decodable {
+            let type: String
+            let text: String?
         }
     }
 

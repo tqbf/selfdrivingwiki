@@ -149,6 +149,11 @@ final class AgentLauncher {
     /// Carries-over bytes from a stdout read that ended mid-line, so the parser only
     /// ever sees complete NDJSON lines.
     private var stdoutLineBuffer = ""
+    /// True while the last row in `events` is an in-progress `.assistantText` row
+    /// being grown by streamed `.assistantTextDelta` chunks (issue #121). Reset by
+    /// any other event (a tool call, a turn boundary, …) so unrelated `.assistantText`
+    /// rows are never merged together.
+    private var isStreamingAssistantRow = false
     /// Append-only handle to the per-run `run.jsonl` (raw stream-json).
     private var logHandle: FileHandle?
     /// Append-only handle to the per-run `run.stderr.log`.
@@ -1037,6 +1042,7 @@ final class AgentLauncher {
     func resetActivityIfIdle() {
         guard !isRunning && !isExtracting else { return }
         events = []
+        isStreamingAssistantRow = false
         rawTranscript = ""
         stderr = ""
         stdoutLineBuffer = ""
@@ -1062,7 +1068,7 @@ final class AgentLauncher {
             let line = String(stdoutLineBuffer[..<newlineIndex])
             stdoutLineBuffer.removeSubrange(...newlineIndex)
             if let event = AgentEventParser.parse(line: line) {
-                events.append(event)
+                mergeOrAppend(event)
                 // `.result` fires at session end (one-shot runs, or when the
                 // interactive session terminates). `.messageStop` fires at the
                 // end of EACH turn in an interactive session — Claude emits it
@@ -1091,6 +1097,39 @@ final class AgentLauncher {
         }
     }
 
+    /// Route one parsed event into `events`: either grow the in-progress streamed
+    /// assistant row in place, or append a new row (the existing, non-streaming
+    /// behavior). This is what lets `AgentTranscriptWebView` patch a live row
+    /// instead of only ever appending (issue #121).
+    private func mergeOrAppend(_ event: AgentEvent) {
+        switch event {
+        case .assistantTextDelta(let delta):
+            if isStreamingAssistantRow, case .assistantText(let existing) = events.last {
+                events[events.count - 1] = .assistantText(existing + delta)
+            } else {
+                events.append(.assistantText(delta))
+                isStreamingAssistantRow = true
+            }
+
+        case .assistantText:
+            // The complete/final text for a block already being streamed — replace
+            // the in-progress row with the authoritative full text rather than
+            // appending a duplicate. Any other `.assistantText` (no streaming in
+            // flight, e.g. a run without `--include-partial-messages`) appends as
+            // it always has.
+            if isStreamingAssistantRow, case .assistantText = events.last {
+                events[events.count - 1] = event
+            } else {
+                events.append(event)
+            }
+            isStreamingAssistantRow = false
+
+        default:
+            events.append(event)
+            isStreamingAssistantRow = false
+        }
+    }
+
     /// Append a raw stderr chunk: surface it in `stderr`, mirror to the transcript +
     /// `run.stderr.log`.
     private func ingestStderr(_ chunk: String) {
@@ -1113,7 +1152,7 @@ final class AgentLauncher {
         watchdogTask = nil
         if !stdoutLineBuffer.isEmpty {
             if let event = AgentEventParser.parse(line: stdoutLineBuffer) {
-                events.append(event)
+                mergeOrAppend(event)
             }
             stdoutLineBuffer = ""
         }
@@ -1165,6 +1204,7 @@ final class AgentLauncher {
         watchdogTask?.cancel()
         watchdogTask = nil
         events = []
+        isStreamingAssistantRow = false
         rawTranscript = ""
         stderr = ""
         stdoutLineBuffer = ""

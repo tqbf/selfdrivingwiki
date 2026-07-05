@@ -154,6 +154,9 @@ struct OperationCommandTests {
     let outputIndex = cmd.arguments.firstIndex(of: "--output-format")!
     #expect(cmd.arguments[outputIndex + 1] == "stream-json")
     #expect(cmd.arguments.contains("--verbose"))
+    // issue #121: without this flag the CLI never emits stream_event/content_block_delta
+    // for the interactive chat path, so Ask/Edit responses buffer instead of streaming.
+    #expect(cmd.arguments.contains("--include-partial-messages"))
     #expect(cmd.arguments.contains("--allowed-tools"))
     #expect(!cmd.arguments.contains("--dangerously-skip-permissions"))
     #expect(!cmd.arguments.contains { $0.hasPrefix("Question:") })

@@ -13,12 +13,14 @@ import WikiFSCore
 /// sibling one — every message was an island. Folding the whole feed into one
 /// document removes that boundary entirely.
 ///
-/// `events` is expected to be append-only except for an explicit reset to
-/// `[]` (`AgentLauncher.events`'s contract): new events are inserted into the
-/// live DOM via `appendRows` rather than a full reload, so an in-progress
-/// text selection survives a streaming run. A count *decrease* (a reset) or a
-/// `showsInternals` change (which changes which underlying events are
-/// visible) forces a full rebuild.
+/// `events` is expected to only grow in length, or have its LAST element mutated
+/// in place (a streamed text delta merged into an in-progress `.assistantText`,
+/// issue #121), except for an explicit reset to `[]` (`AgentLauncher.events`'s
+/// contract): new events are inserted into the live DOM via `appendRows`, and an
+/// in-place growth of the last row is patched via `replaceLastRow`, rather than a
+/// full reload — so an in-progress text selection survives a streaming run. A
+/// count *decrease* (a reset) or a `showsInternals` change (which changes which
+/// underlying events are visible) forces a full rebuild.
 struct AgentTranscriptWebView: NSViewRepresentable {
     /// `.activityFeed` is the inspector look (labeled rows, tool calls,
     /// diagnostics). `.chat` is the Query page look (right-aligned capsule
@@ -73,10 +75,15 @@ struct AgentTranscriptWebView: NSViewRepresentable {
         private var renderedShowsInternals: Bool?
         private var isLoaded = false
         private var pendingEvents: [AgentEvent] = []
+        /// The last event actually rendered, so `apply` can detect "no new row, but
+        /// `AgentLauncher` grew the last one in place" (a streamed `.assistantText`
+        /// delta merge, issue #121) and patch that row instead of no-op'ing.
+        private var renderedLastEvent: AgentEvent?
 
         func reload(events: [AgentEvent], showsInternals: Bool) {
             renderedCount = 0
             renderedShowsInternals = showsInternals
+            renderedLastEvent = nil
             isLoaded = false
             pendingEvents = events
             webView?.loadHTMLString(Self.shellHTML, baseURL: URL(string: "about:blank"))
@@ -95,9 +102,20 @@ struct AgentTranscriptWebView: NSViewRepresentable {
                 reload(events: events, showsInternals: showsInternals)
                 return
             }
-            guard events.count > renderedCount else { return }
+            guard events.count > renderedCount else {
+                // Same row count: `AgentLauncher` may have grown the last row in
+                // place (streamed text deltas merged into an in-progress
+                // `.assistantText`, issue #121) rather than appending a new one —
+                // patch that row's HTML instead of treating this as a no-op.
+                if let last = events.last, last != renderedLastEvent {
+                    replaceLastRow(last)
+                    renderedLastEvent = last
+                }
+                return
+            }
             appendRows(Array(events[renderedCount...]))
             renderedCount = events.count
+            renderedLastEvent = events.last
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -108,6 +126,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
                 appendRows(toRender)
             }
             renderedCount = toRender.count
+            renderedLastEvent = toRender.last
         }
 
         /// Open external links in the default browser instead of navigating
@@ -143,6 +162,17 @@ struct AgentTranscriptWebView: NSViewRepresentable {
                   let jsonString = String(data: data, encoding: .utf8)
             else { return }
             webView?.evaluateJavaScript("appendRows(\(jsonString))", completionHandler: nil)
+        }
+
+        /// Re-render the already-rendered last row in place (a streaming delta grew
+        /// its content without adding a new `AgentEvent`) instead of appending a
+        /// duplicate — the DOM equivalent of `apply`'s same-count branch.
+        private func replaceLastRow(_ event: AgentEvent) {
+            let html = Self.rowHTML(for: event, style: style)
+            guard let data = try? JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed]),
+                  let jsonString = String(data: data, encoding: .utf8)
+            else { return }
+            webView?.evaluateJavaScript("replaceLastRow(\(jsonString))", completionHandler: nil)
         }
 
         // MARK: - Row rendering
@@ -195,8 +225,8 @@ struct AgentTranscriptWebView: NSViewRepresentable {
                 return """
                 <div class="row row-result\(isError ? " is-error" : "")"><div class="row-label">\(label)</div>\(bodyHTML)</div>
                 """
-            case .messageStop:
-                return ""  // internal — not rendered
+            case .messageStop, .assistantTextDelta:
+                return ""  // internal — not rendered (deltas are merged into `.assistantText` upstream)
             case .raw(let line):
                 return "<pre class=\"row row-raw\">\(escape(line))</pre>"
             }
@@ -223,7 +253,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
                 return """
                 <div class="row chat-row chat-assistant"><div class="bubble">\(renderedMarkdown(text))</div></div>
                 """
-            case .systemInit, .toolUse, .toolResult, .subagent, .messageStop, .raw:
+            case .systemInit, .toolUse, .toolResult, .subagent, .messageStop, .raw, .assistantTextDelta:
                 return ""
             }
         }
@@ -322,6 +352,14 @@ struct AgentTranscriptWebView: NSViewRepresentable {
         <script>
           function appendRows(html) {
             document.body.insertAdjacentHTML('beforeend', html);
+            window.scrollTo(0, document.body.scrollHeight);
+          }
+          function replaceLastRow(html) {
+            if (document.body.lastElementChild) {
+              document.body.lastElementChild.outerHTML = html;
+            } else {
+              document.body.insertAdjacentHTML('beforeend', html);
+            }
             window.scrollTo(0, document.body.scrollHeight);
           }
         </script>
