@@ -39,4 +39,35 @@ public struct BookmarkNode: Identifiable, Hashable, Sendable {
         self.label = label
         self.targetID = targetID
     }
+
+    /// Builds a slash-delimited display path for a folder by walking its
+    /// `parentID` chain — e.g. `"Research / Papers"`. Used by the
+    /// bookmark-target picker to disambiguate folders that share a label.
+    /// Root folders (or unknown ids) return just their own label. The walk is
+    /// capped so a corrupted parent cycle can't loop forever.
+    ///
+    /// - Parameters:
+    ///   - id: The folder id to resolve.
+    ///   - nodes: The full bookmark-node set to resolve parents against
+    ///     (typically `store.bookmarkNodes`).
+    /// - Returns: The joined path, or an empty string if the id isn't found or
+    ///   has no label.
+    public static func displayPath(id: String, in nodes: [BookmarkNode]) -> String {
+        var byID: [String: BookmarkNode] = [:]
+        byID.reserveCapacity(nodes.count)
+        for node in nodes { byID[node.id] = node }
+
+        var segments: [String] = []
+        var current = byID[id]
+        var depth = 0
+        let maxDepth = 64
+        while let node = current, depth < maxDepth {
+            depth += 1
+            if let label = node.label, !label.isEmpty {
+                segments.insert(label, at: 0)
+            }
+            current = node.parentID.flatMap { byID[$0] }
+        }
+        return segments.joined(separator: " / ")
+    }
 }

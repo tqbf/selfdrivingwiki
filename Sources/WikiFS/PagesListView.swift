@@ -64,6 +64,9 @@ struct PagesListCallbacks {
     var onLint: ([PageID]) -> Void
     var onRename: (WikiPageSummary) -> Void
     var onDelete: ([PageID]) -> Void
+    /// Bookmark a multi-row selection (or a single row) into a folder the user
+    /// picks in the target-picker sheet. Opens `BookmarkTargetPickerSheet`.
+    var onAddToBookmarks: ([PageID]) -> Void
 }
 
 /// Carries the right-clicked row + the effective selection (selected ∪ clicked)
@@ -305,6 +308,10 @@ extension PagesListViewController {
             menu.addItem(parent)
         }
 
+        menu.addItem(menuItem(
+            title: isBatch ? "Add \(count) Pages to Bookmarks…" : "Add to Bookmarks…",
+            systemImage: "bookmark", action: #selector(addToBookmarksAction(_:)), payload: payload))
+
         if isBatch {
             menu.addItem(menuItem(
                 title: "Share \(count) Pages",
@@ -385,6 +392,11 @@ extension PagesListViewController {
     }
     @objc private func deleteAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onDelete(p.effectiveIDs) }
+    }
+    @objc private func addToBookmarksAction(_ sender: NSMenuItem) {
+        if let p = sender.representedObject as? PagesMenuPayload {
+            callbacks?.onAddToBookmarks(p.effectiveIDs)
+        }
     }
 }
 

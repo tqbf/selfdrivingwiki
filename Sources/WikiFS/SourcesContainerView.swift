@@ -26,6 +26,8 @@ struct SourcesContainerView: View {
     @State private var showBatchReingestConfirmation = false
     @State private var pendingBatchIngestIDs: [PageID] = []
     @State private var pendingReingestNames: [String] = []
+    /// Non-nil while the bookmark-target picker is open for a source selection.
+    @State private var addToBookmarksContext: BookmarkTargetPickerContext?
 
     enum SourceFilter: String, CaseIterable {
         case all = "All"
@@ -81,6 +83,18 @@ struct SourcesContainerView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The following sources have already been ingested:\n\(pendingReingestNames.joined(separator: "\n"))\n\nRunning ingest again may create duplicate pages.")
+        }
+        .sheet(item: $addToBookmarksContext) { ctx in
+            BookmarkTargetPickerSheet(
+                store: store,
+                kind: ctx.kind,
+                ids: ctx.ids,
+                onConfirm: { parentID in
+                    for id in ctx.ids {
+                        store.addSourceRef(parentID: parentID, sourceID: id)
+                    }
+                }
+            )
         }
     }
 
@@ -206,6 +220,9 @@ struct SourcesContainerView: View {
             onRename: { source in beginRename(source) },
             onDelete: { ids in
                 for id in ids { store.deleteSource(id) }
+            },
+            onAddToBookmarks: { ids in
+                addToBookmarksContext = BookmarkTargetPickerContext(kind: .sources, ids: ids)
             })
     }
 

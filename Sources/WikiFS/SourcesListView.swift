@@ -82,6 +82,9 @@ struct SourcesListCallbacks {
     var onExtract: ([SourceExtractItem]) -> Void
     var onRename: (SourceSummary) -> Void
     var onDelete: ([PageID]) -> Void
+    /// Bookmark a multi-row selection (or a single row) into a folder the user
+    /// picks in the target-picker sheet. Opens `BookmarkTargetPickerSheet`.
+    var onAddToBookmarks: ([PageID]) -> Void
 }
 
 private struct SourcesMenuPayload {
@@ -403,6 +406,10 @@ extension SourcesListViewController {
             menu.addItem(parent)
         }
 
+        menu.addItem(item(
+            title: isMulti ? "Add \(count) Sources to Bookmarks…" : "Add to Bookmarks…",
+            systemImage: "bookmark", action: #selector(addToBookmarksAction(_:)), payload: payload))
+
         if isMulti {
             menu.addItem(item(title: "Share \(count) Sources", systemImage: "square.and.arrow.up",
                               action: #selector(shareAction(_:)), payload: payload))
@@ -515,6 +522,11 @@ extension SourcesListViewController {
     }
     @objc private func deleteAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? SourcesMenuPayload { callbacks?.onDelete(p.effective.map(\.id)) }
+    }
+    @objc private func addToBookmarksAction(_ sender: NSMenuItem) {
+        if let p = sender.representedObject as? SourcesMenuPayload {
+            callbacks?.onAddToBookmarks(p.effective.map(\.id))
+        }
     }
 }
 
