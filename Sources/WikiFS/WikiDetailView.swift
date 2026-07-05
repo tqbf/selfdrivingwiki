@@ -23,6 +23,28 @@ struct WikiDetailView: View {
     @State private var isSidebarDropTargeted = false
 
     var body: some View {
+        detailContent
+            // Accept an internal sidebar drag anywhere in the detail column —
+            // dropping a page/source/bookmark onto the welcome screen OR onto any
+            // open detail tab opens it as a tab and focuses it (openTab reuses an
+            // existing tab if one is already open). Innermost drop target, so
+            // URL/file drops still fall through to the window-level ingest
+            // destination in ContentView.
+            .dropDestination(for: SidebarDragPayload.self) { payloads, _ in
+                guard let payload = payloads.first else {
+                    DebugLog.tabs("[drop] detail action fired with NO payload")
+                    return false
+                }
+                DebugLog.tabs("[drop] detail action fired: kind=\(payload.kind) id=\(payload.id)")
+                store.openTab(payload.selection)
+                return true
+            } isTargeted: { targeted in
+                isSidebarDropTargeted = targeted
+            }
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
         switch store.selection {
         case .none:
             ScrollView {
@@ -103,18 +125,6 @@ struct WikiDetailView: View {
             .background {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color.accentColor.opacity(isSidebarDropTargeted ? 0.08 : 0))
-            }
-            // Accept an internal sidebar drag (page/source, or a bookmark
-            // resolved to its target) and open it as a tab. This is the innermost
-            // drop target, so it takes priority over the window-level URL ingest
-            // destination in ContentView for sidebar-item payloads. URL drops
-            // (external files) still fall through to ingest.
-            .dropDestination(for: SidebarDragPayload.self) { payloads, _ in
-                guard let payload = payloads.first else { return false }
-                store.openTab(payload.selection)
-                return true
-            } isTargeted: { targeted in
-                isSidebarDropTargeted = targeted
             }
         case .ask:
             QueryConversationView(
