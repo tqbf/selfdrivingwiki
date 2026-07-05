@@ -340,12 +340,49 @@ struct SourcesTests {
         #expect(result == "Plain Title")
     }
 
-    @Test func displayNameNilForMarkdownWithoutFrontMatter() {
+    @Test func displayNameFromMarkdownH1WithoutFrontMatter() {
         let md = "# Just a heading\n\nSome content."
         let result = DisplayNameResolver.resolve(
             filename: "plain.md", data: Data(md.utf8),
             mimeType: nil, zoteroItemTitle: nil)
+        #expect(result == "Just a heading")
+    }
+
+    @Test func displayNameFromMarkdownH1WithLeadingBlankLines() {
+        let md = "\n\n\n# Heading After Blanks\n\nBody."
+        let result = DisplayNameResolver.resolve(
+            filename: "plain.md", data: Data(md.utf8),
+            mimeType: nil, zoteroItemTitle: nil)
+        #expect(result == "Heading After Blanks")
+    }
+
+    @Test func displayNameFromMarkdownH1WhenFrontMatterHasNoTitle() {
+        let md = """
+        ---
+        author: Someone
+        ---
+        # Fallback Heading
+        """
+        let result = DisplayNameResolver.resolve(
+            filename: "page.md", data: Data(md.utf8),
+            mimeType: nil, zoteroItemTitle: nil)
+        #expect(result == "Fallback Heading")
+    }
+
+    @Test func displayNameNilForMarkdownH2Only() {
+        let md = "## Not An H1\n\nSome content."
+        let result = DisplayNameResolver.resolve(
+            filename: "plain.md", data: Data(md.utf8),
+            mimeType: nil, zoteroItemTitle: nil)
         #expect(result == nil)
+    }
+
+    @Test func displayNameFromMarkdownH1WithInlineFormatting() {
+        let md = "# `Code` in a Title\n\nBody."
+        let result = DisplayNameResolver.resolve(
+            filename: "plain.md", data: Data(md.utf8),
+            mimeType: nil, zoteroItemTitle: nil)
+        #expect(result == "`Code` in a Title")
     }
 
     @Test func displayNameFromMarkdownMimeTypeNotExtension() {

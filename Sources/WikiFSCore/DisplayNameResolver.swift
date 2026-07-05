@@ -8,8 +8,9 @@ import Foundation
 /// Priority order:
 /// 1. Zotero item title (when the source came from Zotero)
 /// 2. Markdown front matter `title` (for `.md` / `text/markdown` files)
-/// 3. PDF document title (via PDFKit metadata)
-/// 4. `nil` — caller uses the filename
+/// 3. Markdown leading `# ` ATX heading (when front matter is absent or has no `title`)
+/// 4. PDF document title (via PDFKit metadata)
+/// 5. `nil` — caller uses the filename
 ///
 /// The Zotero + markdown paths are pure Foundation. The PDF-title step needs
 /// PDFKit, which transitively links **AppKit** — forbidden in the read-only
@@ -50,10 +51,15 @@ public enum DisplayNameResolver {
             return zoteroTitle
         }
 
-        // 2. Markdown front matter title.
-        if isMarkdown(filename: filename, mimeType: mimeType),
-           let title = extractMarkdownTitle(from: data) {
-            return title
+        // 2. Markdown front matter title, falling back to a leading H1 heading
+        //    when front matter is absent or has no `title:` key.
+        if isMarkdown(filename: filename, mimeType: mimeType) {
+            if let title = extractMarkdownTitle(from: data) {
+                return title
+            }
+            if let heading = extractMarkdownHeading(from: data) {
+                return heading
+            }
         }
 
         // 3. PDF document title (via the injectable extractor — nil-returning
@@ -163,6 +169,42 @@ public enum DisplayNameResolver {
         }
 
         return nil
+    }
+
+    // MARK: - Markdown leading heading
+
+    /// Extract the text of a leading `# ` ATX heading — the first non-blank
+    /// line of content (after skipping past any front-matter block, whether
+    /// or not it had a `title:` key). Deeper headings (`##` and beyond) do
+    /// not count; the heading must be the first line of content.
+    static func extractMarkdownHeading(from data: Data) -> String? {
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        var lines = ArraySlice(text.components(separatedBy: .newlines))
+
+        // Skip leading blank lines.
+        while let first = lines.first, first.trimmingCharacters(in: .whitespaces).isEmpty {
+            lines = lines.dropFirst()
+        }
+
+        // Skip a front-matter block, if present, regardless of whether it
+        // contained a `title:` key.
+        if lines.first?.trimmingCharacters(in: .whitespaces) == "---" {
+            lines = lines.dropFirst()
+            while let line = lines.first, line.trimmingCharacters(in: .whitespaces) != "---" {
+                lines = lines.dropFirst()
+            }
+            if !lines.isEmpty { lines = lines.dropFirst() }  // drop closing `---`
+
+            // Skip blank lines between the closing `---` and the heading.
+            while let first = lines.first, first.trimmingCharacters(in: .whitespaces).isEmpty {
+                lines = lines.dropFirst()
+            }
+        }
+
+        guard let headingLine = lines.first else { return nil }
+        let trimmed = headingLine.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("# "), !trimmed.hasPrefix("##") else { return nil }
+        return String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces).nilIfEmpty
     }
 
     // MARK: - PDF title
