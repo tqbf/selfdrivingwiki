@@ -1122,7 +1122,7 @@ public final class WikiStoreModel {
     /// run the agent "ingestion" that reads a source and generates pages; that is
     /// a separate `AgentLauncher` phase.)
     /// - An `http(s)` URL (a link dragged from a browser) **or** a `.webloc`
-    ///   shortcut that resolves to one → `ingestURL` — the fetch + HTML→Markdown
+    ///   shortcut that resolves to one → `addURL` — the fetch + HTML→Markdown
     ///   "Add from URL" path. This avoids reading a `.webloc` plist's raw bytes,
     ///   which would capture the wrapper XML rather than the linked page.
     /// - Any other `file://` URL → `addFiles` (raw bytes, as before).
@@ -1133,7 +1133,7 @@ public final class WikiStoreModel {
     /// default performs a real network GET.
     public func addDroppedURLs(
         _ droppedURLs: [URL],
-        fetcher: any URLIngestService.URLResourceFetcher = URLSessionFetcher()
+        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
     ) async {
         var remoteInputs: [String] = []
         var localFiles: [URL] = []

@@ -4,15 +4,15 @@ import Testing
 
 /// Verifies the window-wide drop routing (#163): an `http(s)` URL dragged from
 /// a browser, and a `.webloc` shortcut that resolves to one, flow through the
-/// "Add from URL" fetch path (`ingestURL` → HTML→Markdown), while genuine local
-/// files still ingest as raw bytes (`ingest(fileURLs:)`). Uses a fake fetcher —
+/// "Add from URL" fetch path (`addURL` → HTML→Markdown), while genuine local
+/// files still ingest as raw bytes (`addFiles`). Uses a fake fetcher —
 /// no real network.
 @MainActor
 struct WikiStoreModelDropRoutingTests {
 
-    struct FakeFetcher: URLIngestService.URLResourceFetcher {
-        let response: URLIngestService.FetchResponse
-        func fetch(_ url: URL) async throws -> URLIngestService.FetchResponse { response }
+    struct FakeFetcher: URLFetchService.URLResourceFetcher {
+        let response: URLFetchService.FetchResponse
+        func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse { response }
     }
 
     private func tempStore() throws -> SQLiteWikiStore {
@@ -50,14 +50,14 @@ struct WikiStoreModelDropRoutingTests {
             in: dir, named: "Link",
             urlString: "https://example.com/article")
 
-        let fetcher = FakeFetcher(response: URLIngestService.FetchResponse(
+        let fetcher = FakeFetcher(response: URLFetchService.FetchResponse(
             data: Data("<title>Article</title><body><p>Body.</p></body>".utf8),
             contentType: "text/html",
             finalURL: URL(string: "https://example.com/article")!))
 
         await model.addDroppedURLs([webloc], fetcher: fetcher)
 
-        // Routed through ingestURL → converted markdown, NOT the raw plist bytes.
+        // Routed through addURL → converted markdown, NOT the raw plist bytes.
         #expect(model.sources.count == 1)
         #expect(model.sources.first?.filename == "Article.md")
         let id = model.sources.first!.id
@@ -69,7 +69,7 @@ struct WikiStoreModelDropRoutingTests {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
 
-        let fetcher = FakeFetcher(response: URLIngestService.FetchResponse(
+        let fetcher = FakeFetcher(response: URLFetchService.FetchResponse(
             data: Data("<title>Page</title><body><h1>Hi</h1></body>".utf8),
             contentType: "text/html",
             finalURL: URL(string: "https://example.com/page")!))
@@ -92,7 +92,7 @@ struct WikiStoreModelDropRoutingTests {
 
         let file = try writeLocalFile(in: dir, named: "notes.txt", contents: "plain text body")
 
-        await model.addDroppedURLs([file], fetcher: FakeFetcher(response: URLIngestService.FetchResponse(
+        await model.addDroppedURLs([file], fetcher: FakeFetcher(response: URLFetchService.FetchResponse(
             data: Data(), contentType: nil, finalURL: URL(string: "https://unused.example")!)))
 
         #expect(model.sources.count == 1)
@@ -114,7 +114,7 @@ struct WikiStoreModelDropRoutingTests {
             urlString: "https://example.com/web")
         let txt = try writeLocalFile(in: dir, named: "doc.txt", contents: "file bytes")
 
-        let fetcher = FakeFetcher(response: URLIngestService.FetchResponse(
+        let fetcher = FakeFetcher(response: URLFetchService.FetchResponse(
             data: Data("<title>Web</title><body><p>Web body.</p></body>".utf8),
             contentType: "text/html",
             finalURL: URL(string: "https://example.com/web")!))
@@ -139,7 +139,7 @@ struct WikiStoreModelDropRoutingTests {
             fromPropertyList: ["Foo": "bar"], format: .xml, options: 0)
         try data.write(to: badWebloc)
 
-        await model.addDroppedURLs([badWebloc], fetcher: FakeFetcher(response: URLIngestService.FetchResponse(
+        await model.addDroppedURLs([badWebloc], fetcher: FakeFetcher(response: URLFetchService.FetchResponse(
             data: Data(), contentType: nil, finalURL: URL(string: "https://unused.example")!)))
 
         #expect(model.sources.isEmpty)
