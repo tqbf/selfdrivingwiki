@@ -135,7 +135,7 @@ struct AddFromURLSheet: View {
     private var isFetching: Bool { phase == .fetching }
 
     private var canFetch: Bool {
-        !isFetching && URLIngestService.normalizeURL(urlText) != nil
+        !isFetching && URLFetchService.normalizeURL(urlText) != nil
     }
 
     // MARK: - Action
@@ -143,14 +143,14 @@ struct AddFromURLSheet: View {
     private func fetch() {
         // Read the field fresh at click time (§3.5), not a captured-early copy.
         let input = urlText
-        guard URLIngestService.normalizeURL(input) != nil else { return }
+        guard URLFetchService.normalizeURL(input) != nil else { return }
         phase = .fetching
         Task {
             do {
                 _ = try await store.addURL(input)
                 dismiss()  // success: the new file is already in store.sources
             } catch {
-                let message = (error as? URLIngestService.IngestError)?.errorDescription
+                let message = (error as? URLFetchService.FetchError)?.errorDescription
                     ?? error.localizedDescription
                 phase = .failed(message)
             }

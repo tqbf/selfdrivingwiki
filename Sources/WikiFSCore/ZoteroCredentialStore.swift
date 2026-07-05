@@ -74,7 +74,7 @@ public struct KeychainZoteroCredentialStore: ZoteroCredentialStore {
     }
 }
 
-/// In-memory test double — mirrors `URLIngestServiceTests.StoreCollector`'s
+/// In-memory test double — mirrors `URLFetchServiceTests.StoreCollector`'s
 /// `@unchecked Sendable` shape. NOT for production use.
 public final class InMemoryZoteroCredentialStore: ZoteroCredentialStore, @unchecked Sendable {
     private var key: String?

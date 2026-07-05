@@ -4,7 +4,7 @@ import Testing
 
 /// Tests for `ZoteroClient`'s request-building, decoding, and status-code mapping
 /// — driven entirely by a FAKE fetcher returning canned `(Data, Int)` pairs, no
-/// real network. Mirrors `URLIngestServiceTests`'s fake-fetcher pattern.
+/// real network. Mirrors `URLFetchServiceTests`'s fake-fetcher pattern.
 struct ZoteroClientTests {
 
     // MARK: - Test double

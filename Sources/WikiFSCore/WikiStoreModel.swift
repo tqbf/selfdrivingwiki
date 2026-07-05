@@ -1151,8 +1151,8 @@ public final class WikiStoreModel {
 
             let ext = (filename as NSString).pathExtension.lowercased()
             let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
-            let response = URLIngestService.FetchResponse(data: data, contentType: mimeType, finalURL: url)
-            let plan = URLIngestService.plan(for: response)
+            let response = URLFetchService.FetchResponse(data: data, contentType: mimeType, finalURL: url)
+            let plan = URLFetchService.plan(for: response)
 
             do {
                 let summary = try store.addSource(
@@ -1188,7 +1188,7 @@ public final class WikiStoreModel {
     /// `store.addSource` path as `addFiles`, so it appears under Sources +
     /// `sources/by-{id,name}` immediately and is pickable in Operations → Ingest.
     /// Returns the outcome on success; throws a user-readable
-    /// `URLIngestService.IngestError` on a bad URL, non-2xx, empty body, or store
+    /// `URLFetchService.FetchError` on a bad URL, non-2xx, empty body, or store
     /// failure (the caller surfaces it in the sheet). The store write hops to the
     /// main actor (this type is `@MainActor`); the fetch runs off it.
     ///
@@ -1197,29 +1197,29 @@ public final class WikiStoreModel {
     @discardableResult
     public func addURL(
         _ rawInput: String,
-        fetcher: any URLIngestService.URLResourceFetcher = URLSessionFetcher()
-    ) async throws -> URLIngestService.IngestOutcome {
+        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
+    ) async throws -> URLFetchService.FetchOutcome {
         // Validate + fetch OFF the main actor (the GET shouldn't stall the UI);
         // `fetch` is `Sendable` and the service is stateless. Then store the result
         // back HERE on the main actor, where we own `store`. Splitting fetch (async,
         // off-actor) from store (main-actor) keeps the @Sendable boundary honest —
         // no `assumeIsolated` gamble on which thread a continuation resumes.
-        guard let url = URLIngestService.normalizeURL(rawInput) else {
-            throw URLIngestService.IngestError.invalidURL(
+        guard let url = URLFetchService.normalizeURL(rawInput) else {
+            throw URLFetchService.FetchError.invalidURL(
                 rawInput.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         let response = try await fetcher.fetch(url)
-        guard !response.data.isEmpty else { throw URLIngestService.IngestError.empty }
+        guard !response.data.isEmpty else { throw URLFetchService.FetchError.empty }
 
         // Pure dispatch decides the filename + bytes; we store directly on the main
         // actor (no @Sendable store closure crossing the actor boundary).
-        let plan = URLIngestService.plan(for: response)
+        let plan = URLFetchService.plan(for: response)
         let summary = try store.addSource(
             filename: plan.filename, data: plan.data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil)
         reloadSources()
         openTab(.source(summary.id))
         onPageDidChange?()
-        return URLIngestService.IngestOutcome(
+        return URLFetchService.FetchOutcome(
             filename: plan.filename, byteSize: plan.data.count, kind: plan.kind)
     }
 
@@ -1245,11 +1245,11 @@ public final class WikiStoreModel {
     /// parent item's key + title into the row as provenance so the detail view
     /// can show "From Zotero" and link back. We already know the filename and
     /// bytes from Zotero's metadata, so this goes straight to the
-    /// `addSource(filename:data:)` seam rather than `URLIngestService`'s
+    /// `addSource(filename:data:)` seam rather than `URLFetchService`'s
     /// content-type dispatch (that dispatch exists for the unknown-bytes-from-a-
     /// URL case, which doesn't apply here). No network fallback in v1: an
     /// attachment that isn't synced to `~/Zotero/storage` yet throws
-    /// `ZoteroIngestError.unavailable` rather than downloading it.
+    /// `ZoteroFetchError.unavailable` rather than downloading it.
     public func ingestFromZotero(
         _ attachment: ZoteroAttachment,
         parentItem: ZoteroItem,
@@ -1275,7 +1275,7 @@ public final class WikiStoreModel {
                 throw error
             }
         case .unavailable(let reason):
-            throw ZoteroIngestError.unavailable(reason)
+            throw ZoteroFetchError.unavailable(reason)
         }
     }
 
@@ -1759,7 +1759,7 @@ public final class WikiStoreModel {
 /// Thrown by `WikiStoreModel.ingestFromZotero` when an attachment can't be
 /// ingested — currently just the "not synced locally yet" case, since v1 has no
 /// network-download fallback (see `ZoteroLocalStorage`).
-public enum ZoteroIngestError: LocalizedError, Equatable {
+public enum ZoteroFetchError: LocalizedError, Equatable {
     case unavailable(String)
 
     public var errorDescription: String? {
