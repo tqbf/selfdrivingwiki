@@ -73,4 +73,36 @@ struct WikiStoreModelAddURLTests {
         }
         #expect(model.sources.isEmpty)
     }
+
+    // MARK: - addURLForBookmark (issue #188)
+
+    @Test func addURLForBookmarkReturnsSourceID() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let fetcher = FakeFetcher(response: URLFetchService.FetchResponse(
+            data: Data("<title>Doc</title><body><p>Body.</p></body>".utf8),
+            contentType: "text/html",
+            finalURL: URL(string: "https://example.com/doc")!))
+
+        let sourceID = try await model.addURLForBookmark("example.com/doc", fetcher: fetcher)
+        #expect(model.sources.count == 1)
+        #expect(model.sources.first?.id == sourceID)
+        // Bookmark path does NOT open a tab.
+        #expect(model.activeTab == nil)
+    }
+
+    @Test func addURLForBookmarkDuplicateReturnsExistingID() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let body = Data("<title>Doc</title><body><p>Body.</p></body>".utf8)
+        let fetcher = FakeFetcher(response: URLFetchService.FetchResponse(
+            data: body, contentType: "text/html",
+            finalURL: URL(string: "https://example.com/doc")!))
+
+        let firstID = try await model.addURLForBookmark("example.com/doc", fetcher: fetcher)
+        let secondID = try await model.addURLForBookmark("example.com/doc", fetcher: fetcher)
+        // Byte-identical → resolves to the existing source, no second row.
+        #expect(secondID == firstID)
+        #expect(model.sources.count == 1)
+    }
 }

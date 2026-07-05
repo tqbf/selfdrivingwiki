@@ -37,6 +37,7 @@ struct WikiReaderView: View {
     /// `\.addURLHandler` environment value, feeding the http(s) "Add as Source"
     /// context-menu item through `WikiLinkMenuNSItems`.
     @Environment(\.addURLHandler) private var addURLHandler
+    @Environment(\.addBookmarkHandler) private var addBookmarkHandler
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @State private var isLoading = true
 
@@ -59,6 +60,7 @@ struct WikiReaderView: View {
                           anchorVersion: store.pendingScrollAnchorVersion,
                           isLoading: $isLoading,
                           addURLHandler: addURLHandler,
+                          addBookmarkHandler: addBookmarkHandler,
                           findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
             if isLoading {
                 ProgressView()
@@ -298,6 +300,7 @@ final class WikiReaderWebView: WKWebView {
     var fileProvider: FileProviderSpike?
     var currentSelection: WikiSelection?
     var addURLHandler: ((String) -> Void)?
+    var addBookmarkHandler: ((String) -> Void)?
     /// The href under the cursor, kept current by the injected `mouseover`
     /// listener. Read synchronously in `willOpenMenu`. `fileprivate(set)` so the
     /// in-file message-handler proxy can write it without exposing a public setter.
@@ -425,7 +428,7 @@ final class WikiReaderWebView: WKWebView {
 
         DebugLog.reader("willOpenMenu: building custom items for url=\(url.absoluteString)")
 
-        let custom = WikiLinkMenuNSItems.items(for: url, store: store, fileProvider: fileProvider, addURL: addURLHandler)
+        let custom = WikiLinkMenuNSItems.items(for: url, store: store, fileProvider: fileProvider, addURL: addURLHandler, addBookmark: addBookmarkHandler)
 
         // Insert "Open in Background" right after WebKit's "Open Link"
         // for resolved wiki links, so it's the second item in the menu.
@@ -501,7 +504,8 @@ final class WikiReaderWebView: WKWebView {
 
             let bottomActions = WikiLinkMenuBuilder.bottomActions(for: url)
             let bottomItems = WikiLinkMenuNSItems.items(
-                for: url, actions: bottomActions, store: store, fileProvider: fileProvider)
+                for: url, actions: bottomActions, store: store, fileProvider: fileProvider,
+                addURL: addURLHandler, addBookmark: addBookmarkHandler)
 
             // Insert at insertIdx in reverse so they appear in order.
             for item in bottomItems.reversed() { menu.insertItem(item, at: insertIdx) }
@@ -696,6 +700,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
     let anchorVersion: Int
     @Binding var isLoading: Bool
     let addURLHandler: ((String) -> Void)?
+    let addBookmarkHandler: ((String) -> Void)?
     let findText: String?
     let findVersion: Int
     let findOccurrence: Int
@@ -707,6 +712,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.fileProvider = fileProvider
         webView.currentSelection = currentSelection
         webView.addURLHandler = addURLHandler
+        webView.addBookmarkHandler = addBookmarkHandler
         webView.navigationDelegate = context.coordinator
         context.coordinator.webView = webView
         context.coordinator.store = store
@@ -721,6 +727,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.fileProvider = fileProvider
         webView.currentSelection = currentSelection
         webView.addURLHandler = addURLHandler
+        webView.addBookmarkHandler = addBookmarkHandler
         context.coordinator.store = store
         context.coordinator.currentSelection = currentSelection
         if context.coordinator.loadedMarkdown != markdown {

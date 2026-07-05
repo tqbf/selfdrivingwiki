@@ -2,6 +2,37 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-05 — "Add Bookmark…" in the link right-click context menu (#188)
+
+Right-clicking an external http(s) link offered "Add as Source" (fetch + ingest)
+but no way to file the link into a bookmark folder directly — you had to ingest
+it, navigate to it, and use the address-bar bookmark button. Adds an **Add
+Bookmark…** item that fetches the URL as a source (reusing the "Add as Source"
+path) then opens `BookmarkTargetPickerSheet` with the resulting source id.
+Implements [#188](https://github.com/tqbf/selfdrivingwiki/issues/188).
+
+- **`WikiStoreModel.addURLForBookmark(_:)`** (new, `WikiFSCore`) — mirrors
+  `addURL` but returns the resulting source `PageID` (so the caller can file it)
+  and does **not** open a tab. A byte-identical duplicate resolves to the
+  *existing* source's id instead of throwing, so re-bookmarking an already-
+  ingested link files the existing source.
+- **`WikiLinkAction.addBookmark`** + `WikiLinkMenuBuilder` — new pure action,
+  offered for http(s) links right after `.addAsSource`. `WikiLinkMenuNSItems`
+  maps it to an "Add Bookmark…" item driven by a new `\.addBookmarkHandler`
+  environment value (mirrors `\.addURLHandler`).
+- **`WikiReaderView`** threads `addBookmarkHandler` (env → `WikiReaderRep` →
+  the `WKWebView` subclass) into both `WikiLinkMenuNSItems.items` call sites.
+- **`ContentView`** wires `\.addBookmarkHandler`: a `Task` runs
+  `addURLForBookmark`, then sets `omniboxBookmarkContext` to present
+  `BookmarkTargetPickerSheet` (kind `.sources`, the source id). Fetch failures
+  surface via a new `WikiStoreModel.setStoreError(_:)` (StoreError's init is now
+  public). Attached on `baseContent` to keep `body` under the type-checker
+  budget.
+- **Tests** — `WikiLinkMenuBuilderTests` updated (http(s) now yields
+  `[.addAsSource, .addBookmark]`); two new `WikiStoreModelAddURLTests` cover
+  `addURLForBookmark` (returns id + no tab; duplicate returns existing id).
+  1468 tests green.
+
 ## 2026-07-05 — Stop sidebar tables stealing Cmd+A from the omnibox (#154)
 
 `PagesNSTableView` and `SourcesNSTableView` overrode `performKeyEquivalent(with:)`

@@ -61,6 +61,10 @@ public final class WikiStoreModel {
         public let id = UUID()
         public let title: String
         public let message: String
+        public init(title: String, message: String) {
+            self.title = title
+            self.message = message
+        }
     }
     public private(set) var storeError: StoreError?
 
@@ -1144,6 +1148,14 @@ public final class WikiStoreModel {
         storeError = nil
     }
 
+    /// Surface a recoverable error to the user via the shared store-error sheet
+    /// (the same one `addFiles`/`addSource` use). Lets non-store call sites
+    /// (e.g. the right-click "Add Bookmark" handler in `ContentView`) report a
+    /// failure without bypassing the model.
+    public func setStoreError(_ error: StoreError) {
+        storeError = error
+    }
+
     // MARK: - File ingestion (Phase 5)
 
     /// Route dropped URLs to the correct **add-source** path (#163). (This adds
@@ -1309,6 +1321,41 @@ public final class WikiStoreModel {
         onPageDidChange?()
         return URLFetchService.FetchOutcome(
             filename: plan.filename, byteSize: plan.data.count, kind: plan.kind)
+    }
+
+    /// Bookmark-from-link seam (issue #188): fetch a URL and land it as a source
+    /// — exactly like ``addURL(_:fetcher:)`` — but return the resulting source id
+    /// (so the caller can file it under a bookmark folder via
+    /// `BookmarkTargetPickerSheet`) instead of opening a tab. A byte-identical
+    /// duplicate resolves to the *existing* source's id rather than throwing, so
+    /// re-bookmarking a link you've already ingested just files the existing
+    /// source. Throws the same `URLFetchService.FetchError` on a bad URL, non-2xx,
+    /// empty body, or a non-duplicate store failure.
+    @discardableResult
+    public func addURLForBookmark(
+        _ rawInput: String,
+        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
+    ) async throws -> PageID {
+        guard let url = URLFetchService.normalizeURL(rawInput) else {
+            throw URLFetchService.FetchError.invalidURL(
+                rawInput.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        let response = try await fetcher.fetch(url)
+        guard !response.data.isEmpty else { throw URLFetchService.FetchError.empty }
+
+        let plan = URLFetchService.plan(for: response)
+        let sourceID: PageID
+        do {
+            let summary = try store.addSource(
+                filename: plan.filename, data: plan.data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil)
+            sourceID = summary.id
+        } catch WikiStoreError.duplicateContent(let existing) {
+            // Already ingested — file the existing source instead of duplicating.
+            sourceID = existing.id
+        }
+        reloadSources()
+        onPageDidChange?()
+        return sourceID
     }
 
     /// Synchronous ingest seam used by tests/verifiers (no drag gesture). Stores

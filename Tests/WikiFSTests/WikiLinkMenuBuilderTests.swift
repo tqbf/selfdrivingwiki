@@ -58,16 +58,16 @@ struct WikiLinkMenuBuilderTests {
     #expect(WikiLinkMenuBuilder.actions(for: url("wiki://anchor#Section")) == [])
   }
 
-  @Test func externalHttpsGetsAddAsSourceOnly() {
+  @Test func externalHttpsGetsAddAsSourceAndBookmark() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("https://github.com/foo/bar"))
-        == [.addAsSource])
+        == [.addAsSource, .addBookmark])
   }
 
-  @Test func externalHttpGetsAddAsSourceOnly() {
+  @Test func externalHttpGetsAddAsSourceAndBookmark() {
     #expect(
       WikiLinkMenuBuilder.actions(for: url("http://example.com/page"))
-        == [.addAsSource])
+        == [.addAsSource, .addBookmark])
   }
 
   @Test func externalMailtoHasNoActions() {

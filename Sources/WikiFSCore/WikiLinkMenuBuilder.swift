@@ -37,6 +37,10 @@ public enum WikiLinkAction: Sendable, Equatable {
     /// pre-filled with the URL). Offered only for http/https links; other
     /// external schemes (mailto:, etc.) can't be ingested and are skipped.
     case addAsSource
+    /// External http(s) link — fetch it as a source (reusing the "Add as Source"
+    /// path) then file the resulting source under a bookmark folder via
+    /// `BookmarkTargetPickerSheet`. Offered only for http/https links. Issue #188.
+    case addBookmark
 }
 
 public enum WikiLinkMenuBuilder {
@@ -56,7 +60,7 @@ public enum WikiLinkMenuBuilder {
         // fetched/ingested, so they get only browser + copy.
         if url.scheme != WikiLinkMarkdown.scheme {
             let scheme = url.scheme?.lowercased()
-            return (scheme == "http" || scheme == "https") ? [.addAsSource] : []
+            return (scheme == "http" || scheme == "https") ? [.addAsSource, .addBookmark] : []
         }
 
         // Wiki link: resolved page/source vs unresolved (missing).

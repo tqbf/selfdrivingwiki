@@ -20,7 +20,8 @@ enum WikiLinkMenuNSItems {
         actions: [WikiLinkAction]? = nil,
         store: WikiStoreModel,
         fileProvider: FileProviderSpike?,
-        addURL: ((String) -> Void)? = nil
+        addURL: ((String) -> Void)? = nil,
+        addBookmark: ((String) -> Void)? = nil
     ) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
         for action in actions ?? WikiLinkMenuBuilder.actions(for: url) {
@@ -32,6 +33,12 @@ enum WikiLinkMenuNSItems {
                 // itself without a File Provider spike.
                 guard let addURL else { continue }
                 items.append(.wikiItem("Add as Source") { addURL(url.absoluteString) })
+            case .addBookmark:
+                // Fetches the link as a source, then opens the bookmark-folder
+                // picker so the user can file it. Omitted when no handler is wired,
+                // mirroring `.addAsSource`. Issue #188.
+                guard let addBookmark else { continue }
+                items.append(.wikiItem("Add Bookmark…") { addBookmark(url.absoluteString) })
             case .suggest:
                 items.append(
                     similarPagesItem(
@@ -125,4 +132,11 @@ extension EnvironmentValues {
     /// threading a closure through every detail view. Mirrors how the reader
     /// already injects behavior via `\.openURL`.
     @Entry var addURLHandler: ((String) -> Void)? = nil
+
+    /// Fetches the given URL as a source and then presents the
+    /// `BookmarkTargetPickerSheet` so the user can file it under a bookmark
+    /// folder. Set once by `ContentView` (mirroring `\.addURLHandler`) and read
+    /// deep in the reader tree via `WikiLinkMenuNSItems`, so any external link
+    /// can be bookmarked from a right-click without per-view wiring. Issue #188.
+    @Entry var addBookmarkHandler: ((String) -> Void)? = nil
 }

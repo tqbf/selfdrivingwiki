@@ -183,6 +183,25 @@ struct ContentView: View {
                 .allowsHitTesting(false)
                 .ignoresSafeArea()
         }
+        // Right-click "Add Bookmark…" on an external link: fetch the URL as a
+        // source (reusing the "Add as Source" path), then present the bookmark-
+        // folder picker with the resulting source id. On a fetch failure the
+        // error surfaces in the shared store-error sheet. Attached here on
+        // `baseContent` (not `body`) so the `body` modifier chain stays under the
+        // SwiftUI type-checker's complexity budget. Issue #188.
+        .environment(\.addBookmarkHandler) { url in
+            Task { @MainActor in
+                do {
+                    let sourceID = try await store.addURLForBookmark(url)
+                    omniboxBookmarkContext = BookmarkTargetPickerContext(kind: .sources, ids: [sourceID])
+                } catch {
+                    DebugLog.store("addBookmarkHandler failed for \(url): \(error)")
+                    store.setStoreError(WikiStoreModel.StoreError(
+                        title: "Couldn't Add Bookmark",
+                        message: error.localizedDescription))
+                }
+            }
+        }
     }
 
     /// The agent is doing work — running, or in a local pdf2md extraction / an
