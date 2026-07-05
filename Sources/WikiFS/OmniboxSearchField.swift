@@ -112,19 +112,28 @@ struct OmniboxSearchField: NSViewRepresentable {
         coordinator.hidePanel()
     }
 
-    final class Coordinator: NSObject, NSSearchFieldDelegate {
+    final class Coordinator: NSObject, NSSearchFieldDelegate, @unchecked Sendable {
         var parent: OmniboxSearchField
         var lastFocusToken = 0
         private var panel: SuggestionsPanel?
 
-        // Keyboard-driven highlight. The arrow keys arrive here (the field editor
-        // has first responder, not the non-key panel), so the "which row is
-        // selected" state must live on the AppKit side and be pushed into the
-        // SwiftUI list for rendering.
+        // Keyboard-driven highlight. The arrow keys never reliably reach
+        // `control(_:textView:doCommandBy:)` when the field lives inside an
+        // `NSToolbar` item (the toolbar hosts its field editor in a responder
+        // chain isolated from the window), so arrow navigation is handled by a
+        // local `NSEvent` key monitor (`handleArrowKey`) that intercepts the
+        // event ahead of the responder chain. The "which row is selected" state
+        // still lives here and is pushed into the SwiftUI list for rendering.
+        //
+        // `@unchecked Sendable`: the coordinator is touched only on the main
+        // thread — SwiftUI's `updateNSView`/delegate callbacks and local event
+        // monitors both deliver there — so the cross-isolation capture in
+        // `handleArrowKey` is race-free.
         private var selectedIndex: Int?
         private var results: [WikiPageSummary] = []
         private var cachedResultIDs: [PageID] = []
         private weak var anchor: NSSearchField?
+        private var keyMonitor: Any?
 
         init(_ parent: OmniboxSearchField) { self.parent = parent }
 
@@ -158,34 +167,14 @@ struct OmniboxSearchField: NSViewRepresentable {
                 parent.onEscape()
                 control.window?.makeFirstResponder(nil)
                 return true
-            case #selector(NSResponder.moveDown(_:)):
-                // Only hijack the arrow keys while suggestions are showing; with
-                // no panel, let the caret move normally in the field.
-                guard !results.isEmpty else { return false }
-                moveSelection(1)
-                return true
-            case #selector(NSResponder.moveUp(_:)):
-                guard !results.isEmpty else { return false }
-                moveSelection(-1)
-                return true
+            // Arrow keys are handled by the local key monitor (`handleArrowKey`),
+            // not here: the field editor for an `NSSearchField` inside an
+            // `NSToolbar` item lives in a responder chain isolated from the
+            // window, so `moveDown:`/`moveUp:` don't reliably reach this delegate
+            // method in the running app (issue #155).
             default:
                 return false
             }
-        }
-
-        /// Advance the keyboard highlight by `delta` (clamped to the list), then
-        /// re-render the panel so the new row lights up.
-        @MainActor
-        private func moveSelection(_ delta: Int) {
-            guard !results.isEmpty else { return }
-            let count = results.count
-            switch selectedIndex {
-            case nil:
-                selectedIndex = delta > 0 ? 0 : count - 1
-            case .some(let current):
-                selectedIndex = max(0, min(count - 1, current + delta))
-            }
-            presentPanel()
         }
 
         @MainActor
@@ -212,14 +201,80 @@ struct OmniboxSearchField: NSViewRepresentable {
                 anchor?.window?.makeFirstResponder(nil)
             }
             panel.present(under: anchor)
+            installKeyMonitor()
         }
 
         @MainActor
         func hidePanel() {
+            removeKeyMonitor()
             guard let panel else { return }
             panel.parent?.removeChildWindow(panel)
             panel.orderOut(nil)
         }
+
+        // MARK: - Arrow-key monitor
+
+        /// Installs a local keyDown monitor (idempotent). Removed in
+        /// `hidePanel` so arrows fall through to the field normally when the
+        /// panel isn't showing.
+        private func installKeyMonitor() {
+            guard keyMonitor == nil else { return }
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else { return event }
+                return self.handleArrowKey(event)
+            }
+        }
+
+        private func removeKeyMonitor() {
+            guard let keyMonitor else { return }
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
+        }
+
+        /// Consumes up/down arrow keys while the suggestions panel is showing;
+        /// passes every other event through untouched. The monitor is installed
+        /// only while the panel is up (and removed in `hidePanel`, which runs
+        /// when the field blurs / results clear), so by the time we're here the
+        /// omnibox field editor holds first responder. The consume/pass-through
+        /// decision is made here from nonisolated state + the (Sendable) key
+        /// code; the `@MainActor` panel update runs synchronously via
+        /// `assumeIsolated` (local monitors deliver on the main thread).
+        private func handleArrowKey(_ event: NSEvent) -> NSEvent? {
+            guard !results.isEmpty else { return event }
+            let delta: Int
+            switch event.keyCode {
+            case 125: delta = 1   // Down arrow
+            case 126: delta = -1  // Up arrow
+            default: return event
+            }
+            MainActor.assumeIsolated { self.applyArrow(delta: delta) }
+            return nil
+        }
+
+        /// Advances the keyboard highlight and pushes the new row into the panel.
+        @MainActor
+        private func applyArrow(delta: Int) {
+            guard let next = OmniboxSelection.advance(current: selectedIndex,
+                                                     count: results.count,
+                                                     delta: delta) else { return }
+            selectedIndex = next
+            presentPanel()
+        }
+    }
+}
+
+/// Pure, testable keyboard-highlight advancement for the omnibox suggestions
+/// list. `current == nil` means nothing is selected yet; `delta > 0` moves toward
+/// the end of the list, `delta < 0` toward the start. Clamps at the ends (no
+/// wrap), matching the caret-free behavior of a browser address-bar dropdown.
+enum OmniboxSelection {
+    /// Returns the new selected index, or `nil` if there is nothing to select
+    /// (empty list). When `current == nil`, the first down selects row 0 and the
+    /// first up selects the last row.
+    static func advance(current: Int?, count: Int, delta: Int) -> Int? {
+        guard count > 0 else { return nil }
+        guard let current else { return delta > 0 ? 0 : count - 1 }
+        return max(0, min(count - 1, current + delta))
     }
 }
 
