@@ -2,40 +2,48 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-07-04 — Drag sidebar rows onto the welcome screen to open them (#133)
+## 2026-07-04 — Drag sidebar rows onto the welcome screen or any detail tab to open it (#133)
 
-The welcome/empty-state screen only accepted external **file** drops (URL
-ingest). Sidebar rows (pages, sources, bookmarks) weren't draggable at all.
-Now any of them can be dragged onto the welcome screen to open its detail view
-directly, instead of requiring a sidebar click. Implements
-[#133](https://github.com/tqbf/selfdrivingwiki/issues/133).
+Sidebar rows (pages, sources, bookmarks) weren't draggable. Now any of them can
+be dragged onto the welcome screen **or onto any open detail tab** (including
+the rendered markdown body) to open its target as a new focused tab.
+Implements [#133](https://github.com/tqbf/selfdrivingwiki/issues/133).
 
 - **`SidebarDragPayload`** (`WikiFSCore`, new) — a `Codable` value carrying a
   `kind` (page/source) + id, with a computed `selection: WikiSelection`. Kept in
   the model layer (no `Transferable`) so it's unit-testable; the app layer adds
-  the `Transferable` conformance + a programmatic `UTType.wikiSidebarItem`
-  (`exportedAs:conformingTo: .data`). No Info.plist UTType registration — the
-  payload only round-trips within the process, matched by identifier string.
+  `Transferable` + a `UTType.wikiSidebarItem` declared in the app's Info.plist
+  (`UTExportedTypeDeclarations`, conforms to `public.item`). The Info.plist
+  declaration is mandatory — without it, AppKit can't match the drag to the drop
+  target and the gesture silently no-ops.
 - **Drag sources** — `PagesListView`/`SourcesListView` gain
-  `pasteboardWriterForRow` (returning a custom `NSPasteboardWriting` with the
-  payload JSON) plus `.copy` local drag-source mask.
-  `BookmarksOutlineView.pasteboardWriterForItem` now dual-registers: the
-  `.string` node id (so intra-tree **reorder** keeps working — `acceptDrop`
-  reads `pb.string(forType: .string)`) AND the resolved-target payload
-  (`pageRef`→page, `sourceRef`→source). Folders carry the node id only.
-  Bookmarks resolve to what they point at at drag-start, so the drop target
-  doesn't need to know bookmarks exist.
-- **Drop target** — `WikiDetailView`'s welcome (`.none`) case gets
-  `.dropDestination(for: SidebarDragPayload.self)` that calls
-  `store.openTab(payload.selection)`. It's the innermost drop target, so it
-  takes priority over the window-level URL-ingest destination for sidebar
-  payloads; URL drops still fall through to ingest. A subtle accent tint
-  highlights the drop zone while targeted.
-- **Tests** — `SidebarDragPayloadTests` (Codable round-trip + selection
-  mapping) and `SidebarDragPasteboardBridgeTests` (pasteboard-level bridge:
-  writer → `NSPasteboard` → decodable JSON, including the bookmark
-  dual-representation and folder node-id-only cases). 1378-test suite green
-  except for one pre-existing flake in unrelated pdf-pipe code.
+  `pasteboardWriterForRow` (a custom `NSPasteboardWriting` carrying the payload
+  JSON) + `.copy` local drag-source mask. `BookmarksOutlineView` dual-registers
+  the `.string` node id (intra-tree **reorder** still works) AND the
+  resolved-target payload (`pageRef`→page, `sourceRef`→source); folders carry
+  the node id only. Bookmarks resolve at drag-start, so the drop target is
+  bookmark-agnostic.
+- **Drop target — SwiftUI chrome** — `WikiDetailView` wraps its whole
+  `detailContent` in `.dropDestination(for: SidebarDragPayload.self)` →
+  `store.openTab(payload.selection)`. Covers the welcome screen, header, and
+  banners. Innermost target, so URL/file drops still fall through to the
+  window-level ingest destination.
+- **Drop target — WKWebView body** — the rendered markdown is a `WKWebView`, and
+  SwiftUI's `.dropDestination` does NOT receive drags over an embedded
+  `NSViewRepresentable`'s NSView (AppKit delivers them into the web view's own
+  subtree). So `WikiReaderWebView` is itself the `NSDraggingDestination` for its
+  body: it overrides `registerForDraggedTypes` to register ONLY the sidebar-item
+  type, plus `draggingEntered`/`draggingUpdated`/`performDragOperation` to decode
+  the payload and call `store.openTab`. WebKit's internal subviews still register
+  their own broad types for web-content drag/drop, but a sidebar payload doesn't
+  conform to those, so AppKit walks up to the WKWebView subclass. This is the
+  fix that made drops work on the markdown body, not just the top portion.
+- **Tests** — `SidebarDragPayloadTests` (Codable round-trip + selection mapping)
+  and `SidebarDragPasteboardBridgeTests` (pasteboard-level bridge: writer →
+  `NSPasteboard` → decodable JSON, including the bookmark dual-representation and
+  folder node-id-only cases). Full 1378-test suite green. Live DnD verified via
+  `os_log` traces: drops land on the welcome screen, the SwiftUI chrome, and the
+  WKWebView markdown body.
 
 ## 2026-07-04 — Sources default-open opens an in-app tab; "Open With" submenu for external editors (#139)
 

@@ -188,7 +188,9 @@ extension PagesListViewController: NSTableViewDataSource {
 
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
         guard row >= 0, row < items.count else { return nil }
-        return SidebarDragPayload(kind: .page, id: items[row].id.rawValue).makePasteboardWriter()
+        let id = items[row].id.rawValue
+        DebugLog.tabs("[drag] page pasteboardWriterForRow row=\(row) id=\(id)")
+        return SidebarDragPayload(kind: .page, id: id).makePasteboardWriter()
     }
 }
 

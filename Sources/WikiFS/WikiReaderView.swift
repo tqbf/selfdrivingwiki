@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
 import WikiFSCore
 
@@ -322,6 +323,40 @@ final class WikiReaderWebView: WKWebView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// Handle sidebar drag-and-drop directly on the WKWebView. SwiftUI's
+    /// `.dropDestination` overlay covers the SwiftUI chrome (header, banners) and
+    /// the welcome screen, but it does NOT cover the AppKit WKWebView's own frame
+    /// — so drops on the rendered markdown body never reach the SwiftUI target
+    /// (#133). The WKWebView subclass is the drop target for its own body:
+    /// register ONLY the sidebar-item type, and AppKit routes a sidebar drag over
+    /// the body here (WebKit's internal subviews still register their own broad
+    /// types for web-content drag/drop, but a sidebar payload doesn't conform to
+    /// those, so they don't match and the drag bubbles up to this view).
+    override func registerForDraggedTypes(_ newTypes: [NSPasteboard.PasteboardType]) {
+        super.registerForDraggedTypes([NSPasteboard.PasteboardType(UTType.wikiSidebarItem.identifier)])
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        sidebarPayload(from: sender.draggingPasteboard) == nil ? [] : .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        sidebarPayload(from: sender.draggingPasteboard) == nil ? [] : .copy
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let payload = sidebarPayload(from: sender.draggingPasteboard) else { return false }
+        DebugLog.tabs("[drop] wikiReader body action fired: kind=\(payload.kind) id=\(payload.id)")
+        store?.openTab(payload.selection)
+        return true
+    }
+
+    private func sidebarPayload(from pb: NSPasteboard) -> SidebarDragPayload? {
+        let type = NSPasteboard.PasteboardType(UTType.wikiSidebarItem.identifier)
+        guard let data = pb.data(forType: type) else { return nil }
+        return try? JSONDecoder().decode(SidebarDragPayload.self, from: data)
+    }
 
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
         super.willOpenMenu(menu, with: event)

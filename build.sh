@@ -194,6 +194,33 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
 	<!-- Per-developer ids read at runtime by WikiIdentifiers (Bundle.main path). -->
 	<key>WIKIAppGroupID</key><string>${APP_GROUP}</string>
 	<key>WIKIFileProviderID</key><string>${EXT_BUNDLE_ID}</string>
+	<!-- Internal pasteboard type for sidebar drag-and-drop onto the welcome
+	     screen / detail view (#133). Conforms to public.item (NOT public.data):
+	     WKWebView and its internal subviews auto-register broad types like
+	     public.data and re-register them after load, which intercepts any
+	     payload that conforms to public.data before SwiftUI's dropDestination
+	     sees it. A sibling under public.item doesn't conform to those broad
+	     types, so sidebar drags bubble past the WKWebView to the drop target. -->
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.selfdrivingwiki.sidebar-item</string>
+			<key>UTTypeDescription</key>
+			<string>Self Driving Wiki sidebar item</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.item</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>sdw-sidebar-item</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 </dict>
 </plist>
 PLIST
