@@ -10,7 +10,7 @@ struct AgentTranscriptSidebar: View {
     /// Forwards wiki-link clicks in the transcript to the detail column. Built
     /// where the store lives (the owning `ContentView` / `LintView`) and
     /// forwarded unchanged to the activity view.
-    var onWikiLink: ((URL) -> Void)? = nil
+    var onWikiLink: ((URL, Bool) -> Void)? = nil
     @State private var showsInternals = false
     @State private var width: CGFloat = AgentTranscriptMetrics.defaultWidth
     @State private var widthDragOrigin: CGFloat = AgentTranscriptMetrics.defaultWidth

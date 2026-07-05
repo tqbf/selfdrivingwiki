@@ -279,18 +279,22 @@ public final class WikiStoreModel {
 
     /// Navigate to the page with `title` from a clicked `[[wiki-link]]` in the
     /// preview. Resolves title → id (lowest-ULID on a duplicate-title collision,
-    /// matching the link graph) and opens its tab — REUSING an already-open tab
-    /// for that page rather than spawning a duplicate. Records the jump in
-    /// navigation history first (so back/forward works), then routes through
-    /// `openTab`, whose `setActiveTab` flushes the outgoing page's pending edits
-    /// before loading the target (§3.5). Returns whether navigation happened, so
-    /// the click handler can report `.handled`. A no-op (`false`) if the title has
-    /// no page.
+    /// matching the link graph) and records the jump in navigation history first
+    /// (so back/forward works). Returns whether navigation happened, so the click
+    /// handler can report `.handled`. A no-op (`false`) if the title has no page.
+    ///
+    /// Navigation target depends on the click's modifier (browser convention):
+    /// - **Plain click** (`openInNewTab: false`, the default) → navigate the
+    ///   active tab in place (`navigateCurrentTab`): focus an already-open tab
+    ///   for the target if one exists, otherwise replace the active tab's
+    ///   selection. Never spawns a duplicate tab.
+    /// - **⌘-click** (`openInNewTab: true`) → `openTab`, which focuses an
+    ///   existing tab for the target or appends a new one (current behavior).
     ///
     /// - Parameter anchor: optional `#fragment` from a `[[Page#Section]]` link;
     ///   the destination `WikiReaderView` scrolls to it after load.
     @discardableResult
-    public func selectPage(byTitle title: String, anchor: String? = nil) -> Bool {
+    public func selectPage(byTitle title: String, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
         guard let id = (try? store.resolveTitleToID(title)) ?? nil else { return false }
         let target = WikiSelection.page(id)
         // Stash the anchor so the destination WikiReaderView can scroll to it
@@ -299,9 +303,14 @@ public final class WikiStoreModel {
         pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
         pendingScrollAnchorVersion += 1
         // Record history while `loadedSelection` still points at the outgoing
-        // page (openTab/setActiveTab don't record history themselves).
+        // page (openTab/setActiveTab/navigateCurrentTab don't record history
+        // themselves).
         recordHistoryTransition(from: loadedSelection, to: target)
-        openTab(target)
+        if openInNewTab {
+            openTab(target)
+        } else {
+            navigateCurrentTab(to: target)
+        }
         return true
     }
 
@@ -346,19 +355,25 @@ public final class WikiStoreModel {
 
     /// Navigate to the source with `displayName` from a clicked
     /// `[[source:display-name]]` link in the preview. Resolves display name → id
-    /// (most-recently-updated on collision), records navigation history, and opens
-    /// the source's tab. Returns whether navigation happened.
+    /// (most-recently-updated on collision) and records navigation history. A
+    /// plain click (`openInNewTab: false`) navigates the active tab in place
+    /// (`navigateCurrentTab`); a ⌘-click (`openInNewTab: true`) opens a new tab
+    /// via `openTab`. Returns whether navigation happened.
     ///
     /// - Parameter anchor: optional `#fragment` from a `[[source:Name#"quote"]]`
     ///   link; the destination `WikiReaderView` scrolls to it after load.
     @discardableResult
-    public func selectSource(byDisplayName displayName: String, anchor: String? = nil) -> Bool {
+    public func selectSource(byDisplayName displayName: String, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
         guard let id = (try? store.resolveSourceByName(displayName)) ?? nil else { return false }
         let target = WikiSelection.source(id)
         pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
         pendingScrollAnchorVersion += 1
         recordHistoryTransition(from: loadedSelection, to: target)
-        openTab(target)
+        if openInNewTab {
+            openTab(target)
+        } else {
+            navigateCurrentTab(to: target)
+        }
         return true
     }
 
@@ -428,6 +443,41 @@ public final class WikiStoreModel {
               let newValue else { return }
         tabs[i].selection = newValue
         tabs[i].title = tabTitle(for: newValue)
+    }
+
+    /// Navigate the **active tab in place** to `target` — the plain-click
+    /// (`[[wiki-link]]`) path, matching the macOS browser convention where a
+    /// plain click navigates the current tab rather than spawning a new one.
+    ///
+    /// Resolution order (history is recorded by the caller):
+    /// 1. A tab for `target` is already open → focus it (reuse, never duplicate),
+    ///    via `setActiveTab` (same as `openTab`'s reuse branch).
+    /// 2. No active tab (empty state) → fall back to `openTab` so the first tab
+    ///    is created and focused.
+    /// 3. Otherwise → mutate the active tab's selection/title in place: flush the
+    ///    outgoing selection's pending edits (so nothing in-flight is lost — the
+    ///    reader is read-only in practice, but this keeps the edit path safe),
+    ///    swap the tab's selection, mirror it into `selection`, and reload drafts.
+    ///    The `isApplyingTabSelection` guard mirrors `setActiveTab` so the view's
+    ///    `onChange(of: selection)` bridge no-ops mid-swap.
+    private func navigateCurrentTab(to target: WikiSelection) {
+        if let existing = tabs.first(where: { $0.selection == target }) {
+            setActiveTab(existing.id)
+            return
+        }
+        guard let activeID = activeTabID,
+              let i = tabs.firstIndex(where: { $0.id == activeID }) else {
+            openTab(target)
+            return
+        }
+        flushPendingSaves()
+        isApplyingTabSelection = true
+        tabs[i].selection = target
+        tabs[i].title = tabTitle(for: target)
+        selection = target
+        loadDrafts(for: target)
+        isApplyingTabSelection = false
+        DebugLog.store("[tabs] navigateCurrentTab: in-place to \(target) (id=\(activeID)), \(tabs.count) tabs total")
     }
 
     /// Open the tab for `selection`: if one is already open, focus it (reuse,
