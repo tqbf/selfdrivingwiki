@@ -2,6 +2,41 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-05 — Fix beachball when pasting large text into the Ask/Edit composer
+
+Pasting ~150 lines of markdown into the chat composer froze the app: the
+composer was `TextField(axis: .vertical).lineLimit(1...6)`, which on macOS is
+NSTextField/field-editor backed — every keystroke, cursor move, and selection
+re-lays-out the entire string, and the 1–6 line clamp re-measures the full
+ideal height every pass. (Everywhere else the app edits large text it already
+uses `TextEditor`/NSTextView; only the composer used the TextField shortcut.)
+
+- **`ComposerTextView`** (`WikiFS/ComposerTextView.swift`, new) — an
+  `NSViewRepresentable` NSScrollView+NSTextView chat composer (the standard
+  Slack/Messages pattern): incremental TextKit layout, auto-grows 1→6 lines
+  then scrolls internally. Plain Return sends; Shift/Option+Return insert a
+  newline; Cmd+Return deliberately falls through to the send button's key
+  equivalent so it can't double-send. Smart quote/dash substitution is OFF
+  (users paste markdown), spellcheck stays on. `lineFragmentPadding = 0` and a
+  matching placeholder inset keep the SwiftUI placeholder overlay exactly on
+  the first line of typed text. Height is written back through a
+  `measuredHeight` binding (deferred to the next main-actor turn — never
+  synchronously from `updateNSView`), and a `frameDidChangeNotification`
+  observer re-measures on width changes so window resizes can't leave the
+  wrap-dependent height stale. Structured like `OmniboxSearchField` (the
+  repo's existing representable precedent), with the height clamp and
+  key-action decision as pure static funcs.
+- **`QueryConversationView.composer`** — swapped the TextField for
+  `ComposerTextView` + `@State composerHeight`; placeholder is a SwiftUI
+  overlay (NSTextView has no built-in placeholder); capsule visuals unchanged.
+- **Tests** — `ComposerTextViewTests` (13 cases): clamp matrix, key-action
+  matrix (incl. the Cmd+Return no-double-send pin), and window-hosted
+  integration (150-line paste clamps to 6 lines, edits propagate to the
+  binding, isEditable toggle, width-change observer re-fires the measurement).
+- **Not yet verified live** — needs a human paste-through: 150 lines into the
+  Ask composer should be instant, selectable, cursor-movable; Return sends,
+  Shift+Return newlines, Cmd+Return sends exactly once.
+
 ## 2026-07-05 — "New Conversation" button on the Ask/Edit chat page
 
 The Ask/Edit page keeps one long-lived interactive `claude` session open, but

@@ -21,6 +21,11 @@ struct QueryConversationView: View {
     let fileProvider: FileProviderSpike
     @State private var draftMessage = ""
     @State private var showsInternals = false
+    /// Backs `ComposerTextView`'s `.frame(height:)`; the view writes the
+    /// clamped 1–6 line measurement into this on every layout pass. Seeded to
+    /// the one-line height so the composer doesn't visibly jump on first
+    /// appearance before the first layout pass runs.
+    @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: QueryConversationMetrics.composerFont)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -222,14 +227,32 @@ struct QueryConversationView: View {
 
     private func composer(maxWidth: CGFloat) -> some View {
         HStack(alignment: .bottom, spacing: 10) {
-            TextField("Ask a question, or ask the Agent to update the wiki…", text: $draftMessage, axis: .vertical)
-                .font(.body)
-                .textFieldStyle(.plain)
-                .lineLimit(1...6)
+            ComposerTextView(
+                text: $draftMessage,
+                isEditable: canType,
+                font: QueryConversationMetrics.composerFont,
+                onSubmit: sendMessage,
+                measuredHeight: $composerHeight
+            )
+                .frame(height: composerHeight)
                 .padding(.leading, QueryConversationMetrics.composerHorizontalPadding)
                 .padding(.vertical, QueryConversationMetrics.composerVerticalPadding)
-                .onSubmit(sendMessage)
-                .disabled(!canType)
+                .overlay(alignment: .topLeading) {
+                    if draftMessage.isEmpty {
+                        Text("Ask a question, or ask the Agent to update the wiki…")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .allowsHitTesting(false)
+                            .padding(.leading, QueryConversationMetrics.composerHorizontalPadding)
+                            // The text view's own `textContainerInset` adds
+                            // `ComposerTextView.Metrics.verticalInsetPerSide`
+                            // above its first line (on top of this view's
+                            // outer padding), so the placeholder needs that
+                            // same extra offset to land on the first line
+                            // instead of floating above it.
+                            .padding(.vertical, QueryConversationMetrics.composerVerticalPadding + ComposerTextView.Metrics.verticalInsetPerSide)
+                    }
+                }
 
             Button(action: sendMessage) {
                 Image(systemName: sendButtonIcon)
@@ -342,5 +365,9 @@ private enum QueryConversationMetrics {
     static let composerHorizontalPadding: CGFloat = 22
     static let composerVerticalPadding: CGFloat = 16
     static let composerButtonInset: CGFloat = 8
+    /// Font for `ComposerTextView` — matches the previous `TextField`'s
+    /// `.font(.body)`, expressed as an `NSFont` since the composer is
+    /// AppKit-backed.
+    static var composerFont: NSFont { .preferredFont(forTextStyle: .body) }
     static let sendButtonSize: CGFloat = 42
 }
