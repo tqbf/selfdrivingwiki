@@ -37,3 +37,19 @@ public struct SidebarDragPayload: Codable, Sendable, Hashable {
         }
     }
 }
+
+/// The full set of targets a single dragged sidebar row resolves to. Most rows
+/// (a page/source, or a bookmark pointing at one) resolve to exactly one
+/// target; a bookmark folder resolves to every page/source reachable
+/// underneath it, so dropping a folder opens all of its contents as tabs.
+///
+/// Every dragged row — leaf or folder — is encoded as one of these (a
+/// single-element list for leaves) so the drop targets only need to handle one
+/// shape.
+public struct SidebarDragPayloadList: Codable, Sendable, Hashable {
+    public let items: [SidebarDragPayload]
+
+    public init(_ items: [SidebarDragPayload]) {
+        self.items = items
+    }
+}

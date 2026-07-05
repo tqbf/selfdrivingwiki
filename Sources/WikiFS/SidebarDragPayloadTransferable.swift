@@ -3,23 +3,26 @@ import CoreTransferable
 import UniformTypeIdentifiers
 import WikiFSCore
 
-/// App-layer `Transferable` conformance for `SidebarDragPayload`, plus the
+/// App-layer `Transferable` conformance for `SidebarDragPayloadList`, plus the
 /// pasteboard wiring. Kept out of `WikiFSCore` so the model layer stays
 /// UI-framework-agnostic; the AppKit drag sources and the SwiftUI drop target
 /// (both in this target) share these definitions.
-extension SidebarDragPayload: Transferable {
+extension SidebarDragPayloadList: Transferable {
     public static var transferRepresentation: some TransferRepresentation {
         CodableRepresentation(contentType: .wikiSidebarItem)
     }
+}
 
-    /// An `NSPasteboardWriting` carrying this payload as JSON, suitable for
-    /// returning from an `NSTableView`/`NSOutlineView` pasteboard-writer
-    /// callback. (`NSItemProvider` is not `NSPasteboardWriting` on this SDK, so
-    /// the AppKit drag source needs a real writer object; the SwiftUI
-    /// `.dropDestination(for: SidebarDragPayload.self)` reads the JSON back via
-    /// the matching `CodableRepresentation`.)
+extension SidebarDragPayload {
+    /// An `NSPasteboardWriting` carrying this single payload (wrapped in a
+    /// one-element `SidebarDragPayloadList`) as JSON, suitable for returning
+    /// from an `NSTableView` pasteboard-writer callback. (`NSItemProvider` is
+    /// not `NSPasteboardWriting` on this SDK, so the AppKit drag source needs a
+    /// real writer object; the SwiftUI
+    /// `.dropDestination(for: SidebarDragPayloadList.self)` reads the JSON back
+    /// via the matching `CodableRepresentation`.)
     func makePasteboardWriter() -> NSPasteboardWriting {
-        SidebarDragPasteboardItem(payload: self)
+        SidebarDragPasteboardItem(payloads: [self])
     }
 }
 
@@ -43,17 +46,18 @@ extension UTType {
     )
 }
 
-/// `NSPasteboardWriting` for a sidebar drag. Carries the resolved-target payload
-/// (page/source) and, for bookmark rows, the node id as `.string` so the existing
-/// intra-tree reorder (`BookmarksOutlineView.acceptDrop` reads
+/// `NSPasteboardWriting` for a sidebar drag. Carries the resolved-target
+/// payloads (page/source — one per leaf, all descendants for a folder) and,
+/// for bookmark rows, the node id as `.string` so the existing intra-tree
+/// reorder (`BookmarksOutlineView.acceptDrop` reads
 /// `pb.string(forType: .string)`) keeps working alongside the welcome-screen
-/// drop. Bookmark folders pass a nil payload (no target to open).
+/// drop. An empty bookmark folder carries no payloads (nothing to open).
 final class SidebarDragPasteboardItem: NSObject {
-    let payload: SidebarDragPayload?
+    let payloads: [SidebarDragPayload]
     let bookmarkNodeID: String?
 
-    init(payload: SidebarDragPayload? = nil, bookmarkNodeID: String? = nil) {
-        self.payload = payload
+    init(payloads: [SidebarDragPayload] = [], bookmarkNodeID: String? = nil) {
+        self.payloads = payloads
         self.bookmarkNodeID = bookmarkNodeID
     }
 
@@ -66,14 +70,14 @@ extension SidebarDragPasteboardItem: NSPasteboardWriting {
     func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
         var types: [NSPasteboard.PasteboardType] = []
         if bookmarkNodeID != nil { types.append(.string) }
-        if payload != nil { types.append(sidebarType) }
+        if !payloads.isEmpty { types.append(sidebarType) }
         return types
     }
 
     func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
         if type == .string { return bookmarkNodeID }
-        if type == sidebarType, let payload,
-           let data = try? JSONEncoder().encode(payload) {
+        if type == sidebarType, !payloads.isEmpty,
+           let data = try? JSONEncoder().encode(SidebarDragPayloadList(payloads)) {
             return data as NSData
         }
         return nil

@@ -30,13 +30,16 @@ struct WikiDetailView: View {
             // existing tab if one is already open). Innermost drop target, so
             // URL/file drops still fall through to the window-level ingest
             // destination in ContentView.
-            .dropDestination(for: SidebarDragPayload.self) { payloads, _ in
-                guard let payload = payloads.first else {
+            .dropDestination(for: SidebarDragPayloadList.self) { lists, _ in
+                let payloads = lists.flatMap(\.items)
+                guard !payloads.isEmpty else {
                     DebugLog.tabs("[drop] detail action fired with NO payload")
                     return false
                 }
-                DebugLog.tabs("[drop] detail action fired: kind=\(payload.kind) id=\(payload.id)")
-                store.openTab(payload.selection)
+                for payload in payloads {
+                    DebugLog.tabs("[drop] detail action fired: kind=\(payload.kind) id=\(payload.id)")
+                    store.openTab(payload.selection)
+                }
                 return true
             } isTargeted: { targeted in
                 isSidebarDropTargeted = targeted

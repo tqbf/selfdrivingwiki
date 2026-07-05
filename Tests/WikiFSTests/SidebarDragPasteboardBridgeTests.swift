@@ -29,8 +29,8 @@ struct SidebarDragPasteboardBridgeTests {
         let pb = write(payload.makePasteboardWriter())
 
         let data = try #require(pb.data(forType: sidebarType))
-        let decoded = try JSONDecoder().decode(SidebarDragPayload.self, from: data)
-        #expect(decoded == payload)
+        let decoded = try JSONDecoder().decode(SidebarDragPayloadList.self, from: data)
+        #expect(decoded.items == [payload])
         // A page row must not advertise a reorder id (no bookmark node).
         #expect(pb.string(forType: .string) == nil)
     }
@@ -40,43 +40,56 @@ struct SidebarDragPasteboardBridgeTests {
         let pb = write(payload.makePasteboardWriter())
 
         let decoded = try JSONDecoder().decode(
-            SidebarDragPayload.self,
+            SidebarDragPayloadList.self,
             from: try #require(pb.data(forType: sidebarType))
         )
-        #expect(decoded == payload)
+        #expect(decoded.items == [payload])
     }
 
     @Test func bookmarkRefCarriesBothNodeIDAndPayload() throws {
         let payload = SidebarDragPayload(kind: .page, id: "page-7")
-        let pb = write(SidebarDragPasteboardItem(payload: payload, bookmarkNodeID: "node-42"))
+        let pb = write(SidebarDragPasteboardItem(payloads: [payload], bookmarkNodeID: "node-42"))
 
         // Intra-tree reorder reads this (BookmarksOutlineView.acceptDrop).
         #expect(pb.string(forType: .string) == "node-42")
         // The welcome-screen drop reads this.
         let decoded = try JSONDecoder().decode(
-            SidebarDragPayload.self,
+            SidebarDragPayloadList.self,
             from: try #require(pb.data(forType: sidebarType))
         )
-        #expect(decoded == payload)
+        #expect(decoded.items == [payload])
     }
 
     @Test func bookmarkFolderCarriesNodeIDOnly() {
-        // A folder has no target to open, so it carries only the reorder id.
-        let pb = write(SidebarDragPasteboardItem(payload: nil, bookmarkNodeID: "folder-1"))
+        // An empty folder has nothing to open, so it carries only the reorder id.
+        let pb = write(SidebarDragPasteboardItem(payloads: [], bookmarkNodeID: "folder-1"))
 
         #expect(pb.string(forType: .string) == "folder-1")
         #expect(pb.data(forType: sidebarType) == nil)
     }
 
+    @Test func bookmarkFolderCarriesAllDescendantPayloads() throws {
+        // A non-empty folder carries every descendant's resolved target.
+        let page = SidebarDragPayload(kind: .page, id: "page-in-folder")
+        let source = SidebarDragPayload(kind: .source, id: "src-in-folder")
+        let pb = write(SidebarDragPasteboardItem(payloads: [page, source], bookmarkNodeID: "folder-2"))
+
+        let decoded = try JSONDecoder().decode(
+            SidebarDragPayloadList.self,
+            from: try #require(pb.data(forType: sidebarType))
+        )
+        #expect(decoded.items == [page, source])
+    }
+
     @Test func bookmarkRefResolvesToSourceTarget() throws {
         // A sourceRef bookmark must resolve to kind=.source in the payload.
         let payload = SidebarDragPayload(kind: .source, id: "src-3")
-        let pb = write(SidebarDragPasteboardItem(payload: payload, bookmarkNodeID: "node-99"))
+        let pb = write(SidebarDragPasteboardItem(payloads: [payload], bookmarkNodeID: "node-99"))
 
         let decoded = try JSONDecoder().decode(
-            SidebarDragPayload.self,
+            SidebarDragPayloadList.self,
             from: try #require(pb.data(forType: sidebarType))
         )
-        #expect(decoded.kind == .source)
+        #expect(decoded.items.first?.kind == .source)
     }
 }

@@ -122,7 +122,7 @@ final class BookmarksOutlineViewController: NSViewController {
         outlineView.doubleAction = #selector(onDoubleClick)
         outlineView.target = self
         outlineView.allowsEmptySelection = true
-        outlineView.allowsMultipleSelection = false
+        outlineView.allowsMultipleSelection = true
         outlineView.backgroundColor = .clear
 
         let column = NSTableColumn(identifier: .init("bookmark"))
@@ -268,20 +268,42 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
     // Drag and drop.
     // The writer carries TWO representations so one drag can serve two drop
     // targets: the `.string` node id powers intra-tree reorder (`acceptDrop`
-    // reads `pb.string(forType: .string)`), and the resolved-target payload lets
-    // the row be dropped onto the welcome screen to open whatever the bookmark
-    // points at (issue #133). Folders have no target, so they carry only the
-    // reorder id.
+    // reads `pb.string(forType: .string)`), and the resolved-target payload list
+    // lets the row be dropped onto the welcome screen to open whatever the
+    // bookmark points at (issue #133). A folder's payload list is every
+    // page/source reachable underneath it, so dropping a folder opens its full
+    // contents as tabs (issue #150).
     func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
         guard let node = item as? BookmarkNode else { return nil }
-        var payload: SidebarDragPayload?
-        if let targetID = node.targetID,
-           node.kind == .pageRef || node.kind == .sourceRef {
-            let kind: SidebarDragPayload.Kind = (node.kind == .pageRef) ? .page : .source
-            payload = SidebarDragPayload(kind: kind, id: targetID.rawValue)
+        let payloads: [SidebarDragPayload]
+        switch node.kind {
+        case .pageRef, .sourceRef:
+            if let targetID = node.targetID {
+                let kind: SidebarDragPayload.Kind = (node.kind == .pageRef) ? .page : .source
+                payloads = [SidebarDragPayload(kind: kind, id: targetID.rawValue)]
+            } else {
+                payloads = []
+            }
+        case .folder:
+            payloads = leafPayloads(under: node.id)
         }
-        DebugLog.tabs("[drag] bookmark pasteboardWriterForItem node=\(node.id) kind=\(node.kind) hasPayload=\(payload != nil)")
-        return SidebarDragPasteboardItem(payload: payload, bookmarkNodeID: node.id)
+        DebugLog.tabs("[drag] bookmark pasteboardWriterForItem node=\(node.id) kind=\(node.kind) payloadCount=\(payloads.count)")
+        return SidebarDragPasteboardItem(payloads: payloads, bookmarkNodeID: node.id)
+    }
+
+    /// Recursively collects the resolved page/source target for every leaf
+    /// reachable under `folderID`, walking into nested subfolders too.
+    private func leafPayloads(under folderID: String) -> [SidebarDragPayload] {
+        children(of: folderID).flatMap { child -> [SidebarDragPayload] in
+            switch child.kind {
+            case .pageRef, .sourceRef:
+                guard let targetID = child.targetID else { return [] }
+                let kind: SidebarDragPayload.Kind = (child.kind == .pageRef) ? .page : .source
+                return [SidebarDragPayload(kind: kind, id: targetID.rawValue)]
+            case .folder:
+                return leafPayloads(under: child.id)
+            }
+        }
     }
 
     func outlineView(_ outlineView: NSOutlineView,
@@ -310,23 +332,33 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
                      childIndex index: Int) -> Bool {
         DebugLog.tabs("BookmarksOutlineView.acceptDrop: item=\((item as? BookmarkNode)?.id ?? "root") index=\(index)")
         guard let store else { return false }
-        let pb = info.draggingPasteboard
-        guard let draggedID = pb.string(forType: .string) else { return false }
+        // Multi-selection is allowed, so a reorder drag can carry more than one
+        // node id — one pasteboard item per dragged row.
+        let draggedIDs = (info.draggingPasteboard.pasteboardItems ?? [])
+            .compactMap { $0.string(forType: .string) }
+        guard !draggedIDs.isEmpty else { return false }
+
+        func moveAll(toParentID parentID: String?, startingAt position: Int) -> Bool {
+            var position = position
+            var succeeded = true
+            for id in draggedIDs {
+                succeeded = store.moveBookmarkNode(id: id, toParentID: parentID, position: position) && succeeded
+                position += 1
+            }
+            return succeeded
+        }
 
         if let folder = item as? BookmarkNode, folder.kind == .folder {
-            let count = children(of: folder.id).count
-            return store.moveBookmarkNode(id: draggedID, toParentID: folder.id, position: count)
+            return moveAll(toParentID: folder.id, startingAt: children(of: folder.id).count)
         }
 
         if let leaf = item as? BookmarkNode {
             // Reorder within the same parent.
-            let position = index >= 0 ? index : leaf.position
-            return store.moveBookmarkNode(id: draggedID, toParentID: leaf.parentID, position: position)
+            return moveAll(toParentID: leaf.parentID, startingAt: index >= 0 ? index : leaf.position)
         }
 
         // Root append
-        let count = children(of: nil).count
-        return store.moveBookmarkNode(id: draggedID, toParentID: nil, position: count)
+        return moveAll(toParentID: nil, startingAt: children(of: nil).count)
     }
 }
 

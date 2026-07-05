@@ -338,24 +338,33 @@ final class WikiReaderWebView: WKWebView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        sidebarPayload(from: sender.draggingPasteboard) == nil ? [] : .copy
+        sidebarPayloads(from: sender.draggingPasteboard).isEmpty ? [] : .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        sidebarPayload(from: sender.draggingPasteboard) == nil ? [] : .copy
+        sidebarPayloads(from: sender.draggingPasteboard).isEmpty ? [] : .copy
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let payload = sidebarPayload(from: sender.draggingPasteboard) else { return false }
-        DebugLog.tabs("[drop] wikiReader body action fired: kind=\(payload.kind) id=\(payload.id)")
-        store?.openTab(payload.selection)
+        let payloads = sidebarPayloads(from: sender.draggingPasteboard)
+        guard !payloads.isEmpty else { return false }
+        for payload in payloads {
+            DebugLog.tabs("[drop] wikiReader body action fired: kind=\(payload.kind) id=\(payload.id)")
+            store?.openTab(payload.selection)
+        }
         return true
     }
 
-    private func sidebarPayload(from pb: NSPasteboard) -> SidebarDragPayload? {
+    /// Reads every dragged pasteboard item (not just the first — a multi-row
+    /// selection or a bookmark folder both put more than one item on the
+    /// pasteboard) and flattens each item's resolved target list.
+    private func sidebarPayloads(from pb: NSPasteboard) -> [SidebarDragPayload] {
         let type = NSPasteboard.PasteboardType(UTType.wikiSidebarItem.identifier)
-        guard let data = pb.data(forType: type) else { return nil }
-        return try? JSONDecoder().decode(SidebarDragPayload.self, from: data)
+        guard let items = pb.pasteboardItems else { return [] }
+        return items.compactMap { item -> SidebarDragPayloadList? in
+            guard let data = item.data(forType: type) else { return nil }
+            return try? JSONDecoder().decode(SidebarDragPayloadList.self, from: data)
+        }.flatMap(\.items)
     }
 
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
