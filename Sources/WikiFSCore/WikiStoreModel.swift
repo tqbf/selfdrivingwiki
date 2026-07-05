@@ -1117,10 +1117,69 @@ public final class WikiStoreModel {
 
     // MARK: - File ingestion (Phase 5)
 
-    /// Add dropped/imported files as sources. For each URL: reject directories
-    /// (a recursive directory add is out of scope), read the bytes OFF the main
-    /// thread (big files shouldn't stall the UI), then hop back to the main actor
-    /// to store + reload. Per-file failures are logged and skipped so one bad drop
+    /// Route dropped URLs to the correct **add-source** path (#163). (This adds
+    /// a source — fetches/stores bytes so it appears under Sources — it does *not*
+    /// run the agent "ingestion" that reads a source and generates pages; that is
+    /// a separate `AgentLauncher` phase.)
+    /// - An `http(s)` URL (a link dragged from a browser) **or** a `.webloc`
+    ///   shortcut that resolves to one → `addURL` — the fetch + HTML→Markdown
+    ///   "Add from URL" path. This avoids reading a `.webloc` plist's raw bytes,
+    ///   which would capture the wrapper XML rather than the linked page.
+    /// - Any other `file://` URL → `addFiles` (raw bytes, as before).
+    ///
+    /// Several links / `.webloc` files dropped together are each added as their
+    /// own source. A `.webloc` whose `URL` key can't be parsed is skipped (its
+    /// bytes aren't useful as a source). `fetcher` is injectable for tests; the
+    /// default performs a real network GET.
+    public func addDroppedURLs(
+        _ droppedURLs: [URL],
+        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
+    ) async {
+        var remoteInputs: [String] = []
+        var localFiles: [URL] = []
+        for url in droppedURLs {
+            if let scheme = url.scheme, scheme == "http" || scheme == "https" {
+                remoteInputs.append(url.absoluteString)
+            } else if url.isFileURL, url.pathExtension.lowercased() == "webloc" {
+                if let resolved = await Self.resolveWeblocURL(url) {
+                    remoteInputs.append(resolved)
+                } else {
+                    DebugLog.store("WikiStoreModel.addDroppedURLs could not resolve .webloc: \(url.lastPathComponent)")
+                }
+            } else {
+                localFiles.append(url)
+            }
+        }
+        for input in remoteInputs {
+            do {
+                _ = try await addURL(input, fetcher: fetcher)
+            } catch {
+                DebugLog.store("WikiStoreModel.addDroppedURLs URL ingest failed for \(input): \(error)")
+            }
+        }
+        if !localFiles.isEmpty {
+            await addFiles(localFiles)
+        }
+    }
+
+    /// Read a `.webloc` property list (XML or binary) off the main actor and
+    /// return its `URL` string, or `nil` if the file isn't a valid webloc. (#163)
+    private static func resolveWeblocURL(_ fileURL: URL) async -> String? {
+        await Task.detached(priority: .userInitiated) {
+            guard let data = try? Data(contentsOf: fileURL),
+                  let plist = try? PropertyListSerialization.propertyList(
+                      from: data, options: [], format: nil),
+                  let urlString = (plist as? [String: Any])?["URL"] as? String,
+                  !urlString.isEmpty
+            else { return nil }
+            return urlString
+        }.value
+    }
+
+    /// Ingest dropped files. For each URL: reject directories (a recursive
+    /// directory ingest is out of scope), read the bytes OFF the main thread
+    /// (big files shouldn't stall the UI), then hop back to the main actor to
+    /// store + reload. Per-file failures are logged and skipped so one bad drop
     /// doesn't abort the batch. `onPageDidChange?()` fires ONCE at the end so the
     /// daemon re-enumerates the `sources/` tree exactly once for the whole batch.
     ///
