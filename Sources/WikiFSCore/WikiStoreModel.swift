@@ -54,10 +54,12 @@ public final class WikiStoreModel {
     /// (first run, an NLEmbedding→MiniLM cutover, or `wikictl`-written content);
     /// the common launch is an instant no-op and shows nothing.
     /// A user-facing error from a store mutation (e.g. a delete that violated a
-    /// foreign-key constraint). Surfaced via an alert in `ContentView`; `nil`-ing
-    /// it dismisses the alert.
+    /// foreign-key constraint, or files skipped as duplicates during ingest).
+    /// Surfaced via an alert in `ContentView`, titled per-site so a duplicate
+    /// skip doesn't read as a failed delete; `nil`-ing it dismisses the alert.
     public struct StoreError: Identifiable {
         public let id = UUID()
+        public let title: String
         public let message: String
     }
     public private(set) var storeError: StoreError?
@@ -1043,7 +1045,9 @@ public final class WikiStoreModel {
             onPageDidChange?()
         } catch {
             DebugLog.store("WikiStoreModel.delete failed: \(error)")
-            storeError = StoreError(message: "Could not delete the page: \(error.localizedDescription)")
+            storeError = StoreError(
+                title: "Couldn't Delete Page",
+                message: "Could not delete the page: \(error.localizedDescription)")
         }
     }
 
@@ -1106,7 +1110,11 @@ public final class WikiStoreModel {
             onPageDidChange?()
         }
         if !duplicateNames.isEmpty {
-            storeError = StoreError(message: "Skipped duplicate content: " + duplicateNames.joined(separator: ", "))
+            storeError = StoreError(
+                title: duplicateNames.count == 1 ? "Duplicate File Skipped" : "Duplicate Files Skipped",
+                message: "These files have the exact same content as a source you already added, "
+                    + "so they weren't added again:\n"
+                    + duplicateNames.map { "• \($0)" }.joined(separator: "\n"))
         }
     }
 
@@ -1157,7 +1165,9 @@ public final class WikiStoreModel {
             reloadSources()
             onPageDidChange?()
         } catch WikiStoreError.duplicateContent(let existing) {
-            storeError = StoreError(message: "\(filename) is byte-identical to \(existing.effectiveName) — not added again.")
+            storeError = StoreError(
+                title: "Duplicate File Skipped",
+                message: "\(filename) has the exact same content as \(existing.effectiveName), so it wasn't added again.")
         } catch {
             DebugLog.store("WikiStoreModel.addSource failed: \(error)")
         }

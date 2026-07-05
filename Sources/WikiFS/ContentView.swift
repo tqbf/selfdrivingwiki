@@ -100,13 +100,10 @@ struct ContentView: View {
         } message: {
             Text("You're in edit mode. Unsaved changes will be discarded.")
         }
-        .alert("Couldn't Delete Page",
-               isPresented: Binding(get: { store.storeError != nil },
+        .sheet(isPresented: Binding(get: { store.storeError != nil },
                                     set: { if !$0 { store.dismissStoreError() } })) {
-            Button("OK", role: .cancel) { store.dismissStoreError() }
-        } message: {
             if let error = store.storeError {
-                Text(error.message)
+                StoreErrorSheet(error: error) { store.dismissStoreError() }
             }
         }
     }
