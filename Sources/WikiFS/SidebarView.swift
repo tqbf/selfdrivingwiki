@@ -94,6 +94,32 @@ struct SidebarView: View {
                 store.createFolder(parentID: nil, name: name)
             }
         }
+        // "Show In List" reveal (issue #183): a detail-view button asked the
+        // sidebar to surface a page/source. Switch to the matching section and
+        // drop any active search that would hide the target row. The actual
+        // scroll + select happens in the list view once it mounts.
+        .onChange(of: store.pendingSidebarRevealVersion) { _, _ in
+            guard let target = store.pendingSidebarReveal else { return }
+            switch target {
+            case .page(let id):
+                selectedSection = .pages
+                // Clearing to "" resets searchResults synchronously (scheduleSearch
+                // sets [] on empty), so the full list is visible when the row is
+                // looked up.
+                if !store.searchQuery.isEmpty,
+                   !store.searchResults.contains(where: { $0.id == id }) {
+                    store.searchQuery = ""
+                }
+            case .source(let id):
+                selectedSection = .sources
+                if !store.sourceSearchQuery.isEmpty,
+                   !store.sourceSearchResults.contains(where: { $0.id == id }) {
+                    store.sourceSearchQuery = ""
+                }
+            default:
+                break
+            }
+        }
     }
 
     /// A row of evenly-spaced icons — one per section — that selects which

@@ -330,6 +330,10 @@ struct SourceDetailView: View {
                     // canonical URL from the daemon (like openSource) so the
                     // filename is human-readable and the URL is guaranteed
                     // to resolve.
+                    Button("Show in List", systemImage: "sidebar.left") {
+                        store.requestSidebarReveal(.source(file.id))
+                    }
+                    .help("Reveal this source in the sidebar")
                     if fileProvider.path != nil {
                         Button("Share", systemImage: "square.and.arrow.up") {
                             Task {

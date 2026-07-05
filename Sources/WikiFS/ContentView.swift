@@ -79,6 +79,14 @@ struct ContentView: View {
         .onChange(of: store.selection) { _, newValue in
             store.handleSelectionChange(to: newValue)
         }
+        // "Show In List" reveal (issue #183): a detail-view button requested the
+        // sidebar reveal a page/source. Un-collapse the sidebar so the target list
+        // is actually mounted (SidebarView only mounts the active section).
+        .onChange(of: store.pendingSidebarRevealVersion) { _, _ in
+            if columnVisibility == .detailOnly {
+                columnVisibility = .all
+            }
+        }
         .onChange(of: agentLauncher.isRunning) { _, isRunning in
             if isRunning {
                 isTranscriptExpanded = true

@@ -4784,3 +4784,40 @@ the window hit the generic file-drop path (`addFiles`), ingesting the
 **Tests:** `WikiStoreModelDropRoutingTests` (5) — webloc→md, http url→md, local
 txt→verbatim, mixed batch, unresolvable webloc skipped. All pass; existing
 `WikiStoreModelAddURLTests` still green.
+
+## #183 — "Show In List" sidebar reveal for pages & sources
+
+A "Show in List" button (next to "Reveal in Finder") in `PageDetailView` and
+`SourceDetailView` that surfaces the current page/source in the sidebar: opens
+the sidebar if collapsed, switches to the right section, clears a search that
+would hide the row, then scrolls to + selects it.
+
+**Mechanism** — mirrors the existing `pendingScrollAnchor` "set once, consume
+once" cross-view signal (issue #183 design):
+
+- `WikiStoreModel` — `pendingSidebarReveal: WikiSelection?` +
+  `pendingSidebarRevealVersion: Int` (monotonic, observed via `.onChange` so a
+  repeat request re-fires even when the value is unchanged), with
+  `requestSidebarReveal(_:)` (producer) and `consumePendingSidebarReveal()`
+  (consumer, called by the list view after scroll+select).
+- `ContentView` — `.onChange(of: pendingSidebarRevealVersion)` un-collapses the
+  sidebar (`columnVisibility = .all`) when it's `.detailOnly`, so the target
+  section's list is actually mounted.
+- `SidebarView` — `.onChange(of: pendingSidebarRevealVersion)` sets
+  `selectedSection` to `.pages`/`.sources` from the `WikiSelection` case and
+  clears the section's search query (`searchQuery`/`sourceSearchQuery`) only
+  when the target isn't in the filtered results (clearing resets
+  `searchResults`/`sourceSearchResults` synchronously, so the full list is
+  visible for row lookup).
+- `PagesListViewController` / `SourcesListViewController` — new
+  `revealAndSelect(id:)`: looks up the row, selects it (bypassing the
+  `reconcileHighlight` multi-select guard — an explicit user action wins over a
+  Cmd/Shift selection), and `scrollRowToVisible(_:)`. Driven from
+  `updateNSViewController`, which reads `pendingSidebarReveal` (also registers
+  the observation so the method re-runs on change), then consumes.
+- `PageDetailView` / `SourceDetailView` — `Button("Show in List",
+  systemImage: "sidebar.left")` calling `requestSidebarReveal(.page(id))` /
+  `.source(id)`. Works without a mounted File Provider (unlike Reveal in Finder).
+
+**Build/tests:** `swift build` clean; `swift test` — 1466 tests pass.
+
