@@ -185,13 +185,21 @@ import SQLite3
         INSERT INTO source_markdown_versions (id, file_id, parent_id, content, origin, note, created_at)
         VALUES ('\(legacyID)', '\(sourceID)', NULL, '# Legacy\nbody bytes', 'extraction', NULL, 1000.0);
         """)
+        // A second legacy row that is a USER EDIT (not an extraction). It must be
+        // CAS'd like any row, but must NOT get a synthetic legacy-extraction
+        // activity — a manual edit has no extraction provenance.
+        let editID = "01JLEGACY0000000000000000U"
+        exec(db, """
+        INSERT INTO source_markdown_versions (id, file_id, parent_id, content, origin, note, created_at)
+        VALUES ('\(editID)', '\(sourceID)', '\(legacyID)', 'edited body', 'user', NULL, 1001.0);
+        """)
 
         // 3. Reopen → runs the v20→v21 backfill.
         sqlite3_close(db)
         let migrated = try SQLiteWikiStore(databaseURL: url)
         #expect(migrated.pragmaValue("user_version") == "21")
 
-        // 4. The legacy row was backfilled: blob_hash + activity_id + source_version_id set.
+        // 4. The legacy extraction row was backfilled: blob_hash + activity_id + source_version_id set.
         #expect(migrated.scalarText(
             "SELECT blob_hash FROM source_markdown_versions WHERE id='\(legacyID)';") != "")
         #expect(migrated.scalarText(
@@ -202,6 +210,15 @@ import SQLite3
         // Inline content was cleared.
         #expect(migrated.scalarText(
             "SELECT content FROM source_markdown_versions WHERE id='\(legacyID)';") == "")
+
+        // 4b. The user-edit row IS CAS'd (blob_hash set, content cleared) but has
+        //     NO activity_id — it must not be mislabeled as a legacy extraction.
+        #expect(migrated.scalarText(
+            "SELECT blob_hash FROM source_markdown_versions WHERE id='\(editID)';") != "")
+        #expect(migrated.scalarText(
+            "SELECT content FROM source_markdown_versions WHERE id='\(editID)';") == "")
+        #expect(migrated.scalarText(
+            "SELECT activity_id FROM source_markdown_versions WHERE id='\(editID)';") == "")
 
         // 5. Content is byte-identical when read back through the resolved reader.
         let head = try migrated.processedMarkdownHead(sourceID: pdf.id)

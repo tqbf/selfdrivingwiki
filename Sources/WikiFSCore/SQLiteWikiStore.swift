@@ -1171,14 +1171,18 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
             // 3. Materialize legacy rows into Swift (sqlite-concurrency: no live
             //    cursor while inner INSERT/UPDATE run on the same connection).
+            //    `origin` decides whether a row is a real extraction (gets a
+            //    legacy-extraction activity) or a user/revert/source edit (no
+            //    extraction provenance — its `origin` column already tells that
+            //    story, so activity_id stays NULL).
             let select = try statement("""
-            SELECT id, file_id, content, created_at
+            SELECT id, file_id, content, origin, created_at
             FROM source_markdown_versions WHERE blob_hash IS NULL;
             """)
             defer { select.reset() }
             struct LegacyRow {
                 let id: String; let fileID: String
-                let content: String; let createdAt: Double
+                let content: String; let origin: String; let createdAt: Double
             }
             var rows: [LegacyRow] = []
             while try select.step() {
@@ -1186,7 +1190,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                     id: select.text(at: 0),
                     fileID: select.text(at: 1),
                     content: select.text(at: 2),
-                    createdAt: select.double(at: 3))
+                    origin: select.text(at: 3),
+                    createdAt: select.double(at: 4))
                 // Silent-data-loss guard: an empty extraction body is corruption.
                 guard !row.content.isEmpty else {
                     throw WikiStoreError.unexpected(
@@ -1232,12 +1237,20 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 try insBlob.bind(data, at: 3)
                 _ = try insBlob.step()
 
-                let activityID = ULID.generate()
-                insActivity.reset()
-                try insActivity.bind(activityID, at: 1)
-                try insActivity.bind(legacyAgentID, at: 2)
-                try insActivity.bind(row.createdAt, at: 3)
-                _ = try insActivity.step()
+                // Only real extractions get a synthetic legacy-extraction activity.
+                // User/revert/source rows are edits, not extractions — their origin
+                // is the provenance; stamping an extract activity would mislabel a
+                // manual edit as a backend extraction (activity_id stays NULL).
+                var activityID: String? = nil
+                if row.origin == "extraction" {
+                    let id = ULID.generate()
+                    insActivity.reset()
+                    try insActivity.bind(id, at: 1)
+                    try insActivity.bind(legacyAgentID, at: 2)
+                    try insActivity.bind(row.createdAt, at: 3)
+                    _ = try insActivity.step()
+                    activityID = id
+                }
 
                 // source_version_id: the source's active content version.
                 var sourceVersionID: String?
@@ -1255,7 +1268,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
                 upd.reset()
                 try upd.bind(hash, at: 1)
-                try upd.bind(activityID, at: 2)
+                if let activityID { try upd.bind(activityID, at: 2) }
                 if let sourceVersionID { try upd.bind(sourceVersionID, at: 3) }
                 try upd.bind(row.id, at: 4)
                 _ = try upd.step()
