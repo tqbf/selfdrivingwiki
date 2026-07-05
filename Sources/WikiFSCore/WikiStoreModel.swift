@@ -1510,6 +1510,11 @@ public final class WikiStoreModel {
         (try? store.hasProcessedMarkdown(sourceID: sourceID)) ?? false
     }
 
+    /// All versions for a source, newest first. Empty if none.
+    public func processedMarkdownHistory(for sourceID: PageID) -> [SourceMarkdownVersion] {
+        (try? store.processedMarkdownHistory(sourceID: sourceID)) ?? []
+    }
+
     /// Save an edit as a new version in the chain. Only called when the text
     /// genuinely differs from the current head — meaningful history, not
     /// keystroke spam.
@@ -1520,14 +1525,55 @@ public final class WikiStoreModel {
     }
 
     /// Seed the first processed-markdown version for a PDF from extraction
-    /// output. Double-seed guard: if a head already exists, returns it instead.
+    /// output, recording full provenance (backend agent + extract activity). The
+    /// `source_version_id` is resolved from the source's active content version.
+    /// Double-seed guard: if a head already exists, returns it instead.
     @discardableResult
-    public func seedPdfMarkdown(for sourceID: PageID, content: String) -> SourceMarkdownVersion? {
+    public func seedPdfMarkdown(
+        for sourceID: PageID, content: String,
+        backend: ExtractionBackend, modelVersion: String? = nil
+    ) -> SourceMarkdownVersion? {
         if let head = try? store.processedMarkdownHead(sourceID: sourceID) {
             return head
         }
-        return try? store.appendProcessedMarkdown(
-            sourceID: sourceID, content: content, origin: "extraction", note: nil)
+        return try? store.recordMarkdownExtraction(
+            sourceID: sourceID, content: content, backend: backend,
+            sourceVersionID: nil, note: nil, modelVersion: modelVersion)
+    }
+
+    /// Re-extract a source's content with a given extractor + backend, appending
+    /// a COEXISTING alternative (never clobbers the existing head). Resolves the
+    /// source bytes + active content version from the store, runs the extractor,
+    /// then records the provenance-carrying extraction. Returns the new
+    /// alternative, or nil if the bytes can't be read or conversion fails.
+    @discardableResult
+    public func reExtractMarkdown(
+        for sourceID: PageID, filename: String,
+        using extractor: any MarkdownExtractor,
+        backend: ExtractionBackend, modelVersion: String? = nil,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async -> SourceMarkdownVersion? {
+        guard let data = try? store.sourceContent(id: sourceID) else { return nil }
+        guard let markdown = try? await extractor.convert(
+            pdfData: data, filename: filename, onProgress: onProgress) else {
+            return nil
+        }
+        return try? store.recordMarkdownExtraction(
+            sourceID: sourceID, content: markdown, backend: backend,
+            sourceVersionID: nil, note: "re-extract via \(backend.agentName)",
+            modelVersion: modelVersion)
+    }
+
+    /// Nominate an existing processed-markdown row as the active HEAD for a
+    /// source (UPSERT the `source-derived` ref). Thin wrapper over the store.
+    public func setActiveMarkdown(for sourceID: PageID, to versionID: PageID) {
+        try? store.setActiveMarkdown(sourceID: sourceID, to: versionID)
+    }
+
+    /// The producing agent name for each of a source's markdown versions
+    /// (smv.id → agents.name), for the alternatives UI labels.
+    public func processedMarkdownAgentNames(for sourceID: PageID) -> [String: String] {
+        (try? store.processedMarkdownAgentNames(sourceID: sourceID)) ?? [:]
     }
 
     // MARK: - Source-of-truth rebuild

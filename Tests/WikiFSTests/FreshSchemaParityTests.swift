@@ -120,8 +120,8 @@ import SQLite3
         let ladder = try fingerprint(at: ladderURL)
 
         // Both must report head version 19.
-        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "20")
-        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "20")
+        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "21")
+        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "21")
 
         if fast != ladder {
             Issue.record("fresh fast-path schema drifted from the stepwise ladder:\n--- fast ---\n\(fast)\n--- ladder ---\n\(ladder)")
@@ -156,5 +156,72 @@ import SQLite3
         // Seeded singletons present.
         #expect(texts(db, "SELECT body_markdown FROM system_prompt WHERE id=1;") == [SystemPrompt.defaultBody])
         #expect(texts(db, "SELECT body_markdown FROM wiki_index WHERE id=1;") == [WikiIndex.defaultBody])
+    }
+
+    /// Raw exec helper for setting up migration-fixture state.
+    private func exec(_ db: OpaquePointer, _ sql: String) {
+        sqlite3_exec(db, sql, nil, nil, nil)
+    }
+
+    /// AC.7 — v20→v21 migration is lossless: a legacy inline-content smv row
+    /// gains a blob_hash + activity_id + source_version_id, its content is
+    /// byte-identical when read back, and content is cleared to ''.
+    @Test func v20ToV21MigrationLossless() throws {
+        let url = tempURL()
+        // 1. Fresh store (v21) + a PDF source (no self-seed) + its content version.
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
+        let sourceID = pdf.id.rawValue
+        let contentVersionID = try store.activeContentVersion(sourceID: pdf.id)?.id
+        // Drop the store so we can manipulate the file with raw sqlite.
+        _ = store
+
+        // 2. Rewind to v20 and insert a legacy inline-content smv row.
+        let db = try open(url)
+        defer { sqlite3_close(db) }
+        exec(db, "PRAGMA user_version=20;")
+        let legacyID = "01JLEGACY0000000000000000V"
+        exec(db, """
+        INSERT INTO source_markdown_versions (id, file_id, parent_id, content, origin, note, created_at)
+        VALUES ('\(legacyID)', '\(sourceID)', NULL, '# Legacy\nbody bytes', 'extraction', NULL, 1000.0);
+        """)
+        // A second legacy row that is a USER EDIT (not an extraction). It must be
+        // CAS'd like any row, but must NOT get a synthetic legacy-extraction
+        // activity — a manual edit has no extraction provenance.
+        let editID = "01JLEGACY0000000000000000U"
+        exec(db, """
+        INSERT INTO source_markdown_versions (id, file_id, parent_id, content, origin, note, created_at)
+        VALUES ('\(editID)', '\(sourceID)', '\(legacyID)', 'edited body', 'user', NULL, 1001.0);
+        """)
+
+        // 3. Reopen → runs the v20→v21 backfill.
+        sqlite3_close(db)
+        let migrated = try SQLiteWikiStore(databaseURL: url)
+        #expect(migrated.pragmaValue("user_version") == "21")
+
+        // 4. The legacy extraction row was backfilled: blob_hash + activity_id + source_version_id set.
+        #expect(migrated.scalarText(
+            "SELECT blob_hash FROM source_markdown_versions WHERE id='\(legacyID)';") != "")
+        #expect(migrated.scalarText(
+            "SELECT activity_id FROM source_markdown_versions WHERE id='\(legacyID)';") != "")
+        #expect(migrated.scalarText(
+            "SELECT source_version_id FROM source_markdown_versions WHERE id='\(legacyID)';")
+            == (contentVersionID ?? ""))
+        // Inline content was cleared.
+        #expect(migrated.scalarText(
+            "SELECT content FROM source_markdown_versions WHERE id='\(legacyID)';") == "")
+
+        // 4b. The user-edit row IS CAS'd (blob_hash set, content cleared) but has
+        //     NO activity_id — it must not be mislabeled as a legacy extraction.
+        #expect(migrated.scalarText(
+            "SELECT blob_hash FROM source_markdown_versions WHERE id='\(editID)';") != "")
+        #expect(migrated.scalarText(
+            "SELECT content FROM source_markdown_versions WHERE id='\(editID)';") == "")
+        #expect(migrated.scalarText(
+            "SELECT activity_id FROM source_markdown_versions WHERE id='\(editID)';") == "")
+
+        // 5. Content is byte-identical when read back through the resolved reader.
+        let head = try migrated.processedMarkdownHead(sourceID: pdf.id)
+        #expect(head?.content == "# Legacy\nbody bytes")
     }
 }

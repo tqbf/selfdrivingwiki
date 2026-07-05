@@ -137,4 +137,49 @@ struct FullTextSearchTests {
         let hits = try reopened.searchSimilar(query: "insurance", limit: 10)
         #expect(hits.contains { $0.id == page.id })
     }
+
+    // MARK: - Phase 2 CAS: search body stays correct after content-addressing
+
+    /// AC.9a — After a CAS'd extraction, the source_search body + the embedding
+    /// work text are non-empty and contain the extracted markdown (guards the
+    /// regression where CAS rows store `content=''` and would silently empty the
+    /// FTS/embedding text).
+    @Test func searchBodyNonemptyAfterCasExtraction() throws {
+        let store = try tempStore()
+        let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
+        _ = try store.recordMarkdownExtraction(
+            sourceID: pdf.id, content: "# Title\nuniquephrase alpha",
+            backend: .anthropic, sourceVersionID: nil, note: nil, modelVersion: nil)
+        // Force a rebuild so source_search is populated from the resolved HEAD.
+        _ = store.rebuildFTS()
+        let body = store.scalarText(
+            "SELECT body FROM source_search WHERE source_id='\(pdf.id.rawValue)';")
+        #expect(body.contains("uniquephrase"))
+
+        let missing = store.missingSourceEmbeddingWork()
+            .first(where: { $0.id == pdf.id })
+        #expect(missing != nil)
+        #expect(missing?.text.contains("uniquephrase") ?? false)
+    }
+
+    /// AC.9b — After nominating a non-MAX alternative via setActiveMarkdown, the
+    /// search body follows the nominated ref, not the MAX-id row.
+    @Test func searchBodyFollowsNominatedRef() throws {
+        let store = try tempStore()
+        let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
+        let first = try store.recordMarkdownExtraction(
+            sourceID: pdf.id, content: "firstphrase nominated",
+            backend: .anthropic, sourceVersionID: nil, note: nil, modelVersion: nil)
+        usleep(2000)
+        _ = try store.recordMarkdownExtraction(
+            sourceID: pdf.id, content: "secondphrase maxid",
+            backend: .gemini, sourceVersionID: nil, note: nil, modelVersion: nil)
+        // Default-active HEAD is the MAX-id row (secondphrase).
+        try store.setActiveMarkdown(sourceID: pdf.id, to: first.id)
+        _ = store.rebuildFTS()
+        let body = store.scalarText(
+            "SELECT body FROM source_search WHERE source_id='\(pdf.id.rawValue)';")
+        #expect(body.contains("firstphrase"))
+        #expect(!body.contains("secondphrase"))
+    }
 }

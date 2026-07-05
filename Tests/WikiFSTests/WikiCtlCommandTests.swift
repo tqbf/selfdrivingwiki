@@ -675,4 +675,39 @@ struct WikiCtlCommandTests {
         #expect(result.didCommit)
         #expect(!result.output.isEmpty)
     }
+
+    // MARK: - source set-active (Phase 2)
+
+    /// AC.8 (wikictl) — `source set-active` nominates an existing markdown
+    /// version as the active HEAD (repoints the `source-derived` ref), commits,
+    /// and `processedMarkdownHead` follows it.
+    @Test func sourceSetActiveRoundTrip() throws {
+        let store = try tempStore()
+        let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
+        let first = try store.recordMarkdownExtraction(
+            sourceID: pdf.id, content: "first version",
+            backend: .anthropic, sourceVersionID: nil, note: nil, modelVersion: nil)
+        usleep(2000)
+        _ = try store.recordMarkdownExtraction(
+            sourceID: pdf.id, content: "second version",
+            backend: .gemini, sourceVersionID: nil, note: nil, modelVersion: nil)
+        // Default-active HEAD is the second (MAX id).
+        #expect(try store.processedMarkdownHead(sourceID: pdf.id)?.content == "second version")
+
+        let result = try SourceCommand.run(
+            .setActive(.id(pdf.id), versionID: first.id), in: store, cwd: "/tmp")
+        #expect(result.didCommit)
+        #expect(try store.processedMarkdownHead(sourceID: pdf.id)?.id == first.id)
+        #expect(try store.processedMarkdownHead(sourceID: pdf.id)?.content == "first version")
+    }
+
+    @Test func sourceSetActiveFailsWithoutMarkdown() throws {
+        let store = try tempStore()
+        let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
+        #expect(throws: SourceCommand.Failure.self) {
+            try SourceCommand.run(
+                .setActive(.id(pdf.id), versionID: PageID(rawValue: "01NOPE")),
+                in: store, cwd: "/tmp")
+        }
+    }
 }

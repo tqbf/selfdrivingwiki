@@ -107,6 +107,10 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
         return try SourceCommand.run(
             .rename(selector, to: to), in: store,
             cwd: FileManager.default.currentDirectoryPath)
+    case .sourceSetActive(let selector, let versionID):
+        return try SourceCommand.run(
+            .setActive(selector, versionID: versionID), in: store,
+            cwd: FileManager.default.currentDirectoryPath)
     }
 }
 

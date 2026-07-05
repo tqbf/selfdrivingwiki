@@ -235,13 +235,17 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // name `file_markdown_versions_file` survives the table rename.
         try exec("""
         CREATE TABLE source_markdown_versions (
-            id          TEXT PRIMARY KEY,
-            file_id     TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-            parent_id   TEXT,
-            content     TEXT NOT NULL,
-            origin      TEXT NOT NULL,
-            note        TEXT,
-            created_at  REAL NOT NULL
+            id                TEXT PRIMARY KEY,
+            file_id           TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+            parent_id         TEXT,
+            content           TEXT NOT NULL,
+            origin            TEXT NOT NULL,
+            note              TEXT,
+            created_at        REAL NOT NULL,
+            activity_id       TEXT REFERENCES activities(id),
+            source_version_id TEXT,
+            blob_hash         TEXT REFERENCES blobs(hash),
+            mime_type         TEXT NOT NULL DEFAULT 'text/markdown'
         );
         """)
         try exec("""
@@ -411,7 +415,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // byte-identical (`freshFastPathMatchesStepwiseLadder`).
         try createObjectsTablesV20()
 
-        try exec("PRAGMA user_version=20;")
+        // v21 (graph-model Phase 2): the four new `source_markdown_versions`
+        // columns are already in the fresh-path table def above; no legacy rows
+        // to backfill on a brand-new DB. Shared with the v20→21 migration step.
+
+        try exec("PRAGMA user_version=21;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -962,6 +970,19 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try exec("PRAGMA user_version=20;")
             version = 20
         }
+
+        // Step 20 → 21 (graph-model Phase 2): turn `source_markdown_versions`
+        // from a flat inline-content chain into CAS'd, provenance-carrying
+        // extraction alternatives. Adds `activity_id`, `source_version_id`,
+        // `blob_hash`, `mime_type`; one-shot backfill CAS-moves each legacy row's
+        // inline `content` into a blob, creates a synthetic `legacy-extraction`
+        // agent + per-row `extract` activity, and backfills `source_version_id`
+        // to the source's active content version. See `migrateV20ToV21`.
+        if version < 21 {
+            try migrateV20ToV21()
+            try exec("PRAGMA user_version=21;")
+            version = 21
+        }
     }
 
     /// The v19→20 migration step. Creates the objects tables, then — for every
@@ -1087,6 +1108,176 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             //    targeted, fall back to the rename→create→copy→drop rebuild
             //    the ladder already uses elsewhere.
             try exec("ALTER TABLE sources DROP COLUMN content;")
+        }
+    }
+
+    /// The v20→21 migration step (graph-model Phase 2). Adds the four
+    /// `source_markdown_versions` columns and CAS-moves each legacy row's inline
+    /// `content` into a blob, recording a synthetic `legacy-extraction` agent +
+    /// per-row `extract` activity and backfilling `source_version_id` to the
+    /// source's active content version. All DML inside ONE `withTransaction`;
+    /// a pre-assertion (every legacy row has non-empty content) throws and rolls
+    /// back the whole step on corruption (silent-data-loss guard).
+    private func migrateV20ToV21() throws {
+        try withTransaction {
+            // 0. Guard: a DB rewound from v21 for testing, or an artificial
+            //    migration fixture that only stamps `sources` (the v8 step that
+            //    creates `source_markdown_versions` was skipped), has no smv table
+            //    to backfill. A genuine v19 DB always has it. No-op + stamp.
+            let hasSMV = try queryScalarText(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='source_markdown_versions';") != "0"
+            guard hasSMV else { return }
+
+            // 1. Add the four columns idempotently (a DB rewound from v21 for
+            //    testing already has them).
+            for (col, decl) in [
+                ("activity_id", "TEXT REFERENCES activities(id)"),
+                ("source_version_id", "TEXT"),
+                ("blob_hash", "TEXT REFERENCES blobs(hash)"),
+                ("mime_type", "TEXT NOT NULL DEFAULT 'text/markdown'"),
+            ] {
+                let present = try queryScalarText(
+                    "SELECT COUNT(*) FROM pragma_table_info('source_markdown_versions') WHERE name='\(col)';") != "0"
+                guard !present else { continue }
+                try exec("ALTER TABLE source_markdown_versions ADD COLUMN \(col) \(decl);")
+            }
+
+            // If every row already has a blob_hash, this DB was migrated to v21
+            // and rewound — nothing to backfill.
+            let unmigrated = try queryScalarText(
+                "SELECT COUNT(*) FROM source_markdown_versions WHERE blob_hash IS NULL;")
+            guard unmigrated != "0" else { return }
+
+            // 2. Seed one legacy-extraction agent (parallel to legacy-import),
+            //    reusing it if already present (idempotent for rewound DBs).
+            let legacyAgentID: String
+            let existing = try? statement(
+                "SELECT id FROM agents WHERE name='legacy-extraction' LIMIT 1;")
+            let found = existing.flatMap { stmt -> Bool in
+                (try? stmt.step()) ?? false
+            } ?? false
+            defer { existing?.reset() }
+            if found, let existing {
+                legacyAgentID = existing.text(at: 0)
+            } else {
+                legacyAgentID = ULID.generate()
+                let ins = try statement(
+                    "INSERT INTO agents (id, kind, name) VALUES (?1, 'software', 'legacy-extraction');")
+                ins.reset()
+                try ins.bind(legacyAgentID, at: 1)
+                _ = try ins.step()
+                ins.reset()
+            }
+
+            // 3. Materialize legacy rows into Swift (sqlite-concurrency: no live
+            //    cursor while inner INSERT/UPDATE run on the same connection).
+            //    `origin` decides whether a row is a real extraction (gets a
+            //    legacy-extraction activity) or a user/revert/source edit (no
+            //    extraction provenance — its `origin` column already tells that
+            //    story, so activity_id stays NULL).
+            let select = try statement("""
+            SELECT id, file_id, content, origin, created_at
+            FROM source_markdown_versions WHERE blob_hash IS NULL;
+            """)
+            defer { select.reset() }
+            struct LegacyRow {
+                let id: String; let fileID: String
+                let content: String; let origin: String; let createdAt: Double
+            }
+            var rows: [LegacyRow] = []
+            while try select.step() {
+                let row = LegacyRow(
+                    id: select.text(at: 0),
+                    fileID: select.text(at: 1),
+                    content: select.text(at: 2),
+                    origin: select.text(at: 3),
+                    createdAt: select.double(at: 4))
+                // Silent-data-loss guard: an empty extraction body is corruption.
+                guard !row.content.isEmpty else {
+                    throw WikiStoreError.unexpected(
+                        "v21 migration: source_markdown_versions row \(row.id) has empty content — refusing to backfill")
+                }
+                rows.append(row)
+            }
+
+            let insBlob = try statement(
+                "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+            let insActivity = try statement("""
+            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+            VALUES (?1, 'extract', ?2, ?3, ?3);
+            """)
+            let upd = try statement("""
+            UPDATE source_markdown_versions
+               SET blob_hash = ?1, activity_id = ?2, source_version_id = ?3,
+                   mime_type = 'text/markdown', content = ''
+             WHERE id = ?4;
+            """)
+            // Resolve the active content-version id for a source (ref → version,
+            // else default-active MAX(id)) — mirrors `activeContentVersion`.
+            let resolveVersion = try statement("""
+            SELECT sv.id
+            FROM refs r
+            JOIN source_versions sv ON sv.id = r.version_id
+            WHERE r.kind = 'source-content' AND r.owner_id = ?1;
+            """)
+            let resolveVersionMax = try statement("""
+            SELECT id FROM source_versions
+            WHERE source_id = ?1 ORDER BY id DESC LIMIT 1;
+            """)
+
+            for row in rows {
+                // SHA-256 of the UTF-8 markdown bytes.
+                let data = Data(row.content.utf8)
+                let hash = SHA256.hash(data: data)
+                    .map { String(format: "%02x", $0) }.joined()
+
+                insBlob.reset()
+                try insBlob.bind(hash, at: 1)
+                try insBlob.bind(Int64(data.count), at: 2)
+                try insBlob.bind(data, at: 3)
+                _ = try insBlob.step()
+
+                // Only real extractions get a synthetic legacy-extraction activity.
+                // User/revert/source rows are edits, not extractions — their origin
+                // is the provenance; stamping an extract activity would mislabel a
+                // manual edit as a backend extraction (activity_id stays NULL).
+                var activityID: String? = nil
+                if row.origin == "extraction" {
+                    let id = ULID.generate()
+                    insActivity.reset()
+                    try insActivity.bind(id, at: 1)
+                    try insActivity.bind(legacyAgentID, at: 2)
+                    try insActivity.bind(row.createdAt, at: 3)
+                    _ = try insActivity.step()
+                    activityID = id
+                }
+
+                // source_version_id: the source's active content version.
+                var sourceVersionID: String?
+                resolveVersion.reset()
+                try resolveVersion.bind(row.fileID, at: 1)
+                if try resolveVersion.step() {
+                    sourceVersionID = resolveVersion.text(at: 0)
+                } else {
+                    resolveVersionMax.reset()
+                    try resolveVersionMax.bind(row.fileID, at: 1)
+                    if try resolveVersionMax.step() {
+                        sourceVersionID = resolveVersionMax.text(at: 0)
+                    }
+                }
+
+                upd.reset()
+                try upd.bind(hash, at: 1)
+                if let activityID { try upd.bind(activityID, at: 2) }
+                if let sourceVersionID { try upd.bind(sourceVersionID, at: 3) }
+                try upd.bind(row.id, at: 4)
+                _ = try upd.step()
+            }
+            insBlob.reset()
+            insActivity.reset()
+            upd.reset()
+            resolveVersion.reset()
+            resolveVersionMax.reset()
         }
     }
 
@@ -2060,6 +2251,33 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         return id
     }
 
+    /// Get-or-create an agent by (name, kind), returning its id. Idempotent: a
+    /// re-extract with the same backend reuses the same agent row. Optionally
+    /// records `version` (e.g. the configured model id) and `external_ref`.
+    /// INTERNAL — caller holds `lock`.
+    private func ensureAgent(name: String, kind: String = "software",
+                             version: String? = nil, externalRef: String? = nil) throws -> String {
+        let find = try statement(
+            "SELECT id FROM agents WHERE name = ?1 AND kind = ?2 LIMIT 1;")
+        find.reset()
+        try find.bind(name, at: 1)
+        try find.bind(kind, at: 2)
+        if try find.step() { return find.text(at: 0) }
+        let id = ULID.generate()
+        let ins = try statement("""
+        INSERT INTO agents (id, kind, name, version, external_ref)
+        VALUES (?1, ?2, ?3, ?4, ?5);
+        """)
+        ins.reset()
+        try ins.bind(id, at: 1)
+        try ins.bind(kind, at: 2)
+        try ins.bind(name, at: 3)
+        if let version { try ins.bind(version, at: 4) }
+        if let externalRef { try ins.bind(externalRef, at: 5) }
+        _ = try ins.step()
+        return id
+    }
+
     public func deleteSource(id: PageID) throws {
         lock.lock(); defer { lock.unlock() }
         let stmt = try statement("DELETE FROM sources WHERE id = ?1;")
@@ -2977,6 +3195,13 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         return (try? queryScalarText("PRAGMA \(name);")) ?? ""
     }
 
+    /// Test hook: run a one-row SELECT and return column 0 as text. Used by tests
+    /// to assert row counts (e.g. `SELECT COUNT(*) FROM blobs`).
+    func scalarText(_ sql: String) -> String {
+        lock.lock(); defer { lock.unlock() }
+        return (try? queryScalarText(sql)) ?? ""
+    }
+
     /// Run a one-row PRAGMA/SELECT and return column 0 as text.
     private func queryScalarText(_ sql: String) throws -> String {
         var handle: OpaquePointer?
@@ -3211,8 +3436,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             let stmt = try statement("""
             INSERT OR IGNORE INTO source_search (source_id, title, body)
             SELECT s.id, COALESCE(s.display_name, s.filename),
-                   COALESCE((SELECT smv.content FROM source_markdown_versions smv
-                             WHERE smv.file_id = s.id ORDER BY smv.id DESC LIMIT 1), '')
+                   \(Self.smvHeadBodySQL)
             FROM sources s
             WHERE s.id NOT IN (SELECT source_id FROM source_search);
             """)
@@ -3289,8 +3513,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             let stmt = try statement("""
             INSERT OR IGNORE INTO source_search (source_id, title, body)
             SELECT s.id, COALESCE(s.display_name, s.filename),
-                   COALESCE((SELECT smv.content FROM source_markdown_versions smv
-                             WHERE smv.file_id = s.id ORDER BY smv.id DESC LIMIT 1), '')
+                   \(Self.smvHeadBodySQL)
             FROM sources s;
             """)
             defer { stmt.reset() }
@@ -3358,8 +3581,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         var out: [(id: PageID, text: String)] = []
         guard let stmt = try? statement("""
         SELECT s.id, COALESCE(s.display_name, s.filename),
-               (SELECT content FROM source_markdown_versions smv
-                WHERE smv.file_id = s.id ORDER BY smv.id DESC LIMIT 1)
+               \(Self.smvHeadBodySQL)
         FROM sources s
         LEFT JOIN source_chunks sc ON sc.source_id = s.id
         WHERE sc.source_id IS NULL;
@@ -3517,29 +3739,110 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
     // MARK: - Processed markdown versions (v8, renamed v10)
 
-    /// Read one `source_markdown_versions` row from the current statement position
-    /// (column order: id, file_id, parent_id, content, origin, note, created_at).
+    /// Read one `source_markdown_versions` row from the current statement position.
+    /// Column order (the SELECT must match):
+    ///   0 id, 1 file_id, 2 parent_id, 3 content(resolved), 4 origin, 5 note,
+    ///   6 created_at, 7 activity_id, 8 source_version_id, 9 blob_hash, 10 mime_type.
+    ///
+    /// The `content` column passed in MUST be the resolved body — i.e. the
+    /// SELECT computes `COALESCE(CAST(blobs.content AS TEXT), smv.content)` so
+    /// CAS rows (whose inline column is `''`) decode to real markdown. This keeps
+    /// `.content` always the full text (the resolved-body invariant) without
+    /// issuing a per-row blob read inside the caller's cursor.
     private func sourceMarkdownVersion(from stmt: SQLiteStatement) -> SourceMarkdownVersion {
-        let parentID: PageID? = sqlite3_column_type(stmt.handle, 2) == SQLITE_NULL
-            ? nil : PageID(rawValue: stmt.text(at: 2))
-        let note: String? = sqlite3_column_type(stmt.handle, 5) == SQLITE_NULL
-            ? nil : stmt.text(at: 5)
+        func textOrNull(_ col: Int32) -> String? {
+            sqlite3_column_type(stmt.handle, col) == SQLITE_NULL ? nil : stmt.text(at: col)
+        }
+        let parentID = textOrNull(2).map(PageID.init(rawValue:))
         return SourceMarkdownVersion(
             id: PageID(rawValue: stmt.text(at: 0)),
             sourceID: PageID(rawValue: stmt.text(at: 1)),
             parentID: parentID,
             content: stmt.text(at: 3),
             origin: stmt.text(at: 4),
-            note: note,
-            createdAt: Date(timeIntervalSince1970: stmt.double(at: 6))
+            note: textOrNull(5),
+            createdAt: Date(timeIntervalSince1970: stmt.double(at: 6)),
+            activityID: textOrNull(7),
+            sourceVersionID: textOrNull(8),
+            blobHash: textOrNull(9),
+            mimeType: textOrNull(10) ?? "text/markdown"
         )
+    }
+
+    /// The shared SELECT-list + LEFT JOIN that resolves a CAS'd row's content from
+    /// its blob (falling back to the inline column for any unmigrated row). Used by
+    /// every Swift-decode reader so they all honor the resolved-body invariant.
+    private static let smvSelectColumns = """
+    smv.id, smv.file_id, smv.parent_id,
+    COALESCE(CAST(b.content AS TEXT), smv.content),
+    smv.origin, smv.note, smv.created_at,
+    smv.activity_id, smv.source_version_id, smv.blob_hash, smv.mime_type
+    """
+    private static let smvBlobJoin = "LEFT JOIN blobs b ON b.hash = smv.blob_hash"
+
+    /// SQL fragment: the resolved HEAD body for source `s.id`, for embedding in a
+    /// larger INSERT...SELECT. Resolves the active row via the default-active rule
+    /// (`source-derived` ref → else MAX(id)), then reads its blob-decoded body via
+    /// CAST (CAS rows store `''` inline). Empty string when the source has no
+    /// markdown. Post-v21 every CAS'd HEAD has `content=''`, so the blobs JOIN is
+    /// mandatory here — without it FTS/embedding text would silently go empty.
+    private static let smvHeadBodySQL = """
+    COALESCE((
+      SELECT CAST(b.content AS TEXT)
+      FROM source_markdown_versions smv
+      LEFT JOIN blobs b ON b.hash = smv.blob_hash
+      WHERE smv.id = COALESCE(
+        (SELECT r.version_id FROM refs r
+         WHERE r.kind = 'source-derived' AND r.owner_id = s.id
+         AND EXISTS (SELECT 1 FROM source_markdown_versions smv3
+                     WHERE smv3.id = r.version_id)),
+        (SELECT MAX(smv2.id) FROM source_markdown_versions smv2
+         WHERE smv2.file_id = s.id)
+      )
+    ), '')
+    """
+
+    /// CAS-store a markdown body: SHA-256 (UTF-8) → `INSERT OR IGNORE` blob →
+    /// return the hex hash. Identical bodies share one blob row (dedup win).
+    /// INTERNAL — caller holds `lock`.
+    private func storeMarkdownBlob(_ content: String) throws -> String {
+        let data = Data(content.utf8)
+        let hash = SHA256.hash(data: data)
+            .map { String(format: "%02x", $0) }.joined()
+        let ins = try statement(
+            "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+        ins.reset()
+        try ins.bind(hash, at: 1)
+        try ins.bind(Int64(data.count), at: 2)
+        try ins.bind(data, at: 3)
+        _ = try ins.step()
+        ins.reset()
+        return hash
     }
 
     public func processedMarkdownHead(sourceID: PageID) throws -> SourceMarkdownVersion? {
         lock.lock(); defer { lock.unlock() }
+        // Prefer the `source-derived` ref; fall back to MAX(id) (default-active
+        // rule, §4.3 — byte-identical to the old behavior until a ref is written).
+        if let refStmt = try? statement("""
+        SELECT \(Self.smvSelectColumns)
+        FROM refs r
+        JOIN source_markdown_versions smv ON smv.id = r.version_id
+        \(Self.smvBlobJoin)
+        WHERE r.kind = 'source-derived' AND r.owner_id = ?1;
+        """) {
+            refStmt.reset()
+            try refStmt.bind(sourceID.rawValue, at: 1)
+            if try refStmt.step() {
+                return sourceMarkdownVersion(from: refStmt)
+            }
+            refStmt.reset()
+        }
         guard let stmt = try? statement("""
-        SELECT id, file_id, parent_id, content, origin, note, created_at
-        FROM source_markdown_versions WHERE file_id = ?1 ORDER BY id DESC LIMIT 1;
+        SELECT \(Self.smvSelectColumns)
+        FROM source_markdown_versions smv
+        \(Self.smvBlobJoin)
+        WHERE smv.file_id = ?1 ORDER BY smv.id DESC LIMIT 1;
         """) else { return nil }
         defer { stmt.reset() }
         try stmt.bind(sourceID.rawValue, at: 1)
@@ -3560,8 +3863,10 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     public func processedMarkdownHistory(sourceID: PageID) throws -> [SourceMarkdownVersion] {
         lock.lock(); defer { lock.unlock() }
         guard let stmt = try? statement("""
-        SELECT id, file_id, parent_id, content, origin, note, created_at
-        FROM source_markdown_versions WHERE file_id = ?1 ORDER BY id DESC;
+        SELECT \(Self.smvSelectColumns)
+        FROM source_markdown_versions smv
+        \(Self.smvBlobJoin)
+        WHERE smv.file_id = ?1 ORDER BY smv.id DESC;
         """) else { return [] }
         defer { stmt.reset() }
         try stmt.bind(sourceID.rawValue, at: 1)
@@ -3576,12 +3881,73 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// the table doesn't exist yet (pre-migration read connection) so the caller
     /// never errors — the sources list simply has no markdown siblings.
     /// Single GROUP BY query avoids N+1 across the full source enumeration.
-    public func processedMarkdownHeadsBySource() throws -> [String: SourceMarkdownVersion] {
+    /// The active HEAD for a source, resolved via the default-active rule
+    /// (`source-derived` ref → else MAX(id)). Returns nil when the source has no
+    /// processed markdown.
+    public func processedMarkdownHeadID(sourceID: PageID) throws -> String? {
+        lock.lock(); defer { lock.unlock() }
+        if let refStmt = try? statement("""
+        SELECT version_id FROM refs
+        WHERE kind = 'source-derived' AND owner_id = ?1;
+        """) {
+            refStmt.reset()
+            try refStmt.bind(sourceID.rawValue, at: 1)
+            if try refStmt.step() { return refStmt.text(at: 0) }
+            refStmt.reset()
+        }
+        let maxStmt = try statement("""
+        SELECT id FROM source_markdown_versions
+        WHERE file_id = ?1 ORDER BY id DESC LIMIT 1;
+        """)
+        maxStmt.reset()
+        try maxStmt.bind(sourceID.rawValue, at: 1)
+        if try maxStmt.step() { return maxStmt.text(at: 0) }
+        return nil
+    }
+
+    /// Resolve the producing agent name for each of a source's processed-markdown
+    /// versions (smv.id → agents.name), via activity_id. Used by the alternatives
+    /// UI to label each extraction with its backend. INTERNAL-friendly; best-effort.
+    public func processedMarkdownAgentNames(sourceID: PageID) throws -> [String: String] {
         lock.lock(); defer { lock.unlock() }
         guard let stmt = try? statement("""
-        SELECT id, file_id, parent_id, content, origin, note, created_at
-        FROM source_markdown_versions
-        WHERE id IN (SELECT MAX(id) FROM source_markdown_versions GROUP BY file_id);
+        SELECT smv.id, a.name
+        FROM source_markdown_versions smv
+        LEFT JOIN activities act ON act.id = smv.activity_id
+        LEFT JOIN agents a ON a.id = act.agent_id
+        WHERE smv.file_id = ?1;
+        """) else { return [:] }
+        defer { stmt.reset() }
+        try stmt.bind(sourceID.rawValue, at: 1)
+        var out: [String: String] = [:]
+        while try stmt.step() {
+            let smvID = stmt.text(at: 0)
+            if sqlite3_column_type(stmt.handle, 1) != SQLITE_NULL {
+                out[smvID] = stmt.text(at: 1)
+            }
+        }
+        return out
+    }
+
+    public func processedMarkdownHeadsBySource() throws -> [String: SourceMarkdownVersion] {
+        lock.lock(); defer { lock.unlock() }
+        // Ref-resolved HEAD per source: the `source-derived` ref's version_id if
+        // present, else MAX(id) (default-active rule). A CTE computes the head id
+        // per source, then we join the resolved row + its blob.
+        guard let stmt = try? statement("""
+        WITH heads(source_id, head_id) AS (
+            SELECT s.id,
+                   COALESCE(
+                     (SELECT r.version_id FROM refs r
+                      WHERE r.kind = 'source-derived' AND r.owner_id = s.id),
+                     (SELECT MAX(id) FROM source_markdown_versions WHERE file_id = s.id)
+                   )
+            FROM sources s
+        )
+        SELECT \(Self.smvSelectColumns)
+        FROM heads
+        JOIN source_markdown_versions smv ON smv.id = heads.head_id
+        \(Self.smvBlobJoin);
         """) else { return [:] }
         defer { stmt.reset() }
         var result: [String: SourceMarkdownVersion] = [:]
@@ -3599,20 +3965,24 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let id = PageID(rawValue: ULID.generate())
         let parentID = try processedMarkdownHead(sourceID: sourceID)?.id
         let now = Date()
+        // CAS the body: hash → INSERT OR IGNORE blob → store blob_hash; leave the
+        // inline column `''` (the resolved-body invariant lives in the readers).
+        let blobHash = try storeMarkdownBlob(content)
 
         let stmt = try statement("""
         INSERT INTO source_markdown_versions
-          (id, file_id, parent_id, content, origin, note, created_at)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);
+          (id, file_id, parent_id, content, origin, note, created_at,
+           blob_hash, mime_type)
+        VALUES (?1, ?2, ?3, '', ?5, ?6, ?7, ?8, 'text/markdown');
         """)
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         try stmt.bind(sourceID.rawValue, at: 2)
         if let parentID { try stmt.bind(parentID.rawValue, at: 3) }
-        try stmt.bind(content, at: 4)
         try stmt.bind(origin, at: 5)
         if let note { try stmt.bind(note, at: 6) }
         try stmt.bind(now.timeIntervalSince1970, at: 7)
+        try stmt.bind(blobHash, at: 8)
         _ = try stmt.step()
 
         // Re-embed the source from the just-written content + its name so content
@@ -3625,31 +3995,242 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
         return SourceMarkdownVersion(
             id: id, sourceID: sourceID, parentID: parentID,
-            content: content, origin: origin, note: note, createdAt: now
+            content: content, origin: origin, note: note, createdAt: now,
+            blobHash: blobHash, mimeType: "text/markdown"
         )
     }
 
+    /// Record a provenance-carrying extraction alternative (§4.5, §4.7). Creates
+    /// the backend's Agent + an `extract` Activity + a CAS'd smv row in ONE
+    /// transaction. Does NOT write the `source-derived` ref — alternatives
+    /// coexist; the first becomes HEAD by the default-active rule (MAX id), later
+    /// ones are alternatives until nominated via `setActiveMarkdown`. Returns the
+    /// new version. Best-effort re-embed/search-index only when this row becomes
+    /// the active head (no ref points elsewhere).
+    @discardableResult
+    public func recordMarkdownExtraction(
+        sourceID: PageID, content: String, backend: ExtractionBackend,
+        sourceVersionID: String? = nil, note: String? = nil,
+        modelVersion: String? = nil
+    ) throws -> SourceMarkdownVersion {
+        lock.lock(); defer { lock.unlock() }
+        let id = PageID(rawValue: ULID.generate())
+        let parentID = try processedMarkdownHead(sourceID: sourceID)?.id
+        let now = Date()
+        let nowTS = now.timeIntervalSince1970
+        // Resolve the source's active content version when the caller didn't
+        // supply one (the model layer can't reach `activeContentVersion`).
+        let resolvedSourceVersionID = sourceVersionID
+            ?? (try? activeContentVersion(sourceID: sourceID))?.id
+
+        var storedBlobHash: String = ""
+        var storedActivityID: String = ""
+        try withTransaction {
+            // Agent (idempotent by name) + a single extract activity.
+            let agentID = try ensureAgent(
+                name: backend.agentName, version: modelVersion)
+            let activityID = ULID.generate()
+            storedActivityID = activityID
+            let plan = "{\"backend\":\"\(backend.rawValue)\""
+                + (modelVersion.map { ",\"model\":\"\($0)\"" } ?? "")
+                + "}"
+            let insActivity = try statement("""
+            INSERT INTO activities (id, kind, agent_id, plan, started_at, ended_at)
+            VALUES (?1, 'extract', ?2, ?3, ?4, ?4);
+            """)
+            insActivity.reset()
+            try insActivity.bind(activityID, at: 1)
+            try insActivity.bind(agentID, at: 2)
+            try insActivity.bind(plan, at: 3)
+            try insActivity.bind(nowTS, at: 4)
+            _ = try insActivity.step()
+            insActivity.reset()
+
+            // CAS the body, then append the smv row.
+            let blobHash = try storeMarkdownBlob(content)
+            storedBlobHash = blobHash
+            let ins = try statement("""
+            INSERT INTO source_markdown_versions
+              (id, file_id, parent_id, content, origin, note, created_at,
+               activity_id, source_version_id, blob_hash, mime_type)
+            VALUES (?1, ?2, ?3, '', 'extraction', ?4, ?5, ?6, ?7, ?8, 'text/markdown');
+            """)
+            ins.reset()
+            try ins.bind(id.rawValue, at: 1)
+            try ins.bind(sourceID.rawValue, at: 2)
+            if let parentID { try ins.bind(parentID.rawValue, at: 3) }
+            if let note { try ins.bind(note, at: 4) }
+            try ins.bind(nowTS, at: 5)
+            try ins.bind(activityID, at: 6)
+            if let resolvedSourceVersionID { try ins.bind(resolvedSourceVersionID, at: 7) }
+            try ins.bind(blobHash, at: 8)
+            _ = try ins.step()
+            ins.reset()
+        }
+
+        // Re-embed / index only when this row is now the active head (default-
+        // active rule: it is MAX(id); if a ref nominates a different row, this is
+        // just a coexisting alternative and must not disturb the active index).
+        let refExists = (try? markdownDerivedRef(sourceID: sourceID)) != nil
+        if !refExists {
+            reembedSource(sourceID: sourceID, body: content)
+            upsertSourceSearch(sourceID: sourceID, body: content)
+        }
+
+        return SourceMarkdownVersion(
+            id: id, sourceID: sourceID, parentID: parentID,
+            content: content, origin: "extraction", note: note, createdAt: now,
+            activityID: storedActivityID, sourceVersionID: resolvedSourceVersionID,
+            blobHash: storedBlobHash, mimeType: "text/markdown"
+        )
+    }
+
+    /// True when a `source-derived` ref exists for the source (i.e. an
+    /// alternative has been explicitly nominated). INTERNAL — caller holds `lock`.
+    private func markdownDerivedRef(sourceID: PageID) throws -> String? {
+        let stmt = try statement("""
+        SELECT version_id FROM refs
+        WHERE kind = 'source-derived' AND owner_id = ?1;
+        """)
+        stmt.reset()
+        try stmt.bind(sourceID.rawValue, at: 1)
+        if try stmt.step() { return stmt.text(at: 0) }
+        return nil
+    }
+
+    /// Revert to an older version by appending a NEW row that reuses the target's
+    /// `blob_hash` (a pointer copy — no blob bytes re-stored), then nominating it
+    /// the active HEAD via the `source-derived` ref. History is preserved.
     @discardableResult
     public func revertProcessedMarkdown(sourceID: PageID, to versionID: PageID) throws -> SourceMarkdownVersion {
         lock.lock(); defer { lock.unlock() }
-        // Read the target version's content — must exist and belong to sourceID.
-        guard let stmt = try? statement("""
-        SELECT content FROM source_markdown_versions WHERE id = ?1 AND file_id = ?2;
+        // Read the target row — must exist and belong to sourceID. Resolve its
+        // body from the blob so the returned version carries real content.
+        guard let target = try? statement("""
+        SELECT \(Self.smvSelectColumns)
+        FROM source_markdown_versions smv
+        \(Self.smvBlobJoin)
+        WHERE smv.id = ?1 AND smv.file_id = ?2;
         """) else {
             throw WikiStoreError.unexpected("source_markdown_versions table not found")
         }
-        defer { stmt.reset() }
-        try stmt.bind(versionID.rawValue, at: 1)
-        try stmt.bind(sourceID.rawValue, at: 2)
-        guard try stmt.step() else {
+        defer { target.reset() }
+        try target.bind(versionID.rawValue, at: 1)
+        try target.bind(sourceID.rawValue, at: 2)
+        guard try target.step() else {
             throw WikiStoreError.notFound(versionID)
         }
-        let oldContent = stmt.text(at: 0)
+        let targetVersion = sourceMarkdownVersion(from: target)
+        guard let targetBlobHash = targetVersion.blobHash else {
+            // A target without a blob_hash is unmigrated/legacy — fall back to the
+            // append-copy path (rare; only pre-v21 rows that escaped backfill).
+            return try appendProcessedMarkdown(
+                sourceID: sourceID, content: targetVersion.content,
+                origin: "revert", note: "revert to \(versionID.rawValue)")
+        }
 
-        // Append a new version whose content copies the target. History preserved.
-        return try appendProcessedMarkdown(
-            sourceID: sourceID, content: oldContent,
-            origin: "revert", note: "revert to \(versionID.rawValue)"
+        // Append a new row reusing the target's blob_hash (INSERT OR IGNORE on the
+        // existing hash is a no-op — zero new blob bytes), then repoint the ref.
+        let id = PageID(rawValue: ULID.generate())
+        let parentID = try processedMarkdownHead(sourceID: sourceID)?.id
+        let now = Date()
+        let nowTS = now.timeIntervalSince1970
+        try withTransaction {
+            let ins = try statement("""
+            INSERT INTO source_markdown_versions
+              (id, file_id, parent_id, content, origin, note, created_at,
+               activity_id, source_version_id, blob_hash, mime_type)
+            VALUES (?1, ?2, ?3, '', 'revert', ?4, ?5, ?6, ?7, ?8, ?9);
+            """)
+            ins.reset()
+            try ins.bind(id.rawValue, at: 1)
+            try ins.bind(sourceID.rawValue, at: 2)
+            if let parentID { try ins.bind(parentID.rawValue, at: 3) }
+            try ins.bind("revert to \(versionID.rawValue)", at: 4)
+            try ins.bind(nowTS, at: 5)
+            if let activityID = targetVersion.activityID { try ins.bind(activityID, at: 6) }
+            if let svID = targetVersion.sourceVersionID { try ins.bind(svID, at: 7) }
+            try ins.bind(targetBlobHash, at: 8)
+            try ins.bind(targetVersion.mimeType, at: 9)
+            _ = try ins.step()
+            ins.reset()
+            try upsertMarkdownDerivedRef(sourceID: sourceID, versionID: id.rawValue, now: nowTS)
+        }
+
+        // Refresh the search indexes for the now-active body.
+        reembedSource(sourceID: sourceID, body: targetVersion.content)
+        upsertSourceSearch(sourceID: sourceID, body: targetVersion.content)
+
+        return SourceMarkdownVersion(
+            id: id, sourceID: sourceID, parentID: parentID,
+            content: targetVersion.content, origin: "revert",
+            note: "revert to \(versionID.rawValue)", createdAt: now,
+            activityID: targetVersion.activityID,
+            sourceVersionID: targetVersion.sourceVersionID,
+            blobHash: targetBlobHash, mimeType: targetVersion.mimeType
         )
+    }
+
+    /// UPSERT the `source-derived` ref (generation + 1). INTERNAL — caller holds
+    /// `lock` and is inside a `withTransaction` when a transactional context is
+    /// required. Used by `setActiveMarkdown` and `revertProcessedMarkdown`.
+    private func upsertMarkdownDerivedRef(sourceID: PageID, versionID: String, now: Double) throws {
+        let prevGeneration = try markdownDerivedGeneration(sourceID: sourceID)
+        let nextGeneration = (prevGeneration ?? 0) + 1
+        let up = try statement("""
+        INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+        VALUES ('source-derived', ?1, ?2, ?3, ?4)
+        ON CONFLICT(kind, owner_id) DO UPDATE SET
+            version_id = excluded.version_id,
+            generation = excluded.generation,
+            updated_at = excluded.updated_at;
+        """)
+        up.reset()
+        try up.bind(sourceID.rawValue, at: 1)
+        try up.bind(versionID, at: 2)
+        try up.bind(Int64(nextGeneration), at: 3)
+        try up.bind(now, at: 4)
+        _ = try up.step()
+        up.reset()
+    }
+
+    /// The current `generation` of the `source-derived` ref, or nil when none.
+    private func markdownDerivedGeneration(sourceID: PageID) throws -> Int? {
+        let stmt = try statement("""
+        SELECT generation FROM refs
+        WHERE kind = 'source-derived' AND owner_id = ?1;
+        """)
+        stmt.reset()
+        try stmt.bind(sourceID.rawValue, at: 1)
+        if try stmt.step() { return Int(stmt.int(at: 0)) }
+        return nil
+    }
+
+    /// Nominate an existing smv row as the active HEAD for a source: validate the
+    /// target belongs to the source, then UPSERT the `source-derived` ref. The
+    /// changeToken already folds `refs.generation_sum`, so a repoint moves it.
+    public func setActiveMarkdown(sourceID: PageID, to versionID: PageID) throws {
+        lock.lock(); defer { lock.unlock() }
+        try withTransaction {
+            // Validate the target belongs to this source.
+            let check = try statement("""
+            SELECT 1 FROM source_markdown_versions
+            WHERE id = ?1 AND file_id = ?2;
+            """)
+            check.reset()
+            try check.bind(versionID.rawValue, at: 1)
+            try check.bind(sourceID.rawValue, at: 2)
+            guard try check.step() else {
+                throw WikiStoreError.notFound(versionID)
+            }
+            try upsertMarkdownDerivedRef(
+                sourceID: sourceID, versionID: versionID.rawValue,
+                now: Date().timeIntervalSince1970)
+        }
+        // Refresh the search indexes for the newly-active body.
+        if let head = try? processedMarkdownHead(sourceID: sourceID) {
+            reembedSource(sourceID: sourceID, body: head.content)
+            upsertSourceSearch(sourceID: sourceID, body: head.content)
+        }
     }
 }
