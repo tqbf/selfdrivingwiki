@@ -540,12 +540,20 @@ final class SourcesNSTableView: NSTableView {
         return (self.delegate as? SourcesListViewController)?.menuForRow(row)
     }
 
+    /// Cmd+A → select all rows, scoped to this table. See the matching note on
+    /// `PagesNSTableView`: `performKeyEquivalent(with:)` runs for the whole
+    /// view hierarchy, so we must confirm this table is the first responder
+    /// (or hosts it) before hijacking Cmd+A — otherwise we steal it from the
+    /// omnibox and other fields in the same window.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.contains(.command),
-           event.charactersIgnoringModifiers == "a" {
-            self.selectAll(self)
-            return true
+        guard event.modifierFlags.contains(.command),
+              event.charactersIgnoringModifiers == "a" else {
+            return super.performKeyEquivalent(with: event)
         }
-        return super.performKeyEquivalent(with: event)
+        guard isSelfOrDescendantFirstResponder() else {
+            return super.performKeyEquivalent(with: event)
+        }
+        self.selectAll(self)
+        return true
     }
 }

@@ -2,6 +2,27 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-05 — Stop sidebar tables stealing Cmd+A from the omnibox (#154)
+
+`PagesNSTableView` and `SourcesNSTableView` overrode `performKeyEquivalent(with:)`
+to map Cmd+A → "select all rows". But `performKeyEquivalent` is dispatched across
+the *entire* window view hierarchy for every key-down (not just to the first
+responder), so the override unconditionally consumed Cmd+A even when the omnibox
+field editor — not the table — was first responder. Result: Cmd+A in the address
+bar selected all sidebar rows instead of the omnibox text. Fixes
+[#154](https://github.com/tqbf/selfdrivingwiki/issues/154).
+
+- **`NSView.isFirstResponder(_:selfOrDescendantOf:)`** (`WikiFS/NSView+FirstResponder.swift`,
+  new) — a pure predicate (nil / self / descendant / unrelated) that the tables
+  now consult before acting on Cmd+A. Split out as a static function so the
+  gating decision is testable without depending on window key/visibility state,
+  which AppKit does not reliably commit in a headless test environment.
+- **Both table overrides** now `guard isSelfOrDescendantFirstResponder()` before
+  calling `selectAll(self)`; otherwise they defer to `super`.
+- **`SidebarSelectAllShortcutTests`** — pure-predicate coverage plus integration
+  regression guards: with an omnibox `NSTextField` holding focus (field editor
+  first responder), neither table consumes Cmd+A, and non-Cmd+A keys always defer.
+
 ## 2026-07-04 — Multi-select pages/sources → bookmark them all into a chosen folder (#151)
 
 Bookmarking was folder-first: the only entry point was from inside the Bookmarks

@@ -411,15 +411,23 @@ final class PagesNSTableView: NSTableView {
         return (self.delegate as? PagesListViewController)?.menuForRow(row)
     }
 
-    /// Cmd+A → select all rows, scoped to this table (only the visible
-    /// section's table is in the responder chain). Replaces the cross-section
-    /// `handleSelectAll` hack from the shared-List era.
+    /// Cmd+A → select all rows, scoped to this table.
+    ///
+    /// `performKeyEquivalent(with:)` is dispatched across the window's entire
+    /// view hierarchy for every key-down event — not just to the current first
+    /// responder — so a naive override here would steal Cmd+A from other first
+    /// responders in the same window (notably the omnibox/address bar). We
+    /// therefore only act when this table view (or a descendant, e.g. an inline
+    /// field editor) is actually the current first responder.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.contains(.command),
-           event.charactersIgnoringModifiers == "a" {
-            self.selectAll(self)
-            return true
+        guard event.modifierFlags.contains(.command),
+              event.charactersIgnoringModifiers == "a" else {
+            return super.performKeyEquivalent(with: event)
         }
-        return super.performKeyEquivalent(with: event)
+        guard isSelfOrDescendantFirstResponder() else {
+            return super.performKeyEquivalent(with: event)
+        }
+        self.selectAll(self)
+        return true
     }
 }
