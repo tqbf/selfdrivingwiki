@@ -28,23 +28,28 @@ ref) verbatim.
   protocol + `WikiStoreModel` wrapper. Replaces the A+B two-call pattern
   (`history` + `agentNames`) for the sheet.
 - **`ExtractionCompareSheet`** (`Sources/WikiFS/ExtractionCompareSheet.swift`,
-  new) — a modal sheet from `SourceDetailView`: an alternatives list with
-  Kaleidoscope-style **assign A/B** targets, two compare panes, a toolbar
-  **Rendered ↔ Diff** toggle, and a per-pane **Set Active** that nominates the
-  `source-derived` ref and moves the Active badge live (sheet stays open).
-  Rendered mode reuses `WikiReaderView` (no new rendering code); Diff mode
-  renders a unified monospaced line-diff with a +/− legend. Defaults: left =
-  active HEAD, right = most-recent other.
+  new) — the compare/nominate surface, rendered as the content of a value-driven
+  `WindowGroup` in `WikiFSApp` (a real, **resizable, non-modal** window — one per
+  source, opened via `openWindow(value:)`; not a sheet, so it doesn't fight the
+  reader for space and you can keep working in the main window while comparing).
+  An alternatives list with Kaleidoscope-style **assign A/B** targets, two
+  compare panes, a toolbar **Rendered ↔ Diff** toggle, and a per-pane **Set
+  Active** that nominates the `source-derived` ref and moves the Active badge
+  live. `ExtractionCompareWindow` resolves the shared `manager.activeStore` so
+  Set Active propagates to the detail view immediately (same `@Observable`
+  model). Rendered mode reuses `WikiReaderView` (no new rendering code); Diff
+  mode renders a unified monospaced line-diff with a +/− legend. Defaults: left
+  = active HEAD, right = most-recent other.
 - **`SourceDetailView`** — a "Compare Extractions…" header button (PDFs with
-  markdown, disabled when fewer than 2 alternatives) + `.sheet(item:)`; the
-  detail reader's `headVersion` refreshes on sheet dismiss. The A+B quick-switch
-  `extractionsMenu` is retained.
+  markdown, disabled when fewer than 2 alternatives) opens the compare window
+  via the `openWindow` environment action. The A+B quick-switch `extractionsMenu`
+  is retained.
 
-**Evidence:** new `MarkdownDiffTests` (6 cases) + track-C cases in
-`ProcessedMarkdownTests` (alternatives provenance, backend-name fallbacks,
-`from(agentName:)` round-trip, Set-Active badge update). Full suite:
-**1498 tests green.** Tracks A+B+C now complete (the deferred compare UI lands
-in v1 with the diff toggle included).
+**Evidence:** new `MarkdownDiffTests` (7 cases, incl. the degraded-cap fallback)
++ track-C cases in `ProcessedMarkdownTests` (alternatives provenance, backend-name
+fallbacks, `from(agentName:)` round-trip, Set-Active badge update). Full suite:
+**1499 tests green.** Tracks A+B+C now complete (the deferred compare UI lands
+in v1 with the diff toggle included, as a non-modal window).
 
 ## 2026-07-05 — Graph-model Phase 2: extraction alternatives (tracks A+B, v21)
 

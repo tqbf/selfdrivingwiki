@@ -1,24 +1,52 @@
 import SwiftUI
 import WikiFSCore
 
-/// Carries the source to compare extractions for. `Identifiable` so
-/// `SourceDetailView` can present the sheet via `.sheet(item:)`.
-struct ExtractionCompareContext: Identifiable {
-    let id = UUID()
+/// Identifies which source to compare extractions for. Value-driven
+/// `WindowGroup(for:)` identity: `Hashable`/`==` are based on `sourceID` alone,
+/// so opening Compare for a source that already has a window focuses it rather
+/// than spawning a duplicate. `Codable` is required by the value-driven scene.
+struct ExtractionCompareContext: Codable, Hashable {
     let sourceID: PageID
     let filename: String
+
+    static func == (lhs: ExtractionCompareContext, rhs: ExtractionCompareContext) -> Bool {
+        lhs.sourceID == rhs.sourceID
+    }
+    func hash(into hasher: inout Hasher) { hasher.combine(sourceID) }
 }
 
-/// Modal compare/nominate surface for a source's extraction alternatives
-/// (graph-model Phase 2, track C). Renders any two alternatives side-by-side in
-/// the real reader (`WikiReaderView`), with a toolbar toggle to a unified
-/// line-diff (`MarkdownDiff`). Each alternative's provenance (backend, model,
-/// date, size) is shown; "Set Active" nominates the `source-derived` ref via
-/// `WikiStoreModel.setActiveMarkdown` and the Active badge updates live — the
-/// sheet stays open so the user can keep comparing.
+/// Resolves the active wiki's store for the compare window. `manager` is the
+/// same `@State` instance the main window uses, so the window shares the live
+/// `WikiStoreModel` — a "Set Active" nominate here propagates to the detail
+/// view immediately (both read the same `@Observable` model).
+struct ExtractionCompareWindow: View {
+    let manager: WikiManager
+    let context: ExtractionCompareContext?
+
+    var body: some View {
+        if let store = manager.activeStore, let ctx = context {
+            ExtractionCompareSheet(store: store, sourceID: ctx.sourceID, filename: ctx.filename)
+        } else {
+            ContentUnavailableView {
+                Label("No Source to Compare", systemImage: "doc.questionmark")
+            } description: {
+                Text("Open a wiki and source, then choose Compare Extractions.")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+/// Compare/nominate surface for a source's extraction alternatives (graph-model
+/// Phase 2, track C). Rendered as the content of a value-driven `WindowGroup`
+/// (a real, resizable, non-modal window — see `WikiFSApp`). Renders any two
+/// alternatives side-by-side in the real reader (`WikiReaderView`), with a
+/// toolbar toggle to a unified line-diff (`MarkdownDiff`). Each alternative's
+/// provenance (backend, model, date, size) is shown; "Set Active" nominates the
+/// `source-derived` ref via `WikiStoreModel.setActiveMarkdown` and the Active
+/// badge updates live.
 ///
-/// Matches the app's picker-sheet idiom (`BookmarkTargetPickerSheet`). No new
-/// markdown-rendering code: both panes reuse `WikiReaderView`.
+/// No new markdown-rendering code: both panes reuse `WikiReaderView`.
 struct ExtractionCompareSheet: View {
     @Bindable var store: WikiStoreModel
     let sourceID: PageID
@@ -63,8 +91,8 @@ struct ExtractionCompareSheet: View {
                     .lineLimit(1).truncationMode(.middle)
             }
             Spacer()
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.return, modifiers: [])
+            Button("Close") { dismiss() }
+                .keyboardShortcut(.escape, modifiers: [])
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)

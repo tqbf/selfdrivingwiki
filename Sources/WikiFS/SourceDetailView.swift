@@ -57,8 +57,8 @@ struct SourceDetailView: View {
     /// Quote to highlight in the PDF view, set when a `[[source:Name#"…"]]` link
     /// targets an un-extracted PDF. Consumed from `store.pendingScrollAnchor`.
     @State private var pdfQuote: String?
-    /// Presented to show the extraction compare/nominate sheet (track C).
-    @State private var compareContext: ExtractionCompareContext?
+    /// Opens the Compare Extractions window (value-driven `WindowGroup`).
+    @Environment(\.openWindow) private var openWindow
 
     // Find bar state. Shared via environment (see `ContentView`) so the address
     // bar's "Find on Page…" menu item and Cmd+F drive the same model (#157).
@@ -226,11 +226,6 @@ struct SourceDetailView: View {
             }
             if !newValue { shouldRestoreEditing = false }
         }
-        .sheet(item: $compareContext) { ctx in
-            ExtractionCompareSheet(
-                store: store, sourceID: ctx.sourceID, filename: ctx.filename)
-                .onDisappear { headVersion = store.processedMarkdownHead(for: file) }
-        }
     }
 
     // MARK: - Header
@@ -333,8 +328,8 @@ struct SourceDetailView: View {
                     }
                     if isPDF, hasMarkdown {
                         Button("Compare Extractions…", systemImage: "arrow.left.and.right.square") {
-                            compareContext = ExtractionCompareContext(
-                                sourceID: file.id, filename: file.filename)
+                            openWindow(value: ExtractionCompareContext(
+                                sourceID: file.id, filename: file.filename))
                         }
                         .disabled(!hasMultipleExtractions)
                         .help(hasMultipleExtractions

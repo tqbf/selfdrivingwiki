@@ -18,11 +18,13 @@ provenance (backend, model, date, size), and lets you **nominate the active one*
 ("Set Active") without leaving the comparison.
 
 **Operator-approved scope (this plan):**
-- Surface = **modal sheet** (matches the existing picker-sheet idiom;
-  `BookmarkTargetPickerSheet` / `ItemPickerSheet`).
-- Representation = **rendered side-by-side** (two `WikiReaderView`s). A raw
-  text diff is a documented **fast-follow**, explicitly out of scope for the
-  gate.
+- Surface = a **value-driven `WindowGroup`** — a real, resizable, non-modal
+  window (one per source), opened via `openWindow(value:)`. Not a sheet/modal:
+  compare shouldn't fight the reader for space, and the user can keep working in
+  the main window while comparing. Mirrors the app's existing `openWindow(id:)`
+  secondary-window precedent (`Claude Prompt Templates`).
+- Representation = **rendered side-by-side** (two `WikiReaderView`s) with a
+  **Rendered ↔ Diff toolbar toggle** (a unified LCS line-diff, shipped in v1).
 
 ## Background (what already exists — grounded)
 
