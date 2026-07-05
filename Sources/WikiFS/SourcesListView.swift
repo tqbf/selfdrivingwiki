@@ -243,6 +243,9 @@ final class SourcesListViewController: NSViewController {
         tableView.backgroundColor = .clear
         tableView.doubleAction = #selector(onDoubleClick)
         tableView.target = self
+        // Enable drag-out (see PagesListView for the mask rationale). `.copy`
+        // because dragging a source row opens a reference rather than moving it.
+        tableView.setDraggingSourceOperationMask(.copy, forLocal: true)
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("source"))
         tableView.addTableColumn(column)
@@ -309,6 +312,11 @@ final class SourcesListViewController: NSViewController {
 
 extension SourcesListViewController: NSTableViewDataSource {
     func numberOfRows(in tableView: NSTableView) -> Int { items.count }
+
+    func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+        guard row >= 0, row < items.count else { return nil }
+        return SidebarDragPayload(kind: .source, id: items[row].id.rawValue).makePasteboardWriter()
+    }
 }
 
 // MARK: - Delegate

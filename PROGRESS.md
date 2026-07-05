@@ -2,21 +2,40 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-07-04 — "Open in Background" focuses the tab when the bar is empty (#138)
+## 2026-07-04 — Drag sidebar rows onto the welcome screen to open them (#133)
 
-"Open in Background" appended a tab without activating it — correct when other
-tabs exist, but a no-op when the bar was empty (nothing stayed focused, so the
-user clicked and saw no visible change). Fixes
-[#138](https://github.com/tqbf/selfdrivingwiki/issues/138).
+The welcome/empty-state screen only accepted external **file** drops (URL
+ingest). Sidebar rows (pages, sources, bookmarks) weren't draggable at all.
+Now any of them can be dragged onto the welcome screen to open its detail view
+directly, instead of requiring a sidebar click. Implements
+[#133](https://github.com/tqbf/selfdrivingwiki/issues/133).
 
-- **`WikiStoreModel.openTabInBackground`** now delegates to `openTab` when
-  `tabs.isEmpty`, so the first tab is opened *and* activated instead of appended
-  to an empty bar. Non-empty-bar behavior is unchanged (background = keep current
-  focus). All five call sites (`SourcesContainerView`, `PagesContainerView`,
-  `BookmarksOutlineView`, `WikiLinkMenuNSItems`, `WikiReaderView`) route through
-  this single method, so no view changes were needed.
-- **Regression test** `backgroundOpenOnEmptyBarFocusesTheNewTab` in
-  `EditorTabTests` asserts the empty-bar path sets `activeTabID` to the new tab.
+- **`SidebarDragPayload`** (`WikiFSCore`, new) — a `Codable` value carrying a
+  `kind` (page/source) + id, with a computed `selection: WikiSelection`. Kept in
+  the model layer (no `Transferable`) so it's unit-testable; the app layer adds
+  the `Transferable` conformance + a programmatic `UTType.wikiSidebarItem`
+  (`exportedAs:conformingTo: .data`). No Info.plist UTType registration — the
+  payload only round-trips within the process, matched by identifier string.
+- **Drag sources** — `PagesListView`/`SourcesListView` gain
+  `pasteboardWriterForRow` (returning a custom `NSPasteboardWriting` with the
+  payload JSON) plus `.copy` local drag-source mask.
+  `BookmarksOutlineView.pasteboardWriterForItem` now dual-registers: the
+  `.string` node id (so intra-tree **reorder** keeps working — `acceptDrop`
+  reads `pb.string(forType: .string)`) AND the resolved-target payload
+  (`pageRef`→page, `sourceRef`→source). Folders carry the node id only.
+  Bookmarks resolve to what they point at at drag-start, so the drop target
+  doesn't need to know bookmarks exist.
+- **Drop target** — `WikiDetailView`'s welcome (`.none`) case gets
+  `.dropDestination(for: SidebarDragPayload.self)` that calls
+  `store.openTab(payload.selection)`. It's the innermost drop target, so it
+  takes priority over the window-level URL-ingest destination for sidebar
+  payloads; URL drops still fall through to ingest. A subtle accent tint
+  highlights the drop zone while targeted.
+- **Tests** — `SidebarDragPayloadTests` (Codable round-trip + selection
+  mapping) and `SidebarDragPasteboardBridgeTests` (pasteboard-level bridge:
+  writer → `NSPasteboard` → decodable JSON, including the bookmark
+  dual-representation and folder node-id-only cases). 1378-test suite green
+  except for one pre-existing flake in unrelated pdf-pipe code.
 
 ## 2026-07-04 — Sources default-open opens an in-app tab; "Open With" submenu for external editors (#139)
 

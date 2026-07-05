@@ -265,10 +265,22 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
         return node.kind == .folder
     }
 
-    // Drag and drop
+    // Drag and drop.
+    // The writer carries TWO representations so one drag can serve two drop
+    // targets: the `.string` node id powers intra-tree reorder (`acceptDrop`
+    // reads `pb.string(forType: .string)`), and the resolved-target payload lets
+    // the row be dropped onto the welcome screen to open whatever the bookmark
+    // points at (issue #133). Folders have no target, so they carry only the
+    // reorder id.
     func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
         guard let node = item as? BookmarkNode else { return nil }
-        return node.id as NSString
+        var payload: SidebarDragPayload?
+        if let targetID = node.targetID,
+           node.kind == .pageRef || node.kind == .sourceRef {
+            let kind: SidebarDragPayload.Kind = (node.kind == .pageRef) ? .page : .source
+            payload = SidebarDragPayload(kind: kind, id: targetID.rawValue)
+        }
+        return SidebarDragPasteboardItem(payload: payload, bookmarkNodeID: node.id)
     }
 
     func outlineView(_ outlineView: NSOutlineView,
