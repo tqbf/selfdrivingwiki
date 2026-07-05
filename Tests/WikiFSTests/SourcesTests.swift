@@ -8,7 +8,7 @@ import WikiFS
 
 /// Phase 5 file-ingestion tests: ingest/list/get/delete, byte-identical content
 /// round-trip, ext/mime derivation, the soft size cap, the stepwise v1→2
-/// migration (pages preserved), and distinct ULIDs for duplicate drops.
+/// migration (pages preserved), and duplicate-content detection (issue #126).
 struct SourcesTests {
 
     private func tempDatabaseURL() -> URL {
@@ -168,12 +168,41 @@ struct SourcesTests {
         }
     }
 
-    // MARK: - Duplicate drops → distinct ULIDs
+    // MARK: - Duplicate content detection (issue #126)
 
-    @Test func duplicateDropsGetDistinctIDs() throws {
+    @Test func byteIdenticalContentThrowsDuplicateContent() throws {
+        // Same bytes, same filename: rejected — the whole point of the check.
         let store = try tempStore()
         let a = try store.addSource(filename: "same.txt", data: Data("same".utf8))
-        let b = try store.addSource(filename: "same.txt", data: Data("same".utf8))
+        #expect(throws: WikiStoreError.self) {
+            try store.addSource(filename: "same.txt", data: Data("same".utf8))
+        }
+        #expect(try store.listSources().count == 1)
+
+        do {
+            _ = try store.addSource(filename: "same.txt", data: Data("same".utf8))
+            Issue.record("expected duplicateContent to be thrown")
+        } catch WikiStoreError.duplicateContent(let existing) {
+            #expect(existing.id == a.id)
+        }
+    }
+
+    @Test func byteIdenticalContentUnderADifferentFilenameStillThrows() throws {
+        // The hash is over CONTENT only — a renamed re-drop of the same bytes
+        // is still a duplicate (issue #126's proposal: content-only, filename
+        // is irrelevant to the hash).
+        let store = try tempStore()
+        _ = try store.addSource(filename: "original.txt", data: Data("same".utf8))
+        #expect(throws: WikiStoreError.self) {
+            try store.addSource(filename: "renamed.txt", data: Data("same".utf8))
+        }
+        #expect(try store.listSources().count == 1)
+    }
+
+    @Test func distinctContentIsNotFlaggedAsDuplicate() throws {
+        let store = try tempStore()
+        let a = try store.addSource(filename: "1.txt", data: Data("one".utf8))
+        let b = try store.addSource(filename: "2.txt", data: Data("two".utf8))
         #expect(a.id != b.id)
         #expect(try store.listSources().count == 2)
     }
@@ -250,7 +279,7 @@ struct SourcesTests {
         #expect(sqlite3_prepare_v2(check, "PRAGMA user_version;", -1, &stmt, nil) == SQLITE_OK)
         defer { sqlite3_finalize(stmt) }
         #expect(sqlite3_step(stmt) == SQLITE_ROW)
-        #expect(sqlite3_column_int(stmt, 0) == 18)
+        #expect(sqlite3_column_int(stmt, 0) == 19)
         _ = store
     }
 

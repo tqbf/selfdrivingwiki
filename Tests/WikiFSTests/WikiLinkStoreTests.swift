@@ -212,8 +212,8 @@ struct WikiLinkStoreTests {
 
     @Test func ambiguousLooseMatchDoesNotResolve() throws {
         let store = try tempStore()
-        _ = try store.addSource(filename: "Report (2025).pdf", data: Data("%PDF".utf8))
-        _ = try store.addSource(filename: "Report (2026).pdf", data: Data("%PDF".utf8))
+        _ = try store.addSource(filename: "Report (2025).pdf", data: Data("%PDF 2025".utf8))
+        _ = try store.addSource(filename: "Report (2026).pdf", data: Data("%PDF 2026".utf8))
         // "Report" loose-matches both → refuse to guess.
         #expect(try store.resolveSourceByName("Report") == nil)
     }

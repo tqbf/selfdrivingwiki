@@ -8,6 +8,11 @@ public enum WikiStoreError: Error, CustomStringConvertible {
     case sqlite(code: Int32, message: String)
     case notFound(PageID)
     case unexpected(String)
+    /// Thrown by `addSource` when the incoming bytes are byte-identical to an
+    /// already-stored source (matched by `content_hash`). Carries the existing
+    /// row so callers can reference it (e.g. "already added as <name>") instead
+    /// of just reporting a bare failure.
+    case duplicateContent(existing: SourceSummary)
 
     public var description: String {
         switch self {
@@ -15,8 +20,14 @@ public enum WikiStoreError: Error, CustomStringConvertible {
         case .sqlite(let code, let message): return "SQLite error \(code): \(message)"
         case .notFound(let id): return "Page not found: \(id.rawValue)"
         case .unexpected(let m): return "Unexpected: \(m)"
+        case .duplicateContent(let existing):
+            return "Duplicate content: already stored as \(existing.effectiveName) (\(existing.id.rawValue))"
         }
     }
+}
+
+extension WikiStoreError: LocalizedError {
+    public var errorDescription: String? { description }
 }
 
 /// Read/write storage interface for wiki pages (INITIAL.md §3). The SQLite
@@ -59,6 +70,13 @@ public protocol WikiStore: Sendable {
     /// The optional `zoteroItemKey`/`zoteroItemTitle` capture provenance when the
     /// file was ingested from a Zotero library item; they default to `nil` so
     /// drag-drop / URL / folder-import callers are unchanged.
+    ///
+    /// Centralized duplicate detection: `data` is hashed (SHA-256) and compared
+    /// against every existing source's `content_hash` BEFORE the insert. A
+    /// byte-identical match throws `WikiStoreError.duplicateContent(existing:)`
+    /// instead of inserting a second copy — every caller funnels through this
+    /// one seam, so drag-drop, URL fetch, Zotero ingest, and folder import all
+    /// get the check automatically.
     @discardableResult
     func addSource(
         filename: String,

@@ -49,7 +49,7 @@ struct SourceEmbeddingSearchTests {
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
         defer { sqlite3_close(db) }
 
-        #expect(scalarInt(db, "PRAGMA user_version;") == 18)
+        #expect(scalarInt(db, "PRAGMA user_version;") == 19)
         #expect(tableExists(db, "source_chunks"))
         // page chunk table mirrors the source one.
         #expect(tableExists(db, "page_chunks"))
@@ -108,9 +108,9 @@ struct SourceEmbeddingSearchTests {
 
     @Test func searchSimilarSourcesLIKEFallbackRespectsLimit() throws {
         let store = try tempStore()
-        _ = try store.addSource(filename: "report-1.pdf", data: Data("%PDF".utf8))
-        _ = try store.addSource(filename: "report-2.pdf", data: Data("%PDF".utf8))
-        _ = try store.addSource(filename: "report-3.pdf", data: Data("%PDF".utf8))
+        _ = try store.addSource(filename: "report-1.pdf", data: Data("%PDF 1".utf8))
+        _ = try store.addSource(filename: "report-2.pdf", data: Data("%PDF 2".utf8))
+        _ = try store.addSource(filename: "report-3.pdf", data: Data("%PDF 3".utf8))
 
         let hits = try store.searchSimilarSources(query: "report", limit: 2)
         #expect(hits.count == 2)

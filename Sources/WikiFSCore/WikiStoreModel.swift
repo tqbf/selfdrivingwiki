@@ -54,10 +54,12 @@ public final class WikiStoreModel {
     /// (first run, an NLEmbedding→MiniLM cutover, or `wikictl`-written content);
     /// the common launch is an instant no-op and shows nothing.
     /// A user-facing error from a store mutation (e.g. a delete that violated a
-    /// foreign-key constraint). Surfaced via an alert in `ContentView`; `nil`-ing
-    /// it dismisses the alert.
+    /// foreign-key constraint, or files skipped as duplicates during ingest).
+    /// Surfaced via an alert in `ContentView`, titled per-site so a duplicate
+    /// skip doesn't read as a failed delete; `nil`-ing it dismisses the alert.
     public struct StoreError: Identifiable {
         public let id = UUID()
+        public let title: String
         public let message: String
     }
     public private(set) var storeError: StoreError?
@@ -1043,7 +1045,9 @@ public final class WikiStoreModel {
             onPageDidChange?()
         } catch {
             DebugLog.store("WikiStoreModel.delete failed: \(error)")
-            storeError = StoreError(message: "Could not delete the page: \(error.localizedDescription)")
+            storeError = StoreError(
+                title: "Couldn't Delete Page",
+                message: "Could not delete the page: \(error.localizedDescription)")
         }
     }
 
@@ -1062,6 +1066,7 @@ public final class WikiStoreModel {
     /// daemon re-enumerates the `sources/` tree exactly once for the whole batch.
     public func ingest(fileURLs: [URL]) async {
         var lastSourceID: PageID?
+        var duplicateNames: [String] = []
         for url in fileURLs {
             // Skip directories — only flat files are ingested.
             let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
@@ -1080,7 +1085,7 @@ public final class WikiStoreModel {
                 DebugLog.store("WikiStoreModel.ingest read failed for \(filename): \(error)")
                 continue
             }
-            
+
             let ext = (filename as NSString).pathExtension.lowercased()
             let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
             let response = URLIngestService.FetchResponse(data: data, contentType: mimeType, finalURL: url)
@@ -1090,6 +1095,11 @@ public final class WikiStoreModel {
                 let summary = try store.addSource(
                     filename: plan.filename, data: plan.data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: mimeType)
                 lastSourceID = summary.id
+            } catch WikiStoreError.duplicateContent(let existing) {
+                // Byte-identical to an already-stored source — skip rather than
+                // abort the rest of the drop batch; report it so the user isn't
+                // left wondering why the file didn't show up.
+                duplicateNames.append("\(filename) (already added as \(existing.effectiveName))")
             } catch {
                 DebugLog.store("WikiStoreModel.ingest store failed for \(filename): \(error)")
             }
@@ -1098,6 +1108,13 @@ public final class WikiStoreModel {
         if let sourceID = lastSourceID {
             openTab(.source(sourceID))
             onPageDidChange?()
+        }
+        if !duplicateNames.isEmpty {
+            storeError = StoreError(
+                title: duplicateNames.count == 1 ? "Duplicate File Skipped" : "Duplicate Files Skipped",
+                message: "These files have the exact same content as a source you already added, "
+                    + "so they weren't added again:\n"
+                    + duplicateNames.map { "• \($0)" }.joined(separator: "\n"))
         }
     }
 
@@ -1147,6 +1164,10 @@ public final class WikiStoreModel {
                 filename: filename, data: data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil)
             reloadSources()
             onPageDidChange?()
+        } catch WikiStoreError.duplicateContent(let existing) {
+            storeError = StoreError(
+                title: "Duplicate File Skipped",
+                message: "\(filename) has the exact same content as \(existing.effectiveName), so it wasn't added again.")
         } catch {
             DebugLog.store("WikiStoreModel.addSource failed: \(error)")
         }
@@ -1194,7 +1215,11 @@ public final class WikiStoreModel {
     /// Import every `.md` / `.markdown` file in `directory` (recursively) as an
     /// ingested file — a one-shot migration of an Obsidian vault, LogSeq graph, or
     /// any folder of Markdown notes. Hidden files/directories are skipped.
-    /// Duplicate filenames get a disambiguating suffix (`Note.md`, `Note-1.md`, …).
+    /// Duplicate FILENAMES get a disambiguating suffix (`Note.md`, `Note-1.md`, …);
+    /// duplicate CONTENT (byte-identical to a file already in the store, from this
+    /// import or an earlier one) is skipped and folded into `errors` rather than
+    /// blocking the rest of the batch — a folder import is often large, so a
+    /// modal-per-duplicate would be disruptive (issue #126).
     ///
     /// All files land via the shared `store.addSource(filename:data:)` seam —
     /// exactly the same path as drag-drop, URL fetch, and Zotero ingest.
@@ -1220,6 +1245,8 @@ public final class WikiStoreModel {
                     filename: file.filename, data: file.data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: mimeType)
                 if firstSourceID == nil { firstSourceID = summary.id }
                 imported += 1
+            } catch WikiStoreError.duplicateContent(let existing) {
+                errorMessages.append("\(file.filename): duplicate of \(existing.effectiveName), skipped")
             } catch {
                 errorMessages.append("\(file.filename): \(error.localizedDescription)")
             }

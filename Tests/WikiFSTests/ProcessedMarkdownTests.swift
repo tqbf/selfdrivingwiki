@@ -87,7 +87,7 @@ struct ProcessedMarkdownTests {
 
     @Test func freshDBHasV8Schema() throws {
         let store = try tempStore()
-        #expect(store.pragmaValue("user_version") == "18")
+        #expect(store.pragmaValue("user_version") == "19")
     }
 
     @Test func v7DBUpgradesToV8PreservingData() throws {
@@ -103,7 +103,7 @@ struct ProcessedMarkdownTests {
 
         // Opening runs v7→v8→…→v15 migration.
         let store = try SQLiteWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "18")
+        #expect(store.pragmaValue("user_version") == "19")
         // Pre-existing file is intact.
         let content = try store.sourceContent(
             id: PageID(rawValue: "01J00000000000000000000000"))
@@ -287,9 +287,9 @@ struct ProcessedMarkdownTests {
 
     @Test func processedMarkdownHeadsBySourceReturnsHeadsBySourceID() throws {
         let store = try tempStore()
-        let fileA = try seedSource(in: store, filename: "alpha.txt")
-        let fileB = try seedSource(in: store, filename: "beta.txt")
-        let fileC = try seedSource(in: store, filename: "gamma.txt") // no head
+        let fileA = try seedSource(in: store, filename: "alpha.txt", data: Data("alpha".utf8))
+        let fileB = try seedSource(in: store, filename: "beta.txt", data: Data("beta".utf8))
+        let fileC = try seedSource(in: store, filename: "gamma.txt", data: Data("gamma".utf8)) // no head
         let headA = try store.appendProcessedMarkdown(
             sourceID: fileA.id, content: "alpha head", origin: "extraction", note: nil)
         usleep(2000)
