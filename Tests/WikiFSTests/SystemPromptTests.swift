@@ -153,9 +153,9 @@ struct SystemPromptTests {
     @Test func changeTokenAdvancesOnSystemPromptEdit() throws {
         let store = try tempStore()
         // No pages, no sources: only the system-prompt version moves.
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0")
+        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0")
         try store.updateSystemPrompt(body: "edited")
-        #expect(try store.changeToken() == "0:0:0:0:2:0:1:0")
+        #expect(try store.changeToken() == "0:0:0:0:2:0:1:0:0:0:0")
     }
 
     // MARK: - UPSERT recreates a missing singleton row (defensive)
@@ -234,7 +234,7 @@ struct SystemPromptTests {
         #expect(sqlite3_prepare_v2(check, "PRAGMA user_version;", -1, &stmt, nil) == SQLITE_OK)
         defer { sqlite3_finalize(stmt) }
         #expect(sqlite3_step(stmt) == SQLITE_ROW)
-        #expect(sqlite3_column_int(stmt, 0) == 19)
+        #expect(sqlite3_column_int(stmt, 0) == 20)
         _ = store
     }
 }

@@ -143,20 +143,29 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // (version >= 1) — and fresh dbs forced onto the ladder by tests — run
         // `migrate(from:)` so every prior upgrade path is preserved.
         if version == 0 && !forceLadderMigration {
-            try createFreshSchemaV19()
+            try createFreshSchemaV20()
             return
         }
         try migrate(from: &version)
     }
 
-    /// Build the complete current (v19) schema for a fresh database in one
+    /// Build the complete current (v20) schema for a fresh database in one
     /// consolidated block. MUST stay schema-identical to the end state of
     /// `migrate(from:)`; the `freshFastPathMatchesStepwiseLadder` test enforces
     /// that by forcing a fresh db through the ladder and comparing. Legacy index
     /// names (`ingested_files_created`, `file_markdown_versions_file`) are
     /// reproduced verbatim — they survive the table renames in the ladder, so a
     /// fresh db must match.
-    private func createFreshSchemaV19() throws {
+    ///
+    /// v20 (graph-model Phase 1): moves source content out of `sources.content`
+    /// into immutable, content-addressed `blobs` (§4.1), an append-only
+    /// `source_versions` chain (§4.2), a PROV-DM `agents`/`activities`
+    /// provenance substrate (§4.7), and a single mutable `refs` pointer table
+    /// (§4.3). The `sources` table keeps `byte_size`/`mime_type`/`content_hash`
+    /// as denormalized mirrors of the active version's blob (deviation from
+    /// §4.2, flagged in the plan's Risks) to minimize blast radius — every
+    /// Phase 1 source has exactly one version, so the mirror never drifts.
+    private func createFreshSchemaV20() throws {
         // Core page model + attachments/links.
         try exec("""
         CREATE TABLE pages (
@@ -196,6 +205,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
         // Sources — final shape: ingested_files (v2) + ingested_at (v6) +
         // zotero columns (v9) + display_name (v10) + content_hash (v19).
+        // v20 (graph-model Phase 1): the `content` column is GONE — bytes live
+        // in immutable `blobs`, reached through the `source_versions` chain and
+        // the `refs` pointer (see the objects tables below). `byte_size`,
+        // `mime_type`, and `content_hash` stay as denormalized mirrors of the
+        // active version's blob (minimize blast radius; single version per
+        // source in Phase 1).
         try exec("""
         CREATE TABLE sources (
             id TEXT PRIMARY KEY,
@@ -203,7 +218,6 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             ext TEXT NOT NULL DEFAULT '',
             mime_type TEXT,
             byte_size INTEGER NOT NULL,
-            content BLOB NOT NULL,
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL,
             version INTEGER NOT NULL DEFAULT 1,
@@ -389,7 +403,78 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // v18 is a data-only step (name sanitization) — a fresh DB has no rows
         // to sweep, so the fast path just stamps the version. v19 adds
         // content_hash (above, in the table def) — also no rows to backfill.
-        try exec("PRAGMA user_version=19;")
+
+        // v20 (graph-model Phase 1): the objects & versioning substrate (§4.1–
+        // 4.3). `sources.content` is already absent from the table def above;
+        // these five tables are the immutable storage it migrates into. Shared
+        // with the v19→20 migration step so the fresh path and the ladder stay
+        // byte-identical (`freshFastPathMatchesStepwiseLadder`).
+        try createObjectsTablesV20()
+
+        try exec("PRAGMA user_version=20;")
+    }
+
+    /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
+    /// `agents`, `activities`, `source_versions`, `refs`. Called by both the
+    /// fresh-schema fast path and the v19→20 migration step so the two stay
+    /// schema-identical. Idempotent in spirit but NOT guarded — callers ensure
+    /// the tables do not yet exist (fresh path: brand-new DB; migration: this
+    /// step runs once at v19).
+    private func createObjectsTablesV20() throws {
+        // `IF NOT EXISTS`: idempotent. The fresh path calls this on a brand-new
+        // DB (no tables), but a DB rewound from v20 for testing already has them.
+        try exec("""
+        CREATE TABLE IF NOT EXISTS blobs (
+            hash       TEXT PRIMARY KEY,
+            byte_size  INTEGER NOT NULL,
+            content    BLOB NOT NULL
+        );
+        """)
+        try exec("""
+        CREATE TABLE IF NOT EXISTS agents (
+            id           TEXT PRIMARY KEY,
+            kind         TEXT NOT NULL,
+            name         TEXT NOT NULL,
+            version      TEXT,
+            external_ref TEXT
+        );
+        """)
+        try exec("""
+        CREATE TABLE IF NOT EXISTS activities (
+            id           TEXT PRIMARY KEY,
+            kind         TEXT NOT NULL,
+            agent_id     TEXT NOT NULL REFERENCES agents(id),
+            plan         TEXT,
+            external_ref TEXT,
+            started_at   REAL NOT NULL,
+            ended_at     REAL
+        );
+        """)
+        try exec("""
+        CREATE TABLE IF NOT EXISTS source_versions (
+            id                TEXT PRIMARY KEY,
+            source_id         TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+            parent_id         TEXT,
+            blob_hash         TEXT REFERENCES blobs(hash),
+            mime_type         TEXT,
+            original_path     TEXT,
+            thumbnail_hash    TEXT REFERENCES blobs(hash),
+            activity_id       TEXT REFERENCES activities(id),
+            external_identity TEXT,
+            fetched_at        REAL NOT NULL
+        );
+        """)
+        try exec("CREATE INDEX IF NOT EXISTS source_versions_source ON source_versions(source_id, id);")
+        try exec("""
+        CREATE TABLE IF NOT EXISTS refs (
+            kind       TEXT NOT NULL,
+            owner_id   TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+            version_id TEXT NOT NULL,
+            generation INTEGER NOT NULL DEFAULT 1,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (kind, owner_id)
+        );
+        """)
     }
 
     /// The stepwise, idempotent migration ladder keyed on `PRAGMA user_version`.
@@ -858,6 +943,151 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try exec("PRAGMA user_version=19;")
             version = 19
         }
+
+        // Step 19 → 20 (graph-model Phase 1): move source content out of the
+        // mutable `sources.content` column into immutable, content-addressed
+        // `blobs`, an append-only `source_versions` chain, a PROV-DM
+        // `agents`/`activities` substrate, and a single mutable `refs` pointer
+        // (§4.1–4.3). Each existing source gets one v1 version + one ref + a
+        // blob whose hash reuses the v19 `content_hash` (same SHA-256 — no
+        // re-hash). `sources.content` is then DROPPED. The single read path
+        // (`sourceContent`) becomes ref-resolved (ref → version → blob).
+        //
+        // All DML is inside ONE `withTransaction` (BEGIN IMMEDIATE → savepoint
+        // nesting): if the pre-migration assertion fails, the whole step rolls
+        // back harmlessly. This is a one-shot, irreversible migration (no
+        // soak/dual-write, §9 pre-launch rationale); the DB is VCS-restorable.
+        if version < 20 {
+            try migrateV19ToV20()
+            try exec("PRAGMA user_version=20;")
+            version = 20
+        }
+    }
+
+    /// The v19→20 migration step. Creates the objects tables, then — for every
+    /// existing source — writes a blob (reusing `content_hash` as the SHA-256),
+    /// a per-source import activity, a v1 `source_versions` row, and a
+    /// `source-content` ref (generation 1). Finally drops `sources.content`.
+    /// Throws (rolling back) if any source lacks a `content_hash` — a
+    /// silent-data-loss guard (in practice impossible: `content BLOB NOT NULL`
+    /// + the v19 backfill sweep guarantee a hash).
+    private func migrateV19ToV20() throws {
+        try withTransaction {
+            // 1. Create the five objects tables (idempotent — IF NOT EXISTS).
+            try createObjectsTablesV20()
+
+            // If `sources.content` is already gone, this DB was migrated to v20
+            // and then rewound to an older stamp for testing. Its blobs/versions/
+            // refs are already populated from the original creation, and there is
+            // no `content` to migrate — so the data step is a no-op. (A genuine
+            // v19 DB always has `content`.)
+            let hasContentColumn = try queryScalarText(
+                "SELECT COUNT(*) FROM pragma_table_info('sources') WHERE name='content';") != "0"
+            guard hasContentColumn else { return }
+
+            // 0. Pre-migration assertion (silent-data-loss guard). Every source
+            //    MUST have a non-empty content_hash to reuse as the blob hash.
+            let unhashed = try queryScalarText(
+                "SELECT COUNT(*) FROM sources WHERE content_hash IS NULL OR content_hash = '';")
+            if unhashed != "0" {
+                // A NULL hash is impossible under `content NOT NULL` + the v19
+                // sweep, but if one ever appears, hash that source's bytes
+                // in-step before proceeding — never silently drop content.
+                try backfillContentHashes()
+                let recheck = try queryScalarText(
+                    "SELECT COUNT(*) FROM sources WHERE content_hash IS NULL OR content_hash = '';")
+                guard recheck == "0" else {
+                    throw WikiStoreError.unexpected(
+                        "v20 migration: \(recheck) source(s) still lack a content_hash after backfill — refusing to drop content")
+                }
+            }
+
+            // 2. Seed one legacy agent representing every pre-Phase-1 import.
+            //    No real extraction provenance exists to backfill (§3); this
+            //    agent stands in so each v1 version has a valid wasAssociatedWith.
+            let legacyAgentID = ULID.generate()
+            let seedAgent = try statement(
+                "INSERT INTO agents (id, kind, name) VALUES (?1, 'software', 'legacy-import');")
+            seedAgent.reset()
+            try seedAgent.bind(legacyAgentID, at: 1)
+            _ = try seedAgent.step()
+
+            // 3. For each existing source: blob + activity + v1 version + ref.
+            let now = Date().timeIntervalSince1970
+            let select = try statement("""
+            SELECT id, content, content_hash, mime_type, byte_size, created_at
+            FROM sources;
+            """)
+            let insBlob = try statement(
+                "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+            let insActivity = try statement("""
+            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+            VALUES (?1, 'import', ?2, ?3, ?3);
+            """)
+            let insVersion = try statement("""
+            INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
+                                         mime_type, activity_id, fetched_at)
+            VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6);
+            """)
+            let insRef = try statement("""
+            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+            VALUES ('source-content', ?1, ?2, 1, ?3);
+            """)
+
+            while try select.step() {
+                let sourceID = select.text(at: 0)
+                let content = select.blob(at: 1)
+                let hash = select.text(at: 2)
+                let mimeIsNull = sqlite3_column_type(select.handle, 3) == SQLITE_NULL
+                let mime = mimeIsNull ? nil : select.text(at: 3)
+                let byteSize = select.int(at: 4)
+                let createdAt = select.double(at: 5)
+
+                // Reuse content_hash as the blob hash (same SHA-256, v19).
+                insBlob.reset()
+                try insBlob.bind(hash, at: 1)
+                try insBlob.bind(byteSize, at: 2)
+                try insBlob.bind(content, at: 3)
+                _ = try insBlob.step()
+
+                // Per-source import activity.
+                let activityID = ULID.generate()
+                insActivity.reset()
+                try insActivity.bind(activityID, at: 1)
+                try insActivity.bind(legacyAgentID, at: 2)
+                try insActivity.bind(createdAt, at: 3)
+                _ = try insActivity.step()
+
+                // v1 version.
+                let versionID = ULID.generate()
+                insVersion.reset()
+                try insVersion.bind(versionID, at: 1)
+                try insVersion.bind(sourceID, at: 2)
+                try insVersion.bind(hash, at: 3)
+                if let mime { try insVersion.bind(mime, at: 4) }
+                try insVersion.bind(activityID, at: 5)
+                try insVersion.bind(createdAt, at: 6)
+                _ = try insVersion.step()
+
+                // Active ref.
+                insRef.reset()
+                try insRef.bind(sourceID, at: 1)
+                try insRef.bind(versionID, at: 2)
+                try insRef.bind(now, at: 3)
+                _ = try insRef.step()
+            }
+            select.reset()
+            insBlob.reset()
+            insActivity.reset()
+            insVersion.reset()
+            insRef.reset()
+
+            // 4. Drop the content column. macOS 15 ships SQLite ≥ 3.43
+            //    (`DROP COLUMN` since 3.35). If an older SQLite is ever
+            //    targeted, fall back to the rename→create→copy→drop rebuild
+            //    the ladder already uses elsewhere.
+            try exec("ALTER TABLE sources DROP COLUMN content;")
+        }
     }
 
     /// One-time backfill for the v18→19 step: hash every existing source's
@@ -865,6 +1095,14 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// pure function of the stored bytes, so this is safe to compute once and
     /// never touch again — new rows get their hash at insert time in `addSource`.
     private func backfillContentHashes() throws {
+        // Resilience: the `content` column is dropped in the v20 step. A DB that
+        // was already migrated to v20 then rewound to an older stamp for testing
+        // (or any DB where content is already gone) has no `content` to hash —
+        // and its `content_hash` is already populated, so this backfill is a
+        // no-op. Bail rather than throw "no such column: content".
+        let hasContentColumn = try queryScalarText(
+            "SELECT COUNT(*) FROM pragma_table_info('sources') WHERE name='content';") != "0"
+        guard hasContentColumn else { return }
         let select = try statement("SELECT id, content FROM sources;")
         defer { select.reset() }
         var rows: [(id: String, hash: String)] = []
@@ -1066,7 +1304,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         let pages = try statement("SELECT COUNT(*), COALESCE(SUM(version), 0) FROM pages;")
         defer { pages.reset() }
-        guard try pages.step() else { return "0:0:0:0:0:0:0:0" }
+        guard try pages.step() else { return "0:0:0:0:0:0:0:0:0:0:0" }
         let pCount = pages.int(at: 0)
         let pSum = pages.int(at: 1)
         let (fCount, fSum) = sourceCountSum()
@@ -1074,7 +1312,14 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let logCount = logRowCount()
         let idxVersion = wikiIndexVersion()
         let smvCount = sourceMarkdownVersionCount()
-        return "\(pCount):\(pSum):\(fCount):\(fSum):\(spVersion):\(logCount):\(idxVersion):\(smvCount)"
+        // v20 folds: source_versions count, refs generation sum, activities
+        // count. All three are change-detector folds (not monotone — a source
+        // delete legitimately lowers them). The token only needs to CHANGE on
+        // any mutation, which it does.
+        let svCount = sourceVersionCount()
+        let refsGenSum = refsGenerationSum()
+        let actCount = activitiesCount()
+        return "\(pCount):\(pSum):\(fCount):\(fSum):\(spVersion):\(logCount):\(idxVersion):\(smvCount):\(svCount):\(refsGenSum):\(actCount)"
     }
 
     /// COUNT/SUM(version) over `sources`, resilient to the table not
@@ -1132,6 +1377,39 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     private func sourceMarkdownVersionCount() -> Int64 {
         guard let stmt = try? statement(
             "SELECT COUNT(*) FROM source_markdown_versions;") else { return 0 }
+        defer { stmt.reset() }
+        guard (try? stmt.step()) == true else { return 0 }
+        return stmt.int(at: 0)
+    }
+
+    /// v20 fold: the `source_versions` table's row COUNT. Resilient to the table
+    /// not existing yet (a read connection opened against a pre-v20 DB). On any
+    /// failure returns `0` so `changeToken()` still answers.
+    private func sourceVersionCount() -> Int64 {
+        guard let stmt = try? statement(
+            "SELECT COUNT(*) FROM source_versions;") else { return 0 }
+        defer { stmt.reset() }
+        guard (try? stmt.step()) == true else { return 0 }
+        return stmt.int(at: 0)
+    }
+
+    /// v20 fold: the `COALESCE(SUM(generation), 0)` over `refs` — the only
+    /// mutable pointer state. Bumps on every repoint (refresh/rollback); drops
+    /// when a source (and its ref) is deleted. Resilient to the table not
+    /// existing yet (pre-v20 read connection).
+    private func refsGenerationSum() -> Int64 {
+        guard let stmt = try? statement(
+            "SELECT COALESCE(SUM(generation), 0) FROM refs;") else { return 0 }
+        defer { stmt.reset() }
+        guard (try? stmt.step()) == true else { return 0 }
+        return stmt.int(at: 0)
+    }
+
+    /// v20 fold: the `activities` table's row COUNT. Resilient to the table not
+    /// existing yet (pre-v20 read connection).
+    private func activitiesCount() -> Int64 {
+        guard let stmt = try? statement(
+            "SELECT COUNT(*) FROM activities;") else { return 0 }
         defer { stmt.reset() }
         guard (try? stmt.step()) == true else { return 0 }
         return stmt.int(at: 0)
@@ -1500,23 +1778,85 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
         let stmt = try statement("""
         INSERT INTO sources
-          (id, filename, ext, mime_type, byte_size, content, created_at, updated_at, version,
+          (id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
            zotero_item_key, zotero_item_title, display_name, content_hash)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, 1, ?8, ?9, ?10, ?11);
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1, ?7, ?8, ?9, ?10);
         """)
-        defer { stmt.reset() }
-        try stmt.bind(id.rawValue, at: 1)
-        try stmt.bind(filename, at: 2)
-        try stmt.bind(ext, at: 3)
-        if let mime { try stmt.bind(mime, at: 4) }  // else leave NULL
-        try stmt.bind(Int64(data.count), at: 5)
-        try stmt.bind(data, at: 6)
-        try stmt.bind(now.timeIntervalSince1970, at: 7)
-        if let zoteroItemKey { try stmt.bind(zoteroItemKey, at: 8) }  // else leave NULL
-        if let zoteroItemTitle { try stmt.bind(zoteroItemTitle, at: 9) }  // else leave NULL
-        if let displayName { try stmt.bind(displayName, at: 10) }  // else leave NULL
-        try stmt.bind(contentHash, at: 11)
-        _ = try stmt.step()
+        // Graph-model Phase 1: the content bytes no longer live in `sources`.
+        // In ONE transaction, write the blob (dedup via INSERT OR IGNORE), an
+        // import activity, the v1 version, and the active ref — then the
+        // `sources` identity row (byte_size/mime_type/content_hash are
+        // denormalized mirrors of the v1 blob). The dedup check above already
+        // ran against `sources.content_hash`, unchanged.
+        try withTransaction {
+            let sourceID = id.rawValue
+            let nowTS = now.timeIntervalSince1970
+
+            // 0. The `sources` identity row FIRST — `source_versions.source_id`
+            //    and `refs.owner_id` FK onto it, so it must exist before they do.
+            stmt.reset()
+            try stmt.bind(id.rawValue, at: 1)
+            try stmt.bind(filename, at: 2)
+            try stmt.bind(ext, at: 3)
+            if let mime { try stmt.bind(mime, at: 4) }  // else leave NULL
+            try stmt.bind(Int64(data.count), at: 5)
+            try stmt.bind(nowTS, at: 6)
+            if let zoteroItemKey { try stmt.bind(zoteroItemKey, at: 7) }  // else leave NULL
+            if let zoteroItemTitle { try stmt.bind(zoteroItemTitle, at: 8) }  // else leave NULL
+            if let displayName { try stmt.bind(displayName, at: 9) }  // else leave NULL
+            try stmt.bind(contentHash, at: 10)
+            _ = try stmt.step()
+
+            // 1. Blob (identical bytes = one row, ever).
+            let insBlob = try statement(
+                "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+            insBlob.reset()
+            try insBlob.bind(contentHash, at: 1)
+            try insBlob.bind(Int64(data.count), at: 2)
+            try insBlob.bind(data, at: 3)
+            _ = try insBlob.step()
+
+            // 2. Import activity, associated with the legacy agent (Phase 3
+            //    swaps in the real provider agent).
+            let agentID = try legacyImportAgentID()
+            let activityID = ULID.generate()
+            let insActivity = try statement("""
+            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+            VALUES (?1, 'import', ?2, ?3, ?3);
+            """)
+            insActivity.reset()
+            try insActivity.bind(activityID, at: 1)
+            try insActivity.bind(agentID, at: 2)
+            try insActivity.bind(nowTS, at: 3)
+            _ = try insActivity.step()
+
+            // 3. v1 version (parent_id NULL, the content blob).
+            let versionID = ULID.generate()
+            let insVersion = try statement("""
+            INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
+                                         mime_type, activity_id, fetched_at)
+            VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6);
+            """)
+            insVersion.reset()
+            try insVersion.bind(versionID, at: 1)
+            try insVersion.bind(sourceID, at: 2)
+            try insVersion.bind(contentHash, at: 3)
+            if let mime { try insVersion.bind(mime, at: 4) }
+            try insVersion.bind(activityID, at: 5)
+            try insVersion.bind(nowTS, at: 6)
+            _ = try insVersion.step()
+
+            // 4. Active ref (generation 1).
+            let insRef = try statement("""
+            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+            VALUES ('source-content', ?1, ?2, 1, ?3);
+            """)
+            insRef.reset()
+            try insRef.bind(sourceID, at: 1)
+            try insRef.bind(versionID, at: 2)
+            try insRef.bind(nowTS, at: 3)
+            _ = try insRef.step()
+        }
 
         // Name-only full-text index entry so an un-extracted source is still
         // findable by filename/display name. The body is indexed once processed
@@ -1562,15 +1902,162 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         return sourceSummary(from: stmt)
     }
 
-    /// The verbatim content bytes for one source, fetched on demand (never
-    /// held in the summary list). Throws `.notFound` if absent.
+    /// The verbatim content bytes for one source, resolved through the graph
+    /// model: ref → version → blob (§4.3). This is the single content read seam,
+    /// so `wikictl cat`/`export`, the File Provider `contents(for:)`, and ingest
+    /// staging all route through it unchanged.
+    ///
+    /// Resolution order:
+    /// 1. The `source-content` ref → its version's `blob_hash` (the chosen
+    ///    active version). Absent a ref row, fall back to the default-active
+    ///    rule (§4.3): `MAX(id)` version for the source — this is the
+    ///    "track latest" path an external writer (`wikictl` direct insert) or a
+    ///    Phase 3 provider may legitimately produce.
+    /// 2. A `NULL` blob_hash means a **byteless** source → return empty `Data()`
+    ///    (never throws — the File Provider projection rule, §9).
+    /// 3. Else read the blob bytes. Throws `.notFound` only when the source has
+    ///    NO version rows at all (truly unknown id).
     public func sourceContent(id: PageID) throws -> Data {
         lock.lock(); defer { lock.unlock() }
-        let stmt = try statement("SELECT content FROM sources WHERE id = ?1;")
+        // 1. Resolve the active version's blob_hash via the ref, else MAX(id).
+        let refStmt = try statement("""
+        SELECT sv.blob_hash
+        FROM refs r
+        JOIN source_versions sv ON sv.id = r.version_id
+        WHERE r.kind = 'source-content' AND r.owner_id = ?1;
+        """)
+        refStmt.reset()
+        try refStmt.bind(id.rawValue, at: 1)
+        var blobHash: String?
+        if try refStmt.step() {
+            // blob_hash may be NULL (byteless) — read via column type.
+            if sqlite3_column_type(refStmt.handle, 0) != SQLITE_NULL {
+                blobHash = refStmt.text(at: 0)
+            } else {
+                blobHash = nil   // explicit byteless
+            }
+        } else {
+            // No ref row → default-active rule: MAX(id) version.
+            let maxStmt = try statement("""
+            SELECT blob_hash FROM source_versions
+            WHERE source_id = ?1 ORDER BY id DESC LIMIT 1;
+            """)
+            maxStmt.reset()
+            try maxStmt.bind(id.rawValue, at: 1)
+            if try maxStmt.step() {
+                if sqlite3_column_type(maxStmt.handle, 0) != SQLITE_NULL {
+                    blobHash = maxStmt.text(at: 0)
+                } else {
+                    blobHash = nil   // explicit byteless
+                }
+            } else {
+                // No version rows at all → unknown source.
+                throw WikiStoreError.notFound(id)
+            }
+        }
+
+        // 2. Byteless source → empty Data (never throws).
+        guard let blobHash else { return Data() }
+
+        // 3. Read the blob bytes.
+        let blobStmt = try statement("SELECT content FROM blobs WHERE hash = ?1;")
+        blobStmt.reset()
+        try blobStmt.bind(blobHash, at: 1)
+        guard try blobStmt.step() else {
+            // A version points at a blob that is missing — an integrity break
+            // (blob writes always precede version writes). Treat as byteless
+            // so the File Provider projection never throws (§9), but log it so
+            // the corruption is observable rather than invisible.
+            DebugLog.store("sourceContent: blob \(blobHash) missing for source \(id.rawValue) — returning empty Data (integrity break)")
+            return Data()
+        }
+        return blobStmt.blob(at: 0)
+    }
+
+    /// The active content version for a source, resolved exactly like
+    /// `sourceContent` (ref → version, else default-active `MAX(id)`). Returns
+    /// nil when the source has no version rows at all.
+    public func activeContentVersion(sourceID: PageID) throws -> SourceVersion? {
+        lock.lock(); defer { lock.unlock() }
+        // Prefer the ref; fall back to MAX(id) (default-active rule, §4.3).
+        let refStmt = try statement("""
+        SELECT sv.id, sv.source_id, sv.parent_id, sv.blob_hash, sv.mime_type,
+               sv.activity_id, sv.external_identity, sv.fetched_at
+        FROM refs r
+        JOIN source_versions sv ON sv.id = r.version_id
+        WHERE r.kind = 'source-content' AND r.owner_id = ?1;
+        """)
+        refStmt.reset()
+        try refStmt.bind(sourceID.rawValue, at: 1)
+        if try refStmt.step() {
+            return sourceVersion(from: refStmt)
+        }
+        let maxStmt = try statement("""
+        SELECT id, source_id, parent_id, blob_hash, mime_type,
+               activity_id, external_identity, fetched_at
+        FROM source_versions
+        WHERE source_id = ?1 ORDER BY id DESC LIMIT 1;
+        """)
+        maxStmt.reset()
+        try maxStmt.bind(sourceID.rawValue, at: 1)
+        guard try maxStmt.step() else { return nil }
+        return sourceVersion(from: maxStmt)
+    }
+
+    /// The full content-version chain for a source, newest-first (parallel to
+    /// `processedMarkdownHistory`). Empty when the source has no versions.
+    public func contentVersionHistory(sourceID: PageID) throws -> [SourceVersion] {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement("""
+        SELECT id, source_id, parent_id, blob_hash, mime_type,
+               activity_id, external_identity, fetched_at
+        FROM source_versions WHERE source_id = ?1 ORDER BY id DESC;
+        """)
         defer { stmt.reset() }
-        try stmt.bind(id.rawValue, at: 1)
-        guard try stmt.step() else { throw WikiStoreError.notFound(id) }
-        return stmt.blob(at: 0)
+        try stmt.bind(sourceID.rawValue, at: 1)
+        var out: [SourceVersion] = []
+        while try stmt.step() {
+            out.append(sourceVersion(from: stmt))
+        }
+        return out
+    }
+
+    /// Decode a `source_versions` row (column order: id, source_id, parent_id,
+    /// blob_hash, mime_type, activity_id, external_identity, fetched_at) into a
+    /// `SourceVersion`, reading NULLable columns by column type.
+    private func sourceVersion(from stmt: SQLiteStatement) -> SourceVersion {
+        func textOrNull(_ col: Int32) -> String? {
+            sqlite3_column_type(stmt.handle, col) == SQLITE_NULL ? nil : stmt.text(at: col)
+        }
+        return SourceVersion(
+            id: stmt.text(at: 0),
+            sourceID: PageID(rawValue: stmt.text(at: 1)),
+            parentID: textOrNull(2),
+            blobHash: textOrNull(3),
+            mimeType: textOrNull(4),
+            activityID: textOrNull(5),
+            externalIdentity: textOrNull(6),
+            fetchedAt: Date(timeIntervalSince1970: stmt.double(at: 7))
+        )
+    }
+
+    /// Get-or-create the single legacy import agent (`kind='software'`,
+    /// `name='legacy-import'`) that stands in for every pre-Phase-3 import (§3:
+    /// no real extraction provenance exists). Idempotent: the v19→20 migration
+    /// seeds one, and a fresh DB has none, so this lazily creates it on first
+    /// `addSource`. INTERNAL — caller holds `lock`.
+    private func legacyImportAgentID() throws -> String {
+        let find = try statement(
+            "SELECT id FROM agents WHERE name = 'legacy-import' LIMIT 1;")
+        find.reset()
+        if try find.step() { return find.text(at: 0) }
+        let id = ULID.generate()
+        let ins = try statement(
+            "INSERT INTO agents (id, kind, name) VALUES (?1, 'software', 'legacy-import');")
+        ins.reset()
+        try ins.bind(id, at: 1)
+        _ = try ins.step()
+        return id
     }
 
     public func deleteSource(id: PageID) throws {
@@ -1579,6 +2066,217 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         _ = try stmt.step()
+    }
+
+    // MARK: - Graph-model Phase 1: content versioning primitives
+
+    /// Append a new content version for a source (the store-level refresh/
+    /// re-ingest primitive; Phase 3 wires the provider refresh UI/verb). Hashes
+    /// the bytes → `INSERT OR IGNORE` into `blobs` (identical bytes = zero new
+    /// blob bytes, the dedup win) → a new `source_versions` row whose
+    /// `parent_id` is the current active version → `UPSERT` the `source-content`
+    /// ref (generation + 1) → refresh the denormalized `sources` mirror
+    /// (`byte_size`/`mime_type`/`version`/`updated_at`). All in ONE transaction.
+    ///
+    /// Throws `.unexpected` if `data` exceeds `ingestByteCap`. Returns the new
+    /// version. The history chain is append-only — nothing is ever updated or
+    /// deleted (a rollback is a pointer repoint, see `rollbackSourceContent`).
+    @discardableResult
+    public func appendContentVersion(
+        sourceID: PageID, data: Data, mimeType: String? = nil
+    ) throws -> SourceVersion {
+        lock.lock(); defer { lock.unlock() }
+        guard data.count <= Self.ingestByteCap else {
+            throw WikiStoreError.unexpected(
+                "source \(data.count) bytes exceeds cap \(Self.ingestByteCap)")
+        }
+        let contentHash = SHA256.hash(data: data)
+            .map { String(format: "%02x", $0) }.joined()
+        let now = Date()
+        let nowTS = now.timeIntervalSince1970
+
+        return try withTransaction {
+            // Resolve the current active version (for parent_id + generation).
+            let parent = try activeContentVersion(sourceID: sourceID)
+            let prevGeneration = try refGeneration(sourceID: sourceID)
+
+            // 1. Blob (identical bytes = one row, ever).
+            let insBlob = try statement(
+                "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+            insBlob.reset()
+            try insBlob.bind(contentHash, at: 1)
+            try insBlob.bind(Int64(data.count), at: 2)
+            try insBlob.bind(data, at: 3)
+            _ = try insBlob.step()
+
+            // 2. Fetch activity (Phase 3 swaps in the real provider agent).
+            let agentID = try legacyImportAgentID()
+            let activityID = ULID.generate()
+            let insActivity = try statement("""
+            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+            VALUES (?1, 'fetch', ?2, ?3, ?3);
+            """)
+            insActivity.reset()
+            try insActivity.bind(activityID, at: 1)
+            try insActivity.bind(agentID, at: 2)
+            try insActivity.bind(nowTS, at: 3)
+            _ = try insActivity.step()
+
+            // 3. New version (parent = current active).
+            let versionID = ULID.generate()
+            let insVersion = try statement("""
+            INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
+                                         mime_type, activity_id, fetched_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);
+            """)
+            insVersion.reset()
+            try insVersion.bind(versionID, at: 1)
+            try insVersion.bind(sourceID.rawValue, at: 2)
+            if let parent { try insVersion.bind(parent.id, at: 3) }
+            try insVersion.bind(contentHash, at: 4)
+            if let mime = mimeType ?? parent?.mimeType {
+                try insVersion.bind(mime, at: 5)
+            }
+            try insVersion.bind(activityID, at: 6)
+            try insVersion.bind(nowTS, at: 7)
+            _ = try insVersion.step()
+
+            // 4. UPSERT the active ref (generation + 1).
+            let nextGeneration = (prevGeneration ?? 0) + 1
+            let upRef = try statement("""
+            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+            VALUES ('source-content', ?1, ?2, ?3, ?4)
+            ON CONFLICT(kind, owner_id) DO UPDATE SET
+                version_id = excluded.version_id,
+                generation = excluded.generation,
+                updated_at = excluded.updated_at;
+            """)
+            upRef.reset()
+            try upRef.bind(sourceID.rawValue, at: 1)
+            try upRef.bind(versionID, at: 2)
+            try upRef.bind(Int64(nextGeneration), at: 3)
+            try upRef.bind(nowTS, at: 4)
+            _ = try upRef.step()
+
+            // 5. Refresh the denormalized `sources` mirror (byte_size,
+            //    mime_type, AND content_hash — the latter so addSource's dedup
+            //    check against the indexed `content_hash` stays consistent with
+            //    the new active blob).
+            let upSource = try statement("""
+            UPDATE sources SET byte_size = ?2, content_hash = ?3, updated_at = ?4,
+                                version = version + 1
+            WHERE id = ?1;
+            """)
+            upSource.reset()
+            try upSource.bind(sourceID.rawValue, at: 1)
+            try upSource.bind(Int64(data.count), at: 2)
+            try upSource.bind(contentHash, at: 3)
+            try upSource.bind(nowTS, at: 4)
+            _ = try upSource.step()
+            if let mime = mimeType ?? parent?.mimeType {
+                let upMime = try statement(
+                    "UPDATE sources SET mime_type = ?2 WHERE id = ?1;")
+                upMime.reset()
+                try upMime.bind(sourceID.rawValue, at: 1)
+                try upMime.bind(mime, at: 2)
+                _ = try upMime.step()
+            }
+
+            return SourceVersion(
+                id: versionID, sourceID: sourceID, parentID: parent?.id,
+                blobHash: contentHash,
+                mimeType: mimeType ?? parent?.mimeType,
+                activityID: activityID, externalIdentity: nil, fetchedAt: now
+            )
+        }
+    }
+
+    /// Roll a source's active content back to a prior version — a pointer
+    /// repoint (§4.3): the `source-content` ref is repointed at `versionID`
+    /// (generation + 1) and the denormalized `sources` mirror is refreshed from
+    /// the target version's blob. The history chain is untouched (append-only).
+    /// Throws `.notFound` if `versionID` does not belong to `sourceID`.
+    public func rollbackSourceContent(sourceID: PageID, to versionID: PageID) throws {
+        lock.lock(); defer { lock.unlock() }
+        try withTransaction {
+            // Validate the target version belongs to this source; read its blob.
+            let target = try statement("""
+            SELECT blob_hash, mime_type FROM source_versions
+            WHERE id = ?1 AND source_id = ?2;
+            """)
+            target.reset()
+            try target.bind(versionID.rawValue, at: 1)
+            try target.bind(sourceID.rawValue, at: 2)
+            guard try target.step() else {
+                throw WikiStoreError.notFound(versionID)
+            }
+            let blobHashIsNull = sqlite3_column_type(target.handle, 0) == SQLITE_NULL
+            let blobHash = blobHashIsNull ? nil : target.text(at: 0)
+            let mimeIsNull = sqlite3_column_type(target.handle, 1) == SQLITE_NULL
+            let mime = mimeIsNull ? nil : target.text(at: 1)
+
+            // Resolve the target blob's byte_size (0 for a byteless version).
+            var byteSize: Int64 = 0
+            if let blobHash {
+                let bs = try statement("SELECT byte_size FROM blobs WHERE hash = ?1;")
+                bs.reset()
+                try bs.bind(blobHash, at: 1)
+                if try bs.step() { byteSize = bs.int(at: 0) }
+            }
+
+            // Repoint the ref (generation + 1). UPSERT creates the row if absent.
+            let prevGeneration = try refGeneration(sourceID: sourceID)
+            let nextGeneration = (prevGeneration ?? 0) + 1
+            let nowTS = Date().timeIntervalSince1970
+            let upRef = try statement("""
+            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+            VALUES ('source-content', ?1, ?2, ?3, ?4)
+            ON CONFLICT(kind, owner_id) DO UPDATE SET
+                version_id = excluded.version_id,
+                generation = excluded.generation,
+                updated_at = excluded.updated_at;
+            """)
+            upRef.reset()
+            try upRef.bind(sourceID.rawValue, at: 1)
+            try upRef.bind(versionID.rawValue, at: 2)
+            try upRef.bind(Int64(nextGeneration), at: 3)
+            try upRef.bind(nowTS, at: 4)
+            _ = try upRef.step()
+
+            // Refresh the denormalized mirror from the target version
+            // (byte_size, mime_type, AND content_hash — keep addSource dedup
+            // consistent with the now-active blob; NULL for a byteless target).
+            let upSource = try statement("""
+            UPDATE sources SET byte_size = ?2, content_hash = ?3, updated_at = ?4,
+                                version = version + 1
+            WHERE id = ?1;
+            """)
+            upSource.reset()
+            try upSource.bind(sourceID.rawValue, at: 1)
+            try upSource.bind(byteSize, at: 2)
+            if let blobHash { try upSource.bind(blobHash, at: 3) }
+            try upSource.bind(nowTS, at: 4)
+            _ = try upSource.step()
+            let upMime = try statement(
+                "UPDATE sources SET mime_type = ?2 WHERE id = ?1;")
+            upMime.reset()
+            try upMime.bind(sourceID.rawValue, at: 1)
+            if let mime { try upMime.bind(mime, at: 2) }
+            _ = try upMime.step()
+        }
+    }
+
+    /// The current `generation` of the `source-content` ref for a source, or nil
+    /// when no ref row exists (default-active rule). INTERNAL — caller holds lock.
+    private func refGeneration(sourceID: PageID) throws -> Int? {
+        let stmt = try statement("""
+        SELECT generation FROM refs
+        WHERE kind = 'source-content' AND owner_id = ?1;
+        """)
+        stmt.reset()
+        try stmt.bind(sourceID.rawValue, at: 1)
+        if try stmt.step() { return Int(stmt.int(at: 0)) }
+        return nil
     }
 
     /// Rename a source's `display_name` and rewrite every
