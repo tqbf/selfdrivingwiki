@@ -338,4 +338,113 @@ struct SourceProviderTests {
               let cstr = sqlite3_column_text(stmt, 0) else { return "" }
         return String(cString: cstr)
     }
+
+    // MARK: - Apple Podcasts provenance (AC.5)
+
+    // MARK: - AC.6: security boundary (agent surface cannot reach podcast code)
+
+    /// AC.6 — the agent-surface modules must contain NO reference to any podcast
+    /// symbol. This converts the "agent cannot reach the token code" claim from
+    /// inspection-only into an executable regression guard.
+    ///
+    /// Host-environment-dependent: locates the repo root by walking up from
+    /// `#filePath` to the `Package.swift` directory, then greps the enumerated
+    /// agent-surface files. Acceptable for this repo's dev workflow. Deliberately
+    /// OUTSIDE `#if PODCAST_TRANSCRIPTS` so it runs in every config (it greps
+    /// source files, not compiled symbols — meaningful regardless of the flag).
+    @Test func agentSurfaceHasNoPodcastReferences() throws {
+        // Coarse: every podcast type/token in this feature is `Podcast`-prefixed
+        // (`PodcastEpisodeURL`, `PodcastTranscriptFetching`, `PodcastTokenProviding`,
+        // `PodcastHTTPClient`, `PodcastTranscriptError`, `ApplePodcast*`,
+        // `HelperPodcastToken*`, `podcastFetcher`). Any occurrence of "Podcast" in
+        // an agent-surface file is itself a smell, so a single token catches them all.
+        let symbols = ["ApplePodcast", "Podcast", "podcastFetcher", "HelperPodcastToken"]
+        let agentFiles = [
+            "Sources/WikiFSCore/OperationCommand.swift",
+            "Sources/WikiFSCore/AgentCommandConfig.swift",
+            "Sources/WikiFSCore/WikiOperation.swift",
+            "Sources/WikiFSCore/IngestWriteRule.swift",
+        ]
+        let repoRoot = try #require(Self.locateRepoRoot())
+        var hits: [String] = []
+        for relPath in agentFiles {
+            let path = repoRoot.appendingPathComponent(relPath)
+            guard FileManager.default.fileExists(atPath: path.path) else { continue }
+            let content = try String(contentsOf: path, encoding: .utf8)
+            for symbol in symbols where content.contains(symbol) {
+                hits.append("\(relPath): \(symbol)")
+            }
+        }
+        // Also check the prompt layer the agent sees (SystemPrompt + GeneratedPrompts).
+        for promptFile in ["Sources/WikiFSCore/SystemPrompt.swift", "Sources/WikiFSCore/GeneratedPrompts.swift"] {
+            let path = repoRoot.appendingPathComponent(promptFile)
+            guard FileManager.default.fileExists(atPath: path.path) else { continue }
+            let content = try String(contentsOf: path, encoding: .utf8)
+            for symbol in symbols where content.contains(symbol) {
+                hits.append("\(promptFile): \(symbol)")
+            }
+        }
+        #expect(hits.isEmpty, "Agent-surface modules must not reference podcast symbols: \(hits)")
+    }
+
+    /// Walk up from `#filePath` to the directory containing `Package.swift`.
+    private static func locateRepoRoot() -> URL? {
+        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: url.appendingPathComponent("Package.swift").path) {
+                return url
+            }
+            url = url.deletingLastPathComponent()
+        }
+        return nil
+    }
+
+    #if PODCAST_TRANSCRIPTS
+    /// A fake transcript fetcher returning a canned transcript — same shape the
+    /// routing/service tests use. `@unchecked Sendable` because it records into
+    /// mutable state (serial test access only — read after `await` on one actor).
+    final class FakePodcastFetcher: PodcastTranscriptFetching, @unchecked Sendable {
+        func transcript(for episode: PodcastEpisodeURL.EpisodeRef) async throws -> PodcastTranscript {
+            PodcastTranscript(
+                episodeID: episode.id,
+                markdown: "SPEAKER_1: Hello from the episode.",
+                filename: "chinatalk-\(episode.id)-transcript.md")
+        }
+    }
+
+    private static let chinaTalkEpisode = PodcastEpisodeURL.EpisodeRef(id: "1000774368453", slug: "chinatalk")
+    private static let chinaTalkPageURL = URL(string: "https://podcasts.apple.com/us/podcast/chinatalk/id1289062927?i=1000774368453")!
+
+    /// AC.5 — `ApplePodcastProvider.materialize()` produces provenance that
+    /// survives a store round-trip: agentName, externalIdentity (episode ID),
+    /// plan (the page URL), and the displayLabel.
+    @Test func applePodcastProviderPersistsProvenance() async throws {
+        let store = try tempStore()
+        let provider = ApplePodcastProvider(
+            episode: Self.chinaTalkEpisode,
+            pageURL: Self.chinaTalkPageURL,
+            fetcher: FakePodcastFetcher())
+        let source = try await provider.materialize()
+        let summary = try store.addSource(
+            filename: source.filename, data: source.data,
+            zoteroItemKey: nil, zoteroItemTitle: nil,
+            mimeType: source.mimeType, provenance: source.provenance)
+
+        let origin = try requireOrigin(store, summary.id)
+        #expect(origin.agentName == "apple-podcast")
+        #expect(origin.activityKind == "fetch")
+        #expect(origin.externalIdentity == "1000774368453")
+        #expect(origin.plan == Self.chinaTalkPageURL.absoluteString)
+        #expect(origin.displayLabel == "Apple Podcast")
+    }
+
+    /// displayLabel unit test — the `apple-podcast` arm renders "Apple Podcast",
+    /// not the `.capitalized` fallback ("Apple-podcast").
+    @Test func applePodcastDisplayLabel() {
+        let origin = SourceOrigin(
+            agentName: "apple-podcast", activityKind: "fetch",
+            plan: nil, externalRef: nil, externalIdentity: nil, fetchedAt: Date())
+        #expect(origin.displayLabel == "Apple Podcast")
+    }
+    #endif
 }

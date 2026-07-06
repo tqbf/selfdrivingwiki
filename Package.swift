@@ -1,9 +1,19 @@
 // swift-tools-version: 6.0
 import PackageDescription
+import Foundation
 
 // Self Driving Wiki — native macOS SwiftUI wiki with a File Provider filesystem
 // projection. Built with SwiftPM (no Xcode IDE, no xcodebuild); ./build.sh
 // bundles the executable produced here into build/Self Driving Wiki.app and codesigns it.
+
+// Apple Podcasts transcript ingest uses the PRIVATE PodcastsFoundation framework
+// (via the `podcast-token-helper` target) — fine for local/dev, NOT App Store
+// shippable. INCLUDED BY DEFAULT. Set WIKIFS_APP_STORE=1 to build without it: that
+// drops the helper target AND compiles the feature out of the Swift sources via the
+// `PODCAST_TRANSCRIPTS` compilation condition. See plans/podcast-transcripts.md.
+let podcastTranscriptsEnabled = ProcessInfo.processInfo.environment["WIKIFS_APP_STORE"] == nil
+let podcastSwiftSettings: [SwiftSetting] = podcastTranscriptsEnabled ? [.define("PODCAST_TRANSCRIPTS")] : []
+
 let package = Package(
     name: "WikiFS",
     platforms: [.macOS(.v15)],
@@ -49,6 +59,7 @@ let package = Package(
             // NaturalLanguage: semantic-search embeddings. JavaScriptCore: the
             // MermaidValidator runs the vendored merval bundle in a JSContext
             // (system framework — no Node) to validate ```mermaid blocks on save.
+            swiftSettings: podcastSwiftSettings,
             linkerSettings: [
                 .linkedFramework("NaturalLanguage"),
                 .linkedFramework("JavaScriptCore"),
@@ -77,6 +88,7 @@ let package = Package(
             path: "Sources/WikiFS",
             // WKWebView for the reader path (Sources/WikiFS/WikiReaderView.swift)
             // — the single markdown reader (replaced the vendored Textual).
+            swiftSettings: podcastSwiftSettings,
             linkerSettings: [.linkedFramework("WebKit")]
         ),
         // wikictl's logic (arg parsing, command dispatch, wiki resolution, the
@@ -98,10 +110,41 @@ let package = Package(
             dependencies: ["WikiFSCore", "WikiCtlCore"],
             path: "Sources/wikictl"
         ),
+        // podcast-token-helper — the FairPlay/Mescal bearer-token signer for Apple
+        // Podcasts transcripts. An ObjC executable ON PURPOSE: it dlopens the private
+        // PodcastsFoundation framework and calls undeclared selectors (AMSMescal /
+        // AMSMescalSession), so it must be isolated from Swift 6 strict-concurrency
+        // and from the app process (the signing call can segfault on cleanup — a
+        // crash here costs one failed fetch, never the app). WikiFSCore spawns it via
+        // Process. -Wno-objc-method-access allows the undeclared-selector calls; the
+        // private AppleMediaServices framework (AMSMescal's home) is linked from
+        // /System/Library/PrivateFrameworks. See plans/podcast-transcripts.md and
+        // Sources/PodcastTokenHelper/main.m. build.sh bundles it under
+        // Contents/Helpers and signs it beside wikictl. Gated on
+        // `podcastTranscriptsEnabled` so WIKIFS_APP_STORE=1 drops it entirely.
+        .executableTarget(
+            name: "podcast-token-helper",
+            path: "Sources/PodcastTokenHelper",
+            cSettings: [
+                // -Wno-objc-method-access: allow the undeclared private selectors.
+                // -fno-objc-arc: the reference is MRC — under ARC, calling a selector
+                // with unknown ownership semantics is a hard error, not a warning.
+                .unsafeFlags(["-Wno-objc-method-access", "-fno-objc-arc"]),
+            ],
+            linkerSettings: [
+                .linkedFramework("Foundation"),
+                .unsafeFlags([
+                    "-F/System/Library/PrivateFrameworks",
+                    "-framework", "AppleMediaServices",
+                ]),
+            ]
+        ),
         .testTarget(
             name: "WikiFSTests",
             dependencies: ["WikiFSCore", "WikiCtlCore", "WikiFS", "WikiFSMLX", "WikiFSFileProvider"],
-            path: "Tests/WikiFSTests"
+            path: "Tests/WikiFSTests",
+            // Matches WikiFSCore so the gated podcast test files compile in/out too.
+            swiftSettings: podcastSwiftSettings
         ),
         // The File Provider extension binary. build.sh repackages this into a
         // .appex bundle under Self Driving Wiki.app/Contents/PlugIns and signs it.
@@ -120,5 +163,9 @@ let package = Package(
                 .unsafeFlags(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain"]),
             ]
         ),
-    ]
+    ].filter {
+        // Drop the private-API podcast helper for App Store builds (WIKIFS_APP_STORE=1);
+        // the feature is also #if'd out of the Swift sources, so nothing references it.
+        podcastTranscriptsEnabled || $0.name != "podcast-token-helper"
+    }
 )

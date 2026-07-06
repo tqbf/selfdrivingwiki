@@ -55,7 +55,7 @@ struct AddFromURLSheet: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Add from URL")
                 .font(.headline)
-            Text("Fetch a web page and add it as source material")
+            Text(subtitle)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -133,6 +133,16 @@ struct AddFromURLSheet: View {
     // MARK: - Derived
 
     private var isFetching: Bool { phase == .fetching }
+
+    /// The subtitle mentions Apple Podcasts transcripts when the feature is
+    /// compiled in; the App-Store build omits it.
+    private var subtitle: String {
+        #if PODCAST_TRANSCRIPTS
+        "Fetch a web page or Apple Podcasts episode and add it as source material"
+        #else
+        "Fetch a web page and add it as source material"
+        #endif
+    }
 
     private var canFetch: Bool {
         !isFetching && URLFetchService.normalizeURL(urlText) != nil
