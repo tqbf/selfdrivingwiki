@@ -321,4 +321,35 @@ struct WikiLinkStoreTests {
         #expect(sources[0].id == source.id)
         #expect(sources[0].filename == "test.txt")
     }
+
+    // MARK: - Embed edges `role='embed'` (Phase 4a, AC.3)
+
+    @Test func replaceLinksWritesCiteAndEmbedAsSeparateRows() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "A")
+        let source = try store.addSource(filename: "img.png", data: Data([0x89]))
+
+        // One cite + one embed to the SAME source → two rows (cite role='cite',
+        // embed role='embed'; the `source_links_edge` unique index treats role
+        // as part of the key so both survive INSERT OR IGNORE).
+        try store.replaceLinks(from: page.id, parsedLinks: [
+            .init(linkType: .source, target: source.filename, linkText: "img.png"),
+            .init(linkType: .source, target: source.filename, linkText: "img.png", isEmbed: true),
+        ])
+        #expect(try store.listAllSourceLinks().count == 2)
+    }
+
+    @Test func replaceLinksDedupesDuplicateEmbeds() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "A")
+        let source = try store.addSource(filename: "img.png", data: Data([0x89]))
+
+        // Two embed links to the same source → one row (INSERT OR IGNORE on
+        // the unique index collapses them).
+        try store.replaceLinks(from: page.id, parsedLinks: [
+            .init(linkType: .source, target: source.filename, linkText: "img.png", isEmbed: true),
+            .init(linkType: .source, target: source.filename, linkText: "img.png", isEmbed: true),
+        ])
+        #expect(try store.listAllSourceLinks().count == 1)
+    }
 }

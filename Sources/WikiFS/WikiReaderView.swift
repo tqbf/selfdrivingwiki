@@ -247,6 +247,8 @@ struct WikiReaderView: View {
           th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
           th { font-weight: 600; }
           img { max-width: 100%; height: auto; }
+          .wiki-embed { max-width: 100%; height: auto; border-radius: 8px; }
+          .wiki-embed-pdf { width: 100%; height: 600px; border: 1px solid var(--border); border-radius: 8px; }
           mark.sdwhl { background: rgba(255, 213, 79, 0.8); border-radius: 2px; }
           .mermaid { text-align:center; margin:0 0 1em; overflow:auto; }
           .mermaid svg { max-width:100%; height:auto; }
@@ -306,6 +308,11 @@ final class WikiReaderWebView: WKWebView {
     /// in-file message-handler proxy can write it without exposing a public setter.
     fileprivate(set) var hoveredLinkHref: String?
 
+    /// Serves `wiki-blob://source/<id>` blob bytes from SQLite to the WKWebView.
+    /// Created in `init()` (must be registered before the view loads). Its
+    /// `store` is set by the representable alongside the view's own `store`.
+    let blobHandler = BlobSchemeHandler(store: nil)
+
     init() {
         let config = WKWebViewConfiguration()
         let cc = WKUserContentController()
@@ -320,6 +327,10 @@ final class WikiReaderWebView: WKWebView {
             injectionTime: .atDocumentEnd,
             forMainFrameOnly: true))
         config.userContentController = cc
+        // Register the blob scheme handler BEFORE super.init so it's available
+        // for the first page load. The store is injected later by the
+        // representable (same as the view's own `store` property).
+        config.setURLSchemeHandler(blobHandler, forURLScheme: BlobSchemeHandler.scheme)
         super.init(frame: .zero, configuration: config)
         proxy.target = self
     }
@@ -709,6 +720,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         let webView = WikiReaderWebView()
         webView.pageZoom = readerZoom
         webView.store = store
+        webView.blobHandler.store = store
         webView.fileProvider = fileProvider
         webView.currentSelection = currentSelection
         webView.addURLHandler = addURLHandler
@@ -724,6 +736,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
     func updateNSView(_ webView: WikiReaderWebView, context: Context) {
         webView.pageZoom = readerZoom
         webView.store = store
+        webView.blobHandler.store = store
         webView.fileProvider = fileProvider
         webView.currentSelection = currentSelection
         webView.addURLHandler = addURLHandler
@@ -808,6 +821,21 @@ internal struct WikiReaderRep: NSViewRepresentable {
             }
             let uniqueLooseKeys = Set(looseKeyCounts.filter { $0.value == 1 }.keys)
 
+            // Embed map: lowercased source name → (id, mimeType). Uses the same
+            // name variants as sourceNames (displayName, filename, extension-
+            // stripped) but NOT the loose-match tier — embeds are exact-match-
+            // only by design (a loose match might embed the wrong source).
+            // Captured by the embedInfo closure below (pure data, no store
+            // access in the detached task — same pattern as isResolved).
+            var embedMap: [String: (id: PageID, mimeType: String?)] = [:]
+            for source in store?.sources ?? [] {
+                let names = [source.displayName, source.filename].compactMap({ $0 })
+                let stripped = names.map { ($0 as NSString).deletingPathExtension }
+                for name in (names + stripped).map({ $0.lowercased() }) {
+                    embedMap[name] = (source.id, source.mimeType)
+                }
+            }
+
             let loadStartVal = loadStart
             convertTask = Task.detached(priority: .userInitiated) { [weak self] in
                 let t0 = DispatchTime.now()
@@ -818,12 +846,17 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 // Shared pre-pass (footnotes + wiki links) + swift-markdown HTML
                 // render, both off the main actor. isResolved resolves against
                 // the precomputed existence sets so missing links style as ghosts.
-                let prepared = ReaderMarkdown.prepared(markdown) { name, kind in
-                    kind == .source
-                        ? sourceNames.contains(name.lowercased())
-                            || uniqueLooseKeys.contains(WikiNameRules.looseMatchKey(name))
-                        : pageTitles.contains(name.lowercased())
-                }
+                // embedInfo resolves `![[source:…]]` embeds to (id, mimeType) for
+                // inline HTML rendering (<img>/<video>/<audio>/<iframe>).
+                let prepared = ReaderMarkdown.prepared(markdown,
+                    isResolved: { name, kind in
+                        kind == .source
+                            ? sourceNames.contains(name.lowercased())
+                                || uniqueLooseKeys.contains(WikiNameRules.looseMatchKey(name))
+                            : pageTitles.contains(name.lowercased())
+                    },
+                    embedInfo: { name in embedMap[name.lowercased()] }
+                )
                 let body = MarkdownHTMLRenderer.render(prepared)
                 let html = WikiReaderView.documentHTML(body)
                 let convertMs = Self.elapsedMs(since: t0)

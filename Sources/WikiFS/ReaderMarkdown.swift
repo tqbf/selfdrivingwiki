@@ -13,10 +13,13 @@ import WikiFSCore
 enum ReaderMarkdown {
     static func prepared(
         _ raw: String,
-        isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool
+        isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool,
+        embedInfo: ((String) -> (id: PageID, mimeType: String?)?)? = nil
     ) -> String {
         let renderedFootnotes = WikiFootnoteMarkdown.rendered(raw)
-        let body = WikiLinkMarkdown.linkified(renderedFootnotes.bodyMarkdown, isResolved: isResolved)
+        let body = WikiLinkMarkdown.linkified(renderedFootnotes.bodyMarkdown,
+                                              isResolved: isResolved,
+                                              embedInfo: embedInfo)
         guard !renderedFootnotes.footnotes.isEmpty else { return body }
         // Each definition gets a raw-HTML anchor (`wiki-fn-<id>`) so a clicked
         // reference (`wiki-footnote://note?id=…`) can scroll to it. The anchor is

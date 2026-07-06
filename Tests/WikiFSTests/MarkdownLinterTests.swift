@@ -173,4 +173,14 @@ struct MarkdownLinterTests {
     @Test func describeEmptyForNoFindings() {
         #expect(MarkdownLinter.describe([]).isEmpty)
     }
+
+    // MARK: - Wiki-link embeds (Phase 4a)
+
+    @Test func embedSourceSyntaxProducesNoFalsePositives() throws {
+        // `![[source:img.png]]` has a leading `!` before `[[` that could be
+        // parsed as a CommonMark image start — verify markdownlint doesn't flag it.
+        let l = try linter()
+        let findings = l.lint(markdown: "See this image:\n\n![[source:diagram.png]]\n\nText after.\n")
+        #expect(findings.isEmpty)
+    }
 }

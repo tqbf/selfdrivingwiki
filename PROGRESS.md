@@ -2,6 +2,47 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-06 — Graph-model Phase 4a: `![[source:…]]` embed parsing + binary content rendering
+
+Landed the **first demoable Phase 4 behavior**: `![[source:Name]]` embed syntax
+renders a source's content inline in the WKWebView page reader — `<img>` for
+images, `<video>`/`<audio>` for media, `<iframe>` for PDFs. This exercises the
+`source_links.role='embed'` column (shipped in the v22 foundation slice) and
+introduces the `WKURLSchemeHandler` infrastructure all future media rendering
+builds on.
+
+**Parsing.** `WikiLinkParser.ParsedLink` gains `isEmbed: Bool` (defaults
+`false`). `WikiLinkSpan.isEmbedPrefix` detects a clean `!` prefix immediately
+before `[[`, guarding against escaped (`\![[`) and double-bang (`!![[`) forms.
+`parse()` uses the embed flag in the dedup key so cite + embed to the same
+source coexist as separate edges. Page embeds (`![[Page]]`) are invalid and
+skipped. `linkified()` consumes the `!` for embeds and page-link-with-bang
+(avoiding a CommonMark image artifact), and renders embed source links as inline
+HTML dispatched on MIME type.
+
+**Edge writing.** `replaceLinks` writes `role='embed'` for embed source links
+via a second INSERT statement (`insSourceEmbed`). The `source_links_edge` unique
+index means cite + embed to the same source are distinct rows.
+
+**Blob serving.** New `BlobSchemeHandler: NSObject, WKURLSchemeHandler` resolves
+`wiki-blob://source/<id>` → `WikiStoreModel.sourceContentAndMIME(id:)` → serves
+blob bytes with the source's MIME type. Registered in `WikiReaderWebView.init()`
+before the first load. Unknown IDs serve 404; byteless sources serve empty 200.
+
+**Rendering wiring.** `WikiReaderView` precomputes an embed map
+(`[normalizedName: (id, mimeType)]`) on the main actor before the detached
+convert task, mirroring the existing `isResolved` pattern. `ReaderMarkdown.prepared()`
+and `WikiLinkMarkdown.linkified()` gain an optional `embedInfo` closure.
+
+**Touch points:** `WikiLinkParser.swift`, `WikiLinkSpan.swift`,
+`WikiLinkMarkdown.swift`, `SQLiteWikiStore.swift` (`replaceLinks`),
+`ReaderMarkdown.swift`, `WikiReaderView.swift`, `WikiStoreModel.swift`,
+`MarkdownHTMLRenderer.swift` (no change — already passes through inline HTML),
+`BlobSchemeHandler.swift` (new).
+
+1605 tests green (+28 new): 9 parser, 2 store, 10 markdown, 2 rewriter, 1
+linter, 4 blob handler. AC.6 (live WKWebView paint) is manual-only.
+
 ## 2026-07-06 — Graph-model Phase 4 foundation: `sources.role` + `source_links` rebuild (v22) + media filtering
 
 Landed the **storage substrate** for Phase 4 (Media & roles): schema v22 adds

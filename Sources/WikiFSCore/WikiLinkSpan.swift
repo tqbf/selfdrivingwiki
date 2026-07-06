@@ -110,4 +110,29 @@ public enum WikiLinkSpan {
     }
 
     private static let backtick: unichar = 0x60 // `
+    private static let bang: unichar = 0x21     // !
+    private static let backslash: unichar = 0x5C // \
+
+    // MARK: - Embed prefix detection
+
+    /// True when a `!` immediately precedes the `[[` at `range.location`, making
+    /// the span an embed (`![[…]]`, Obsidian syntax). Guards against escaped
+    /// (`\![[`) and double-bang (`!![[`) forms so only a clean `![[` run counts:
+    ///   * `range.location > 0` and the char at `location - 1` is `!`;
+    ///   * the char at `location - 2` is NOT `\` (not escaped);
+    ///   * the char at `location - 2` is NOT `!` (the bang is the START of the
+    ///     `![[` run — a double bang `!![[` is not an embed).
+    ///
+    /// Shared by `WikiLinkParser.parse()` (sets `isEmbed`) and
+    /// `WikiLinkMarkdown.linkified()` (emits embed HTML / consumes the `!`).
+    public static func isEmbedPrefix(_ body: NSString, _ range: NSRange) -> Bool {
+        guard range.location > 0,
+              body.character(at: range.location - 1) == bang else { return false }
+        // Not escaped and not double-bang: check location - 2 if it exists.
+        if range.location >= 2 {
+            let prev = body.character(at: range.location - 2)
+            if prev == backslash || prev == bang { return false }
+        }
+        return true
+    }
 }

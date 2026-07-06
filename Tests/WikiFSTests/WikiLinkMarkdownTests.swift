@@ -401,6 +401,121 @@ struct WikiLinkMarkdownTests {
         #expect(!out.contains("wiki://page?title=Home"))
     }
 
+    // MARK: - Embed rendering `![[source:…]]` (Phase 4a, AC.4)
+
+    @Test func embedImageRendersAsImgTag() {
+        let id = PageID(rawValue: "01HTESTIMG0000000000000001")
+        let out = WikiLinkMarkdown.linkified(
+            "![[source:img.png]]",
+            isResolved: { _, _ in true },
+            embedInfo: { _ in (id: id, mimeType: "image/png") }
+        )
+        #expect(out.contains("<img"))
+        #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
+        #expect(out.contains("class=\"wiki-embed\""))
+        #expect(!out.contains("wiki://"))  // not a fallback cite link
+    }
+
+    @Test func embedVideoRendersAsVideoTag() {
+        let id = PageID(rawValue: "01HTESTVID00000000000000002")
+        let out = WikiLinkMarkdown.linkified(
+            "![[source:clip.mp4]]",
+            isResolved: { _, _ in true },
+            embedInfo: { _ in (id: id, mimeType: "video/mp4") }
+        )
+        #expect(out.contains("<video"))
+        #expect(out.contains("controls"))
+        #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
+    }
+
+    @Test func embedAudioRendersAsAudioTag() {
+        let id = PageID(rawValue: "01HTESTAUD00000000000000003")
+        let out = WikiLinkMarkdown.linkified(
+            "![[source:song.mp3]]",
+            isResolved: { _, _ in true },
+            embedInfo: { _ in (id: id, mimeType: "audio/mpeg") }
+        )
+        #expect(out.contains("<audio"))
+        #expect(out.contains("controls"))
+        #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
+    }
+
+    @Test func embedPdfRendersAsIframe() {
+        let id = PageID(rawValue: "01HTESTPDF00000000000000004")
+        let out = WikiLinkMarkdown.linkified(
+            "![[source:doc.pdf]]",
+            isResolved: { _, _ in true },
+            embedInfo: { _ in (id: id, mimeType: "application/pdf") }
+        )
+        #expect(out.contains("<iframe"))
+        #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
+    }
+
+    @Test func embedUnresolvedSourceFallsBackToCiteLink() {
+        // embedInfo returns nil → fallback to a cite link (ghost styling).
+        let out = WikiLinkMarkdown.linkified(
+            "![[source:Ghost]]",
+            isResolved: { _, _ in false },
+            embedInfo: { _ in nil }
+        )
+        #expect(out.contains("wiki://missing"))
+        #expect(!out.contains("<img"))
+    }
+
+    @Test func embedUnknownMimeFallsBackToCiteLink() {
+        // Source resolves but MIME is not renderable (e.g. text/plain).
+        let id = PageID(rawValue: "01HTESTTXT00000000000000005")
+        let out = WikiLinkMarkdown.linkified(
+            "![[source:notes.txt]]",
+            isResolved: { _, _ in true },
+            embedInfo: { _ in (id: id, mimeType: "text/plain") }
+        )
+        #expect(out.contains("wiki://source"))
+        #expect(!out.contains("<img"))
+        #expect(!out.contains("<video"))
+    }
+
+    @Test func embedWithNoResolverFallsBackToCiteLink() {
+        // No embedInfo passed → fallback to cite link.
+        let out = WikiLinkMarkdown.linkified(
+            "![[source:img.png]]",
+            isResolved: { _, _ in true }
+        )
+        #expect(out.contains("wiki://source"))
+        #expect(!out.contains("<img"))
+    }
+
+    @Test func pageEmbedPrefixConsumedAndRendersAsLink() {
+        // `![[Page]]` is not a valid embed; the `!` is consumed so it doesn't
+        // form a CommonMark image, and the link renders normally.
+        let out = WikiLinkMarkdown.linkified("![[Home]]", isResolved: { _, _ in true })
+        #expect(out.contains("[Home](wiki://page?title=Home)"))
+        #expect(!out.contains("!"))
+    }
+
+    @Test func embedInSentenceDoesNotConsumePrecedingText() {
+        let id = PageID(rawValue: "01HTESTIMG00000000000000006")
+        let out = WikiLinkMarkdown.linkified(
+            "Here is ![[source:img.png]] inline.",
+            isResolved: { _, _ in true },
+            embedInfo: { _ in (id: id, mimeType: "image/png") }
+        )
+        #expect(out.hasPrefix("Here is "))
+        #expect(out.hasSuffix(" inline."))
+        #expect(out.contains("<img"))
+    }
+
+    @Test func escapedBangIsNotEmbedAndStaysLiteral() {
+        // `\![[source:X]]` — the `\!` stays as literal text, and the link is a
+        // normal cite link (the `!` is NOT consumed for non-embeds).
+        let out = WikiLinkMarkdown.linkified(
+            "\\![[source:X]]",
+            isResolved: { _, _ in true }
+        )
+        #expect(out.contains("wiki://source?title=X"))
+        #expect(!out.contains("<img"))
+    }
+
     // Pull the URL substring out of a single `[text](url)` for assertions.
     private func extractURL(_ markdownLink: String) -> String {
         guard let open = markdownLink.lastIndex(of: "("),
