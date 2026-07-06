@@ -23,6 +23,24 @@ import Foundation
 ///     so the view can style it dimmed, but the click handler no-ops on it).
 public enum WikiLinkMarkdown {
 
+    /// The render decision for one `![[source:…]]` embed: the source id + its
+    /// MIME type (for the byteful `wiki-blob://` dispatch) and an optional
+    /// external `EmbedTarget` (for byteless external media — provider iframes,
+    /// direct-remote `<audio>`/`<video>`, Apple Podcasts player). When `target`
+    /// is non-nil the renderer emits the external element; otherwise it falls
+    /// back to the byteful blob dispatch (Phase 4a), then to a cite link.
+    public struct SourceEmbedInfo {
+        public let id: PageID
+        public let mimeType: String?
+        public let target: EmbedTarget?
+
+        public init(id: PageID, mimeType: String?, target: EmbedTarget? = nil) {
+            self.id = id
+            self.mimeType = mimeType
+            self.target = target
+        }
+    }
+
     /// The private scheme the in-app `OpenURLAction` intercepts. Real external
     /// links (https, mailto, …) fall through to `.systemDefault`.
     public static let scheme = "wiki"
@@ -50,15 +68,17 @@ public enum WikiLinkMarkdown {
     ///                 existing page/source. Receives the whitespace-collapsed,
     ///                 prefix-stripped target.
     ///   - embedInfo: when non-nil, called for each `![[source:…]]` embed to
-    ///                resolve the source name to `(id, mimeType)`. Returns the
-    ///                embed HTML (`<img>`, `<video>`, `<audio>`, `<iframe>`) if
-    ///                the source resolves and the MIME type is renderable; falls
-    ///                back to a cite link otherwise.
+    ///                resolve the source name to a `SourceEmbedInfo` (id + MIME
+    ///                + optional external `EmbedTarget`). Returns the embed HTML
+    ///                (`<img>`, `<video>`, `<audio>`, `<iframe>`) if the source
+    ///                resolves and is renderable; falls back to a cite link
+    ///                otherwise. A non-nil `target` (byteless external media)
+    ///                takes precedence over the byteful `wiki-blob://` dispatch.
     /// - Returns: Markdown safe to hand to `AttributedString(markdown:)`.
     public static func linkified(
         _ body: String,
         isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool = { _, _ in true },
-        embedInfo: ((String) -> (id: PageID, mimeType: String?)?)? = nil,
+        embedInfo: ((String) -> SourceEmbedInfo?)? = nil,
         displayName: (PageID, WikiLinkParser.ParsedLink.LinkType) -> String? = { _, _ in nil },
         pinnedExtractionID: ((PageID, Int) -> PageID?)? = nil
     ) -> String {
@@ -165,7 +185,7 @@ public enum WikiLinkMarkdown {
                 // is made ULID-aware by the reader (a bare ULID resolves there).
                 if isEmbedPrefix && kind == .source,
                    let info = embedInfo?(bareTarget),
-                   let html = embedHTML(display: display, id: info.id, mimeType: info.mimeType) {
+                   let html = embedHTML(display: display, id: info.id, mimeType: info.mimeType, target: info.target) {
                     out += html
                     continue
                 }
@@ -214,7 +234,7 @@ public enum WikiLinkMarkdown {
             // is not renderable, or no embedInfo resolver was provided.
             if isEmbedPrefix && kind == .source,
                let info = embedInfo?(linkTarget),
-               let html = embedHTML(display: display, id: info.id, mimeType: info.mimeType) {
+               let html = embedHTML(display: display, id: info.id, mimeType: info.mimeType, target: info.target) {
                 out += html
                 continue
             }
@@ -355,12 +375,37 @@ public enum WikiLinkMarkdown {
         return "[\(safeDisplay)](\(url))"
     }
 
-    /// Inline HTML for an embed source link, dispatched on MIME type. Returns
-    /// `nil` for unrecognized MIME types so the caller falls back to a cite link.
-    /// The `wiki-blob://source/<id>` URL is served by `BlobSchemeHandler`.
-    private static func embedHTML(display: String, id: PageID, mimeType: String?) -> String? {
+    /// Inline HTML for an embed source link. Returns `nil` for unrecognized
+    /// cases so the caller falls back to a cite link.
+    ///
+    /// **Load-bearing ordering:** an external `target` (byteless external media)
+    /// is checked FIRST — before the byteful `wiki-blob://` MIME dispatch — so a
+    /// byteless source carrying a synthetic mime (`video/youtube`, `audio/spotify`)
+    /// NEVER reaches the blob branch (which would emit a broken
+    /// `<video src="wiki-blob://…">` against empty bytes). The `wiki-blob://` URL
+    /// is served by `BlobSchemeHandler` (Phase 4a).
+    private static func embedHTML(display: String, id: PageID, mimeType: String?, target: EmbedTarget?) -> String? {
+        // 1. Byteless external media: provider iframe or direct-remote native tag.
+        if let target {
+            switch target.kind {
+            case .iframe:
+                let sizeClass = iframeSizeClass(for: target.url)
+                return "<iframe src=\"\(embedEscape(target.url))\" class=\"wiki-embed \(sizeClass)\" allow=\"encrypted-media; picture-in-picture; fullscreen\" loading=\"lazy\"></iframe>"
+            case .audio:
+                return "<audio src=\"\(embedEscape(target.url))\" controls class=\"wiki-embed\"></audio>"
+            case .video:
+                return "<video src=\"\(embedEscape(target.url))\" controls class=\"wiki-embed\"></video>"
+            }
+        }
+        // 2. Byteful blob dispatch (Phase 4a) — unchanged.
         let url = "\(blobScheme)://source/\(id.rawValue)"
         guard let mime = mimeType else { return nil }
+        // Safety: a synthetic provider mime (video/youtube, audio/spotify, …)
+        // that did NOT resolve to a target must NOT reach the blob branch — its
+        // `hasPrefix("video/")` / `("audio/")` would otherwise emit a broken
+        // `<video src="wiki-blob://…">` against empty bytes. Fall back to a cite
+        // link instead (§1.3 / R2 ordering invariant).
+        if syntheticProviderMimes.contains(mime) { return nil }
         if mime.hasPrefix("image/") {
             return "<img src=\"\(url)\" alt=\"\(embedEscape(display))\" class=\"wiki-embed\">"
         }
@@ -375,6 +420,26 @@ public enum WikiLinkMarkdown {
         }
         return nil // unknown MIME → caller falls back to cite link
     }
+
+    /// Pick the reader-CSS sizing class for a provider iframe: audio-player
+    /// iframes (Spotify, SoundCloud, Apple Podcasts) get a fixed height; video
+    /// iframes (YouTube, Vimeo) get a 16:9 aspect ratio. Derived from the embed
+    /// URL host so `EmbedTarget` stays a minimal (kind, url) pair.
+    private static func iframeSizeClass(for url: String) -> String {
+        if url.contains("open.spotify.com")
+            || url.contains("w.soundcloud.com")
+            || url.contains("embed.podcasts.apple.com") {
+            return "wiki-embed-audio"
+        }
+        return "wiki-embed-video"
+    }
+
+    /// The synthetic MIME types used for byteless provider embeds. A source
+    /// carrying one of these MUST render via an `EmbedTarget` (checked first);
+    /// if it has no target it falls back to a cite link, never the blob branch.
+    private static let syntheticProviderMimes: Set<String> = [
+        "video/youtube", "video/vimeo", "audio/spotify", "audio/soundcloud"
+    ]
 
     /// Escape `"` and `<`/`>`/`&` for an HTML attribute value (alt text).
     private static func embedEscape(_ s: String) -> String {

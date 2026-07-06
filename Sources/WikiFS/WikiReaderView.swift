@@ -256,6 +256,9 @@ struct WikiReaderView: View {
           img { max-width: 100%; height: auto; }
           .wiki-embed { max-width: 100%; height: auto; border-radius: 8px; }
           .wiki-embed-pdf { width: 100%; height: 600px; border: 1px solid var(--border); border-radius: 8px; }
+          iframe.wiki-embed-video { width: 100%; aspect-ratio: 16/9; height: auto; border: none; border-radius: 8px; }
+          iframe.wiki-embed-audio { width: 100%; height: 152px; border: none; border-radius: 8px; }
+          audio.wiki-embed { width: 100%; }
           mark.sdwhl { background: rgba(255, 213, 79, 0.8); border-radius: 2px; }
           .mermaid { text-align:center; margin:0 0 1em; overflow:auto; }
           .mermaid svg { max-width:100%; height:auto; }
@@ -842,22 +845,31 @@ internal struct WikiReaderRep: NSViewRepresentable {
             }
             let uniqueLooseKeys = Set(looseKeyCounts.filter { $0.value == 1 }.keys)
 
-            // Embed map: lowercased source name → (id, mimeType). Uses the same
+            // Embed map: lowercased source name → SourceEmbedInfo. Uses the same
             // name variants as sourceNames (displayName, filename, extension-
             // stripped) but NOT the loose-match tier — embeds are exact-match-
             // only by design (a loose match might embed the wrong source).
             // Phase 5: the source's own id (lowercased) is ALSO a key so a
             // canonical `![[source:ULID|Name]]` embed resolves by id.
+            // Phase 4b: each byteless source carries an optional external
+            // EmbedTarget (provider iframe / direct-remote native tag / Apple
+            // Podcasts player) resolved from the batched embedDescriptors()
+            // query — merged here so the render closure stays pure (no store
+            // access in the detached task, same pattern as isResolved).
             // Captured by the embedInfo closure below (pure data, no store
             // access in the detached task — same pattern as isResolved).
-            var embedMap: [String: (id: PageID, mimeType: String?)] = [:]
+            let embedDescriptorMap = store?.embedDescriptors() ?? [:]
+            var embedMap: [String: WikiLinkMarkdown.SourceEmbedInfo] = [:]
             for source in store?.sources ?? [] {
+                let target = embedDescriptorMap[source.id].flatMap { ExternalEmbed.target(for: $0) }
+                let info = WikiLinkMarkdown.SourceEmbedInfo(
+                    id: source.id, mimeType: source.mimeType, target: target)
                 let names = [source.displayName, source.filename].compactMap({ $0 })
                 let stripped = names.map { ($0 as NSString).deletingPathExtension }
                 for name in (names + stripped).map({ $0.lowercased() }) {
-                    embedMap[name] = (source.id, source.mimeType)
+                    embedMap[name] = info
                 }
-                embedMap[source.id.rawValue.lowercased()] = (source.id, source.mimeType)
+                embedMap[source.id.rawValue.lowercased()] = info
             }
 
             // Phase 6: source id → ULID-asc [smvID] chain (chronological; index 0

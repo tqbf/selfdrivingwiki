@@ -2,6 +2,70 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-06 — Graph-model Phase 4b: byteless external embeds
+
+**Phase gate met: provider iframes + direct-remote media + Apple Podcasts player
+render via `![[source:…]]` (AC.1–AC.9, 1705 tests green).** A wiki page can now
+embed **external, byteless media** inline in the WKWebView reader — provider-player
+iframes (YouTube, Vimeo, Spotify, SoundCloud), native `<audio>`/`<video>` for
+direct-remote media URLs (mp3 radio streams, podcast `.mp3` enclosures, remote
+media files), and the Apple Podcasts embed audio player for existing podcast
+sources — all through one shared, provider-agnostic mechanism. **No schema change**
+(`external_identity`/`mime_type`/`thumbnail_hash` columns already existed); every
+external embed is a byteless source (`blob_hash IS NULL`) carrying `external_identity`
++ provenance, exactly like the Phase 3b podcast byteless source.
+
+**What shipped:**
+
+- **Shared core.** `SourceEmbedDescriptor` (new value type) + a batched store
+  query `SQLiteWikiStore.embedDescriptors()` (one join: byteless source → active
+  version → activity → agent, mirroring `sourceOrigin` but restricted to
+  `blob_hash IS NULL`). `ExternalEmbed.target(for:)` — a pure dispatch table
+  (`SourceEmbedDescriptor → EmbedTarget?` where `EmbedTarget { kind, url }`).
+  `WikiLinkMarkdown.embedInfo` widened from `(id, mimeType)?` to a
+  `SourceEmbedInfo { id, mimeType, target }`; `embedHTML` checks the external
+  target FIRST (load-bearing ordering: a synthetic mime like `video/youtube`
+  never reaches the `wiki-blob://` branch). `.wiki-embed` reader CSS extended
+  for 16:9 video iframes / fixed-height audio iframes / full-width native audio.
+- **Direct-remote media (Phase 2).** `MediaEmbedURL.remoteMedia(_:)` recognizes
+  media by path extension (`.mp3/.m4a/.aac/.ogg/.opus/.flac/.wav/.m4b` audio;
+  `.mp4/.m4v/.webm/.mov` video; `.m3u8` HLS) → byteless source with a real MIME.
+  `addURL` routing → `FetchOutcome.Kind.remoteMedia`.
+- **Provider iframes (Phase 3).** Pure recognizers for YouTube (`watch?v=`/
+  `youtu.be`/`embed`/`shorts`), Vimeo, Spotify (`track|episode|podcast`),
+  SoundCloud → byteless sources with synthetic mimes. `ExternalEmbed` rows build
+  the `youtube-nocookie`/`player.vimeo`/`open.spotify.com/embed`/
+  `w.soundcloud.com/player` URLs. Routing → `.videoEmbed`/`.audioEmbed`.
+- **Apple Podcasts player (Phase 4).** `ExternalEmbed` host-swaps the stored
+  episode page URL (`podcasts.apple.com` → `embed.podcasts.apple.com`, preserving
+  path + `?i=<episodeId>`). No routing/data change — existing podcast sources
+  gain the audio player from their stored `origin.plan`.
+- **Routing.** `WikiStoreModel.bytelessMediaOutcome(_:)` — pure URL parsing, no
+  network; fixed precedence: apple-podcast FIRST → providers → remote-media →
+  website fallthrough. `role: .primary` (visible/searchable/citable, matching the
+  podcast precedent).
+- **Refresh (no code).** New agentNames hit `SourceRefreshService.materialize`'s
+  default → `.notRefreshable` (correct: byteless pointers). Tested.
+- **Docs.** Agent-facing "External media embeds" note in the system prompt
+  (`make prompts` regen committed); graph-model §7 + §12 Phase 4 row footnoted;
+  PLAN.md + this entry.
+
+**Key files:** `Sources/WikiFSCore/ExternalEmbed.swift` (new),
+`Sources/WikiFSCore/MediaEmbedURL.swift` (new), `WikiLinkMarkdown.swift`,
+`SQLiteWikiStore.swift`, `WikiStore.swift`, `WikiStoreModel.swift`,
+`URLFetchService.swift`, `Sources/WikiFS/WikiReaderView.swift`,
+`Sources/WikiFS/ReaderMarkdown.swift`. Tests: `ExternalEmbedTests`,
+`MediaEmbedURLTests`, `BytelessEmbedIntegrationTests`, + embed-target cases in
+`WikiLinkMarkdownTests`.
+
+**Manual (AC.9):** a page embedding one source of each kind (YouTube iframe,
+Spotify iframe, remote mp3 `<audio>`, Apple Podcasts iframe, + a byteful `<img>`)
+should paint all five in the live WKWebView. This is the same manual-only live-
+paint status as Phase 4a (no automated UI harness for the reader). Verify ATS /
+sandbox / WKWebView config allow egress to `youtube-nocookie.com`,
+`player.vimeo.com`, `open.spotify.com`, `w.soundcloud.com`,
+`embed.podcasts.apple.com`, and the remote-media hosts (R1).
+
 ## 2026-07-06 — Graph-model Phase 6: `@vN` version pinning
 
 **Phase gate met: `[[source:X@v3#"quote"]]` highlights after X is reprocessed

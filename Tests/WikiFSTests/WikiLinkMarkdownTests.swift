@@ -408,7 +408,7 @@ struct WikiLinkMarkdownTests {
         let out = WikiLinkMarkdown.linkified(
             "![[source:img.png]]",
             isResolved: { _, _ in true },
-            embedInfo: { _ in (id: id, mimeType: "image/png") }
+            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "image/png") }
         )
         #expect(out.contains("<img"))
         #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
@@ -421,7 +421,7 @@ struct WikiLinkMarkdownTests {
         let out = WikiLinkMarkdown.linkified(
             "![[source:clip.mp4]]",
             isResolved: { _, _ in true },
-            embedInfo: { _ in (id: id, mimeType: "video/mp4") }
+            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "video/mp4") }
         )
         #expect(out.contains("<video"))
         #expect(out.contains("controls"))
@@ -433,7 +433,7 @@ struct WikiLinkMarkdownTests {
         let out = WikiLinkMarkdown.linkified(
             "![[source:song.mp3]]",
             isResolved: { _, _ in true },
-            embedInfo: { _ in (id: id, mimeType: "audio/mpeg") }
+            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "audio/mpeg") }
         )
         #expect(out.contains("<audio"))
         #expect(out.contains("controls"))
@@ -445,7 +445,7 @@ struct WikiLinkMarkdownTests {
         let out = WikiLinkMarkdown.linkified(
             "![[source:doc.pdf]]",
             isResolved: { _, _ in true },
-            embedInfo: { _ in (id: id, mimeType: "application/pdf") }
+            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "application/pdf") }
         )
         #expect(out.contains("<iframe"))
         #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
@@ -468,7 +468,7 @@ struct WikiLinkMarkdownTests {
         let out = WikiLinkMarkdown.linkified(
             "![[source:notes.txt]]",
             isResolved: { _, _ in true },
-            embedInfo: { _ in (id: id, mimeType: "text/plain") }
+            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "text/plain") }
         )
         #expect(out.contains("wiki://source"))
         #expect(!out.contains("<img"))
@@ -485,6 +485,80 @@ struct WikiLinkMarkdownTests {
         #expect(!out.contains("<img"))
     }
 
+    // MARK: - Byteless external-embed targets (Phase 4b, AC.1/AC.2/AC.4)
+
+    @Test func embedProviderIframeTargetRendersIframe() {
+        let id = PageID(rawValue: "01HTESTYT0000000000000000A")
+        let target = EmbedTarget(kind: .iframe, url: "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ")
+        let out = WikiLinkMarkdown.linkified(
+            "![[source:video]]",
+            isResolved: { _, _ in true },
+            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "video/youtube", target: target) }
+        )
+        #expect(out.contains("<iframe"))
+        #expect(out.contains("youtube-nocookie.com/embed/dQw4w9WgXcQ"))
+        #expect(out.contains("wiki-embed"))
+        #expect(out.contains("loading=\"lazy\""))
+        #expect(!out.contains("wiki-blob://"))  // external, not blob
+        #expect(!out.contains("wiki://"))  // not a fallback cite link
+    }
+
+    @Test func embedDirectRemoteAudioTargetRendersNativeAudio() {
+        let id = PageID(rawValue: "01HTESTMP3000000000000000B")
+        let target = EmbedTarget(kind: .audio, url: "https://radio.example.com/live.mp3")
+        let out = WikiLinkMarkdown.linkified(
+            "![[source:stream]]",
+            isResolved: { _, _ in true },
+            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "audio/mpeg", target: target) }
+        )
+        #expect(out.contains("<audio"))
+        #expect(out.contains("radio.example.com/live.mp3"))
+        #expect(out.contains("controls"))
+        #expect(!out.contains("wiki-blob://"))
+        #expect(!out.contains("wiki://"))
+    }
+
+    @Test func embedDirectRemoteVideoTargetRendersNativeVideo() {
+        let id = PageID(rawValue: "01HTESTMP4000000000000000C")
+        let target = EmbedTarget(kind: .video, url: "https://example.com/clip.mp4")
+        let out = WikiLinkMarkdown.linkified(
+            "![[source:clip]]",
+            isResolved: { _, _ in true },
+            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "video/mp4", target: target) }
+        )
+        #expect(out.contains("<video"))
+        #expect(out.contains("example.com/clip.mp4"))
+        #expect(out.contains("controls"))
+        #expect(!out.contains("wiki-blob://"))
+    }
+
+    @Test func embedSyntheticMimeWithoutTargetFallsBackToCiteLink() {
+        // AC.4 / R2 regression: a byteless source with a synthetic mime
+        // (video/youtube) but NO resolved target must fall back to a cite link —
+        // NOT emit a broken <video src="wiki-blob://…"> against empty bytes.
+        let id = PageID(rawValue: "01HTESTSYN000000000000000D")
+        let out = WikiLinkMarkdown.linkified(
+            "![[source:video]]",
+            isResolved: { _, _ in true },
+            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "video/youtube") }
+        )
+        #expect(out.contains("wiki://source"))  // cite link fallback
+        #expect(!out.contains("<video"))
+        #expect(!out.contains("wiki-blob://"))
+    }
+
+    @Test func embedBytefulStillUsesBlobDispatch() {
+        // AC.4 regression: a byteful source (target nil) still emits wiki-blob://.
+        let id = PageID(rawValue: "01HTESTBYT000000000000000E")
+        let out = WikiLinkMarkdown.linkified(
+            "![[source:pic.png]]",
+            isResolved: { _, _ in true },
+            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "image/png") }
+        )
+        #expect(out.contains("<img"))
+        #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
+    }
+
     @Test func pageEmbedPrefixConsumedAndRendersAsLink() {
         // `![[Page]]` is not a valid embed; the `!` is consumed so it doesn't
         // form a CommonMark image, and the link renders normally.
@@ -498,7 +572,7 @@ struct WikiLinkMarkdownTests {
         let out = WikiLinkMarkdown.linkified(
             "Here is ![[source:img.png]] inline.",
             isResolved: { _, _ in true },
-            embedInfo: { _ in (id: id, mimeType: "image/png") }
+            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "image/png") }
         )
         #expect(out.hasPrefix("Here is "))
         #expect(out.hasSuffix(" inline."))
