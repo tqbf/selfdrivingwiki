@@ -93,7 +93,7 @@ struct WikiStoreModelZoteroIngestTests {
         let model = WikiStoreModel(store: store)
         let zoteroDir = try tempZoteroDir()  // no fixture written — file doesn't exist
 
-        await #expect(throws: ZoteroIngestError.self) {
+        await #expect(throws: ZoteroFetchError.self) {
             try await model.ingestFromZotero(
                 attachment(key: "MISSING1", filename: "ghost.pdf"),
                 parentItem: parentItem(), zoteroDir: zoteroDir)
@@ -108,7 +108,7 @@ struct WikiStoreModelZoteroIngestTests {
         try writeFixture(
             zoteroDir: zoteroDir, key: "L1", filename: "stray.pdf", data: Data("%PDF".utf8))
 
-        await #expect(throws: ZoteroIngestError.self) {
+        await #expect(throws: ZoteroFetchError.self) {
             try await model.ingestFromZotero(
                 attachment(key: "L1", linkMode: "linked_file", filename: "stray.pdf"),
                 parentItem: parentItem(), zoteroDir: zoteroDir)
@@ -135,17 +135,17 @@ struct WikiStoreModelZoteroIngestTests {
         #expect(filenames == ["paper.pdf", "notes.md"])
     }
 
-    // MARK: - ZoteroIngestError
+    // MARK: - ZoteroFetchError
 
-    @Test func zoteroIngestErrorDescriptionReturnsReason() {
-        let error = ZoteroIngestError.unavailable("Not synced to this Mac yet")
+    @Test func zoteroFetchErrorDescriptionReturnsReason() {
+        let error = ZoteroFetchError.unavailable("Not synced to this Mac yet")
         #expect(error.errorDescription == "Not synced to this Mac yet")
     }
 
-    @Test func zoteroIngestErrorIsEquatable() {
-        let a = ZoteroIngestError.unavailable("msg")
-        let b = ZoteroIngestError.unavailable("msg")
-        let c = ZoteroIngestError.unavailable("different")
+    @Test func zoteroFetchErrorIsEquatable() {
+        let a = ZoteroFetchError.unavailable("msg")
+        let b = ZoteroFetchError.unavailable("msg")
+        let c = ZoteroFetchError.unavailable("different")
         #expect(a == b)
         #expect(a != c)
     }

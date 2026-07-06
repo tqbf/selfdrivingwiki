@@ -12,9 +12,9 @@ import FoundationNetworking
 ///   so the filename derives from where we landed;
 /// - send a desktop browser `User-Agent` so sites that 403 unknown agents serve us;
 /// - use a bounded timeout so a dead host fails cleanly instead of hanging the sheet;
-/// - translate a non-2xx status into `IngestError.httpStatus` and a transport error
-///   into `IngestError.network`, both with user-readable messages.
-public struct URLSessionFetcher: URLIngestService.URLResourceFetcher {
+/// - translate a non-2xx status into `FetchError.httpStatus` and a transport error
+///   into `FetchError.network`, both with user-readable messages.
+public struct URLSessionFetcher: URLFetchService.URLResourceFetcher {
 
     /// A current desktop Safari UA — generic enough that content sites serve full
     /// HTML rather than a bot challenge.
@@ -32,7 +32,7 @@ public struct URLSessionFetcher: URLIngestService.URLResourceFetcher {
         self.session = URLSession(configuration: config)
     }
 
-    public func fetch(_ url: URL) async throws -> URLIngestService.FetchResponse {
+    public func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse {
         // Rewrite recognized file-share preview links (e.g. a Dropbox `www.dropbox.com`
         // share URL) to their direct-download host BEFORE the request — otherwise the
         // host serves a non-browser an HTML JS interstitial instead of the file. Pure +
@@ -53,13 +53,13 @@ public struct URLSessionFetcher: URLIngestService.URLResourceFetcher {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw URLIngestService.IngestError.network(
+            throw URLFetchService.FetchError.network(
                 "Couldn't reach that URL: \(error.localizedDescription)")
         }
 
         guard let http = response as? HTTPURLResponse else {
             // Non-HTTP (e.g. file://) — accept the bytes as-is.
-            return URLIngestService.FetchResponse(
+            return URLFetchService.FetchResponse(
                 data: data,
                 contentType: response.mimeType,
                 finalURL: response.url ?? fetchURL
@@ -67,11 +67,11 @@ public struct URLSessionFetcher: URLIngestService.URLResourceFetcher {
         }
 
         guard (200..<300).contains(http.statusCode) else {
-            throw URLIngestService.IngestError.httpStatus(http.statusCode)
+            throw URLFetchService.FetchError.httpStatus(http.statusCode)
         }
 
         let contentType = http.value(forHTTPHeaderField: "Content-Type") ?? response.mimeType
-        return URLIngestService.FetchResponse(
+        return URLFetchService.FetchResponse(
             data: data,
             contentType: contentType,
             finalURL: http.url ?? fetchURL

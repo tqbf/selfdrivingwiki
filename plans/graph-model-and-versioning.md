@@ -625,18 +625,29 @@ go through the main-actor model; never hold connection state across calls."*
 ## 9. Migration & compatibility
 
 Additive ladder steps (v18…), each independently shippable; the fresh-path
-block extends in parity, enforced by the existing test:
+block extends in parity, enforced by the existing test.
+
+> **Numbering reconciliation (Phase 1 implemented).** §9 originally numbered
+> the objects step "v18"; v18/v19 are taken (v18 = name sanitization, v19 =
+> `content_hash`). The objects & versioning step shipped as **v20**. The later
+> phases renumber accordingly: extraction columns **v21**, `source_links`
+> rebuild + `sources.role` **v22**. The step descriptions below are updated to
+> the shipped/renumbered sequence.
 
 1. **Phase 0 — no schema step.** (Concurrency is code-only; `user_version`
-   stays 17.)
-2. **v18: `blobs`, `agents`, `activities`, `source_versions`, `refs`** — create
-   the tables, then a **one-shot migration**: for each source, hash `content` →
-   `INSERT OR IGNORE` blob → insert a v1 version row (`parent_id NULL`,
-   `fetched_at = created_at`) → write the `source-content` ref → **drop the
-   `sources.content` column** in the same step (table rebuild). PROV backfill:
-   seed one `agents` row per distinct legacy `extraction_technique` /
-   `provider_kind` and one `activities` row (`kind='fetch'`) per source's
-   origin, repointing the new version rows at them (§4.7).
+   stays at the ladder head.)
+2. **v18: name sanitization** (data-only sweep), **v19: `content_hash`** — both
+   shipped before Phase 1.
+3. **v20: `blobs`, `agents`, `activities`, `source_versions`, `refs`** (Phase 1,
+   implemented) — create the tables, then a **one-shot migration**: for each
+   source, **reuse the existing v19 `content_hash`** as the blob hash (same
+   SHA-256 — no re-hash) → `INSERT OR IGNORE` blob → seed one legacy `agents`
+   row (`'software'`/`'legacy-import'`) → per-source import `activities` row →
+   insert a v1 version row (`parent_id NULL`, `fetched_at = created_at`) → write
+   the `source-content` ref (generation 1) → **drop the `sources.content`
+   column** in the same transaction (`ALTER TABLE … DROP COLUMN`; macOS 15 ships
+   SQLite ≥ 3.43). All inside one `withTransaction`; a pre-migration assertion
+   guarantees no source lacks a `content_hash` (silent-data-loss guard).
 
    **No soak, no dual-write, no read-fallback.** The defensive soak machinery
    this plan once carried existed for *binary skew across live users* — three
@@ -644,26 +655,48 @@ block extends in parity, enforced by the existing test:
    binaries sharing one file at different schema versions. The app is
    **pre-launch**: there are no users with stale binaries, and "skew" during
    development means "rebuild all three," the normal dev loop, not something to
-   design migrations around. So `sources.content` is dropped outright in v18, not
+   design migrations around. So `sources.content` is dropped outright in v20, not
    kept nullable through a transition release. The developer's own existing DB
    (real data) migrates once, in place, via this step; it is restorable from
    VCS if the one-shot ever misbehaves during development. Byteless sources
-   (`blob_hash IS NULL`) are legal from v18 onward — no gating.
+   (`blob_hash IS NULL`) are legal from v20 onward — no gating.
 
    Reads go through `sourceContent(id:)` which resolves ref → version → blob, so
    the call-site surface (wikictl `cat`/`export`, FP projection, agent staging)
    doesn't change signatures.
-3. **v19: extraction columns** (`activity_id REFERENCES activities(id)`,
+
+   > **Deviation from §4.2 (decided, flagged).** §4.2 migrates `byte_size` and
+   > `mime_type` onto the version rows. Phase 1 **keeps them as denormalized
+   > columns on `sources`** mirroring the active version's blob, dropping only
+   > `content`. In Phase 1 every source has exactly one version, so the mirror
+   > is trivially correct and never drifts; it avoids reworking `SourceSummary`,
+   > `getSource`/`listSources`, the FP `node(for:)` size, and
+   > `indexes/sources.jsonl` in this foundational migration. Phase 3's repoint
+   > path reconciles the mirror; a later phase may collapse the denorm columns
+   > onto the version.
+
+4. **v21: extraction columns** (`activity_id REFERENCES activities(id)`,
    `source_version_id`, `blob_hash`, `mime_type`) + backfills (one
    `kind='extract'` activity per legacy row, associated with the matching agent;
    v1 version id).
-4. **v20: `source_links` rebuild** as the rowid table + `COALESCE`'d unique
+   > **Phase 2 implemented (v21).** CAS-moves each legacy row's inline `content`
+   > into a blob (reusing the SHA-256 as `blob_hash`), seeds one
+   > `legacy-extraction` agent + a per-row `extract` activity, backfills
+   > `source_version_id` to the source's active content version, and clears the
+   > inline column to `''`. New extractions go through `recordMarkdownExtraction`
+   > (provenance-carrying, CAS'd); the `source-derived` ref makes "switch active
+   > extraction" a one-row repoint; `revert` is a pointer copy. Default-active
+   > rule keeps HEAD = MAX(id) byte-identical until a ref is written. Tracks A+B
+   > shipped; track C (compare/nominate UI) implemented on
+   > `feature/extraction-compare-ui` (a modal compare sheet, rendered side-by-side
+   > + line-diff toggle, live Set Active; no schema change).
+5. **v22: `source_links` rebuild** as the rowid table + `COALESCE`'d unique
    index of §4.4 (copy-over `role='cite'`, `pinned_version_id=NULL` — still
    unique, byte-identical behavior), **plus**
    `ALTER TABLE sources ADD COLUMN role TEXT NOT NULL DEFAULT 'primary'`
    (`'primary' | 'media'`, per the draft's provenance grouping) — the default
    is the backfill; only new provider fetches ever write `'media'`.
-5. **Link canonicalization** (Phase D) is a *data* migration, not schema: a
+6. **Link canonicalization** (Phase D) is a *data* migration, not schema: a
    guarded one-time body rewrite (dry-runnable via lint), then the save-path
    normalizer keeps it invariant.
 
@@ -688,16 +721,21 @@ serves for `sources/by-*` and the `.md` sibling); version appends must move it
 (`LogIndexTests`, `SystemPromptTests`, `SQLiteWikiStoreTests`) update in the
 same commit as the fold.
 
-> **Token is monotone non-decreasing by design (adversarial hardening).** All
-> three new folds grow monotonically: `source_versions`/`activities` are
-> append-only counts, and `refs.generation` only increments — so a *rollback*
-> (a repoint) moves the token *forward* (generation+1), never back. This is
-> intentional: rollback changes the bytes the projection serves, so consumers
-> must refresh. Consequence: the token can never express "the wiki returned to a
-> previous state" (a decrease). Any future feature wanting "changed since
+> **Token is monotone non-decreasing *except for deletes* (adversarial hardening,
+> reconciled in Phase 1).** `source_versions` and `activities` are append-only
+> *counts*, and `refs.generation` only increments — so a *rollback* (a repoint)
+> moves the token *forward* (generation+1), never back. **But** `deleteSource`
+> cascades `source_versions` and `refs` rows, which legitimately *lowers*
+> `svCount` and `refsGenSum` (and `activities` rows persist — no cascade from
+> sources). The token only needs to *change* on any mutation, which it does; the
+> strict "never decreases" framing holds for appends/repoints but NOT deletes.
+> This is intentional: rollback changes the bytes the projection serves, so
+> consumers must refresh. Consequence: the token can never express "the wiki
+> returned to a previous state" via a rollback (a decrease); a delete does lower
+> it, but that still forces a refresh. Any future feature wanting "changed since
 > snapshot X" semantics where rollback-to-prior should *decrease* the token is
 > foreclosed by this design and would need a different change-detection
-> mechanism. Not a bug; recorded so the constraint is explicit.
+> mechanism. Recorded so the constraint is stated correctly.
 
 Projection changes (deferred to late phases, per the draft): serve the
 *active* content version (ref-resolved) for source nodes; byteless sources
@@ -719,8 +757,8 @@ verbs) carry over from the draft verbatim. Two grounding notes:
   is reason enough to sequence providers before "refresh" ships (refresh
   needs to know what to re-fetch).
 
-> **Apple Podcasts provider (PR #106).** Podcast transcript ingest already
-> exists as a special case on the URL path (`PodcastEpisodeURL.parse` →
+> **Apple Podcasts provider (PR #106, Phase 3b — SHIPPED).** Podcast transcript
+> ingest exists as a special case on the URL path (`PodcastEpisodeURL.parse` →
 > `ApplePodcastTranscriptService`), built against today's flat source model: it
 > stores the transcript `.md` as source `content` and bakes the episode ID into
 > the filename. When Phase 1–3 land it re-models cleanly — a **byteless source**
@@ -733,6 +771,13 @@ verbs) carry over from the draft verbatim. Two grounding notes:
 > (`#if PODCAST_TRANSCRIPTS`) and stay on the user-initiated UI path — they do
 > not move into the agent surface. Ships independently of this plan; tracked
 > here so it is unified when providers land.
+>
+> **Status (Phase 3b, 2026-07-06):** the byteless conversion has shipped —
+> podcast episodes now store as byteless sources (`addBytelessSource`) with the
+> transcript as a derived markdown alternative (`appendProcessedMarkdown`).
+> Source refresh is live via `SourceRefreshService` + `refreshSource`. The
+> transcript-level `apple-ttml` extract PROV is deferred to Phase 4 (no consumer
+> until the alternatives UI gains a podcast transcript backend).
 
 ## 12. Phases
 
@@ -743,6 +788,7 @@ Ordered by dependency; each gate is demoable.
 | **0 — Concurrency substrate** *(this branch)* | Method-atomic store, `withTransaction` savepoints, atomic `renameSource`, `WikiReadPool`, off-main search, skill/AGENTS update | Full suite green; concurrent hammer test passes; searches don't touch the main-thread store |
 | **1 — Objects & versions** | `blobs`, `agents`, `activities`, `source_versions`, `refs`, one-shot content migration (drop `sources.content`), ref-resolved reads, byteless support, refresh-append write path | Re-ingesting an identical file adds one version row + zero new blob bytes; rollback = repoint; byteless YouTube source renders via transcript |
 | **2 — Extraction alternatives** | extraction-as-Activity (`activity_id` on smv + `used` the content version, §4.7), CAS extraction content, `source-derived` ref, compare/nominate UI, re-extract path (today none exists) | Two backends' extractions coexist; switch active; revert is a pointer copy |
+| ↳ *Phase 2 tracks A+B implemented (v21).* CAS'd/provenance-carrying extractions via `recordMarkdownExtraction`, `source-derived` ref + `setActiveMarkdown`, `revert` pointer copy, re-extract path, `wikictl source set-active`, minimal alternatives Menu. Gate met (AC.1–AC.9, 1488 tests green). *Track C (full compare/nominate UI) implemented on `feature/extraction-compare-ui`: a modal "Compare Extractions" sheet rendering any two alternatives side-by-side (Rendered ↔ Diff toggle), provenance per alternative (`processedMarkdownAlternatives`), and live "Set Active" nominate (1498 tests green; no schema change).* | | |
 | **3 — Providers & provenance** | `SourceProvider` protocol, four paths unified, runs recorded (URL provenance!), refresh verb, credentials UX, **website provider writes disambiguated `original_path` per sibling rule (§7)** | Drag-drop/URL/Zotero/folder all flow through providers; `wikictl source refresh` appends a version |
 | **4 — Media & roles** | `source_links` rebuild (role/pin), `![[…]]` embeds, render-by-content-type, sibling `original_path` resolution, media filtering | Website snapshot renders with inline images; a YouTube embed plays; a json-render spec mounts |
 | **5 — Link canonicalization** | Save-time ULID normalization, display-at-render, one-time body migration, `?id=` URL contract, rename = metadata-only | Rename a page with 50 inbound links: zero bodies rewritten, zero ghosts |
@@ -767,6 +813,22 @@ Phase 5 depends only on 0 (it can move earlier if rename pain dominates);
    model-coordination design (who reloads, when) before any change.
 5. **json-render runtime choice** — which renderer/spec dialect the WKWebView
    mounts; the schema is agnostic (it's a mime + a blob).
+6. **Activity lifecycle on source delete (revisit at Phase 2/3).** `activities`
+   has no FK to `sources` (it references `agents`), so `deleteSource` cascades
+   `source_versions` + `refs` but **leaves activities orphaned** — they persist
+   as durable PROV-DM history (Model A, §4.7). Consequence: `activities` grows
+   unbounded on source deletes, and the `actCount` changeToken fold is monotone
+   (only `svCount`/`refsGenSum` drop on delete — see the §10 caveat). In Phase 1
+   this is harmless: every activity is a synthetic `'legacy-import'`/`'import'`/
+   `'fetch'` stub carrying no real provenance (§3), so the orphans are pure dead
+   weight. **Revisit when real provenance lands (Phase 2 extraction activities,
+   Phase 3 provider fetches):** if provenance turns out worth keeping, keep Model
+   A and add an activity-GC pass that sweeps only synthetic legacy activities; if
+   not, add an explicit cascade in `deleteSource` (delete activities referenced
+   solely by the source's versions — a 5–10 line explicit delete, *not* a FK
+   change, since the FK runs `source_versions → activities` child→parent and
+   SQLite cannot auto-cascade it; a future multi-input extraction activity also
+   makes a single `activities.source_id` FK wrong).
 
 ## 14. Explicitly deferred (unchanged from the draft)
 

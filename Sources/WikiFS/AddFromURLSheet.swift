@@ -55,7 +55,7 @@ struct AddFromURLSheet: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Add from URL")
                 .font(.headline)
-            Text("Fetch a web page and add it as source material")
+            Text(subtitle)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -134,8 +134,18 @@ struct AddFromURLSheet: View {
 
     private var isFetching: Bool { phase == .fetching }
 
+    /// The subtitle mentions Apple Podcasts transcripts when the feature is
+    /// compiled in; the App-Store build omits it.
+    private var subtitle: String {
+        #if PODCAST_TRANSCRIPTS
+        "Fetch a web page or Apple Podcasts episode and add it as source material"
+        #else
+        "Fetch a web page and add it as source material"
+        #endif
+    }
+
     private var canFetch: Bool {
-        !isFetching && URLIngestService.normalizeURL(urlText) != nil
+        !isFetching && URLFetchService.normalizeURL(urlText) != nil
     }
 
     // MARK: - Action
@@ -143,14 +153,14 @@ struct AddFromURLSheet: View {
     private func fetch() {
         // Read the field fresh at click time (§3.5), not a captured-early copy.
         let input = urlText
-        guard URLIngestService.normalizeURL(input) != nil else { return }
+        guard URLFetchService.normalizeURL(input) != nil else { return }
         phase = .fetching
         Task {
             do {
-                _ = try await store.ingestURL(input)
+                _ = try await store.addURL(input)
                 dismiss()  // success: the new file is already in store.sources
             } catch {
-                let message = (error as? URLIngestService.IngestError)?.errorDescription
+                let message = (error as? URLFetchService.FetchError)?.errorDescription
                     ?? error.localizedDescription
                 phase = .failed(message)
             }

@@ -411,6 +411,35 @@ public final class WikiStoreModel {
         return pending.fragment
     }
 
+    // MARK: - Sidebar reveal ("Show In List")
+
+    /// The pending "Show In List" reveal target set by a detail view's button
+    /// (`requestSidebarReveal(_:)`) and consumed by the sidebar list view once it
+    /// has scrolled to + selected the row. Follows the same "set once, consume
+    /// once" producer/consumer discipline as `pendingScrollAnchor` (issue #183).
+    public private(set) var pendingSidebarReveal: WikiSelection?
+
+    /// Monotonic counter bumped each time `pendingSidebarReveal` is assigned. The
+    /// sidebar host (`SidebarView`) and `ContentView` observe it via `.onChange`
+    /// so a repeat request for an already-mounted section still fires the switch
+    /// / un-collapse / scroll path (the value itself may be identical to the
+    /// previous one).
+    public private(set) var pendingSidebarRevealVersion: Int = 0
+
+    /// Request that the sidebar reveal `selection` in its list: open the sidebar
+    /// if collapsed, switch to the matching section (Pages vs. Sources), clear any
+    /// active search that would hide the target, then scroll to + select the row.
+    public func requestSidebarReveal(_ selection: WikiSelection) {
+        pendingSidebarReveal = selection
+        pendingSidebarRevealVersion += 1
+    }
+
+    /// Called by the sidebar list view AFTER it has scrolled to + selected the
+    /// target row, so the reveal fires exactly once. Clears the pending target.
+    public func consumePendingSidebarReveal() {
+        pendingSidebarReveal = nil
+    }
+
     // MARK: - Tab operations
 
     /// The single seam every tab switch routes through: flush the outgoing tab's
@@ -1117,50 +1146,120 @@ public final class WikiStoreModel {
 
     // MARK: - File ingestion (Phase 5)
 
+    /// Route dropped URLs to the correct **add-source** path (#163). (This adds
+    /// a source — fetches/stores bytes so it appears under Sources — it does *not*
+    /// run the agent "ingestion" that reads a source and generates pages; that is
+    /// a separate `AgentLauncher` phase.)
+    /// - An `http(s)` URL (a link dragged from a browser) **or** a `.webloc`
+    ///   shortcut that resolves to one → `addURL` — the fetch + HTML→Markdown
+    ///   "Add from URL" path. This avoids reading a `.webloc` plist's raw bytes,
+    ///   which would capture the wrapper XML rather than the linked page.
+    /// - Any other `file://` URL → `addFiles` (raw bytes, as before).
+    ///
+    /// Several links / `.webloc` files dropped together are each added as their
+    /// own source. A `.webloc` whose `URL` key can't be parsed is skipped (its
+    /// bytes aren't useful as a source). `fetcher` is injectable for tests; the
+    /// default performs a real network GET.
+    public func addDroppedURLs(
+        _ droppedURLs: [URL],
+        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
+    ) async {
+        var remoteInputs: [String] = []
+        var localFiles: [URL] = []
+        for url in droppedURLs {
+            if let scheme = url.scheme, scheme == "http" || scheme == "https" {
+                remoteInputs.append(url.absoluteString)
+            } else if url.isFileURL, url.pathExtension.lowercased() == "webloc" {
+                if let resolved = await Self.resolveWeblocURL(url) {
+                    remoteInputs.append(resolved)
+                } else {
+                    DebugLog.store("WikiStoreModel.addDroppedURLs could not resolve .webloc: \(url.lastPathComponent)")
+                }
+            } else {
+                localFiles.append(url)
+            }
+        }
+        for input in remoteInputs {
+            do {
+                _ = try await addURL(input, fetcher: fetcher)
+            } catch {
+                DebugLog.store("WikiStoreModel.addDroppedURLs URL ingest failed for \(input): \(error)")
+            }
+        }
+        if !localFiles.isEmpty {
+            await addFiles(localFiles)
+        }
+    }
+
+    /// Read a `.webloc` property list (XML or binary) off the main actor and
+    /// return its `URL` string, or `nil` if the file isn't a valid webloc. (#163)
+    private static func resolveWeblocURL(_ fileURL: URL) async -> String? {
+        await Task.detached(priority: .userInitiated) {
+            guard let data = try? Data(contentsOf: fileURL),
+                  let plist = try? PropertyListSerialization.propertyList(
+                      from: data, options: [], format: nil),
+                  let urlString = (plist as? [String: Any])?["URL"] as? String,
+                  !urlString.isEmpty
+            else { return nil }
+            return urlString
+        }.value
+    }
+
+    // MARK: - Provider-backed ingest seam (Phase 3a)
+
+    /// The single store-write seam every provider-backed ingest flows through.
+    /// Materialization (bytes + provenance) happens off-main inside the provider;
+    /// this does the main-actor `store.addSource` write, threading the
+    /// `MaterializedSource`'s provenance + retained Zotero columns through. Each
+    /// caller wraps its OWN duplicate/error handling around this throw.
+    @discardableResult
+    private func storeMaterialized(_ m: MaterializedSource) throws -> SourceSummary {
+        try store.addSource(
+            filename: m.filename, data: m.data,
+            zoteroItemKey: m.zoteroItemKey, zoteroItemTitle: m.zoteroItemTitle,
+            mimeType: m.mimeType, provenance: m.provenance)
+    }
+
     /// Ingest dropped files. For each URL: reject directories (a recursive
     /// directory ingest is out of scope), read the bytes OFF the main thread
     /// (big files shouldn't stall the UI), then hop back to the main actor to
     /// store + reload. Per-file failures are logged and skipped so one bad drop
     /// doesn't abort the batch. `onPageDidChange?()` fires ONCE at the end so the
     /// daemon re-enumerates the `sources/` tree exactly once for the whole batch.
-    public func ingest(fileURLs: [URL]) async {
+    ///
+    /// Named `addFiles` (not `ingest`) because it only adds sources — it does NOT
+    /// run the agent "Ingest into wiki" phase (see `AgentLauncher` /
+    /// `ingestingSourceIDs`). Issue #178.
+    public func addFiles(_ fileURLs: [URL]) async {
         var lastSourceID: PageID?
         var duplicateNames: [String] = []
         for url in fileURLs {
             // Skip directories — only flat files are ingested.
             let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
             if isDir {
-                DebugLog.store("WikiStoreModel.ingest skipping directory: \(url.lastPathComponent)")
+                DebugLog.store("WikiStoreModel.addFiles skipping directory: \(url.lastPathComponent)")
                 continue
             }
-            let filename = url.lastPathComponent
-            let data: Data
+            // Materialize off-main (read + dispatch), store on the main actor.
+            let provider = LocalFileProvider(fileURL: url)
+            let materialized: MaterializedSource
             do {
-                // Read off the main actor; `Data(contentsOf:)` is blocking I/O.
-                data = try await Task.detached(priority: .userInitiated) {
-                    try Data(contentsOf: url)
-                }.value
+                materialized = try await provider.materialize()
             } catch {
-                DebugLog.store("WikiStoreModel.ingest read failed for \(filename): \(error)")
+                DebugLog.store("WikiStoreModel.addFiles read failed for \(url.lastPathComponent): \(error)")
                 continue
             }
 
-            let ext = (filename as NSString).pathExtension.lowercased()
-            let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
-            let response = URLIngestService.FetchResponse(data: data, contentType: mimeType, finalURL: url)
-            let plan = URLIngestService.plan(for: response)
-
             do {
-                let summary = try store.addSource(
-                    filename: plan.filename, data: plan.data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: mimeType)
+                let summary = try storeMaterialized(materialized)
                 lastSourceID = summary.id
             } catch WikiStoreError.duplicateContent(let existing) {
                 // Byte-identical to an already-stored source — skip rather than
                 // abort the rest of the drop batch; report it so the user isn't
                 // left wondering why the file didn't show up.
-                duplicateNames.append("\(filename) (already added as \(existing.effectiveName))")
+                duplicateNames.append("\(url.lastPathComponent) (already added as \(existing.effectiveName))")
             } catch {
-                DebugLog.store("WikiStoreModel.ingest store failed for \(filename): \(error)")
+                DebugLog.store("WikiStoreModel.addFiles store failed for \(url.lastPathComponent): \(error)")
             }
         }
         reloadSources()
@@ -1177,42 +1276,154 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Ingest a resource by URL: fetch it, convert HTML→Markdown (or store a PDF /
-    /// text / binary verbatim), and land it as an ingested file — exactly like a
-    /// drag-dropped file, so the existing "Ingest into wiki" `claude -p` operation
-    /// can summarize it afterward. Lands through the SAME `store.ingestFile` path as
-    /// drag-ingest, so it appears under Sources + `sources/by-{id,name}` immediately and
-    /// is pickable in Operations → Ingest. Returns the outcome on success; throws a
-    /// user-readable `URLIngestService.IngestError` on a bad URL, non-2xx, empty
-    /// body, or store failure (the caller surfaces it in the sheet). The store write
-    /// hops to the main actor (this type is `@MainActor`); the fetch runs off it.
+    /// Add a resource by URL as a source: fetch it, convert HTML→Markdown (or
+    /// store a PDF / text / binary verbatim), and land it as a source file —
+    /// exactly like a drag-dropped file, so the existing **"Ingest into wiki"**
+    /// `claude -p` operation can summarize it afterward. Lands through the SAME
+    /// `store.addSource` path as `addFiles`, so it appears under Sources +
+    /// `sources/by-{id,name}` immediately and is pickable in Operations → Ingest.
+    /// Returns the outcome on success; throws a user-readable
+    /// `URLFetchService.FetchError` on a bad URL, non-2xx, empty body, or store
+    /// failure (the caller surfaces it in the sheet). The store write hops to the
+    /// main actor (this type is `@MainActor`); the fetch runs off it.
+    ///
+    /// Named `addURL` (not `ingestURL`) because it only adds a source — the agent
+    /// "Ingest into wiki" phase is a separate, later step. Issue #178.
     @discardableResult
-    public func ingestURL(
+    public func addURL(
         _ rawInput: String,
-        fetcher: any URLIngestService.URLResourceFetcher = URLSessionFetcher()
-    ) async throws -> URLIngestService.IngestOutcome {
-        // Validate + fetch OFF the main actor (the GET shouldn't stall the UI);
-        // `fetch` is `Sendable` and the service is stateless. Then store the result
-        // back HERE on the main actor, where we own `store`. Splitting fetch (async,
-        // off-actor) from store (main-actor) keeps the @Sendable boundary honest —
-        // no `assumeIsolated` gamble on which thread a continuation resumes.
-        guard let url = URLIngestService.normalizeURL(rawInput) else {
-            throw URLIngestService.IngestError.invalidURL(
-                rawInput.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        let response = try await fetcher.fetch(url)
-        guard !response.data.isEmpty else { throw URLIngestService.IngestError.empty }
+        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
+    ) async throws -> URLFetchService.FetchOutcome {
+        #if PODCAST_TRANSCRIPTS
+        // Delegate to the podcast-aware overload so routing is in one place.
+        return try await addURL(rawInput, fetcher: fetcher, podcastFetcher: ApplePodcastTranscriptService.bundled())
+        #else
+        return try await addURLViaWebsite(rawInput, fetcher: fetcher)
+        #endif
+    }
 
-        // Pure dispatch decides the filename + bytes; we store directly on the main
-        // actor (no @Sendable store closure crossing the actor boundary).
-        let plan = URLIngestService.plan(for: response)
-        let summary = try store.addSource(
-            filename: plan.filename, data: plan.data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil)
+    #if PODCAST_TRANSCRIPTS
+    /// The podcast-aware `addURL`: recognizes an Apple Podcasts episode link and
+    /// routes to the transcript pipeline instead of the HTML fetcher. The
+    /// `podcastFetcher` seam lets CI inject a fake `PodcastTranscriptFetching`
+    /// (the bundled service returns nil without the signing helper).
+    @discardableResult
+    public func addURL(
+        _ rawInput: String,
+        fetcher: any URLFetchService.URLResourceFetcher,
+        podcastFetcher: (any PodcastTranscriptFetching)?
+    ) async throws -> URLFetchService.FetchOutcome {
+        // An Apple Podcasts EPISODE link is recognized before the generic web
+        // fetch: its HTML is the useless player page, so we route to the
+        // transcript pipeline instead. The pageURL is re-normalized from the raw
+        // input so the Origin row surfaces the canonical `podcasts.apple.com` URL
+        // the user pasted (the episode ID alone isn't a clickable link).
+        if let episode = PodcastEpisodeURL.parse(rawInput) {
+            guard let svc = podcastFetcher else {
+                throw PodcastTranscriptError.signatureUnavailable(
+                    "Apple Podcasts transcripts need the signing helper, which isn't available in this build.")
+            }
+            let pageURL = URLFetchService.normalizeURL(rawInput)
+                ?? URL(string: "https://podcasts.apple.com")!
+            let provider = ApplePodcastProvider(episode: episode, pageURL: pageURL, fetcher: svc)
+            let transcript = try await provider.materialize()
+            // §11 byteless model: the source is byteless (a pointer to the
+            // external episode), and the transcript markdown is stored as the
+            // derived alternative — NOT as content bytes (Option-A). The
+            // provider is unchanged; only the storage path repoints.
+            guard let prov = transcript.provenance else {
+                throw URLFetchService.FetchError.invalidURL("podcast transcript missing provenance")
+            }
+            let summary = try store.addBytelessSource(
+                filename: transcript.filename, mimeType: transcript.mimeType, provenance: prov)
+            let markdown = String(data: transcript.data, encoding: .utf8) ?? ""
+            try store.appendProcessedMarkdown(
+                sourceID: summary.id, content: markdown, origin: "transcript", note: nil)
+            reloadSources()
+            openTab(.source(summary.id))
+            onPageDidChange?()
+            return URLFetchService.FetchOutcome(
+                filename: transcript.filename,
+                byteSize: transcript.data.count,
+                kind: .podcastTranscript)
+        }
+        return try await addURLViaWebsite(rawInput, fetcher: fetcher)
+    }
+    #endif
+
+    /// The web-fetch ingest path (HTML→md / PDF / text / binary), shared by both
+    /// the feature-on and feature-off `addURL` overloads. Validate + fetch OFF the
+    /// main actor (the GET shouldn't stall the UI); the WebsiteProvider owns
+    /// normalize→fetch→dispatch (materialization). Then store the result HERE on
+    /// the main actor, where we own `store`.
+    private func addURLViaWebsite(
+        _ rawInput: String,
+        fetcher: any URLFetchService.URLResourceFetcher
+    ) async throws -> URLFetchService.FetchOutcome {
+        let provider = WebsiteProvider(rawInput: rawInput, fetcher: fetcher)
+        let (materialized, plan) = try await provider.materializeWithPlan()
+        let summary = try storeMaterialized(materialized)
         reloadSources()
         openTab(.source(summary.id))
         onPageDidChange?()
-        return URLIngestService.IngestOutcome(
+        return URLFetchService.FetchOutcome(
             filename: plan.filename, byteSize: plan.data.count, kind: plan.kind)
+    }
+
+    // MARK: - Source refresh (Phase 3b)
+
+    /// Refresh a source: re-fetch it via its provider (reconstructed from the
+    /// stored origin), appending a new version instead of overwriting. Website
+    /// sources append a content version; podcast (byteless) sources append a
+    /// derived markdown version. Import-only sources (local-file, Zotero,
+    /// folder) throw `.notRefreshable`. Materialization runs off-main (the
+    /// provider's network fetch); the store write happens HERE on the main
+    /// actor, exactly like `addURL`.
+    ///
+    /// Returns a human-readable description for UI surfacing.
+    #if PODCAST_TRANSCRIPTS
+    @discardableResult
+    public func refreshSource(
+        _ id: PageID,
+        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher(),
+        podcastFetcher: (any PodcastTranscriptFetching)? = ApplePodcastTranscriptService.bundled()
+    ) async throws -> String {
+        let service = SourceRefreshService(
+            fetcher: fetcher, podcastFetcher: podcastFetcher)
+        return try await performRefresh(id: id, service: service)
+    }
+    #else
+    @discardableResult
+    public func refreshSource(
+        _ id: PageID,
+        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
+    ) async throws -> String {
+        let service = SourceRefreshService(fetcher: fetcher)
+        return try await performRefresh(id: id, service: service)
+    }
+    #endif
+
+    /// Shared refresh body: materialize off-main, append the version on-main,
+    /// reload. Split out so the `#if PODCAST_TRANSCRIPTS` gated inits don't
+    /// duplicate the store-write logic.
+    private func performRefresh(
+        id: PageID, service: SourceRefreshService
+    ) async throws -> String {
+        guard let origin = try store.sourceOrigin(sourceID: id) else {
+            throw SourceRefreshService.RefreshError.notRefreshable("unknown")
+        }
+        let material = try await service.materialize(origin: origin)
+        switch material {
+        case .contentVersion(let data, let prov):
+            _ = try store.appendContentVersion(
+                sourceID: id, data: data, mimeType: nil, provenance: prov)
+        case .derivedMarkdown(let content):
+            try store.appendProcessedMarkdown(
+                sourceID: id, content: content, origin: "transcript", note: nil)
+        }
+        reloadSources()
+        onPageDidChange?()
+        return "Refreshed \(origin.displayLabel) source."
     }
 
     /// Synchronous ingest seam used by tests/verifiers (no drag gesture). Stores
@@ -1220,7 +1431,8 @@ public final class WikiStoreModel {
     public func addSource(filename: String, data: Data) {
         do {
             _ = try store.addSource(
-                filename: filename, data: data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil)
+                filename: filename, data: data, zoteroItemKey: nil, zoteroItemTitle: nil,
+                mimeType: nil, provenance: nil)
             reloadSources()
             onPageDidChange?()
         } catch WikiStoreError.duplicateContent(let existing) {
@@ -1237,37 +1449,29 @@ public final class WikiStoreModel {
     /// parent item's key + title into the row as provenance so the detail view
     /// can show "From Zotero" and link back. We already know the filename and
     /// bytes from Zotero's metadata, so this goes straight to the
-    /// `addSource(filename:data:)` seam rather than `URLIngestService`'s
+    /// `addSource(filename:data:)` seam rather than `URLFetchService`'s
     /// content-type dispatch (that dispatch exists for the unknown-bytes-from-a-
     /// URL case, which doesn't apply here). No network fallback in v1: an
     /// attachment that isn't synced to `~/Zotero/storage` yet throws
-    /// `ZoteroIngestError.unavailable` rather than downloading it.
+    /// `ZoteroFetchError.unavailable` rather than downloading it.
     public func ingestFromZotero(
         _ attachment: ZoteroAttachment,
         parentItem: ZoteroItem,
         zoteroDir: URL
     ) async throws {
-        switch ZoteroLocalStorage.resolve(attachment, zoteroDir: zoteroDir) {
-        case .local(let path):
-            // Read off the main actor — same rationale as `ingest(fileURLs:)`:
-            // `Data(contentsOf:)` is blocking I/O and shouldn't stall the UI.
-            let data = try await Task.detached(priority: .userInitiated) {
-                try Data(contentsOf: path)
-            }.value
-            do {
-                let summary = try store.addSource(
-                    filename: path.lastPathComponent, data: data,
-                    zoteroItemKey: parentItem.key, zoteroItemTitle: parentItem.title,
-                    mimeType: nil)
-                reloadSources()
-                openTab(.source(summary.id))
-                onPageDidChange?()
-            } catch {
-                DebugLog.store("WikiStoreModel.ingestFromZotero failed: \(error)")
-                throw error
-            }
-        case .unavailable(let reason):
-            throw ZoteroIngestError.unavailable(reason)
+        let provider = ZoteroProvider(
+            attachment: attachment, parentItem: parentItem, zoteroDir: zoteroDir)
+        // Resolve + read off the main actor (the provider materializes, throwing
+        // ZoteroFetchError.unavailable when the attachment isn't local).
+        let materialized = try await provider.materialize()
+        do {
+            let summary = try storeMaterialized(materialized)
+            reloadSources()
+            openTab(.source(summary.id))
+            onPageDidChange?()
+        } catch {
+            DebugLog.store("WikiStoreModel.ingestFromZotero failed: \(error)")
+            throw error
         }
     }
 
@@ -1299,9 +1503,11 @@ public final class WikiStoreModel {
         for file in result.files {
             let ext = (file.filename as NSString).pathExtension.lowercased()
             let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
+            let provider = MarkdownFolderProvider(
+                filename: file.filename, data: file.data, mimeType: mimeType)
             do {
-                let summary = try store.addSource(
-                    filename: file.filename, data: file.data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: mimeType)
+                let materialized = try await provider.materialize()
+                let summary = try storeMaterialized(materialized)
                 if firstSourceID == nil { firstSourceID = summary.id }
                 imported += 1
             } catch WikiStoreError.duplicateContent(let existing) {
@@ -1391,6 +1597,13 @@ public final class WikiStoreModel {
         sourceIngestedStatus[file.id] ?? false
     }
 
+    /// The origin provenance of a source (provider agent + the activity that
+    /// fetched/imported it). `nil` when the read fails or no version exists.
+    /// Drives the "Origin" row in `SourceDetailView`.
+    public func sourceOrigin(for id: PageID) -> SourceOrigin? {
+        try? store.sourceOrigin(sourceID: id)
+    }
+
     // MARK: - Processed markdown versions (v8)
 
     /// The latest (HEAD) processed markdown version for a file. Every source has a
@@ -1414,6 +1627,11 @@ public final class WikiStoreModel {
         (try? store.hasProcessedMarkdown(sourceID: sourceID)) ?? false
     }
 
+    /// All versions for a source, newest first. Empty if none.
+    public func processedMarkdownHistory(for sourceID: PageID) -> [SourceMarkdownVersion] {
+        (try? store.processedMarkdownHistory(sourceID: sourceID)) ?? []
+    }
+
     /// Save an edit as a new version in the chain. Only called when the text
     /// genuinely differs from the current head — meaningful history, not
     /// keystroke spam.
@@ -1424,14 +1642,61 @@ public final class WikiStoreModel {
     }
 
     /// Seed the first processed-markdown version for a PDF from extraction
-    /// output. Double-seed guard: if a head already exists, returns it instead.
+    /// output, recording full provenance (backend agent + extract activity). The
+    /// `source_version_id` is resolved from the source's active content version.
+    /// Double-seed guard: if a head already exists, returns it instead.
     @discardableResult
-    public func seedPdfMarkdown(for sourceID: PageID, content: String) -> SourceMarkdownVersion? {
+    public func seedPdfMarkdown(
+        for sourceID: PageID, content: String,
+        backend: ExtractionBackend, modelVersion: String? = nil
+    ) -> SourceMarkdownVersion? {
         if let head = try? store.processedMarkdownHead(sourceID: sourceID) {
             return head
         }
-        return try? store.appendProcessedMarkdown(
-            sourceID: sourceID, content: content, origin: "extraction", note: nil)
+        return try? store.recordMarkdownExtraction(
+            sourceID: sourceID, content: content, backend: backend,
+            sourceVersionID: nil, note: nil, modelVersion: modelVersion)
+    }
+
+    /// Re-extract a source's content with a given extractor + backend, appending
+    /// a COEXISTING alternative (never clobbers the existing head). Resolves the
+    /// source bytes + active content version from the store, runs the extractor,
+    /// then records the provenance-carrying extraction. Returns the new
+    /// alternative, or nil if the bytes can't be read or conversion fails.
+    @discardableResult
+    public func reExtractMarkdown(
+        for sourceID: PageID, filename: String,
+        using extractor: any MarkdownExtractor,
+        backend: ExtractionBackend, modelVersion: String? = nil,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async -> SourceMarkdownVersion? {
+        guard let data = try? store.sourceContent(id: sourceID) else { return nil }
+        guard let markdown = try? await extractor.convert(
+            pdfData: data, filename: filename, onProgress: onProgress) else {
+            return nil
+        }
+        return try? store.recordMarkdownExtraction(
+            sourceID: sourceID, content: markdown, backend: backend,
+            sourceVersionID: nil, note: "re-extract via \(backend.agentName)",
+            modelVersion: modelVersion)
+    }
+
+    /// Nominate an existing processed-markdown row as the active HEAD for a
+    /// source (UPSERT the `source-derived` ref). Thin wrapper over the store.
+    public func setActiveMarkdown(for sourceID: PageID, to versionID: PageID) {
+        try? store.setActiveMarkdown(sourceID: sourceID, to: versionID)
+    }
+
+    /// The producing agent name for each of a source's markdown versions
+    /// (smv.id → agents.name), for the alternatives UI labels.
+    public func processedMarkdownAgentNames(for sourceID: PageID) -> [String: String] {
+        (try? store.processedMarkdownAgentNames(sourceID: sourceID)) ?? [:]
+    }
+
+    /// All extraction alternatives for a source with provenance + active flag,
+    /// for the compare/nominate sheet (track C). Empty if none.
+    public func processedMarkdownAlternatives(for sourceID: PageID) -> [ExtractionAlternative] {
+        (try? store.processedMarkdownAlternatives(sourceID: sourceID)) ?? []
     }
 
     // MARK: - Source-of-truth rebuild
@@ -1660,13 +1925,14 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Add a page reference to a folder.
-    public func addPageRef(parentID: String?, pageID: PageID) {
+    /// Add a page reference to a folder. Pass `position` to insert at a specific
+    /// sibling index (the store shifts later siblings down); omit it to append.
+    public func addPageRef(parentID: String?, pageID: PageID, position: Int? = nil) {
         let t0 = DispatchTime.now()
-        let position = bookmarkNodes.filter { $0.parentID == parentID }.count
+        let pos = position ?? bookmarkNodes.filter { $0.parentID == parentID }.count
         do {
             _ = try store.createBookmarkNode(
-                parentID: parentID, position: position, kind: .pageRef,
+                parentID: parentID, position: pos, kind: .pageRef,
                 label: nil, targetID: pageID)
             reloadBookmarkNodes()
             let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
@@ -1676,12 +1942,13 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Add a source reference to a folder.
-    public func addSourceRef(parentID: String?, sourceID: PageID) {
-        let position = bookmarkNodes.filter { $0.parentID == parentID }.count
+    /// Add a source reference to a folder. Pass `position` to insert at a specific
+    /// sibling index (the store shifts later siblings down); omit it to append.
+    public func addSourceRef(parentID: String?, sourceID: PageID, position: Int? = nil) {
+        let pos = position ?? bookmarkNodes.filter { $0.parentID == parentID }.count
         do {
             _ = try store.createBookmarkNode(
-                parentID: parentID, position: position, kind: .sourceRef,
+                parentID: parentID, position: pos, kind: .sourceRef,
                 label: nil, targetID: sourceID)
             reloadBookmarkNodes()
         } catch {
@@ -1749,7 +2016,7 @@ public final class WikiStoreModel {
 /// Thrown by `WikiStoreModel.ingestFromZotero` when an attachment can't be
 /// ingested — currently just the "not synced locally yet" case, since v1 has no
 /// network-download fallback (see `ZoteroLocalStorage`).
-public enum ZoteroIngestError: LocalizedError, Equatable {
+public enum ZoteroFetchError: LocalizedError, Equatable {
     case unavailable(String)
 
     public var errorDescription: String? {

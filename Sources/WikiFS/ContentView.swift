@@ -79,6 +79,14 @@ struct ContentView: View {
         .onChange(of: store.selection) { _, newValue in
             store.handleSelectionChange(to: newValue)
         }
+        // "Show In List" reveal (issue #183): a detail-view button requested the
+        // sidebar reveal a page/source. Un-collapse the sidebar so the target list
+        // is actually mounted (SidebarView only mounts the active section).
+        .onChange(of: store.pendingSidebarRevealVersion) { _, _ in
+            if columnVisibility == .detailOnly {
+                columnVisibility = .all
+            }
+        }
         .onChange(of: agentLauncher.isRunning) { _, isRunning in
             if isRunning {
                 isTranscriptExpanded = true
@@ -153,10 +161,12 @@ struct ContentView: View {
         } detail: {
             detailColumn
         }
-        // Drop a file anywhere on the window to ingest it (raw bytes → SQLite →
-        // the read-only `files/` projection). The whole content is the target.
+        // Drop a file or link anywhere on the window. Remote links (an http(s)
+        // URL dragged from a browser, or a `.webloc` resolved to one) route
+        // through the "Add from URL" fetch path; local files ingest as raw
+        // bytes. The whole content is the target. (#163)
         .dropDestination(for: URL.self) { urls, _ in
-            Task { await store.ingest(fileURLs: urls) }
+            Task { await store.addDroppedURLs(urls) }
             return true
         } isTargeted: { targeted in
             // Fade, not bounce; skip the animation entirely under Reduce Motion.
@@ -172,6 +182,14 @@ struct ContentView: View {
                 .opacity(isDropTargeted ? 1 : 0)
                 .allowsHitTesting(false)
                 .ignoresSafeArea()
+        }
+        // Right-click "Add Bookmark…" on a resolved internal wiki link: the
+        // menu item (WikiLinkMenuNSItems) already resolved the page/source id,
+        // so we just hand the context to the existing bookmark-picker sheet.
+        // Attached on `baseContent` (not `body`) so the `body` modifier chain
+        // stays under the SwiftUI type-checker's complexity budget. Issue #188.
+        .environment(\.addBookmarkHandler) { ctx in
+            omniboxBookmarkContext = ctx
         }
     }
 

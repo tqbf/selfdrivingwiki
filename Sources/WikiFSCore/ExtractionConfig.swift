@@ -67,6 +67,16 @@ public struct ExtractionConfig: Codable, Equatable, Sendable {
 
     public static let defaultGeminiBaseURL = "https://generativelanguage.googleapis.com"
 
+    /// The configured model id for the current backend, where applicable (used to
+    /// stamp the extraction agent's `version`). nil for backends without a model.
+    public var currentModelVersion: String? {
+        switch backend {
+        case .anthropic: return anthropicModel
+        case .gemini: return geminiModel
+        case .localPdf2md, .doclingServe: return nil
+        }
+    }
+
     // MARK: - Resilient Codable
 
     /// Decode each field with `decodeIfPresent` + a default fallback so a missing

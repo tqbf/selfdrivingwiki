@@ -79,6 +79,297 @@ accumulated indefinitely.
 - **Not yet verified live** — needs a human to click through: start an Ask
   conversation, click the compose button, page resets to the empty state, next
   message starts a fresh session (no memory of the prior chat).
+## 2026-07-06 — Source refresh + Apple Podcasts byteless conversion (Phase 3b)
+
+Shipped two features on the graph-model versioning substrate:
+
+**Source refresh.** A new `SourceRefreshService` (in `WikiFSCore`) reconstructs
+a source's provider from its stored `SourceOrigin` and re-materializes it
+**off-main**, returning a `RefreshMaterial` (`.contentVersion` for website
+sources, `.derivedMarkdown` for byteless podcast sources). The `@MainActor`
+caller (`WikiStoreModel.refreshSource`) performs the store write
+(`appendContentVersion` / `appendProcessedMarkdown`) — preserving the Phase-0
+single-writer-discipline invariant. Import-only providers (local-file, Zotero,
+folder) throw `.notRefreshable`.
+
+**Apple Podcasts byteless conversion (§11).** Retired the Option-A technical
+debt: podcast episodes now store as **byteless sources** (a pointer to the
+external episode with `blob_hash IS NULL`), with the transcript markdown as a
+derived alternative via `appendProcessedMarkdown`. The provider is unchanged;
+only the storage path repoints. New store primitive `addBytelessSource` mirrors
+`addSource`'s transaction discipline minus the blob/hash write, with a dedup on
+`external_identity` (backed by a partial index).
+
+**Surfaces:** UI refresh button in `SourceDetailView` (gated on refreshability),
+`wikictl source refresh` (website-only; async→sync semaphore bridge), the
+`SourceRefreshService` seam (injectable fetchers for CI).
+
+**Deferred:** credentials UX (Phase 7), website sibling `original_path`
+(Phase 4), transcript-level PROV (`apple-ttml` extract agent — Phase 4 when the
+alternatives UI gains a podcast transcript backend).
+
+## 2026-07-05 — Apple Podcasts transcript ingest (PR #106 rebase + Option-A remodel)
+
+Rebased PR #106 ("Apple Podcasts episode URLs as transcript sources") onto
+current `main` by porting its transcript pipeline to the Phase-3a
+`SourceProvider` protocol. `ApplePodcastProvider` becomes the first real
+consumer of the protocol — validating it cheaply before Phase 3b/4 build on it.
+
+**What shipped:**
+- The full transcript pipeline (recognizer, TTML parser, AMP decoder,
+  orchestration service, `podcast-token-helper` ObjC executable) ported verbatim
+  from PR #106 — all pure/self-contained, depending only on Foundation/XMLParser.
+- A new `ApplePodcastProvider: SourceProvider` materializes the transcript
+  markdown into a `MaterializedSource` and flows through the existing
+  `storeMaterialized(_:)` → `store.addSource(provenance:)` seam, recording real
+  PROV provenance (agent `apple-podcast`, `fetch` activity, `plan` = the
+  `podcasts.apple.com` URL, `externalIdentity` = the episode ID).
+- `WikiStoreModel.addURL` recognizes an episode URL and routes to the provider
+  instead of `WebsiteProvider`; a `podcastFetcher:` injection seam enables CI
+  routing tests with a fake.
+- `FetchOutcome.Kind.podcastTranscript` + `SourceOrigin.displayLabel` arm
+  (`"apple-podcast"` → `"Apple Podcast"`).
+- The `#if PODCAST_TRANSCRIPTS` build flag + `WIKIFS_APP_STORE=1` off-switch:
+  the feature is compiled in by default; the App Store config drops the
+  `podcast-token-helper` target entirely and compiles the Swift sources out.
+- The security boundary (user-initiated UI path only; never the agent surface)
+  is now an **executable** architecture test (`agentSurfaceHasNoPodcastReferences`)
+  — grepping the agent-surface modules + prompt layer for podcast symbols.
+
+**Option-A technical debt (deliberate deferral):** the transcript is stored as
+source content (not as a byteless source + derived alternative per §11). This is
+cheap to retire later: Phase 2's `recordMarkdownExtraction` + CAS make the
+conversion a pointer move. Recorded so a future agent doesn't mistake the current
+shape for the intended end-state. Cross-ref `plans/graph-model-and-versioning.md`
+§11 and `plans/podcast-transcripts.md`.
+
+**Test coverage:** 1561 tests pass (1503 baseline + 58 new podcast/provider
+tests). The live fetch path (private-framework signing + Apple endpoints) is
+`WIKIFS_LIVE_PODCAST_TESTS=1`-gated and skips in CI; all pure logic (parser,
+TTML, AMP decode, orchestration, routing, provenance, displayLabel) has CI
+coverage via injected fakes.
+
+## 2026-07-05 — Graph-model Phase 3a: provider protocol & real source provenance (no schema change)
+
+Introduced the `SourceProvider` protocol + `MaterializedSource`/
+`SourceProvenance`/`SourceOrigin` value types and four providers
+(`LocalFileProvider`/`WebsiteProvider`/`ZoteroProvider`/`MarkdownFolderProvider`),
+unified the four ingest entry points behind a single `storeMaterialized(_:)`
+seam, and recorded **real provider/URL provenance** in the existing Phase-1 PROV
+substrate — populating the previously-stubbed columns (`activities.plan`/
+`external_ref`, `source_versions.external_identity`) so the origin of every
+fetched source is recoverable. Design authority:
+`plans/graph-model-and-versioning.md` §4.7 (PROV-DM), §11 (provider protocol),
+§3 (the gap).
+
+**No schema migration** — every populated column already existed and was
+stubbed NULL. `addSource`/`appendContentVersion` gained a default-nil
+`provenance:` param; when present, the store seeds a real provider agent
+(`ensureAgent`, deduped on `(name, kind)`) + an activity carrying `plan`/
+`external_ref` + binds `external_identity`; when nil, the legacy-import agent
+path is byte-identical to pre-Phase-3. New `sourceOrigin(sourceID:)` read joins
+active-version → activity → agent (plan/external_ref from the per-ingest
+**activity**, agentName from the **agent**). Surfaced in `SourceDetailView`
+(Origin row: website clickable URL / Zotero / "Added from file") and
+`wikictl source info`. `changeToken` unchanged; refresh/credentials UX deferred
+to Phase 3b. PR #106 (Apple Podcasts) re-models as `ApplePodcastProvider`, the
+first consumer of this protocol, after this stage. **Gate:** 1503 tests green
+(13 new in `SourceProviderTests`, 2 new `source info` CLI tests; existing
+`appendContentVersionDedupsBlob` / `freshFastPathMatchesStepwiseLadder` /
+changeToken tests pass unmodified). See
+`plans/phase-3a-providers-and-provenance.md`.
+
+## 2026-07-05 — Graph-model Phase 2 track C: extraction compare & nominate UI
+
+Closes the "compare" half of the §4.5 "keep both, compare, nominate" loop that
+tracks A+B left as a flat header `Menu`. Design of record:
+[`plans/track-c-extraction-compare.md`](plans/track-c-extraction-compare.md)
+(implemented). No schema change, no migration, no `changeToken` change — it
+reuses the A+B storage (CAS'd alternatives, PROV provenance, `source-derived`
+ref) verbatim.
+
+- **`MarkdownDiff`** (`Sources/WikiFSCore/MarkdownDiff.swift`, new) — a pure
+  LCS line-diff producing `[DiffLine]` (`equal`/`added`/`removed`), removals
+  grouped before additions. Capped DP table (`maxCells = 4M`) with a degraded
+  whole-document fallback so huge bodies can't starve the UI. Trailing-newline
+  safe.
+- **`ExtractionAlternative`** (`Sources/WikiFSCore/ExtractionAlternative.swift`,
+  new) — presentation-layer bundle over `SourceMarkdownVersion`: resolved
+  backend display name, raw agent name, model version, char count, `isActive`.
+  `backendDisplayName(agentName:)` resolves via a new reverse map
+  `ExtractionBackend.from(agentName:)` (`MarkdownExtractor.swift`) with graceful
+  "Legacy"/first-capital fallbacks for unknown agents.
+- **Consolidated provenance query** — `processedMarkdownAlternatives(sourceID:)`
+  on `SQLiteWikiStore` (one join smv→activity→agent over the resolved-body
+  SELECT, `isActive` via the existing ref→else-MAX HEAD id) + `WikiStore`
+  protocol + `WikiStoreModel` wrapper. Replaces the A+B two-call pattern
+  (`history` + `agentNames`) for the sheet.
+- **`ExtractionCompareSheet`** (`Sources/WikiFS/ExtractionCompareSheet.swift`,
+  new) — the compare/nominate surface, rendered as the content of a value-driven
+  `WindowGroup` in `WikiFSApp` (a real, **resizable, non-modal** window — one per
+  source, opened via `openWindow(value:)`; not a sheet, so it doesn't fight the
+  reader for space and you can keep working in the main window while comparing).
+  An alternatives list with Kaleidoscope-style **assign A/B** targets, two
+  compare panes, a toolbar **Rendered ↔ Diff** toggle, and a per-pane **Set
+  Active** that nominates the `source-derived` ref and moves the Active badge
+  live. `ExtractionCompareWindow` resolves the shared `manager.activeStore` so
+  Set Active propagates to the detail view immediately (same `@Observable`
+  model). Rendered mode reuses `WikiReaderView` (no new rendering code); Diff
+  mode renders a unified monospaced line-diff with a +/− legend. Defaults: left
+  = active HEAD, right = most-recent other.
+- **`SourceDetailView`** — a "Compare Extractions…" header button (PDFs with
+  markdown, disabled when fewer than 2 alternatives) opens the compare window
+  via the `openWindow` environment action. The A+B quick-switch `extractionsMenu`
+  is retained.
+
+**Evidence:** new `MarkdownDiffTests` (7 cases, incl. the degraded-cap fallback)
++ track-C cases in `ProcessedMarkdownTests` (alternatives provenance, backend-name
+fallbacks, `from(agentName:)` round-trip, Set-Active badge update). Full suite:
+**1499 tests green.** Tracks A+B+C now complete (the deferred compare UI lands
+in v1 with the diff toggle included, as a non-modal window).
+
+## 2026-07-05 — Graph-model Phase 2: extraction alternatives (tracks A+B, v21)
+
+Turned `source_markdown_versions` from a flat inline-content chain into CAS'd,
+provenance-carrying extraction **alternatives** that coexist. Design authority:
+`plans/graph-model-and-versioning.md` §4.5 (CAS), §4.7 (PROV-DM), §4.3 (refs +
+default-active rule), §9 step v21, §12 Phase 2 gate.
+
+**Schema v21** (`migrateV20ToV21`, one `withTransaction`; fresh-path CREATE
+extended in parity): adds `activity_id`, `source_version_id`, `blob_hash`,
+`mime_type` to `source_markdown_versions`. One-shot backfill CAS-moves each
+legacy row's inline `content` into a blob (SHA-256 hex → `INSERT OR IGNORE`),
+seeds one `legacy-extraction` agent + a per-row `extract` activity, backfills
+`source_version_id` to the source's active content version (ref→else-MAX,
+mirroring `activeContentVersion`), and clears the inline column to `''`. A
+silent-data-loss guard throws + rolls back on an empty-content legacy row; a
+table-existence guard no-ops artificial migration fixtures. Legacy rows are
+materialized into a Swift array before inner DML (sqlite-concurrency discipline
+— no live cursor stepping while inner statements run).
+
+**CAS read/write path:** every new smv row hashes its markdown → `INSERT OR
+IGNORE` blob → stores `blob_hash`, leaves `content=''` (`storeMarkdownBlob`,
+used by `appendProcessedMarkdown` + `recordMarkdownExtraction` + revert). The
+**resolved-body invariant** lives in the readers: `sourceMarkdownVersion(from:)`
+decodes `COALESCE(CAST(blobs.content AS TEXT), smv.content)` via a shared
+`smvSelectColumns`/`smvBlobJoin`, so `.content` is always the full markdown. The
+three SQL-subquery sites (`rebuildFTS`, `ensureSearchIndexes` source_search
+backfill, `missingSourceEmbeddingWork`) were rewritten inline with `smvHeadBodySQL`
+— a fragment that resolves both the blob body AND the ref-resolved HEAD, fixing
+the critical regression where `content=''` CAS rows would have silently emptied
+FTS/embedding text and MAX-id subqueries ignored a nominated ref.
+
+**Provenance write path:** `recordMarkdownExtraction(sourceID:content:backend:
+sourceVersionID:note:modelVersion:)` creates the backend's Agent (idempotent by
+name via `ensureAgent`, `backend.agentName` → pdf2md/claude/gemini/docling-serve)
++ an `extract` Activity (plan JSON) + the CAS'd smv row in one transaction. Does
+NOT write the `source-derived` ref — alternatives coexist; the first becomes HEAD
+by the default-active rule (MAX id), later ones are alternatives until nominated.
+
+**`source-derived` ref + ref-resolved HEAD + revert-as-pointer:** enabled
+`RefKind.sourceDerived`. `processedMarkdownHead` / `processedMarkdownHeadsBySource`
+(now a CTE) prefer the `source-derived` ref's `version_id`, else MAX(id) —
+byte-identical until a ref is written. `setActiveMarkdown` UPSERTs the ref
+(generation+1; changeToken already folds `refs.generation_sum`, no new fold).
+`revertProcessedMarkdown` is now a pointer copy: appends a new row reusing the
+target's `blob_hash` (zero new blob bytes) and repoints the ref.
+
+**Re-extract path (B):** `WikiStoreModel.reExtractMarkdown(for:using:backend:)`
+runs a second backend and appends a coexisting alternative. UI in
+`SourceDetailView`: an "Extractions" Menu lists each alternative (backend agent
+name + date, "Active" check) and a "Re-extract with…" submenu. All three
+extraction call sites (`SourceDetailView`, `AgentOperationRunner`,
+`AgentLauncher`) now pass the resolved backend + model version to the provenance
+recorder. `wikictl source set-active (--id|--name) --version <smv-id>` nominates
+the active HEAD (scriptable/testable switch).
+
+**Evidence (gate met):** AC.1–AC.9 covered by new tests in
+`ProcessedMarkdownTests` (CAS dedup, revert pointer copy, two-backend coexistence,
+setActive + token, provenance recovery, reExtract coexistence),
+`FreshSchemaParityTests` (v20→v21 lossless migration + ladder parity),
+`FullTextSearchTests` (search body non-empty after CAS + follows nominated ref),
+and `WikiCtlCommandTests` (`source set-active` round-trip). Full suite: **1488
+tests green.** Track C (full compare/nominate UI) deferred to a follow-on plan.
+
+## 2026-07-05 — Graph-model Phase 1: objects & versioning (`blobs`/`agents`/`activities`/`source_versions`/`refs`, v20)
+
+The foundational storage migration that Phases 2–7 depend on. Moves source
+content out of the mutable `sources.content` column into immutable,
+content-addressed `blobs`, an append-only `source_versions` chain, a PROV-DM
+`agents`/`activities` provenance substrate, and a single mutable `refs` pointer
+table — all behind a ref-resolved read path. **Invisible to every caller**:
+reads (`sourceContent`, File Provider projection, `wikictl cat`/`export`) keep
+working unchanged; no `WikiStore` protocol change, no projection change, no CLI
+change. Design of record: [`plans/graph-model-and-versioning.md`](plans/graph-model-and-versioning.md)
+§4.1–4.3, §9, §10.
+
+- **New file `Sources/WikiFSCore/SourceVersioning.swift`** — value types
+  `Blob`, `ProvenanceAgent`, `ProvenanceActivity`, `SourceVersion`, `enum RefKind`.
+- **Schema v20** (`createFreshSchemaV20` + `createObjectsTablesV20` helper):
+  the fresh `sources` table drops `content`; keeps `byte_size`/`mime_type`/
+  `content_hash` as denormalized mirrors of the active version's blob (deviation
+  from §4.2, flagged — single version per source in Phase 1, so the mirror never
+  drifts; avoids reworking `SourceSummary`/`listSources`/FP size/`sources.jsonl`).
+- **Migration step 19→20** (`migrateV19ToV20`, one `withTransaction`): a
+  silent-data-loss guard asserts every source has a `content_hash`; then for
+  each source reuses that hash as the blob hash (no re-hash), writes a
+  `INSERT OR IGNORE` blob + a per-source import activity + a v1 version + a
+  `source-content` ref (generation 1), then `ALTER TABLE … DROP COLUMN content`.
+  Resilient to a DB rewound from v20 for testing (skips the data step when
+  `content` is already gone). `backfillContentHashes` guarded against a missing
+  `content` column for the same reason.
+- **`sourceContent(id:)` rewritten** — ref → version → blob, with the
+  default-active `MAX(id)` fallback (§4.3), empty `Data()` for byteless
+  (`blob_hash IS NULL`, never throws), `.notFound` only when no version rows.
+  New helpers `activeContentVersion`, `contentVersionHistory`.
+- **`addSource` rewritten** — writes the `sources` row first (FK ordering),
+  then blob + import activity + v1 version + ref in one transaction; dedup check
+  unchanged (on indexed `sources.content_hash`).
+- **Store-level versioning primitives** — `appendContentVersion` (dedup blob,
+  new version, ref UPSERT generation+1, mirror refresh) and
+  `rollbackSourceContent` (pointer repoint, append-only history). Phase 3 wires
+  the provider refresh UI/verb.
+- **`changeToken()` grew 8 → 11 fields** (+`svCount`, +`refsGenSum`, +`actCount`);
+  ~20 hardcoded literals updated across `SQLiteWikiStoreTests`/`LogIndexTests`/
+  `SystemPromptTests`; all head-version assertions bumped 19 → 20. The three new
+  folds are change-detectors (deletes legitimately lower `svCount`/`refsGenSum`;
+  activities persist — no cascade from sources); §10's monotone-non-decreasing
+  caveat corrected in the design doc.
+- Gate: full suite green — **1477 tests / 113 suites** (10 new Phase 1 tests:
+  fresh-schema objects + content-drop, raw-SQL v19→v20 migration, ref-resolved
+  read + byteless + MAX(id) fallback, append-dedup + rollback-preserves-history,
+  changeToken-on-append/rollback, delete-cascade-keeps-blobs, read-only-store
+  resolution). `StoreConcurrencyTests` (Phase 0 hammer) still green.
+
+## 2026-07-05 — "Add Bookmark…" on internal wiki links in the link context menu (#188)
+
+Right-clicking a **resolved internal wiki link** (`[[Page]]` / `[[source:Name]]`)
+in a reader had no way to file the target into a bookmark folder — you had to
+navigate to it and use the address-bar bookmark button. Adds an **Add
+Bookmark…** item that resolves the link's page/source id and opens
+`BookmarkTargetPickerSheet` to file it. No fetch or source creation — the
+target already exists. Implements
+[#188](https://github.com/tqbf/selfdrivingwiki/issues/188). (An earlier attempt
+targeted external http(s) links and was reverted; this is the corrected scope.)
+
+- **`WikiLinkAction.addBookmark`** + `WikiLinkMenuBuilder` — new pure action,
+  offered for resolved `wiki://page` / `wiki://source` links (not `wiki://missing`,
+  not external links). `actions(for:)` for resolved links now returns
+  `[.addBookmark]` (was `[]`).
+- **`WikiLinkMenuNSItems`** — `.addBookmark` resolves the id (same lookup as
+  `.openInBackgroundTab`: `store.pageID(forTitle:)` / `sourceID(forDisplayName:)`),
+  builds a `BookmarkTargetPickerContext`, and hands it to a new
+  `\.addBookmarkHandler` environment value (mirrors `\.addURLHandler`). Omitted
+  when no handler is wired or the link no longer resolves.
+- **`WikiReaderView`** — threads `addBookmarkHandler` (env → `WikiReaderRep` →
+  the `WKWebView` subclass) into both `WikiLinkMenuNSItems.items` call sites.
+- **`ContentView`** — wires `\.addBookmarkHandler` to set the existing
+  `omniboxBookmarkContext` (the sheet's `onConfirm` already does
+  `addPageRef`/`addSourceRef`). Attached on `baseContent` to keep `body` under
+  the type-checker budget.
+- **Tests** — `WikiLinkMenuBuilderTests` updated (resolved page/source links,
+  including fragment + encoded-title variants, now yield `[.addBookmark]`).
+  1466 tests green.
 
 ## 2026-07-05 — Stop sidebar tables stealing Cmd+A from the omnibox (#154)
 
@@ -4840,3 +5131,62 @@ hello-world WikiFS SwiftUI app building, signing, and launching.
 - Add a `WikiFSTests` target so `make test` does something.
 - Begin SQLite store + page model (Milestone 0 deliverables in `plans/INITIAL.md`
   also include persistence; the build skeleton is done, the data layer is not).
+
+## #163 — Drop routing for .webloc / remote URLs (2026-07-05)
+
+**Problem:** dragging a `.webloc` file or an `http(s)` URL from a browser onto
+the window hit the generic file-drop path (`addFiles`), ingesting the
+`.webloc` plist's raw bytes instead of fetching the linked page.
+
+**Fix**
+- `WikiStoreModel.addDroppedURLs(_:fetcher:)` — partitions dropped URLs:
+  `http(s)` URLs and `.webloc` shortcuts (resolved to their target) route through
+  `addURL` (the "Add from URL" fetch + HTML→Markdown path); other `file://`
+  URLs still ingest as raw bytes via `addFiles`. Supports multi-URL drops;
+  an unresolvable `.webloc` is skipped (its bytes aren't a useful source).
+  Named `add*` (not `ingest*`) since it only adds a source — agent ingestion
+  (read source → generate pages) is a separate `AgentLauncher` phase.
+- `WikiStoreModel.resolveWeblocURL(_:)` — reads the plist (XML or binary) off the
+  main actor via `PropertyListSerialization`.
+- `ContentView` `.dropDestination` now calls `store.addDroppedURLs(_:)`.
+
+**Tests:** `WikiStoreModelDropRoutingTests` (5) — webloc→md, http url→md, local
+txt→verbatim, mixed batch, unresolvable webloc skipped. All pass; existing
+`WikiStoreModelAddURLTests` still green.
+
+## #183 — "Show In List" sidebar reveal for pages & sources
+
+A "Show in List" button (next to "Reveal in Finder") in `PageDetailView` and
+`SourceDetailView` that surfaces the current page/source in the sidebar: opens
+the sidebar if collapsed, switches to the right section, clears a search that
+would hide the row, then scrolls to + selects it.
+
+**Mechanism** — mirrors the existing `pendingScrollAnchor` "set once, consume
+once" cross-view signal (issue #183 design):
+
+- `WikiStoreModel` — `pendingSidebarReveal: WikiSelection?` +
+  `pendingSidebarRevealVersion: Int` (monotonic, observed via `.onChange` so a
+  repeat request re-fires even when the value is unchanged), with
+  `requestSidebarReveal(_:)` (producer) and `consumePendingSidebarReveal()`
+  (consumer, called by the list view after scroll+select).
+- `ContentView` — `.onChange(of: pendingSidebarRevealVersion)` un-collapses the
+  sidebar (`columnVisibility = .all`) when it's `.detailOnly`, so the target
+  section's list is actually mounted.
+- `SidebarView` — `.onChange(of: pendingSidebarRevealVersion)` sets
+  `selectedSection` to `.pages`/`.sources` from the `WikiSelection` case and
+  clears the section's search query (`searchQuery`/`sourceSearchQuery`) only
+  when the target isn't in the filtered results (clearing resets
+  `searchResults`/`sourceSearchResults` synchronously, so the full list is
+  visible for row lookup).
+- `PagesListViewController` / `SourcesListViewController` — new
+  `revealAndSelect(id:)`: looks up the row, selects it (bypassing the
+  `reconcileHighlight` multi-select guard — an explicit user action wins over a
+  Cmd/Shift selection), and `scrollRowToVisible(_:)`. Driven from
+  `updateNSViewController`, which reads `pendingSidebarReveal` (also registers
+  the observation so the method re-runs on change), then consumes.
+- `PageDetailView` / `SourceDetailView` — `Button("Show in List",
+  systemImage: "sidebar.left")` calling `requestSidebarReveal(.page(id))` /
+  `.source(id)`. Works without a mounted File Provider (unlike Reveal in Finder).
+
+**Build/tests:** `swift build` clean; `swift test` — 1466 tests pass.
+

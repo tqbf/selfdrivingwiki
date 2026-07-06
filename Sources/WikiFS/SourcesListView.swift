@@ -50,6 +50,12 @@ struct SourcesListView: NSViewControllerRepresentable {
         DebugLog.tabs("SourcesListView.updateNSVC: count=\(sources.count) needsReload=\(needs)")
         if needs { vc.reloadData(from: sources) }
         vc.reconcileHighlight(activeSelection: store.activeTab?.selection)
+        // Explicit "Show In List" reveal (issue #183). See PagesListView for the
+        // rationale; the pending read also re-triggers this method on change.
+        if let pending = store.pendingSidebarReveal, case .source(let id) = pending {
+            _ = vc.revealAndSelect(id: id)
+            store.consumePendingSidebarReveal()
+        }
     }
 }
 
@@ -302,6 +308,22 @@ final class SourcesListViewController: NSViewController {
                 isReconcilingHighlight = false
             }
         }
+    }
+
+    // MARK: - Reveal ("Show In List")
+
+    /// Explicit "Show In List" reveal: select the target row and scroll it into
+    /// view. Unlike ``reconcileHighlight``, this bypasses the multi-select guard
+    /// (an explicit user action should win over a Cmd/Shift selection) and always
+    /// scrolls. Returns whether the row was found in the current items.
+    @discardableResult
+    func revealAndSelect(id: PageID) -> Bool {
+        guard let row = items.firstIndex(where: { $0.id == id }) else { return false }
+        isReconcilingHighlight = true
+        tableView.selectRowIndexes(IndexSet([row]), byExtendingSelection: false)
+        isReconcilingHighlight = false
+        tableView.scrollRowToVisible(row)
+        return true
     }
 
     @objc private func onDoubleClick() {

@@ -26,12 +26,25 @@ struct SystemPromptDetailView: View {
                 }
 
                 HStack(spacing: 10) {
-                    Button(store.isAgentRunning ? "Agent updating wiki…" : "Edit",
-                           systemImage: "pencil") { isEditing = true }
+                    if isEditing {
+                        Button("Save Changes", systemImage: "checkmark.circle") {
+                            toggleEditing()
+                        }
+                        .keyboardShortcut("s", modifiers: .command)
                         .disabled(store.isAgentRunning)
-                        .help(store.isAgentRunning
-                              ? "Editing is paused while the agent is updating the wiki"
-                              : "Edit the system prompt source")
+
+                        Button("Cancel", systemImage: "xmark.circle") {
+                            isEditing = false
+                        }
+                        .keyboardShortcut(.escape, modifiers: [])
+                    } else {
+                        Button(store.isAgentRunning ? "Agent updating wiki…" : "Edit",
+                               systemImage: "pencil") { isEditing = true }
+                            .disabled(store.isAgentRunning)
+                            .help(store.isAgentRunning
+                                  ? "Editing is paused while the agent is updating the wiki"
+                                  : "Edit the system prompt source")
+                    }
                 }
             }
             .padding(.horizontal, PageEditorMetrics.contentInset)
@@ -72,34 +85,16 @@ struct SystemPromptDetailView: View {
 
     /// Edit mode: the monospaced source editor, bound to the live draft buffer.
     /// Autosave fires via `.onChange` (not a `Binding(get:set:)`, per swiftui-pro).
-    /// Save/Cancel buttons live inline so they are visually part of the editor.
+    /// Save/Cancel buttons live in the header (see `body`), matching
+    /// `PageDetailView`.
     private var editor: some View {
-        VStack(spacing: 0) {
-            TextEditor(text: $store.draftSystemPrompt)
-                .font(.system(.body, design: .monospaced))
-                .scrollContentBackground(.hidden)
-                .padding(.horizontal, PageEditorMetrics.contentInset - 5)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .frame(minHeight: PageEditorMetrics.editorMinHeight)
-                .onChange(of: store.draftSystemPrompt) { store.systemPromptChanged() }
-
-            Divider().opacity(PageEditorMetrics.dividerOpacity)
-
-            HStack(spacing: 10) {
-                Button("Save Changes", systemImage: "checkmark.circle") {
-                    toggleEditing()
-                }
-                .keyboardShortcut("s", modifiers: .command)
-
-                Button("Cancel", systemImage: "xmark.circle") {
-                    isEditing = false
-                }
-                .keyboardShortcut(.escape, modifiers: [])
-            }
-            .padding(.horizontal, PageEditorMetrics.contentInset)
-            .padding(.vertical, PageEditorMetrics.sectionSpacing)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-        }
+        TextEditor(text: $store.draftSystemPrompt)
+            .font(.system(.body, design: .monospaced))
+            .scrollContentBackground(.hidden)
+            .padding(.horizontal, PageEditorMetrics.contentInset - 5)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(minHeight: PageEditorMetrics.editorMinHeight)
+            .onChange(of: store.draftSystemPrompt) { store.systemPromptChanged() }
     }
 
     private func toggleEditing() {

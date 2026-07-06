@@ -675,4 +675,136 @@ struct WikiCtlCommandTests {
         #expect(result.didCommit)
         #expect(!result.output.isEmpty)
     }
+
+    // MARK: - source set-active (Phase 2)
+
+    /// AC.8 (wikictl) — `source set-active` nominates an existing markdown
+    /// version as the active HEAD (repoints the `source-derived` ref), commits,
+    /// and `processedMarkdownHead` follows it.
+    @Test func sourceSetActiveRoundTrip() throws {
+        let store = try tempStore()
+        let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
+        let first = try store.recordMarkdownExtraction(
+            sourceID: pdf.id, content: "first version",
+            backend: .anthropic, sourceVersionID: nil, note: nil, modelVersion: nil)
+        usleep(2000)
+        _ = try store.recordMarkdownExtraction(
+            sourceID: pdf.id, content: "second version",
+            backend: .gemini, sourceVersionID: nil, note: nil, modelVersion: nil)
+        // Default-active HEAD is the second (MAX id).
+        #expect(try store.processedMarkdownHead(sourceID: pdf.id)?.content == "second version")
+
+        let result = try SourceCommand.run(
+            .setActive(.id(pdf.id), versionID: first.id), in: store, cwd: "/tmp")
+        #expect(result.didCommit)
+        #expect(try store.processedMarkdownHead(sourceID: pdf.id)?.id == first.id)
+        #expect(try store.processedMarkdownHead(sourceID: pdf.id)?.content == "first version")
+    }
+
+    @Test func sourceSetActiveFailsWithoutMarkdown() throws {
+        let store = try tempStore()
+        let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
+        #expect(throws: SourceCommand.Failure.self) {
+            try SourceCommand.run(
+                .setActive(.id(pdf.id), versionID: PageID(rawValue: "01NOPE")),
+                in: store, cwd: "/tmp")
+        }
+    }
+
+    // MARK: - source info (Phase 3a)
+
+    /// AC.7 — source info prints identity + origin provenance. A website source
+    /// shows the provider, plan/URL, and external identity.
+    @Test func sourceInfoPrintsWebsiteOrigin() async throws {
+        let store = try tempStore()
+        let prov = SourceProvenance(
+            agentName: "website", activityKind: "fetch",
+            plan: "https://example.com/article",
+            externalRef: "https://example.com/article",
+            externalIdentity: "https://example.com/article")
+        let summary = try store.addSource(
+            filename: "Article.md", data: Data("# Article".utf8),
+            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            provenance: prov)
+
+        let byID = try SourceCommand.run(.info(.id(summary.id)), in: store, cwd: "/tmp")
+        guard case .text(let textByID) = byID.payload else {
+            Issue.record("expected text payload"); return
+        }
+        #expect(textByID.contains("provider\twebsite"))
+        #expect(textByID.contains("plan\thttps://example.com/article"))
+        #expect(textByID.contains("external_identity\thttps://example.com/article"))
+
+        let byName = try SourceCommand.run(.info(.name("Article.md")), in: store, cwd: "/tmp")
+        guard case .text(let textByName) = byName.payload else {
+            Issue.record("expected text payload"); return
+        }
+        #expect(textByName.contains("filename\tArticle.md"))
+        #expect(textByName.contains("provider\twebsite"))
+    }
+
+    /// AC.7 — a local (legacy) source shows the legacy-import provider.
+    @Test func sourceInfoPrintsLegacyOrigin() throws {
+        let store = try tempStore()
+        let summary = try store.addSource(filename: "plain.txt", data: Data("hi".utf8))
+
+        let result = try SourceCommand.run(.info(.id(summary.id)), in: store, cwd: "/tmp")
+        guard case .text(let text) = result.payload else {
+            Issue.record("expected text payload"); return
+        }
+        #expect(text.contains("provider\tlegacy-import"))
+        #expect(text.contains("filename\tplain.txt"))
+        #expect(text.contains("size\t2"))
+    }
+
+    @Test func parsesSourceRefresh() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "source", "refresh", "--id", "01ABC"], env: noEnv)
+        #expect(invocation.command == .sourceRefresh(.id(PageID(rawValue: "01ABC"))))
+    }
+
+    // MARK: - source refresh (Phase 3b)
+
+    /// A fake fetcher returning a canned HTML response.
+    struct RefreshFakeFetcher: URLFetchService.URLResourceFetcher {
+        var response: URLFetchService.FetchResponse
+        func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse { response }
+    }
+
+    @Test func sourceRefreshAppendsVersionAndCommits() async throws {
+        let store = try tempStore()
+        // Seed a website source via a fake fetcher.
+        let fetcher = RefreshFakeFetcher(response: URLFetchService.FetchResponse(
+            data: Data("<html><body>v1</body></html>".utf8),
+            contentType: "text/html", finalURL: URL(string: "https://example.com/p")!))
+        let provider = WebsiteProvider(rawInput: "https://example.com/p", fetcher: fetcher)
+        let source = try await provider.materialize()
+        let summary = try store.addSource(
+            filename: source.filename, data: source.data,
+            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            provenance: source.provenance)
+        let historyBefore = try store.contentVersionHistory(sourceID: summary.id).count
+
+        // Refresh via wikictl with updated content.
+        let fetcher2 = RefreshFakeFetcher(response: URLFetchService.FetchResponse(
+            data: Data("<html><body>v2</body></html>".utf8),
+            contentType: "text/html", finalURL: URL(string: "https://example.com/p")!))
+        let result = try await SourceCommand.runRefresh(
+            .id(summary.id), in: store, fetcher: fetcher2)
+
+        #expect(result.didCommit)
+        let historyAfter = try store.contentVersionHistory(sourceID: summary.id).count
+        #expect(historyAfter == historyBefore + 1)
+    }
+
+    @Test func sourceRefreshByNameNotFound() async throws {
+        let store = try tempStore()
+        let fetcher = RefreshFakeFetcher(response: URLFetchService.FetchResponse(
+            data: Data("x".utf8), contentType: "text/plain",
+            finalURL: URL(string: "https://x")!))
+        await #expect(throws: SourceCommand.Failure.self) {
+            _ = try await SourceCommand.runRefresh(
+                .name("Nonexistent"), in: store, fetcher: fetcher)
+        }
+    }
 }

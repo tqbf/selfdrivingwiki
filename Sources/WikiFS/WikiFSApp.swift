@@ -176,6 +176,15 @@ struct WikiFSApp: App {
         }
         .defaultSize(width: 880, height: 680)
 
+        // Track C extraction compare: a real, resizable, non-modal window (one
+        // per source, opened via `openWindow(value:)` from SourceDetailView).
+        // Shares the main window's `manager` so Set Active propagates live.
+        WindowGroup("Compare Extractions", for: ExtractionCompareContext.self) { $context in
+            ExtractionCompareWindow(manager: manager, context: context)
+        }
+        .defaultSize(width: 1080, height: 740)
+        .windowResizability(.contentMinSize)
+
         Settings {
             TabView {
                 ZoteroSettingsView(containerDirectory: containerDirectory)

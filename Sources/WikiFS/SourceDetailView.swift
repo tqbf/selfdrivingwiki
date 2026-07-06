@@ -39,9 +39,14 @@ struct SourceDetailView: View {
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @AppStorage("isOutlineExpanded") private var isOutlineExpanded = false
     @State private var headVersion: SourceMarkdownVersion?
+    @State private var origin: SourceOrigin?
     @State private var isEditing = false
     @State private var editBuffer = ""
     @State private var isExtracting = false
+    /// True while a source refresh (re-fetch via provider) is in flight.
+    @State private var isRefreshing = false
+    /// Set when a refresh fails — surfaced inline below the action row.
+    @State private var refreshError: String?
     /// Tracks the active tab ID as of the last resolved update cycle — used to
     /// distinguish tab switches from in-tab file navigation.
     @State private var lastKnownActiveTabID: UUID? = nil
@@ -57,6 +62,8 @@ struct SourceDetailView: View {
     /// Quote to highlight in the PDF view, set when a `[[source:Name#"…"]]` link
     /// targets an un-extracted PDF. Consumed from `store.pendingScrollAnchor`.
     @State private var pdfQuote: String?
+    /// Opens the Compare Extractions window (value-driven `WindowGroup`).
+    @Environment(\.openWindow) private var openWindow
 
     // Find bar state. Shared via environment (see `ContentView`) so the address
     // bar's "Find on Page…" menu item and Cmd+F drive the same model (#157).
@@ -80,7 +87,20 @@ struct SourceDetailView: View {
 
     private var hasMarkdown: Bool { headVersion != nil }
 
+    /// `true` when the source's origin is a refreshable provider (website or
+    /// Apple Podcast). Import-only providers (local-file, Zotero, folder) carry
+    /// no URL to re-fetch.
+    private var isRefreshable: Bool {
+        origin?.agentName == "website" || origin?.agentName == "apple-podcast"
+    }
+
     private var showTabs: Bool { isPDF && hasMarkdown }
+
+    /// `true` when this source has ≥2 extraction alternatives — the gate for the
+    /// "Compare Extractions…" button (compare is meaningless with one).
+    private var hasMultipleExtractions: Bool {
+        store.processedMarkdownHistory(for: file.id).count >= 2
+    }
 
     private var isMarkdownEditable: Bool {
         isMarkdownNative || hasMarkdown
@@ -138,6 +158,7 @@ struct SourceDetailView: View {
         .background(Color(nsColor: .textBackgroundColor))
         .onAppear {
             headVersion = store.processedMarkdownHead(for: file)
+            origin = store.sourceOrigin(for: file.id)
             lastKnownActiveTabID = store.activeTabID
         }
         .onChange(of: file.id) {
@@ -150,15 +171,21 @@ struct SourceDetailView: View {
             flushEditIfDirty()
             isEditing = false
             isExtracting = false
+            isRefreshing = false
+            refreshError = nil
             showReingestConfirmation = false
             headVersion = nil
+            origin = nil
             selectedTab = .markdown
             pdfQuote = nil
             // Cancel any pending edit-mode restoration so it doesn't apply to
             // the new file when its headVersion loads.
             shouldRestoreEditing = false
         }
-        .task(id: file.id) { headVersion = store.processedMarkdownHead(for: file) }
+        .task(id: file.id) {
+            headVersion = store.processedMarkdownHead(for: file)
+            origin = store.sourceOrigin(for: file.id)
+        }
         .task(id: PDFTaskKey(sourceID: file.id, anchorVersion: store.pendingScrollAnchorVersion)) {
             // Only consume for un-extracted PDFs (the markdown side handles
             // extracted PDFs via WikiReaderView). Double-check at consume time
@@ -237,129 +264,164 @@ struct SourceDetailView: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 12) {
-                statusLabel
+            HStack(spacing: 8) {
                 Text(Self.sizeFormatter.string(fromByteCount: Int64(file.byteSize)))
-                Text("Added \(file.createdAt, style: .date) at \(file.createdAt, style: .time)")
+                metadataSeparator
+                // Compact, single-line dates — "Added Jun 26, 2026 · Updated
+                // Jun 28". The exact clock time was noise here (and wrapped);
+                // it lives in the version menu where it's actually decided.
+                Text("Added \(Self.compactDate(file.createdAt))")
                 if file.updatedAt != file.createdAt {
-                    Text("Updated \(file.updatedAt, style: .date) at \(file.updatedAt, style: .time)")
+                    Text("· Updated \(Self.compactDate(file.updatedAt))")
                 }
-                if let head = headVersion, let label = Self.markdownOriginLabel(for: head.origin) {
-                    Text("\(label) \(head.createdAt, style: .date) at \(head.createdAt, style: .time)")
+                // For non-PDF markdown the origin is plain provenance text here;
+                // for PDFs the interactive extraction chip lives on the action
+                // row beside Ingest (see below), not in this metadata line.
+                if let head = headVersion, !isPDF,
+                   let label = Self.markdownOriginLabel(for: head.origin) {
+                    metadataSeparator
+                    Text("\(label) \(Self.compactDate(head.createdAt))")
+                }
+                // Zotero provenance sits inline on the metadata line rather than
+                // in its own row — the big title already names the item, so this
+                // just needs the "Zotero" origin tag + a jump-back link.
+                if let key = file.zoteroItemKey, !key.isEmpty {
+                    metadataSeparator
+                    if let url = zoteroItemURL(itemKey: key) {
+                        // The "Zotero" tag itself is the link — clicking it jumps
+                        // back to the item in the Zotero app (no separate button).
+                        Button {
+                            NSWorkspace.shared.open(url)
+                        } label: {
+                            Label("Zotero", systemImage: "books.vertical")
+                        }
+                        .buttonStyle(.link)
+                        .help("View in Zotero")
+                    } else {
+                        Label("Zotero", systemImage: "books.vertical")
+                    }
+                } else if let origin, origin.agentName != "legacy-import" {
+                    // Phase 3a provider origin: website → clickable link to the
+                    // origin URL; local-file → "File"; markdown-folder → "Folder".
+                    metadataSeparator
+                    providerOriginTag(origin)
                 }
             }
             .font(.callout)
             .foregroundStyle(.secondary)
+            .lineLimit(1)
 
-            if let zoteroItemKey = file.zoteroItemKey, !zoteroItemKey.isEmpty {
-                zoteroOriginRow(key: zoteroItemKey)
-            }
-
-            HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 if isEditing {
-                    Button("Save Changes", systemImage: "checkmark.circle") {
-                        commitEdit()
-                    }
-                    .keyboardShortcut("s", modifiers: .command)
-                    .disabled(store.isAgentRunning
-                              || editBuffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                              || (headVersion?.content == editBuffer))
+                    HStack(spacing: 10) {
+                        Button("Save Changes", systemImage: "checkmark.circle") {
+                            commitEdit()
+                        }
+                        .keyboardShortcut("s", modifiers: .command)
+                        .disabled(store.isAgentRunning
+                                  || editBuffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                  || (headVersion?.content == editBuffer))
 
-                    Button("Cancel", systemImage: "xmark.circle") {
-                        isEditing = false
-                    }
-                    .keyboardShortcut(.escape, modifiers: [])
+                        Button("Cancel", systemImage: "xmark.circle") {
+                            isEditing = false
+                        }
+                        .keyboardShortcut(.escape, modifiers: [])
 
-                    Button {
-                        isOutlineExpanded.toggle()
-                    } label: {
-                        Image(systemName: "sidebar.right")
-                    }
-                    .help("Toggle Outline")
-                } else {
-                    Button(isIngesting ? "Ingesting…" : "Ingest into Wiki",
-                           systemImage: "text.badge.plus") {
-                        DebugLog.ingest("SourceDetailView: Ingest tapped — id=\(file.id.rawValue)")
-                        if hasBeenIngested {
-                            showReingestConfirmation = true
-                        } else {
-                            runIngest(file.id)
-                        }
-                    }
-                        .keyboardShortcut(.return, modifiers: .command)
-                        .disabled(isRunning || isIngesting || isAnySourceIngesting
-                                  || isThisFileExtracting || isEditLockedExternally)
-                        .confirmationDialog(
-                            "Ingest Again?",
-                            isPresented: $showReingestConfirmation,
-                            titleVisibility: .visible
-                        ) {
-                            Button("Ingest Again", role: .destructive) {
-                                runIngest(file.id)
-                            }
-                            Button("Cancel", role: .cancel) {}
-                        } message: {
-                            Text("This document has already been ingested. Running ingest again may create duplicate pages.")
-                        }
-                    if isPDF, !hasMarkdown {
-                        Button(isExtracting ? "Extracting…" : "Extract Markdown",
-                               systemImage: "doc.plaintext") {
-                            let task = Task {
-                                defer { launcher.extractTask = nil }
-                                await runExtraction()
-                            }
-                            launcher.extractTask = task
-                        }
-                        .disabled(isExtracting
-                                  || isThisFileExtracting
-                                  // Another file currently holds the extraction
-                                  // slot — this extract would await it, so show
-                                  // it as busy rather than letting the tap hang.
-                                  || (launcher.isExtractionSlotBusy
-                                      && !launcher.extractingSourceIDs.contains(file.id)))
-                    }
-                    if isMarkdownEditable {
-                        Button("Edit", systemImage: "pencil") {
-                            editBuffer = headVersion?.content ?? ""
-                            isEditing = true
-                        }
-                        .keyboardShortcut("e", modifiers: .command)
-                        .disabled(isRunning)
-                    }
-                    // Share — to the left of the Outline toggle.  Resolves the
-                    // canonical URL from the daemon (like openSource) so the
-                    // filename is human-readable and the URL is guaranteed
-                    // to resolve.
-                    if fileProvider.path != nil {
-                        Button("Share", systemImage: "square.and.arrow.up") {
-                            Task {
-                                guard let url = await fileProvider.resolveSourceByNameURL(id: file.id) else { return }
-                                DebugLog.fileprovider("Share source detail: \(url.lastPathComponent)")
-                                let picker = NSSharingServicePicker(items: [url])
-                                let mouseScreen = NSEvent.mouseLocation
-                                guard let window = NSApplication.shared.keyWindow,
-                                      let contentView = window.contentView else { return }
-                                let windowPoint = window.convertPoint(fromScreen: mouseScreen)
-                                let viewPoint = contentView.convert(windowPoint, from: nil)
-                                picker.show(
-                                    relativeTo: NSRect(origin: viewPoint,
-                                                       size: NSSize(width: 1, height: 1)),
-                                    of: contentView, preferredEdge: .minY)
-                            }
-                        }
-                        .help("Share this source file")
-                        Button("Reveal in Finder", systemImage: "folder") {
-                            Task { await fileProvider.revealSourceInFinder(id: file.id) }
-                        }
-                        .help("Reveal this source file in Finder")
-                    }
-                    if isMarkdownEditable {
                         Button {
                             isOutlineExpanded.toggle()
                         } label: {
                             Image(systemName: "sidebar.right")
                         }
                         .help("Toggle Outline")
+                    }
+                } else {
+                    // Row 1 — primary source actions: the extraction chip leads
+                    // ("this is the derivation, and here's what you do with it"),
+                    // then Ingest, then Extract Markdown when no derivation exists
+                    // yet. Above the utility row so the wiki goal reads first.
+                    HStack(spacing: 10) {
+                        if isPDF, hasMarkdown, let head = headVersion {
+                            extractionProvenanceChip(head: head)
+                        }
+                        if isPDF, !hasMarkdown {
+                            // No derivation yet → Extract is the call-to-action:
+                            // prominent and leftmost, with Ingest stepped down to
+                            // secondary until there's markdown worth ingesting.
+                            Button(isExtracting ? "Extracting…" : "Extract",
+                                   systemImage: "doc.plaintext") {
+                                let task = Task {
+                                    defer { launcher.extractTask = nil }
+                                    await runExtraction()
+                                }
+                                launcher.extractTask = task
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isExtracting
+                                      || isThisFileExtracting
+                                      // Another file currently holds the extraction
+                                      // slot — this extract would await it, so show
+                                      // it as busy rather than letting the tap hang.
+                                      || (launcher.isExtractionSlotBusy
+                                          && !launcher.extractingSourceIDs.contains(file.id)))
+                        }
+                        ingestButton
+                    }
+                    // Row 2 — secondary / utility actions: Edit, Show in List,
+                    // Share, Reveal in Finder, Outline.
+                    HStack(spacing: 10) {
+                        if isMarkdownEditable {
+                            Button("Edit", systemImage: "pencil") {
+                                editBuffer = headVersion?.content ?? ""
+                                isEditing = true
+                            }
+                            .keyboardShortcut("e", modifiers: .command)
+                            .disabled(isRunning)
+                        }
+                        // Share — resolves the canonical URL from the daemon
+                        // (like openSource) so the filename is human-readable
+                        // and the URL is guaranteed to resolve.
+                        Button("Show in List", systemImage: "sidebar.left") {
+                            store.requestSidebarReveal(.source(file.id))
+                        }
+                        .help("Reveal this source in the sidebar")
+                        if isRefreshable {
+                            Button("Refresh", systemImage: "arrow.clockwise") {
+                                Task { await runRefresh() }
+                            }
+                            .disabled(isRefreshing || store.isAgentRunning)
+                            .help("Re-fetch this source and append a new version")
+                        }
+                        if fileProvider.path != nil {
+                            Button("Share", systemImage: "square.and.arrow.up") {
+                                Task {
+                                    guard let url = await fileProvider.resolveSourceByNameURL(id: file.id) else { return }
+                                    DebugLog.fileprovider("Share source detail: \(url.lastPathComponent)")
+                                    let picker = NSSharingServicePicker(items: [url])
+                                    let mouseScreen = NSEvent.mouseLocation
+                                    guard let window = NSApplication.shared.keyWindow,
+                                          let contentView = window.contentView else { return }
+                                    let windowPoint = window.convertPoint(fromScreen: mouseScreen)
+                                    let viewPoint = contentView.convert(windowPoint, from: nil)
+                                    picker.show(
+                                        relativeTo: NSRect(origin: viewPoint,
+                                                           size: NSSize(width: 1, height: 1)),
+                                        of: contentView, preferredEdge: .minY)
+                                }
+                            }
+                            .help("Share this source file")
+                            Button("Reveal in Finder", systemImage: "folder") {
+                                Task { await fileProvider.revealSourceInFinder(id: file.id) }
+                            }
+                            .help("Reveal this source file in Finder")
+                        }
+                        if isMarkdownEditable {
+                            Button {
+                                isOutlineExpanded.toggle()
+                            } label: {
+                                Image(systemName: "sidebar.right")
+                            }
+                            .help("Toggle Outline")
+                        }
                     }
                 }
             }
@@ -373,50 +435,47 @@ struct SourceDetailView: View {
                 }
             }
 
+            if isRefreshing {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Refreshing…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let refreshError {
+                Text(refreshError)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
+
         }
         .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
         .padding(PageEditorMetrics.contentInset)
     }
 
-    // MARK: - Zotero origin
+    // MARK: - Refresh (Phase 3b)
 
-    /// A small provenance row shown only for files ingested from a Zotero library
-    /// item: a "Zotero" tag with the item's title, and a "View in Zotero" link
-    /// that opens the item via the `zotero://select` URI scheme in the Zotero
-    /// desktop app. Files ingested via drag-drop / URL / folder import show
-    /// nothing here — empty keeps the header clean rather than adding a neutral
-    /// "Imported" tag.
-    @ViewBuilder
-    private func zoteroOriginRow(key: String) -> some View {
-        HStack(spacing: 8) {
-            Label {
-                Text("Zotero")
-                    .font(.callout)
-                    .fontWeight(.medium)
-            } icon: {
-                Image(systemName: "books.vertical")
-                    .foregroundStyle(.secondary)
-            }
-            .labelStyle(.titleAndIcon)
-
-            if let title = file.zoteroItemTitle, !title.isEmpty {
-                Text(title)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-
-            if let url = zoteroItemURL(itemKey: key) {
-                Spacer(minLength: 0)
-                Button("View in Zotero", systemImage: "arrow.up.right.square") {
-                    NSWorkspace.shared.open(url)
-                }
-                .buttonStyle(.borderless)
-                .font(.callout)
-            }
+    /// Re-fetch the source via its provider, appending a new version. The
+    /// materialization (network fetch) runs off-main inside the service; the
+    /// store write + `reloadSources` happen on-main inside `refreshSource`.
+    /// On success, reloads the head markdown so the reader updates.
+    private func runRefresh() async {
+        isRefreshing = true
+        refreshError = nil
+        defer { isRefreshing = false }
+        do {
+            _ = try await store.refreshSource(file.id)
+            headVersion = store.processedMarkdownHead(for: file)
+        } catch SourceRefreshService.RefreshError.notRefreshable(let agent) {
+            refreshError = "This \(agent) source can't be refreshed."
+        } catch {
+            refreshError = "Refresh failed: \(error.localizedDescription)"
         }
     }
+
+    // MARK: - Zotero origin
 
     /// Build a `zotero://select` URI that opens the item directly in the Zotero
     /// desktop app. The `select/library/items/<key>` path targets "My Library"
@@ -424,6 +483,34 @@ struct SourceDetailView: View {
     private func zoteroItemURL(itemKey: String) -> URL? {
         guard !itemKey.isEmpty else { return nil }
         return URL(string: "zotero://select/library/items/\(itemKey)")
+    }
+
+    // MARK: - Provider origin (Phase 3a)
+
+    /// Inline origin tag for non-Zotero providers, shown on the metadata line:
+    /// website → a clickable link to the origin URL; local-file → "File";
+    /// markdown-folder → "Folder". Mirrors the inline Zotero tag's styling.
+    @ViewBuilder
+    private func providerOriginTag(_ origin: SourceOrigin) -> some View {
+        switch origin.agentName {
+        case "website":
+            let urlString = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
+            if let url = URL(string: urlString), url.scheme != nil {
+                Button {
+                    NSWorkspace.shared.open(url)
+                } label: {
+                    Label("Website", systemImage: "globe")
+                }
+                .buttonStyle(.link)
+                .help("Open original: \(urlString)")
+            } else {
+                Label("Website", systemImage: "globe")
+            }
+        case "markdown-folder":
+            Label("Folder", systemImage: "folder")
+        default:
+            Label("File", systemImage: "doc")
+        }
     }
 
     // MARK: - Content area
@@ -584,7 +671,10 @@ struct SourceDetailView: View {
                     onProgress: { line in
                         Task { @MainActor in launcher.extractionLog.append(line) }
                     })
-                if let version = store.seedPdfMarkdown(for: file.id, content: markdown) {
+                if let version = store.seedPdfMarkdown(
+                    for: file.id, content: markdown,
+                    backend: extractionCoordinator.config.backend,
+                    modelVersion: extractionCoordinator.config.currentModelVersion) {
                     headVersion = version
                     launcher.extractionLog = "Markdown extracted — \(markdown.count) chars."
                 }
@@ -597,6 +687,175 @@ struct SourceDetailView: View {
             }
         case .needsSetup(let message), .notInstalled(let message):
             launcher.extractionLog = message
+        }
+    }
+
+    // MARK: - Extraction alternatives (Phase 2)
+
+    /// The provenance line rendered as the single home for extraction
+    /// management. Its label reports how the active markdown came to exist and
+    /// which backend produced it ("Converted · Claude (Anthropic) ▾"); its menu
+    /// folds in what used to be three separate controls — switch the active
+    /// alternative, Compare Extractions… (the track-C window), and Re-extract
+    /// with another backend. Shown in place of the old inert provenance text.
+    @ViewBuilder
+    private func extractionProvenanceChip(head: SourceMarkdownVersion) -> some View {
+        let names = store.processedMarkdownAgentNames(for: file.id)
+        Menu {
+            Section("Active extraction") {
+                let history = store.processedMarkdownHistory(for: file.id)
+                let headID = headVersion?.id.rawValue
+                ForEach(history) { version in
+                    let agent = names[version.id.rawValue] ?? version.origin
+                    Button {
+                        store.setActiveMarkdown(for: file.id, to: version.id)
+                        headVersion = store.processedMarkdownHead(for: file)
+                    } label: {
+                        Label {
+                            Text("\(Self.backendDisplayName(forAgent: agent)) — \(version.createdAt, style: .date)")
+                        } icon: {
+                            Image(systemName: version.id.rawValue == headID
+                                  ? "checkmark.circle.fill" : "doc.text")
+                        }
+                    }
+                }
+            }
+            Section {
+                Button("Compare Extractions…", systemImage: "arrow.left.and.right.square") {
+                    openWindow(value: ExtractionCompareContext(
+                        sourceID: file.id, filename: file.filename))
+                }
+                .disabled(!hasMultipleExtractions)
+                .help(hasMultipleExtractions
+                      ? "Compare and switch between extraction alternatives"
+                      : "Re-extract with another backend to enable compare")
+            }
+            Section("Re-extract with") {
+                ForEach(ExtractionBackend.allCases, id: \.self) { backend in
+                    Button(backend.displayName) {
+                        let task = Task {
+                            defer { launcher.extractTask = nil }
+                            await runReExtraction(with: backend)
+                        }
+                        launcher.extractTask = task
+                    }
+                    .disabled(isThisFileExtracting
+                              || (launcher.isExtractionSlotBusy
+                                  && !launcher.extractingSourceIDs.contains(file.id)))
+                }
+            }
+        } label: {
+            // Label = the active alternative's producer ("Legacy", "Claude
+            // (Anthropic)", or "Edited"), no origin verb and no manual chevron —
+            // `.borderlessButton` draws its own disclosure arrow.
+            Label(Self.activeAlternativeLabel(head: head, agent: names[head.id.rawValue]),
+                  systemImage: "doc.on.doc")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Switch the active extraction, compare alternatives, or re-extract")
+    }
+
+    /// Stable, human-facing name for the active markdown alternative. A user
+    /// edit reads "Edited", a revert "Reverted", and an extraction its backend
+    /// display name — so the chip label describes *which alternative is live*,
+    /// not the mutating origin verb.
+    private static func activeAlternativeLabel(head: SourceMarkdownVersion, agent: String?) -> String {
+        switch head.origin {
+        case "user": return "Edited"
+        case "revert": return "Reverted"
+        default:
+            if let agent { return backendDisplayName(forAgent: agent) }
+            return "Extraction"
+        }
+    }
+
+    /// Human-facing backend name for an `agents.name` value: the legacy
+    /// migration stub reads "Legacy", known backends use their display name,
+    /// and anything else falls back to the raw name.
+    private static func backendDisplayName(forAgent agent: String) -> String {
+        if agent == "legacy-extraction" { return "Legacy" }
+        return ExtractionBackend.from(agentName: agent)?.displayName ?? agent
+    }
+
+    /// Re-extract the source with a chosen backend, appending a coexisting
+    /// alternative (does not clobber the current head). Mirrors `runExtraction`
+    /// but always appends via `reExtractMarkdown`.
+    private func runReExtraction(with backend: ExtractionBackend) async {
+        let cfg = extractionCoordinator.config
+        let extractor = extractorFor(backend: backend, config: cfg)
+        let acquired = await launcher.awaitExtractionSlot()
+        guard acquired, !Task.isCancelled else {
+            if acquired { launcher.releaseExtractionSlot() }
+            launcher.extractionLog = "Re-extraction cancelled."
+            return
+        }
+        launcher.extractingSourceIDs.insert(file.id)
+        defer {
+            launcher.extractingSourceIDs.remove(file.id)
+            launcher.releaseExtractionSlot()
+        }
+        switch await extractor.readiness() {
+        case .ready:
+            launcher.isExtracting = true
+            launcher.extractionPID = nil
+            launcher.extractionLog = "Re-extracting with \(backend.displayName)…"
+            defer {
+                launcher.isExtracting = false
+                launcher.extractionPID = nil
+            }
+            let onProgress: (@Sendable (String) -> Void) = { line in
+                Task { @MainActor in launcher.extractionLog.append(line) }
+            }
+            if let version = await store.reExtractMarkdown(
+                for: file.id, filename: file.filename,
+                using: extractor, backend: backend,
+                modelVersion: modelVersionFor(backend: backend, config: cfg),
+                onProgress: onProgress) {
+                headVersion = version
+                launcher.extractionLog = "Re-extracted with \(backend.displayName) — \(version.content.count) chars."
+            } else {
+                launcher.extractionLog = "Re-extraction failed."
+            }
+        case .needsSetup(let message), .notInstalled(let message):
+            launcher.extractionLog = message
+        }
+    }
+
+    /// Resolve a concrete extractor for an arbitrary backend from the shared
+    /// coordinator's config + secrets. Used by the Re-extract menu so the user
+    /// can pick a backend other than the configured default.
+    private func extractorFor(backend: ExtractionBackend, config: ExtractionConfig) -> any MarkdownExtractor {
+        switch backend {
+        case .localPdf2md:
+            return extractionCoordinator.current()
+        case .anthropic:
+            let base = config.anthropicBaseURLOverride.flatMap(URL.init(string:))
+                ?? URL(string: ExtractionConfig.defaultAnthropicBaseURL)!
+            return AnthropicExtractionClient(
+                model: config.anthropicModel,
+                apiKey: extractionCoordinator.credentialStore.secret(.anthropicAPIKey) ?? "",
+                baseURL: base, fetcher: extractionCoordinator.fetcher)
+        case .gemini:
+            let base = config.geminiBaseURLOverride.flatMap(URL.init(string:))
+                ?? URL(string: ExtractionConfig.defaultGeminiBaseURL)!
+            return GeminiExtractionClient(
+                model: config.geminiModel,
+                apiKey: extractionCoordinator.credentialStore.secret(.geminiAPIKey) ?? "",
+                baseURL: base, fetcher: extractionCoordinator.fetcher)
+        case .doclingServe:
+            return DoclingServeClient(
+                endpoint: config.doclingServeEndpoint ?? "",
+                apiToken: extractionCoordinator.credentialStore.secret(.doclingServeToken),
+                fetcher: extractionCoordinator.fetcher)
+        }
+    }
+
+    private func modelVersionFor(backend: ExtractionBackend, config: ExtractionConfig) -> String? {
+        switch backend {
+        case .anthropic: return config.anthropicModel
+        case .gemini: return config.geminiModel
+        case .localPdf2md, .doclingServe: return nil
         }
     }
 
@@ -639,20 +898,58 @@ struct SourceDetailView: View {
 
     // MARK: - Shared sub-views
 
+    /// The ingest control now carries the source's ingest *state*, so status and
+    /// action are one thing: a not-yet-ingested source shows a prominent
+    /// call-to-action; a processed one reads as a green "Ingested" affordance
+    /// (still clickable to re-ingest, behind the existing confirmation); mid-run
+    /// it shows a spinner. This replaces the separate "Ready to ingest / Processed"
+    /// status tag that used to sit in the metadata row.
     @ViewBuilder
-    private var statusLabel: some View {
-        if isIngesting {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text("Ingesting…")
+    private var ingestButton: some View {
+        let button = Button {
+            DebugLog.ingest("SourceDetailView: Ingest tapped — id=\(file.id.rawValue)")
+            if hasBeenIngested {
+                showReingestConfirmation = true
+            } else {
+                runIngest(file.id)
             }
-            .foregroundStyle(.orange)
+        } label: {
+            if isIngesting {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Ingesting…")
+                }
+            } else if hasBeenIngested {
+                Label("Ingested", systemImage: "checkmark.circle.fill")
+            } else {
+                Label("Ingest into Wiki", systemImage: "text.badge.plus")
+            }
+        }
+        .keyboardShortcut(.return, modifiers: .command)
+        .disabled(isRunning || isIngesting || isAnySourceIngesting
+                  || isThisFileExtracting || isEditLockedExternally)
+        .confirmationDialog(
+            "Ingest Again?",
+            isPresented: $showReingestConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Ingest Again", role: .destructive) {
+                runIngest(file.id)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This document has already been ingested. Running ingest again may create duplicate pages.")
+        }
+
+        // Ingested → a calm green "done" affordance. Otherwise prominent only
+        // when Ingest is the actual next step; when a PDF has no markdown yet,
+        // Extract is the call-to-action, so Ingest stays secondary here.
+        if hasBeenIngested {
+            button.tint(.green)
+        } else if isPDF, !hasMarkdown {
+            button
         } else {
-            Label(
-                hasBeenIngested ? "Processed" : "Ready to ingest",
-                systemImage: hasBeenIngested ? "checkmark.circle.fill" : "circle.dashed"
-            )
-            .foregroundStyle(hasBeenIngested ? .green : .secondary)
+            button.buttonStyle(.borderedProminent)
         }
     }
 
@@ -679,6 +976,18 @@ struct SourceDetailView: View {
         Button("") { findModel.toggle() }
             .keyboardShortcut("f", modifiers: .command)
             .opacity(0).allowsHitTesting(false)
+    }
+
+    /// A faint dot separating metadata items, so the row reads as one line of
+    /// distinct facts rather than gap-delimited fragments.
+    private var metadataSeparator: some View {
+        Text("·").foregroundStyle(.tertiary)
+    }
+
+    /// Compact, abbreviated date ("Jun 26, 2026") — no clock time, which was
+    /// noise in the metadata row and caused it to wrap.
+    private static func compactDate(_ date: Date) -> String {
+        date.formatted(.dateTime.month(.abbreviated).day().year())
     }
 
     private static let sizeFormatter: ByteCountFormatter = {

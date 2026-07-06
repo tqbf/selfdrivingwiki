@@ -83,7 +83,30 @@ public protocol WikiStore: Sendable {
         data: Data,
         zoteroItemKey: String?,
         zoteroItemTitle: String?,
-        mimeType: String?
+        mimeType: String?,
+        provenance: SourceProvenance?
+    ) throws -> SourceSummary
+
+    /// Store a **byteless** source: a source whose identity row + v1 content
+    /// version carry NO blob (`blob_hash = NULL`, `byte_size = 0`,
+    /// `content_hash = NULL`). The source is a pointer to an external resource
+    /// (e.g. an Apple Podcasts episode); its derived alternative (the transcript
+    /// markdown) is stored separately via `appendProcessedMarkdown`. Mirrors
+    /// `addSource`'s transaction discipline minus the blob/hash write. Dedups on
+    /// `external_identity` (when non-nil) among byteless sources — throws
+    /// `.duplicateContent(existing:)` if one already exists with the same
+    /// identity. See `plans/graph-model-and-versioning.md` §11.
+    ///
+    /// IMPORTANT: `sources.content_hash IS NULL` is used as a one-shot
+    /// "needs backfill" sentinel ONLY inside the schema-version-gated v20
+    /// migration block (already shipped; cannot re-trigger). Byteless rows with
+    /// `content_hash = NULL` are safe, but NO future migration may reuse that
+    /// sentinel — a byteless row would falsely match it.
+    @discardableResult
+    func addBytelessSource(
+        filename: String,
+        mimeType: String?,
+        provenance: SourceProvenance
     ) throws -> SourceSummary
 
     /// Source summaries (no content blob), most-recent-first.
@@ -97,6 +120,14 @@ public protocol WikiStore: Sendable {
 
     /// Remove a source by id.
     func deleteSource(id: PageID) throws
+
+    /// The origin provenance of a source: the provider agent + the activity that
+    /// fetched/imported it, joined from the active content version to its activity
+    /// to the agent. Returns `nil` when the source has no version rows (unknown id).
+    /// `plan`/`externalRef` come from the per-ingest **activity** row (so two
+    /// website sources with different URLs each return their own URL); `agentName`
+    /// from the **agent** row.
+    func sourceOrigin(sourceID: PageID) throws -> SourceOrigin?
 
     /// Rename a source's display_name and rewrite every `[[source:<old>…]]` link
     /// that points at it. Transactional — source row + all affected pages + their
@@ -114,6 +145,16 @@ public protocol WikiStore: Sendable {
 
     // MARK: - Processed markdown versions (v8, renamed v10)
 
+    /// Append a new content version for a source (the store-level refresh/
+    /// re-ingest primitive). Hashes the bytes → CAS blob → new version row →
+    /// UPSERT the active ref → refresh the denormalized `sources` mirror, all in
+    /// one transaction. Used by the provider refresh path (Phase 3b).
+    @discardableResult
+    func appendContentVersion(
+        sourceID: PageID, data: Data, mimeType: String?,
+        provenance: SourceProvenance?
+    ) throws -> SourceVersion
+
     /// The latest (HEAD) version of the processed markdown for a source, or nil
     /// when no version exists yet (not yet seeded/extracted).
     func processedMarkdownHead(sourceID: PageID) throws -> SourceMarkdownVersion?
@@ -123,6 +164,17 @@ public protocol WikiStore: Sendable {
 
     /// All versions for a source, newest first (HEAD → v1). Empty if none.
     func processedMarkdownHistory(sourceID: PageID) throws -> [SourceMarkdownVersion]
+
+    /// The producing agent name for each of a source's markdown versions
+    /// (smv.id → agents.name), for the alternatives UI labels.
+    func processedMarkdownAgentNames(sourceID: PageID) throws -> [String: String]
+
+    /// All extraction alternatives for a source, newest first, each bundled
+    /// with its recoverable provenance (backend display name, model version,
+    /// char count) and whether it is the active HEAD. Consolidates
+    /// `processedMarkdownHistory` + `processedMarkdownAgentNames` into one join
+    /// (smv → activity → agent). For the track C compare/nominate UI.
+    func processedMarkdownAlternatives(sourceID: PageID) throws -> [ExtractionAlternative]
 
     /// Append a new full-text markdown version to the chain. Reads the current
     /// head to set `parentID`. Returns the new version.
@@ -134,6 +186,22 @@ public protocol WikiStore: Sendable {
     /// copies the target. History is preserved; HEAD = the new revert version.
     @discardableResult
     func revertProcessedMarkdown(sourceID: PageID, to versionID: PageID) throws -> SourceMarkdownVersion
+
+    /// Record a provenance-carrying extraction alternative (§4.5, §4.7): create
+    /// the backend's Agent + an `extract` Activity + a CAS'd markdown row in one
+    /// transaction. Does NOT write the `source-derived` ref — alternatives
+    /// coexist; the first becomes HEAD by the default-active rule, later ones are
+    /// alternatives until nominated via `setActiveMarkdown`.
+    @discardableResult
+    func recordMarkdownExtraction(
+        sourceID: PageID, content: String, backend: ExtractionBackend,
+        sourceVersionID: String?, note: String?, modelVersion: String?
+    ) throws -> SourceMarkdownVersion
+
+    /// Nominate an existing processed-markdown row as the active HEAD for a
+    /// source (UPSERT the `source-derived` ref). Used by the alternatives UI,
+    /// `wikictl source set-active`, and revert.
+    func setActiveMarkdown(sourceID: PageID, to versionID: PageID) throws
 
     // MARK: - System prompt (singleton document, v3)
 

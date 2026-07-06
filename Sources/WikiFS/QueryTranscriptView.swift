@@ -27,6 +27,16 @@ struct QueryTranscriptView: View {
             switch event {
             case .result(_, let text):
                 return !hasAssistantText(matching: text)
+            case .toolUse:
+                // A concise one-line progress summary per tool call (issue #173):
+                // lets the user see the agent reading/searching/editing without
+                // opting into the full internals view. Full raw detail still lives
+                // behind "Show internals".
+                return true
+            case .toolResult(let isError, _):
+                // Surface failed tool calls (a useful stall/error signal); successes
+                // are implied by the agent's next action or final answer.
+                return isError
             default:
                 return !event.isInternalTranscriptEvent
             }
@@ -50,7 +60,7 @@ struct QueryTranscriptView: View {
                 .font(.headline)
                 .fontWeight(.medium)
                 .foregroundStyle(.primary)
-            Text("Answers appear here; tool calls and scratch-work stay hidden unless you show internals.")
+            Text("Answers appear here; one-line tool-call summaries show as the agent works. Full detail is available under “Show internals.”")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }

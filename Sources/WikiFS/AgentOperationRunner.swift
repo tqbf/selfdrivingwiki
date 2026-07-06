@@ -115,7 +115,10 @@ enum AgentOperationRunner {
                         launcher.extractionLog.append("PDF conversion done — \(markdown.count) chars extracted.\n")
                         // Persist extracted markdown as v1 in the version chain.
                         // Double-seed guard: if a head already exists, reuse it.
-                        store.seedPdfMarkdown(for: source.id, content: markdown)
+                        let cfg = extractionCoordinator.config
+                        store.seedPdfMarkdown(
+                            for: source.id, content: markdown,
+                            backend: cfg.backend, modelVersion: cfg.currentModelVersion)
                     } catch {
                         if Task.isCancelled {
                             DebugLog.extraction("convert: CANCELLED")

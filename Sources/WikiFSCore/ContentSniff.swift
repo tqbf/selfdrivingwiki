@@ -1,7 +1,7 @@
 import Foundation
 
 /// Pure, dependency-free content-type detection from magic bytes (the leading
-/// bytes of a data blob). Extracted from `URLIngestService` so the store,
+/// bytes of a data blob). Extracted from `URLFetchService` so the store,
 /// ingest paths, and any future caller can sniff without depending on the
 /// URL-fetch layer.
 ///

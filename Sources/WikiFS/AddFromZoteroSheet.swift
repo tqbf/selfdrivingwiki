@@ -323,7 +323,7 @@ struct AddFromZoteroSheet: View {
     }
 
     /// Ingest every selected attachment, collect-and-continue on a per-item
-    /// failure (mirrors `WikiStoreModel.ingest(fileURLs:)`) — one bad attachment
+    /// failure (mirrors `WikiStoreModel.addFiles(_:)`) — one bad attachment
     /// shouldn't block the others. Dismisses only on full success.
     private func addSelected() {
         let toIngest = attachmentRows.filter { selectedAttachmentKeys.contains($0.id) }.map(\.attachment)

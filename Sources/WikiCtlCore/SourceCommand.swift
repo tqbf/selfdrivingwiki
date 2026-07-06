@@ -30,7 +30,7 @@ public enum SourceCommand {
     }
 
     /// How a file is selected for `cat` / `export`.
-    public enum Selector: Equatable {
+    public enum Selector: Equatable, Sendable {
         case id(PageID)
         case name(String)
     }
@@ -42,6 +42,9 @@ public enum SourceCommand {
         case editMarkdown(Selector, content: String)
         case rename(Selector, to: String)
         case search(query: String, limit: Int)
+        case setActive(Selector, versionID: PageID)
+        case info(Selector)
+        case refresh(Selector)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -71,6 +74,14 @@ public enum SourceCommand {
             return try rename(selector, to: to, in: store)
         case .search(let query, let limit):
             return try search(query: query, limit: limit, in: store)
+        case .setActive(let selector, let versionID):
+            return try setActive(selector, versionID: versionID, in: store)
+        case .info(let selector):
+            return try info(selector, in: store)
+        case .refresh:
+            // Refresh is async-only — routed via `runRefresh` from `main.swift`.
+            // This case is unreachable through the sync `run` path.
+            throw Failure.message("source refresh requires async execution")
         }
     }
 
@@ -221,5 +232,98 @@ public enum SourceCommand {
             return "\(summary.id.rawValue)\t\(name)"
         }.joined(separator: "\n")
         return Result(payload: .text(output), didCommit: false)
+    }
+
+    // MARK: - set-active
+
+    /// Nominate an existing processed-markdown version as the active HEAD for a
+    /// source (UPSERT the `source-derived` ref). Errors when the source has no
+    /// markdown chain or the version doesn't belong to it. Commits — the caller
+    /// posts the Darwin notification on `didCommit`.
+    private static func setActive(
+        _ selector: Selector, versionID: PageID, in store: WikiStore
+    ) throws -> Result {
+        let id = try resolve(selector, in: store)
+        guard try store.hasProcessedMarkdown(sourceID: id) else {
+            throw Failure.message("no processed markdown for this source")
+        }
+        try store.setActiveMarkdown(sourceID: id, to: versionID)
+        return Result(
+            payload: .text("Set active markdown to \(versionID.rawValue)."),
+            didCommit: true)
+    }
+
+    // MARK: - info
+
+    /// Print identity (filename, display name, mime, size) and origin provenance
+    /// (provider agent, plan/URL, external identity, fetched-at) for a source.
+    /// Mirrors `set-active`'s selector parsing. Read-only.
+    private static func info(_ selector: Selector, in store: WikiStore) throws -> Result {
+        let id = try resolve(selector, in: store)
+        let summaries = try store.listSources()
+        guard let summary = summaries.first(where: { $0.id == id }) else {
+            throw Failure.message("source not found: \(id.rawValue)")
+        }
+        var lines: [String] = []
+        lines.append("id\t\(summary.id.rawValue)")
+        lines.append("filename\t\(summary.filename)")
+        let display = summary.effectiveName
+        lines.append("display\t\(display.isEmpty ? summary.filename : display)")
+        lines.append("mime\t\(summary.mimeType ?? "")")
+        lines.append("size\t\(summary.byteSize)")
+        if let origin = try store.sourceOrigin(sourceID: id) {
+            lines.append("provider\t\(origin.agentName)")
+            lines.append("activity\t\(origin.activityKind)")
+            if let plan = origin.plan { lines.append("plan\t\(plan)") }
+            if let extID = origin.externalIdentity { lines.append("external_identity\t\(extID)") }
+            if let extRef = origin.externalRef, extRef != origin.externalIdentity {
+                lines.append("external_ref\t\(extRef)")
+            }
+            let date = ISO8601DateFormatter().string(from: origin.fetchedAt)
+            lines.append("fetched_at\t\(date)")
+        }
+        return Result(payload: .text(lines.joined(separator: "\n")), didCommit: false)
+    }
+
+    // MARK: - refresh
+
+    /// Re-fetch a source via its provider, appending a new version instead of
+    /// overwriting. Unlike the other SourceCommand actions (all sync), this
+    /// needs async network I/O, so it has its own async entry point. `main`
+    /// bridges it to the sync `execute` context via a semaphore.
+    ///
+    /// wikictl is a CLI process (no `@MainActor`), so the store write happens
+    /// directly after the off-main materialize — the Phase-0 `@MainActor`
+    /// invariant applies to the APP process, not wikictl. The service is
+    /// constructed with `podcastFetcher: nil` (no bundled signing helper in the
+    /// CLI context), so podcast refresh throws `.signatureUnavailable` and only
+    /// website sources are refreshable from the CLI. Commits — the caller posts
+    /// the Darwin notification on `didCommit`.
+    public static func runRefresh(
+        _ selector: Selector,
+        in store: WikiStore,
+        fetcher: any URLFetchService.URLResourceFetcher
+    ) async throws -> Result {
+        let id = try resolve(selector, in: store)
+        guard let origin = try store.sourceOrigin(sourceID: id) else {
+            throw Failure.message("source has no origin provenance: \(id.rawValue)")
+        }
+        #if PODCAST_TRANSCRIPTS
+        let service = SourceRefreshService(fetcher: fetcher, podcastFetcher: nil)
+        #else
+        let service = SourceRefreshService(fetcher: fetcher)
+        #endif
+        let material = try await service.materialize(origin: origin)
+        switch material {
+        case .contentVersion(let data, let prov):
+            _ = try store.appendContentVersion(
+                sourceID: id, data: data, mimeType: nil, provenance: prov)
+        case .derivedMarkdown(let content):
+            try store.appendProcessedMarkdown(
+                sourceID: id, content: content, origin: "transcript", note: nil)
+        }
+        return Result(
+            payload: .text("Refreshed \(origin.displayLabel) source."),
+            didCommit: true)
     }
 }

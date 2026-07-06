@@ -1,6 +1,7 @@
 import Foundation
 import SQLite3
 import Testing
+import CryptoKit
 @testable import WikiFSCore
 
 /// Store-level tests: persistence across reopen, pragmas + schema, slug
@@ -65,7 +66,7 @@ struct SQLiteWikiStoreTests {
         // user_version guard: a fresh DB runs all migration steps → version 16.
         // Reopening must not re-run DDL (no-op bootstrap).
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "19")
+        #expect(userVersion == "21")
         let reopened = try SQLiteWikiStore(databaseURL: url)
         // If bootstrap weren't guarded, the CREATE TABLE would throw here.
         #expect((try? reopened.listPages(sortBy: .lastUpdated)) != nil)
@@ -149,77 +150,83 @@ struct SQLiteWikiStoreTests {
     @Test func changeTokenAdvancesOnEveryMutation() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
 
-        // Current format:
-        //   "<pCount>:<pSum>:<fCount>:<fSum>:<spVersion>:<logCount>:<idxVersion>:<smvCount>".
+        // Current format (v20, 11 folds):
+        //   "<pCount>:<pSum>:<fCount>:<fSum>:<spVersion>:<logCount>:<idxVersion>:<smvCount>:<svCount>:<refsGenSum>:<actCount>".
         // A fresh DB seeds the system_prompt AND wiki_index singletons at version
-        // 1, has no log rows, no source_markdown_versions, and no processed
-        // markdown → trailing ":1:0:1:0".
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0")
+        // 1, has no log rows, no source_markdown_versions, and no sources →
+        // trailing ":1:0:1:0:0:0:0".
+        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0")
 
         // Create bumps page COUNT and SUM (version starts at 1).
         let a = try store.createPage(title: "Alpha")
-        #expect(try store.changeToken() == "1:1:0:0:1:0:1:0")
+        #expect(try store.changeToken() == "1:1:0:0:1:0:1:0:0:0:0")
 
         // Update bumps that row's version by 1 → SUM increments.
         try store.updatePage(id: a.id, title: "Alpha", body: "edited")
-        #expect(try store.changeToken() == "1:2:0:0:1:0:1:0")
+        #expect(try store.changeToken() == "1:2:0:0:1:0:1:0:0:0:0")
 
         // A SECOND page that is NOT the global-max version must STILL advance the
         // token — the MAX-vs-SUM correctness lock. b starts at version 1, yet
         // count:sum changes (2 pages, sum 2+1=3).
         let b = try store.createPage(title: "Beta")
-        #expect(try store.changeToken() == "2:3:0:0:1:0:1:0")
+        #expect(try store.changeToken() == "2:3:0:0:1:0:1:0:0:0:0")
 
         try store.updatePage(id: b.id, title: "Beta", body: "beta edit")
-        #expect(try store.changeToken() == "2:4:0:0:1:0:1:0")
+        #expect(try store.changeToken() == "2:4:0:0:1:0:1:0:0:0:0")
 
         // Delete changes page COUNT and SUM.
         try store.deletePage(id: b.id)
-        #expect(try store.changeToken() == "1:2:0:0:1:0:1:0")
+        #expect(try store.changeToken() == "1:2:0:0:1:0:1:0:0:0:0")
     }
 
     /// The token MUST advance on ingest AND on delete (else the `files/` tree
     /// would never refresh — the orchestrator-critical fold-in).
     @Test func changeTokenAdvancesOnIngestAndDelete() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0")
+        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0")
 
-        // Ingest bumps the file COUNT and SUM (version 1).
+        // Ingest bumps the file COUNT and SUM (version 1). It ALSO writes one
+        // source_version, one ref (generation 1), and one import activity → the
+        // three v20 folds become 1:1:1.
         let f = try store.addSource(filename: "a.txt", data: Data("hi".utf8))
-        #expect(try store.changeToken() == "0:0:1:1:1:0:1:0")
+        #expect(try store.changeToken() == "0:0:1:1:1:0:1:0:1:1:1")
 
         // A second file.
         _ = try store.addSource(filename: "b.txt", data: Data("yo".utf8))
-        #expect(try store.changeToken() == "0:0:2:2:1:0:1:0")
+        #expect(try store.changeToken() == "0:0:2:2:1:0:1:0:2:2:2")
 
-        // Delete the first → file COUNT and SUM drop.
+        // Delete the first → file COUNT/SUM, svCount, and refsGenSum drop. The
+        // import ACTIVITY is provenance (no cascade from sources) so actCount
+        // stays at 2 — but the token still changes (svCount/refsGenSum moved).
         try store.deleteSource(id: f.id)
-        #expect(try store.changeToken() == "0:0:1:1:1:0:1:0")
+        #expect(try store.changeToken() == "0:0:1:1:1:0:1:0:1:1:2")
     }
 
     /// The token MUST advance when a processed markdown version is appended,
     /// or the `sources/` tree would never learn of new extracts.
     @Test func changeTokenAdvancesOnAppendProcessedMarkdown() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0")
+        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0")
 
         // Add a source first.
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf content".utf8))
-        #expect(try store.changeToken() == "0:0:1:1:1:0:1:0")
+        #expect(try store.changeToken() == "0:0:1:1:1:0:1:0:1:1:1")
 
         // Append processed markdown — smvCount goes 0 → 1.
         _ = try store.appendProcessedMarkdown(
             sourceID: source.id, content: "# Extracted", origin: "test", note: nil)
-        #expect(try store.changeToken() == "0:0:1:1:1:0:1:1")
+        #expect(try store.changeToken() == "0:0:1:1:1:0:1:1:1:1:1")
 
         // Append another version — smvCount advances again.
         _ = try store.appendProcessedMarkdown(
             sourceID: source.id, content: "# Edited", origin: "test", note: "edit")
-        #expect(try store.changeToken() == "0:0:1:1:1:0:1:2")
+        #expect(try store.changeToken() == "0:0:1:1:1:0:1:2:1:1:1")
 
-        // Deleting the source removes its markdown versions (CASCADE).
+        // Deleting the source removes its markdown versions + content versions +
+        // ref (CASCADE), but the import activity persists (provenance) →
+        // actCount stays 1.
         try store.deleteSource(id: source.id)
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0")
+        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:1")
     }
 
     /// processedMarkdownHeadsBySource returns one row per source, keyed by
@@ -316,7 +323,7 @@ struct SQLiteWikiStoreTests {
         defer { sqlite3_close(db) }
 
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "19")
+        #expect(userVersion == "21")
 
         let tables = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))
@@ -360,7 +367,7 @@ struct SQLiteWikiStoreTests {
 
     @Test func freshDBReachesUserVersion18() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
-        #expect(store.pragmaValue("user_version") == "19")
+        #expect(store.pragmaValue("user_version") == "21")
     }
 
     @Test func v11SourceLinksHasDeleteCascade() throws {
@@ -543,6 +550,289 @@ struct SQLiteWikiStoreTests {
         try store.renameSource(id: source.id, to: source.filename)
         // No version bump, no token change.
         #expect(try store.changeToken() == oldToken)
+    }
+
+    // MARK: - Graph-model Phase 1: objects & versioning (v20)
+
+    /// AC.1 — a fresh (fast-path) DB is at v20, has all five objects tables, and
+    /// `sources` has NO `content` column.
+    @Test func freshSchemaHasObjectsTablesAndDropsContent() throws {
+        let url = tempDatabaseURL()
+        _ = try SQLiteWikiStore(databaseURL: url)
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+
+        #expect(scalarText(db, "PRAGMA user_version;") == "21")
+        let tables = Set(rows(db,
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"))
+        for expected in ["blobs", "agents", "activities", "source_versions", "refs"] {
+            #expect(tables.contains(expected), "missing objects table: \(expected)")
+        }
+        // sources must no longer have a `content` column (byte_size/mime_type/
+        // content_hash stay as denormalized mirrors).
+        let colNames = Set(rows(db, "SELECT name FROM pragma_table_info('sources');"))
+        #expect(!colNames.contains("content"))
+        #expect(colNames.contains("byte_size"))
+        #expect(colNames.contains("mime_type"))
+        #expect(colNames.contains("content_hash"))
+    }
+
+    /// AC.2 — a v19 DB (sources.content present) migrates to v20: each source
+    /// gets one version + one ref (generation 1) + a blob whose hash equals the
+    /// prior content_hash; the content column is dropped; bytes are preserved.
+    @Test func migrateV19ToV20_hashesContentIntoBlobsAndDropsContentColumn() throws {
+        let url = tempDatabaseURL()
+
+        // Build a v19-shaped DB by hand: a `sources` table WITH a content column
+        // and content_hash, one seeded source. Stamp user_version=19.
+        let payload = Data("phase-one-payload".utf8)
+        let hash = SHA256.hash(data: payload)
+            .map { String(format: "%02x", $0) }.joined()
+        let payloadHex = payload.map { String(format: "%02X", $0) }.joined()
+        // Build a v19-shaped DB by hand: a `sources` table WITH a content column
+        // and content_hash, one seeded source (content as a hex blob literal,
+        // hash as a string literal — avoids manual sqlite bind lifetimes).
+        // Stamp user_version=19.
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        defer { sqlite3_close(raw) }
+        let v19SQL = """
+        CREATE TABLE sources (
+            id TEXT PRIMARY KEY,
+            filename TEXT NOT NULL,
+            ext TEXT NOT NULL DEFAULT '',
+            mime_type TEXT,
+            byte_size INTEGER NOT NULL,
+            content BLOB NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            ingested_at REAL,
+            zotero_item_key TEXT,
+            zotero_item_title TEXT,
+            display_name TEXT,
+            content_hash TEXT
+        );
+        INSERT INTO sources (id, filename, ext, mime_type, byte_size, content,
+                             created_at, updated_at, version, content_hash)
+        VALUES ('01SRC', 'p.txt', 'txt', 'text/plain', \(payload.count), X'\(payloadHex)',
+                1000, 1000, 1, '\(hash)');
+        PRAGMA user_version=19;
+        """
+        #expect(sqlite3_exec(raw, v19SQL, nil, nil, nil) == SQLITE_OK)
+
+        // Reopen → migrates 19→20.
+        let store = try SQLiteWikiStore(databaseURL: url)
+        #expect(store.pragmaValue("user_version") == "21")
+
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+
+        // content column is gone.
+        #expect(!Set(rows(db, "SELECT name FROM pragma_table_info('sources');")).contains("content"))
+
+        // One version + one ref (generation 1) + a blob whose hash == content_hash.
+        #expect(scalarText(db, "SELECT COUNT(*) FROM source_versions WHERE source_id='01SRC';") == "1")
+        #expect(scalarText(db, "SELECT COUNT(*) FROM refs WHERE owner_id='01SRC' AND kind='source-content';") == "1")
+        #expect(scalarText(db, "SELECT generation FROM refs WHERE owner_id='01SRC';") == "1")
+        #expect(scalarText(db, "SELECT hash FROM blobs;") == hash)
+        #expect(scalarText(db, "SELECT byte_size FROM blobs WHERE hash='\(hash)';") == "\(payload.count)")
+
+        // Byte-for-byte content preserved through the ref-resolved read path.
+        #expect(try store.sourceContent(id: PageID(rawValue: "01SRC")) == payload)
+    }
+
+    /// AC.3 — sourceContent resolves through the ref → version → blob.
+    @Test func sourceContentResolvesThroughRef() throws {
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let payload = Data("hello-phase-one".utf8)
+        let source = try store.addSource(filename: "a.txt", data: payload)
+        #expect(try store.sourceContent(id: source.id) == payload)
+    }
+
+    /// AC.3 — a byteless source (blob_hash NULL) returns empty Data, never throws.
+    @Test func bytelessSourceReturnsEmptyData() throws {
+        let url = tempDatabaseURL()
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let source = try store.addSource(filename: "b.txt", data: Data("x".utf8))
+
+        // Tamper: repoint the source's version at a NULL blob_hash (byteless).
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        _ = scalarText(db, """
+        UPDATE source_versions SET blob_hash = NULL WHERE source_id = '\(source.id.rawValue)';
+        """)
+        // Empty Data, never throws.
+        #expect(try store.sourceContent(id: source.id) == Data())
+    }
+
+    /// AC.3 — when no ref row exists, sourceContent falls back to MAX(id) version.
+    @Test func sourceContentResolvesViaMaxIdWhenNoRefRow() throws {
+        let url = tempDatabaseURL()
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let source = try store.addSource(filename: "c.txt", data: Data("via-max".utf8))
+
+        // Delete the ref row, leaving only the version → exercises the fallback.
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        _ = scalarText(db, "DELETE FROM refs WHERE owner_id = '\(source.id.rawValue)';")
+
+        // sourceContent still returns the blob bytes via MAX(id).
+        #expect(try store.sourceContent(id: source.id) == Data("via-max".utf8))
+        // activeContentVersion resolves the same way.
+        let active = try store.activeContentVersion(sourceID: source.id)
+        #expect(active != nil)
+        #expect(active?.sourceID == source.id)
+    }
+
+    /// AC.4 — appendContentVersion with identical bytes adds a version + ZERO new
+    /// blob bytes; different bytes add a version + a blob.
+    @Test func appendContentVersionDedupsBlob() throws {
+        let url = tempDatabaseURL()
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let source = try store.addSource(filename: "d.txt", data: Data("v1".utf8))
+
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        let blobBytesBefore = Int(scalarText(db, "SELECT COALESCE(SUM(byte_size),0) FROM blobs;")) ?? 0
+
+        // Append identical bytes → one new version, zero new blob bytes.
+        _ = try store.appendContentVersion(sourceID: source.id, data: Data("v1".utf8))
+        #expect(scalarText(db, "SELECT COUNT(*) FROM source_versions WHERE source_id='\(source.id.rawValue)';") == "2")
+        let blobBytesSame = Int(scalarText(db, "SELECT COALESCE(SUM(byte_size),0) FROM blobs;")) ?? 0
+        #expect(blobBytesSame == blobBytesBefore)   // dedup: no new bytes
+
+        // Append different bytes → one new version + one new blob.
+        _ = try store.appendContentVersion(sourceID: source.id, data: Data("v2-different".utf8))
+        #expect(scalarText(db, "SELECT COUNT(*) FROM source_versions WHERE source_id='\(source.id.rawValue)';") == "3")
+        let blobRows = scalarText(db, "SELECT COUNT(*) FROM blobs;")
+        #expect(blobRows == "2")
+
+        // The active content is now the v2-different bytes (ref repointed).
+        #expect(try store.sourceContent(id: source.id) == Data("v2-different".utf8))
+    }
+
+    /// AC.4 — rollback repoints the ref (generation+1) and sourceContent returns
+    /// the target bytes; the version chain is unchanged (append-only).
+    @Test func rollbackRepointsRefAndPreservesHistory() throws {
+        let url = tempDatabaseURL()
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let source = try store.addSource(filename: "e.txt", data: Data("orig".utf8))
+        // Append a new version, then roll back to v1.
+        _ = try store.appendContentVersion(sourceID: source.id, data: Data("newer".utf8))
+        #expect(try store.sourceContent(id: source.id) == Data("newer".utf8))
+
+        let history = try store.contentVersionHistory(sourceID: source.id)
+        #expect(history.count == 2)
+        let v1 = history.last!   // oldest (newest-first)
+
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        let genBefore = Int(scalarText(db, "SELECT generation FROM refs WHERE owner_id='\(source.id.rawValue)';")) ?? 0
+
+        try store.rollbackSourceContent(sourceID: source.id, to: PageID(rawValue: v1.id))
+
+        // Ref generation bumped.
+        let genAfter = Int(scalarText(db, "SELECT generation FROM refs WHERE owner_id='\(source.id.rawValue)';")) ?? 0
+        #expect(genAfter == genBefore + 1)
+        // sourceContent now returns the rolled-back (orig) bytes.
+        #expect(try store.sourceContent(id: source.id) == Data("orig".utf8))
+        // History unchanged (append-only).
+        #expect(try store.contentVersionHistory(sourceID: source.id).count == 2)
+    }
+
+    /// AC.6 — appending a version and a rollback each change the changeToken.
+    @Test func changeTokenChangesOnVersionAppendAndRollback() throws {
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let source = try store.addSource(filename: "f.txt", data: Data("a".utf8))
+        let tokenAfterAdd = try store.changeToken()
+
+        _ = try store.appendContentVersion(sourceID: source.id, data: Data("b".utf8))
+        let tokenAfterAppend = try store.changeToken()
+        #expect(tokenAfterAppend != tokenAfterAdd)
+
+        let v1 = try store.contentVersionHistory(sourceID: source.id).last!
+        try store.rollbackSourceContent(sourceID: source.id, to: PageID(rawValue: v1.id))
+        let tokenAfterRollback = try store.changeToken()
+        #expect(tokenAfterRollback != tokenAfterAppend)
+    }
+
+    /// AC.7 — deleteSource cascades source_versions + refs but leaves shared
+    /// blobs intact.
+    @Test func deleteSourceCascadesVersionsAndRefsKeepsBlobs() throws {
+        let url = tempDatabaseURL()
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let source = try store.addSource(filename: "g.txt", data: Data("shared".utf8))
+
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        let hash = scalarText(db, "SELECT hash FROM blobs LIMIT 1;")
+
+        try store.deleteSource(id: source.id)
+
+        // Versions + refs cascade-deleted.
+        #expect(scalarText(db, "SELECT COUNT(*) FROM source_versions WHERE source_id='\(source.id.rawValue)';") == "0")
+        #expect(scalarText(db, "SELECT COUNT(*) FROM refs WHERE owner_id='\(source.id.rawValue)';") == "0")
+        // The blob survives (shared, GC'd lazily).
+        #expect(scalarText(db, "SELECT COUNT(*) FROM blobs WHERE hash='\(hash)';") == "1")
+    }
+
+    /// AC.8 — the ref-resolved read path works through a READ-ONLY store
+    /// (`init(readOnlyURL:)`), the path the File Provider extension uses.
+    @Test func readOnlyStoreResolvesSourceContentThroughRef() throws {
+        let url = tempDatabaseURL()
+        let payload = Data("read-only-payload".utf8)
+        // Ingest through the writer.
+        let writer = try SQLiteWikiStore(databaseURL: url)
+        let source = try writer.addSource(filename: "h.txt", data: payload)
+
+        // Open a read-only store against the same DB and read via the ref join.
+        let reader = try SQLiteWikiStore(readOnlyURL: url)
+        #expect(try reader.sourceContent(id: source.id) == payload)
+    }
+
+    /// Regression (review H1): after append/rollback the denormalized
+    /// `sources.content_hash` must track the new active blob, so addSource dedup
+    /// stays consistent ("identical bytes = one source").
+    @Test func contentHashMirrorStaysConsistentAfterAppendAndRollback() throws {
+        let url = tempDatabaseURL()
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let orig = Data("orig-content".utf8)
+        let updated = Data("updated-content".utf8)
+        let origHash = SHA256.hash(data: orig).map { String(format: "%02x", $0) }.joined()
+        let updatedHash = SHA256.hash(data: updated).map { String(format: "%02x", $0) }.joined()
+        let source = try store.addSource(filename: "i.txt", data: orig)
+
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        func contentHash(_ id: String) -> String {
+            scalarText(db, "SELECT content_hash FROM sources WHERE id='\(id)';")
+        }
+
+        #expect(contentHash(source.id.rawValue) == origHash)
+
+        // Append new content → mirror content_hash tracks the new active blob.
+        _ = try store.appendContentVersion(sourceID: source.id, data: updated)
+        #expect(contentHash(source.id.rawValue) == updatedHash)
+
+        // Roll back to v1 (orig) → mirror tracks the rolled-back blob.
+        let v1 = try store.contentVersionHistory(sourceID: source.id).last!
+        try store.rollbackSourceContent(sourceID: source.id, to: PageID(rawValue: v1.id))
+        #expect(contentHash(source.id.rawValue) == origHash)
+
+        // And addSource dedup follows the mirror: after the rollback, re-adding
+        // the active `orig` bytes dedup-throws.
+        #expect(throws: WikiStoreError.self) {
+            _ = try store.addSource(filename: "dupe.txt", data: orig)
+        }
     }
 
     // MARK: - Helpers

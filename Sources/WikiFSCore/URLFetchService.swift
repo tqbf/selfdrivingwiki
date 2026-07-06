@@ -1,14 +1,17 @@
 import Foundation
 
-/// Fetches a URL and lands its content as an ingested file in the active wiki —
+/// Fetches a URL and lands its content as a source file in the active wiki —
 /// exactly like a drag-dropped file, so the existing "Ingest into wiki" `claude -p`
 /// operation can summarize it afterward.
+///
+/// Named `URLFetchService` (not `URLIngestService`) because it only fetches and
+/// stores bytes — it does NOT run the agent "Ingest into wiki" phase. Issue #178.
 ///
 /// Design for testability: the network is behind an injected `URLResourceFetcher`,
 /// and the store write is an injected closure (`store:`). So the whole
 /// dispatch / filename / store pipeline is unit-tested with a FAKE fetcher and an
 /// in-memory store — no real network, deterministic. The app wires the real
-/// `URLSessionFetcher` + the active `WikiStoreModel.ingestFile`.
+/// `URLSessionFetcher` + the active `WikiStoreModel.addSource`.
 ///
 /// Dispatch by `Content-Type`:
 /// - `text/html` / `application/xhtml+xml` → `HTMLToMarkdown` → store the **markdown**
@@ -17,7 +20,7 @@ import Foundation
 /// - other `text/*` (plain, markdown, csv…) → store the raw text as-is.
 /// - anything else (images, binaries) → store raw bytes with an extension inferred
 ///   from the MIME type or the URL.
-public struct URLIngestService {
+public struct URLFetchService {
 
     /// The bytes + metadata returned by a fetch. `finalURL` reflects redirects, so
     /// the filename derives from where we ended up, not where we asked.
@@ -34,7 +37,7 @@ public struct URLIngestService {
     }
 
     /// What was stored, surfaced to the UI for the success message.
-    public struct IngestOutcome: Sendable, Equatable {
+    public struct FetchOutcome: Sendable, Equatable {
         public let filename: String
         public let byteSize: Int
         /// The detected kind, for a human-readable confirmation.
@@ -45,6 +48,7 @@ public struct URLIngestService {
             case pdf             // verbatim PDF
             case text            // verbatim text
             case binary          // verbatim other bytes
+            case podcastTranscript  // Apple Podcasts episode TTML → Markdown
         }
 
         public init(filename: String, byteSize: Int, kind: Kind) {
@@ -60,7 +64,7 @@ public struct URLIngestService {
     }
 
     /// Errors surfaced to the UI with user-readable messages.
-    public enum IngestError: LocalizedError, Equatable {
+    public enum FetchError: LocalizedError, Equatable {
         case invalidURL(String)
         case httpStatus(Int)
         case empty
@@ -78,7 +82,7 @@ public struct URLIngestService {
 
     private let fetcher: any URLResourceFetcher
     /// Stores `(filename, data)` into the active wiki and returns nothing. The app
-    /// passes `WikiStoreModel.ingestFile`; tests pass an in-memory collector.
+    /// passes `WikiStoreModel.addSource`; tests pass an in-memory collector.
     private let store: @Sendable (_ filename: String, _ data: Data) throws -> Void
 
     public init(
@@ -111,12 +115,12 @@ public struct URLIngestService {
     }
 
     /// Fetch `rawInput`, dispatch by content type, and store the result in the
-    /// active wiki. Returns what was stored. Throws `IngestError` on a bad URL,
+    /// active wiki. Returns what was stored. Throws `FetchError` on a bad URL,
     /// non-2xx status (the fetcher reports it), empty body, or a store failure.
     @discardableResult
-    public func ingest(rawInput: String) async throws -> IngestOutcome {
+    public func fetch(_ rawInput: String) async throws -> FetchOutcome {
         guard let url = Self.normalizeURL(rawInput) else {
-            throw IngestError.invalidURL(rawInput.trimmingCharacters(in: .whitespacesAndNewlines))
+            throw FetchError.invalidURL(rawInput.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         let response = try await fetcher.fetch(url)
         return try store(response: response)
@@ -125,15 +129,15 @@ public struct URLIngestService {
     /// The PURE dispatch + filename + store step (no network), so tests can drive it
     /// directly with a hand-built `FetchResponse`.
     @discardableResult
-    public func store(response: FetchResponse) throws -> IngestOutcome {
-        guard !response.data.isEmpty else { throw IngestError.empty }
+    public func store(response: FetchResponse) throws -> FetchOutcome {
+        guard !response.data.isEmpty else { throw FetchError.empty }
         let plan = Self.plan(for: response)
         do {
             try store(plan.filename, plan.data)
         } catch {
-            throw IngestError.network("Couldn't save the fetched file: \(error.localizedDescription)")
+            throw FetchError.network("Couldn't save the fetched file: \(error.localizedDescription)")
         }
-        return IngestOutcome(filename: plan.filename, byteSize: plan.data.count, kind: plan.kind)
+        return FetchOutcome(filename: plan.filename, byteSize: plan.data.count, kind: plan.kind)
     }
 
     // MARK: - Dispatch plan (pure)
@@ -144,7 +148,7 @@ public struct URLIngestService {
     public struct StorePlan: Equatable, Sendable {
         public let filename: String
         public let data: Data
-        public let kind: IngestOutcome.Kind
+        public let kind: FetchOutcome.Kind
     }
 
     public static func plan(for response: FetchResponse) -> StorePlan {
@@ -162,7 +166,7 @@ public struct URLIngestService {
             let ext = binaryExtension(forMIME: sniffed, url: response.finalURL)
             let stem = stemFromURL(response.finalURL, droppingExtension: ext)
             let filename = ext.isEmpty ? sanitizeStem(stem) : ensureExtension(sanitizeStem(stem), ext: ext)
-            let kind: IngestOutcome.Kind = sniffed == "application/pdf" ? .pdf : .binary
+            let kind: FetchOutcome.Kind = sniffed == "application/pdf" ? .pdf : .binary
             return StorePlan(filename: filename, data: response.data, kind: kind)
         }
 
