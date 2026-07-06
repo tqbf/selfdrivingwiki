@@ -84,7 +84,8 @@ public protocol WikiStore: Sendable {
         zoteroItemKey: String?,
         zoteroItemTitle: String?,
         mimeType: String?,
-        provenance: SourceProvenance?
+        provenance: SourceProvenance?,
+        role: SourceRole
     ) throws -> SourceSummary
 
     /// Store a **byteless** source: a source whose identity row + v1 content
@@ -106,7 +107,8 @@ public protocol WikiStore: Sendable {
     func addBytelessSource(
         filename: String,
         mimeType: String?,
-        provenance: SourceProvenance
+        provenance: SourceProvenance,
+        role: SourceRole
     ) throws -> SourceSummary
 
     /// Source summaries (no content blob), most-recent-first.

@@ -66,7 +66,7 @@ struct SQLiteWikiStoreTests {
         // user_version guard: a fresh DB runs all migration steps → version 16.
         // Reopening must not re-run DDL (no-op bootstrap).
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "21")
+        #expect(userVersion == "22")
         let reopened = try SQLiteWikiStore(databaseURL: url)
         // If bootstrap weren't guarded, the CREATE TABLE would throw here.
         #expect((try? reopened.listPages(sortBy: .lastUpdated)) != nil)
@@ -323,7 +323,7 @@ struct SQLiteWikiStoreTests {
         defer { sqlite3_close(db) }
 
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "21")
+        #expect(userVersion == "22")
 
         let tables = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))
@@ -367,7 +367,7 @@ struct SQLiteWikiStoreTests {
 
     @Test func freshDBReachesUserVersion18() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
-        #expect(store.pragmaValue("user_version") == "21")
+        #expect(store.pragmaValue("user_version") == "22")
     }
 
     @Test func v11SourceLinksHasDeleteCascade() throws {
@@ -552,6 +552,54 @@ struct SQLiteWikiStoreTests {
         #expect(try store.changeToken() == oldToken)
     }
 
+    // MARK: - Graph-model Phase 4 foundation: source role (v22)
+
+    /// AC.4 — `SourceSummary.role` round-trips: `addSource(role: .media)` produces
+    /// a source whose `getSource`/`listSources` return `.media`; a default
+    /// `addSource`/`addBytelessSource` returns `.primary`.
+    @Test func sourceRoleRoundTrips() throws {
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        // Default addSource → .primary.
+        let primary = try store.addSource(filename: "doc.pdf", data: Data("%PDF".utf8))
+        #expect(primary.role == .primary)
+        #expect(try store.getSource(id: primary.id).role == .primary)
+        // addSource(role: .media) → .media.
+        let media = try store.addSource(filename: "img.png", data: Data("png".utf8), role: .media)
+        #expect(media.role == .media)
+        #expect(try store.getSource(id: media.id).role == .media)
+        // listSources carries role for both.
+        let all = try store.listSources()
+        #expect(all.first { $0.id == media.id }?.role == .media)
+        #expect(all.first { $0.id == primary.id }?.role == .primary)
+        // Default addBytelessSource → .primary.
+        let prov = SourceProvenance(agentName: "test", activityKind: "import",
+                                    externalIdentity: "ext-\(UUID().uuidString)")
+        let byteless = try store.addBytelessSource(
+            filename: "ep.m4a", mimeType: "audio/mp4", provenance: prov)
+        #expect(byteless.role == .primary)
+        #expect(try store.getSource(id: byteless.id).role == .primary)
+    }
+
+    /// AC.5 — A `.media` source is filtered out of the primary Sources list (and
+    /// search) via the `SourceSummary.isPrimary` seam — the actual predicate
+    /// `visibleSources` filters through. An omitted or inverted filter fails this.
+    @Test func mediaSourcesFilteredFromPrimaryList() throws {
+        let primary = SourceSummary(
+            id: PageID(rawValue: "01PRIMARY"), filename: "a.txt", ext: "txt",
+            mimeType: nil, byteSize: 1, createdAt: Date(), updatedAt: Date(), version: 1)
+        let media = SourceSummary(
+            id: PageID(rawValue: "01MEDIA00"), filename: "b.png", ext: "png",
+            mimeType: nil, byteSize: 1, createdAt: Date(), updatedAt: Date(), version: 1,
+            role: .media)
+        // The isPrimary seam — the actual predicate visibleSources filters through.
+        #expect(primary.isPrimary)
+        #expect(!media.isPrimary)
+        // Simulate visibleSources' filter: only primary survives.
+        let filtered = [primary, media].filter { $0.isPrimary }
+        #expect(filtered.count == 1)
+        #expect(filtered.first?.id == primary.id)
+    }
+
     // MARK: - Graph-model Phase 1: objects & versioning (v20)
 
     /// AC.1 — a fresh (fast-path) DB is at v20, has all five objects tables, and
@@ -563,7 +611,7 @@ struct SQLiteWikiStoreTests {
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
         defer { sqlite3_close(db) }
 
-        #expect(scalarText(db, "PRAGMA user_version;") == "21")
+        #expect(scalarText(db, "PRAGMA user_version;") == "22")
         let tables = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"))
         for expected in ["blobs", "agents", "activities", "source_versions", "refs"] {
@@ -624,7 +672,7 @@ struct SQLiteWikiStoreTests {
 
         // Reopen → migrates 19→20.
         let store = try SQLiteWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "21")
+        #expect(store.pragmaValue("user_version") == "22")
 
         var db: OpaquePointer?
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)

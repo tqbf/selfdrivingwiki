@@ -44,8 +44,13 @@ struct SourcesContainerView: View {
     }
 
     /// Search overrides filter (mirrors the prior `SourcesSectionView` swap).
+    /// Media sources (`.media`) are filtered out of both the list and search
+    /// paths via `SourceSummary.isPrimary`, so they never appear in the main
+    /// Sources view — they are presentation content surfaced via embeds, not the
+    /// content list (graph-model §4.2).
     private var visibleSources: [SourceSummary] {
-        store.sourceSearchQuery.isEmpty ? filteredSources : store.sourceSearchResults
+        (store.sourceSearchQuery.isEmpty ? filteredSources : store.sourceSearchResults)
+            .filter { $0.isPrimary }
     }
 
     var body: some View {

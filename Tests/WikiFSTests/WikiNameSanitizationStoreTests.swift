@@ -104,7 +104,7 @@ struct WikiNameSanitizationStoreTests {
 
         // Reopen → the 17→18 step sweeps the dirty names.
         let reopened = try SQLiteWikiStore(databaseURL: url)
-        #expect(reopened.pragmaValue("user_version") == "21")
+        #expect(reopened.pragmaValue("user_version") == "22")
         let page = try reopened.getPage(id: pageID!)
         #expect(page.title == "(Draft) Bad - #Title") // inner # is fine, kept
         #expect(try reopened.getSource(id: sourceID!).displayName == "Foo - Bar)")

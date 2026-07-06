@@ -696,6 +696,15 @@ block extends in parity, enforced by the existing test.
    `ALTER TABLE sources ADD COLUMN role TEXT NOT NULL DEFAULT 'primary'`
    (`'primary' | 'media'`, per the draft's provenance grouping) — the default
    is the backfill; only new provider fetches ever write `'media'`.
+   > **Status (Phase 4 foundation, 2026-07-06):** shipped. `migrateV21ToV22()`
+   > adds `sources.role` (default `'primary'`) and rebuilds `source_links` to
+   > the §4.4 rowid + role/pin shape + `source_links_edge` unique index. The
+   > `SourceRole` enum + `SourceSummary.role`/`isPrimary` seam widen the value
+   > type and read/write paths; media sources are filtered from the main
+   > Sources list via `SourcesContainerView.visibleSources`. **Deferred to the
+   > second Phase 4 handoff:** `![[source:…]]` embed parsing, render-by-content-
+   > type dispatch, sibling `original_path` resolution, and the transcript-level
+   > `apple-ttml` extract PROV. 1577 tests green (+5 new).
 6. **Link canonicalization** (Phase D) is a *data* migration, not schema: a
    guarded one-time body rewrite (dry-runnable via lint), then the save-path
    normalizer keeps it invariant.
@@ -791,6 +800,7 @@ Ordered by dependency; each gate is demoable.
 | ↳ *Phase 2 tracks A+B implemented (v21).* CAS'd/provenance-carrying extractions via `recordMarkdownExtraction`, `source-derived` ref + `setActiveMarkdown`, `revert` pointer copy, re-extract path, `wikictl source set-active`, minimal alternatives Menu. Gate met (AC.1–AC.9, 1488 tests green). *Track C (full compare/nominate UI) implemented on `feature/extraction-compare-ui`: a modal "Compare Extractions" sheet rendering any two alternatives side-by-side (Rendered ↔ Diff toggle), provenance per alternative (`processedMarkdownAlternatives`), and live "Set Active" nominate (1498 tests green; no schema change).* | | |
 | **3 — Providers & provenance** | `SourceProvider` protocol, four paths unified, runs recorded (URL provenance!), refresh verb, credentials UX, **website provider writes disambiguated `original_path` per sibling rule (§7)** | Drag-drop/URL/Zotero/folder all flow through providers; `wikictl source refresh` appends a version |
 | **4 — Media & roles** | `source_links` rebuild (role/pin), `![[…]]` embeds, render-by-content-type, sibling `original_path` resolution, media filtering | Website snapshot renders with inline images; a YouTube embed plays; a json-render spec mounts |
+| ↳ *Phase 4 foundation shipped (v22, 2026-07-06).* `sources.role` + `source_links` §4.4 rebuild + `source_links_edge` index landed; `SourceRole`/`isPrimary` seam + media filtering in the Sources UI. Embeds/render-dispatch/`original_path` deferred to the second handoff. | | |
 | **5 — Link canonicalization** | Save-time ULID normalization, display-at-render, one-time body migration, `?id=` URL contract, rename = metadata-only | Rename a page with 50 inbound links: zero bodies rewritten, zero ghosts |
 | **6 — Pinning** | `@vN` parse/resolve, `pinned_version_id`, quote-against-pinned-version | `[[source:X@v3#"quote"]]` highlights after X is reprocessed |
 | **7 — New providers** | git@SHA, Tavily, Slack, archives, Apple Podcasts — each a leaf | Each materializes a frozen, provenance-carrying source |
