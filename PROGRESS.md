@@ -2,6 +2,47 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-05 — Apple Podcasts transcript ingest (PR #106 rebase + Option-A remodel)
+
+Rebased PR #106 ("Apple Podcasts episode URLs as transcript sources") onto
+current `main` by porting its transcript pipeline to the Phase-3a
+`SourceProvider` protocol. `ApplePodcastProvider` becomes the first real
+consumer of the protocol — validating it cheaply before Phase 3b/4 build on it.
+
+**What shipped:**
+- The full transcript pipeline (recognizer, TTML parser, AMP decoder,
+  orchestration service, `podcast-token-helper` ObjC executable) ported verbatim
+  from PR #106 — all pure/self-contained, depending only on Foundation/XMLParser.
+- A new `ApplePodcastProvider: SourceProvider` materializes the transcript
+  markdown into a `MaterializedSource` and flows through the existing
+  `storeMaterialized(_:)` → `store.addSource(provenance:)` seam, recording real
+  PROV provenance (agent `apple-podcast`, `fetch` activity, `plan` = the
+  `podcasts.apple.com` URL, `externalIdentity` = the episode ID).
+- `WikiStoreModel.addURL` recognizes an episode URL and routes to the provider
+  instead of `WebsiteProvider`; a `podcastFetcher:` injection seam enables CI
+  routing tests with a fake.
+- `FetchOutcome.Kind.podcastTranscript` + `SourceOrigin.displayLabel` arm
+  (`"apple-podcast"` → `"Apple Podcast"`).
+- The `#if PODCAST_TRANSCRIPTS` build flag + `WIKIFS_APP_STORE=1` off-switch:
+  the feature is compiled in by default; the App Store config drops the
+  `podcast-token-helper` target entirely and compiles the Swift sources out.
+- The security boundary (user-initiated UI path only; never the agent surface)
+  is now an **executable** architecture test (`agentSurfaceHasNoPodcastReferences`)
+  — grepping the agent-surface modules + prompt layer for podcast symbols.
+
+**Option-A technical debt (deliberate deferral):** the transcript is stored as
+source content (not as a byteless source + derived alternative per §11). This is
+cheap to retire later: Phase 2's `recordMarkdownExtraction` + CAS make the
+conversion a pointer move. Recorded so a future agent doesn't mistake the current
+shape for the intended end-state. Cross-ref `plans/graph-model-and-versioning.md`
+§11 and `plans/podcast-transcripts.md`.
+
+**Test coverage:** 1561 tests pass (1503 baseline + 58 new podcast/provider
+tests). The live fetch path (private-framework signing + Apple endpoints) is
+`WIKIFS_LIVE_PODCAST_TESTS=1`-gated and skips in CI; all pure logic (parser,
+TTML, AMP decode, orchestration, routing, provenance, displayLabel) has CI
+coverage via injected fakes.
+
 ## 2026-07-05 — Graph-model Phase 3a: provider protocol & real source provenance (no schema change)
 
 Introduced the `SourceProvider` protocol + `MaterializedSource`/

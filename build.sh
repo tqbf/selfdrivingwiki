@@ -34,6 +34,11 @@ APP_NAME="Self Driving Wiki"
 APP_TARGET_NAME="WikiFS"
 EXT_NAME="WikiFSFileProvider"
 CTL_NAME="wikictl"
+# podcast-token-helper: the FairPlay/Mescal signer for Apple Podcasts transcripts
+# (dlopens the private PodcastsFoundation framework in an isolated process). Bundled
+# under Contents/Helpers beside wikictl; WikiFSCore spawns it via Process. Private
+# API — dev-signed / local only. See plans/podcast-transcripts.md.
+PODCAST_HELPER_NAME="podcast-token-helper"
 PDF2MD_NAME="pdf2md"
 PDF2MD_SRC="tools/pdf2md/pdf2md"
 BUNDLE_ID="${BUNDLE_ID:-org.sockpuppet.WikiFS}"
@@ -76,6 +81,7 @@ BIN_DIR="$(swift build -c "${CONFIG}" --show-bin-path)"
 APP_BIN="${BIN_DIR}/${APP_TARGET_NAME}"
 EXT_BIN="${BIN_DIR}/${EXT_NAME}"
 CTL_BIN="${BIN_DIR}/${CTL_NAME}"
+PODCAST_HELPER_BIN="${BIN_DIR}/${PODCAST_HELPER_NAME}"
 for b in "${APP_BIN}" "${EXT_BIN}" "${CTL_BIN}"; do
   [ -x "$b" ] || { echo "✗ built binary missing: $b" >&2; exit 1; }
 done
@@ -91,6 +97,14 @@ cp "${EXT_BIN}" "${APPEX_MACOS}/${EXT_NAME}"
 cp "${CTL_BIN}" "${HELPERS_DIR}/${CTL_NAME}"
 # Also drop a copy at build/wikictl for the Phase A gate to invoke directly.
 cp "${CTL_BIN}" "${BUILD_DIR}/${CTL_NAME}"
+# podcast-token-helper alongside wikictl (spawned via Process for transcript
+# ingest). Optional — a toolchain/App-Store config that can't build the ObjC
+# target just omits it, and podcast ingest surfaces a clear "not available" message.
+if [ -x "${PODCAST_HELPER_BIN}" ]; then
+  cp "${PODCAST_HELPER_BIN}" "${HELPERS_DIR}/${PODCAST_HELPER_NAME}"
+else
+  echo "  (${PODCAST_HELPER_NAME} not found at ${PODCAST_HELPER_BIN} — Apple Podcasts transcript ingest will be unavailable)"
+fi
 # wikictl is a plain CLI with no Info.plist, so it can't read the App Group id
 # the way the .app/.appex do. Drop a sidecar that WikiIdentifiers reads. It must
 # NOT live in Contents/Helpers (a code location — codesign rejects unsigned
@@ -333,6 +347,12 @@ PLIST
     codesign --force --timestamp=none --sign "${IDENTITY}" \
       "${HELPERS_DIR}/${PDF2MD_NAME}"
   fi
+  # podcast-token-helper is a nested Mach-O — sign it before the outer app (same
+  # inside-out discipline as wikictl). Only present in a feature-on build.
+  if [ -f "${HELPERS_DIR}/${PODCAST_HELPER_NAME}" ]; then
+    codesign --force --timestamp=none --sign "${IDENTITY}" \
+      "${HELPERS_DIR}/${PODCAST_HELPER_NAME}"
+  fi
   echo "→ codesign appex (${IDENTITY})"
   codesign --force --timestamp=none --sign "${IDENTITY}" \
     --entitlements "${EXT_ENTITLEMENTS}" \
@@ -347,6 +367,9 @@ else
   codesign --force --sign - "${HELPERS_DIR}/${CTL_NAME}"
   if [ -f "${HELPERS_DIR}/${PDF2MD_NAME}" ]; then
     codesign --force --sign - "${HELPERS_DIR}/${PDF2MD_NAME}"
+  fi
+  if [ -f "${HELPERS_DIR}/${PODCAST_HELPER_NAME}" ]; then
+    codesign --force --sign - "${HELPERS_DIR}/${PODCAST_HELPER_NAME}"
   fi
   codesign --force --sign - "${APPEX}"
   codesign --force --sign - "${APP_BUNDLE}"

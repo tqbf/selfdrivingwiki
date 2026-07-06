@@ -1294,9 +1294,61 @@ public final class WikiStoreModel {
         _ rawInput: String,
         fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
     ) async throws -> URLFetchService.FetchOutcome {
-        // Validate + fetch OFF the main actor (the GET shouldn't stall the UI);
-        // the WebsiteProvider owns normalize→fetch→dispatch (materialization).
-        // Then store the result HERE on the main actor, where we own `store`.
+        #if PODCAST_TRANSCRIPTS
+        // Delegate to the podcast-aware overload so routing is in one place.
+        return try await addURL(rawInput, fetcher: fetcher, podcastFetcher: ApplePodcastTranscriptService.bundled())
+        #else
+        return try await addURLViaWebsite(rawInput, fetcher: fetcher)
+        #endif
+    }
+
+    #if PODCAST_TRANSCRIPTS
+    /// The podcast-aware `addURL`: recognizes an Apple Podcasts episode link and
+    /// routes to the transcript pipeline instead of the HTML fetcher. The
+    /// `podcastFetcher` seam lets CI inject a fake `PodcastTranscriptFetching`
+    /// (the bundled service returns nil without the signing helper).
+    @discardableResult
+    public func addURL(
+        _ rawInput: String,
+        fetcher: any URLFetchService.URLResourceFetcher,
+        podcastFetcher: (any PodcastTranscriptFetching)?
+    ) async throws -> URLFetchService.FetchOutcome {
+        // An Apple Podcasts EPISODE link is recognized before the generic web
+        // fetch: its HTML is the useless player page, so we route to the
+        // transcript pipeline instead. The pageURL is re-normalized from the raw
+        // input so the Origin row surfaces the canonical `podcasts.apple.com` URL
+        // the user pasted (the episode ID alone isn't a clickable link).
+        if let episode = PodcastEpisodeURL.parse(rawInput) {
+            guard let svc = podcastFetcher else {
+                throw PodcastTranscriptError.signatureUnavailable(
+                    "Apple Podcasts transcripts need the signing helper, which isn't available in this build.")
+            }
+            let pageURL = URLFetchService.normalizeURL(rawInput)
+                ?? URL(string: "https://podcasts.apple.com")!
+            let provider = ApplePodcastProvider(episode: episode, pageURL: pageURL, fetcher: svc)
+            let materialized = try await provider.materialize()
+            let summary = try storeMaterialized(materialized)
+            reloadSources()
+            openTab(.source(summary.id))
+            onPageDidChange?()
+            return URLFetchService.FetchOutcome(
+                filename: materialized.filename,
+                byteSize: materialized.data.count,
+                kind: .podcastTranscript)
+        }
+        return try await addURLViaWebsite(rawInput, fetcher: fetcher)
+    }
+    #endif
+
+    /// The web-fetch ingest path (HTML→md / PDF / text / binary), shared by both
+    /// the feature-on and feature-off `addURL` overloads. Validate + fetch OFF the
+    /// main actor (the GET shouldn't stall the UI); the WebsiteProvider owns
+    /// normalize→fetch→dispatch (materialization). Then store the result HERE on
+    /// the main actor, where we own `store`.
+    private func addURLViaWebsite(
+        _ rawInput: String,
+        fetcher: any URLFetchService.URLResourceFetcher
+    ) async throws -> URLFetchService.FetchOutcome {
         let provider = WebsiteProvider(rawInput: rawInput, fetcher: fetcher)
         let (materialized, plan) = try await provider.materializeWithPlan()
         let summary = try storeMaterialized(materialized)

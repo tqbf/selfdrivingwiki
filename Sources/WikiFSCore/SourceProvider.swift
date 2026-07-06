@@ -145,6 +145,7 @@ public struct SourceOrigin: Sendable, Equatable {
         case "markdown-folder": return "Markdown folder"
         case "local-file": return "File"
         case "legacy-import": return "Imported"
+        case "apple-podcast": return "Apple Podcast"
         default: return agentName.capitalized
         }
     }
@@ -242,6 +243,62 @@ public struct WebsiteProvider: SourceProvider {
         return (source, plan)
     }
 }
+
+// MARK: - ApplePodcastProvider
+
+#if PODCAST_TRANSCRIPTS
+/// Materializes an Apple Podcasts episode transcript: the fetch (token signing →
+/// AMP metadata → TTML download → parse → markdown) runs off-main, producing a
+/// `MaterializedSource` with `agentName = "apple-podcast"`, `activityKind = "fetch"`,
+/// `plan`/`externalRef` = the episode's `podcasts.apple.com` URL, and
+/// `externalIdentity` = the numeric episode ID (`i=` value). This is the first real
+/// consumer of the `SourceProvider` protocol; `addURL` routes recognized episode
+/// URLs here instead of `WebsiteProvider`.
+///
+/// Holds the page URL separately from `EpisodeRef` so the provenance records the
+/// canonical `podcasts.apple.com` link (not the episode ID alone) — the ID is what
+/// the AMP endpoint wants, but the URL is what the user pasted and what the Origin
+/// row should surface.
+public struct ApplePodcastProvider: SourceProvider {
+    public let agentName = "apple-podcast"
+    public let episode: PodcastEpisodeURL.EpisodeRef
+    public let pageURL: URL
+    public let fetcher: any PodcastTranscriptFetching
+
+    public init(
+        episode: PodcastEpisodeURL.EpisodeRef,
+        pageURL: URL,
+        fetcher: any PodcastTranscriptFetching
+    ) {
+        self.episode = episode
+        self.pageURL = pageURL
+        self.fetcher = fetcher
+    }
+
+    public func materialize() async throws -> MaterializedSource {
+        let episode = self.episode
+        let fetcher = self.fetcher
+        // The transcript fetch (helper subprocess + two HTTP round-trips) is
+        // off-main; the provider never touches the store.
+        let transcript = try await Task.detached(priority: .userInitiated) {
+            try await fetcher.transcript(for: episode)
+        }.value
+        let urlString = pageURL.absoluteString
+        return MaterializedSource(
+            filename: transcript.filename,
+            data: Data(transcript.markdown.utf8),
+            mimeType: "text/markdown",
+            provenance: SourceProvenance(
+                agentName: agentName,
+                activityKind: "fetch",
+                plan: urlString,
+                externalRef: urlString,
+                externalIdentity: episode.id
+            )
+        )
+    }
+}
+#endif
 
 // MARK: - ZoteroProvider
 

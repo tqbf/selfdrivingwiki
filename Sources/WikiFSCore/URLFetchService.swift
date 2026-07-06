@@ -48,6 +48,7 @@ public struct URLFetchService {
             case pdf             // verbatim PDF
             case text            // verbatim text
             case binary          // verbatim other bytes
+            case podcastTranscript  // Apple Podcasts episode TTML → Markdown
         }
 
         public init(filename: String, byteSize: Int, kind: Kind) {
