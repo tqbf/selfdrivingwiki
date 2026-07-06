@@ -94,6 +94,13 @@ The wiki is projected read-only at `$WIKI_ROOT`. Browse it with
   primary use case (embed a diagram or figure that lives as a source). The
   syntax is **source-only** (`![[Page]]` is not valid — use Mermaid for
   diagrams instead). Unresolved embeds render as ghost links.
+- **External media embeds.** Pasting a media URL (YouTube, Vimeo, Spotify,
+  SoundCloud, or a direct `.mp3`/`.mp4`/`.m3u8` link) via Add URL creates a
+  *byteless* source — no bytes are fetched, it's just a pointer. Embed it with
+  `![[source:Name]]` and the page reader renders the provider player
+  (`<iframe>`) or a native `<audio>`/`<video>` for direct media. Existing
+  episode-transcript sources (audio-player providers) embed their player the
+  same way.
 - **Canonical links.** At save time every resolvable `[[Title]]` /
   `[[source:Name]]` is normalized to a ULID-stable form —
   `[[page:01H…|Title]]` / `[[source:01J…|Name]]` — where the ULID is the

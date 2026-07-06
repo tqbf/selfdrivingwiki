@@ -14,7 +14,7 @@ enum ReaderMarkdown {
     static func prepared(
         _ raw: String,
         isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool,
-        embedInfo: ((String) -> (id: PageID, mimeType: String?)?)? = nil,
+        embedInfo: ((String) -> WikiLinkMarkdown.SourceEmbedInfo?)? = nil,
         displayName: (PageID, WikiLinkParser.ParsedLink.LinkType) -> String? = { _, _ in nil },
         pinnedExtractionID: ((PageID, Int) -> PageID?)? = nil
     ) -> String {

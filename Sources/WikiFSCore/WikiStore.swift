@@ -179,6 +179,13 @@ public protocol WikiStore: Sendable {
     /// resolve `@vN` per occurrence.
     func sourceDerivedChains() throws -> [PageID: [PageID]]
 
+    /// The embed descriptors for every **byteless** source, batched in one query
+    /// (`[sourceID: SourceEmbedDescriptor]`). Joins the active content version →
+    /// activity (`plan`) → agent (`name`), restricted to `blob_hash IS NULL`.
+    /// Byteful sources are excluded. Used by the page-reader precompute to feed
+    /// `ExternalEmbed.target(for:)` for byteless external embeds.
+    func embedDescriptors() throws -> [PageID: SourceEmbedDescriptor]
+
     /// The producing agent name for each of a source's markdown versions
     /// (smv.id → agents.name), for the alternatives UI labels.
     func processedMarkdownAgentNames(sourceID: PageID) throws -> [String: String]

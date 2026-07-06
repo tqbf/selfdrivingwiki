@@ -551,7 +551,9 @@ dispatch on content type.** No widget registry, no special cases.
   - `video/*` / `audio/*` with bytes → native `<video>`/`<audio>` (WKWebView
     handles these already).
   - byteless + `external_identity` → provider-shaped embed (YouTube iframe,
-    etc.), thumbnail as poster.
+    etc.), thumbnail as poster. *(Shipped Phase 4b: YouTube/Vimeo/Spotify/
+    SoundCloud iframes, direct-remote `<audio>`/`<video>`, Apple Podcasts
+    player. Thumbnails-as-posters still deferred.)*
   - `application/pdf` → the existing PDF view, inline-framed.
 - A `render` edge (or an embed whose active derived alternative is
   `application/vnd.wiki.jsonrender+json`) → the generative-UI path: the JSON
@@ -710,8 +712,8 @@ block extends in parity, enforced by the existing test.
    > (`<img>`/`<video>`/`<audio>`/`<iframe>`) dispatched on MIME type; a new
    > `BlobSchemeHandler` serves `wiki-blob://source/<id>` blob bytes from SQLite
    > to the WKWebView. **Still deferred:** sibling `original_path` resolution,
-   > external provider embeds (YouTube), json-render, and the transcript-level
-   > `apple-ttml` extract PROV. 1605 tests green (+28 new).
+   > json-render, and the transcript-level `apple-ttml` extract PROV. (External
+   > provider embeds shipped in Phase 4b — see §12.) 1605 tests green (+28 new).
 6. **Link canonicalization** (Phase D) is a *data* migration, not schema: a
    guarded one-time body rewrite (dry-runnable via lint), then the save-path
    normalizer keeps it invariant.
@@ -807,7 +809,7 @@ Ordered by dependency; each gate is demoable.
 | ↳ *Phase 2 tracks A+B implemented (v21).* CAS'd/provenance-carrying extractions via `recordMarkdownExtraction`, `source-derived` ref + `setActiveMarkdown`, `revert` pointer copy, re-extract path, `wikictl source set-active`, minimal alternatives Menu. Gate met (AC.1–AC.9, 1488 tests green). *Track C (full compare/nominate UI) implemented on `feature/extraction-compare-ui`: a modal "Compare Extractions" sheet rendering any two alternatives side-by-side (Rendered ↔ Diff toggle), provenance per alternative (`processedMarkdownAlternatives`), and live "Set Active" nominate (1498 tests green; no schema change).* | | |
 | **3 — Providers & provenance** | `SourceProvider` protocol, four paths unified, runs recorded (URL provenance!), refresh verb, credentials UX, **website provider writes disambiguated `original_path` per sibling rule (§7)** | Drag-drop/URL/Zotero/folder all flow through providers; `wikictl source refresh` appends a version |
 | **4 — Media & roles** | `source_links` rebuild (role/pin), `![[…]]` embeds, render-by-content-type, sibling `original_path` resolution, media filtering | Website snapshot renders with inline images; a YouTube embed plays; a json-render spec mounts |
-| ↳ *Phase 4 foundation shipped (v22, 2026-07-06).* `sources.role` + `source_links` §4.4 rebuild + `source_links_edge` index landed; `SourceRole`/`isPrimary` seam + media filtering in the Sources UI. *Phase 4a embeds (2026-07-06):* `![[source:…]]` parsing + `role='embed'` edges + `BlobSchemeHandler` binary serving (`wiki-blob://`) shipped. `original_path` resolution + external provider embeds still deferred. | | |
+| ↳ *Phase 4 foundation shipped (v22, 2026-07-06).* `sources.role` + `source_links` §4.4 rebuild + `source_links_edge` index landed; `SourceRole`/`isPrimary` seam + media filtering in the Sources UI. *Phase 4a embeds (2026-07-06):* `![[source:…]]` parsing + `role='embed'` edges + `BlobSchemeHandler` binary serving (`wiki-blob://`) shipped. *Phase 4b byteless external embeds (2026-07-06):* provider-player iframes (YouTube/Vimeo/Spotify/SoundCloud), direct-remote native `<audio>`/`<video>` (mp3/mp4/HLS), and the Apple Podcasts embed player — all via one shared byteless mechanism (`SourceEmbedDescriptor` + `embedDescriptors()` query + `ExternalEmbed` dispatch table + target-first `embedHTML` ordering). No schema change (`external_identity`/`mime_type`/`thumbnail_hash` already existed); byteless sources, `role: .primary`. `original_path` website-snapshot resolution still deferred (separate plan). | | |
 | **5 — Link canonicalization** | Save-time ULID normalization, display-at-render, one-time body migration, `?id=` URL contract, rename = metadata-only | Rename a page with 50 inbound links: zero bodies rewritten, zero ghosts |
 | ↳ *Phase 5 shipped (v23, 2026-07-06).* `WikiLinkRewriter.canonicalize` rewrites resolvable `[[…]]` to `[[page:ULID\|alias]]`/`[[source:ULID\|alias]]` at the shared `PageUpsert` seam; `replaceLinks` validates canonical targets by id (name fallback for ULID-shaped titles); `linkified` resolves ULID→current name at render + emits `?id=` URLs; id-based click routing; v22→23 data-only body sweep (token advances); `renameSource`'s body-rewrite loop deleted (rename = one-row metadata update, self-heals at render). Gate met (AC.1–AC.9, 1617 tests green). `rewriteSourceBase` + its 28-test suite removed. | | |
 | **6 — Pinning** | `@vN` parse/resolve, `pinned_version_id`, quote-against-pinned-version | `[[source:X@v3#"quote"]]` highlights after X is reprocessed |

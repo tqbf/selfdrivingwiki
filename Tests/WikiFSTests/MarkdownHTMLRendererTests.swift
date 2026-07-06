@@ -123,7 +123,7 @@ struct MarkdownHTMLRendererTests {
         let prepared = WikiLinkMarkdown.linkified(
             "Here is ![[source:img.png]] inline.",
             isResolved: { _, _ in true },
-            embedInfo: { _ in (id: id, mimeType: "image/png") }
+            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "image/png") }
         )
         let html = MarkdownHTMLRenderer.render(prepared)
         #expect(html.contains(#"<img src="wiki-blob://source/\#(id.rawValue)""#))

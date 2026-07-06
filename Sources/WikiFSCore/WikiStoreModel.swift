@@ -1380,6 +1380,11 @@ public final class WikiStoreModel {
         // Delegate to the podcast-aware overload so routing is in one place.
         return try await addURL(rawInput, fetcher: fetcher, podcastFetcher: ApplePodcastTranscriptService.bundled())
         #else
+        // Phase 4b: byteless external-embed media works without the podcast
+        // helper too (it needs no network — pure URL parsing).
+        if let outcome = try bytelessMediaOutcome(rawInput) {
+            return outcome
+        }
         return try await addURLViaWebsite(rawInput, fetcher: fetcher)
         #endif
     }
@@ -1430,9 +1435,52 @@ public final class WikiStoreModel {
                 byteSize: transcript.data.count,
                 kind: .podcastTranscript)
         }
+        // Phase 4b: byteless external-embed media (provider iframes + direct-
+        // remote). Recognized by pure URL parsing, after apple-podcast and
+        // before the website fetch. Creates a byteless source (no bytes fetched).
+        if let outcome = try bytelessMediaOutcome(rawInput) {
+            return outcome
+        }
         return try await addURLViaWebsite(rawInput, fetcher: fetcher)
     }
     #endif
+
+    /// Phase 4b: try the byteless external-embed recognizers in fixed precedence
+    /// order — provider iframes (YouTube → Vimeo → Spotify → SoundCloud) then
+    /// direct-remote media. On a match, create a **byteless** source (no bytes
+    /// fetched) and return its outcome; on no match, return `nil` so the caller
+    /// falls through to the website fetch. Pure URL parsing — no network. Throws
+    /// only on a store failure (e.g. `.duplicateContent` for a re-paste).
+    ///
+    /// `role: .primary` (not `.media`): these are first-class, user-created,
+    /// referenceable sources — visible, searchable, and citable in the Sources
+    /// list — matching the byteless-podcast precedent.
+    private func bytelessMediaOutcome(_ rawInput: String) throws -> URLFetchService.FetchOutcome? {
+        let match: MediaEmbedMatch
+        let kind: URLFetchService.FetchOutcome.Kind
+        if let m = MediaEmbedURL.youtube(rawInput) { match = m; kind = .videoEmbed }
+        else if let m = MediaEmbedURL.vimeo(rawInput) { match = m; kind = .videoEmbed }
+        else if let m = MediaEmbedURL.spotify(rawInput) { match = m; kind = .audioEmbed }
+        else if let m = MediaEmbedURL.soundcloud(rawInput) { match = m; kind = .audioEmbed }
+        else if let m = MediaEmbedURL.remoteMedia(rawInput) { match = m; kind = .remoteMedia }
+        else { return nil }
+
+        let summary = try store.addBytelessSource(
+            filename: match.filename,
+            mimeType: match.mimeType,
+            provenance: SourceProvenance(
+                agentName: match.agentName,
+                activityKind: match.activityKind,
+                plan: match.planURL,
+                externalRef: match.planURL,
+                externalIdentity: match.externalIdentity),
+            role: .primary)
+        reloadSources()
+        openTab(.source(summary.id))
+        onPageDidChange?()
+        return URLFetchService.FetchOutcome(
+            filename: match.filename, byteSize: 0, kind: kind)
+    }
 
     /// The web-fetch ingest path (HTML→md / PDF / text / binary), shared by both
     /// the feature-on and feature-off `addURL` overloads. Validate + fetch OFF the
@@ -1728,6 +1776,14 @@ public final class WikiStoreModel {
     /// map so `linkified` can resolve `@vN` per occurrence.
     public func sourceDerivedChains() -> [PageID: [PageID]] {
         (try? store.sourceDerivedChains()) ?? [:]
+    }
+
+    /// The embed descriptors for every byteless source, batched in one query.
+    /// Phase 4b: the render precompute builds this once (main-actor read) and
+    /// feeds `ExternalEmbed.target(for:)` to widen `![[source:…]]` embeds to
+    /// external media. Returns `{}` on any query failure.
+    public func embedDescriptors() -> [PageID: SourceEmbedDescriptor] {
+        (try? store.embedDescriptors()) ?? [:]
     }
 
     /// Save an edit as a new version in the chain. Only called when the text

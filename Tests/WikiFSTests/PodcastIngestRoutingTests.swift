@@ -117,5 +117,21 @@ struct PodcastIngestRoutingTests {
             "https://example.com/article", fetcher: HTMLFetcher(), podcastFetcher: nil)
         #expect(outcome.kind == .htmlConverted)
     }
+
+    /// Phase 4b routing-precedence: an Apple Podcasts episode URL must still
+    /// route to `.podcastTranscript` (apple-podcast stays FIRST) even though the
+    /// new media recognizers are now wired in `addURL`. A `podcasts.apple.com`
+    /// URL is not a recognized media-provider URL, but the order is pinned so a
+    /// future recognizer can't accidentally shadow it.
+    @Test func podcastURLStaysFirstInRoutingPrecedence() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let podcast = FakePodcastFetcher()
+
+        let outcome = try await model.addURL(
+            Self.chinaTalkURL, fetcher: ExplodingFetcher(), podcastFetcher: podcast)
+        #expect(outcome.kind == .podcastTranscript)
+        #expect(podcast.requestedEpisodeID == "1000774368453")
+    }
 }
 #endif

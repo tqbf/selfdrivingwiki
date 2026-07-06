@@ -49,6 +49,9 @@ public struct URLFetchService {
             case text            // verbatim text
             case binary          // verbatim other bytes
             case podcastTranscript  // Apple Podcasts episode TTML → Markdown
+            case videoEmbed      // byteless provider video embed (YouTube/Vimeo)
+            case audioEmbed      // byteless provider audio embed (Spotify/SoundCloud)
+            case remoteMedia     // byteless direct-remote media (mp3 stream / remote video)
         }
 
         public init(filename: String, byteSize: Int, kind: Kind) {

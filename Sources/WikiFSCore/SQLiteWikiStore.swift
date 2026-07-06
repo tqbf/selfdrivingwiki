@@ -2711,6 +2711,55 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         )
     }
 
+    /// The embed descriptors for every **byteless** source, batched in one query
+    /// (`[sourceID: SourceEmbedDescriptor]`). Joins the active content version
+    /// (resolved with the same ref→else-MAX(id) rule as `sourceOrigin`) → its
+    /// activity (`plan`) → agent (`name`), restricted to `blob_hash IS NULL`.
+    ///
+    /// Byteful sources are excluded — they embed via `wiki-blob://` and need no
+    /// descriptor. Used by the page-reader precompute to feed
+    /// `ExternalEmbed.target(for:)`. Returns `{}` on a query failure (defensive,
+    /// matching `sourceDerivedChains`) so the reader simply has no external
+    /// embeds rather than erroring. INTERNAL — values only cross the boundary.
+    public func embedDescriptors() throws -> [PageID: SourceEmbedDescriptor] {
+        lock.lock(); defer { lock.unlock() }
+        // Column order: source_id, mime_type, external_identity, agent_name,
+        // activity_plan — keep in lockstep with the decode below.
+        guard let stmt = try? statement("""
+        SELECT s.id, sv.mime_type, sv.external_identity, a.name, act.plan
+        FROM sources s
+        JOIN source_versions sv ON sv.source_id = s.id
+            AND sv.id = (
+                -- Active version: prefer the source-content ref, else MAX(id)
+                -- (the same rule as sourceOrigin / activeContentVersion).
+                SELECT COALESCE(
+                    (SELECT r.version_id FROM refs r
+                     WHERE r.kind = 'source-content' AND r.owner_id = s.id),
+                    (SELECT MAX(sv2.id) FROM source_versions sv2
+                     WHERE sv2.source_id = s.id)
+                )
+            )
+        LEFT JOIN activities act ON act.id = sv.activity_id
+        LEFT JOIN agents a ON a.id = act.agent_id
+        WHERE sv.blob_hash IS NULL;
+        """) else { return [:] }
+        defer { stmt.reset() }
+        func textOrNull(_ col: Int32) -> String? {
+            sqlite3_column_type(stmt.handle, col) == SQLITE_NULL ? nil : stmt.text(at: col)
+        }
+        var out: [PageID: SourceEmbedDescriptor] = [:]
+        while try stmt.step() {
+            let id = PageID(rawValue: stmt.text(at: 0))
+            out[id] = SourceEmbedDescriptor(
+                id: id,
+                mimeType: textOrNull(1),
+                externalIdentity: textOrNull(2),
+                agentName: textOrNull(3),
+                planURL: textOrNull(4))
+        }
+        return out
+    }
+
     /// Get-or-create the single legacy import agent (`kind='software'`,
     /// `name='legacy-import'`) that stands in for every pre-Phase-3 import (§3:
     /// no real extraction provenance exists). Idempotent: the v19→20 migration
