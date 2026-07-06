@@ -1326,14 +1326,25 @@ public final class WikiStoreModel {
             let pageURL = URLFetchService.normalizeURL(rawInput)
                 ?? URL(string: "https://podcasts.apple.com")!
             let provider = ApplePodcastProvider(episode: episode, pageURL: pageURL, fetcher: svc)
-            let materialized = try await provider.materialize()
-            let summary = try storeMaterialized(materialized)
+            let transcript = try await provider.materialize()
+            // §11 byteless model: the source is byteless (a pointer to the
+            // external episode), and the transcript markdown is stored as the
+            // derived alternative — NOT as content bytes (Option-A). The
+            // provider is unchanged; only the storage path repoints.
+            guard let prov = transcript.provenance else {
+                throw URLFetchService.FetchError.invalidURL("podcast transcript missing provenance")
+            }
+            let summary = try store.addBytelessSource(
+                filename: transcript.filename, mimeType: transcript.mimeType, provenance: prov)
+            let markdown = String(data: transcript.data, encoding: .utf8) ?? ""
+            try store.appendProcessedMarkdown(
+                sourceID: summary.id, content: markdown, origin: "transcript", note: nil)
             reloadSources()
             openTab(.source(summary.id))
             onPageDidChange?()
             return URLFetchService.FetchOutcome(
-                filename: materialized.filename,
-                byteSize: materialized.data.count,
+                filename: transcript.filename,
+                byteSize: transcript.data.count,
                 kind: .podcastTranscript)
         }
         return try await addURLViaWebsite(rawInput, fetcher: fetcher)
@@ -1357,6 +1368,62 @@ public final class WikiStoreModel {
         onPageDidChange?()
         return URLFetchService.FetchOutcome(
             filename: plan.filename, byteSize: plan.data.count, kind: plan.kind)
+    }
+
+    // MARK: - Source refresh (Phase 3b)
+
+    /// Refresh a source: re-fetch it via its provider (reconstructed from the
+    /// stored origin), appending a new version instead of overwriting. Website
+    /// sources append a content version; podcast (byteless) sources append a
+    /// derived markdown version. Import-only sources (local-file, Zotero,
+    /// folder) throw `.notRefreshable`. Materialization runs off-main (the
+    /// provider's network fetch); the store write happens HERE on the main
+    /// actor, exactly like `addURL`.
+    ///
+    /// Returns a human-readable description for UI surfacing.
+    #if PODCAST_TRANSCRIPTS
+    @discardableResult
+    public func refreshSource(
+        _ id: PageID,
+        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher(),
+        podcastFetcher: (any PodcastTranscriptFetching)? = ApplePodcastTranscriptService.bundled()
+    ) async throws -> String {
+        let service = SourceRefreshService(
+            fetcher: fetcher, podcastFetcher: podcastFetcher)
+        return try await performRefresh(id: id, service: service)
+    }
+    #else
+    @discardableResult
+    public func refreshSource(
+        _ id: PageID,
+        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
+    ) async throws -> String {
+        let service = SourceRefreshService(fetcher: fetcher)
+        return try await performRefresh(id: id, service: service)
+    }
+    #endif
+
+    /// Shared refresh body: materialize off-main, append the version on-main,
+    /// reload. Split out so the `#if PODCAST_TRANSCRIPTS` gated inits don't
+    /// duplicate the store-write logic.
+    private func performRefresh(
+        id: PageID, service: SourceRefreshService
+    ) async throws -> String {
+        guard let origin = try store.sourceOrigin(sourceID: id) else {
+            throw SourceRefreshService.RefreshError.notRefreshable("unknown")
+        }
+        let material = try await service.materialize(origin: origin)
+        switch material {
+        case .contentVersion(let data, let prov):
+            _ = try store.appendContentVersion(
+                sourceID: id, data: data, mimeType: nil, provenance: prov)
+        case .derivedMarkdown(let content):
+            try store.appendProcessedMarkdown(
+                sourceID: id, content: content, origin: "transcript", note: nil)
+        }
+        reloadSources()
+        onPageDidChange?()
+        return "Refreshed \(origin.displayLabel) source."
     }
 
     /// Synchronous ingest seam used by tests/verifiers (no drag gesture). Stores

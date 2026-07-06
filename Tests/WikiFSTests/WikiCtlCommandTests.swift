@@ -756,4 +756,55 @@ struct WikiCtlCommandTests {
         #expect(text.contains("filename\tplain.txt"))
         #expect(text.contains("size\t2"))
     }
+
+    @Test func parsesSourceRefresh() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "source", "refresh", "--id", "01ABC"], env: noEnv)
+        #expect(invocation.command == .sourceRefresh(.id(PageID(rawValue: "01ABC"))))
+    }
+
+    // MARK: - source refresh (Phase 3b)
+
+    /// A fake fetcher returning a canned HTML response.
+    struct RefreshFakeFetcher: URLFetchService.URLResourceFetcher {
+        var response: URLFetchService.FetchResponse
+        func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse { response }
+    }
+
+    @Test func sourceRefreshAppendsVersionAndCommits() async throws {
+        let store = try tempStore()
+        // Seed a website source via a fake fetcher.
+        let fetcher = RefreshFakeFetcher(response: URLFetchService.FetchResponse(
+            data: Data("<html><body>v1</body></html>".utf8),
+            contentType: "text/html", finalURL: URL(string: "https://example.com/p")!))
+        let provider = WebsiteProvider(rawInput: "https://example.com/p", fetcher: fetcher)
+        let source = try await provider.materialize()
+        let summary = try store.addSource(
+            filename: source.filename, data: source.data,
+            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            provenance: source.provenance)
+        let historyBefore = try store.contentVersionHistory(sourceID: summary.id).count
+
+        // Refresh via wikictl with updated content.
+        let fetcher2 = RefreshFakeFetcher(response: URLFetchService.FetchResponse(
+            data: Data("<html><body>v2</body></html>".utf8),
+            contentType: "text/html", finalURL: URL(string: "https://example.com/p")!))
+        let result = try await SourceCommand.runRefresh(
+            .id(summary.id), in: store, fetcher: fetcher2)
+
+        #expect(result.didCommit)
+        let historyAfter = try store.contentVersionHistory(sourceID: summary.id).count
+        #expect(historyAfter == historyBefore + 1)
+    }
+
+    @Test func sourceRefreshByNameNotFound() async throws {
+        let store = try tempStore()
+        let fetcher = RefreshFakeFetcher(response: URLFetchService.FetchResponse(
+            data: Data("x".utf8), contentType: "text/plain",
+            finalURL: URL(string: "https://x")!))
+        await #expect(throws: SourceCommand.Failure.self) {
+            _ = try await SourceCommand.runRefresh(
+                .name("Nonexistent"), in: store, fetcher: fetcher)
+        }
+    }
 }

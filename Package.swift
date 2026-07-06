@@ -98,7 +98,11 @@ let package = Package(
         .target(
             name: "WikiCtlCore",
             dependencies: ["WikiFSCore"],
-            path: "Sources/WikiCtlCore"
+            path: "Sources/WikiCtlCore",
+            // Must match WikiFSCore's PODCAST_TRANSCRIPTS flag so conditional
+            // API in SourceRefreshService (the podcast refresh branch) compiles
+            // consistently across the dependency.
+            swiftSettings: podcastSwiftSettings
         ),
         // wikictl — the agent's write path (plans/llm-wiki.md Phase A). A
         // scriptable CLI that writes straight to a wiki's <ulid>.sqlite in the
@@ -108,7 +112,8 @@ let package = Package(
         .executableTarget(
             name: "wikictl",
             dependencies: ["WikiFSCore", "WikiCtlCore"],
-            path: "Sources/wikictl"
+            path: "Sources/wikictl",
+            swiftSettings: podcastSwiftSettings
         ),
         // podcast-token-helper — the FairPlay/Mescal bearer-token signer for Apple
         // Podcasts transcripts. An ObjC executable ON PURPOSE: it dlopens the private

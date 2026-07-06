@@ -52,11 +52,40 @@ struct PodcastIngestRoutingTests {
         #expect(outcome.kind == .podcastTranscript)
         #expect(outcome.filename == "chinatalk-1000774368453-transcript.md")
 
-        // The transcript landed as a real source with the markdown bytes.
+        // §11 byteless model: the source is byteless (no content bytes); the
+        // transcript lives as the processed-markdown derived alternative.
         let sources = try store.listSources()
         let stored = try #require(sources.first { $0.filename == outcome.filename })
-        let content = String(data: try store.sourceContent(id: stored.id), encoding: .utf8)
-        #expect(content == "SPEAKER_1: Hello from the episode.")
+        #expect(stored.byteSize == 0)
+        // sourceContent returns empty Data for a byteless source.
+        #expect(try store.sourceContent(id: stored.id).isEmpty)
+        // The transcript is the processed-markdown head.
+        let head = try #require(try store.processedMarkdownHead(sourceID: stored.id))
+        #expect(head.content == "SPEAKER_1: Hello from the episode.")
+        // Origin provenance: apple-podcast agent + the pasted episode URL.
+        let origin = try #require(try store.sourceOrigin(sourceID: stored.id))
+        #expect(origin.agentName == "apple-podcast")
+        #expect(origin.plan == Self.chinaTalkURL)
+        #expect(origin.externalIdentity == "1000774368453")
+    }
+
+    @Test func pastingSameEpisodeTwiceDedupsAsByteless() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let podcast = FakePodcastFetcher()
+
+        _ = try await model.addURL(
+            Self.chinaTalkURL, fetcher: ExplodingFetcher(), podcastFetcher: podcast)
+
+        // Second paste of the same episode URL → duplicate (byteless dedup on
+        // external_identity).
+        await #expect(throws: WikiStoreError.self) {
+            try await model.addURL(
+                Self.chinaTalkURL, fetcher: ExplodingFetcher(), podcastFetcher: podcast)
+        }
+        // Only one source was created.
+        let sources = try store.listSources()
+        #expect(sources.count == 1)
     }
 
     @Test func missingHelperGivesAClearError() async throws {

@@ -30,7 +30,7 @@ public enum SourceCommand {
     }
 
     /// How a file is selected for `cat` / `export`.
-    public enum Selector: Equatable {
+    public enum Selector: Equatable, Sendable {
         case id(PageID)
         case name(String)
     }
@@ -44,6 +44,7 @@ public enum SourceCommand {
         case search(query: String, limit: Int)
         case setActive(Selector, versionID: PageID)
         case info(Selector)
+        case refresh(Selector)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -77,6 +78,10 @@ public enum SourceCommand {
             return try setActive(selector, versionID: versionID, in: store)
         case .info(let selector):
             return try info(selector, in: store)
+        case .refresh:
+            // Refresh is async-only — routed via `runRefresh` from `main.swift`.
+            // This case is unreachable through the sync `run` path.
+            throw Failure.message("source refresh requires async execution")
         }
     }
 
@@ -278,5 +283,47 @@ public enum SourceCommand {
             lines.append("fetched_at\t\(date)")
         }
         return Result(payload: .text(lines.joined(separator: "\n")), didCommit: false)
+    }
+
+    // MARK: - refresh
+
+    /// Re-fetch a source via its provider, appending a new version instead of
+    /// overwriting. Unlike the other SourceCommand actions (all sync), this
+    /// needs async network I/O, so it has its own async entry point. `main`
+    /// bridges it to the sync `execute` context via a semaphore.
+    ///
+    /// wikictl is a CLI process (no `@MainActor`), so the store write happens
+    /// directly after the off-main materialize — the Phase-0 `@MainActor`
+    /// invariant applies to the APP process, not wikictl. The service is
+    /// constructed with `podcastFetcher: nil` (no bundled signing helper in the
+    /// CLI context), so podcast refresh throws `.signatureUnavailable` and only
+    /// website sources are refreshable from the CLI. Commits — the caller posts
+    /// the Darwin notification on `didCommit`.
+    public static func runRefresh(
+        _ selector: Selector,
+        in store: WikiStore,
+        fetcher: any URLFetchService.URLResourceFetcher
+    ) async throws -> Result {
+        let id = try resolve(selector, in: store)
+        guard let origin = try store.sourceOrigin(sourceID: id) else {
+            throw Failure.message("source has no origin provenance: \(id.rawValue)")
+        }
+        #if PODCAST_TRANSCRIPTS
+        let service = SourceRefreshService(fetcher: fetcher, podcastFetcher: nil)
+        #else
+        let service = SourceRefreshService(fetcher: fetcher)
+        #endif
+        let material = try await service.materialize(origin: origin)
+        switch material {
+        case .contentVersion(let data, let prov):
+            _ = try store.appendContentVersion(
+                sourceID: id, data: data, mimeType: nil, provenance: prov)
+        case .derivedMarkdown(let content):
+            try store.appendProcessedMarkdown(
+                sourceID: id, content: content, origin: "transcript", note: nil)
+        }
+        return Result(
+            payload: .text("Refreshed \(origin.displayLabel) source."),
+            didCommit: true)
     }
 }

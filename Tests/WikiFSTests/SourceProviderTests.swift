@@ -447,4 +447,60 @@ struct SourceProviderTests {
         #expect(origin.displayLabel == "Apple Podcast")
     }
     #endif
+
+    // MARK: - AC.4/AC.9: Byteless source store tests
+
+    @Test func addBytelessSourceCreatesEmptyBytelessSource() throws {
+        let store = try tempStore()
+        let summary = try store.addBytelessSource(
+            filename: "episode-123-transcript.md", mimeType: "text/markdown",
+            provenance: SourceProvenance(
+                agentName: "apple-podcast", activityKind: "fetch",
+                plan: "https://podcasts.apple.com/x?i=123",
+                externalRef: "https://podcasts.apple.com/x?i=123",
+                externalIdentity: "123"))
+
+        #expect(summary.byteSize == 0)
+        // sourceContent returns empty Data for a byteless source.
+        #expect(try store.sourceContent(id: summary.id).isEmpty)
+        // Origin preserved.
+        let origin = try #require(try store.sourceOrigin(sourceID: summary.id))
+        #expect(origin.agentName == "apple-podcast")
+        #expect(origin.externalIdentity == "123")
+    }
+
+    @Test func bytelessSourceDedupsOnExternalIdentity() throws {
+        let store = try tempStore()
+        let prov = SourceProvenance(
+            agentName: "apple-podcast", activityKind: "fetch",
+            plan: "https://podcasts.apple.com/x?i=456",
+            externalIdentity: "456")
+        _ = try store.addBytelessSource(filename: "a.md", mimeType: nil, provenance: prov)
+
+        // Same external_identity → duplicate.
+        #expect(throws: WikiStoreError.self) {
+            _ = try store.addBytelessSource(filename: "b.md", mimeType: nil, provenance: prov)
+        }
+        // Only one source.
+        #expect(try store.listSources().count == 1)
+    }
+
+    @Test func bytelessAndContentSourceCoexistWithSameIdentity() throws {
+        let store = try tempStore()
+        // A byteless source with external_identity "X".
+        _ = try store.addBytelessSource(
+            filename: "ep.md", mimeType: nil,
+            provenance: SourceProvenance(
+                agentName: "apple-podcast", activityKind: "fetch",
+                externalIdentity: "X"))
+        // A content source (different content_hash) — coexists (disjoint dedup).
+        _ = try store.addSource(
+            filename: "doc.txt", data: Data("hello".utf8),
+            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            provenance: SourceProvenance(
+                agentName: "website", activityKind: "fetch",
+                externalIdentity: "X"))
+        // Both exist — byteless dedup and content dedup are disjoint.
+        #expect(try store.listSources().count == 2)
+    }
 }
