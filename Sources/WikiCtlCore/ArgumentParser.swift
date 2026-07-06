@@ -245,6 +245,9 @@ public enum ArgumentParser {
             }
             return .sourceSetActive(selector, versionID: PageID(rawValue: raw))
 
+        case "info":
+            return .source(.info(try options.requireSourceSelector()))
+
         case "search":
             guard let query = options.value("--query") else {
                 throw Failure.usage("source search: --query is required")

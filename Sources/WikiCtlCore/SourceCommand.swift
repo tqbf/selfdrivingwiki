@@ -43,6 +43,7 @@ public enum SourceCommand {
         case rename(Selector, to: String)
         case search(query: String, limit: Int)
         case setActive(Selector, versionID: PageID)
+        case info(Selector)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -74,6 +75,8 @@ public enum SourceCommand {
             return try search(query: query, limit: limit, in: store)
         case .setActive(let selector, let versionID):
             return try setActive(selector, versionID: versionID, in: store)
+        case .info(let selector):
+            return try info(selector, in: store)
         }
     }
 
@@ -243,5 +246,37 @@ public enum SourceCommand {
         return Result(
             payload: .text("Set active markdown to \(versionID.rawValue)."),
             didCommit: true)
+    }
+
+    // MARK: - info
+
+    /// Print identity (filename, display name, mime, size) and origin provenance
+    /// (provider agent, plan/URL, external identity, fetched-at) for a source.
+    /// Mirrors `set-active`'s selector parsing. Read-only.
+    private static func info(_ selector: Selector, in store: WikiStore) throws -> Result {
+        let id = try resolve(selector, in: store)
+        let summaries = try store.listSources()
+        guard let summary = summaries.first(where: { $0.id == id }) else {
+            throw Failure.message("source not found: \(id.rawValue)")
+        }
+        var lines: [String] = []
+        lines.append("id\t\(summary.id.rawValue)")
+        lines.append("filename\t\(summary.filename)")
+        let display = summary.effectiveName
+        lines.append("display\t\(display.isEmpty ? summary.filename : display)")
+        lines.append("mime\t\(summary.mimeType ?? "")")
+        lines.append("size\t\(summary.byteSize)")
+        if let origin = try store.sourceOrigin(sourceID: id) {
+            lines.append("provider\t\(origin.agentName)")
+            lines.append("activity\t\(origin.activityKind)")
+            if let plan = origin.plan { lines.append("plan\t\(plan)") }
+            if let extID = origin.externalIdentity { lines.append("external_identity\t\(extID)") }
+            if let extRef = origin.externalRef, extRef != origin.externalIdentity {
+                lines.append("external_ref\t\(extRef)")
+            }
+            let date = ISO8601DateFormatter().string(from: origin.fetchedAt)
+            lines.append("fetched_at\t\(date)")
+        }
+        return Result(payload: .text(lines.joined(separator: "\n")), didCommit: false)
     }
 }

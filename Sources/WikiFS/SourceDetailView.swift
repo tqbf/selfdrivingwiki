@@ -39,6 +39,7 @@ struct SourceDetailView: View {
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @AppStorage("isOutlineExpanded") private var isOutlineExpanded = false
     @State private var headVersion: SourceMarkdownVersion?
+    @State private var origin: SourceOrigin?
     @State private var isEditing = false
     @State private var editBuffer = ""
     @State private var isExtracting = false
@@ -146,6 +147,7 @@ struct SourceDetailView: View {
         .background(Color(nsColor: .textBackgroundColor))
         .onAppear {
             headVersion = store.processedMarkdownHead(for: file)
+            origin = store.sourceOrigin(for: file.id)
             lastKnownActiveTabID = store.activeTabID
         }
         .onChange(of: file.id) {
@@ -160,13 +162,17 @@ struct SourceDetailView: View {
             isExtracting = false
             showReingestConfirmation = false
             headVersion = nil
+            origin = nil
             selectedTab = .markdown
             pdfQuote = nil
             // Cancel any pending edit-mode restoration so it doesn't apply to
             // the new file when its headVersion loads.
             shouldRestoreEditing = false
         }
-        .task(id: file.id) { headVersion = store.processedMarkdownHead(for: file) }
+        .task(id: file.id) {
+            headVersion = store.processedMarkdownHead(for: file)
+            origin = store.sourceOrigin(for: file.id)
+        }
         .task(id: PDFTaskKey(sourceID: file.id, anchorVersion: store.pendingScrollAnchorVersion)) {
             // Only consume for un-extracted PDFs (the markdown side handles
             // extracted PDFs via WikiReaderView). Double-check at consume time
@@ -281,6 +287,11 @@ struct SourceDetailView: View {
                     } else {
                         Label("Zotero", systemImage: "books.vertical")
                     }
+                } else if let origin, origin.agentName != "legacy-import" {
+                    // Phase 3a provider origin: website → clickable link to the
+                    // origin URL; local-file → "File"; markdown-folder → "Folder".
+                    metadataSeparator
+                    providerOriginTag(origin)
                 }
             }
             .font(.callout)
@@ -417,6 +428,34 @@ struct SourceDetailView: View {
     private func zoteroItemURL(itemKey: String) -> URL? {
         guard !itemKey.isEmpty else { return nil }
         return URL(string: "zotero://select/library/items/\(itemKey)")
+    }
+
+    // MARK: - Provider origin (Phase 3a)
+
+    /// Inline origin tag for non-Zotero providers, shown on the metadata line:
+    /// website → a clickable link to the origin URL; local-file → "File";
+    /// markdown-folder → "Folder". Mirrors the inline Zotero tag's styling.
+    @ViewBuilder
+    private func providerOriginTag(_ origin: SourceOrigin) -> some View {
+        switch origin.agentName {
+        case "website":
+            let urlString = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
+            if let url = URL(string: urlString), url.scheme != nil {
+                Button {
+                    NSWorkspace.shared.open(url)
+                } label: {
+                    Label("Website", systemImage: "globe")
+                }
+                .buttonStyle(.link)
+                .help("Open original: \(urlString)")
+            } else {
+                Label("Website", systemImage: "globe")
+            }
+        case "markdown-folder":
+            Label("Folder", systemImage: "folder")
+        default:
+            Label("File", systemImage: "doc")
+        }
     }
 
     // MARK: - Content area
