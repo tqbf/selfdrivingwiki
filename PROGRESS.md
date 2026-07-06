@@ -36,6 +36,15 @@ uses `TextEditor`/NSTextView; only the composer used the TextField shortcut.)
 - **Not yet verified live** — needs a human paste-through: 150 lines into the
   Ask composer should be instant, selectable, cursor-movable; Return sends,
   Shift+Return newlines, Cmd+Return sends exactly once.
+- **Follow-up (same day)** — the send button was left bottom-flush in a
+  now-taller capsule (one-line NSTextView measures 24pt vs the TextField's
+  ~17pt), sitting 14pt below center. Added
+  `QueryConversationMetrics.sendButtonBottomInset` (derived from the one-line
+  height, not hardcoded) so the button centers in a one-line capsule and stays
+  anchored that far off the bottom as the composer grows. Diagnosed and
+  verified via a throwaway window-hosted snapshot harness (per
+  `reproducing-live-ui-bugs`): rendered the replica composer to PNGs, measured
+  frames before (0pt/14pt slack) and after (7pt/7pt), deleted the harness.
 
 ## 2026-07-05 — "New Conversation" button on the Ask/Edit chat page
 

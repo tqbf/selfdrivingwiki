@@ -265,6 +265,11 @@ struct QueryConversationView: View {
                 .disabled(!canSend)
                 .keyboardShortcut(.return, modifiers: .command)
                 .help(sendButtonTitle)
+                // Center the button in a one-line capsule; as the composer grows
+                // the button stays anchored this far off the bottom (it is NOT
+                // re-centered), which also keeps it clear of the capsule's
+                // bottom-corner curve.
+                .padding(.bottom, QueryConversationMetrics.sendButtonBottomInset)
         }
         .padding(.trailing, QueryConversationMetrics.composerButtonInset)
         .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
@@ -370,4 +375,12 @@ private enum QueryConversationMetrics {
     /// AppKit-backed.
     static var composerFont: NSFont { .preferredFont(forTextStyle: .body) }
     static let sendButtonSize: CGFloat = 42
+    /// Bottom inset that vertically centers the send button in a ONE-line
+    /// capsule (whose height is the one-line composer plus the vertical
+    /// padding on both sides). Derived, not hardcoded, so a font or padding
+    /// change can't silently un-center the button.
+    static var sendButtonBottomInset: CGFloat {
+        (ComposerTextView.oneLineHeight(for: composerFont)
+            + composerVerticalPadding * 2 - sendButtonSize) / 2
+    }
 }
