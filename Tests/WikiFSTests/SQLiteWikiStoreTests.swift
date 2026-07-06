@@ -66,7 +66,7 @@ struct SQLiteWikiStoreTests {
         // user_version guard: a fresh DB runs all migration steps → version 16.
         // Reopening must not re-run DDL (no-op bootstrap).
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "22")
+        #expect(userVersion == "23")
         let reopened = try SQLiteWikiStore(databaseURL: url)
         // If bootstrap weren't guarded, the CREATE TABLE would throw here.
         #expect((try? reopened.listPages(sortBy: .lastUpdated)) != nil)
@@ -323,7 +323,7 @@ struct SQLiteWikiStoreTests {
         defer { sqlite3_close(db) }
 
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "22")
+        #expect(userVersion == "23")
 
         let tables = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))
@@ -367,7 +367,7 @@ struct SQLiteWikiStoreTests {
 
     @Test func freshDBReachesUserVersion18() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
-        #expect(store.pragmaValue("user_version") == "22")
+        #expect(store.pragmaValue("user_version") == "23")
     }
 
     @Test func v11SourceLinksHasDeleteCascade() throws {
@@ -526,21 +526,33 @@ struct SQLiteWikiStoreTests {
         #expect(newToken != oldToken)
     }
 
-    @Test func renameSourceRewritesLinksInLinkingPages() throws {
+    @Test func renameSourceDoesNotRewriteLinkingPageBodies() throws {
+        // Phase 5 (AC.9): a source rename is a one-row metadata update. The
+        // linking page's body is NOT rewritten — the stored alias self-heals to
+        // the current display name at render. Here the body is stored verbatim
+        // (raw updatePage, no canonicalization), so it stays byte-identical.
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
         let source = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
         let page = try store.createPage(title: "Summary")
-        // Write a page body with a source link using the old name.
         try store.updatePage(id: page.id, title: "Summary",
             body: "See [[source:paper.pdf]] for details.")
         try store.replaceLinks(from: page.id,
             parsedLinks: WikiLinkParser.parse("See [[source:paper.pdf]] for details."))
+        let before = try store.getPage(id: page.id)
+        let oldVersion = before.version
+        let oldUpdatedAt = before.updatedAt
 
         try store.renameSource(id: source.id, to: "Renamed Paper")
 
-        let updated = try store.getPage(id: page.id)
-        #expect(updated.bodyMarkdown.contains("[[source:Renamed Paper]]"))
-        #expect(!updated.bodyMarkdown.contains("[[source:paper.pdf]]"))
+        // The source row IS renamed.
+        let updated = try store.getSource(id: source.id)
+        #expect(updated.displayName == "Renamed Paper")
+        // The linking page's body is byte-identical (no rewrite), and its
+        // version + updated_at are unchanged (the zero-body-writes proxy).
+        let after = try store.getPage(id: page.id)
+        #expect(after.bodyMarkdown == "See [[source:paper.pdf]] for details.")
+        #expect(after.version == oldVersion)
+        #expect(after.updatedAt == oldUpdatedAt)
     }
 
     @Test func renameSourceIsNoOpWhenNameUnchanged() throws {
@@ -611,7 +623,7 @@ struct SQLiteWikiStoreTests {
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
         defer { sqlite3_close(db) }
 
-        #expect(scalarText(db, "PRAGMA user_version;") == "22")
+        #expect(scalarText(db, "PRAGMA user_version;") == "23")
         let tables = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"))
         for expected in ["blobs", "agents", "activities", "source_versions", "refs"] {
@@ -672,7 +684,7 @@ struct SQLiteWikiStoreTests {
 
         // Reopen → migrates 19→20.
         let store = try SQLiteWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "22")
+        #expect(store.pragmaValue("user_version") == "23")
 
         var db: OpaquePointer?
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)

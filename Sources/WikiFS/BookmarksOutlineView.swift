@@ -359,9 +359,23 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
             DebugLog.tabs("[drop] wiki-link bookmark drop: not a resolvable wiki URL \(url.absoluteString)")
             return false
         }
-        let targetID: PageID? = (kind == .page)
-            ? store.pageID(forTitle: title)
-            : store.sourceID(forDisplayName: title)
+        // Phase 5: prefer the canonical `?id=<ULID>` when present (a direct id —
+        // no name resolution, stable across renames); validate it names a real
+        // row so a bookmark to a since-deleted target falls back to title-based
+        // resolution instead of storing a dead id. Legacy `?title=`-only URLs
+        // resolve by name as before.
+        let targetID: PageID?
+        if let id = WikiLinkMarkdown.id(from: url) {
+            let exists = (kind == .page)
+                ? store.summaries.contains { $0.id == id }
+                : store.sources.contains { $0.id == id }
+            targetID = exists ? id
+                : (kind == .page ? store.pageID(forTitle: title) : store.sourceID(forDisplayName: title))
+        } else {
+            targetID = (kind == .page)
+                ? store.pageID(forTitle: title)
+                : store.sourceID(forDisplayName: title)
+        }
         guard let resolved = targetID else {
             DebugLog.tabs("[drop] wiki-link bookmark drop: title \"\(title)\" did not resolve to a \(kind) id")
             return false

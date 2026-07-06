@@ -14,12 +14,14 @@ enum ReaderMarkdown {
     static func prepared(
         _ raw: String,
         isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool,
-        embedInfo: ((String) -> (id: PageID, mimeType: String?)?)? = nil
+        embedInfo: ((String) -> (id: PageID, mimeType: String?)?)? = nil,
+        displayName: (PageID, WikiLinkParser.ParsedLink.LinkType) -> String? = { _, _ in nil }
     ) -> String {
         let renderedFootnotes = WikiFootnoteMarkdown.rendered(raw)
         let body = WikiLinkMarkdown.linkified(renderedFootnotes.bodyMarkdown,
                                               isResolved: isResolved,
-                                              embedInfo: embedInfo)
+                                              embedInfo: embedInfo,
+                                              displayName: displayName)
         guard !renderedFootnotes.footnotes.isEmpty else { return body }
         // Each definition gets a raw-HTML anchor (`wiki-fn-<id>`) so a clicked
         // reference (`wiki-footnote://note?id=…`) can scroll to it. The anchor is
@@ -28,7 +30,8 @@ enum ReaderMarkdown {
         let footnotes = renderedFootnotes.footnotes
             .map { footnote in
                 let anchor = "<a id=\"\(WikiFootnoteMarkdown.footnoteAnchorID(for: footnote.id))\"></a>"
-                let def = WikiLinkMarkdown.linkified(footnote.markdown, isResolved: isResolved)
+                let def = WikiLinkMarkdown.linkified(footnote.markdown, isResolved: isResolved,
+                                                     displayName: displayName)
                 return "\(footnote.number). \(anchor)\(def)"
             }
             .joined(separator: "\n")

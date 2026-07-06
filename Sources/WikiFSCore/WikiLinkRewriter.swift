@@ -1,100 +1,102 @@
 import Foundation
 
-/// Pure, dependency-free helper that rewrites `[[source:<oldBase>…]]` spans when
-/// a source's display name changes (Phase D). Reuses `WikiLinkSpan` for the regex
-/// and code-range detection, and `WikiLinkParser` for classification.
+/// Pure, dependency-free helper that canonicalizes `[[wiki-link]]` targets to
+/// ULID-stable form at save time (Phase 5). Reuses `WikiLinkSpan` for the regex
+/// and code-range detection, and `WikiLinkParser`/`WikiLinkResolver` for
+/// classification and resolution.
 public enum WikiLinkRewriter {
 
-    /// In `body`, find every `[[source:<oldBase>…]]` link span (skipping code
-    /// spans/fences), and swap `<oldBase>` for `<newBase>`, leaving any
-    /// `#fragment` and `|alias` verbatim. Returns `nil` if no span matched (so
-    /// callers can skip the re-save). Case-insensitive, whitespace-collapsed
-    /// base match (same normalization as `WikiLinkParser.classify`).
+    private static let hashChar: unichar = 0x23 // #
+
+    // MARK: - Canonicalization (Phase 5)
+
+    /// Rewrite each resolvable `[[…]]` span in `body` to canonical
+    /// `[[page:<ULID>|alias]]` / `[[source:<ULID>|alias]]` form, preserving the
+    /// `|alias`, the `#fragment`, and the `!` embed prefix. Unresolvable
+    /// (forward) links are left byte-identical. Code-fence-safe (spans inside a
+    /// backtick code span or fenced block are skipped). Idempotent:
+    /// canonicalizing an already-canonical body is a no-op. Returns `nil` when
+    /// nothing changed (so callers can skip the re-save).
     ///
-    /// The match is by DIRECT string comparison, not by delimiter guessing: the
-    /// old name is known, so after the `source:` prefix every candidate slice —
-    /// the whole remainder first, then up to each `#` from rightmost to
-    /// leftmost — is compared (normalized, case-insensitive) against `oldBase`,
-    /// and the first hit is spliced. That way a name CONTAINING `#` (e.g.
-    /// "…for C# Security Auditing"), cited with or without a `#"quote"` anchor,
-    /// matches whole instead of being truncated at its first `#`.
-    ///
-    /// `isNameKnown` mirrors `WikiLinkResolver`'s longest-name-wins rule: when
-    /// a LONGER candidate slice names some OTHER existing source (e.g. old name
-    /// "C", but the span reads `[[source:C# Notes]]` and a source "C# Notes"
-    /// exists), that longer name owns the link and the span is left alone.
-    /// Callers with no namespace can omit it (nothing else is "known").
-    public static func rewriteSourceBase(
+    /// Resolution mirrors `WikiLinkMarkdown.linkified` exactly: longest-name-wins
+    /// via `WikiLinkResolver.candidateSplits`, so a name containing `#` resolves
+    /// whole. When a span has an existing `|alias`, ONLY the target slice is
+    /// rewritten (the alias is left byte-for-byte). When there is no alias, the
+    /// human text is preserved by inserting `|<bareTarget>` so the author's
+    /// display text survives (it self-heals to the current title at render).
+    public static func canonicalize(
         in body: String,
-        matching oldBase: String,
-        to newBase: String,
-        isNameKnown: (String) -> Bool = { _ in false }
-    ) -> String? {
+        resolvePage: (String) throws -> PageID?,
+        resolveSource: (String) throws -> PageID?
+    ) throws -> String? {
         let ns = body as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
         let matches = WikiLinkSpan.regex.matches(
             in: body, range: NSRange(location: 0, length: ns.length))
 
-        let normalizedOld = WikiText.normalized(oldBase).lowercased()
         var result = body
         var changed = false
 
-        // Walk matches right-to-left so byte offsets stay valid across splices.
+        // Walk right-to-left so byte offsets stay valid across splices.
         for match in matches.reversed() {
             let fullRange = match.range
-
-            // Skip matches inside code spans/fences.
-            if codeRanges.contains(where: { NSIntersectionRange($0, fullRange).length > 0 }) {
-                continue
-            }
+            guard !WikiLinkSpan.isProtected(fullRange, by: codeRanges) else { continue }
 
             let targetRange = match.range(at: 1)
-            let target = ns.substring(with: targetRange) as NSString
+            let aliasRange = match.range(at: 2)
+            let rawTarget = ns.substring(with: targetRange)
+            let rawAlias = aliasRange.location != NSNotFound ? ns.substring(with: aliasRange) : nil
 
-            // Only `source:` links are rewritten. classify() peels the prefix
-            // off the (normalized) start, so `page:source:foo` stays untouched.
-            let (kind, _) = WikiLinkParser.classify(WikiText.normalized(target as String))
-            guard kind == .source else { continue }
+            let fixed = WikiLinkFixer.fix(target: rawTarget, alias: rawAlias)
+            let collapsed = WikiText.normalized(fixed.target)
+            guard !collapsed.isEmpty else { continue }
 
-            // The splice range starts right after the `source:` prefix
-            // (classify confirmed it's at the start, modulo whitespace).
-            let prefix = target.range(of: "source:", options: [.caseInsensitive])
-            guard prefix.location != NSNotFound else { continue }
-            let start = prefix.location + prefix.length
-            guard start < target.length else { continue }
+            // Split on first "#" BEFORE classifying — shared with the parser.
+            let (base, fragment) = WikiLinkParser.splitFragment(collapsed)
+            guard !base.isEmpty else { continue } // same-page anchor → skip
 
-            // Candidate name ends, longest slice first: end-of-target (no
-            // fragment), then each `#` from rightmost to leftmost.
-            var ends: [Int] = [target.length]
-            var i = target.length - 1
-            while i > start {
-                if target.character(at: i) == hashChar { ends.append(i) }
-                i -= 1
+            let (kind, bareTarget) = WikiLinkParser.classify(base)
+            guard !bareTarget.isEmpty, !WikiLinkParser.isEmptyPrefix(base) else { continue }
+
+            // Idempotency fast path: already canonical → leave untouched.
+            if WikiLinkParser.isCanonicalULID(bareTarget) { continue }
+
+            // Resolve (longest-name-wins). Walk candidate splits ourselves so we
+            // capture the id in a single pass (resolvedSplit only yields a Split,
+            // not the id). Unresolved → forward link, leave byte-identical.
+            let raw = fragment.map { "\(bareTarget)#\($0)" } ?? bareTarget
+            var resolved: (id: PageID, fragment: String?)?
+            for split in WikiLinkResolver.candidateSplits(of: raw) {
+                if let id = try kind == .source
+                    ? resolveSource(split.base)
+                    : resolvePage(split.base) {
+                    resolved = (id, split.fragment)
+                    break
+                }
             }
+            guard let (resolvedID, resolvedFragment) = resolved else { continue }
 
-            for end in ends {
-                let slice = WikiText.normalized(
-                    target.substring(with: NSRange(location: start, length: end - start)))
-                let isOld = slice.lowercased() == normalizedOld
-                // Neither the old name nor any other known name — keep trying
-                // shorter readings of this span.
-                guard isOld || isNameKnown(slice) else { continue }
-                // A longer KNOWN name owns this span (longest-name-wins, same
-                // rule as WikiLinkResolver) — leave the span untouched.
-                guard isOld else { break }
+            // Canonical target portion: kind:ULID (+ #fragment if any).
+            let prefix = kind == .source ? "source:" : "page:"
+            let canonicalTarget = prefix + resolvedID.rawValue
+                + (resolvedFragment.map { "#\($0)" } ?? "")
 
-                let absolute = NSRange(location: targetRange.location + start,
-                                       length: end - start)
+            if rawAlias != nil {
+                // Alias exists: surgical — replace ONLY the target slice, leaving
+                // the `|alias` byte-for-byte where it is.
                 let mutable = NSMutableString(string: result)
-                mutable.replaceCharacters(in: absolute, with: newBase)
+                mutable.replaceCharacters(in: targetRange, with: canonicalTarget)
                 result = mutable as String
-                changed = true
-                break
+            } else {
+                // No alias: insert `|<bareTarget>` so the human text survives.
+                let replacement = "[[\(canonicalTarget)|\(bareTarget)]]"
+                let mutable = NSMutableString(string: result)
+                mutable.replaceCharacters(in: fullRange, with: replacement)
+                result = mutable as String
             }
+            changed = true
         }
 
         return changed ? result : nil
     }
-
-    private static let hashChar: unichar = 0x23 // #
 }

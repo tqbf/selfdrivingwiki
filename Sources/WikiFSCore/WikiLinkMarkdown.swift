@@ -58,7 +58,8 @@ public enum WikiLinkMarkdown {
     public static func linkified(
         _ body: String,
         isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool = { _, _ in true },
-        embedInfo: ((String) -> (id: PageID, mimeType: String?)?)? = nil
+        embedInfo: ((String) -> (id: PageID, mimeType: String?)?)? = nil,
+        displayName: (PageID, WikiLinkParser.ParsedLink.LinkType) -> String? = { _, _ in nil }
     ) -> String {
         let ns = body as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
@@ -134,6 +135,38 @@ public enum WikiLinkMarkdown {
                 continue
             }
 
+            // Canonical ULID target (Phase 5): resolve by id and display the
+            // CURRENT name so a stale alias self-heals at render without touching
+            // any bytes. `displayName` returns the live title/name (nil when the
+            // target was deleted → ghost, or when the caller didn't supply it →
+            // fall back to the stored alias). Non-canonical links keep the
+            // name-resolution path below.
+            if WikiLinkParser.isCanonicalULID(bareTarget) {
+                let id = PageID(rawValue: bareTarget)
+                let currentName = displayName(id, kind)
+                let resolved = currentName != nil || isResolved(bareTarget, kind)
+                let display: String
+                if let currentName {
+                    display = currentName
+                } else if let alias = fixed.alias {
+                    let collapsedAlias = collapseWhitespace(alias)
+                    display = collapsedAlias.isEmpty ? bareTarget : collapsedAlias
+                } else {
+                    display = bareTarget
+                }
+                // Embed: canonical source embeds look up MIME by id — embedInfo
+                // is made ULID-aware by the reader (a bare ULID resolves there).
+                if isEmbedPrefix && kind == .source,
+                   let info = embedInfo?(bareTarget),
+                   let html = embedHTML(display: display, id: info.id, mimeType: info.mimeType) {
+                    out += html
+                    continue
+                }
+                out += markdownLink(display: display, target: display, kind: kind,
+                                    resolved: resolved, fragment: fragment, id: id)
+                continue
+            }
+
             // Try every (name, fragment) reading of the target against the
             // caller's namespace, longest name first — so a `#` INSIDE a
             // page/source name (e.g. "… for C# …", with or without a real
@@ -188,6 +221,22 @@ public enum WikiLinkMarkdown {
         return title
     }
 
+    /// The canonical `id` query item from a `wiki://…?id=<ULID>&title=…` URL, or
+    /// nil when absent (legacy `?title=`-only links). Used by the view's click
+    /// router to resolve a canonical link by id — a direct row fetch — instead of
+    /// by display name (Phase 5 §6.5). Returns nil for non-wiki or unresolved
+    /// (`missing`) URLs so only resolvable links route by id.
+    public static func id(from url: URL) -> PageID? {
+        guard url.scheme == scheme,
+              let host = url.host,
+              host == resolvedHost || host == "source",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let idString = components.queryItems?.first(where: { $0.name == "id" })?.value,
+              !idString.isEmpty
+        else { return nil }
+        return PageID(rawValue: idString)
+    }
+
     /// Return the URL-decoded fragment from a `wiki://` URL, or nil. Used by the
     /// view's `OpenURLAction` to extract the anchor for scroll-to.
     public static func fragment(from url: URL) -> String? {
@@ -226,7 +275,8 @@ public enum WikiLinkMarkdown {
     private static func markdownLink(display: String, target: String,
                                      kind: WikiLinkParser.ParsedLink.LinkType,
                                      resolved: Bool,
-                                     fragment: String? = nil) -> String {
+                                     fragment: String? = nil,
+                                     id: PageID? = nil) -> String {
         let host: String
         if resolved {
             host = kind == .source ? "source" : resolvedHost
@@ -241,7 +291,17 @@ public enum WikiLinkMarkdown {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "[", with: "\\[")
             .replacingOccurrences(of: "]", with: "\\]")
-        var url = "\(scheme)://\(host)?title=\(encodedTitle)"
+        // Canonical links carry `id=<ULID>` so click routing resolves by id
+        // (a direct row fetch) instead of display name; `title=` is retained as
+        // a transition fallback for any unconverted consumer (Phase 5 §6.5).
+        var url: String
+        if let id {
+            let encodedID = id.rawValue.addingPercentEncoding(withAllowedCharacters: titleQueryAllowed)
+                ?? id.rawValue
+            url = "\(scheme)://\(host)?id=\(encodedID)&title=\(encodedTitle)"
+        } else {
+            url = "\(scheme)://\(host)?title=\(encodedTitle)"
+        }
         if let frag = fragment, !frag.isEmpty {
             let encodedFrag = frag.addingPercentEncoding(withAllowedCharacters: fragmentAllowed)
                 ?? frag

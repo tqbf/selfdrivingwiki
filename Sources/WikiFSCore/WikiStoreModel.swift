@@ -314,6 +314,26 @@ public final class WikiStoreModel {
         return true
     }
 
+    /// Navigate to the page with `id` from a clicked canonical
+    /// `wiki://page?id=<ULID>` link (Phase 5). A direct selection — no title
+    /// resolution, so it is stable across renames (the §6.5 click-time row
+    /// fetch). Returns `false` when the id names no loaded page (a deleted
+    /// target), so the caller can fall back to title-based selection.
+    @discardableResult
+    public func selectPage(byID id: PageID, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
+        guard summaries.contains(where: { $0.id == id }) else { return false }
+        let target = WikiSelection.page(id)
+        pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
+        pendingScrollAnchorVersion += 1
+        recordHistoryTransition(from: loadedSelection, to: target)
+        if openInNewTab {
+            openTab(target)
+        } else {
+            navigateCurrentTab(to: target)
+        }
+        return true
+    }
+
     // MARK: - Source link resolution
 
     /// Existence check for `[[source:…]]` linkification: returns `true` when a
@@ -378,6 +398,26 @@ public final class WikiStoreModel {
     @discardableResult
     public func selectSource(byDisplayName displayName: String, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
         guard let id = (try? store.resolveSourceByName(displayName)) ?? nil else { return false }
+        let target = WikiSelection.source(id)
+        pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
+        pendingScrollAnchorVersion += 1
+        recordHistoryTransition(from: loadedSelection, to: target)
+        if openInNewTab {
+            openTab(target)
+        } else {
+            navigateCurrentTab(to: target)
+        }
+        return true
+    }
+
+    /// Navigate to the source with `id` from a clicked canonical
+    /// `wiki://source?id=<ULID>` link (Phase 5). A direct selection — no
+    /// display-name resolution, so it is stable across renames. Returns `false`
+    /// when the id names no loaded source (a deleted target), so the caller can
+    /// fall back to display-name-based selection.
+    @discardableResult
+    public func selectSource(byID id: PageID, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
+        guard sources.contains(where: { $0.id == id }) else { return false }
         let target = WikiSelection.source(id)
         pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
         pendingScrollAnchorVersion += 1

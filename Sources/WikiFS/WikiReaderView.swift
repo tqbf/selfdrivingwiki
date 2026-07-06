@@ -102,9 +102,12 @@ struct WikiReaderView: View {
         }
         guard let title = WikiLinkMarkdown.target(from: url) else { return .inert }
         let frag = WikiLinkMarkdown.fragment(from: url)
+        // Phase 5: prefer the canonical `?id=<ULID>` when present; `title` is the
+        // transition fallback for legacy/`title=`-only URLs.
+        let id = WikiLinkMarkdown.id(from: url)
         switch WikiLinkMarkdown.resolvedKind(from: url) {
-        case .page:   return .page(title: title, fragment: frag)
-        case .source: return .source(title: title, fragment: frag)
+        case .page:   return .page(title: title, id: id, fragment: frag)
+        case .source: return .source(title: title, id: id, fragment: frag)
         case nil:     return .inert
         }
     }
@@ -121,8 +124,12 @@ struct WikiReaderView: View {
     static func onWikiLinkHandler(for store: WikiStoreModel) -> (URL, Bool) -> Void {
         { url, openInNewTab in
             switch WikiReaderView.linkRoute(for: url) {
-            case .page(let title, let frag):   store.selectPage(byTitle: title, anchor: frag, openInNewTab: openInNewTab)
-            case .source(let title, let frag): store.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab)
+            case .page(let title, let id, let frag):
+                if let id, store.selectPage(byID: id, anchor: frag, openInNewTab: openInNewTab) { }
+                else { store.selectPage(byTitle: title, anchor: frag, openInNewTab: openInNewTab) }
+            case .source(let title, let id, let frag):
+                if let id, store.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab) { }
+                else { store.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab) }
             case .samePageAnchor, .inert:      break
             }
         }
@@ -264,10 +271,13 @@ struct WikiReaderView: View {
 enum WikiLinkRoute: Equatable, Sendable {
     /// Same-page `[[#Section]]` — scroll within the current document.
     case samePageAnchor(fragment: String?)
-    /// Resolved page link — navigate + carry the optional `#fragment`.
-    case page(title: String, fragment: String?)
-    /// Resolved source link — navigate + carry the optional `#fragment`.
-    case source(title: String, fragment: String?)
+    /// Resolved page link — navigate + carry the optional `#fragment`. `id` is
+    /// the canonical ULID when the URL carried `?id=` (Phase 5); nil for legacy
+    /// `?title=`-only links, which resolve by `title` as the transition fallback.
+    case page(title: String, id: PageID?, fragment: String?)
+    /// Resolved source link — navigate + carry the optional `#fragment`. `id` is
+    /// the canonical ULID when present; nil for legacy `?title=`-only links.
+    case source(title: String, id: PageID?, fragment: String?)
     /// Unresolved (`wiki://missing`) or un-classifiable — inert.
     case inert
 }
@@ -805,12 +815,21 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // resolveSourceByName's fallback, so a `[[source:Paper]]` link also
             // resolves against a source whose filename is "Paper.pdf".
             let pageTitles = Set((store?.summaries ?? []).map { $0.title.lowercased() })
+            // Phase 5: id-keyed maps for canonical-link display-at-render. A
+            // stored `[[page:ULID|Stale Title]]` resolves ULID → the CURRENT
+            // title here, so a rename self-heals visually without touching bytes.
+            let pageIDToName = Dictionary(uniqueKeysWithValues:
+                (store?.summaries ?? []).map { ($0.id, $0.title) })
             let sourceNames = Set((store?.sources ?? [])
                 .flatMap { source -> [String] in
                     let names = [source.displayName, source.filename].compactMap { $0 }
                     let stripped = names.map { ($0 as NSString).deletingPathExtension }
                     return (names + stripped).map { $0.lowercased() }
                 })
+            // Phase 5: source id → current display name (or filename fallback),
+            // for canonical source-link display-at-render.
+            let sourceIDToName = Dictionary(uniqueKeysWithValues:
+                (store?.sources ?? []).map { ($0.id, $0.displayName ?? $0.filename) })
             // Lenient tier, mirroring resolveSourceByName's pass 3 so ghost
             // styling agrees with navigation: loose keys (extension + trailing
             // "(…)" stripped) that are UNIQUE across sources.
@@ -825,6 +844,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // name variants as sourceNames (displayName, filename, extension-
             // stripped) but NOT the loose-match tier — embeds are exact-match-
             // only by design (a loose match might embed the wrong source).
+            // Phase 5: the source's own id (lowercased) is ALSO a key so a
+            // canonical `![[source:ULID|Name]]` embed resolves by id.
             // Captured by the embedInfo closure below (pure data, no store
             // access in the detached task — same pattern as isResolved).
             var embedMap: [String: (id: PageID, mimeType: String?)] = [:]
@@ -834,6 +855,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 for name in (names + stripped).map({ $0.lowercased() }) {
                     embedMap[name] = (source.id, source.mimeType)
                 }
+                embedMap[source.id.rawValue.lowercased()] = (source.id, source.mimeType)
             }
 
             let loadStartVal = loadStart
@@ -850,12 +872,23 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 // inline HTML rendering (<img>/<video>/<audio>/<iframe>).
                 let prepared = ReaderMarkdown.prepared(markdown,
                     isResolved: { name, kind in
-                        kind == .source
+                        // Phase 5: canonical ULID targets check id-keyed
+                        // existence; legacy/forward links check name sets.
+                        if WikiLinkParser.isCanonicalULID(name) {
+                            let id = PageID(rawValue: name)
+                            return kind == .source
+                                ? sourceIDToName[id] != nil
+                                : pageIDToName[id] != nil
+                        }
+                        return kind == .source
                             ? sourceNames.contains(name.lowercased())
                                 || uniqueLooseKeys.contains(WikiNameRules.looseMatchKey(name))
                             : pageTitles.contains(name.lowercased())
                     },
-                    embedInfo: { name in embedMap[name.lowercased()] }
+                    embedInfo: { name in embedMap[name.lowercased()] },
+                    displayName: { id, kind in
+                        kind == .source ? sourceIDToName[id] : pageIDToName[id]
+                    }
                 )
                 let body = MarkdownHTMLRenderer.render(prepared)
                 let html = WikiReaderView.documentHTML(body)
@@ -1039,10 +1072,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     webView.evaluateJavaScript(
                         #"var e=document.getElementById("\#(s)"); if(e){e.scrollIntoView({block:"start"});}""#)
                 }
-            case .page(let title, let frag):
-                store?.selectPage(byTitle: title, anchor: frag, openInNewTab: openInNewTab)
-            case .source(let title, let frag):
-                store?.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab)
+            case .page(let title, let id, let frag):
+                if let id, store?.selectPage(byID: id, anchor: frag, openInNewTab: openInNewTab) == true { }
+                else { store?.selectPage(byTitle: title, anchor: frag, openInNewTab: openInNewTab) }
+            case .source(let title, let id, let frag):
+                if let id, store?.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab) == true { }
+                else { store?.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab) }
             case .inert:
                 break
             }
