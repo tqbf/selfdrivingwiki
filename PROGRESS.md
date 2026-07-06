@@ -2,6 +2,36 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-05 — Graph-model Phase 3a: provider protocol & real source provenance (no schema change)
+
+Introduced the `SourceProvider` protocol + `MaterializedSource`/
+`SourceProvenance`/`SourceOrigin` value types and four providers
+(`LocalFileProvider`/`WebsiteProvider`/`ZoteroProvider`/`MarkdownFolderProvider`),
+unified the four ingest entry points behind a single `storeMaterialized(_:)`
+seam, and recorded **real provider/URL provenance** in the existing Phase-1 PROV
+substrate — populating the previously-stubbed columns (`activities.plan`/
+`external_ref`, `source_versions.external_identity`) so the origin of every
+fetched source is recoverable. Design authority:
+`plans/graph-model-and-versioning.md` §4.7 (PROV-DM), §11 (provider protocol),
+§3 (the gap).
+
+**No schema migration** — every populated column already existed and was
+stubbed NULL. `addSource`/`appendContentVersion` gained a default-nil
+`provenance:` param; when present, the store seeds a real provider agent
+(`ensureAgent`, deduped on `(name, kind)`) + an activity carrying `plan`/
+`external_ref` + binds `external_identity`; when nil, the legacy-import agent
+path is byte-identical to pre-Phase-3. New `sourceOrigin(sourceID:)` read joins
+active-version → activity → agent (plan/external_ref from the per-ingest
+**activity**, agentName from the **agent**). Surfaced in `SourceDetailView`
+(Origin row: website clickable URL / Zotero / "Added from file") and
+`wikictl source info`. `changeToken` unchanged; refresh/credentials UX deferred
+to Phase 3b. PR #106 (Apple Podcasts) re-models as `ApplePodcastProvider`, the
+first consumer of this protocol, after this stage. **Gate:** 1503 tests green
+(13 new in `SourceProviderTests`, 2 new `source info` CLI tests; existing
+`appendContentVersionDedupsBlob` / `freshFastPathMatchesStepwiseLadder` /
+changeToken tests pass unmodified). See
+`plans/phase-3a-providers-and-provenance.md`.
+
 ## 2026-07-05 — Graph-model Phase 2 track C: extraction compare & nominate UI
 
 Closes the "compare" half of the §4.5 "keep both, compare, nominate" loop that

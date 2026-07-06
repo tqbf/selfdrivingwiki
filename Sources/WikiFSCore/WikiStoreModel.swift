@@ -1205,6 +1205,21 @@ public final class WikiStoreModel {
         }.value
     }
 
+    // MARK: - Provider-backed ingest seam (Phase 3a)
+
+    /// The single store-write seam every provider-backed ingest flows through.
+    /// Materialization (bytes + provenance) happens off-main inside the provider;
+    /// this does the main-actor `store.addSource` write, threading the
+    /// `MaterializedSource`'s provenance + retained Zotero columns through. Each
+    /// caller wraps its OWN duplicate/error handling around this throw.
+    @discardableResult
+    private func storeMaterialized(_ m: MaterializedSource) throws -> SourceSummary {
+        try store.addSource(
+            filename: m.filename, data: m.data,
+            zoteroItemKey: m.zoteroItemKey, zoteroItemTitle: m.zoteroItemTitle,
+            mimeType: m.mimeType, provenance: m.provenance)
+    }
+
     /// Ingest dropped files. For each URL: reject directories (a recursive
     /// directory ingest is out of scope), read the bytes OFF the main thread
     /// (big files shouldn't stall the UI), then hop back to the main actor to
@@ -1225,34 +1240,26 @@ public final class WikiStoreModel {
                 DebugLog.store("WikiStoreModel.addFiles skipping directory: \(url.lastPathComponent)")
                 continue
             }
-            let filename = url.lastPathComponent
-            let data: Data
+            // Materialize off-main (read + dispatch), store on the main actor.
+            let provider = LocalFileProvider(fileURL: url)
+            let materialized: MaterializedSource
             do {
-                // Read off the main actor; `Data(contentsOf:)` is blocking I/O.
-                data = try await Task.detached(priority: .userInitiated) {
-                    try Data(contentsOf: url)
-                }.value
+                materialized = try await provider.materialize()
             } catch {
-                DebugLog.store("WikiStoreModel.addFiles read failed for \(filename): \(error)")
+                DebugLog.store("WikiStoreModel.addFiles read failed for \(url.lastPathComponent): \(error)")
                 continue
             }
 
-            let ext = (filename as NSString).pathExtension.lowercased()
-            let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
-            let response = URLFetchService.FetchResponse(data: data, contentType: mimeType, finalURL: url)
-            let plan = URLFetchService.plan(for: response)
-
             do {
-                let summary = try store.addSource(
-                    filename: plan.filename, data: plan.data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: mimeType)
+                let summary = try storeMaterialized(materialized)
                 lastSourceID = summary.id
             } catch WikiStoreError.duplicateContent(let existing) {
                 // Byte-identical to an already-stored source — skip rather than
                 // abort the rest of the drop batch; report it so the user isn't
                 // left wondering why the file didn't show up.
-                duplicateNames.append("\(filename) (already added as \(existing.effectiveName))")
+                duplicateNames.append("\(url.lastPathComponent) (already added as \(existing.effectiveName))")
             } catch {
-                DebugLog.store("WikiStoreModel.addFiles store failed for \(filename): \(error)")
+                DebugLog.store("WikiStoreModel.addFiles store failed for \(url.lastPathComponent): \(error)")
             }
         }
         reloadSources()
@@ -1288,22 +1295,11 @@ public final class WikiStoreModel {
         fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
     ) async throws -> URLFetchService.FetchOutcome {
         // Validate + fetch OFF the main actor (the GET shouldn't stall the UI);
-        // `fetch` is `Sendable` and the service is stateless. Then store the result
-        // back HERE on the main actor, where we own `store`. Splitting fetch (async,
-        // off-actor) from store (main-actor) keeps the @Sendable boundary honest —
-        // no `assumeIsolated` gamble on which thread a continuation resumes.
-        guard let url = URLFetchService.normalizeURL(rawInput) else {
-            throw URLFetchService.FetchError.invalidURL(
-                rawInput.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        let response = try await fetcher.fetch(url)
-        guard !response.data.isEmpty else { throw URLFetchService.FetchError.empty }
-
-        // Pure dispatch decides the filename + bytes; we store directly on the main
-        // actor (no @Sendable store closure crossing the actor boundary).
-        let plan = URLFetchService.plan(for: response)
-        let summary = try store.addSource(
-            filename: plan.filename, data: plan.data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil)
+        // the WebsiteProvider owns normalize→fetch→dispatch (materialization).
+        // Then store the result HERE on the main actor, where we own `store`.
+        let provider = WebsiteProvider(rawInput: rawInput, fetcher: fetcher)
+        let (materialized, plan) = try await provider.materializeWithPlan()
+        let summary = try storeMaterialized(materialized)
         reloadSources()
         openTab(.source(summary.id))
         onPageDidChange?()
@@ -1316,7 +1312,8 @@ public final class WikiStoreModel {
     public func addSource(filename: String, data: Data) {
         do {
             _ = try store.addSource(
-                filename: filename, data: data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil)
+                filename: filename, data: data, zoteroItemKey: nil, zoteroItemTitle: nil,
+                mimeType: nil, provenance: nil)
             reloadSources()
             onPageDidChange?()
         } catch WikiStoreError.duplicateContent(let existing) {
@@ -1343,27 +1340,19 @@ public final class WikiStoreModel {
         parentItem: ZoteroItem,
         zoteroDir: URL
     ) async throws {
-        switch ZoteroLocalStorage.resolve(attachment, zoteroDir: zoteroDir) {
-        case .local(let path):
-            // Read off the main actor — same rationale as `addFiles(_:)`:
-            // `Data(contentsOf:)` is blocking I/O and shouldn't stall the UI.
-            let data = try await Task.detached(priority: .userInitiated) {
-                try Data(contentsOf: path)
-            }.value
-            do {
-                let summary = try store.addSource(
-                    filename: path.lastPathComponent, data: data,
-                    zoteroItemKey: parentItem.key, zoteroItemTitle: parentItem.title,
-                    mimeType: nil)
-                reloadSources()
-                openTab(.source(summary.id))
-                onPageDidChange?()
-            } catch {
-                DebugLog.store("WikiStoreModel.ingestFromZotero failed: \(error)")
-                throw error
-            }
-        case .unavailable(let reason):
-            throw ZoteroFetchError.unavailable(reason)
+        let provider = ZoteroProvider(
+            attachment: attachment, parentItem: parentItem, zoteroDir: zoteroDir)
+        // Resolve + read off the main actor (the provider materializes, throwing
+        // ZoteroFetchError.unavailable when the attachment isn't local).
+        let materialized = try await provider.materialize()
+        do {
+            let summary = try storeMaterialized(materialized)
+            reloadSources()
+            openTab(.source(summary.id))
+            onPageDidChange?()
+        } catch {
+            DebugLog.store("WikiStoreModel.ingestFromZotero failed: \(error)")
+            throw error
         }
     }
 
@@ -1395,9 +1384,11 @@ public final class WikiStoreModel {
         for file in result.files {
             let ext = (file.filename as NSString).pathExtension.lowercased()
             let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
+            let provider = MarkdownFolderProvider(
+                filename: file.filename, data: file.data, mimeType: mimeType)
             do {
-                let summary = try store.addSource(
-                    filename: file.filename, data: file.data, zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: mimeType)
+                let materialized = try await provider.materialize()
+                let summary = try storeMaterialized(materialized)
                 if firstSourceID == nil { firstSourceID = summary.id }
                 imported += 1
             } catch WikiStoreError.duplicateContent(let existing) {
@@ -1485,6 +1476,13 @@ public final class WikiStoreModel {
 
     public func isSourceIngested(_ file: SourceSummary) -> Bool {
         sourceIngestedStatus[file.id] ?? false
+    }
+
+    /// The origin provenance of a source (provider agent + the activity that
+    /// fetched/imported it). `nil` when the read fails or no version exists.
+    /// Drives the "Origin" row in `SourceDetailView`.
+    public func sourceOrigin(for id: PageID) -> SourceOrigin? {
+        try? store.sourceOrigin(sourceID: id)
     }
 
     // MARK: - Processed markdown versions (v8)

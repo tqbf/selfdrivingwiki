@@ -1923,7 +1923,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         data: Data,
         zoteroItemKey: String? = nil,
         zoteroItemTitle: String? = nil,
-        mimeType: String? = nil
+        mimeType: String? = nil,
+        provenance: SourceProvenance? = nil
     ) throws -> SourceSummary {
         lock.lock(); defer { lock.unlock() }
         guard data.count <= Self.ingestByteCap else {
@@ -2007,26 +2008,44 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try insBlob.bind(data, at: 3)
             _ = try insBlob.step()
 
-            // 2. Import activity, associated with the legacy agent (Phase 3
-            //    swaps in the real provider agent).
-            let agentID = try legacyImportAgentID()
+            // 2. Import/fetch activity + associated agent. When provenance is
+            //    present (Phase 3a), seed a REAL provider agent + an activity
+            //    carrying plan/external_ref; otherwise fall back to the synthetic
+            //    legacy-import agent + a bare 'import' activity (byte-identical
+            //    to the pre-Phase-3 path).
+            let agentID: String
+            let activityKind: String
+            if let prov = provenance {
+                agentID = try ensureAgent(
+                    name: prov.agentName, kind: prov.agentKind,
+                    version: prov.agentVersion, externalRef: nil)
+                activityKind = prov.activityKind
+            } else {
+                agentID = try legacyImportAgentID()
+                activityKind = "import"
+            }
             let activityID = ULID.generate()
             let insActivity = try statement("""
-            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
-            VALUES (?1, 'import', ?2, ?3, ?3);
+            INSERT INTO activities (id, kind, agent_id, plan, external_ref, started_at, ended_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6);
             """)
             insActivity.reset()
             try insActivity.bind(activityID, at: 1)
-            try insActivity.bind(agentID, at: 2)
-            try insActivity.bind(nowTS, at: 3)
+            try insActivity.bind(activityKind, at: 2)
+            try insActivity.bind(agentID, at: 3)
+            if let plan = provenance?.plan { try insActivity.bind(plan, at: 4) }
+            if let extRef = provenance?.externalRef { try insActivity.bind(extRef, at: 5) }
+            try insActivity.bind(nowTS, at: 6)
             _ = try insActivity.step()
 
-            // 3. v1 version (parent_id NULL, the content blob).
+            // 3. v1 version (parent_id NULL, the content blob). external_identity
+            //    is the canonical external id (resolved URL / Zotero key), NULL
+            //    when no provenance is present.
             let versionID = ULID.generate()
             let insVersion = try statement("""
             INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
-                                         mime_type, activity_id, fetched_at)
-            VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6);
+                                         mime_type, activity_id, external_identity, fetched_at)
+            VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7);
             """)
             insVersion.reset()
             try insVersion.bind(versionID, at: 1)
@@ -2034,7 +2053,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try insVersion.bind(contentHash, at: 3)
             if let mime { try insVersion.bind(mime, at: 4) }
             try insVersion.bind(activityID, at: 5)
-            try insVersion.bind(nowTS, at: 6)
+            if let extID = provenance?.externalIdentity { try insVersion.bind(extID, at: 6) }
+            try insVersion.bind(nowTS, at: 7)
             _ = try insVersion.step()
 
             // 4. Active ref (generation 1).
@@ -2232,6 +2252,63 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         )
     }
 
+    /// The origin provenance of a source: joined from the active content version
+    /// (ref → else `MAX(id)`, mirroring `activeContentVersion`) → its `activities`
+    /// row → the joined `agents` row. `plan`/`external_ref` are read from the
+    /// **activity** (per-ingest), `agentName` from the **agent**. Returns `nil`
+    /// when the source has no version rows at all (unknown id).
+    public func sourceOrigin(sourceID: PageID) throws -> SourceOrigin? {
+        lock.lock(); defer { lock.unlock() }
+        // The columns selected here MUST stay in lockstep with `originFrom(stmt:)`.
+        let columnList = """
+            a.name, act.kind, act.plan, act.external_ref,
+            sv.external_identity, sv.fetched_at
+        """
+        // 1. Prefer the active ref.
+        let refStmt = try statement("""
+        SELECT \(columnList)
+        FROM refs r
+        JOIN source_versions sv ON sv.id = r.version_id
+        LEFT JOIN activities act ON act.id = sv.activity_id
+        LEFT JOIN agents a ON a.id = act.agent_id
+        WHERE r.kind = 'source-content' AND r.owner_id = ?1;
+        """)
+        refStmt.reset()
+        try refStmt.bind(sourceID.rawValue, at: 1)
+        if try refStmt.step() {
+            return originFrom(stmt: refStmt)
+        }
+        // 2. Fall back to the default-active rule: MAX(id) version.
+        let maxStmt = try statement("""
+        SELECT \(columnList)
+        FROM source_versions sv
+        LEFT JOIN activities act ON act.id = sv.activity_id
+        LEFT JOIN agents a ON a.id = act.agent_id
+        WHERE sv.source_id = ?1 ORDER BY sv.id DESC LIMIT 1;
+        """)
+        maxStmt.reset()
+        try maxStmt.bind(sourceID.rawValue, at: 1)
+        guard try maxStmt.step() else { return nil }
+        return originFrom(stmt: maxStmt)
+    }
+
+    /// Decode an origin row (column order: agent name, activity kind, plan,
+    /// external_ref, external_identity, fetched_at). NULL activity/agent columns
+    /// (a pre-graph-model or corrupted row) degrade gracefully.
+    private func originFrom(stmt: SQLiteStatement) -> SourceOrigin {
+        func textOrNull(_ col: Int32) -> String? {
+            sqlite3_column_type(stmt.handle, col) == SQLITE_NULL ? nil : stmt.text(at: col)
+        }
+        return SourceOrigin(
+            agentName: textOrNull(0) ?? "unknown",
+            activityKind: textOrNull(1) ?? "import",
+            plan: textOrNull(2),
+            externalRef: textOrNull(3),
+            externalIdentity: textOrNull(4),
+            fetchedAt: Date(timeIntervalSince1970: stmt.double(at: 5))
+        )
+    }
+
     /// Get-or-create the single legacy import agent (`kind='software'`,
     /// `name='legacy-import'`) that stands in for every pre-Phase-3 import (§3:
     /// no real extraction provenance exists). Idempotent: the v19→20 migration
@@ -2301,7 +2378,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// deleted (a rollback is a pointer repoint, see `rollbackSourceContent`).
     @discardableResult
     public func appendContentVersion(
-        sourceID: PageID, data: Data, mimeType: String? = nil
+        sourceID: PageID, data: Data, mimeType: String? = nil,
+        provenance: SourceProvenance? = nil
     ) throws -> SourceVersion {
         lock.lock(); defer { lock.unlock() }
         guard data.count <= Self.ingestByteCap else {
@@ -2327,25 +2405,40 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try insBlob.bind(data, at: 3)
             _ = try insBlob.step()
 
-            // 2. Fetch activity (Phase 3 swaps in the real provider agent).
-            let agentID = try legacyImportAgentID()
+            // 2. Fetch/import activity + agent. Provenance-present seeds a real
+            //    provider agent; otherwise the legacy-import fallback (the
+            //    nil-provenance path stays byte-identical to pre-Phase-3).
+            let agentID: String
+            let activityKind: String
+            if let prov = provenance {
+                agentID = try ensureAgent(
+                    name: prov.agentName, kind: prov.agentKind,
+                    version: prov.agentVersion, externalRef: nil)
+                activityKind = prov.activityKind
+            } else {
+                agentID = try legacyImportAgentID()
+                activityKind = "fetch"
+            }
             let activityID = ULID.generate()
             let insActivity = try statement("""
-            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
-            VALUES (?1, 'fetch', ?2, ?3, ?3);
+            INSERT INTO activities (id, kind, agent_id, plan, external_ref, started_at, ended_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6);
             """)
             insActivity.reset()
             try insActivity.bind(activityID, at: 1)
-            try insActivity.bind(agentID, at: 2)
-            try insActivity.bind(nowTS, at: 3)
+            try insActivity.bind(activityKind, at: 2)
+            try insActivity.bind(agentID, at: 3)
+            if let plan = provenance?.plan { try insActivity.bind(plan, at: 4) }
+            if let extRef = provenance?.externalRef { try insActivity.bind(extRef, at: 5) }
+            try insActivity.bind(nowTS, at: 6)
             _ = try insActivity.step()
 
             // 3. New version (parent = current active).
             let versionID = ULID.generate()
             let insVersion = try statement("""
             INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
-                                         mime_type, activity_id, fetched_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);
+                                         mime_type, activity_id, external_identity, fetched_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);
             """)
             insVersion.reset()
             try insVersion.bind(versionID, at: 1)
@@ -2356,7 +2449,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 try insVersion.bind(mime, at: 5)
             }
             try insVersion.bind(activityID, at: 6)
-            try insVersion.bind(nowTS, at: 7)
+            if let extID = provenance?.externalIdentity { try insVersion.bind(extID, at: 7) }
+            try insVersion.bind(nowTS, at: 8)
             _ = try insVersion.step()
 
             // 4. UPSERT the active ref (generation + 1).
@@ -2404,7 +2498,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 id: versionID, sourceID: sourceID, parentID: parent?.id,
                 blobHash: contentHash,
                 mimeType: mimeType ?? parent?.mimeType,
-                activityID: activityID, externalIdentity: nil, fetchedAt: now
+                activityID: activityID,
+                externalIdentity: provenance?.externalIdentity, fetchedAt: now
             )
         }
     }

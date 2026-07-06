@@ -710,4 +710,50 @@ struct WikiCtlCommandTests {
                 in: store, cwd: "/tmp")
         }
     }
+
+    // MARK: - source info (Phase 3a)
+
+    /// AC.7 — source info prints identity + origin provenance. A website source
+    /// shows the provider, plan/URL, and external identity.
+    @Test func sourceInfoPrintsWebsiteOrigin() async throws {
+        let store = try tempStore()
+        let prov = SourceProvenance(
+            agentName: "website", activityKind: "fetch",
+            plan: "https://example.com/article",
+            externalRef: "https://example.com/article",
+            externalIdentity: "https://example.com/article")
+        let summary = try store.addSource(
+            filename: "Article.md", data: Data("# Article".utf8),
+            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            provenance: prov)
+
+        let byID = try SourceCommand.run(.info(.id(summary.id)), in: store, cwd: "/tmp")
+        guard case .text(let textByID) = byID.payload else {
+            Issue.record("expected text payload"); return
+        }
+        #expect(textByID.contains("provider\twebsite"))
+        #expect(textByID.contains("plan\thttps://example.com/article"))
+        #expect(textByID.contains("external_identity\thttps://example.com/article"))
+
+        let byName = try SourceCommand.run(.info(.name("Article.md")), in: store, cwd: "/tmp")
+        guard case .text(let textByName) = byName.payload else {
+            Issue.record("expected text payload"); return
+        }
+        #expect(textByName.contains("filename\tArticle.md"))
+        #expect(textByName.contains("provider\twebsite"))
+    }
+
+    /// AC.7 — a local (legacy) source shows the legacy-import provider.
+    @Test func sourceInfoPrintsLegacyOrigin() throws {
+        let store = try tempStore()
+        let summary = try store.addSource(filename: "plain.txt", data: Data("hi".utf8))
+
+        let result = try SourceCommand.run(.info(.id(summary.id)), in: store, cwd: "/tmp")
+        guard case .text(let text) = result.payload else {
+            Issue.record("expected text payload"); return
+        }
+        #expect(text.contains("provider\tlegacy-import"))
+        #expect(text.contains("filename\tplain.txt"))
+        #expect(text.contains("size\t2"))
+    }
 }

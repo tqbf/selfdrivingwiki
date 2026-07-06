@@ -83,7 +83,8 @@ public protocol WikiStore: Sendable {
         data: Data,
         zoteroItemKey: String?,
         zoteroItemTitle: String?,
-        mimeType: String?
+        mimeType: String?,
+        provenance: SourceProvenance?
     ) throws -> SourceSummary
 
     /// Source summaries (no content blob), most-recent-first.
@@ -97,6 +98,14 @@ public protocol WikiStore: Sendable {
 
     /// Remove a source by id.
     func deleteSource(id: PageID) throws
+
+    /// The origin provenance of a source: the provider agent + the activity that
+    /// fetched/imported it, joined from the active content version to its activity
+    /// to the agent. Returns `nil` when the source has no version rows (unknown id).
+    /// `plan`/`externalRef` come from the per-ingest **activity** row (so two
+    /// website sources with different URLs each return their own URL); `agentName`
+    /// from the **agent** row.
+    func sourceOrigin(sourceID: PageID) throws -> SourceOrigin?
 
     /// Rename a source's display_name and rewrite every `[[source:<old>…]]` link
     /// that points at it. Transactional — source row + all affected pages + their
