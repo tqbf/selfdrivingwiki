@@ -25,6 +25,11 @@ public struct SourceRefreshService: Sendable {
         /// The origin has no `plan` (URL) to re-fetch — a data-integrity edge
         /// case (website sources always record the URL at ingest).
         case missingPlan
+        /// Phase 4 (D3): the source is a website snapshot with image siblings.
+        /// Single-source refresh would move the active version to a new activity
+        /// and orphan the images (the resolver joins on the active activity).
+        /// Snapshot-aware refresh (re-snapshotting images) is a named follow-on.
+        case snapshotWithImages
 
         public var errorDescription: String? {
             switch self {
@@ -32,6 +37,8 @@ public struct SourceRefreshService: Sendable {
                 return "Sources from \"\(agent)\" can't be refreshed (no URL to re-fetch)."
             case .missingPlan:
                 return "This source has no recorded URL to re-fetch."
+            case .snapshotWithImages:
+                return "This snapshot source includes images; re-snapshotting on refresh is coming soon."
             }
         }
     }

@@ -878,6 +878,19 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // data captured by the detached task (same pattern as embedMap).
             let sourceDerivedChain = store?.sourceDerivedChains() ?? [:]
 
+            // Phase 4: sibling-image resolver maps. For each source,
+            // [original_path → sibling sourceID]. Captured as pure data for the
+            // detached task (same pattern as embedMap / sourceDerivedChain).
+            let siblingMaps = store?.siblingImageResolvers() ?? [:]
+            // The rendered source's own map (nil for pages — no sibling images).
+            var renderedSourceMap: [String: PageID]? = nil
+            if case .source(let sourceID) = currentSelection {
+                renderedSourceMap = siblingMaps[sourceID]
+            }
+            // Capture the blob scheme string on the main actor (the static
+            // property is main-actor-isolated; the detached task can't read it).
+            let blobScheme = BlobSchemeHandler.scheme
+
             let loadStartVal = loadStart
             convertTask = Task.detached(priority: .userInitiated) { [weak self] in
                 let t0 = DispatchTime.now()
@@ -918,7 +931,14 @@ internal struct WikiReaderRep: NSViewRepresentable {
                         return idx < chain.count ? chain[idx] : nil
                     }
                 )
-                let body = MarkdownHTMLRenderer.render(prepared)
+                let body = MarkdownHTMLRenderer.render(prepared, imageResolver: { src in
+                    // Phase 4: rewrite a relative image src to its stored blob.
+                    // Only the rendered source's own sibling map is consulted
+                    // (nil for pages → no-op). The renderer already filters out
+                    // absolute/data:/wiki: srcs before calling us.
+                    guard let map = renderedSourceMap, let siblingID = map[src] else { return nil }
+                    return "\(blobScheme)://source/\(siblingID.rawValue)"
+                })
                 let html = WikiReaderView.documentHTML(body)
                 let convertMs = Self.elapsedMs(since: t0)
                 let convertDone = DispatchTime.now()

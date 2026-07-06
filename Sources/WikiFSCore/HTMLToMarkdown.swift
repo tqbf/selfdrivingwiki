@@ -47,6 +47,28 @@ public enum HTMLToMarkdown {
         return Result(markdown: markdown, title: title)
     }
 
+    /// Tokenize + scope to main content, returning the scoped tokens. Internal
+    /// so the website snapshot extractor can extract/rewrite `<img src>` at the
+    /// token level before render — sharing the same tokenizer + scoper the
+    /// normal `convert` path uses.
+    static func scopedTokens(for html: String) -> [Token] {
+        scopeToMainContent(Tokenizer.tokenize(html))
+    }
+
+    /// Render pre-scoped tokens to Markdown (the render step only, no re-tokenize).
+    /// Internal counterpart to `scopedTokens(for:)`.
+    static func markdown(fromScopedTokens tokens: [Token]) -> String {
+        var renderer = Renderer()
+        return renderer.render(tokens)
+    }
+
+    /// Extract the document title from raw HTML (tokenize + scan), without
+    /// converting the body. Internal so the snapshot path can name the page from
+    /// `<title>` before it rewrites image srcs.
+    static func titleOnly(from html: String) -> String? {
+        extractTitle(from: Tokenizer.tokenize(html))
+    }
+
     /// Convenience: just the Markdown body.
     public static func markdown(from html: String) -> String {
         convert(html).markdown

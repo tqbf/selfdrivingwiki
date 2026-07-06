@@ -501,6 +501,8 @@ struct SourceDetailView: View {
             headVersion = store.processedMarkdownHead(for: file)
         } catch SourceRefreshService.RefreshError.notRefreshable(let agent) {
             refreshError = "This \(agent) source can't be refreshed."
+        } catch SourceRefreshService.RefreshError.snapshotWithImages {
+            refreshError = "This snapshot source includes images; re-snapshotting on refresh is coming soon."
         } catch {
             refreshError = "Refresh failed: \(error.localizedDescription)"
         }
