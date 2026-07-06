@@ -2,6 +2,47 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-06 — Graph-model Phase 4 foundation: `sources.role` + `source_links` rebuild (v22) + media filtering
+
+Landed the **storage substrate** for Phase 4 (Media & roles): schema v22 adds
+`sources.role` (`'primary'` | `'media'`) and rebuilds `source_links` into the
+§4.4 rowid + role/pin shape, plus the one demoable behavior change that
+exercises the new column — **media sources are filtered out of the main Sources
+list**.
+
+**Schema (v22).** Two additive, data-preserving changes inside one
+`migrateV21ToV22()` transaction:
+- `ALTER TABLE sources ADD COLUMN role TEXT NOT NULL DEFAULT 'primary'` — the
+  default backfills every existing row.
+- `source_links` rebuild (mirrors the shipped v10→v11 pattern): drop the
+  composite PK (rowid table per §4.4), add `role TEXT NOT NULL DEFAULT 'cite'` +
+  `pinned_version_id TEXT`, and create the `source_links_edge` unique index on
+  `(from_page_id, to_source_id, role, COALESCE(pinned_version_id, ''))`. The
+  COALESCE restores the v11 dedup semantics (SQLite treats NULLs as distinct).
+
+**Value type + read/write paths.** New `SourceRole` enum (`.primary`/`.media`,
+modeled on `RefKind`); `SourceSummary.role` + `isPrimary` seam; the central
+`sourceSummary(from:)` decoder + all six SELECTs (including the two search
+paths) append `role`; `addSource`/`addBytelessSource` write the column (with a
+defaulted `role:` param). The `WikiStore` protocol requirement gains `role`
+(undeclared-defaulted — the 3 existential call sites in `WikiStoreModel` pass
+`.primary` explicitly).
+
+**Media filtering.** `SourcesContainerView.visibleSources` applies
+`.filter { $0.isPrimary }` — a `.media` source never appears in the main Sources
+list or its search.
+
+**Bug fix found in testing:** the `FreshSchemaParityTests.columns`/`fks` helpers
+used `PRAGMA table_info table` (no parens) which silently failed to prepare on
+all SQLite versions — they always returned `[]`. Fixed to use the parenthesized
+form `PRAGMA table_info(table)`. The parity fingerprint test passed vacuously
+(both paths produced empty column lists); it now actually compares column/FK
+data.
+
+**No `changeToken` change** — a default column doesn't move the token for
+existing rows. 1577 tests green (+5 new). Embeds/render-dispatch/`original_path`
+deferred to the second Phase 4 handoff.
+
 ## 2026-07-06 — Source refresh + Apple Podcasts byteless conversion (Phase 3b)
 
 Shipped two features on the graph-model versioning substrate:

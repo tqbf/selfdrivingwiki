@@ -38,11 +38,16 @@ import SQLite3
         return out
     }
 
+    /// First-row, first-column text value (empty string when no row / NULL).
+    private func scalarText(_ db: OpaquePointer, _ sql: String) -> String {
+        texts(db, sql).first ?? ""
+    }
+
     private struct Col { let name, type, dflt: String; let notnull, pk: Int32 }
 
     private func columns(_ db: OpaquePointer, _ table: String) -> [Col] {
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "PRAGMA table_info \(table);", -1, &stmt, nil) == SQLITE_OK
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(\(table));", -1, &stmt, nil) == SQLITE_OK
         else { return [] }
         defer { sqlite3_finalize(stmt) }
         var out: [Col] = []
@@ -61,7 +66,7 @@ import SQLite3
 
     private func fks(_ db: OpaquePointer, _ table: String) -> [FK] {
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "PRAGMA foreign_key_list \(table);", -1, &stmt, nil) == SQLITE_OK
+        guard sqlite3_prepare_v2(db, "PRAGMA foreign_key_list(\(table));", -1, &stmt, nil) == SQLITE_OK
         else { return [] }
         defer { sqlite3_finalize(stmt) }
         var out: [FK] = []
@@ -119,9 +124,9 @@ import SQLite3
         let fast = try fingerprint(at: fastURL)
         let ladder = try fingerprint(at: ladderURL)
 
-        // Both must report head version 19.
-        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "21")
-        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "21")
+        // Both must report head version 22.
+        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "22")
+        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "22")
 
         if fast != ladder {
             Issue.record("fresh fast-path schema drifted from the stepwise ladder:\n--- fast ---\n\(fast)\n--- ladder ---\n\(ladder)")
@@ -197,7 +202,7 @@ import SQLite3
         // 3. Reopen → runs the v20→v21 backfill.
         sqlite3_close(db)
         let migrated = try SQLiteWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "21")
+        #expect(migrated.pragmaValue("user_version") == "22")
 
         // 4. The legacy extraction row was backfilled: blob_hash + activity_id + source_version_id set.
         #expect(migrated.scalarText(
@@ -223,5 +228,145 @@ import SQLite3
         // 5. Content is byte-identical when read back through the resolved reader.
         let head = try migrated.processedMarkdownHead(sourceID: pdf.id)
         #expect(head?.content == "# Legacy\nbody bytes")
+    }
+
+    // MARK: - v22 (graph-model Phase 4 foundation): sources.role + source_links rebuild
+
+    /// Strip v22 schema to simulate a genuine v21 DB, so reopening triggers the
+    /// v21→v22 migration. Drops `sources.role` and rebuilds `source_links` to the
+    /// v11 composite-PK shape (no role/pin columns). Used by the v22 tests below.
+    private func rewindToV21(_ db: OpaquePointer) {
+        exec(db, "PRAGMA user_version=21;")
+        exec(db, "ALTER TABLE sources DROP COLUMN role;")
+        exec(db, "DROP INDEX IF EXISTS source_links_edge;")
+        exec(db, "DROP TABLE source_links;")
+        exec(db, """
+        CREATE TABLE source_links (
+            from_page_id TEXT NOT NULL REFERENCES pages(id),
+            to_source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+            link_text    TEXT NOT NULL,
+            PRIMARY KEY (from_page_id, to_source_id)
+        );
+        """)
+    }
+
+    /// AC.1 — On a migrated DB, `sources.role` exists (NOT NULL, default
+    /// `'primary'`), and `user_version` reports 22.
+    @Test func v21ToV22AddsSourcesRole() throws {
+        let url = tempURL()
+        do {
+            let store = try SQLiteWikiStore(databaseURL: url)
+            _ = try store.addSource(filename: "seed.pdf", data: Data("%PDF".utf8))
+        }
+        let db = try open(url)
+        rewindToV21(db)
+        sqlite3_close(db)
+
+        let migrated = try SQLiteWikiStore(databaseURL: url)
+        #expect(migrated.pragmaValue("user_version") == "22")
+        let db2 = try open(url)
+        defer { sqlite3_close(db2) }
+        let roleCol = columns(db2, "sources").first { $0.name == "role" }
+        #expect(roleCol != nil, "sources.role column missing after migration")
+        #expect(roleCol?.notnull == 1, "sources.role must be NOT NULL")
+        // Default verified through behavior: addSource without role → 'primary'.
+        let test = try migrated.addSource(filename: "def.txt", data: Data("x".utf8))
+        #expect(test.role == .primary)
+    }
+
+    /// AC.2 — The v21→v22 migration is data-preserving: every source that existed
+    /// pre-migration reads back with `role='primary'` and unchanged identity.
+    @Test func v21ToV22MigrationPreservesSources() throws {
+        let url = tempURL()
+        let before: [(id: String, filename: String, displayName: String?, version: Int)]
+        do {
+            let store = try SQLiteWikiStore(databaseURL: url)
+            let s1 = try store.addSource(filename: "a.pdf", data: Data("%PDF".utf8))
+            let s2 = try store.addSource(filename: "b.txt", data: Data("hello".utf8))
+            before = [
+                (s1.id.rawValue, s1.filename, s1.displayName, s1.version),
+                (s2.id.rawValue, s2.filename, s2.displayName, s2.version),
+            ]
+        }
+
+        let db = try open(url)
+        rewindToV21(db)
+        sqlite3_close(db)
+
+        let migrated = try SQLiteWikiStore(databaseURL: url)
+        let db2 = try open(url)
+        defer { sqlite3_close(db2) }
+        for (id, filename, displayName, version) in before {
+            #expect(scalarText(db2, "SELECT role FROM sources WHERE id='\(id)';") == "primary")
+            #expect(scalarText(db2, "SELECT filename FROM sources WHERE id='\(id)';") == filename)
+            #expect(scalarText(db2, "SELECT coalesce(display_name,'') FROM sources WHERE id='\(id)';")
+                    == (displayName ?? ""))
+            #expect(scalarText(db2, "SELECT version FROM sources WHERE id='\(id)';")
+                    == String(version))
+        }
+        let count = scalarText(db2, "SELECT COUNT(*) FROM sources;")
+        #expect(count == String(before.count))
+        _ = migrated
+    }
+
+    /// AC.3 — source_links is rebuilt to the §4.4 shape and is byte-identical in
+    /// behavior: (a) rows copy as role='cite'/pinned NULL, (b) index exists,
+    /// (c) cascade still works, (d) dedup still collapses, (e) backlinks match.
+    @Test func v22SourceLinksRebuildIsByteIdentical() throws {
+        let url = tempURL()
+        let pageID: String
+        let sourceID: String
+        let page: WikiPage
+        let source: SourceSummary
+        do {
+            let store = try SQLiteWikiStore(databaseURL: url)
+            page = try store.createPage(title: "Source Page")
+            source = try store.addSource(filename: "ref.txt", data: Data("ref".utf8))
+            pageID = page.id.rawValue
+            sourceID = source.id.rawValue
+        }
+
+        // Rewind to v21 (source_links back to v11 composite-PK shape).
+        let db = try open(url)
+        rewindToV21(db)
+        // Seed two source_links rows in v11 shape.
+        exec(db, """
+        INSERT INTO source_links (from_page_id, to_source_id, link_text)
+        VALUES ('\(pageID)', '\(sourceID)', 'seeded link');
+        """)
+        sqlite3_close(db)
+
+        // Reopen → v22 migration rebuilds source_links.
+        let migrated = try SQLiteWikiStore(databaseURL: url)
+        #expect(migrated.pragmaValue("user_version") == "22")
+        let db2 = try open(url)
+        defer { sqlite3_close(db2) }
+
+        // (a) Pre-migration rows copied with role='cite', pinned_version_id NULL.
+        #expect(scalarText(db2, "SELECT COUNT(*) FROM source_links WHERE to_source_id='\(sourceID)';") == "1")
+        #expect(scalarText(db2, "SELECT role FROM source_links WHERE to_source_id='\(sourceID)' LIMIT 1;") == "cite")
+        #expect(scalarText(db2, "SELECT COUNT(*) FROM source_links WHERE pinned_version_id IS NOT NULL;") == "0")
+
+        // (b) source_links_edge unique index exists.
+        #expect(scalarText(db2,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='source_links_edge';") != "0")
+
+        // (e) Backlinks query returns the same page.
+        let backlinks = try migrated.sourceLinkingPages(to: source.id)
+        #expect(backlinks == [page.id])
+
+        // (d) Dedup: replaceLinks with two links to the same source → 1 row.
+        let dedupPage = try migrated.createPage(title: "Dedup")
+        try migrated.replaceLinks(from: dedupPage.id, parsedLinks: [
+            .init(linkType: .source, target: source.filename, linkText: "one"),
+            .init(linkType: .source, target: source.filename, linkText: "two"),
+        ])
+        #expect(scalarText(db2,
+            "SELECT COUNT(*) FROM source_links WHERE from_page_id='\(dedupPage.id.rawValue)';") == "1")
+
+        // (c) Cascade: deleting the source removes all its source_links rows.
+        try migrated.deleteSource(id: source.id)
+        #expect(scalarText(db2,
+            "SELECT COUNT(*) FROM source_links WHERE to_source_id='\(sourceID)';") == "0")
     }
 }

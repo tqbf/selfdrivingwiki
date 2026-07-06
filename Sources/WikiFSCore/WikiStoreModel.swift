@@ -1217,7 +1217,7 @@ public final class WikiStoreModel {
         try store.addSource(
             filename: m.filename, data: m.data,
             zoteroItemKey: m.zoteroItemKey, zoteroItemTitle: m.zoteroItemTitle,
-            mimeType: m.mimeType, provenance: m.provenance)
+            mimeType: m.mimeType, provenance: m.provenance, role: .primary)
     }
 
     /// Ingest dropped files. For each URL: reject directories (a recursive
@@ -1335,7 +1335,8 @@ public final class WikiStoreModel {
                 throw URLFetchService.FetchError.invalidURL("podcast transcript missing provenance")
             }
             let summary = try store.addBytelessSource(
-                filename: transcript.filename, mimeType: transcript.mimeType, provenance: prov)
+                filename: transcript.filename, mimeType: transcript.mimeType,
+                provenance: prov, role: .primary)
             let markdown = String(data: transcript.data, encoding: .utf8) ?? ""
             try store.appendProcessedMarkdown(
                 sourceID: summary.id, content: markdown, origin: "transcript", note: nil)
@@ -1432,7 +1433,7 @@ public final class WikiStoreModel {
         do {
             _ = try store.addSource(
                 filename: filename, data: data, zoteroItemKey: nil, zoteroItemTitle: nil,
-                mimeType: nil, provenance: nil)
+                mimeType: nil, provenance: nil, role: .primary)
             reloadSources()
             onPageDidChange?()
         } catch WikiStoreError.duplicateContent(let existing) {

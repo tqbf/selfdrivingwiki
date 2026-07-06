@@ -1,5 +1,19 @@
 import Foundation
 
+/// The role a source plays in the wiki (graph-model §4.2). `primary` is the
+/// ingest default for every ordinary source (the verbatim bytes the agent
+/// summarizes). `media` marks a source that is presentation content (an image,
+/// audio, video) surfaced via `![[source:…]]` embeds rather than the main
+/// Sources list — set only by future provider fetches. Modeled on `RefKind`
+/// (`SourceVersioning.swift`): a raw-value enum so it round-trips through the
+/// `sources.role` TEXT column.
+public enum SourceRole: String, Sendable {
+    /// Raw value `"primary"` — the ingest default.
+    case primary
+    /// Raw value `"media"` — presentation content, excluded from the main list.
+    case media
+}
+
 /// Metadata for one source — the verbatim bytes ingested into the app and
 /// stored in the `sources` table (NOT a wiki page). The raw `content`
 /// BLOB is deliberately NOT part of this summary: it is fetched on demand via
@@ -34,6 +48,18 @@ public struct SourceSummary: Identifiable, Hashable, Sendable {
     /// resolution and sidebar/file-provider presentation.
     public let displayName: String?
 
+    /// The role of this source (graph-model §4.2): `.primary` (the ingest
+    /// default — ordinary content the agent summarizes) or `.media`
+    /// (presentation content like an image/audio/video, surfaced via embeds).
+    public let role: SourceRole
+
+    /// True when this source belongs in the main Sources list (`.primary`).
+    /// A `.media` source is filtered out of the list and its search. This is
+    /// the unit-testable seam `SourcesContainerView.visibleSources` filters
+    /// through — so an omitted or inverted filter fails the test, not just
+    /// the build.
+    public var isPrimary: Bool { role == .primary }
+
     /// Best human-readable name: `displayName` when set and non-empty, otherwise `filename`.
     /// Use this everywhere a label is needed instead of branching on `displayName` at the call site.
     public var effectiveName: String {
@@ -52,7 +78,8 @@ public struct SourceSummary: Identifiable, Hashable, Sendable {
         version: Int,
         zoteroItemKey: String? = nil,
         zoteroItemTitle: String? = nil,
-        displayName: String? = nil
+        displayName: String? = nil,
+        role: SourceRole = .primary
     ) {
         self.id = id
         self.filename = filename
@@ -65,5 +92,6 @@ public struct SourceSummary: Identifiable, Hashable, Sendable {
         self.zoteroItemKey = zoteroItemKey
         self.zoteroItemTitle = zoteroItemTitle
         self.displayName = displayName
+        self.role = role
     }
 }

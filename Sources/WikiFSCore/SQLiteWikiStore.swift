@@ -225,7 +225,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             zotero_item_key TEXT,
             zotero_item_title TEXT,
             display_name TEXT,
-            content_hash TEXT
+            content_hash TEXT,
+            role TEXT NOT NULL DEFAULT 'primary'
         );
         """)
         try exec("CREATE INDEX ingested_files_created ON sources(created_at);")
@@ -253,14 +254,27 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             ON source_markdown_versions(file_id, id);
         """)
 
-        // source_links with cascade (v10 create, v11 cascade rebuild).
+        // source_links with cascade (v10 create, v11 cascade rebuild, v22
+        // role/pin rebuild). v22 turns this into a rowid table (drops the
+        // composite PRIMARY KEY) and adds `role` + `pinned_version_id` per §4.4
+        // (edges — roles and pins). The `source_links_edge` unique index on
+        // `(from_page_id, to_source_id, role, COALESCE(pinned_version_id, ''))`
+        // restores the v11 dedup semantics: SQLite treats NULLs as distinct in
+        // unique constraints, so the COALESCE collapses duplicate *unpinned*
+        // links to one source exactly as the old composite PK did.
         try exec("""
         CREATE TABLE source_links (
             from_page_id TEXT NOT NULL REFERENCES pages(id),
             to_source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
             link_text    TEXT NOT NULL,
-            PRIMARY KEY (from_page_id, to_source_id)
+            role         TEXT NOT NULL DEFAULT 'cite',
+            pinned_version_id TEXT
         );
+        """)
+        try exec("""
+        CREATE UNIQUE INDEX source_links_edge
+            ON source_links(from_page_id, to_source_id, role,
+                            COALESCE(pinned_version_id, ''));
         """)
 
         // Singleton documents (seeded) + the append-only log.
@@ -419,7 +433,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // columns are already in the fresh-path table def above; no legacy rows
         // to backfill on a brand-new DB. Shared with the v20→21 migration step.
 
-        try exec("PRAGMA user_version=21;")
+        // v22 (graph-model Phase 4 foundation): `sources.role` is already in the
+        // fresh-path table def above, and `source_links` is already rebuilt to
+        // the §4.4 rowid + role/pin shape. No legacy rows to backfill on a
+        // brand-new DB. Shared with the v21→22 migration step.
+
+        try exec("PRAGMA user_version=22;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -994,6 +1013,19 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try exec("PRAGMA user_version=21;")
             version = 21
         }
+
+        // Step 21 → 22 (graph-model Phase 4 foundation): adds `sources.role`
+        // (`'primary'` | `'media'`) and rebuilds `source_links` into the §4.4
+        // rowid + role/pin shape (`role` + `pinned_version_id` + the
+        // `source_links_edge` unique index). `role` defaults to `'primary'`
+        // (every existing source is primary); `source_links.role` defaults to
+        // `'cite'`, `pinned_version_id` to NULL. Both are additive and
+        // data-preserving. See `migrateV21ToV22`.
+        if version < 22 {
+            try migrateV21ToV22()
+            try exec("PRAGMA user_version=22;")
+            version = 22
+        }
     }
 
     /// The v19→20 migration step. Creates the objects tables, then — for every
@@ -1289,6 +1321,75 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             upd.reset()
             resolveVersion.reset()
             resolveVersionMax.reset()
+        }
+    }
+
+    /// The v21→v22 migration step (graph-model Phase 4 foundation). Two additive,
+    /// data-preserving schema changes inside one `withTransaction`:
+    ///
+    /// 1. `sources.role TEXT NOT NULL DEFAULT 'primary'` — `ALTER TABLE … ADD
+    ///    COLUMN` applies the default to every existing row (the backfill *is*
+    ///    the default). Today every source is `primary`; `media` sources are
+    ///    written later by future provider fetches.
+    /// 2. `source_links` rebuild — mirrors the shipped v10→v11 rename→create→
+    ///    copy→drop pattern exactly (it's a leaf join table; nothing FKs to it).
+    ///    The composite `PRIMARY KEY` is dropped (making it a rowid table per
+    ///    §4.4), and `role TEXT NOT NULL DEFAULT 'cite'` +
+    ///    `pinned_version_id TEXT` are added. The `source_links_edge` unique
+    ///    index on `(from_page_id, to_source_id, role, COALESCE(pinned_version_id,
+    ///    ''))` restores the v11 dedup semantics: SQLite treats NULLs as distinct
+    ///    in unique constraints, so the COALESCE collapses duplicate *unpinned*
+    ///    links to one source exactly as the old composite PK did.
+    private func migrateV21ToV22() throws {
+        try withTransaction {
+            // Guard: a DB rewound from v22 for testing already has `sources.role`
+            // (and the rebuilt `source_links`). A genuine v21 DB does not. Skip
+            // the whole step if present — matches the established rewind guard.
+            let hasRole = try queryScalarText(
+                "SELECT COUNT(*) FROM pragma_table_info('sources') WHERE name='role';") != "0"
+            guard !hasRole else { return }
+
+            // 1. sources.role — ADD COLUMN applies the default to every existing
+            //    row (the backfill *is* the default). Every source becomes 'primary'.
+            try exec("ALTER TABLE sources ADD COLUMN role TEXT NOT NULL DEFAULT 'primary';")
+
+            // 2. source_links rebuild (mirrors the shipped v10→v11 rename→create→
+            //    copy→drop pattern — it's a leaf join table, nothing FKs to it).
+            //    Drop the composite PRIMARY KEY (rowid table per §4.4) and add
+            //    `role` + `pinned_version_id`. The `source_links_edge` unique index
+            //    on `(from_page_id, to_source_id, role, COALESCE(pinned_version_id,
+            //    ''))` restores the v11 dedup semantics: SQLite treats NULLs as
+            //    distinct in unique constraints, so the COALESCE collapses
+            //    duplicate *unpinned* links to one source exactly as the old PK did.
+            // Guard: a hand-built test fixture at v19/v21 may not have the table
+            // (created at v10) — skip the rebuild when it's absent. A genuine
+            // production DB at v21 always has it.
+            let hasSourceLinks = try queryScalarText(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='source_links';") != "0"
+            guard hasSourceLinks else { return }
+            let hasRoleCol = try queryScalarText(
+                "SELECT COUNT(*) FROM pragma_table_info('source_links') WHERE name='role';") != "0"
+            guard !hasRoleCol else { return }  // already rebuilt (rewound v22 DB)
+            try exec("ALTER TABLE source_links RENAME TO source_links_v21;")
+            try exec("""
+            CREATE TABLE source_links (
+                from_page_id TEXT NOT NULL REFERENCES pages(id),
+                to_source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                link_text    TEXT NOT NULL,
+                role         TEXT NOT NULL DEFAULT 'cite',
+                pinned_version_id TEXT
+            );
+            """)
+            try exec("""
+            INSERT INTO source_links (from_page_id, to_source_id, link_text, role, pinned_version_id)
+            SELECT from_page_id, to_source_id, link_text, 'cite', NULL FROM source_links_v21;
+            """)
+            try exec("DROP TABLE source_links_v21;")
+            try exec("""
+            CREATE UNIQUE INDEX source_links_edge
+                ON source_links(from_page_id, to_source_id, role,
+                                COALESCE(pinned_version_id, ''));
+            """)
         }
     }
 
@@ -1935,7 +2036,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         zoteroItemKey: String? = nil,
         zoteroItemTitle: String? = nil,
         mimeType: String? = nil,
-        provenance: SourceProvenance? = nil
+        provenance: SourceProvenance? = nil,
+        role: SourceRole = .primary
     ) throws -> SourceSummary {
         lock.lock(); defer { lock.unlock() }
         guard data.count <= Self.ingestByteCap else {
@@ -1945,7 +2047,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let contentHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let dupStmt = try statement("""
         SELECT id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
-               zotero_item_key, zotero_item_title, display_name
+               zotero_item_key, zotero_item_title, display_name, role
         FROM sources WHERE content_hash = ?1 LIMIT 1;
         """)
         dupStmt.reset()
@@ -1982,8 +2084,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let stmt = try statement("""
         INSERT INTO sources
           (id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
-           zotero_item_key, zotero_item_title, display_name, content_hash)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1, ?7, ?8, ?9, ?10);
+           zotero_item_key, zotero_item_title, display_name, content_hash, role)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1, ?7, ?8, ?9, ?10, ?11);
         """)
         // Graph-model Phase 1: the content bytes no longer live in `sources`.
         // In ONE transaction, write the blob (dedup via INSERT OR IGNORE), an
@@ -2008,6 +2110,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             if let zoteroItemTitle { try stmt.bind(zoteroItemTitle, at: 8) }  // else leave NULL
             if let displayName { try stmt.bind(displayName, at: 9) }  // else leave NULL
             try stmt.bind(contentHash, at: 10)
+            try stmt.bind(role.rawValue, at: 11)
             _ = try stmt.step()
 
             // 1. Blob (identical bytes = one row, ever).
@@ -2089,7 +2192,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             id: id, filename: filename, ext: ext, mimeType: mime,
             byteSize: data.count, createdAt: now, updatedAt: now, version: 1,
             zoteroItemKey: zoteroItemKey, zoteroItemTitle: zoteroItemTitle,
-            displayName: displayName
+            displayName: displayName, role: role
         )
     }
 
@@ -2110,7 +2213,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     public func addBytelessSource(
         filename: String,
         mimeType: String? = nil,
-        provenance: SourceProvenance
+        provenance: SourceProvenance,
+        role: SourceRole = .primary
     ) throws -> SourceSummary {
         lock.lock(); defer { lock.unlock() }
 
@@ -2120,7 +2224,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             let dupStmt = try statement("""
             SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size,
                    s.created_at, s.updated_at, s.version,
-                   s.zotero_item_key, s.zotero_item_title, s.display_name
+                   s.zotero_item_key, s.zotero_item_title, s.display_name, s.role
             FROM sources s
             JOIN source_versions sv ON sv.source_id = s.id
             WHERE sv.external_identity = ?1 AND sv.blob_hash IS NULL
@@ -2157,8 +2261,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let insStmt = try statement("""
         INSERT INTO sources
           (id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
-           zotero_item_key, zotero_item_title, display_name, content_hash)
-        VALUES (?1, ?2, ?3, ?4, 0, ?5, ?5, 1, NULL, NULL, ?6, NULL);
+           zotero_item_key, zotero_item_title, display_name, content_hash, role)
+        VALUES (?1, ?2, ?3, ?4, 0, ?5, ?5, 1, NULL, NULL, ?6, NULL, ?7);
         """)
 
         try withTransaction {
@@ -2174,6 +2278,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             if let mime { try insStmt.bind(mime, at: 4) }
             try insStmt.bind(nowTS, at: 5)
             if let displayName { try insStmt.bind(displayName, at: 6) }
+            try insStmt.bind(role.rawValue, at: 7)
             _ = try insStmt.step()
 
             // 1. Fetch/import activity + real provider agent (provenance is
@@ -2232,7 +2337,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             id: id, filename: filename, ext: ext, mimeType: mime,
             byteSize: 0, createdAt: now, updatedAt: now, version: 1,
             zoteroItemKey: nil, zoteroItemTitle: nil,
-            displayName: displayName
+            displayName: displayName, role: role
         )
     }
 
@@ -2242,7 +2347,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         SELECT id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
-               zotero_item_key, zotero_item_title, display_name
+               zotero_item_key, zotero_item_title, display_name, role
         FROM sources ORDER BY created_at DESC, id DESC;
         """)
         defer { stmt.reset() }
@@ -2258,7 +2363,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         SELECT id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
-               zotero_item_key, zotero_item_title, display_name
+               zotero_item_key, zotero_item_title, display_name, role
         FROM sources WHERE id = ?1;
         """)
         defer { stmt.reset() }
@@ -2872,8 +2977,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
     /// Map the current row of a `sources` SELECT (column order: id,
     /// filename, ext, mime_type, byte_size, created_at, updated_at, version,
-    /// zotero_item_key, zotero_item_title, display_name) to a summary.
+    /// zotero_item_key, zotero_item_title, display_name, role) to a summary.
     /// `mime_type` and the two Zotero columns are read as NULL→nil via the column type.
+    /// `role` is a NOT NULL TEXT column decoded via `SourceRole(rawValue:)`.
     private func sourceSummary(from stmt: SQLiteStatement) -> SourceSummary {
         let mime = sqlite3_column_type(stmt.handle, 3) == SQLITE_NULL
             ? nil : stmt.text(at: 3)
@@ -2883,6 +2989,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             ? nil : stmt.text(at: 9)
         let displayName = sqlite3_column_type(stmt.handle, 10) == SQLITE_NULL
             ? nil : stmt.text(at: 10)
+        let role = SourceRole(rawValue: stmt.text(at: 11)) ?? .primary
         return SourceSummary(
             id: PageID(rawValue: stmt.text(at: 0)),
             filename: stmt.text(at: 1),
@@ -2894,7 +3001,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             version: Int(stmt.int(at: 7)),
             zoteroItemKey: zoteroItemKey,
             zoteroItemTitle: zoteroItemTitle,
-            displayName: displayName
+            displayName: displayName,
+            role: role
         )
     }
 
@@ -3623,7 +3731,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         guard !q.isEmpty else { return [] }
         let sql = """
         SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size, s.created_at, s.updated_at,
-               s.version, s.zotero_item_key, s.zotero_item_title, s.display_name
+               s.version, s.zotero_item_key, s.zotero_item_title, s.display_name, s.role
         FROM sources_fts
         JOIN source_search ss ON ss.rowid = sources_fts.rowid
         JOIN sources s ON s.id = ss.source_id
@@ -3953,7 +4061,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     private func searchSourcesSemantic(blob queryBlob: Data, limit: Int) throws -> [SourceSummary] {
         let sql = """
         SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size, s.created_at, s.updated_at,
-               s.version, s.zotero_item_key, s.zotero_item_title, s.display_name
+               s.version, s.zotero_item_key, s.zotero_item_title, s.display_name, s.role
         FROM (
             SELECT source_id, MIN(vec_distance_cosine(embedding, ?1)) AS best
             FROM source_chunks GROUP BY source_id
