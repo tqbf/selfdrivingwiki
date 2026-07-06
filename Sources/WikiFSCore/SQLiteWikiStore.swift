@@ -2180,7 +2180,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         zoteroItemTitle: String? = nil,
         mimeType: String? = nil,
         provenance: SourceProvenance? = nil,
-        role: SourceRole = .primary
+        role: SourceRole = .primary,
+        originalPath: String? = nil,
+        activityID: String? = nil
     ) throws -> SourceSummary {
         lock.lock(); defer { lock.unlock() }
         guard data.count <= Self.ingestByteCap else {
@@ -2269,49 +2271,59 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             //    present (Phase 3a), seed a REAL provider agent + an activity
             //    carrying plan/external_ref; otherwise fall back to the synthetic
             //    legacy-import agent + a bare 'import' activity (byte-identical
-            //    to the pre-Phase-3 path).
-            let agentID: String
-            let activityKind: String
-            if let prov = provenance {
-                agentID = try ensureAgent(
-                    name: prov.agentName, kind: prov.agentKind,
-                    version: prov.agentVersion, externalRef: nil)
-                activityKind = prov.activityKind
+            //    to the pre-Phase-3 path). When `activityID` is provided (Phase 4
+            //    snapshot path — the page shares the snapshot's pre-created
+            //    activity), skip activity creation entirely and reuse it.
+            let resolvedActivityID: String
+            if let activityID {
+                resolvedActivityID = activityID
             } else {
-                agentID = try legacyImportAgentID()
-                activityKind = "import"
+                let agentID: String
+                let activityKind: String
+                if let prov = provenance {
+                    agentID = try ensureAgent(
+                        name: prov.agentName, kind: prov.agentKind,
+                        version: prov.agentVersion, externalRef: nil)
+                    activityKind = prov.activityKind
+                } else {
+                    agentID = try legacyImportAgentID()
+                    activityKind = "import"
+                }
+                resolvedActivityID = ULID.generate()
+                let insActivity = try statement("""
+                INSERT INTO activities (id, kind, agent_id, plan, external_ref, started_at, ended_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6);
+                """)
+                insActivity.reset()
+                try insActivity.bind(resolvedActivityID, at: 1)
+                try insActivity.bind(activityKind, at: 2)
+                try insActivity.bind(agentID, at: 3)
+                if let plan = provenance?.plan { try insActivity.bind(plan, at: 4) }
+                if let extRef = provenance?.externalRef { try insActivity.bind(extRef, at: 5) }
+                try insActivity.bind(nowTS, at: 6)
+                _ = try insActivity.step()
             }
-            let activityID = ULID.generate()
-            let insActivity = try statement("""
-            INSERT INTO activities (id, kind, agent_id, plan, external_ref, started_at, ended_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6);
-            """)
-            insActivity.reset()
-            try insActivity.bind(activityID, at: 1)
-            try insActivity.bind(activityKind, at: 2)
-            try insActivity.bind(agentID, at: 3)
-            if let plan = provenance?.plan { try insActivity.bind(plan, at: 4) }
-            if let extRef = provenance?.externalRef { try insActivity.bind(extRef, at: 5) }
-            try insActivity.bind(nowTS, at: 6)
-            _ = try insActivity.step()
 
             // 3. v1 version (parent_id NULL, the content blob). external_identity
             //    is the canonical external id (resolved URL / Zotero key), NULL
-            //    when no provenance is present.
+            //    when no provenance is present. original_path is the relative
+            //    sibling path (Phase 4 snapshot images); NULL for the page and
+            //    all non-snapshot sources.
             let versionID = ULID.generate()
             let insVersion = try statement("""
             INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
-                                         mime_type, activity_id, external_identity, fetched_at)
-            VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7);
+                                         mime_type, original_path, activity_id, external_identity, fetched_at)
+            VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8);
             """)
             insVersion.reset()
             try insVersion.bind(versionID, at: 1)
             try insVersion.bind(sourceID, at: 2)
             try insVersion.bind(contentHash, at: 3)
             if let mime { try insVersion.bind(mime, at: 4) }
-            try insVersion.bind(activityID, at: 5)
-            if let extID = provenance?.externalIdentity { try insVersion.bind(extID, at: 6) }
-            try insVersion.bind(nowTS, at: 7)
+            if let originalPath { try insVersion.bind(originalPath, at: 5) }
+            try insVersion.bind(resolvedActivityID, at: 6)
+            if let extID = provenance?.externalIdentity { try insVersion.bind(extID, at: 7) }
+            try insVersion.bind(nowTS, at: 8)
             _ = try insVersion.step()
 
             // 4. Active ref (generation 1).
@@ -2337,6 +2349,239 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             zoteroItemKey: zoteroItemKey, zoteroItemTitle: zoteroItemTitle,
             displayName: displayName, role: role
         )
+    }
+
+    // MARK: - Graph-model Phase 4: website snapshot store primitives
+
+    /// Create (or reuse) the shared fetch activity for a website snapshot. Opens
+    /// its **own** `withTransaction` (commits the agent + activity FIRST so the
+    /// `source_versions.activity_id` FK is satisfied before any image version is
+    /// written). Returns the `activityID`. Used **only** by the snapshot path.
+    @discardableResult
+    public func ensureFetchActivity(provenance: SourceProvenance) throws -> String {
+        lock.lock(); defer { lock.unlock() }
+        return try withTransaction {
+            let agentID = try ensureAgent(
+                name: provenance.agentName, kind: provenance.agentKind,
+                version: provenance.agentVersion, externalRef: nil)
+            let activityID = ULID.generate()
+            let nowTS = Date().timeIntervalSince1970
+            let insActivity = try statement("""
+            INSERT INTO activities (id, kind, agent_id, plan, external_ref, started_at, ended_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6);
+            """)
+            insActivity.reset()
+            try insActivity.bind(activityID, at: 1)
+            try insActivity.bind(provenance.activityKind, at: 2)
+            try insActivity.bind(agentID, at: 3)
+            if let plan = provenance.plan { try insActivity.bind(plan, at: 4) }
+            if let extRef = provenance.externalRef { try insActivity.bind(extRef, at: 5) }
+            try insActivity.bind(nowTS, at: 6)
+            _ = try insActivity.step()
+            return activityID
+        }
+    }
+
+    /// Store one snapshot image as a **per-snapshot** source (no source-level
+    /// `content_hash` dedup — each snapshot owns its image source rows). The
+    /// blob is still deduped (`INSERT OR IGNORE`). Writes a fresh `sources` row
+    /// + blob + v1 version bound to the shared `activityID` + `originalPath` +
+    /// `external_identity = sourceURL`, `role = .media`, + the active
+    /// `source-content` ref, all in one `withTransaction`.
+    ///
+    /// This is the primitive that makes the activity-join resolver correct:
+    /// each snapshot owns its image source/version rows, while identical bytes
+    /// collapse to one blob.
+    @discardableResult
+    public func addSnapshotImage(
+        filename: String,
+        data: Data,
+        mimeType: String,
+        originalPath: String,
+        sourceURL: URL,
+        activityID: String,
+        role: SourceRole = .media
+    ) throws -> SourceSummary {
+        lock.lock(); defer { lock.unlock() }
+        guard data.count <= Self.ingestByteCap else {
+            throw WikiStoreError.unexpected(
+                "source \(data.count) bytes exceeds cap \(Self.ingestByteCap)")
+        }
+        let contentHash = SHA256.hash(data: data)
+            .map { String(format: "%02x", $0) }.joined()
+        let id = PageID(rawValue: ULID.generate())
+        let ext = (filename as NSString).pathExtension.lowercased()
+        let mime = ContentSniff.mimeType(of: data) ?? mimeType
+        let now = Date()
+        let displayName: String? = {
+            if let resolved = DisplayNameResolver.resolve(
+                filename: filename, data: data, mimeType: mime, zoteroItemTitle: nil) {
+                return WikiNameRules.sanitized(resolved)
+            } else if !WikiNameRules.isLinkable(filename) {
+                return WikiNameRules.sanitized(filename)
+            }
+            return nil
+        }()
+
+        try withTransaction {
+            let sourceID = id.rawValue
+            let nowTS = now.timeIntervalSince1970
+
+            // 0. Fresh `sources` identity row (NO content_hash dedup).
+            let insSource = try statement("""
+            INSERT INTO sources
+              (id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
+               zotero_item_key, zotero_item_title, display_name, content_hash, role)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1, NULL, NULL, ?7, ?8, ?9);
+            """)
+            insSource.reset()
+            try insSource.bind(sourceID, at: 1)
+            try insSource.bind(filename, at: 2)
+            try insSource.bind(ext, at: 3)
+            try insSource.bind(mime, at: 4)
+            try insSource.bind(Int64(data.count), at: 5)
+            try insSource.bind(nowTS, at: 6)
+            if let displayName { try insSource.bind(displayName, at: 7) }
+            try insSource.bind(contentHash, at: 8)
+            try insSource.bind(role.rawValue, at: 9)
+            _ = try insSource.step()
+
+            // 1. Blob (identical bytes = one row, ever).
+            let insBlob = try statement(
+                "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+            insBlob.reset()
+            try insBlob.bind(contentHash, at: 1)
+            try insBlob.bind(Int64(data.count), at: 2)
+            try insBlob.bind(data, at: 3)
+            _ = try insBlob.step()
+
+            // 2. v1 version bound to the shared activity + original_path +
+            //    external_identity = the resolved source URL.
+            let versionID = ULID.generate()
+            let insVersion = try statement("""
+            INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
+                                         mime_type, original_path, activity_id, external_identity, fetched_at)
+            VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8);
+            """)
+            insVersion.reset()
+            try insVersion.bind(versionID, at: 1)
+            try insVersion.bind(sourceID, at: 2)
+            try insVersion.bind(contentHash, at: 3)
+            try insVersion.bind(mime, at: 4)
+            try insVersion.bind(originalPath, at: 5)
+            try insVersion.bind(activityID, at: 6)
+            try insVersion.bind(sourceURL.absoluteString, at: 7)
+            try insVersion.bind(nowTS, at: 8)
+            _ = try insVersion.step()
+
+            // 3. Active ref (generation 1).
+            let insRef = try statement("""
+            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+            VALUES ('source-content', ?1, ?2, 1, ?3);
+            """)
+            insRef.reset()
+            try insRef.bind(sourceID, at: 1)
+            try insRef.bind(versionID, at: 2)
+            try insRef.bind(nowTS, at: 3)
+            _ = try insRef.step()
+        }
+
+        upsertSourceSearch(sourceID: id, body: "")
+
+        return SourceSummary(
+            id: id, filename: filename, ext: ext, mimeType: mime,
+            byteSize: data.count, createdAt: now, updatedAt: now, version: 1,
+            zoteroItemKey: nil, zoteroItemTitle: nil,
+            displayName: displayName, role: role
+        )
+    }
+
+    /// True when the source's active content version's `activity_id` has sibling
+    /// versions with non-null `original_path` (i.e. this is a snapshot page with
+    /// image siblings). Mirrors the resolver join. Used by the refresh guard.
+    public func hasImageSiblings(sourceID: PageID) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let active = try activeContentVersion(sourceID: sourceID),
+              let activityID = active.activityID else { return false }
+        let stmt = try statement("""
+        SELECT COUNT(*) FROM source_versions
+        WHERE activity_id = ?1 AND original_path IS NOT NULL;
+        """)
+        stmt.reset()
+        try stmt.bind(activityID, at: 1)
+        guard try stmt.step() else { return false }
+        return stmt.int(at: 0) > 0
+    }
+
+    /// Batched sibling-image resolver maps: for each source, the
+    /// `[original_path → sibling sourceID]` map built from its active content
+    /// version's `activity_id`. Self-joins `source_versions` on the active
+    /// activity, returns sibling versions (non-null `original_path`) ordered by
+    /// `sv.id ASC` with first-wins per `original_path` (§7). The page's own
+    /// version has `original_path = NULL` (excluded). Value-only return
+    /// (sqlite-concurrency discipline: no statement/column state crosses the
+    /// boundary).
+    public func siblingImageResolvers() throws -> [PageID: [String: PageID]] {
+        lock.lock(); defer { lock.unlock() }
+        // One pass: for every source, resolve its active activity_id, then find
+        // sibling versions sharing that activity with non-null original_path.
+        // We do this in two steps to avoid a complex correlated subquery:
+        //   1. Map: sourceID → active activity_id
+        //   2. For each activity_id, collect [original_path → sourceID].
+        // Then fold: sourceID → { activity's [original_path → sourceID] }.
+
+        // Step 1: active version's activity_id per source (ref → else MAX(id)).
+        let activeStmt = try statement("""
+        SELECT s.id, (
+            SELECT sv.activity_id FROM refs r
+            JOIN source_versions sv ON sv.id = r.version_id
+            WHERE r.kind = 'source-content' AND r.owner_id = s.id
+        ) AS ref_activity,
+        COALESCE((
+            SELECT sv.activity_id FROM source_versions sv
+            WHERE sv.source_id = s.id ORDER BY sv.id DESC LIMIT 1
+        ), '') AS max_activity
+        FROM sources s;
+        """)
+        activeStmt.reset()
+        var sourceActivity: [(PageID, String)] = []
+        while try activeStmt.step() {
+            let sid = PageID(rawValue: activeStmt.text(at: 0))
+            let refAct = sqlite3_column_type(activeStmt.handle, 1) == SQLITE_NULL
+                ? nil : activeStmt.text(at: 1)
+            let maxAct = activeStmt.text(at: 2)
+            let activity = refAct ?? (maxAct.isEmpty ? nil : maxAct)
+            if let activity { sourceActivity.append((sid, activity)) }
+        }
+
+        // Step 2: collect all [activity_id → [(original_path, sourceID, versionID)]]
+        // ordered by versionID ASC for first-wins.
+        let siblingStmt = try statement("""
+        SELECT sv.activity_id, sv.original_path, sv.source_id, sv.id
+        FROM source_versions sv
+        WHERE sv.original_path IS NOT NULL AND sv.activity_id IS NOT NULL
+        ORDER BY sv.id ASC;
+        """)
+        siblingStmt.reset()
+        var byActivity: [String: [(String, PageID)]] = [:]
+        while try siblingStmt.step() {
+            let activity = siblingStmt.text(at: 0)
+            let path = siblingStmt.text(at: 1)
+            let sid = PageID(rawValue: siblingStmt.text(at: 2))
+            byActivity[activity, default: []].append((path, sid))
+        }
+
+        // Step 3: fold — for each source, its activity's path→siblingID map
+        // (first-wins per path, already ordered by id ASC).
+        var result: [PageID: [String: PageID]] = [:]
+        for (sid, activity) in sourceActivity {
+            var map: [String: PageID] = [:]
+            for (path, siblingID) in byActivity[activity] ?? [] {
+                if map[path] == nil { map[path] = siblingID }
+            }
+            if !map.isEmpty { result[sid] = map }
+        }
+        return result
     }
 
     /// Store a **byteless** source — the §11 model for sources whose content is

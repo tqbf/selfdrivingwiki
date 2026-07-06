@@ -209,6 +209,14 @@ edit; prefer it over the raw PDF when reading. `sources.jsonl` gives metadata
 and `source cat` the raw bytes; to find source **content** by meaning, use
 `$WIKICTL source search --query "…"` (semantic — works across PDFs and text).
 
+**Website snapshots:** a fetched web page that includes content images stores
+as a self-contained snapshot — the page's markdown plus its images as sibling
+sources (role `media`, filtered from the main Sources list). Image references
+in the stored markdown use relative paths (`![](images/foo.png)`) that resolve
+to the stored image blobs, rendering **offline and inline** with no network
+dependency. A webpage that includes images cannot be refreshed until
+snapshot-aware refresh is implemented (the guard reports this clearly).
+
 ## Workflows
 
 **Ingest** — bring one raw source into the wiki:

@@ -20,14 +20,27 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
 
     /// Render `markdown` to an HTML fragment (no `<html>`/`<body>` wrapper —
     /// `WikiReaderView.documentHTML` wraps it).
-    static func render(_ markdown: String) -> String {
+    ///
+    /// When `imageResolver` is provided, relative image srcs (those that are not
+    /// `http(s)`, `data:`, or already `wiki-blob:`/`wiki:`) are passed to it; a
+    /// non-nil return rewrites the `<img src>`. Absolute/protocol/data srcs and
+    /// unresolved relatives are left verbatim. Phase 4 sibling resolution.
+    static func render(
+        _ markdown: String,
+        imageResolver: ((String) -> String?)? = nil
+    ) -> String {
         var renderer = MarkdownHTMLRenderer()
+        renderer.imageResolver = imageResolver
         return renderer.visit(Document(parsing: markdown))
     }
 
     /// Per-render slug dedup counts, mirroring `AnchorBlock.makeSlug` so heading
     /// ids match the native reader's resolution list.
     private var slugCounts: [String: Int] = [:]
+
+    /// Phase 4: optional resolver that rewrites a relative image src to a
+    /// `wiki-blob://source/<id>` URL. Set by the static `render` before visiting.
+    private var imageResolver: ((String) -> String?)?
 
     private mutating func visitChildren(_ markup: Markup) -> String {
         var s = ""
@@ -117,7 +130,23 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     }
 
     mutating func visitImage(_ image: Image) -> String {
-        "<img src=\"\(escapeAttribute(image.source ?? ""))\" alt=\"\(escape(plainText(image)))\">"
+        let rawSrc = image.source ?? ""
+        let src = resolvedImageSrc(rawSrc)
+        return "<img src=\"\(escapeAttribute(src))\" alt=\"\(escape(plainText(image)))\">"
+    }
+
+    /// Phase 4: resolve a relative image src through the `imageResolver` (when
+    /// present). Only relative srcs are candidates — absolute (`http`/`https`),
+    /// `data:`, and already-rewritten (`wiki-blob:`/`wiki:`) srcs pass through
+    /// verbatim. An unresolved relative is left verbatim (no crash).
+    private func resolvedImageSrc(_ src: String) -> String {
+        guard let resolver = imageResolver, !src.isEmpty else { return src }
+        let lower = src.lowercased()
+        if lower.hasPrefix("http") || lower.hasPrefix("data:")
+            || lower.hasPrefix("wiki-blob:") || lower.hasPrefix("wiki:") {
+            return src
+        }
+        return resolver(src) ?? src
     }
 
     // MARK: Tables

@@ -1299,7 +1299,8 @@ public final class WikiStoreModel {
         try store.addSource(
             filename: m.filename, data: m.data,
             zoteroItemKey: m.zoteroItemKey, zoteroItemTitle: m.zoteroItemTitle,
-            mimeType: m.mimeType, provenance: m.provenance, role: .primary)
+            mimeType: m.mimeType, provenance: m.provenance, role: .primary,
+            originalPath: nil, activityID: nil)
     }
 
     /// Ingest dropped files. For each URL: reject directories (a recursive
@@ -1487,18 +1488,61 @@ public final class WikiStoreModel {
     /// main actor (the GET shouldn't stall the UI); the WebsiteProvider owns
     /// normalize→fetch→dispatch (materialization). Then store the result HERE on
     /// the main actor, where we own `store`.
+    ///
+    /// Phase 4: HTML pages with images are stored as a **website snapshot** —
+    /// the page plus its image siblings under one shared fetch activity. Non-HTML
+    /// and image-less HTML stay single-source.
     private func addURLViaWebsite(
         _ rawInput: String,
         fetcher: any URLFetchService.URLResourceFetcher
     ) async throws -> URLFetchService.FetchOutcome {
         let provider = WebsiteProvider(rawInput: rawInput, fetcher: fetcher)
-        let (materialized, plan) = try await provider.materializeWithPlan()
-        let summary = try storeMaterialized(materialized)
+        let snapshot = try await provider.materializeSnapshot()
+        let summary: SourceSummary
+        if snapshot.plan.kind == .htmlConverted && !snapshot.images.isEmpty {
+            summary = try storeSnapshot(snapshot)
+        } else {
+            summary = try storeMaterialized(snapshot.page)
+        }
         reloadSources()
         openTab(.source(summary.id))
         onPageDidChange?()
         return URLFetchService.FetchOutcome(
-            filename: plan.filename, byteSize: plan.data.count, kind: plan.kind)
+            filename: snapshot.plan.filename, byteSize: snapshot.plan.data.count, kind: snapshot.plan.kind)
+    }
+
+    /// Phase 4 — store a website snapshot: one shared fetch activity (committed
+    /// FIRST so the version FK is satisfied), then the page source via `addSource`
+    /// (with source-level content-hash dedup intact), then each image as a
+    /// per-snapshot `.media` source via `addSnapshotImage` (no source dedup; blob
+    /// still deduped). Three independent method-atomic commits (§8: the model has
+    /// no `withTransaction` access and needs none).
+    ///
+    /// The snapshot is intentionally non-atomic across siblings: a mid-snapshot
+    /// failure leaves the page + already-stored images committed and degrades
+    /// gracefully (un-stored images simply don't resolve at render). The page's
+    /// own `.duplicateContent` (a re-paste of the same page) propagates as today.
+    private func storeSnapshot(_ snapshot: WebsiteSnapshot) throws -> SourceSummary {
+        guard let prov = snapshot.page.provenance else {
+            return try storeMaterialized(snapshot.page)
+        }
+        // 1. Commit the shared activity FIRST so source_versions.activity_id FK
+        //    is satisfied before any version is written.
+        let activityID = try store.ensureFetchActivity(provenance: prov)
+        // 2. Store the page (source-level dedup intact; shares the activity).
+        let pageSummary = try store.addSource(
+            filename: snapshot.page.filename, data: snapshot.page.data,
+            zoteroItemKey: nil, zoteroItemTitle: nil,
+            mimeType: snapshot.page.mimeType, provenance: prov, role: .primary,
+            originalPath: nil, activityID: activityID)
+        // 3. Store each image as a per-snapshot .media source.
+        for image in snapshot.images {
+            _ = try? store.addSnapshotImage(
+                filename: image.filename, data: image.data, mimeType: image.mimeType,
+                originalPath: image.originalPath, sourceURL: image.sourceURL,
+                activityID: activityID, role: .media)
+        }
+        return pageSummary
     }
 
     // MARK: - Source refresh (Phase 3b)
@@ -1543,6 +1587,14 @@ public final class WikiStoreModel {
         guard let origin = try store.sourceOrigin(sourceID: id) else {
             throw SourceRefreshService.RefreshError.notRefreshable("unknown")
         }
+        // Phase 4 refresh guard (D3): a snapshot source with image siblings
+        // cannot be refreshed by the single-source path — a new activity would
+        // orphan its images (the resolver joins on the active activity). Guard
+        // BEFORE materialize so no version is appended. Snapshot-aware refresh
+        // (re-snapshotting images) is a named follow-on.
+        if try store.hasImageSiblings(sourceID: id) {
+            throw SourceRefreshService.RefreshError.snapshotWithImages
+        }
         let material = try await service.materialize(origin: origin)
         switch material {
         case .contentVersion(let data, let prov):
@@ -1563,7 +1615,8 @@ public final class WikiStoreModel {
         do {
             _ = try store.addSource(
                 filename: filename, data: data, zoteroItemKey: nil, zoteroItemTitle: nil,
-                mimeType: nil, provenance: nil, role: .primary)
+                mimeType: nil, provenance: nil, role: .primary,
+                originalPath: nil, activityID: nil)
             reloadSources()
             onPageDidChange?()
         } catch WikiStoreError.duplicateContent(let existing) {
@@ -1784,6 +1837,13 @@ public final class WikiStoreModel {
     /// external media. Returns `{}` on any query failure.
     public func embedDescriptors() -> [PageID: SourceEmbedDescriptor] {
         (try? store.embedDescriptors()) ?? [:]
+    }
+
+    /// Phase 4: batched sibling-image resolver maps for the render precompute.
+    /// Per source, `[original_path → sibling sourceID]`. Returns `{}` on
+    /// failure (images simply won't resolve — degraded, not fatal).
+    public func siblingImageResolvers() -> [PageID: [String: PageID]] {
+        (try? store.siblingImageResolvers()) ?? [:]
     }
 
     /// Save an edit as a new version in the chain. Only called when the text

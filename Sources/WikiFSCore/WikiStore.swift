@@ -85,7 +85,9 @@ public protocol WikiStore: Sendable {
         zoteroItemTitle: String?,
         mimeType: String?,
         provenance: SourceProvenance?,
-        role: SourceRole
+        role: SourceRole,
+        originalPath: String?,
+        activityID: String?
     ) throws -> SourceSummary
 
     /// Store a **byteless** source: a source whose identity row + v1 content
@@ -179,12 +181,44 @@ public protocol WikiStore: Sendable {
     /// resolve `@vN` per occurrence.
     func sourceDerivedChains() throws -> [PageID: [PageID]]
 
-    /// The embed descriptors for every **byteless** source, batched in one query
+    /// Embed descriptors for every **byteless** source, batched in one query
     /// (`[sourceID: SourceEmbedDescriptor]`). Joins the active content version →
     /// activity (`plan`) → agent (`name`), restricted to `blob_hash IS NULL`.
     /// Byteful sources are excluded. Used by the page-reader precompute to feed
     /// `ExternalEmbed.target(for:)` for byteless external embeds.
     func embedDescriptors() throws -> [PageID: SourceEmbedDescriptor]
+
+    // MARK: - Phase 4: website snapshot store primitives
+
+    /// Create the shared fetch activity for a website snapshot. Commits the
+    /// agent + activity FIRST (own transaction) so `source_versions.activity_id`
+    /// FK is satisfied before any image version is written. Returns the id.
+    @discardableResult
+    func ensureFetchActivity(provenance: SourceProvenance) throws -> String
+
+    /// Store one snapshot image as a per-snapshot `.media` source — NO
+    /// source-level content-hash dedup (each snapshot owns its image sources);
+    /// the blob is still deduped (`INSERT OR IGNORE`). Used by `storeSnapshot`.
+    @discardableResult
+    func addSnapshotImage(
+        filename: String,
+        data: Data,
+        mimeType: String,
+        originalPath: String,
+        sourceURL: URL,
+        activityID: String,
+        role: SourceRole
+    ) throws -> SourceSummary
+
+    /// True when the source's active content version's `activity_id` has
+    /// sibling versions with non-null `original_path` (a snapshot page with
+    /// images). Used by the refresh guard.
+    func hasImageSiblings(sourceID: PageID) throws -> Bool
+
+    /// Batched sibling-image resolver maps: per source,
+    /// `[original_path → sibling sourceID]`, joined on the source's active
+    /// version's `activity_id`. First-wins per path in ULID order (§7).
+    func siblingImageResolvers() throws -> [PageID: [String: PageID]]
 
     /// The producing agent name for each of a source's markdown versions
     /// (smv.id → agents.name), for the alternatives UI labels.

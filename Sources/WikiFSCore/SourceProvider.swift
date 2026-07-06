@@ -242,6 +242,93 @@ public struct WebsiteProvider: SourceProvider {
         )
         return (source, plan)
     }
+
+    /// Phase 4 — materialize a fetched URL as a **website snapshot** (HTML pages
+    /// only): the page's markdown (with image srcs rewritten to relative sibling
+    /// paths) plus its downloaded image bytes. Non-HTML responses (PDF / text /
+    /// binary) return a snapshot with zero images — the caller routes those to
+    /// the single-source store path.
+    ///
+    /// One shared `SourceProvenance` (agent `"website"`, kind `"fetch"`, plan =
+    /// request URL, external_ref = final URL) covers the whole snapshot so the
+    /// store can write all sources under one activity for sibling resolution.
+    public func materializeSnapshot() async throws -> WebsiteSnapshot {
+        guard let url = URLFetchService.normalizeURL(rawInput) else {
+            throw URLFetchService.FetchError.invalidURL(
+                rawInput.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        let response = try await fetcher.fetch(url)
+        guard !response.data.isEmpty else { throw URLFetchService.FetchError.empty }
+
+        let plan = URLFetchService.plan(for: response)
+        let finalURLString = response.finalURL.absoluteString
+        let provenance = SourceProvenance(
+            agentName: agentName,
+            activityKind: "fetch",
+            plan: url.absoluteString,
+            externalRef: finalURLString,
+            externalIdentity: finalURLString)
+
+        if plan.kind == .htmlConverted {
+            // HTML: full snapshot — extract + download images, rewrite srcs.
+            let html = URLFetchService.decodeText(response.data)
+            return try await WebsiteSnapshotExtractor.snapshot(
+                html: html,
+                finalURL: response.finalURL,
+                fetcher: fetcher,
+                filename: plan.filename,
+                provenance: provenance,
+                plan: plan)
+        }
+
+        // Non-HTML: single source, no images.
+        let source = MaterializedSource(
+            filename: plan.filename, data: plan.data, mimeType: nil,
+            provenance: provenance)
+        return WebsiteSnapshot(page: source, images: [], plan: plan)
+    }
+}
+
+// MARK: - Website snapshot (Phase 4)
+
+/// One downloaded image sibling in a website snapshot. The image's bytes are
+/// stored as a `.media` source sharing the page's fetch activity, keyed by its
+/// relative `original_path` so the render resolver can rewrite the page's image
+/// references to the stored blob.
+public struct SnapshotImage: Sendable, Equatable {
+    /// The disambiguated relative path used in the page's stored markdown and
+    /// written to `source_versions.original_path` (e.g. `images/foo.png`).
+    public let originalPath: String
+    /// The filename for the stored image source (last path component).
+    public let filename: String
+    public let data: Data
+    public let mimeType: String
+    /// The resolved absolute URL the image was downloaded from — stored as the
+    /// version's `external_identity` so a future snapshot-aware refresh can
+    /// re-fetch by the same URL.
+    public let sourceURL: URL
+
+    public init(originalPath: String, filename: String, data: Data, mimeType: String, sourceURL: URL) {
+        self.originalPath = originalPath
+        self.filename = filename
+        self.data = data
+        self.mimeType = mimeType
+        self.sourceURL = sourceURL
+    }
+}
+
+/// A self-contained website snapshot: the page (markdown bytes) plus its
+/// downloaded image siblings, all under one shared fetch provenance.
+public struct WebsiteSnapshot: Sendable {
+    public let page: MaterializedSource
+    public let images: [SnapshotImage]
+    public let plan: URLFetchService.StorePlan
+
+    public init(page: MaterializedSource, images: [SnapshotImage], plan: URLFetchService.StorePlan) {
+        self.page = page
+        self.images = images
+        self.plan = plan
+    }
 }
 
 // MARK: - ApplePodcastProvider

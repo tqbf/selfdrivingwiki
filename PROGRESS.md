@@ -2,6 +2,55 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-06 — Graph-model Phase 4 close-out: website snapshot `original_path` sibling resolution
+
+**Phase gate met: website snapshot renders with inline images (AC.1–AC.11, 1721 tests green).**
+A fetched web page that includes content images stores as a **self-contained
+snapshot** — the page's markdown plus its images as sibling sources grouped under
+one provider fetch activity — so image references resolve to the stored image
+blobs and render **offline, inline**, with no broken images and no network
+dependency. This closes the last open Phase 4 item. **No schema change**
+(`source_versions.original_path` shipped v20; never previously written or read).
+
+**What shipped:**
+
+- **Snapshot fetch (`WebsiteSnapshotExtractor`).** A pure + async helper that
+  scopes HTML to main content, extracts `<img src>` at the token level (sharing
+  `HTMLToMarkdown`'s tokenizer/scoper), resolves each against the page's final
+  URL, downloads each off-main (caps: 20 MB/image, 30 images, 50 MB total —
+  over-cap skipped, not fatal), disambiguates collisions (`foo.png` → `foo-1.png`,
+  mirroring `MarkdownFolderReader`), and rewrites srcs to relative `original_path`
+  before HTML→Markdown (D4: absolute srcs normalized to relative — the immutable
+  blob is the reproducibility anchor).
+- **Per-snapshot store path.** `ensureFetchActivity` commits the shared activity
+  FIRST (own transaction); `addSnapshotImage` stores each image as a fresh
+  `.media` source — **no source-level content-hash dedup** (each snapshot owns
+  its image source rows), blob still deduped via `INSERT OR IGNORE`. Widened
+  `addSource` with optional `originalPath:` + `activityID:` so the page shares
+  the activity.
+- **Render-time sibling resolution.** `siblingImageResolvers()` batched store
+  query maps per source `[original_path → sibling sourceID]` (joined on the
+  active version's `activity_id`, first-wins per path in ULID order §7). An
+  `imageResolver` closure on `MarkdownHTMLRenderer.render` rewrites relative
+  srcs to `wiki-blob://source/<id>`; `WikiReaderView`'s precompute wires it for
+  the rendered source (no-op for pages). Absolute/`data:`/`wiki:` srcs untouched.
+- **Refresh guard (D3).** `performRefresh` throws `RefreshError.snapshotWithImages`
+  before materialize when `hasImageSiblings(sourceID:)` is true — a single-source
+  refresh would orphan images (the resolver joins on the active activity). Image-
+  less website sources refresh as today. Snapshot-aware refresh (re-snapshotting
+  images) is a named follow-on.
+
+**Design decisions:** D1 (HTML only), D2 (`.media` role), D3 (per-snapshot
+sources + refresh guard), D4 (absolute srcs normalized — amends §7). Remaining
+deferred: `json-render` generative-UI spec, `apple-ttml` transcript-level PROV,
+snapshot-aware refresh.
+
+**Files:** `WebsiteSnapshotExtractor.swift` (new), `SQLiteWikiStore.swift`,
+`SourceProvider.swift`, `WikiStore.swift`, `WikiStoreModel.swift`,
+`SourceRefreshService.swift`, `HTMLToMarkdown.swift`, `MarkdownHTMLRenderer.swift`,
+`WikiReaderView.swift`, `SourceDetailView.swift`. Tests: `WebsiteSnapshotExtractorTests`,
+`WebsiteSnapshotStoreTests`, `SiblingResolutionRenderTests`, `SnapshotRefreshGuardTests`.
+
 ## 2026-07-06 — Graph-model Phase 4b: byteless external embeds
 
 **Phase gate met: provider iframes + direct-remote media + Apple Podcasts player
