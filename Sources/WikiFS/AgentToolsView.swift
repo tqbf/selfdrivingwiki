@@ -46,9 +46,51 @@ struct AgentToolsView: View {
                     systemImage: "sparkles")
                     .tag(WikiSelection.systemPrompt)
                     .help("Agent instructions, projected read-only as CLAUDE.md and AGENTS.md")
+
+                if !store.chats.isEmpty {
+                    Section("Recent Conversations") {
+                        ForEach(store.chats) { chat in
+                            RecentChatRow(chat: chat)
+                                .tag(WikiSelection.chat(chat.id))
+                                .contextMenu {
+                                    Button("Delete Conversation", role: .destructive) {
+                                        store.deleteChat(id: chat.id)
+                                    }
+                                }
+                        }
+                    }
+                }
             }
             .listStyle(.inset)
             .scrollContentBackground(.hidden)
         }
+    }
+}
+
+/// One row in the "Recent Conversations" section — mirrors `SidebarModeRow`'s
+/// layout but needs a `Text(_:format:)` subtitle (relative timestamp) instead
+/// of a plain `String`, so it can't reuse that view unmodified.
+private struct RecentChatRow: View {
+    let chat: ChatSummary
+
+    var body: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(chat.title)
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                Text(chat.updatedAt, format: .relative(presentation: .named))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        } icon: {
+            Image(systemName: chat.kind == .ask ? "bubble.left.and.bubble.right" : "square.and.pencil")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+        }
+        .padding(.vertical, 3)
     }
 }

@@ -197,6 +197,8 @@ struct WikiDetailView: View {
             } description: {
                 Text("Bookmark folders are managed in the sidebar.")
             }
+        case .chat(let id):
+            ChatHistoryDetailView(store: store, chatID: id)
         }
     }
 

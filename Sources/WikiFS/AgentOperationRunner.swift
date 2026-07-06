@@ -232,6 +232,10 @@ enum AgentOperationRunner {
         let root = fileProvider.path ?? ""
         DebugLog.agent("startQueryConversation: wikiRoot=\(root.isEmpty ? "<mount unavailable>" : root)")
 
+        // Persist the conversation from the first message (issue #119). Best-effort:
+        // a store failure yields chat == nil and the session runs unpersisted.
+        let chat = store.startChat(kind: allowWikiEdits ? .edit : .ask, firstMessage: trimmed)
+
         // Edit mode takes the edit lock; Ask mode is forced read-only by the seatbelt
         // sandbox and never acquires the lock at all.
         await launcher.startInteractiveQuery(
@@ -248,7 +252,13 @@ enum AgentOperationRunner {
             // send). Lives in the launcher — not the view — so it fires even when
             // the Query view is unmounted (the bug fix). Gated on `allowWikiEdits`
             // so a read-only session never touches the lock.
-            onTurnBoundary: { if allowWikiEdits { store.setAgentRunning($0) } }
+            onTurnBoundary: { if allowWikiEdits { store.setAgentRunning($0) } },
+            // Weak store: if the user switches wikis mid-session the model may be
+            // torn down — persistence degrades to a no-op rather than writing into
+            // the wrong wiki (issue #119).
+            onTranscript: chat.map { chat -> (@MainActor ([AgentEvent]) -> Void) in
+                return { [weak store] events in store?.appendChatEvents(chatID: chat.id, events: events) }
+            }
         )
     }
 

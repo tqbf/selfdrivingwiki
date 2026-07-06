@@ -341,6 +341,10 @@ struct AddressBarView: View {
             return "[[lint]]"
         case .bookmark:
             return ""
+        case .chat:
+            // `[[chat:…]]` wikilink resolution is a deferred follow-up phase
+            // (plans/persisted-chat-history.md) — no pseudo-notation yet.
+            return ""
         }
     }
 }

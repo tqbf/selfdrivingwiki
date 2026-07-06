@@ -9,7 +9,10 @@ import Foundation
 /// This is the typed projection of the raw NDJSON: `AgentEventParser` decodes ONLY
 /// the fields we render and is tolerant — any line it doesn't recognize (including
 /// a malformed/partial one) becomes `.raw`, so a bad line never crashes a run.
-public enum AgentEvent: Equatable, Sendable {
+/// `Codable` (synthesized) because persisted chat history stores each event
+/// verbatim as JSON in `chat_messages.event_json` — the history view then
+/// re-renders through the exact same typed pipeline as the live transcript.
+public enum AgentEvent: Equatable, Sendable, Codable {
     /// A user turn sent into an interactive agent session.
     case userText(String)
 

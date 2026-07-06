@@ -438,9 +438,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // the §4.4 rowid + role/pin shape. No legacy rows to backfill on a
         // brand-new DB. Shared with the v21→22 migration step.
 
-        // v23 (graph-model Phase 5): data-only link canonicalization sweep — no
-        // schema change, and a fresh DB has no rows to sweep. The run-once guard
-        // is the only effect on a fresh DB. Shared with the v22→23 migration step.
+        // v23 (graph-model Phase 5 & issue #119 phase 1):
+        // - data-only link canonicalization sweep — no schema change, and a fresh DB has no rows to sweep.
+        // - persisted chat history — `chats` + `chat_messages`. Purely additive; no legacy rows to backfill on a brand-new DB.
+        // Both are shared with the v22→23 migration step.
+        try createChatTablesV23()
 
         try exec("PRAGMA user_version=23;")
     }
@@ -517,6 +519,41 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             PRIMARY KEY (kind, owner_id)
         );
         """)
+    }
+
+    /// Create the two persisted-chat-history tables (issue #119 phase 1):
+    /// `chats` (one row per conversation) and `chat_messages` (one row per
+    /// persistable `AgentEvent`, `event_json` verbatim). Called by both the
+    /// fresh-schema fast path and the v22→23 migration step so the two stay
+    /// schema-identical (`freshFastPathMatchesStepwiseLadder`). `IF NOT
+    /// EXISTS`, same rationale as `createObjectsTablesV20`: idempotent so a
+    /// DB rewound to a pre-v23 `user_version` for testing (already having
+    /// these tables from its original fresh-schema creation) can still run
+    /// this step without a "table already exists" error. See
+    /// `plans/persisted-chat-history.md`.
+    private func createChatTablesV23() throws {
+        try exec("""
+        CREATE TABLE IF NOT EXISTS chats (
+            id         TEXT PRIMARY KEY,
+            kind       TEXT NOT NULL,
+            title      TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
+        """)
+        try exec("CREATE INDEX IF NOT EXISTS chats_updated ON chats(updated_at);")
+        try exec("""
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id         TEXT PRIMARY KEY,
+            chat_id    TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+            seq        INTEGER NOT NULL,
+            role       TEXT NOT NULL,
+            event_json TEXT NOT NULL,
+            text       TEXT NOT NULL DEFAULT '',
+            created_at REAL NOT NULL
+        );
+        """)
+        try exec("CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_seq ON chat_messages(chat_id, seq);")
     }
 
     /// The stepwise, idempotent migration ladder keyed on `PRAGMA user_version`.
@@ -1031,12 +1068,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             version = 22
         }
 
-        // Step 22 → 23 (graph-model Phase 5): data-only body sweep — rewrite
-        // every resolvable `[[…]]` link in every page body to canonical
-        // ULID-stable form. No schema change; the version bump is a run-once
-        // guard (the v18 name-sanitization precedent). See `migrateV22ToV23`.
+        // Step 22 → 23 (graph-model Phase 5 & issue #119 phase 1):
+        // - data-only body sweep — rewrite every resolvable `[[…]]` link in every page body to canonical ULID-stable form.
+        // - persisted chat history — `chats` + `chat_messages`. Purely additive.
         if version < 23 {
             try migrateV22ToV23()
+            try createChatTablesV23()
             try exec("PRAGMA user_version=23;")
             version = 23
         }
@@ -3907,6 +3944,165 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try upd.bind(Int64(i), at: 2)
             _ = try upd.step()
         }
+    }
+
+    // MARK: - Persisted chats (v23)
+
+    @discardableResult
+    public func createChat(kind: ChatKind, title: String) throws -> ChatSummary {
+        lock.lock(); defer { lock.unlock() }
+        let id = PageID(rawValue: ULID.generate())
+        let now = Date()
+        let stmt = try statement("""
+        INSERT INTO chats (id, kind, title, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5);
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        try stmt.bind(kind.rawValue, at: 2)
+        try stmt.bind(title, at: 3)
+        try stmt.bind(now.timeIntervalSince1970, at: 4)
+        try stmt.bind(now.timeIntervalSince1970, at: 5)
+        _ = try stmt.step()
+        return ChatSummary(id: id, kind: kind, title: title, createdAt: now, updatedAt: now, messageCount: 0)
+    }
+
+    /// Empty `events` is a no-op (returns `[]` without touching `updated_at`) —
+    /// checked BEFORE opening a transaction, so an idle flush never bumps
+    /// `updated_at` and reorders the history list.
+    @discardableResult
+    public func appendChatMessages(chatID: PageID, events: [AgentEvent]) throws -> [ChatMessage] {
+        lock.lock(); defer { lock.unlock() }
+        guard !events.isEmpty else { return [] }
+        return try withTransaction {
+            let exists = try statement("SELECT 1 FROM chats WHERE id = ?1;")
+            exists.reset()
+            try exists.bind(chatID.rawValue, at: 1)
+            guard try exists.step() else {
+                throw WikiStoreError.notFound(chatID)
+            }
+
+            // Dense per-chat seq, continuing from the current max (-1 when empty
+            // so the first row lands at 0).
+            let maxSeq = try statement(
+                "SELECT COALESCE(MAX(seq), -1) FROM chat_messages WHERE chat_id = ?1;")
+            maxSeq.reset()
+            try maxSeq.bind(chatID.rawValue, at: 1)
+            _ = try maxSeq.step()
+            var nextSeq = Int(maxSeq.int(at: 0)) + 1
+
+            let now = Date()
+            let encoder = JSONEncoder()
+            let ins = try statement("""
+            INSERT INTO chat_messages (id, chat_id, seq, role, event_json, text, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);
+            """)
+            var inserted: [ChatMessage] = []
+            for event in events {
+                let json = String(data: try encoder.encode(event), encoding: .utf8) ?? "{}"
+                let messageID = PageID(rawValue: ULID.generate())
+                ins.reset()
+                try ins.bind(messageID.rawValue, at: 1)
+                try ins.bind(chatID.rawValue, at: 2)
+                try ins.bind(Int64(nextSeq), at: 3)
+                try ins.bind(event.chatRole, at: 4)
+                try ins.bind(json, at: 5)
+                try ins.bind(event.plainText, at: 6)
+                try ins.bind(now.timeIntervalSince1970, at: 7)
+                _ = try ins.step()
+                inserted.append(ChatMessage(
+                    id: messageID, chatID: chatID, seq: nextSeq, event: event, createdAt: now))
+                nextSeq += 1
+            }
+
+            let touch = try statement("UPDATE chats SET updated_at = ?2 WHERE id = ?1;")
+            touch.reset()
+            try touch.bind(chatID.rawValue, at: 1)
+            try touch.bind(now.timeIntervalSince1970, at: 2)
+            _ = try touch.step()
+
+            return inserted
+        }
+    }
+
+    public func listChats() throws -> [ChatSummary] {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement("""
+        SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
+               (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id)
+        FROM chats c
+        ORDER BY c.updated_at DESC, c.rowid DESC;
+        """)
+        defer { stmt.reset() }
+        var out: [ChatSummary] = []
+        while try stmt.step() {
+            out.append(ChatSummary(
+                id: PageID(rawValue: stmt.text(at: 0)),
+                kind: ChatKind(rawValue: stmt.text(at: 1)) ?? .ask,
+                title: stmt.text(at: 2),
+                createdAt: Date(timeIntervalSince1970: stmt.double(at: 3)),
+                updatedAt: Date(timeIntervalSince1970: stmt.double(at: 4)),
+                messageCount: Int(stmt.int(at: 5))
+            ))
+        }
+        return out
+    }
+
+    /// Tolerant read: a row whose `event_json` fails to decode (a future event
+    /// case, or hand-corrupted data) is skipped rather than failing the whole
+    /// read — a bad row must never brick the rest of a chat's history.
+    public func chatMessages(chatID: PageID) throws -> [ChatMessage] {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement("""
+        SELECT id, seq, event_json, created_at FROM chat_messages
+        WHERE chat_id = ?1 ORDER BY seq ASC;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(chatID.rawValue, at: 1)
+        let decoder = JSONDecoder()
+        var out: [ChatMessage] = []
+        while try stmt.step() {
+            guard
+                let data = stmt.text(at: 2).data(using: .utf8),
+                let event = try? decoder.decode(AgentEvent.self, from: data)
+            else { continue }
+            out.append(ChatMessage(
+                id: PageID(rawValue: stmt.text(at: 0)),
+                chatID: chatID,
+                seq: Int(stmt.int(at: 1)),
+                event: event,
+                createdAt: Date(timeIntervalSince1970: stmt.double(at: 3))
+            ))
+        }
+        return out
+    }
+
+    public func renameChat(id: PageID, to title: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try withTransaction {
+            let exists = try statement("SELECT 1 FROM chats WHERE id = ?1;")
+            exists.reset()
+            try exists.bind(id.rawValue, at: 1)
+            guard try exists.step() else {
+                throw WikiStoreError.notFound(id)
+            }
+            let upd = try statement("UPDATE chats SET title = ?2, updated_at = ?3 WHERE id = ?1;")
+            upd.reset()
+            try upd.bind(id.rawValue, at: 1)
+            try upd.bind(title, at: 2)
+            try upd.bind(Date().timeIntervalSince1970, at: 3)
+            _ = try upd.step()
+        }
+    }
+
+    /// `ON DELETE CASCADE` (`PRAGMA foreign_keys=ON`, set at open) removes the
+    /// chat's messages. No error if `id` doesn't exist.
+    public func deleteChat(id: PageID) throws {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement("DELETE FROM chats WHERE id = ?1;")
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        _ = try stmt.step()
     }
 
     // MARK: - Transactions

@@ -23,14 +23,24 @@ final class AgentLauncher {
     /// The live, ordered activity feed for the current/last run: typed events parsed
     /// from the stream-json NDJSON. The UI renders these as tool-call rows, prose,
     /// and a final result. Appended on the main actor as lines arrive.
-    private(set) var events: [AgentEvent] = []
+    ///
+    /// Exposed without `private(set)` so tests can simulate "a transcript is
+    /// visible" via `@testable import WikiFS`, without requiring a real spawned
+    /// process.
+    var events: [AgentEvent] = []
     /// The raw combined transcript (raw stream-json stdout + stderr) kept alongside
     /// the typed `events`, so the UI / a debugger can see exactly what the CLI
     /// emitted. This is the in-memory mirror of the on-disk `run.jsonl`.
-    private(set) var rawTranscript = ""
+    ///
+    /// Exposed without `private(set)` so tests can simulate pre-existing transcript
+    /// state via `@testable import WikiFS`.
+    var rawTranscript = ""
     /// stderr captured separately (claude's diagnostics): a failed start, a flag
     /// error, an auth prompt. Surfaced prominently in the UI rather than swallowed.
-    private(set) var stderr = ""
+    ///
+    /// Exposed without `private(set)` so tests can simulate pre-existing stderr
+    /// state via `@testable import WikiFS`.
+    var stderr = ""
     var extractionLog = ""
     /// True while a local `pdf2md` conversion subprocess is running (before the
     /// agent itself starts). Drives the PDF-extraction spinner / Cancel affordance.
@@ -90,14 +100,21 @@ final class AgentLauncher {
     private(set) var isAwaitingGenerationSlot = false
     /// Exit status of the last finished process, or nil if none finished / one is
     /// running.
-    private(set) var exitStatus: Int32?
+    ///
+    /// Exposed without `private(set)` so tests can simulate pre-existing exit
+    /// status via `@testable import WikiFS`.
+    var exitStatus: Int32?
     /// Set when the PATH preflight fails (claude not resolvable) or the spawn
     /// itself throws; shown in the UI instead of spawning. Cleared on the next
     /// successful run. Settable from `AgentOperationRunner` for silent-failure
     /// paths where no agent process is spawned.
     var preflightError: String?
     /// The kind of the operation currently running (drives the UI title / spinner).
-    private(set) var runningKind: WikiOperation.Kind?
+    ///
+    /// Exposed without `private(set)` so tests can simulate "a non-query run is
+    /// active" (e.g. `.ingest`) via `@testable import WikiFS`, without requiring a
+    /// real spawned process.
+    var runningKind: WikiOperation.Kind?
     /// The per-run `run.jsonl` backend log on disk (raw stream-json), so the UI can
     /// offer a "Reveal log" affordance. Its sibling `run.stderr.log` holds stderr.
     private(set) var logFileURL: URL?
@@ -143,6 +160,18 @@ final class AgentLauncher {
     /// turns. The per-turn lock release via `onTurnBoundary(false)` is the mechanism
     /// that makes this visible to the wiki store.
     @ObservationIgnored private var onTurnBoundaryHandler: (@MainActor (Bool) -> Void)?
+    /// Persistence callback for an interactive query conversation (issue #119).
+    /// Receives the not-yet-persisted TAIL of `events` at each turn boundary and
+    /// once more at `finish()` — never the full array, so repeated flushes stay
+    /// cheap. The sink's owner (`AgentOperationRunner`) is what actually writes to
+    /// the store; the launcher only knows "hand this slice somewhere." `nil` for
+    /// one-shot runs and whenever no chat has been created for the session (e.g.
+    /// `store.startChat` failed). Cleared in `finish()` and `resetRunArtifacts()`.
+    @ObservationIgnored private var transcriptSink: (@MainActor ([AgentEvent]) -> Void)?
+    /// Cursor into `events`: the count already handed to `transcriptSink`. Makes
+    /// `flushTranscript()` incremental — each call only sends events appended since
+    /// the last flush — and idempotent when nothing new arrived since the last call.
+    private var persistedEventCount = 0
     /// Backstop poller that reconciles the UI if the process `terminationHandler`
     /// is ever missed (see `startCompletionWatchdog`). Cancelled on teardown.
     private var watchdogTask: Task<Void, Never>?
@@ -737,6 +766,10 @@ final class AgentLauncher {
     ///
     /// - Parameter allowWikiEdits: when `false` (default), the agent runs under a
     ///   READ-ONLY seatbelt sandbox that physically blocks all writes to the wiki DB.
+    /// - Parameter onTranscript: persistence sink (issue #119). Receives the
+    ///   not-yet-persisted tail of `events` at each turn boundary and once more at
+    ///   `finish()`. `nil` (the default) when the caller has no chat to persist
+    ///   into (e.g. `store.startChat` failed) — the session simply runs unpersisted.
     func startInteractiveQuery(
         firstMessage: String,
         stateMarkdown: String,
@@ -747,7 +780,8 @@ final class AgentLauncher {
         allowWikiEdits: Bool = false,
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
-        onTurnBoundary: @escaping @MainActor (Bool) -> Void
+        onTurnBoundary: @escaping @MainActor (Bool) -> Void,
+        onTranscript: (@MainActor ([AgentEvent]) -> Void)? = nil
     ) async {
         // No gate acquisition here — the interactive session does NOT hold the gate
         // for its lifetime, only per-turn (via sendInteractiveMessage). Two sessions
@@ -834,6 +868,10 @@ final class AgentLauncher {
         // the lock release between turns EVEN WHEN the Query view is not on screen
         // (the old view `.onChange` never fired while unmounted).
         onTurnBoundaryHandler = onTurnBoundary
+        // Install the transcript sink alongside the per-turn callback (issue #119):
+        // both are per-session callbacks assigned once resetRunArtifacts() has run
+        // (which clears any stale sink from a prior run).
+        transcriptSink = onTranscript
         // NOTE: do NOT `setGenerating(true)` here. The first turn's transition is
         // owned by `sendInteractiveMessage(firstMessage)` below (after the gate is
         // acquired). If we set it here, `sendInteractiveMessage`'s gate-guard would
@@ -1039,11 +1077,20 @@ final class AgentLauncher {
         stopAgent()
     }
 
-    /// Clear the visible activity feed so a freshly-opened surface (e.g. the ingest
-    /// sheet for a different file) doesn't show the previous run's events. No-op
-    /// while a run is in flight, so we never wipe a live transcript.
-    func resetActivityIfIdle() {
-        guard !isRunning && !isExtracting else { return }
+    /// End the interactive query session (if any) and clear the visible
+    /// transcript so the page returns to its empty state; the next send spawns a
+    /// fresh claude process with a clean context. History is already persisted
+    /// incrementally (and stopAgent → finish flushes the tail), so nothing is lost.
+    /// Guarded so it can never kill a non-query run (ingest/lint) streaming into
+    /// this launcher, and it does NOT touch extractionLog/extractionPID — a
+    /// concurrently running pdf2md extraction is untouched.
+    func startNewConversation() {
+        if isRunning && runningKind != .query { return }
+        if isRunning {
+            // stopAgent() is a safe no-op when idle (PR #198); here it terminates
+            // the live query process and triggers finish() → final flush + sink clear.
+            stopAgent()
+        }
         events = []
         isStreamingAssistantRow = false
         rawTranscript = ""
@@ -1051,8 +1098,31 @@ final class AgentLauncher {
         stdoutLineBuffer = ""
         exitStatus = nil
         preflightError = nil
-        extractionLog = ""
-        extractionPID = nil
+        transcriptSink = nil
+        persistedEventCount = 0
+    }
+
+    // MARK: - Transcript persistence (issue #119)
+
+    /// Pure tail computation: the slice of `events` not yet handed to the sink.
+    /// Extracted so the cursor arithmetic is unit-testable without driving a live
+    /// launcher. Mirrors the `>=` guard in `flushTranscript()` — returns empty when
+    /// nothing new has arrived since `persistedCount`.
+    static func unflushedTail(events: [AgentEvent], persistedCount: Int) -> [AgentEvent] {
+        guard persistedCount < events.count else { return [] }
+        return Array(events[persistedCount...])
+    }
+
+    /// Hand the not-yet-persisted tail of `events` to `transcriptSink`, if any, and
+    /// advance the cursor. Filtering to persistable events is the model's job
+    /// (`WikiStoreModel.appendChatEvents` filters via `AgentEvent.isPersistable`) —
+    /// the tail is passed whole. No-op when nothing new has arrived or no sink is
+    /// installed.
+    private func flushTranscript() {
+        guard persistedEventCount < events.count else { return }
+        let tail = Self.unflushedTail(events: events, persistedCount: persistedEventCount)
+        persistedEventCount = events.count
+        transcriptSink?(tail)
     }
 
     // MARK: - Stream ingestion (main actor)
@@ -1080,6 +1150,9 @@ final class AgentLauncher {
                 // between turns instead of staying stuck until session end.
                 if AgentEvent.endsGeneration(event) {
                     setGenerating(false)
+                    // Turn boundary: the streamed assistant row (if any) is final now
+                    // — flush the persisted tail (issue #119).
+                    flushTranscript()
                     // Correctness assumption: `AgentEvent.endsGeneration` is true
                     // for `.result` and `.messageStop`. The per-turn release below
                     // relies on `.result` firing only at interactive SESSION end
@@ -1159,6 +1232,10 @@ final class AgentLauncher {
             }
             stdoutLineBuffer = ""
         }
+        // Session over: flush any remaining tail (a killed/died session still
+        // persists its last events) THEN detach the sink — no further writes.
+        flushTranscript()
+        transcriptSink = nil
         closeLogFiles()
         exitStatus = status
         // Clear process-alive state.
@@ -1224,6 +1301,10 @@ final class AgentLauncher {
         currentProcessID = nil
         inputHandle = nil
         onUnlockHandler = nil
+        // A reset starts a new run: a stale sink must never receive a new
+        // session's events (issue #119).
+        transcriptSink = nil
+        persistedEventCount = 0
     }
 
     private static func streamJSONLine(forUserText text: String) -> String? {

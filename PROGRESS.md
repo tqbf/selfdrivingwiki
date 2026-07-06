@@ -202,6 +202,66 @@ body-rewrite loop is deleted — rename is now a one-row metadata update.
 note (authoring unchanged; leave `[[page:01H…|Title]]` as-is). `make prompts`
 regenerated `GeneratedPrompts.swift`. `graph-model-and-versioning.md` §12 Phase 5
 row footnoted; `PLAN.md` status + doc index updated.
+## 2026-07-06 — Persisted chat history, phase 1 (issue #119) + New Conversation (PR #198)
+
+Ask/Edit conversations now **persist to the wiki's SQLite store** and survive
+app restarts / wiki switches; past conversations are browsable and reopenable.
+Design of record: `plans/persisted-chat-history.md`. The issue's "additional
+requirements" (`[[chat:…]]` links, quote anchors, `chats.jsonl`, the File
+Provider `chats/` tree, multi-concurrent live sessions, `--resume`) are
+documented follow-ups there.
+
+**Schema (v23).** `chats` (ULID id — the stable resource identity everything
+in #119 item 3 hangs off — kind `ask`/`edit`, auto-derived title, timestamps)
++ `chat_messages` (ULID id, dense per-chat `seq`, coarse `role`, the typed
+`AgentEvent` verbatim as `event_json`, a `plainText` projection in `text` for
+future FTS/quote anchors). Shared `createChatTablesV23()` keeps the fresh fast
+path and the ladder identical (`FreshSchemaParityTests`). `changeToken()`
+untouched — chats aren't projected yet.
+
+**Write path.** `AgentEvent` is now `Codable`, with `isPersistable` (drops
+deltas / `messageStop` / `raw`) and `chatRole` projections.
+`AgentOperationRunner.startQueryConversation` creates the chat row at session
+start (`WikiStoreModel.startChat`, title from the first message — best-effort,
+a store failure never blocks the session) and installs a **transcript sink**
+on the launcher (weak store capture: a wiki switch degrades persistence to a
+no-op rather than writing into the wrong wiki). `AgentLauncher` flushes the
+not-yet-persisted tail of `events` at every turn boundary (the same
+`endsGeneration` seam the edit lock uses — streamed assistant rows are final
+by then) and once more in `finish()`, via an incremental `persistedEventCount`
+cursor. Gate/lock/extraction mechanisms untouched.
+
+**Read path / UI.** New `WikiSelection.chat(PageID)` — persisted conversations
+are first-class selections (tabs, history nav, deletion closes the tab).
+`ChatHistoryDetailView` renders a chat read-only through the exact same
+`AgentTranscriptWebView` + a newly-extracted shared `[AgentEvent].transcriptVisible`
+filter as the live Query page. The Agent sidebar section lists **Recent
+Conversations** (most-recently-updated first, relative timestamps, Delete via
+context menu). The Ask/Edit page gains PR #198's **New Conversation** button
+(trash, top-trailing band; shows while a query session is live or a transcript
+is visible): stops the session — final flush persists the tail — clears the
+transcript, and detaches the sink so the next send starts a fresh chat row.
+`resetActivityIfIdle()` deleted (zero callers, per PR #198).
+
+**Store API.** `WikiStore` gains `createChat` / `appendChatMessages` (single
+transaction, dense seq, bumps `updated_at`; empty append is a no-op that never
+reorders history) / `listChats` (message counts via subquery) / `chatMessages`
+(tolerant read — a row whose JSON fails to decode is skipped, so a future
+event case can't brick history) / `renameChat` / `deleteChat` (cascade).
+
+**Touch points:** `SQLiteWikiStore.swift`, `WikiStore.swift`,
+`ChatModels.swift` (new), `AgentEvent.swift`, `WikiSelection.swift`,
+`EditorTab.swift`, `WikiStoreModel.swift`, `AddressBarView.swift`,
+`AgentLauncher.swift`, `AgentOperationRunner.swift`,
+`QueryConversationView.swift`, `QueryTranscriptView.swift`,
+`ChatHistoryDetailView.swift` (new), `AgentToolsView.swift`,
+`WikiDetailView.swift`.
+
+1658 tests green (+52 new: 11 `ChatStoreTests`, 10 `AgentEventCodableTests`,
+5 `ChatTitleTests`, 14 `ChatTranscriptFilterTests`, 7
+`QueryNewConversationTests`, 5 `ChatPersistenceTests`). Live click-through
+(start a chat → restart the app → reopen it from Recent Conversations) is
+manual-only.
 
 ## 2026-07-06 — Graph-model Phase 4a: `![[source:…]]` embed parsing + binary content rendering
 

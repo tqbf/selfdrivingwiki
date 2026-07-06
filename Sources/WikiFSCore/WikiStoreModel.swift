@@ -131,6 +131,17 @@ public final class WikiStoreModel {
     /// Flat bookmark nodes, rebuilt from store after mutation (§3.1 pattern).
     public private(set) var bookmarkNodes: [BookmarkNode] = []
 
+    /// Persisted chat summaries (issue #119), most-recently-updated first —
+    /// rebuilt from `store.listChats()` after every mutation (§3.1 pattern),
+    /// like `bookmarkNodes`.
+    public private(set) var chats: [ChatSummary] = []
+
+    /// Rebuild `chats` from the store. Best-effort (`try?`) — the history list
+    /// degrading to empty on a store hiccup must never crash the sidebar.
+    public func reloadChats() {
+        chats = (try? store.listChats()) ?? []
+    }
+
     /// Computed tree for the Bookmarks section.
     public var bookmarkTree: [BookmarkTreeItem] {
         let t0 = DispatchTime.now()
@@ -209,6 +220,7 @@ public final class WikiStoreModel {
         reloadSummaries()
         reloadSources()
         reloadBookmarkNodes()
+        reloadChats()
         // Preload the system-prompt draft so its editor has content immediately;
         // selecting it later reloads fresh from the store.
         draftSystemPrompt = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
@@ -765,7 +777,7 @@ public final class WikiStoreModel {
         mermaidSaveWarning = nil
         var restoredFromPendingDraft = false
         switch newValue {
-        case .ask, .edit, .lint, .bookmark:
+        case .ask, .edit, .lint, .bookmark, .chat:
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
@@ -1923,6 +1935,7 @@ public final class WikiStoreModel {
     public func reloadFromStore() {
         reloadSummaries()
         reloadSources()
+        reloadChats()
         pruneHistoryToCurrentStore()
     }
 
@@ -2207,22 +2220,90 @@ public final class WikiStoreModel {
     private func pruneHistoryToCurrentStore() {
         let pageIDs = Set(summaries.map(\.id))
         let sourceIDs = Set(sources.map(\.id))
-        backStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, sourceIDs: sourceIDs) }
-        forwardStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, sourceIDs: sourceIDs) }
+        let chatIDs = Set(chats.map(\.id))
+        backStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, sourceIDs: sourceIDs, chatIDs: chatIDs) }
+        forwardStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, sourceIDs: sourceIDs, chatIDs: chatIDs) }
     }
 
     private func isAvailableHistorySelection(
         _ value: WikiSelection,
         pageIDs: Set<PageID>,
-        sourceIDs: Set<PageID>
+        sourceIDs: Set<PageID>,
+        chatIDs: Set<PageID>
     ) -> Bool {
         switch value {
         case .page(let id):
             pageIDs.contains(id)
         case .source(let id):
             sourceIDs.contains(id)
+        case .chat(let id):
+            chatIDs.contains(id)
         case .ask, .edit, .systemPrompt, .changeLog, .lint, .bookmark:
             true
+        }
+    }
+
+    // MARK: - Persisted chats (issue #119)
+
+    /// Create a persisted chat, titled from the first user message. Returns nil
+    /// (logging via DebugLog.store) on store failure — persistence must never
+    /// block a conversation from starting.
+    @discardableResult
+    public func startChat(kind: ChatKind, firstMessage: String) -> ChatSummary? {
+        do {
+            let title = ChatSummary.title(fromFirstMessage: firstMessage)
+            let chat = try store.createChat(kind: kind, title: title)
+            reloadChats()
+            return chat
+        } catch {
+            DebugLog.store("WikiStoreModel.startChat failed: \(error)")
+            return nil
+        }
+    }
+
+    /// Append the persistable subset of `events` to a chat. Non-persistable
+    /// events (deltas, messageStop, raw) are filtered here as defense in depth.
+    public func appendChatEvents(chatID: PageID, events: [AgentEvent]) {
+        let persistable = events.filter(\.isPersistable)
+        guard !persistable.isEmpty else { return }
+        do {
+            try store.appendChatMessages(chatID: chatID, events: persistable)
+            reloadChats()  // cheap — keeps updated_at ordering + counts live.
+        } catch {
+            DebugLog.store("WikiStoreModel.appendChatEvents failed: \(error)")
+        }
+    }
+
+    public func chatMessages(chatID: PageID) -> [ChatMessage] {
+        (try? store.chatMessages(chatID: chatID)) ?? []
+    }
+
+    public func renameChat(id: PageID, to title: String) {
+        do {
+            try store.renameChat(id: id, to: title)
+            reloadChats()
+        } catch {
+            DebugLog.store("WikiStoreModel.renameChat failed: \(error)")
+            storeError = StoreError(
+                title: "Couldn't Rename Conversation",
+                message: "Could not rename the conversation: \(error.localizedDescription)")
+        }
+    }
+
+    public func deleteChat(id: PageID) {
+        do {
+            try store.deleteChat(id: id)
+            removeFromHistory(.chat(id))
+            // Close any tab showing this deleted chat.
+            if let tab = tabs.first(where: { $0.selection == .chat(id) }) {
+                closeTab(id: tab.id)
+            }
+            reloadChats()
+        } catch {
+            DebugLog.store("WikiStoreModel.deleteChat failed: \(error)")
+            storeError = StoreError(
+                title: "Couldn't Delete Conversation",
+                message: "Could not delete the conversation: \(error.localizedDescription)")
         }
     }
 }

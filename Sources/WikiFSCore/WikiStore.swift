@@ -353,4 +353,38 @@ public protocol WikiStore: Sendable {
     /// Move a node to a new parent and/or position. Renumber siblings of both
     /// the old and new parent so positions stay contiguous (0, 1, 2, …).
     func moveBookmarkNode(id: String, toParentID: String?, position: Int) throws
+
+    // MARK: - Persisted chats (issue #119 phase 1)
+
+    /// Create a new chat row. `id` is a fresh ULID; `createdAt`/`updatedAt` both
+    /// start at "now"; `messageCount` starts at 0. Returns the inserted summary.
+    @discardableResult
+    func createChat(kind: ChatKind, title: String) throws -> ChatSummary
+
+    /// Append the given events as new `chat_messages` rows, in one transaction:
+    /// each row gets the next dense `seq` (continuing from the chat's current
+    /// max), `role` from `event.chatRole`, `event_json` from encoding `event`,
+    /// and `text` from `event.plainText`. Bumps `chats.updated_at` to "now" —
+    /// skipped entirely (including the `updated_at` bump) when `events` is
+    /// empty. Throws `.notFound` if `chatID` has no row. Returns the inserted
+    /// messages in `seq` order.
+    @discardableResult
+    func appendChatMessages(chatID: PageID, events: [AgentEvent]) throws -> [ChatMessage]
+
+    /// All chat summaries, most-recently-updated first (ties broken by
+    /// insertion order), for the history list.
+    func listChats() throws -> [ChatSummary]
+
+    /// A chat's messages in `seq` order. Tolerant read: a row whose
+    /// `event_json` fails to decode (e.g. a future event case) is skipped
+    /// rather than failing the whole read.
+    func chatMessages(chatID: PageID) throws -> [ChatMessage]
+
+    /// Rename a chat's title, bumping `updated_at`. Throws `.notFound` if no
+    /// chat has `id`.
+    func renameChat(id: PageID, to title: String) throws
+
+    /// Delete a chat. `ON DELETE CASCADE` removes its messages. No error if
+    /// `id` doesn't exist.
+    func deleteChat(id: PageID) throws
 }

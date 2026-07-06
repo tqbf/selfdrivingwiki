@@ -44,6 +44,8 @@ extension WikiStoreModel {
             return source.effectiveName.nonEmpty ?? "Source"
         case .bookmark(let id):
             return bookmarkNodes.first(where: { $0.id == id })?.label ?? "Bookmark"
+        case .chat(let id):
+            return chats.first { $0.id == id }?.title ?? "Conversation"
         }
     }
 
@@ -64,6 +66,7 @@ extension WikiStoreModel {
             if let mime = source.mimeType, mime.hasPrefix("text/") { return "doc.plaintext" }
             return "doc"
         case .bookmark: return "bookmark"
+        case .chat: return "bubble.left.and.bubble.right"
         }
     }
 }
