@@ -318,4 +318,73 @@ struct WikiLinkParserTests {
         #expect(links[0].fragment == "\"first option | second option\"")
         #expect(links[0].linkText == "My Label")
     }
+
+    // MARK: - Embed prefix `![[source:…]]` (Phase 4a)
+
+    @Test func embedParsingDetectsBangPrefix() {
+        // AC.1: `![[source:img.png]]` → one source link with isEmbed=true.
+        let links = WikiLinkParser.parse("![[source:img.png]]")
+        #expect(links.count == 1)
+        #expect(links[0].linkType == .source)
+        #expect(links[0].isEmbed == true)
+        #expect(links[0].target == "img.png")
+    }
+
+    @Test func nonEmbedSourceLinkHasIsEmbedFalse() {
+        // AC.1: `[[source:img.png]]` (no `!`) → isEmbed == false.
+        let links = WikiLinkParser.parse("[[source:img.png]]")
+        #expect(links.count == 1)
+        #expect(links[0].linkType == .source)
+        #expect(links[0].isEmbed == false)
+    }
+
+    @Test func pageEmbedIsNotParsed() {
+        // AC.2: `![[Page Title]]` is invalid (embeds are source-only) → empty.
+        #expect(WikiLinkParser.parse("![[Page Title]]").isEmpty)
+    }
+
+    @Test func embedAndCiteToSameSourceAreBothParsed() {
+        // AC.3 foundation: cite + embed to the same source are distinct
+        // (different dedup keys) — the parser emits both.
+        let links = WikiLinkParser.parse("[[source:X]] and ![[source:X]]")
+        #expect(links.count == 2)
+        #expect(links.contains { $0.isEmbed == false && $0.target == "X" })
+        #expect(links.contains { $0.isEmbed == true && $0.target == "X" })
+    }
+
+    @Test func duplicateEmbedsAreDeduped() {
+        // Two `![[source:X]]` → one embed link (deduped).
+        let links = WikiLinkParser.parse("![[source:X]] again ![[source:X]]")
+        let embeds = links.filter { $0.isEmbed }
+        #expect(embeds.count == 1)
+    }
+
+    @Test func embedWithAliasPreservesAlias() {
+        let links = WikiLinkParser.parse("![[source:img.png|the image]]")
+        #expect(links.count == 1)
+        #expect(links[0].isEmbed == true)
+        #expect(links[0].target == "img.png")
+        #expect(links[0].linkText == "the image")
+    }
+
+    @Test func escapedBangIsNotEmbed() {
+        // `\![[source:X]]` → the `!` is escaped, so it's a regular cite link.
+        let links = WikiLinkParser.parse("\\![[source:X]]")
+        #expect(links.count == 1)
+        #expect(links[0].isEmbed == false)
+    }
+
+    @Test func doubleBangIsNotEmbed() {
+        // `!![[source:X]]` → not a clean embed prefix (double bang).
+        let links = WikiLinkParser.parse("!![[source:X]]")
+        #expect(links.count == 1)
+        #expect(links[0].isEmbed == false)
+    }
+
+    @Test func spaceBetweenBangAndBracketsIsNotEmbed() {
+        // `! [[source:X]]` → space breaks the embed prefix.
+        let links = WikiLinkParser.parse("! [[source:X]]")
+        #expect(links.count == 1)
+        #expect(links[0].isEmbed == false)
+    }
 }

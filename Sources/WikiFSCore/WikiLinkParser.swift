@@ -33,15 +33,22 @@ public enum WikiLinkParser {
         public let target: String       // prefix-stripped, whitespace-collapsed (BASE only)
         public let fragment: String?    // everything after the first "#", verbatim; nil if none
         public let linkText: String     // alias verbatim (never prefix-stripped)
+        /// True when the link has a `!` embed prefix (`![[source:…]]`). Embeds are
+        /// source-only — `![[Page]]` is not valid and is skipped at parse time.
+        /// Defaults to `false` so every existing call site compiles unchanged.
+        public let isEmbed: Bool
 
-        /// `linkType` defaults to `.page` so every existing `ParsedLink(target:linkText:)`
-        /// call site compiles unchanged and equality holds (both sides default to `.page`).
+        /// `linkType` defaults to `.page` and `isEmbed` to `false` so every
+        /// existing `ParsedLink(target:linkText:)` call site compiles unchanged
+        /// and equality holds (both sides default to `.page` / non-embed).
         public init(linkType: LinkType = .page, target: String,
-                    fragment: String? = nil, linkText: String) {
+                    fragment: String? = nil, linkText: String,
+                    isEmbed: Bool = false) {
             self.linkType = linkType
             self.target = target
             self.fragment = fragment
             self.linkText = linkText
+            self.isEmbed = isEmbed
         }
     }
 
@@ -106,9 +113,11 @@ public enum WikiLinkParser {
     // MARK: - Parse
 
     /// Parse all wiki links from `body`, in document order, de-duplicated by
-    /// `(kind, raw target)` (first alias wins). Same-page anchors (`[[#…]]`,
-    /// empty base) are skipped — they don't name a page or source, so they don't
-    /// belong in the link graph.
+    /// `(kind, raw target, embed/cite role)` (first alias wins). Same-page anchors
+    /// (`[[#…]]`, empty base) are skipped — they don't name a page or source, so
+    /// they don't belong in the link graph. Page links with a `!` embed prefix
+    /// (`![[Page]]`) are invalid embeds and are skipped entirely — only source
+    /// links can be embeds (`![[source:…]]`).
     public static func parse(_ body: String) -> [ParsedLink] {
         let ns = body as NSString
         let matches = regex.matches(in: body, range: NSRange(location: 0, length: ns.length))
@@ -136,14 +145,23 @@ public enum WikiLinkParser {
             guard !bareTarget.isEmpty else { continue } // empty target → skip
             if isEmptyPrefix(base) { continue } // `[[source:]]` → literal
 
+            // Detect the `!` embed prefix. Embeds are source-only: a `![[Page]]`
+            // is not a valid embed, so skip it entirely (AC.2). A `![[source:X]]`
+            // sets isEmbed=true and uses a distinct dedup key so the cite and
+            // embed edges coexist in `source_links_edge` (AC.3).
+            let isEmbed = WikiLinkSpan.isEmbedPrefix(ns, match.range)
+            if isEmbed && kind == .page { continue }
+
             // De-dupe by the RAW target (base + fragment), not the base alone:
             // two `#`-containing titles (e.g. `[[C# Guide]]` / `[[C# Notes]]`)
             // share the mis-split base "C" but are different links. Plain
             // duplicates (`[[Home]]` twice) still collapse; `[[Page#A]]` +
             // `[[Page#B]]` both survive and the store's (from,to) primary key
-            // collapses them if they resolve to one page.
+            // collapses them if they resolve to one page. The embed/cite role
+            // is part of the key so a cite + embed to the same source are both
+            // kept (distinct rows under `source_links_edge`).
             let raw = fragment.map { "\(bareTarget)#\($0)" } ?? bareTarget
-            let dedupKey = "\(kind.rawValue):\(raw)"
+            let dedupKey = "\(kind.rawValue):\(raw):\(isEmbed ? "embed" : "cite")"
             guard seen.insert(dedupKey).inserted else { continue }
 
             let linkText: String
@@ -154,7 +172,8 @@ public enum WikiLinkParser {
                 linkText = bareTarget
             }
             out.append(ParsedLink(linkType: kind, target: bareTarget,
-                                  fragment: fragment, linkText: linkText))
+                                  fragment: fragment, linkText: linkText,
+                                  isEmbed: isEmbed))
         }
         return out
     }

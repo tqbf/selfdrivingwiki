@@ -195,4 +195,23 @@ struct WikiLinkRewriterTests {
             matching: "Old", to: "New")
         #expect(result == "[[source:New|see #1]]")
     }
+
+    // MARK: - Embed prefix `![[source:…]]` (Phase 4a)
+
+    @Test func rewritesEmbedSourceLinkPreservingBang() {
+        // The `!` sits outside the regex match span, so rewriteSourceBase only
+        // rewrites the inner `[[source:Old]]` → `[[source:New]]`, leaving the
+        // `!` prefix intact: `![[source:Old]]` → `![[source:New]]`.
+        let result = WikiLinkRewriter.rewriteSourceBase(
+            in: "![[source:Old]]",
+            matching: "Old", to: "New")
+        #expect(result == "![[source:New]]")
+    }
+
+    @Test func rewritesEmbedSourceLinkWithFragment() {
+        let result = WikiLinkRewriter.rewriteSourceBase(
+            in: "![[source:Old#\"a quote\"]]",
+            matching: "Old", to: "New")
+        #expect(result == "![[source:New#\"a quote\"]]")
+    }
 }

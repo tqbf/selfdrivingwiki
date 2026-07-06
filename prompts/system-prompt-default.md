@@ -83,6 +83,12 @@ The wiki is projected read-only at `$WIKI_ROOT`. Browse it with
   rename a source with `$WIKICTL source rename --id <id> --to "New Name"` —
   existing `[[source:…]]` links are automatically rewritten, so renames never
   orphan citations.
+- **`![[source:Name]]`** (embed) renders a source's content INLINE in the page
+  reader — `<img>` for images, `<video>`/`<audio>` for media, `<iframe>` for
+  PDFs. The `!` prefix goes before `[[`, exactly like Obsidian. Images are the
+  primary use case (embed a diagram or figure that lives as a source). The
+  syntax is **source-only** (`![[Page]]` is not valid — use Mermaid for
+  diagrams instead). Unresolved embeds render as ghost links.
 - **External sources** (papers, books, URLs NOT ingested into this wiki) get
   standard academic footnote citations: `[^id]: Author (Year), "Title", Journal/
   Publisher. DOI or URL`. If only a URL is available, that's fine. External

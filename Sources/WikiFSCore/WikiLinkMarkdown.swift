@@ -26,6 +26,10 @@ public enum WikiLinkMarkdown {
     /// The private scheme the in-app `OpenURLAction` intercepts. Real external
     /// links (https, mailto, …) fall through to `.systemDefault`.
     public static let scheme = "wiki"
+    /// The custom WKURL scheme that serves source blob bytes from SQLite to the
+    /// web view. `![[source:…]]` embeds emit `<img src="wiki-blob://source/<id>">`.
+    /// The `BlobSchemeHandler` (in `WikiFS`) registers for this scheme.
+    public static let blobScheme = "wiki-blob"
     /// Host for a link whose target resolves to a real page (navigates).
     public static let resolvedHost = "page"
     /// Host for a link whose target has no page/source (rendered dimmed, inert).
@@ -45,10 +49,16 @@ public enum WikiLinkMarkdown {
     ///   - isResolved: returns `true` if a (target, LinkType) pair maps to an
     ///                 existing page/source. Receives the whitespace-collapsed,
     ///                 prefix-stripped target.
+    ///   - embedInfo: when non-nil, called for each `![[source:…]]` embed to
+    ///                resolve the source name to `(id, mimeType)`. Returns the
+    ///                embed HTML (`<img>`, `<video>`, `<audio>`, `<iframe>`) if
+    ///                the source resolves and the MIME type is renderable; falls
+    ///                back to a cite link otherwise.
     /// - Returns: Markdown safe to hand to `AttributedString(markdown:)`.
     public static func linkified(
         _ body: String,
-        isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool = { _, _ in true }
+        isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool = { _, _ in true },
+        embedInfo: ((String) -> (id: PageID, mimeType: String?)?)? = nil
     ) -> String {
         let ns = body as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
@@ -67,8 +77,14 @@ public enum WikiLinkMarkdown {
             }
 
             // Copy the untouched text between the previous match and this one.
-            if full.location > cursor {
-                out += ns.substring(with: NSRange(location: cursor, length: full.location - cursor))
+            // If an embed prefix `!` immediately precedes the match, consume it
+            // (copy up to location - 1) so the `!` doesn't appear as literal
+            // text — CommonMark would otherwise parse `![display](url)` as an
+            // `<img>` node with a `wiki://` src.
+            let isEmbedPrefix = WikiLinkSpan.isEmbedPrefix(ns, full)
+            let copyEnd = isEmbedPrefix ? full.location - 1 : full.location
+            if copyEnd > cursor {
+                out += ns.substring(with: NSRange(location: cursor, length: copyEnd - cursor))
             }
             cursor = full.location + full.length
 
@@ -135,6 +151,17 @@ public enum WikiLinkMarkdown {
                 display = collapsedAlias.isEmpty ? linkTarget : collapsedAlias
             } else {
                 display = linkTarget
+            }
+
+            // Embed rendering: if the span has a `!` prefix and is a source
+            // link, try to emit inline HTML dispatched on MIME type. Falls back
+            // to a normal cite link when the source is unresolved, the MIME type
+            // is not renderable, or no embedInfo resolver was provided.
+            if isEmbedPrefix && kind == .source,
+               let info = embedInfo?(linkTarget),
+               let html = embedHTML(display: display, id: info.id, mimeType: info.mimeType) {
+                out += html
+                continue
             }
 
             out += markdownLink(display: display, target: linkTarget, kind: kind,
@@ -221,6 +248,35 @@ public enum WikiLinkMarkdown {
             url += "#\(encodedFrag)"
         }
         return "[\(safeDisplay)](\(url))"
+    }
+
+    /// Inline HTML for an embed source link, dispatched on MIME type. Returns
+    /// `nil` for unrecognized MIME types so the caller falls back to a cite link.
+    /// The `wiki-blob://source/<id>` URL is served by `BlobSchemeHandler`.
+    private static func embedHTML(display: String, id: PageID, mimeType: String?) -> String? {
+        let url = "\(blobScheme)://source/\(id.rawValue)"
+        guard let mime = mimeType else { return nil }
+        if mime.hasPrefix("image/") {
+            return "<img src=\"\(url)\" alt=\"\(embedEscape(display))\" class=\"wiki-embed\">"
+        }
+        if mime.hasPrefix("video/") {
+            return "<video src=\"\(url)\" controls class=\"wiki-embed\"></video>"
+        }
+        if mime.hasPrefix("audio/") {
+            return "<audio src=\"\(url)\" controls class=\"wiki-embed\"></audio>"
+        }
+        if mime == "application/pdf" {
+            return "<iframe src=\"\(url)\" class=\"wiki-embed-pdf\"></iframe>"
+        }
+        return nil // unknown MIME → caller falls back to cite link
+    }
+
+    /// Escape `"` and `<`/`>`/`&` for an HTML attribute value (alt text).
+    private static func embedEscape(_ s: String) -> String {
+        s.replacingOccurrences(of: "&", with: "&amp;")
+         .replacingOccurrences(of: "<", with: "&lt;")
+         .replacingOccurrences(of: ">", with: "&gt;")
+         .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
     /// Collapse whitespace runs to one space and trim — delegates to the single

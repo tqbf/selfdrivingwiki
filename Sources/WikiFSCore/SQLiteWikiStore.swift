@@ -1919,6 +1919,14 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             INSERT OR IGNORE INTO source_links (from_page_id, to_source_id, link_text)
             VALUES (?1, ?2, ?3);
             """)
+            // Embed source links (`![[source:…]]`) write a DISTINCT edge with
+            // role='embed' — the `source_links_edge` unique index treats
+            // (from, to, role, pin) as distinct, so a cite + embed to the same
+            // source coexist as separate rows (Phase 4a, AC.3).
+            let insSourceEmbed = try statement("""
+            INSERT OR IGNORE INTO source_links (from_page_id, to_source_id, link_text, role)
+            VALUES (?1, ?2, ?3, 'embed');
+            """)
             // A `#` inside a page/source NAME mis-splits into base + fragment
             // at parse time. Resolve via WikiLinkResolver: try every reading
             // of the raw target (longest name first) and take the first that
@@ -1936,11 +1944,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 case .source:
                     guard let target = try resolveLinkTarget(link, using: resolveSourceByName)
                     else { continue }
-                    insSource.reset()
-                    try insSource.bind(pageID.rawValue, at: 1)
-                    try insSource.bind(target.rawValue, at: 2)
-                    try insSource.bind(link.linkText, at: 3)
-                    _ = try insSource.step()
+                    let stmt = link.isEmbed ? insSourceEmbed : insSource
+                    stmt.reset()
+                    try stmt.bind(pageID.rawValue, at: 1)
+                    try stmt.bind(target.rawValue, at: 2)
+                    try stmt.bind(link.linkText, at: 3)
+                    _ = try stmt.step()
                 }
             }
         }

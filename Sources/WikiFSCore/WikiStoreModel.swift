@@ -322,6 +322,19 @@ public final class WikiStoreModel {
         (try? store.resolveSourceByName(displayName)) != nil
     }
 
+    /// `(bytes, mimeType)` for the blob scheme handler (`wiki-blob://`). `nil` =
+    /// unknown id (→ 404); empty `Data` = byteless source (→ 200 empty body);
+    /// else the blob bytes + MIME. Used by `BlobSchemeHandler` to serve source
+    /// content to the WKWebView for `![[source:…]]` embeds. Looks up the MIME
+    /// type from the loaded `sources` list (which mirrors `store.listSources()`)
+    /// rather than calling the store directly, since `getSource(id:)` is concrete
+    /// on `SQLiteWikiStore`, not on the `WikiStore` protocol.
+    @MainActor public func sourceContentAndMIME(id: PageID) -> (data: Data, mimeType: String?)? {
+        guard let summary = sources.first(where: { $0.id == id }) else { return nil }
+        let data = (try? store.sourceContent(id: id)) ?? Data()
+        return (data, summary.mimeType)
+    }
+
     /// Semantic search for pages matching `query`. Delegates to the store's
     /// hybrid search (FTS5 bm25 always; +MiniLM cosine fused via RRF when the
     /// model is available). Runs the query embedding + SQLite on the main actor
