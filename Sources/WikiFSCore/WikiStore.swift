@@ -87,6 +87,28 @@ public protocol WikiStore: Sendable {
         provenance: SourceProvenance?
     ) throws -> SourceSummary
 
+    /// Store a **byteless** source: a source whose identity row + v1 content
+    /// version carry NO blob (`blob_hash = NULL`, `byte_size = 0`,
+    /// `content_hash = NULL`). The source is a pointer to an external resource
+    /// (e.g. an Apple Podcasts episode); its derived alternative (the transcript
+    /// markdown) is stored separately via `appendProcessedMarkdown`. Mirrors
+    /// `addSource`'s transaction discipline minus the blob/hash write. Dedups on
+    /// `external_identity` (when non-nil) among byteless sources — throws
+    /// `.duplicateContent(existing:)` if one already exists with the same
+    /// identity. See `plans/graph-model-and-versioning.md` §11.
+    ///
+    /// IMPORTANT: `sources.content_hash IS NULL` is used as a one-shot
+    /// "needs backfill" sentinel ONLY inside the schema-version-gated v20
+    /// migration block (already shipped; cannot re-trigger). Byteless rows with
+    /// `content_hash = NULL` are safe, but NO future migration may reuse that
+    /// sentinel — a byteless row would falsely match it.
+    @discardableResult
+    func addBytelessSource(
+        filename: String,
+        mimeType: String?,
+        provenance: SourceProvenance
+    ) throws -> SourceSummary
+
     /// Source summaries (no content blob), most-recent-first.
     func listSources() throws -> [SourceSummary]
 
@@ -122,6 +144,16 @@ public protocol WikiStore: Sendable {
     func markedSourceIDs() throws -> Set<String>
 
     // MARK: - Processed markdown versions (v8, renamed v10)
+
+    /// Append a new content version for a source (the store-level refresh/
+    /// re-ingest primitive). Hashes the bytes → CAS blob → new version row →
+    /// UPSERT the active ref → refresh the denormalized `sources` mirror, all in
+    /// one transaction. Used by the provider refresh path (Phase 3b).
+    @discardableResult
+    func appendContentVersion(
+        sourceID: PageID, data: Data, mimeType: String?,
+        provenance: SourceProvenance?
+    ) throws -> SourceVersion
 
     /// The latest (HEAD) version of the processed markdown for a source, or nil
     /// when no version exists yet (not yet seeded/extracted).

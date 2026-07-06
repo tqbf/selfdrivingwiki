@@ -59,6 +59,8 @@ public enum ArgumentParser {
         case sourceRename(SourceCommand.Selector, to: String)
         /// Nominate a processed-markdown version as the active HEAD (Phase 2).
         case sourceSetActive(SourceCommand.Selector, versionID: PageID)
+        /// Re-fetch a source via its provider, appending a new version (Phase 3b).
+        case sourceRefresh(SourceCommand.Selector)
     }
 
     public enum Failure: Error, Equatable, CustomStringConvertible {
@@ -99,6 +101,8 @@ public enum ArgumentParser {
       source set-active (--id X | --name N) --version <smv-id>
                                               nominate a processed-markdown version
                                               as the active HEAD (extraction alt)
+      source refresh (--id X | --name N)      re-fetch a website source via its
+                                               provider, appending a new version
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -247,6 +251,9 @@ public enum ArgumentParser {
 
         case "info":
             return .source(.info(try options.requireSourceSelector()))
+
+        case "refresh":
+            return .sourceRefresh(try options.requireSourceSelector())
 
         case "search":
             guard let query = options.value("--query") else {

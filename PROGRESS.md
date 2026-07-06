@@ -2,6 +2,35 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-06 — Source refresh + Apple Podcasts byteless conversion (Phase 3b)
+
+Shipped two features on the graph-model versioning substrate:
+
+**Source refresh.** A new `SourceRefreshService` (in `WikiFSCore`) reconstructs
+a source's provider from its stored `SourceOrigin` and re-materializes it
+**off-main**, returning a `RefreshMaterial` (`.contentVersion` for website
+sources, `.derivedMarkdown` for byteless podcast sources). The `@MainActor`
+caller (`WikiStoreModel.refreshSource`) performs the store write
+(`appendContentVersion` / `appendProcessedMarkdown`) — preserving the Phase-0
+single-writer-discipline invariant. Import-only providers (local-file, Zotero,
+folder) throw `.notRefreshable`.
+
+**Apple Podcasts byteless conversion (§11).** Retired the Option-A technical
+debt: podcast episodes now store as **byteless sources** (a pointer to the
+external episode with `blob_hash IS NULL`), with the transcript markdown as a
+derived alternative via `appendProcessedMarkdown`. The provider is unchanged;
+only the storage path repoints. New store primitive `addBytelessSource` mirrors
+`addSource`'s transaction discipline minus the blob/hash write, with a dedup on
+`external_identity` (backed by a partial index).
+
+**Surfaces:** UI refresh button in `SourceDetailView` (gated on refreshability),
+`wikictl source refresh` (website-only; async→sync semaphore bridge), the
+`SourceRefreshService` seam (injectable fetchers for CI).
+
+**Deferred:** credentials UX (Phase 7), website sibling `original_path`
+(Phase 4), transcript-level PROV (`apple-ttml` extract agent — Phase 4 when the
+alternatives UI gains a podcast transcript backend).
+
 ## 2026-07-05 — Apple Podcasts transcript ingest (PR #106 rebase + Option-A remodel)
 
 Rebased PR #106 ("Apple Podcasts episode URLs as transcript sources") onto

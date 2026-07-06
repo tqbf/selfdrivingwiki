@@ -473,6 +473,17 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         );
         """)
         try exec("CREATE INDEX IF NOT EXISTS source_versions_source ON source_versions(source_id, id);")
+        // UNIQUE partial index for byteless-source dedup: keeps the
+        // external_identity lookup O(log n) AND provides a DB-level backstop
+        // against the SELECT-then-INSERT TOCTOU (a concurrent wikictl writer
+        // could pass the dedup check and both insert). NULL external_identity
+        // values are not equal in SQLite, so multiple NULLs coexist fine.
+        // Created here (fresh DB) and re-asserted idempotently in
+        // ensureSearchIndexesPopulated so existing v21 DBs pick it up too.
+        try exec("""
+        CREATE UNIQUE INDEX IF NOT EXISTS source_versions_byteless_eid
+            ON source_versions(external_identity) WHERE blob_hash IS NULL;
+        """)
         try exec("""
         CREATE TABLE IF NOT EXISTS refs (
             kind       TEXT NOT NULL,
@@ -2082,6 +2093,149 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         )
     }
 
+    /// Store a **byteless** source — the §11 model for sources whose content is
+    /// an external resource (e.g. an Apple Podcasts episode), not stored bytes.
+    /// The source identity row + v1 content version carry `blob_hash = NULL`,
+    /// `byte_size = 0`, `content_hash = NULL`; the derived alternative (the
+    /// transcript markdown) is stored separately via `appendProcessedMarkdown`.
+    ///
+    /// Mirrors `addSource`'s transaction discipline EXACTLY, minus the blob/
+    /// hash write. Dedups on `external_identity` among byteless sources (the
+    /// partial index `source_versions_byteless_eid` keeps this O(log n)). The
+    /// byteless dedup and `addSource`'s content-hash dedup are disjoint: content
+    /// sources dedup on `content_hash`; byteless sources dedup on
+    /// `external_identity`. SQL `NULL = '…'` is NULL, so `addSource`'s content-
+    /// hash dedup never matches a byteless source.
+    @discardableResult
+    public func addBytelessSource(
+        filename: String,
+        mimeType: String? = nil,
+        provenance: SourceProvenance
+    ) throws -> SourceSummary {
+        lock.lock(); defer { lock.unlock() }
+
+        // Byteless dedup: a byteless source with the same external_identity
+        // already exists → reject (the partial index makes this lookup fast).
+        if let extID = provenance.externalIdentity {
+            let dupStmt = try statement("""
+            SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size,
+                   s.created_at, s.updated_at, s.version,
+                   s.zotero_item_key, s.zotero_item_title, s.display_name
+            FROM sources s
+            JOIN source_versions sv ON sv.source_id = s.id
+            WHERE sv.external_identity = ?1 AND sv.blob_hash IS NULL
+            LIMIT 1;
+            """)
+            dupStmt.reset()
+            try dupStmt.bind(extID, at: 1)
+            if try dupStmt.step() {
+                let existing = sourceSummary(from: dupStmt)
+                dupStmt.reset()
+                throw WikiStoreError.duplicateContent(existing: existing)
+            }
+            dupStmt.reset()
+        }
+
+        let id = PageID(rawValue: ULID.generate())
+        let ext = (filename as NSString).pathExtension.lowercased()
+        let mime = mimeType
+            ?? (ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType)
+        let now = Date()
+        // Display-name resolution mirrors addSource — pass empty Data (no bytes
+        // to sniff); the resolver falls back to filename/extension inference.
+        let displayName: String?
+        if let resolved = DisplayNameResolver.resolve(
+            filename: filename, data: Data(), mimeType: mime,
+            zoteroItemTitle: nil) {
+            displayName = WikiNameRules.sanitized(resolved)
+        } else if !WikiNameRules.isLinkable(filename) {
+            displayName = WikiNameRules.sanitized(filename)
+        } else {
+            displayName = nil
+        }
+
+        let insStmt = try statement("""
+        INSERT INTO sources
+          (id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
+           zotero_item_key, zotero_item_title, display_name, content_hash)
+        VALUES (?1, ?2, ?3, ?4, 0, ?5, ?5, 1, NULL, NULL, ?6, NULL);
+        """)
+
+        try withTransaction {
+            let sourceID = id.rawValue
+            let nowTS = now.timeIntervalSince1970
+
+            // 0. The `sources` identity row FIRST (byte_size = 0, content_hash
+            //    = NULL — no blob to hash).
+            insStmt.reset()
+            try insStmt.bind(sourceID, at: 1)
+            try insStmt.bind(filename, at: 2)
+            try insStmt.bind(ext, at: 3)
+            if let mime { try insStmt.bind(mime, at: 4) }
+            try insStmt.bind(nowTS, at: 5)
+            if let displayName { try insStmt.bind(displayName, at: 6) }
+            _ = try insStmt.step()
+
+            // 1. Fetch/import activity + real provider agent (provenance is
+            //    required for byteless sources — there's no meaningful byteless
+            //    source without external identity/provenance).
+            let agentID = try ensureAgent(
+                name: provenance.agentName, kind: provenance.agentKind,
+                version: provenance.agentVersion, externalRef: nil)
+            let activityID = ULID.generate()
+            let insActivity = try statement("""
+            INSERT INTO activities (id, kind, agent_id, plan, external_ref, started_at, ended_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6);
+            """)
+            insActivity.reset()
+            try insActivity.bind(activityID, at: 1)
+            try insActivity.bind(provenance.activityKind, at: 2)
+            try insActivity.bind(agentID, at: 3)
+            if let plan = provenance.plan { try insActivity.bind(plan, at: 4) }
+            if let extRef = provenance.externalRef { try insActivity.bind(extRef, at: 5) }
+            try insActivity.bind(nowTS, at: 6)
+            _ = try insActivity.step()
+
+            // 2. v1 content version (blob_hash = NULL, external_identity set).
+            let versionID = ULID.generate()
+            let insVersion = try statement("""
+            INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
+                                         mime_type, activity_id, external_identity, fetched_at)
+            VALUES (?1, ?2, NULL, NULL, ?3, ?4, ?5, ?6);
+            """)
+            insVersion.reset()
+            try insVersion.bind(versionID, at: 1)
+            try insVersion.bind(sourceID, at: 2)
+            if let mime { try insVersion.bind(mime, at: 3) }
+            try insVersion.bind(activityID, at: 4)
+            if let extID = provenance.externalIdentity { try insVersion.bind(extID, at: 5) }
+            try insVersion.bind(nowTS, at: 6)
+            _ = try insVersion.step()
+
+            // 3. Active ref (generation 1).
+            let insRef = try statement("""
+            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+            VALUES ('source-content', ?1, ?2, 1, ?3);
+            """)
+            insRef.reset()
+            try insRef.bind(sourceID, at: 1)
+            try insRef.bind(versionID, at: 2)
+            try insRef.bind(nowTS, at: 3)
+            _ = try insRef.step()
+        }
+
+        // Name-only FTS index entry (no content text — the transcript lives in
+        // the derived alternative, indexed when appendProcessedMarkdown runs).
+        upsertSourceSearch(sourceID: id, body: "")
+
+        return SourceSummary(
+            id: id, filename: filename, ext: ext, mimeType: mime,
+            byteSize: 0, createdAt: now, updatedAt: now, version: 1,
+            zoteroItemKey: nil, zoteroItemTitle: nil,
+            displayName: displayName
+        )
+    }
+
     /// All source summaries (NO content blob), most-recent-first for the
     /// management list. `id` is a ULID so `created_at DESC` orders by ingest.
     public func listSources() throws -> [SourceSummary] {
@@ -3594,6 +3748,21 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     private func ensureSearchIndexesPopulated() {
         // 0. Wipe chunks if the active embedder changed since the last open.
         ensureEmbedderConsistency()
+
+        // 0a. Ensure the byteless-source dedup UNIQUE partial index exists.
+        //     Fresh DBs get it in createObjectsTablesV20; existing v21 DBs that
+        //     predate Phase 3b need it created here. If an older non-UNIQUE
+        //     version of the index exists (shouldn't happen — it's new), the
+        //     CREATE UNIQUE IF NOT EXISTS is a no-op (the name already exists).
+        //     Idempotent: a no-op once the index exists.
+        do {
+            try exec("""
+            CREATE UNIQUE INDEX IF NOT EXISTS source_versions_byteless_eid
+                ON source_versions(external_identity) WHERE blob_hash IS NULL;
+            """)
+        } catch {
+            DebugLog.store("ensureSearchIndexes: byteless index create failed — \(error)")
+        }
 
         // 1. Seed a v1 processed-markdown version for markdown-native sources
         //    that have none, so their body is searchable (name-only otherwise).

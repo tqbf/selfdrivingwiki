@@ -757,8 +757,8 @@ verbs) carry over from the draft verbatim. Two grounding notes:
   is reason enough to sequence providers before "refresh" ships (refresh
   needs to know what to re-fetch).
 
-> **Apple Podcasts provider (PR #106).** Podcast transcript ingest already
-> exists as a special case on the URL path (`PodcastEpisodeURL.parse` →
+> **Apple Podcasts provider (PR #106, Phase 3b — SHIPPED).** Podcast transcript
+> ingest exists as a special case on the URL path (`PodcastEpisodeURL.parse` →
 > `ApplePodcastTranscriptService`), built against today's flat source model: it
 > stores the transcript `.md` as source `content` and bakes the episode ID into
 > the filename. When Phase 1–3 land it re-models cleanly — a **byteless source**
@@ -771,6 +771,13 @@ verbs) carry over from the draft verbatim. Two grounding notes:
 > (`#if PODCAST_TRANSCRIPTS`) and stay on the user-initiated UI path — they do
 > not move into the agent surface. Ships independently of this plan; tracked
 > here so it is unified when providers land.
+>
+> **Status (Phase 3b, 2026-07-06):** the byteless conversion has shipped —
+> podcast episodes now store as byteless sources (`addBytelessSource`) with the
+> transcript as a derived markdown alternative (`appendProcessedMarkdown`).
+> Source refresh is live via `SourceRefreshService` + `refreshSource`. The
+> transcript-level `apple-ttml` extract PROV is deferred to Phase 4 (no consumer
+> until the alternatives UI gains a podcast transcript backend).
 
 ## 12. Phases
 

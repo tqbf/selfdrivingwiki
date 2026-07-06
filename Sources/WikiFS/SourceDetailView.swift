@@ -43,6 +43,10 @@ struct SourceDetailView: View {
     @State private var isEditing = false
     @State private var editBuffer = ""
     @State private var isExtracting = false
+    /// True while a source refresh (re-fetch via provider) is in flight.
+    @State private var isRefreshing = false
+    /// Set when a refresh fails — surfaced inline below the action row.
+    @State private var refreshError: String?
     /// Tracks the active tab ID as of the last resolved update cycle — used to
     /// distinguish tab switches from in-tab file navigation.
     @State private var lastKnownActiveTabID: UUID? = nil
@@ -82,6 +86,13 @@ struct SourceDetailView: View {
     private var isPDF: Bool { file.mimeType == "application/pdf" }
 
     private var hasMarkdown: Bool { headVersion != nil }
+
+    /// `true` when the source's origin is a refreshable provider (website or
+    /// Apple Podcast). Import-only providers (local-file, Zotero, folder) carry
+    /// no URL to re-fetch.
+    private var isRefreshable: Bool {
+        origin?.agentName == "website" || origin?.agentName == "apple-podcast"
+    }
 
     private var showTabs: Bool { isPDF && hasMarkdown }
 
@@ -160,6 +171,8 @@ struct SourceDetailView: View {
             flushEditIfDirty()
             isEditing = false
             isExtracting = false
+            isRefreshing = false
+            refreshError = nil
             showReingestConfirmation = false
             headVersion = nil
             origin = nil
@@ -371,6 +384,13 @@ struct SourceDetailView: View {
                             store.requestSidebarReveal(.source(file.id))
                         }
                         .help("Reveal this source in the sidebar")
+                        if isRefreshable {
+                            Button("Refresh", systemImage: "arrow.clockwise") {
+                                Task { await runRefresh() }
+                            }
+                            .disabled(isRefreshing || store.isAgentRunning)
+                            .help("Re-fetch this source and append a new version")
+                        }
                         if fileProvider.path != nil {
                             Button("Share", systemImage: "square.and.arrow.up") {
                                 Task {
@@ -415,9 +435,44 @@ struct SourceDetailView: View {
                 }
             }
 
+            if isRefreshing {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Refreshing…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let refreshError {
+                Text(refreshError)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
+
         }
         .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
         .padding(PageEditorMetrics.contentInset)
+    }
+
+    // MARK: - Refresh (Phase 3b)
+
+    /// Re-fetch the source via its provider, appending a new version. The
+    /// materialization (network fetch) runs off-main inside the service; the
+    /// store write + `reloadSources` happen on-main inside `refreshSource`.
+    /// On success, reloads the head markdown so the reader updates.
+    private func runRefresh() async {
+        isRefreshing = true
+        refreshError = nil
+        defer { isRefreshing = false }
+        do {
+            _ = try await store.refreshSource(file.id)
+            headVersion = store.processedMarkdownHead(for: file)
+        } catch SourceRefreshService.RefreshError.notRefreshable(let agent) {
+            refreshError = "This \(agent) source can't be refreshed."
+        } catch {
+            refreshError = "Refresh failed: \(error.localizedDescription)"
+        }
     }
 
     // MARK: - Zotero origin

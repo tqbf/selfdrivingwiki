@@ -111,6 +111,46 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
         return try SourceCommand.run(
             .setActive(selector, versionID: versionID), in: store,
             cwd: FileManager.default.currentDirectoryPath)
+    case .sourceRefresh(let selector):
+        // `runRefresh` is async (network I/O). Bridge it to the sync `execute`
+        // context via a semaphore — the standard CLI async→sync pattern. Safe
+        // because `DispatchSemaphore.wait()` blocks only the main thread; the
+        // async task signals from its own continuation thread, which never needs
+        // to acquire the main thread to signal (signaling is thread-agnostic).
+        // WebsiteProvider does not hop to the main actor, so no deadlock.
+        let box = RefreshResultBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            do {
+                box.result = try await SourceCommand.runRefresh(
+                    selector, in: store, fetcher: URLSessionFetcher())
+            } catch {
+                box.error = error
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+        if let error = box.error { throw error }
+        return box.result ?? SourceCommand.Result(payload: .text(""), didCommit: false)
+    }
+}
+
+/// Thread-safe box for the wikictl async→sync semaphore bridge (Phase 3b).
+/// `@unchecked Sendable` — the semaphore guarantees the write (in the async
+/// task) happens-before the read (after `semaphore.wait()` returns), so the
+/// lock is belt-and-suspenders for Swift 6's data-race checker.
+final class RefreshResultBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _result: SourceCommand.Result?
+    private var _error: Error?
+
+    var result: SourceCommand.Result? {
+        get { lock.lock(); defer { lock.unlock() }; return _result }
+        set { lock.lock(); defer { lock.unlock() }; _result = newValue }
+    }
+    var error: Error? {
+        get { lock.lock(); defer { lock.unlock() }; return _error }
+        set { lock.lock(); defer { lock.unlock() }; _error = newValue }
     }
 }
 
