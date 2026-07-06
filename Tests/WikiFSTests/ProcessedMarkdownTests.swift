@@ -644,6 +644,85 @@ struct MarkdownDiffTests {
     }
 }
 
+/// Pure unit tests for the split (two-column) alignment used by Diff mode.
+struct SplitDiffTests {
+    private func rows(_ l: String, _ r: String) -> [SplitRow] {
+        SplitDiff.rows(from: MarkdownDiff.lineDiff(l, r))
+    }
+
+    @Test func equalRowsCarryBothSidesAndNumbers() {
+        let rs = rows("a\nb", "a\nb")
+        #expect(rs.count == 2)
+        #expect(rs[0].left == SplitCell(number: 1, text: "a", kind: .equal))
+        #expect(rs[0].right == SplitCell(number: 1, text: "a", kind: .equal))
+        #expect(rs[1].left?.number == 2 && rs[1].right?.number == 2)
+        #expect(rs.allSatisfy { !$0.isChange })
+    }
+
+    @Test func additionIsRightOnly() {
+        let rs = rows("a\nc", "a\nb\nc")
+        // a=equal, b=added(right-only), c=equal
+        #expect(rs.count == 3)
+        #expect(rs[1].left == nil)
+        #expect(rs[1].right == SplitCell(number: 2, text: "b", kind: .added))
+        #expect(rs[2].left?.number == 2)   // left line count skips the addition
+        #expect(rs[2].right?.number == 3)
+    }
+
+    @Test func removalIsLeftOnly() {
+        let rs = rows("a\nb\nc", "a\nc")
+        #expect(rs[1].left == SplitCell(number: 2, text: "b", kind: .removed))
+        #expect(rs[1].right == nil)
+    }
+
+    @Test func replacementPairsRemovedWithAddedOnSameRow() {
+        let rs = rows("x", "y")
+        #expect(rs.count == 1)
+        #expect(rs[0].left == SplitCell(number: 1, text: "x", kind: .removed))
+        #expect(rs[0].right == SplitCell(number: 1, text: "y", kind: .added))
+        #expect(rs[0].isChange)
+    }
+
+    @Test func unequalRunPairsThenSpills() {
+        // 3 removed, 5 added → 3 paired rows, then 2 right-only rows.
+        let left = "r1\nr2\nr3"
+        let right = "a1\na2\na3\na4\na5"
+        let rs = rows(left, right)
+        #expect(rs.count == 5)
+        #expect(rs.prefix(3).allSatisfy { $0.left != nil && $0.right != nil })
+        #expect(rs[3].left == nil && rs[3].right?.text == "a4")
+        #expect(rs[4].left == nil && rs[4].right?.text == "a5")
+        // Right numbering stays contiguous 1...5.
+        #expect(rs.compactMap { $0.right?.number } == [1, 2, 3, 4, 5])
+    }
+
+    @Test func collapseHidesLongUnchangedRuns() {
+        // 20 equal lines with a single change at the end.
+        let base = (0..<20).map { "line\($0)" }.joined(separator: "\n")
+        let els = SplitDiff.elements(from: rows(base, base + "\nchanged"),
+                                     context: 3, threshold: 4)
+        let collapsed = els.compactMap { if case .collapsed(let r) = $0 { return r } else { return nil } }
+        #expect(collapsed.count == 1)
+        // Only a leading run before the change → context kept at the tail (3),
+        // none at the document start.
+        let visibleRows = els.filter { if case .row = $0 { return true } else { return false } }
+        #expect(visibleRows.count < 21)   // most of the equal run is hidden
+    }
+
+    @Test func shortUnchangedRunsAreNotCollapsed() {
+        let els = SplitDiff.elements(from: rows("a\nb\nc", "a\nb\nc"),
+                                     context: 3, threshold: 4)
+        #expect(els.allSatisfy { if case .row = $0 { return true } else { return false } })
+    }
+
+    @Test func hunkAnchorsMarkStartsOfChangeBlocks() {
+        // equal, change, equal, equal, change → 2 anchors.
+        let rs = rows("a\nX\nc\nd\nY", "a\nX2\nc\nd\nY2")
+        let anchors = SplitDiff.hunkAnchors(from: rs)
+        #expect(anchors.count == 2)
+    }
+}
+
 /// A trivial `MarkdownExtractor` used by tests: always ready, returns fixed
 /// markdown. Conforms to Sendable for use across actor boundaries.
 private struct FakeMarkdownExtractor: MarkdownExtractor {

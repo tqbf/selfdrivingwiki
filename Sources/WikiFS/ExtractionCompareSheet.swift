@@ -41,12 +41,12 @@ struct ExtractionCompareWindow: View {
 /// Phase 2, track C). Rendered as the content of a value-driven `WindowGroup`
 /// (a real, resizable, non-modal window — see `WikiFSApp`). Renders any two
 /// alternatives side-by-side in the real reader (`WikiReaderView`), with a
-/// toolbar toggle to a unified line-diff (`MarkdownDiff`). Each alternative's
-/// provenance (backend, model, date, size) is shown; "Set Active" nominates the
-/// `source-derived` ref via `WikiStoreModel.setActiveMarkdown` and the Active
-/// badge updates live.
+/// toolbar toggle to a synchronized two-column line-diff (`SplitDiffView`).
+/// Each alternative's provenance (backend, model, date, size) lives in the
+/// sidebar; "Set Active" nominates the `source-derived` ref via
+/// `WikiStoreModel.setActiveMarkdown` and the Active badge updates live.
 ///
-/// No new markdown-rendering code: both panes reuse `WikiReaderView`.
+/// No new markdown-rendering code: both rendered panes reuse `WikiReaderView`.
 struct ExtractionCompareSheet: View {
     @Bindable var store: WikiStoreModel
     let sourceID: PageID
@@ -58,6 +58,13 @@ struct ExtractionCompareSheet: View {
     @State private var leftID: PageID?
     @State private var rightID: PageID?
     @State private var showDiff = false
+
+    init(store: WikiStoreModel, sourceID: PageID, filename: String, startInDiff: Bool = false) {
+        self._store = Bindable(wrappedValue: store)
+        self.sourceID = sourceID
+        self.filename = filename
+        self._showDiff = State(initialValue: startInDiff)
+    }
 
     private enum CompareMode: String, CaseIterable {
         case rendered = "Rendered"
@@ -76,7 +83,7 @@ struct ExtractionCompareSheet: View {
                 contentSplit
             }
         }
-        .frame(minWidth: 880, minHeight: 560)
+        .frame(minWidth: 900, minHeight: 580)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { refresh(assignDefaults: true) }
     }
@@ -106,15 +113,17 @@ struct ExtractionCompareSheet: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(width: 180)
+            .frame(width: 170)
             .disabled(alternatives.count < 2)
-            if showDiff, let l = leftVersion, let r = rightVersion {
-                DiffLegend(left: l, right: r)
-            }
+
+            paneMenu(title: "Base", tint: .red, selection: $leftID, current: leftVersion)
+            paneMenu(title: "Compare", tint: .green, selection: $rightID, current: rightVersion)
+
             Spacer()
+
             if let l = leftVersion, let r = rightVersion {
                 Text("\(l.charCount, format: .number) ↔ \(r.charCount, format: .number) chars")
-                    .font(.caption)
+                    .font(.caption).monospacedDigit()
                     .foregroundStyle(.secondary)
             }
         }
@@ -122,17 +131,55 @@ struct ExtractionCompareSheet: View {
         .padding(.vertical, 8)
     }
 
+    /// A `Base ▾` / `Compare ▾` picker. Replaces the old per-row A/B circles with
+    /// the more discoverable header-dropdown idiom; the colored dot ties the pane
+    /// to its diff side (base = red/removed, compare = green/added).
+    private func paneMenu(title: String, tint: Color,
+                          selection: Binding<PageID?>,
+                          current: ExtractionAlternative?) -> some View {
+        Menu {
+            ForEach(alternatives) { alt in
+                Button {
+                    selection.wrappedValue = alt.id
+                } label: {
+                    HStack {
+                        Text(alt.backendDisplayName)
+                        if alt.id == current?.id { Image(systemName: "checkmark") }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Circle().fill(tint).frame(width: 7, height: 7)
+                (Text("\(title): ").foregroundStyle(.secondary)
+                    + Text(current?.backendDisplayName ?? "—").fontWeight(.medium))
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            .font(.callout)
+            .frame(maxWidth: 220, alignment: .leading)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
     // MARK: - Content
 
     private var contentSplit: some View {
         HSplitView {
             alternativesList
-                .frame(minWidth: 230, idealWidth: 260, maxWidth: 340)
-            if showDiff {
-                diffPane
-            } else {
-                renderedSplit
+                .frame(minWidth: 240, idealWidth: 268, maxWidth: 340)
+            Group {
+                if showDiff {
+                    SplitDiffView(
+                        leftLabel: leftVersion?.backendDisplayName ?? "—",
+                        rightLabel: rightVersion?.backendDisplayName ?? "—",
+                        left: leftVersion?.version.content ?? "",
+                        right: rightVersion?.version.content ?? "")
+                } else {
+                    renderedSplit
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -160,67 +207,77 @@ struct ExtractionCompareSheet: View {
     }
 
     private func alternativeRow(_ alt: ExtractionAlternative) -> some View {
-        let isLeft = leftID == alt.id
-        let isRight = rightID == alt.id
-        return HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(alt.backendDisplayName)
-                        .font(.callout)
-                        .fontWeight(alt.isActive ? .semibold : .regular)
-                    if alt.isActive {
-                        Text("Active")
-                            .font(.caption2)
-                            .fontWeight(.medium)
-                            .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(.tint, in: Capsule())
-                    }
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(alt.backendDisplayName)
+                    .font(.callout)
+                    .fontWeight(alt.isActive ? .semibold : .regular)
+                if alt.isActive {
+                    Text("Active")
+                        .font(.caption2).fontWeight(.medium)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(.tint, in: Capsule())
+                        .foregroundStyle(.white)
                 }
-                Text(alt.version.createdAt, style: .date)
-                    + Text("  ·  \(alt.charCount, format: .number) chars").foregroundStyle(.secondary)
-                if let model = alt.modelVersion {
-                    Text(model).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                        .truncationMode(.middle)
-                }
+                Spacer(minLength: 4)
+                assignmentTag(alt)
             }
-            Spacer(minLength: 4)
-            VStack(spacing: 6) {
-                assignButton("A", label: "left pane", assigned: isLeft) { leftID = alt.id }
-                assignButton("B", label: "right pane", assigned: isRight) { rightID = alt.id }
+            (Text(alt.version.createdAt, style: .date)
+                + Text("  ·  \(alt.charCount, format: .number) chars"))
+                .font(.caption).monospacedDigit()
+                .foregroundStyle(.secondary)
+            if let model = alt.modelVersion {
+                Text(model).font(.caption2).foregroundStyle(.tertiary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            if !alt.isActive {
+                Button("Set Active") { setActive(to: alt.id) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Nominate this extraction as the active HEAD")
+                    .padding(.top, 2)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
         .contentShape(Rectangle())
     }
 
-    private func assignButton(_ title: String, label: String, assigned: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .frame(width: 22, height: 22)
-                .background(assigned ? Color.accentColor : Color.clear,
-                            in: Circle())
-                .foregroundStyle(assigned ? Color.white : Color.secondary)
-                .overlay(Circle().strokeBorder(Color.secondary.opacity(0.4), lineWidth: 1))
+    /// Small read-only badge marking a row assigned to the Base / Compare pane —
+    /// mirrors the toolbar dropdown colors so the two controls read as one system.
+    @ViewBuilder
+    private func assignmentTag(_ alt: ExtractionAlternative) -> some View {
+        if leftVersion?.id == alt.id {
+            paneBadge("Base", tint: .red)
+        } else if rightVersion?.id == alt.id {
+            paneBadge("Compare", tint: .green)
         }
-        .buttonStyle(.plain)
-        .help("Set as \(label)")
+    }
+
+    private func paneBadge(_ text: String, tint: Color) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(tint).frame(width: 6, height: 6)
+            Text(text)
+        }
+        .font(.caption2).fontWeight(.medium)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(tint.opacity(0.12), in: Capsule())
     }
 
     // MARK: - Rendered panes
 
     private var renderedSplit: some View {
         HSplitView {
-            renderedPane(version: leftVersion, tag: "A")
-            renderedPane(version: rightVersion, tag: "B")
+            renderedPane(version: leftVersion, tag: "Base", tint: .red)
+            renderedPane(version: rightVersion, tag: "Compare", tint: .green)
         }
     }
 
     @ViewBuilder
-    private func renderedPane(version: ExtractionAlternative?, tag: String) -> some View {
+    private func renderedPane(version: ExtractionAlternative?, tag: String, tint: Color) -> some View {
         VStack(spacing: 0) {
-            paneHeader(tag: tag, alternative: version)
+            paneHeader(tag: tag, tint: tint, alternative: version)
             Divider()
             if let alt = version {
                 WikiReaderView(markdown: alt.version.content, store: store)
@@ -234,43 +291,26 @@ struct ExtractionCompareSheet: View {
     }
 
     @ViewBuilder
-    private func paneHeader(tag: String, alternative: ExtractionAlternative?) -> some View {
+    private func paneHeader(tag: String, tint: Color, alternative: ExtractionAlternative?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(tag).font(.system(size: 12, weight: .bold, design: .rounded))
-                .foregroundStyle(.secondary)
+            HStack(spacing: 5) {
+                Circle().fill(tint).frame(width: 7, height: 7)
+                Text(tag).font(.caption).fontWeight(.semibold).foregroundStyle(.secondary)
+            }
             if let alt = alternative {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(alt.backendDisplayName).font(.callout).fontWeight(.medium)
+                Text(alt.backendDisplayName).font(.callout).fontWeight(.medium)
+                    .lineLimit(1).truncationMode(.tail)
+                if let model = alt.modelVersion {
+                    Text(model).font(.caption2).foregroundStyle(.tertiary)
                         .lineLimit(1).truncationMode(.tail)
-                    if let model = alt.modelVersion {
-                        Text(model).font(.caption2).foregroundStyle(.secondary)
-                            .lineLimit(1).truncationMode(.tail)
-                    }
                 }
             } else {
                 Text("—").font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
-            if let alt = alternative {
-                Button("Set Active") { setActive(to: alt.id) }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(alt.isActive)
-                    .help("Nominate this extraction as the active HEAD")
-            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-    }
-
-    // MARK: - Diff pane
-
-    private var diffPane: some View {
-        MarkdownDiffView(
-            leftLabel: leftVersion?.backendDisplayName ?? "—",
-            rightLabel: rightVersion?.backendDisplayName ?? "—",
-            left: leftVersion?.version.content ?? "",
-            right: rightVersion?.version.content ?? "")
     }
 
     // MARK: - Derived
@@ -295,7 +335,7 @@ struct ExtractionCompareSheet: View {
     }
 
     /// Reload alternatives from the store and (on first load) assign sensible
-    /// defaults: left = active HEAD, right = the most recent other alternative.
+    /// defaults: base = active HEAD, compare = the most recent other alternative.
     private func refresh(assignDefaults: Bool) {
         let fresh = store.processedMarkdownAlternatives(for: sourceID)
         alternatives = fresh
@@ -307,95 +347,229 @@ struct ExtractionCompareSheet: View {
     }
 }
 
-// MARK: - Diff legend
+// MARK: - Synchronized two-column line-diff
 
-private struct DiffLegend: View {
-    let left: ExtractionAlternative
-    let right: ExtractionAlternative
-
-    var body: some View {
-        let lines = MarkdownDiff.lineDiff(left.version.content, right.version.content)
-        let added = lines.filter { $0.kind == .added }.count
-        let removed = lines.filter { $0.kind == .removed }.count
-        HStack(spacing: 10) {
-            Label("\(added)", systemImage: "plus")
-                .foregroundStyle(.green).font(.caption)
-            Label("\(removed)", systemImage: "minus")
-                .foregroundStyle(.red).font(.caption)
-        }
-    }
-}
-
-// MARK: - Unified line-diff view
-
-/// Renders a unified, scrollable line-diff of two markdown bodies: unchanged
-/// lines plain, additions in green, removals in red, each prefixed with a
-/// marker glyph. Monospaced so column alignment across backends is legible.
-struct MarkdownDiffView: View {
+/// Renders a synchronized **side-by-side** line-diff of two markdown bodies.
+/// Both columns live in a single `ScrollView` (so scroll is synced by
+/// construction), each row carries per-side line numbers and a change gutter,
+/// long unchanged runs collapse into expandable bands, and the toolbar offers
+/// prev/next change navigation (⌥↑ / ⌥↓).
+///
+/// The LCS diff + split alignment is expensive on 100k-char bodies, so it is
+/// computed **once** off the main thread into `@State` (with a spinner) and only
+/// recomputed when the left/right content changes — never on scroll or hover.
+struct SplitDiffView: View {
     let leftLabel: String
     let rightLabel: String
     let left: String
     let right: String
 
-    private var lines: [DiffLine] { MarkdownDiff.lineDiff(left, right) }
+    @State private var elements: [SplitDiffElement] = []
+    @State private var anchors: [Int] = []
+    @State private var added = 0
+    @State private var removed = 0
+    @State private var expanded: Set<Int> = []
+    @State private var currentHunk = 0
+    @State private var isComputing = false
+
+    private let gutterWidth: CGFloat = 46
+    private let markerWidth: CGFloat = 14
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                paneLabel(leftLabel, tint: .red)
-                Divider()
-                paneLabel(rightLabel, tint: .green)
-            }
+            columnHeader
             Divider()
-            if left.isEmpty && right.isEmpty {
-                ContentUnavailableView("Pick alternatives to diff",
-                                       systemImage: "circle.dashed")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                            diffRow(line)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+            content
         }
+        .task(id: left + "\u{0}" + right) { await recompute() }
     }
 
-    private func paneLabel(_ text: String, tint: Color) -> some View {
-        Text(text)
-            .font(.caption).fontWeight(.medium)
-            .foregroundStyle(.secondary)
-            .lineLimit(1).truncationMode(.middle)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
+    // MARK: Header
+
+    private var columnHeader: some View {
+        HStack(spacing: 0) {
+            headerCell(leftLabel, tint: .red, systemImage: "minus.circle.fill", count: removed)
+            Divider().frame(height: 22)
+            headerCell(rightLabel, tint: .green, systemImage: "plus.circle.fill", count: added)
+        }
+        // Pin to intrinsic height: an unbounded vertical `Divider` in an HStack is
+        // greedy and would otherwise split the flexible height with the ScrollView
+        // below, floating the labels to mid-pane. This is the dead-space fix.
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .trailing) { changeNav.padding(.trailing, 10) }
+    }
+
+    private func headerCell(_ text: String, tint: Color, systemImage: String, count: Int) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage).foregroundStyle(tint).font(.caption)
+            Text(text).font(.caption).fontWeight(.semibold).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.middle)
+            Text("\(count)").font(.caption2).monospacedDigit().foregroundStyle(tint)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 7)
     }
 
     @ViewBuilder
-    private func diffRow(_ line: DiffLine) -> some View {
-        let (marker, tint, bg): (String, Color, Color) = {
-            switch line.kind {
-            case .equal:  return (" ", .secondary, Color.clear)
-            case .added:  return ("+", .green, Color.green.opacity(0.10))
-            case .removed:return ("−", .red, Color.red.opacity(0.10))
+    private var changeNav: some View {
+        if !anchors.isEmpty {
+            HStack(spacing: 2) {
+                Text("\(min(currentHunk + 1, anchors.count))/\(anchors.count)")
+                    .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+                    .padding(.trailing, 4)
+                Button { step(-1) } label: { Image(systemName: "chevron.up") }
+                    .keyboardShortcut(.upArrow, modifiers: .option)
+                Button { step(1) } label: { Image(systemName: "chevron.down") }
+                    .keyboardShortcut(.downArrow, modifiers: .option)
             }
-        }()
-        HStack(alignment: .firstTextBaseline, spacing: 0) {
-            Text(marker)
-                .foregroundStyle(tint)
-                .frame(width: 18)
-            Text(line.isEmpty ? " " : line.text)
-                .foregroundStyle(line.kind == .equal ? Color.primary : tint)
+            .buttonStyle(.borderless)
+            .font(.caption)
         }
-        .font(.system(size: 12, design: .monospaced))
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(bg)
-        .textSelection(.enabled)
     }
-}
 
-private extension DiffLine {
-    var isEmpty: Bool { text.isEmpty }
+    // MARK: Body
+
+    @ViewBuilder
+    private var content: some View {
+        if isComputing {
+            ProgressView().controlSize(.large)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if left.isEmpty && right.isEmpty {
+            ContentUnavailableView("Pick alternatives to diff", systemImage: "circle.dashed")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(elements) { element in
+                            switch element {
+                            case .row(let r): rowView(r)
+                            case .collapsed(let rows): collapsedBand(rows, id: element.id)
+                            }
+                        }
+                    }
+                }
+                .onChange(of: currentHunk) { _, new in
+                    guard anchors.indices.contains(new) else { return }
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        proxy.scrollTo(anchors[new], anchor: .center)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func rowView(_ r: SplitRow) -> some View {
+        HStack(spacing: 0) {
+            cell(r.left)
+            Divider()
+            cell(r.right)
+        }
+        .id(r.index)
+    }
+
+    @ViewBuilder
+    private func cell(_ cell: SplitCell?) -> some View {
+        if let cell {
+            HStack(alignment: .top, spacing: 0) {
+                Text("\(cell.number)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: gutterWidth, alignment: .trailing)
+                    .padding(.trailing, 6)
+                Text(marker(cell.kind))
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(tint(cell.kind))
+                    .frame(width: markerWidth)
+                Text(cell.text.isEmpty ? " " : cell.text)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(cell.kind == .equal ? .primary : tint(cell.kind))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .padding(.trailing, 8)
+            }
+            .padding(.vertical, 1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(background(cell.kind))
+        } else {
+            // Filler for an unpaired addition/removal on the opposite side.
+            Color.primary.opacity(0.03)
+                .frame(maxWidth: .infinity)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(.quaternary).frame(width: 1).padding(.leading, gutterWidth + markerWidth + 6)
+                }
+        }
+    }
+
+    private func collapsedBand(_ rows: [SplitRow], id: Int) -> some View {
+        Group {
+            if expanded.contains(id) {
+                ForEach(rows) { rowView($0) }
+            } else {
+                Button {
+                    expanded.insert(id)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.down.circle").font(.caption)
+                        Text("Show \(rows.count) unchanged lines").font(.caption)
+                        Spacer()
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14).padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.accentColor.opacity(0.10))
+                    .overlay(alignment: .top) { Divider() }
+                    .overlay(alignment: .bottom) { Divider() }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    // MARK: Styling
+
+    private func marker(_ kind: DiffLineKind) -> String {
+        switch kind { case .equal: " "; case .added: "+"; case .removed: "−" }
+    }
+    private func tint(_ kind: DiffLineKind) -> Color {
+        switch kind { case .equal: .secondary; case .added: .green; case .removed: .red }
+    }
+    private func background(_ kind: DiffLineKind) -> Color {
+        switch kind {
+        case .equal: .clear
+        case .added: .green.opacity(0.11)
+        case .removed: .red.opacity(0.11)
+        }
+    }
+
+    // MARK: Actions
+
+    private func step(_ delta: Int) {
+        guard !anchors.isEmpty else { return }
+        currentHunk = (currentHunk + delta + anchors.count) % anchors.count
+    }
+
+    private func recompute() async {
+        isComputing = true
+        let l = left, r = right
+        let result = await Task.detached(priority: .userInitiated) { () -> ([SplitDiffElement], [Int], Int, Int) in
+            let lines = MarkdownDiff.lineDiff(l, r)
+            let rows = SplitDiff.rows(from: lines)
+            let elements = SplitDiff.elements(from: rows)
+            let anchors = SplitDiff.hunkAnchors(from: rows)
+            let added = rows.reduce(0) { $0 + ((($1.right?.kind ?? .equal) == .added) ? 1 : 0) }
+            let removed = rows.reduce(0) { $0 + ((($1.left?.kind ?? .equal) == .removed) ? 1 : 0) }
+            return (elements, anchors, added, removed)
+        }.value
+        elements = result.0
+        anchors = result.1
+        added = result.2
+        removed = result.3
+        expanded = []
+        currentHunk = 0
+        isComputing = false
+    }
 }

@@ -188,9 +188,18 @@ Run: `swift test --filter ProcessedMarkdownTests`, then full `swift test`.
 - **Assign-A/B discoverability.** Two target dots per row may be obscure.
   Mitigation: tooltips, sensible defaults on open, and Set Active is the obvious
   nominate path.
-- **Diff shipped in v1** (operator-approved): a unified line-diff
-  (`MarkdownDiff`, LCS) with a Rendered ↔ Diff toolbar toggle. The DP table is
-  capped (`maxCells`) with a degraded fallback so oversized bodies stay
-  responsive; the rendered side-by-side remains the default and primary surface.
+- **Diff shipped in v1** (operator-approved): originally a unified line-diff;
+  **redesigned to a synchronized two-column (split) diff** (`SplitDiff` aligns
+  `MarkdownDiff`'s LCS output into per-side numbered rows; `SplitDiffView`
+  renders them in one ScrollView so scroll is synced by construction, with
+  line-number gutters, collapsed unchanged regions, and ⌥↑/⌥↓ change navigation).
+  The diff is computed once off-main into `@State` (never per-render/scroll). The
+  DP table is still capped (`maxCells`) with a degraded fallback so oversized
+  bodies stay responsive; the rendered side-by-side remains the default surface.
+  The A/B assignment moved from per-row circles to toolbar **Base/Compare**
+  pickers; "Set Active" moved into the sidebar rows (survives both modes). A
+  greedy vertical `Divider` in the diff header was inflating its height and
+  floating the labels mid-pane (the "clunky" dead-space) — pinned to intrinsic
+  height. Verified via a hosted-view PNG snapshot harness (`SplitDiffSnapshotTests`).
 - **Single-alternative source.** Button disabled (<2), so the sheet is never
   opened into a degenerate state.
