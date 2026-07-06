@@ -687,7 +687,9 @@ block extends in parity, enforced by the existing test.
    > (provenance-carrying, CAS'd); the `source-derived` ref makes "switch active
    > extraction" a one-row repoint; `revert` is a pointer copy. Default-active
    > rule keeps HEAD = MAX(id) byte-identical until a ref is written. Tracks A+B
-   > shipped; track C (compare/nominate UI) deferred to a follow-on plan.
+   > shipped; track C (compare/nominate UI) implemented on
+   > `feature/extraction-compare-ui` (a modal compare sheet, rendered side-by-side
+   > + line-diff toggle, live Set Active; no schema change).
 5. **v22: `source_links` rebuild** as the rowid table + `COALESCE`'d unique
    index of §4.4 (copy-over `role='cite'`, `pinned_version_id=NULL` — still
    unique, byte-identical behavior), **plus**
@@ -779,7 +781,7 @@ Ordered by dependency; each gate is demoable.
 | **0 — Concurrency substrate** *(this branch)* | Method-atomic store, `withTransaction` savepoints, atomic `renameSource`, `WikiReadPool`, off-main search, skill/AGENTS update | Full suite green; concurrent hammer test passes; searches don't touch the main-thread store |
 | **1 — Objects & versions** | `blobs`, `agents`, `activities`, `source_versions`, `refs`, one-shot content migration (drop `sources.content`), ref-resolved reads, byteless support, refresh-append write path | Re-ingesting an identical file adds one version row + zero new blob bytes; rollback = repoint; byteless YouTube source renders via transcript |
 | **2 — Extraction alternatives** | extraction-as-Activity (`activity_id` on smv + `used` the content version, §4.7), CAS extraction content, `source-derived` ref, compare/nominate UI, re-extract path (today none exists) | Two backends' extractions coexist; switch active; revert is a pointer copy |
-| ↳ *Phase 2 tracks A+B implemented (v21).* CAS'd/provenance-carrying extractions via `recordMarkdownExtraction`, `source-derived` ref + `setActiveMarkdown`, `revert` pointer copy, re-extract path, `wikictl source set-active`, minimal alternatives Menu. Gate met (AC.1–AC.9, 1488 tests green). *Track C (full compare/nominate UI) deferred to a follow-on plan.* | | |
+| ↳ *Phase 2 tracks A+B implemented (v21).* CAS'd/provenance-carrying extractions via `recordMarkdownExtraction`, `source-derived` ref + `setActiveMarkdown`, `revert` pointer copy, re-extract path, `wikictl source set-active`, minimal alternatives Menu. Gate met (AC.1–AC.9, 1488 tests green). *Track C (full compare/nominate UI) implemented on `feature/extraction-compare-ui`: a modal "Compare Extractions" sheet rendering any two alternatives side-by-side (Rendered ↔ Diff toggle), provenance per alternative (`processedMarkdownAlternatives`), and live "Set Active" nominate (1498 tests green; no schema change).* | | |
 | **3 — Providers & provenance** | `SourceProvider` protocol, four paths unified, runs recorded (URL provenance!), refresh verb, credentials UX, **website provider writes disambiguated `original_path` per sibling rule (§7)** | Drag-drop/URL/Zotero/folder all flow through providers; `wikictl source refresh` appends a version |
 | **4 — Media & roles** | `source_links` rebuild (role/pin), `![[…]]` embeds, render-by-content-type, sibling `original_path` resolution, media filtering | Website snapshot renders with inline images; a YouTube embed plays; a json-render spec mounts |
 | **5 — Link canonicalization** | Save-time ULID normalization, display-at-render, one-time body migration, `?id=` URL contract, rename = metadata-only | Rename a page with 50 inbound links: zero bodies rewritten, zero ghosts |

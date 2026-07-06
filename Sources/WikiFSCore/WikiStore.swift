@@ -128,6 +128,13 @@ public protocol WikiStore: Sendable {
     /// (smv.id → agents.name), for the alternatives UI labels.
     func processedMarkdownAgentNames(sourceID: PageID) throws -> [String: String]
 
+    /// All extraction alternatives for a source, newest first, each bundled
+    /// with its recoverable provenance (backend display name, model version,
+    /// char count) and whether it is the active HEAD. Consolidates
+    /// `processedMarkdownHistory` + `processedMarkdownAgentNames` into one join
+    /// (smv → activity → agent). For the track C compare/nominate UI.
+    func processedMarkdownAlternatives(sourceID: PageID) throws -> [ExtractionAlternative]
+
     /// Append a new full-text markdown version to the chain. Reads the current
     /// head to set `parentID`. Returns the new version.
     @discardableResult

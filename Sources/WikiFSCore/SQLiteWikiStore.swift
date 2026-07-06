@@ -3929,6 +3929,42 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         return out
     }
 
+    /// All extraction alternatives for a source, newest first, each bundled with
+    /// its provenance (agent name + version) and active-HEAD flag. One join
+    /// (smv → activity → agent) over the resolved-body SELECT. For track C.
+    public func processedMarkdownAlternatives(sourceID: PageID) throws -> [ExtractionAlternative] {
+        lock.lock(); defer { lock.unlock() }
+        let headID = try? processedMarkdownHeadID(sourceID: sourceID)
+        guard let stmt = try? statement("""
+        SELECT \(Self.smvSelectColumns), a.name, a.version
+        FROM source_markdown_versions smv
+        \(Self.smvBlobJoin)
+        LEFT JOIN activities act ON act.id = smv.activity_id
+        LEFT JOIN agents a ON a.id = act.agent_id
+        WHERE smv.file_id = ?1 ORDER BY smv.id DESC;
+        """) else { return [] }
+        defer { stmt.reset() }
+        try stmt.bind(sourceID.rawValue, at: 1)
+        var out: [ExtractionAlternative] = []
+        while try stmt.step() {
+            let version = sourceMarkdownVersion(from: stmt)
+            // Columns 0–10 are the smv row (see `smvSelectColumns`); 11/12 are
+            // the agent name/version from the join.
+            let agentName = (sqlite3_column_type(stmt.handle, 11) == SQLITE_NULL)
+                ? "unknown" : stmt.text(at: 11)
+            let modelVersion: String? = (sqlite3_column_type(stmt.handle, 12) == SQLITE_NULL)
+                ? nil : stmt.text(at: 12)
+            out.append(ExtractionAlternative(
+                version: version,
+                backendDisplayName: ExtractionAlternative.backendDisplayName(agentName: agentName),
+                agentName: agentName,
+                modelVersion: modelVersion,
+                charCount: version.content.count,
+                isActive: headID.map { $0 == version.id.rawValue } ?? false))
+        }
+        return out
+    }
+
     public func processedMarkdownHeadsBySource() throws -> [String: SourceMarkdownVersion] {
         lock.lock(); defer { lock.unlock() }
         // Ref-resolved HEAD per source: the `source-derived` ref's version_id if
