@@ -37,18 +37,27 @@ public enum WikiLinkParser {
         /// source-only — `![[Page]]` is not valid and is skipped at parse time.
         /// Defaults to `false` so every existing call site compiles unchanged.
         public let isEmbed: Bool
+        /// The digits of a trailing `@vN` version pin (e.g. `"3"` for
+        /// `[[source:X@v3]]`), or `nil` when the link is unpinned. Phase 6: pins a
+        /// specific derived-markdown extraction so a quote highlight survives
+        /// re-extraction. The pin is stripped from `target` (resolution is
+        /// pin-free); it is re-attached to the raw form / canonical target where
+        /// needed. Defaults to `nil` so every existing call site compiles and
+        /// equality holds.
+        public let versionPin: String?
 
-        /// `linkType` defaults to `.page` and `isEmbed` to `false` so every
-        /// existing `ParsedLink(target:linkText:)` call site compiles unchanged
-        /// and equality holds (both sides default to `.page` / non-embed).
+        /// `linkType` defaults to `.page`, `isEmbed` to `false`, and `versionPin`
+        /// to `nil` so every existing `ParsedLink(target:linkText:)` call site
+        /// compiles unchanged and equality holds.
         public init(linkType: LinkType = .page, target: String,
                     fragment: String? = nil, linkText: String,
-                    isEmbed: Bool = false) {
+                    isEmbed: Bool = false, versionPin: String? = nil) {
             self.linkType = linkType
             self.target = target
             self.fragment = fragment
             self.linkText = linkText
             self.isEmbed = isEmbed
+            self.versionPin = versionPin
         }
     }
 
@@ -110,6 +119,30 @@ public enum WikiLinkParser {
         return rest.allSatisfy(\.isWhitespace) ? nil : rest // `[[source:]]` → not a source link
     }
 
+    /// Strip a trailing `@v<digits>` version pin from `base`, returning the
+    /// pin-free base and the captured digits (or `nil` when there is no pin).
+    /// Phase 6: `@vN` pins the Nth derived-markdown extraction (oldest = `v1`) so
+    /// a `[[source:X@v3#"quote"]]` highlight survives re-extraction. The `v` is
+    /// case-insensitive (`@V3` works); the digits are returned as a string.
+    ///
+    /// Invalid forms yield `nil` (left literal): `@v` (no digits), `@x3` (not
+    /// `v`), `@v3x` (trailing junk). A base that literally ends in `@v3` is
+    /// ambiguous and treated as a pin — rare; documented.
+    public static func splitVersionPin(_ base: String) -> (bare: String, pin: String?) {
+        guard let m = versionPinRegex.firstMatch(in: base, range: NSRange(location: 0, length: base.utf16.count)) else {
+            return (base, nil)
+        }
+        let bare = NSString(string: base).substring(with: m.range(at: 1))
+        let pin = NSString(string: base).substring(with: m.range(at: 2))
+        return (bare, pin)
+    }
+
+    /// `^(.*?)@[vV](\d+)$` — non-greedy so a trailing pin is the LAST `@vN`. The
+    /// `.*?` keeps the leading `@` (if the name itself contains one) intact; only
+    /// the final `@v<digits>` is peeled.
+    private static let versionPinRegex = try! NSRegularExpression(
+        pattern: #"^(.*?)@[vV](\d+)$"#)
+
     /// True when `target` is a canonical ULID link target — a 26-character
     /// Crockford base32 string (the exact shape `ULID.generate` emits), case-
     /// insensitively. Phase 5 stores resolvable links as
@@ -159,9 +192,14 @@ public enum WikiLinkParser {
             let (base, fragment) = splitFragment(collapsed)
             guard !base.isEmpty else { continue } // same-page anchor → skip
 
-            let (kind, bareTarget) = classify(base)
+            // Phase 6: strip a trailing `@vN` version pin AFTER the fragment split
+            // (so a quote containing `@vN` isn't mis-read as a pin). The bare base
+            // is what resolves by id/name; the pin is carried separately.
+            let (bareBase, pin) = splitVersionPin(base)
+
+            let (kind, bareTarget) = classify(bareBase)
             guard !bareTarget.isEmpty else { continue } // empty target → skip
-            if isEmptyPrefix(base) { continue } // `[[source:]]` → literal
+            if isEmptyPrefix(bareBase) { continue } // `[[source:]]` → literal
 
             // Detect the `!` embed prefix. Embeds are source-only: a `![[Page]]`
             // is not a valid embed, so skip it entirely (AC.2). A `![[source:X]]`
@@ -179,7 +217,10 @@ public enum WikiLinkParser {
             // is part of the key so a cite + embed to the same source are both
             // kept (distinct rows under `source_links_edge`).
             let raw = fragment.map { "\(bareTarget)#\($0)" } ?? bareTarget
-            let dedupKey = "\(kind.rawValue):\(raw):\(isEmbed ? "embed" : "cite")"
+            // Phase 6: the pin is part of the dedup key so `[[source:X@v3]]` and
+            // `[[source:X@v5]]` are distinct occurrences (matches the
+            // `source_links_edge` pin-distinct semantics, §4.4).
+            let dedupKey = "\(kind.rawValue):\(raw):\(isEmbed ? "embed" : "cite"):\(pin ?? "")"
             guard seen.insert(dedupKey).inserted else { continue }
 
             let linkText: String
@@ -191,7 +232,7 @@ public enum WikiLinkParser {
             }
             out.append(ParsedLink(linkType: kind, target: bareTarget,
                                   fragment: fragment, linkText: linkText,
-                                  isEmbed: isEmbed))
+                                  isEmbed: isEmbed, versionPin: pin))
         }
         return out
     }

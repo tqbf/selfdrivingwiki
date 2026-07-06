@@ -39,6 +39,16 @@ final class SQLiteStatement {
         try check(rc)
     }
 
+    /// Bind an optional string — `nil` binds SQL NULL. Phase 6: used for
+    /// `source_links.pinned_version_id` (NULL = unpinned/out-of-range).
+    func bind(_ value: String?, at index: Int32) throws {
+        if let value {
+            try bind(value, at: index)
+        } else {
+            try check(sqlite3_bind_null(handle, index))
+        }
+    }
+
     func bind(_ value: Double, at index: Int32) throws {
         try check(sqlite3_bind_double(handle, index, value))
     }

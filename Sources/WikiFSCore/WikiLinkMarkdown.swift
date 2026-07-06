@@ -59,7 +59,8 @@ public enum WikiLinkMarkdown {
         _ body: String,
         isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool = { _, _ in true },
         embedInfo: ((String) -> (id: PageID, mimeType: String?)?)? = nil,
-        displayName: (PageID, WikiLinkParser.ParsedLink.LinkType) -> String? = { _, _ in nil }
+        displayName: (PageID, WikiLinkParser.ParsedLink.LinkType) -> String? = { _, _ in nil },
+        pinnedExtractionID: ((PageID, Int) -> PageID?)? = nil
     ) -> String {
         let ns = body as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
@@ -122,7 +123,13 @@ public enum WikiLinkMarkdown {
                 continue
             }
 
-            let (kind, bareTarget) = WikiLinkParser.classify(base)
+            // Phase 6: strip a trailing `@vN` pin AFTER the fragment split (so a
+            // quote containing `@vN` isn't mis-read as a pin, and a `ULID@v3`
+            // passes the 26-char ULID fast-path). The pin is emitted only for
+            // pinned source quote links (below).
+            let (bareBase, pin) = WikiLinkParser.splitVersionPin(base)
+
+            let (kind, bareTarget) = WikiLinkParser.classify(bareBase)
             guard !bareTarget.isEmpty else {
                 // Empty bare target after prefix strip: literal text.
                 out += ns.substring(with: full)
@@ -130,7 +137,7 @@ public enum WikiLinkMarkdown {
             }
             // `[[source:]]` / `[[page:]]` — reserved prefix with no meaningful
             // remainder: emit literal text (consistent with the parser's skip).
-            if WikiLinkParser.isEmptyPrefix(base) {
+            if WikiLinkParser.isEmptyPrefix(bareBase) {
                 out += ns.substring(with: full)
                 continue
             }
@@ -162,8 +169,17 @@ public enum WikiLinkMarkdown {
                     out += html
                     continue
                 }
+                // Phase 6: a pinned source link WITH a fragment (quote) emits
+                // `&pin=<smvID>` so the destination loads the pinned extraction
+                // — the quote is then present in the rendered DOM and the
+                // highlighter finds it. A pinned link WITHOUT a fragment opens
+                // HEAD (the chosen scope): no `&pin=`. Embeds are excluded above.
+                let pinID: PageID? = (kind == .source && pin != nil && fragment != nil)
+                    ? pin.flatMap { Int($0) }.flatMap { pinnedExtractionID?(id, $0) }
+                    : nil
                 out += markdownLink(display: display, target: display, kind: kind,
-                                    resolved: resolved, fragment: fragment, id: id)
+                                    resolved: resolved, fragment: fragment, id: id,
+                                    pinID: pinID)
                 continue
             }
 
@@ -172,6 +188,12 @@ public enum WikiLinkMarkdown {
             // page/source name (e.g. "… for C# …", with or without a real
             // anchor after it) links the actual page instead of truncating at
             // the first `#`. Ghost links keep the heuristic split.
+            //
+            // Phase 6 note: `&pin=` is NOT emitted here. This branch handles
+            // name-based links (forward links, pre-Phase-5 bodies) — a forward
+            // link to a source that doesn't exist yet has no extraction chain
+            // to pin. Once the page is re-saved, `canonicalize` promotes the
+            // link to ULID form and the canonical branch above emits the pin.
             let raw = fragment.map { "\(bareTarget)#\($0)" } ?? bareTarget
             let split = WikiLinkResolver.resolvedSplit(of: raw) { isResolved($0, kind) }
             let resolved = split != nil
@@ -237,6 +259,21 @@ public enum WikiLinkMarkdown {
         return PageID(rawValue: idString)
     }
 
+    /// The pinned extraction smv id (`pin=<ULID>`) from a `wiki://…` URL, or nil
+    /// when absent (a non-quote pinned link, or a legacy URL). Phase 6: the click
+    /// router forwards this to `selectSource(pinnedExtractionID:)` so the
+    /// destination loads the pinned extraction the quote was written against.
+    public static func pin(from url: URL) -> PageID? {
+        guard url.scheme == scheme,
+              let host = url.host,
+              host == "source",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let pinString = components.queryItems?.first(where: { $0.name == "pin" })?.value,
+              !pinString.isEmpty
+        else { return nil }
+        return PageID(rawValue: pinString)
+    }
+
     /// Return the URL-decoded fragment from a `wiki://` URL, or nil. Used by the
     /// view's `OpenURLAction` to extract the anchor for scroll-to.
     public static func fragment(from url: URL) -> String? {
@@ -276,7 +313,8 @@ public enum WikiLinkMarkdown {
                                      kind: WikiLinkParser.ParsedLink.LinkType,
                                      resolved: Bool,
                                      fragment: String? = nil,
-                                     id: PageID? = nil) -> String {
+                                     id: PageID? = nil,
+                                     pinID: PageID? = nil) -> String {
         let host: String
         if resolved {
             host = kind == .source ? "source" : resolvedHost
@@ -294,11 +332,18 @@ public enum WikiLinkMarkdown {
         // Canonical links carry `id=<ULID>` so click routing resolves by id
         // (a direct row fetch) instead of display name; `title=` is retained as
         // a transition fallback for any unconverted consumer (Phase 5 §6.5).
+        // Phase 6: a pinned quote link also carries `pin=<smvID>` so the
+        // destination source view loads the pinned extraction.
         var url: String
         if let id {
             let encodedID = id.rawValue.addingPercentEncoding(withAllowedCharacters: titleQueryAllowed)
                 ?? id.rawValue
             url = "\(scheme)://\(host)?id=\(encodedID)&title=\(encodedTitle)"
+            if let pinID {
+                let encodedPin = pinID.rawValue.addingPercentEncoding(withAllowedCharacters: titleQueryAllowed)
+                    ?? pinID.rawValue
+                url += "&pin=\(encodedPin)"
+            }
         } else {
             url = "\(scheme)://\(host)?title=\(encodedTitle)"
         }

@@ -22,12 +22,12 @@ struct WikiReaderRoutingTests {
 
     @Test func sourceLinkRoutesToSource() {
         let url = URL(string: "wiki://source?title=Paper")!
-        #expect(WikiReaderView.linkRoute(for: url) == .source(title: "Paper", id: nil, fragment: nil))
+        #expect(WikiReaderView.linkRoute(for: url) == .source(title: "Paper", id: nil, fragment: nil, pin: nil))
     }
 
     @Test func sourceLinkWithQuoteFragment() {
         let url = URL(string: "wiki://source?title=Paper#%22a%20quote%22")!
-        #expect(WikiReaderView.linkRoute(for: url) == .source(title: "Paper", id: nil, fragment: "\"a quote\""))
+        #expect(WikiReaderView.linkRoute(for: url) == .source(title: "Paper", id: nil, fragment: "\"a quote\"", pin: nil))
     }
 
     @Test func missingLinkIsInert() {
@@ -69,7 +69,44 @@ struct WikiReaderRoutingTests {
         let ulid = "01JZZZZZZZZZZZZZZZZZZZZZZZ"
         let url = URL(string: "wiki://source?id=\(ulid)&title=Paper#Section")!
         let route = WikiReaderView.linkRoute(for: url)
-        #expect(route == .source(title: "Paper", id: PageID(rawValue: ulid), fragment: "Section"))
+        #expect(route == .source(title: "Paper", id: PageID(rawValue: ulid), fragment: "Section", pin: nil))
+    }
+
+    // MARK: - Phase 6 `@vN` pin routing (AC.5)
+
+    @Test func pinnedSourceLinkCarriesPin() {
+        // A pinned quote link carries `&pin=<smvID>`; the route extracts it so
+        // the destination loads the pinned extraction.
+        let sourceID = "01JZZZZZZZZZZZZZZZZZZZZZZZ"
+        let pinID = "01JYYYYYYYYYYYYYYYYYYYYYYY"
+        let url = URL(string: "wiki://source?id=\(sourceID)&title=Paper&pin=\(pinID)#%22a%20quote%22")!
+        let route = WikiReaderView.linkRoute(for: url)
+        #expect(route == .source(title: "Paper", id: PageID(rawValue: sourceID),
+                                fragment: "\"a quote\"", pin: PageID(rawValue: pinID)))
+    }
+
+    @Test func unpinnedSourceLinkHasNilPin() {
+        // A non-quote pinned link (or any normal source link) has no `&pin=`.
+        let sourceID = "01JZZZZZZZZZZZZZZZZZZZZZZZ"
+        let url = URL(string: "wiki://source?id=\(sourceID)&title=Paper")!
+        let route = WikiReaderView.linkRoute(for: url)
+        if case .source(_, _, _, let pin) = route {
+            #expect(pin == nil)
+        } else {
+            Issue.record("expected .source route")
+        }
+    }
+
+    @Test func pinRecoveredFromUrl() {
+        let pinID = "01JYYYYYYYYYYYYYYYYYYYYYYY"
+        let url = URL(string: "wiki://source?id=01JZZZZZZZZZZZZZZZZZZZZZZZ&title=Paper&pin=\(pinID)#quote")!
+        #expect(WikiLinkMarkdown.pin(from: url) == PageID(rawValue: pinID))
+    }
+
+    @Test func pinAbsentFromPageUrl() {
+        // `pin` is source-only; a page URL never carries it.
+        let url = URL(string: "wiki://page?id=01JZZZZZZZZZZZZZZZZZZZZZZZ&title=Home&pin=01JYYYYYYYYYYYYYYYYYYYYYYY")!
+        #expect(WikiLinkMarkdown.pin(from: url) == nil)
     }
 
     @Test func idQueryItemRecovered() {

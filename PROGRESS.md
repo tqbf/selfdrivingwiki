@@ -2,6 +2,45 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-06 — Graph-model Phase 6: `@vN` version pinning
+
+**Phase gate met: `[[source:X@v3#"quote"]]` highlights after X is reprocessed
+(AC.1–AC.10, 1653 tests green).** A wiki link can now pin a specific derived-
+markdown extraction so that a **quote highlight survives re-extraction**. Today
+quotes match the HEAD extraction, which moves on every re-extract — so the
+highlight silently dies. Pinning the version the quote was written against fixes
+that. See [`plans/phase-6-pinning.md`](plans/phase-6-pinning.md). **No schema
+change** — `pinned_version_id` shipped v22 and was never written until now;
+code-only.
+
+**What shipped:**
+
+- **6.1 — Parse `@vN` (pure).** `WikiLinkParser.splitVersionPin` strips a
+  trailing `@v<digits>` from the base (case-insensitive `v`; invalid forms
+  `@v`/`@x3`/`@v3x` left literal). `ParsedLink.versionPin` carries the digits;
+  the bare base is what resolves by id/name. Dedup key is pin-distinct so
+  `@v3` and `@v5` to one source are two occurrences.
+- **6.2 — Canonicalize preserves `@vN` (pure).** `canonicalize` splits the pin
+  before the ULID fast-path (so `ULID@v3` passes the 26-char check) and
+  reattaches it verbatim to the canonical target. Idempotent.
+- **6.3 — Resolve + write the pin (store).** `replaceLinks` resolves the
+  ordinal (1-based, ULID-asc = chronological) to a concrete smv id and writes
+  `pinned_version_id` (NULL for out-of-range/unpinned). New store methods:
+  `derivedVersionIDs(sourceID:)`, `processedMarkdownVersion(id:)`,
+  `sourceDerivedChains()`. Protocol + model wrappers added.
+- **6.4 — Render linkification.** `linkified` resolves `@vN`→id via a
+  `pinnedExtractionID` closure and emits `&pin=<smvID>` **only for pinned quote
+  links** (non-quote pins open HEAD — the chosen scope). `WikiLinkMarkdown.pin
+  (from:)` recovers it from the URL.
+- **6.5 — Click routing + pinned viewer.** `WikiLinkRoute.source` carries
+  `pin`; both click handlers forward it to
+  `selectSource(byID:pinnedExtractionID:)`. Set-once/consume-once
+  `pendingPinnedExtraction` (mirrors `pendingScrollAnchor`) hands the pinned id
+  to the destination. `SourceDetailView` consumes it and renders the pinned
+  extraction's content so the existing highlighter finds the quote.
+- **6.6 — Docs.** Agent-facing "Version pins" note in the system prompt +
+  `make prompts` regen; graph-model §12 Phase 6 footnote; PLAN.md + this entry.
+
 ## 2026-07-06 — Graph-model Phase 5: ULID-canonical link targets (v23)
 
 **Phase gate met: rename a page with 50 inbound links → zero bodies rewritten,

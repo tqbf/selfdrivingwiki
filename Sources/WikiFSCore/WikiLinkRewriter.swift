@@ -55,8 +55,14 @@ public enum WikiLinkRewriter {
             let (base, fragment) = WikiLinkParser.splitFragment(collapsed)
             guard !base.isEmpty else { continue } // same-page anchor → skip
 
-            let (kind, bareTarget) = WikiLinkParser.classify(base)
-            guard !bareTarget.isEmpty, !WikiLinkParser.isEmptyPrefix(base) else { continue }
+            // Phase 6: strip the trailing `@vN` pin BEFORE classifying so a
+            // `ULID@v3` (29 chars) passes the 26-char ULID fast-path instead of
+            // being mis-classified as an unresolved name. The pin is preserved
+            // verbatim and re-attached to the canonical target below.
+            let (bareBase, pin) = WikiLinkParser.splitVersionPin(base)
+
+            let (kind, bareTarget) = WikiLinkParser.classify(bareBase)
+            guard !bareTarget.isEmpty, !WikiLinkParser.isEmptyPrefix(bareBase) else { continue }
 
             // Idempotency fast path: already canonical → leave untouched.
             if WikiLinkParser.isCanonicalULID(bareTarget) { continue }
@@ -76,9 +82,12 @@ public enum WikiLinkRewriter {
             }
             guard let (resolvedID, resolvedFragment) = resolved else { continue }
 
-            // Canonical target portion: kind:ULID (+ #fragment if any).
+            // Canonical target portion: kind:ULID (+ @vN pin + #fragment if any).
+            // Phase 6: the pin is preserved verbatim (`@v3`), not resolved here —
+            // it stays in the body as the per-occurrence source of truth.
             let prefix = kind == .source ? "source:" : "page:"
             let canonicalTarget = prefix + resolvedID.rawValue
+                + (pin.map { "@v\($0)" } ?? "")
                 + (resolvedFragment.map { "#\($0)" } ?? "")
 
             if rawAlias != nil {

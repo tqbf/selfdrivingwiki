@@ -62,6 +62,12 @@ struct SourceDetailView: View {
     /// Quote to highlight in the PDF view, set when a `[[source:Name#"…"]]` link
     /// targets an un-extracted PDF. Consumed from `store.pendingScrollAnchor`.
     @State private var pdfQuote: String?
+    /// Phase 6: the pinned extraction to render instead of HEAD, set when a
+    /// `[[source:X@v3#"quote"]]` link is clicked. The quote lives in v3's
+    /// extraction; rendering it (not HEAD) means the highlighter finds the quote
+    /// even after the source is reprocessed (HEAD moves, v3 stays). Transient:
+    /// cleared on navigation away (returns to HEAD).
+    @State private var pinnedExtraction: SourceMarkdownVersion?
     /// Opens the Compare Extractions window (value-driven `WindowGroup`).
     @Environment(\.openWindow) private var openWindow
 
@@ -86,6 +92,18 @@ struct SourceDetailView: View {
     private var isPDF: Bool { file.mimeType == "application/pdf" }
 
     private var hasMarkdown: Bool { headVersion != nil }
+
+    /// Phase 6: consume a pending pinned-extraction id (if any) for the current
+    /// source and load that extraction into `pinnedExtraction`. Called from
+    /// `.onAppear` so the pinned DOM is ready before the body first evaluates.
+    /// Does NOT clear on nil — the `.onChange(of: pendingScrollAnchorVersion)`
+    /// handler owns the clear (so a `.task(id: file.id)` re-fire can't clobber a
+    /// pin consumed synchronously by `.onChange`).
+    private func consumePinnedExtraction() {
+        if let pinID = store.consumePendingPinnedExtraction(for: store.selection) {
+            pinnedExtraction = store.processedMarkdownVersion(for: pinID)
+        }
+    }
 
     /// `true` when the source's origin is a refreshable provider (website or
     /// Apple Podcast). Import-only providers (local-file, Zotero, folder) carry
@@ -115,7 +133,7 @@ struct SourceDetailView: View {
     /// markdown source). Used as the find bar's search content.
     private var currentMarkdownContent: String? {
         if isEditing { return editBuffer }
-        if let head = headVersion { return head.content }
+        if let head = headVersion { return pinnedExtraction?.content ?? head.content }
         if isMarkdownNative, let data = store.sourceBytes(id: file.id) {
             return String(data: data, encoding: .utf8)
         }
@@ -160,6 +178,7 @@ struct SourceDetailView: View {
             headVersion = store.processedMarkdownHead(for: file)
             origin = store.sourceOrigin(for: file.id)
             lastKnownActiveTabID = store.activeTabID
+            consumePinnedExtraction()
         }
         .onChange(of: file.id) {
             // Navigating between ingested files REUSES this view instance (same
@@ -178,6 +197,7 @@ struct SourceDetailView: View {
             origin = nil
             selectedTab = .markdown
             pdfQuote = nil
+            pinnedExtraction = nil
             // Cancel any pending edit-mode restoration so it doesn't apply to
             // the new file when its headVersion loads.
             shouldRestoreEditing = false
@@ -193,6 +213,17 @@ struct SourceDetailView: View {
             guard isPDF, !hasMarkdown else { return }
             if let frag = store.consumePendingScrollAnchor(for: store.selection) {
                 pdfQuote = frag.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            }
+        }
+        // Phase 6: consume the pinned-extraction id on every navigation cycle
+        // (fires for new-source navigation AND re-clicks on an already-open
+        // source). Clearing on no-pin returns to HEAD; a pinned quote link sets
+        // `pinnedExtraction` so the rendered DOM contains the quote.
+        .onChange(of: store.pendingScrollAnchorVersion) {
+            if let pinID = store.consumePendingPinnedExtraction(for: store.selection) {
+                pinnedExtraction = store.processedMarkdownVersion(for: pinID)
+            } else {
+                pinnedExtraction = nil
             }
         }
         .onChange(of: store.selection) { flushEditIfDirty(); isEditing = false }
@@ -593,7 +624,9 @@ struct SourceDetailView: View {
             // The web reader is the only reader — it handles all sizes (its
             // windowed layout is faster than the native reader even on small
             // docs, so the size threshold that once gated web-vs-native is gone).
-            WikiReaderView(markdown: head.content,
+            // Phase 6: when a pinned quote link was clicked, render the pinned
+            // extraction's content (where the quote lives) instead of HEAD.
+            WikiReaderView(markdown: pinnedExtraction?.content ?? head.content,
                             currentSelection: store.selection,
                             store: store,
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)

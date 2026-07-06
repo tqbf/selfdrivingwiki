@@ -167,6 +167,18 @@ public protocol WikiStore: Sendable {
     /// All versions for a source, newest first (HEAD → v1). Empty if none.
     func processedMarkdownHistory(sourceID: PageID) throws -> [SourceMarkdownVersion]
 
+    /// Read a single resolved-markdown version by its smv id (Phase 6). Returns
+    /// the blob-decoded `SourceMarkdownVersion`, or `nil` when no row matches.
+    /// Used by the pinned-extraction viewer to load the exact extraction a quote
+    /// was written against.
+    func processedMarkdownVersion(id: PageID) throws -> SourceMarkdownVersion?
+
+    /// Every source's derived-markdown chain as `[sourceID: [smvID]]`, ULID-asc
+    /// per source (chronological; index 0 = v1). Phase 6: the render precompute
+    /// builds the `sourceID → [smvID]` map in one query so `linkified` can
+    /// resolve `@vN` per occurrence.
+    func sourceDerivedChains() throws -> [PageID: [PageID]]
+
     /// The producing agent name for each of a source's markdown versions
     /// (smv.id → agents.name), for the alternatives UI labels.
     func processedMarkdownAgentNames(sourceID: PageID) throws -> [String: String]
