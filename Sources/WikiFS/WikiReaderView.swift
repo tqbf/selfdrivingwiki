@@ -107,7 +107,7 @@ struct WikiReaderView: View {
         let id = WikiLinkMarkdown.id(from: url)
         switch WikiLinkMarkdown.resolvedKind(from: url) {
         case .page:   return .page(title: title, id: id, fragment: frag)
-        case .source: return .source(title: title, id: id, fragment: frag)
+        case .source: return .source(title: title, id: id, fragment: frag, pin: WikiLinkMarkdown.pin(from: url))
         case nil:     return .inert
         }
     }
@@ -127,8 +127,8 @@ struct WikiReaderView: View {
             case .page(let title, let id, let frag):
                 if let id, store.selectPage(byID: id, anchor: frag, openInNewTab: openInNewTab) { }
                 else { store.selectPage(byTitle: title, anchor: frag, openInNewTab: openInNewTab) }
-            case .source(let title, let id, let frag):
-                if let id, store.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab) { }
+            case .source(let title, let id, let frag, let pin):
+                if let id, store.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab, pinnedExtractionID: pin) { }
                 else { store.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab) }
             case .samePageAnchor, .inert:      break
             }
@@ -277,7 +277,9 @@ enum WikiLinkRoute: Equatable, Sendable {
     case page(title: String, id: PageID?, fragment: String?)
     /// Resolved source link — navigate + carry the optional `#fragment`. `id` is
     /// the canonical ULID when present; nil for legacy `?title=`-only links.
-    case source(title: String, id: PageID?, fragment: String?)
+    /// `pin` is the pinned-extraction smv id when the URL carried `&pin=` (Phase 6:
+    /// a pinned quote link); nil otherwise (opens HEAD).
+    case source(title: String, id: PageID?, fragment: String?, pin: PageID?)
     /// Unresolved (`wiki://missing`) or un-classifiable — inert.
     case inert
 }
@@ -858,6 +860,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 embedMap[source.id.rawValue.lowercased()] = (source.id, source.mimeType)
             }
 
+            // Phase 6: source id → ULID-asc [smvID] chain (chronological; index 0
+            // = v1). The render precompute builds this once so `linkified` can
+            // resolve an `@vN` ordinal per occurrence without per-link SQL. Pure
+            // data captured by the detached task (same pattern as embedMap).
+            let sourceDerivedChain = store?.sourceDerivedChains() ?? [:]
+
             let loadStartVal = loadStart
             convertTask = Task.detached(priority: .userInitiated) { [weak self] in
                 let t0 = DispatchTime.now()
@@ -888,6 +896,14 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     embedInfo: { name in embedMap[name.lowercased()] },
                     displayName: { id, kind in
                         kind == .source ? sourceIDToName[id] : pageIDToName[id]
+                    },
+                    pinnedExtractionID: { sourceID, ordinal in
+                        // Phase 6: resolve a 1-based ordinal into the source's
+                        // ULID-asc chain. Out-of-range → nil (link opens HEAD).
+                        guard let chain = sourceDerivedChain[sourceID],
+                              ordinal >= 1 else { return nil }
+                        let idx = ordinal - 1
+                        return idx < chain.count ? chain[idx] : nil
                     }
                 )
                 let body = MarkdownHTMLRenderer.render(prepared)
@@ -1075,8 +1091,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
             case .page(let title, let id, let frag):
                 if let id, store?.selectPage(byID: id, anchor: frag, openInNewTab: openInNewTab) == true { }
                 else { store?.selectPage(byTitle: title, anchor: frag, openInNewTab: openInNewTab) }
-            case .source(let title, let id, let frag):
-                if let id, store?.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab) == true { }
+            case .source(let title, let id, let frag, let pin):
+                if let id, store?.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab, pinnedExtractionID: pin) == true { }
                 else { store?.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab) }
             case .inert:
                 break

@@ -415,11 +415,21 @@ public final class WikiStoreModel {
     /// display-name resolution, so it is stable across renames. Returns `false`
     /// when the id names no loaded source (a deleted target), so the caller can
     /// fall back to display-name-based selection.
+    ///
+    /// - Parameter pinnedExtractionID: Phase 6 — when non-nil (a pinned quote
+    ///   link carrying `&pin=<smvID>`), the destination `SourceDetailView` loads
+    ///   *that* extraction so the quote is present in the rendered DOM. Nil
+    ///   (no pin, or a non-quote pin) opens HEAD.
     @discardableResult
-    public func selectSource(byID id: PageID, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
+    public func selectSource(byID id: PageID, anchor: String? = nil,
+                             openInNewTab: Bool = false,
+                             pinnedExtractionID: PageID? = nil) -> Bool {
         guard sources.contains(where: { $0.id == id }) else { return false }
         let target = WikiSelection.source(id)
         pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
+        // Phase 6: stash the pinned-extraction id alongside the anchor (same
+        // counter — the pin travels with its anchor). Set-once/consume-once.
+        pendingPinnedExtraction = pinnedExtractionID.map { (selection: target, versionID: $0) }
         pendingScrollAnchorVersion += 1
         recordHistoryTransition(from: loadedSelection, to: target)
         if openInNewTab {
@@ -462,6 +472,25 @@ public final class WikiStoreModel {
               pending.selection == sel else { return nil }
         pendingScrollAnchor = nil
         return pending.fragment
+    }
+
+    /// Phase 6: the pending pinned-extraction id set by
+    /// `selectSource(byID:pinnedExtractionID:)` and consumed by the destination
+    /// `SourceDetailView` so it loads the pinned extraction the quote was written
+    /// against. Tagged with the target `WikiSelection` and set-once/consume-once
+    /// — mirrors `pendingScrollAnchor`.
+    public private(set) var pendingPinnedExtraction: (selection: WikiSelection, versionID: PageID)?
+
+    /// Atomically consume the pending pinned-extraction id if `selection`
+    /// matches. Returns the smv id once and clears the state; nil if the
+    /// selection doesn't match or there is no pending pin. Mirrors
+    /// `consumePendingScrollAnchor`.
+    public func consumePendingPinnedExtraction(for selection: WikiSelection?) -> PageID? {
+        guard let pending = pendingPinnedExtraction,
+              let sel = selection,
+              pending.selection == sel else { return nil }
+        pendingPinnedExtraction = nil
+        return pending.versionID
     }
 
     // MARK: - Sidebar reveal ("Show In List")
@@ -1684,6 +1713,21 @@ public final class WikiStoreModel {
     /// All versions for a source, newest first. Empty if none.
     public func processedMarkdownHistory(for sourceID: PageID) -> [SourceMarkdownVersion] {
         (try? store.processedMarkdownHistory(sourceID: sourceID)) ?? []
+    }
+
+    /// Read a single resolved-markdown version by its smv id (Phase 6). Returns
+    /// the blob-decoded version, or `nil` when no row matches. Used by the
+    /// pinned-extraction viewer to load the exact extraction a quote was written
+    /// against.
+    public func processedMarkdownVersion(for id: PageID) -> SourceMarkdownVersion? {
+        (try? store.processedMarkdownVersion(id: id)) ?? nil
+    }
+
+    /// Every source's derived-markdown chain as `[sourceID: [smvID]]`, ULID-asc
+    /// per source. Phase 6: the render precompute builds the `sourceID → [smvID]`
+    /// map so `linkified` can resolve `@vN` per occurrence.
+    public func sourceDerivedChains() -> [PageID: [PageID]] {
+        (try? store.sourceDerivedChains()) ?? [:]
     }
 
     /// Save an edit as a new version in the chain. Only called when the text

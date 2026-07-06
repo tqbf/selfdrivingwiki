@@ -51,6 +51,12 @@ The wiki is projected read-only at `$WIKI_ROOT`. Browse it with
   the source name with NO pipe (`|`). The quote makes the link scroll to that
   exact passage when clicked. Pick a snippet unique to that passage; it survives
   re-extraction. The quote is whitespace-normalized and case-sensitive.
+- **Version pins (`@vN`) freeze a quote against re-extraction.** Append `@vN`
+  before the `#"…"` to pin the Nth extraction (oldest = `v1`):
+  `[[source:Smith2023@v3#"the effect vanishes above 40°C"]]`. The link then
+  opens *that* extraction — so the quote highlight survives even if the source
+  is re-extracted later (HEAD moves, `@v3` stays). Use this for citations that
+  must remain stable; omit `@vN` to follow the latest extraction.
 - **Link to page sections by heading** — `[[Overview#Methodology]]`. The heading
   text becomes a URL-style slug (lowercase, spaces→`-`, punctuation dropped,
   `-1/-2` suffix on duplicates). Same-page scroll: `[[#Methodology]]`.

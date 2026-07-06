@@ -2009,16 +2009,16 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             VALUES (?1, ?2, ?3);
             """)
             let insSource = try statement("""
-            INSERT OR IGNORE INTO source_links (from_page_id, to_source_id, link_text)
-            VALUES (?1, ?2, ?3);
+            INSERT OR IGNORE INTO source_links (from_page_id, to_source_id, link_text, pinned_version_id)
+            VALUES (?1, ?2, ?3, ?4);
             """)
             // Embed source links (`![[source:…]]`) write a DISTINCT edge with
             // role='embed' — the `source_links_edge` unique index treats
             // (from, to, role, pin) as distinct, so a cite + embed to the same
             // source coexist as separate rows (Phase 4a, AC.3).
             let insSourceEmbed = try statement("""
-            INSERT OR IGNORE INTO source_links (from_page_id, to_source_id, link_text, role)
-            VALUES (?1, ?2, ?3, 'embed');
+            INSERT OR IGNORE INTO source_links (from_page_id, to_source_id, link_text, role, pinned_version_id)
+            VALUES (?1, ?2, ?3, 'embed', ?4);
             """)
             // A `#` inside a page/source NAME mis-splits into base + fragment
             // at parse time. Resolve via WikiLinkResolver: try every reading
@@ -2051,11 +2051,19 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                         resolved = try resolveLinkTarget(link, using: resolveSourceByName)
                     }
                     guard let resolved else { continue }
+                    // Phase 6: resolve the `@vN` ordinal (1-based) to a concrete
+                    // smv id; NULL when unpinned or out-of-range (follows the
+                    // active ref). `replaceLinks` is the sole writer of
+                    // `pinned_version_id` (the un-FK'd polymorphic column).
+                    let pinID = try link.versionPin.flatMap {
+                        try resolveVersionPin($0, sourceID: resolved)
+                    }
                     let stmt = link.isEmbed ? insSourceEmbed : insSource
                     stmt.reset()
                     try stmt.bind(pageID.rawValue, at: 1)
                     try stmt.bind(resolved.rawValue, at: 2)
                     try stmt.bind(link.linkText, at: 3)
+                    try stmt.bind(pinID?.rawValue, at: 4)
                     _ = try stmt.step()
                 }
             }
@@ -2122,6 +2130,25 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             out.append(PageID(rawValue: stmt.text(at: 0)))
         }
         return out
+    }
+
+    /// Read the `pinned_version_id` for a source-link edge `(from, to, role)`.
+    /// Returns the resolved smv id, or nil when the edge has no pin (NULL) or
+    /// doesn't exist. Phase 6: test/diagnostic accessor for pin write-back.
+    public func sourceLinkPin(from pageID: PageID, to sourceID: PageID,
+                              role: String = "cite") throws -> PageID? {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement("""
+        SELECT pinned_version_id FROM source_links
+        WHERE from_page_id = ?1 AND to_source_id = ?2 AND role = ?3;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(pageID.rawValue, at: 1)
+        try stmt.bind(sourceID.rawValue, at: 2)
+        try stmt.bind(role, at: 3)
+        guard try stmt.step() else { return nil }
+        return sqlite3_column_type(stmt.handle, 0) == SQLITE_NULL
+            ? nil : PageID(rawValue: stmt.text(at: 0))
     }
 
     // MARK: - Sources (Phase 5, renamed v10)
@@ -4337,6 +4364,71 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         defer { stmt.reset() }
         try stmt.bind(sourceID.rawValue, at: 1)
         return try stmt.step()
+    }
+
+    /// Read a single resolved-markdown version by its smv id (Phase 6). Returns
+    /// the blob-decoded `SourceMarkdownVersion`, or `nil` when no row matches.
+    /// Used by the pinned-extraction viewer to load the exact extraction a quote
+    /// was written against. INTERNAL-friendly: shares `smvSelectColumns` +
+    /// `smvBlobJoin` with the other readers.
+    public func processedMarkdownVersion(id: PageID) throws -> SourceMarkdownVersion? {
+        lock.lock(); defer { lock.unlock() }
+        guard let stmt = try? statement("""
+        SELECT \(Self.smvSelectColumns)
+        FROM source_markdown_versions smv
+        \(Self.smvBlobJoin)
+        WHERE smv.id = ?1;
+        """) else { return nil }
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        guard try stmt.step() else { return nil }
+        return sourceMarkdownVersion(from: stmt)
+    }
+
+    /// The derived-markdown version ids for `sourceID` in ULID-ascending
+    /// (chronological) order — index 0 = `v1` (oldest). Phase 6: resolves an
+    /// `@vN` ordinal to a concrete smv id for `source_links.pinned_version_id`.
+    /// INTERNAL — caller holds `lock`.
+    private func derivedVersionIDs(sourceID: PageID) throws -> [PageID] {
+        let stmt = try statement("""
+        SELECT id FROM source_markdown_versions WHERE file_id = ?1 ORDER BY id ASC;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(sourceID.rawValue, at: 1)
+        var ids: [PageID] = []
+        while try stmt.step() {
+            ids.append(PageID(rawValue: stmt.text(at: 0)))
+        }
+        return ids
+    }
+
+    /// Resolve an `@vN` ordinal (1-based) to the concrete smv id for `sourceID`,
+    /// or `nil` when out of range. ULID-asc = chronological. Phase 6.
+    /// INTERNAL — caller holds `lock`.
+    private func resolveVersionPin(_ pin: String, sourceID: PageID) throws -> PageID? {
+        guard let ordinal = Int(pin), ordinal >= 1 else { return nil }
+        let ids = try derivedVersionIDs(sourceID: sourceID)
+        let idx = ordinal - 1
+        return idx < ids.count ? ids[idx] : nil
+    }
+
+    /// Every source's derived-markdown chain as `[sourceID: [smvID]]`, ULID-asc
+    /// per source (chronological; index 0 = v1). Phase 6: the render precompute
+    /// builds the `sourceID → [smvID]` map in one query so `linkified` can
+    /// resolve `@vN` per occurrence without per-link SQL.
+    public func sourceDerivedChains() throws -> [PageID: [PageID]] {
+        lock.lock(); defer { lock.unlock() }
+        guard let stmt = try? statement("""
+        SELECT file_id, id FROM source_markdown_versions ORDER BY file_id ASC, id ASC;
+        """) else { return [:] }
+        defer { stmt.reset() }
+        var chains: [PageID: [PageID]] = [:]
+        while try stmt.step() {
+            let sourceID = PageID(rawValue: stmt.text(at: 0))
+            let smvID = PageID(rawValue: stmt.text(at: 1))
+            chains[sourceID, default: []].append(smvID)
+        }
+        return chains
     }
 
     public func processedMarkdownHistory(sourceID: PageID) throws -> [SourceMarkdownVersion] {
