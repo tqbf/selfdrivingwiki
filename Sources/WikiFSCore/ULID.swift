@@ -16,7 +16,22 @@ import Foundation
 /// ordering across any number of generations.
 public enum ULID {
     /// Crockford base32 alphabet (no I, L, O, U to avoid ambiguity).
-    private static let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+    static let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+
+    /// The Crockford base32 character set (uppercase only — the confusable
+    /// digits `I`/`L`/`O`/`U` are NOT members). Used by `isCanonicalULID` so a
+    /// single source of truth governs what a canonical link target looks like.
+    /// Uppercase-only because `ULID.generate` always emits uppercase: a lowercase
+    /// string is never a legitimately canonical id, and treating it as one would
+    /// skip the canonicalizer (idempotency fast-path) yet miss every case-
+    /// sensitive id lookup (`getPage(id:)`, `pageIDToName[id]`), rendering it as
+    /// a ghost. Restricting to uppercase makes a lowercase ULID resolve by name
+    /// (which fails) → ghost, the safest behavior for hand-edited content.
+    static let allowedCharacters: CharacterSet = {
+        var set = CharacterSet()
+        for ch in alphabet { set.insert(charactersIn: String(ch)) }
+        return set
+    }()
 
     /// Lock for the monotonic counter and last timestamp. Protected by `lock`;
     /// `nonisolated(unsafe)` is correct because the lock serializes all access.

@@ -110,6 +110,24 @@ public enum WikiLinkParser {
         return rest.allSatisfy(\.isWhitespace) ? nil : rest // `[[source:]]` → not a source link
     }
 
+    /// True when `target` is a canonical ULID link target — a 26-character
+    /// Crockford base32 string (the exact shape `ULID.generate` emits), case-
+    /// insensitively. Phase 5 stores resolvable links as
+    /// `[[page:<ULID>|alias]]` / `[[source:<ULID>|alias]]`, and this predicate
+    /// is the single load-bearing test that distinguishes a canonical target
+    /// (validate by id) from a human title (resolve by name). It is evaluated
+    /// on the prefix-stripped, fragment-removed bare target — `classify` peels
+    /// the `page:`/`source:` prefix and the caller passes the base — so a
+    /// `ULID#"quote"` form still passes the 26-char check.
+    ///
+    /// `01H…`/`01J…` time-prefixed ids are the norm; the confusable letters
+    /// `I`/`L`/`O`/`U` are absent from Crockford base32, so their presence
+    /// rejects a string that is merely ULID-shaped.
+    public static func isCanonicalULID(_ target: String) -> Bool {
+        target.count == 26
+            && target.unicodeScalars.allSatisfy { ULID.allowedCharacters.contains($0) }
+    }
+
     // MARK: - Parse
 
     /// Parse all wiki links from `body`, in document order, de-duplicated by

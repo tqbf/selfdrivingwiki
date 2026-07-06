@@ -56,8 +56,18 @@ public enum PageUpsert {
         // raw title against sanitized stored titles would always miss, and
         // every upsert of the same unlinkable title would create a new page.
         let title = WikiNameRules.sanitized(title)
-        let outcome = try writePage(in: store, id: id, title: title, body: body)
-        try store.replaceLinks(from: outcome.id, parsedLinks: WikiLinkParser.parse(body))
+        // Canonicalize the body's `[[…]]` links to ULID-stable form BEFORE the
+        // write (Phase 5): every resolvable link becomes `[[kind:ULID|alias]]`,
+        // so renames self-heal at render instead of dropping link rows. The raw
+        // body is passed through so both the app and `wikictl` canonicalize
+        // identically (the single shared write seam). Unresolved (forward) links
+        // are left byte-identical. `nil` = nothing changed → write the body as-is.
+        let canonicalBody = (try WikiLinkRewriter.canonicalize(
+            in: body, resolvePage: store.resolveTitleToID,
+            resolveSource: store.resolveSourceByName)) ?? body
+        let outcome = try writePage(in: store, id: id, title: title, body: canonicalBody)
+        // Parse the CANONICAL body so link rows match the stored bytes exactly.
+        try store.replaceLinks(from: outcome.id, parsedLinks: WikiLinkParser.parse(canonicalBody))
         // Compute + store chunk embeddings for the page body. Non-fatal: a
         // failure (or the model being unavailable, e.g. under `wikictl`) never
         // breaks the save — the background backfill embeds it later.

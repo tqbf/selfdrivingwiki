@@ -2,6 +2,55 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-06 — Graph-model Phase 5: ULID-canonical link targets (v23)
+
+**Phase gate met: rename a page with 50 inbound links → zero bodies rewritten,
+zero ghosts.** Wiki-link targets are now ULID-canonical at rest while authoring
+stays human-friendly. Agents/users keep writing `[[Some Title]]` /
+`[[source:Name]]`; at save time each resolvable link is normalized to
+`[[page:<ULID>|alias]]` / `[[source:<ULID>|alias]]`; at render time the display
+name is resolved from the ULID so a stale alias self-heals. This kills the
+documented bug class (rename silently drops link rows; two divergent tiebreak
+conventions; full-table scans inside write transactions; ASCII-only case
+folding) and unblocks Phase 6 (`@vN` pinning). See
+[`plans/phase-5-link-canonicalization.md`](plans/phase-5-link-canonical.md).
+**1617 tests green.**
+
+**Save-time normalization (5.1).** `WikiLinkRewriter.canonicalize` (new) rewrites
+each resolvable `[[…]]` span to `kind:ULID|alias`, preserving alias, `#fragment`,
+the `!` embed prefix, and code-fence safety; idempotent; unresolved links left
+byte-identical. Wired into the one shared write seam, `PageUpsert.upsert`, so
+the app and `wikictl` canonicalize identically. `WikiLinkParser.isCanonicalULID`
+(a new predicate, backed by `ULID`'s Crockford alphabet) drives the idempotency
+fast path. `replaceLinks` validates canonical targets **by id first**
+(`getPage(id:)`/`getSource(id:)`) with a name-resolution fallback so a
+ULID-shaped title never loses its edge.
+
+**Render-time display-at-render + `?id=` URL contract (5.2).**
+`WikiLinkMarkdown.linkified` gains a `displayName: (PageID, LinkType) -> String?`
+closure; a canonical ULID resolves to the *current* name (stale alias
+self-heals). Canonical links emit `wiki://page?id=<ULID>&title=…`
+(`title=` retained for transition); `WikiLinkMarkdown.id(from:)` recovers the
+ULID. The reader builds `pageIDToName`/`sourceIDToName` maps in the same
+main-actor precompute pass; click routing + the bookmark drop path prefer `id=`
+with a `title=`-only fallback. `WikiStoreModel` gains `selectPage(byID:)` /
+`selectSource(byID:)` (direct row fetch; `selectPage(byTitle:)` kept).
+
+**One-time body migration (v23) + rename collapse (5.3).** A guarded, idempotent
+data-only sweep (`migrateV22ToV23`) rewrites every page body inside one
+`withTransaction`. **The token MUST advance** — `changeToken()` folds
+`COUNT(pages)` + `SUM(version)`, and the File Provider versions each projected
+`.md` by `version`+`updated_at`, so the sweep deliberately bumps both (matching
+the v18 precedent; a token-neutral sweep would serve stale bodies). Link rows
+are untouched (edges are invariant under canonicalization). `renameSource`'s
+body-rewrite loop is deleted — rename is now a one-row metadata update.
+`WikiLinkRewriter.rewriteSourceBase` + its 28-test suite removed.
+
+**Docs.** `prompts/system-prompt-default.md` updated with a "Canonical links"
+note (authoring unchanged; leave `[[page:01H…|Title]]` as-is). `make prompts`
+regenerated `GeneratedPrompts.swift`. `graph-model-and-versioning.md` §12 Phase 5
+row footnoted; `PLAN.md` status + doc index updated.
+
 ## 2026-07-06 — Graph-model Phase 4a: `![[source:…]]` embed parsing + binary content rendering
 
 Landed the **first demoable Phase 4 behavior**: `![[source:Name]]` embed syntax

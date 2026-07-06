@@ -108,33 +108,36 @@ struct StoreConcurrencyTests {
 
     // MARK: - Atomic renameSource
 
-    /// `renameSource` used to be documented "eventually consistent" because raw
-    /// `BEGIN IMMEDIATE` couldn't nest around `updatePage`/`replaceLinks`. It
-    /// now commits the source row + every page rewrite in one transaction —
-    /// this exercises the savepoint path end-to-end.
-    @Test func renameSourceRewritesAllLinkingPagesAtomically() throws {
+    /// `renameSource` commits the source-row update in one transaction. Phase 5
+    /// removed the body-rewrite loop (stored aliases self-heal at render), so
+    /// this now verifies the rename is still atomic AND that no linking-page
+    /// body is touched — the zero-body-writes guarantee (AC.9).
+    @Test func renameSourceDoesNotRewriteLinkingPagesAtomically() throws {
         let (store, _) = try makeStore()
         let source = try store.addSource(
             filename: "paper.md", data: Data("hello".utf8),
             zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: "text/markdown")
 
         var pageIDs: [PageID] = []
+        var originalBodies: [PageID: String] = [:]
         for i in 0..<3 {
             let page = try store.createPage(title: "Linker \(i)")
             let body = "See [[source:paper.md#\"hello\"|the paper]] and [[source:paper.md]]."
             try store.updatePage(id: page.id, title: "Linker \(i)", body: body)
             try store.replaceLinks(from: page.id, parsedLinks: WikiLinkParser.parse(body))
             pageIDs.append(page.id)
+            originalBodies[page.id] = body
         }
 
         try store.renameSource(id: source.id, to: "The Great Paper")
 
+        // The source row is renamed (the atomic one-row update committed).
+        #expect(try store.getSource(id: source.id).displayName == "The Great Paper")
+        // No linking-page body changed (zero body writes — the AC.9 gate).
         for id in pageIDs {
-            let body = try store.getPage(id: id).bodyMarkdown
-            #expect(body.contains("[[source:The Great Paper#\"hello\"|the paper]]"))
-            #expect(body.contains("[[source:The Great Paper]]"))
-            #expect(!body.contains("paper.md#"))
+            #expect(try store.getPage(id: id).bodyMarkdown == originalBodies[id])
         }
+        // Link rows are intact.
         #expect(try store.sourceLinkingPages(to: source.id).count == 3)
     }
 

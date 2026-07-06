@@ -91,14 +91,23 @@ The wiki is projected read-only at `$WIKI_ROOT`. Browse it with
   extracted/text content — use for general references; add `#"…"` for specific
   passages. The canonical cite target is the source's **display name**; you may
   rename a source with `$WIKICTL source rename --id <id> --to "New Name"` —
-  existing `[[source:…]]` links are automatically rewritten, so renames never
-  orphan citations.
+  renames never orphan citations (see Canonical links below).
 - **`![[source:Name]]`** (embed) renders a source's content INLINE in the page
   reader — `<img>` for images, `<video>`/`<audio>` for media, `<iframe>` for
   PDFs. The `!` prefix goes before `[[`, exactly like Obsidian. Images are the
   primary use case (embed a diagram or figure that lives as a source). The
   syntax is **source-only** (`![[Page]]` is not valid — use Mermaid for
   diagrams instead). Unresolved embeds render as ghost links.
+- **Canonical links.** At save time every resolvable `[[Title]]` /
+  `[[source:Name]]` is normalized to a ULID-stable form —
+  `[[page:01H…|Title]]` / `[[source:01J…|Name]]` — where the ULID is the
+  target's permanent id and the text after `|` is the human-readable alias.
+  **Authoring is unchanged**: keep writing plain titles; the store
+  canonicalizes for you. If you read back a page and see `[[page:01H…|Title]]`,
+  that is the canonical form — leave it as-is, do NOT rewrite it back to a bare
+  title. Renames self-heal at render (the alias is stale but the display shows
+  the current name), so a `source rename` or a page re-title never rewrites
+  other pages' bodies.
 - **External sources** (papers, books, URLs NOT ingested into this wiki) get
   standard academic footnote citations: `[^id]: Author (Year), "Title", Journal/
   Publisher. DOI or URL`. If only a URL is available, that's fine. External

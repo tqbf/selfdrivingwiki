@@ -438,7 +438,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // the §4.4 rowid + role/pin shape. No legacy rows to backfill on a
         // brand-new DB. Shared with the v21→22 migration step.
 
-        try exec("PRAGMA user_version=22;")
+        // v23 (graph-model Phase 5): data-only link canonicalization sweep — no
+        // schema change, and a fresh DB has no rows to sweep. The run-once guard
+        // is the only effect on a fresh DB. Shared with the v22→23 migration step.
+
+        try exec("PRAGMA user_version=23;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -1026,6 +1030,16 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try exec("PRAGMA user_version=22;")
             version = 22
         }
+
+        // Step 22 → 23 (graph-model Phase 5): data-only body sweep — rewrite
+        // every resolvable `[[…]]` link in every page body to canonical
+        // ULID-stable form. No schema change; the version bump is a run-once
+        // guard (the v18 name-sanitization precedent). See `migrateV22ToV23`.
+        if version < 23 {
+            try migrateV22ToV23()
+            try exec("PRAGMA user_version=23;")
+            version = 23
+        }
     }
 
     /// The v19→20 migration step. Creates the objects tables, then — for every
@@ -1390,6 +1404,68 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 ON source_links(from_page_id, to_source_id, role,
                                 COALESCE(pinned_version_id, ''));
             """)
+        }
+    }
+
+    /// The v22→23 step (graph-model Phase 5): a one-time, data-only sweep that
+    /// rewrites every page body's resolvable `[[…]]` links to canonical
+    /// ULID-stable form (`[[page:ULID|alias]]` / `[[source:ULID|alias]]`). No
+    /// schema change — `user_version=23` is only a run-once guard (the v18
+    /// name-sanitization precedent). Idempotent (canonical→no-op), code-fence-
+    /// safe, and alias/fragment-preserving (see `WikiLinkRewriter.canonicalize`).
+    ///
+    /// The change token MUST advance: `changeToken()` folds `COUNT(pages)` +
+    /// `COALESCE(SUM(version),0)`, and the File Provider versions each projected
+    /// `.md` by `page.version` + `page.updatedAt`. A body rewrite that left the
+    /// token unmoved would serve stale pre-canonicalization bodies — reintroducing
+    /// the ghost-link class this phase kills. So every rewritten page bumps
+    /// `version` + `updated_at` (matching the v18 precedent exactly). Link rows
+    /// are NOT touched: the from→to edges are invariant under canonicalization
+    /// (a `[[Title]]` that resolved to page X becomes `[[page:X_id|Title]]`,
+    /// same edge), so the existing `page_links`/`source_links` stay correct.
+    private func migrateV22ToV23() throws {
+        try withTransaction {
+            // Guard: a minimal fixture (or a DB rewound for testing) may lack a
+            // `pages` table — the canonicalizer has nothing to sweep, so skip
+            // (matches the established "check before SELECT" rewind guard).
+            let hasPages = try queryScalarText(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pages';") != "0"
+            guard hasPages else { return }
+
+            // At v22 `sources` always exists, but a minimal/corrupted fixture may
+            // lack it — a body with `[[source:…]]` would then throw "no such
+            // table" from `resolveSourceByName` and abort the open. Pass a nil
+            // resolver when it's absent so those spans are simply left as-written.
+            let hasSources = try queryScalarText(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sources';") != "0"
+            let resolveSource: (String) throws -> PageID? = hasSources
+                ? { [self] in try self.resolveSourceByName($0) }
+                : { _ in nil }
+
+            // Snapshot id + body under the write lock. The canonicalizer is pure
+            // (resolvers are read-only lookups), so collecting first then rewriting
+            // avoids a statement handle spanning the reparse.
+            let select = try statement("SELECT id, body_markdown FROM pages;")
+            defer { select.reset() }
+            var rows: [(id: String, body: String)] = []
+            while try select.step() {
+                rows.append((select.text(at: 0), select.text(at: 1)))
+            }
+            let now = Date().timeIntervalSince1970
+            let update = try statement("""
+            UPDATE pages SET body_markdown = ?2, updated_at = ?3, version = version + 1 WHERE id = ?1;
+            """)
+            for row in rows {
+                guard let canonical = try WikiLinkRewriter.canonicalize(
+                    in: row.body, resolvePage: resolveTitleToID,
+                    resolveSource: resolveSource) else { continue }
+                update.reset()
+                try update.bind(row.id, at: 1)
+                try update.bind(canonical, at: 2)
+                try update.bind(now, at: 3)
+                _ = try update.step()
+            }
+            update.reset()
         }
     }
 
@@ -1892,6 +1968,23 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         return nil
     }
 
+    /// If `link.target` is a canonical ULID naming an existing row, return that
+    /// id directly (Phase 5). A stored `[[page:ULID|Title]]` resolves by id — a
+    /// direct row fetch — instead of being dropped by name resolution (which
+    /// matches on title, not id). Returns `nil` when the target is non-canonical
+    /// OR the id names no row, so the caller can fall back to name resolution
+    /// (collision safety: a title that happens to be ULID-shaped still links).
+    private func canonicalLinkID(
+        _ link: WikiLinkParser.ParsedLink
+    ) throws -> PageID? {
+        guard WikiLinkParser.isCanonicalULID(link.target) else { return nil }
+        let id = PageID(rawValue: link.target)
+        switch link.linkType {
+        case .page:   return (try? getPage(id: id)) != nil ? id : nil
+        case .source: return (try? getSource(id: id)) != nil ? id : nil
+        }
+    }
+
     public func replaceLinks(from pageID: PageID,
                              parsedLinks: [WikiLinkParser.ParsedLink]) throws {
         lock.lock(); defer { lock.unlock() }
@@ -1934,20 +2027,34 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             for link in parsedLinks {
                 switch link.linkType {
                 case .page:
-                    guard let target = try resolveLinkTarget(link, using: resolveTitleToID)
-                    else { continue }
+                    // Canonical ULID targets validate by id (a direct row fetch);
+                    // legacy and forward links resolve by name. A ULID that names
+                    // no row falls back to name resolution so a ULID-shaped title
+                    // never silently loses its edge (Phase 5).
+                    let resolved: PageID?
+                    if let id = try canonicalLinkID(link) {
+                        resolved = id
+                    } else {
+                        resolved = try resolveLinkTarget(link, using: resolveTitleToID)
+                    }
+                    guard let resolved else { continue }
                     insPage.reset()
                     try insPage.bind(pageID.rawValue, at: 1)
-                    try insPage.bind(target.rawValue, at: 2)
+                    try insPage.bind(resolved.rawValue, at: 2)
                     try insPage.bind(link.linkText, at: 3)
                     _ = try insPage.step()
                 case .source:
-                    guard let target = try resolveLinkTarget(link, using: resolveSourceByName)
-                    else { continue }
+                    let resolved: PageID?
+                    if let id = try canonicalLinkID(link) {
+                        resolved = id
+                    } else {
+                        resolved = try resolveLinkTarget(link, using: resolveSourceByName)
+                    }
+                    guard let resolved else { continue }
                     let stmt = link.isEmbed ? insSourceEmbed : insSource
                     stmt.reset()
                     try stmt.bind(pageID.rawValue, at: 1)
-                    try stmt.bind(target.rawValue, at: 2)
+                    try stmt.bind(resolved.rawValue, at: 2)
                     try stmt.bind(link.linkText, at: 3)
                     _ = try stmt.step()
                 }
@@ -2898,21 +3005,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try stmt.bind(Date().timeIntervalSince1970, at: 3)
             _ = try stmt.step()
 
-            // Rewrite links in every page that points at this source. The
-            // isNameKnown closure keeps longest-name-wins intact: a span whose
-            // longer reading names some OTHER source is not this rename's to
-            // take. (The row above is already renamed, so oldBase itself
-            // resolves to nothing here — only genuinely different names
-            // answer true.)
-            for pageID in try sourceLinkingPages(to: id) {
-                let page = try getPage(id: pageID)
-                guard let rewritten = WikiLinkRewriter.rewriteSourceBase(
-                    in: page.bodyMarkdown, matching: oldBase,
-                    to: newDisplayName,
-                    isNameKnown: { (try? self.resolveSourceByName($0)) != nil }) else { continue }
-                try updatePage(id: pageID, title: page.title, body: rewritten)
-                try replaceLinks(from: pageID, parsedLinks: WikiLinkParser.parse(rewritten))
-            }
+            // Phase 5: NO body rewrite. Stored aliases like
+            // `[[source:ULID|Old Name]]` self-heal to the new name at render
+            // (WikiLinkMarkdown.linkified resolves the ULID → current display
+            // name), so a source rename is a one-row metadata update. The old
+            // rewriteSourceBase loop that walked every linking page is gone —
+            // zero bodies rewritten, zero ghosts.
             return true
         }
         guard renamed else { return }   // no-op rename: skip re-embed/FTS work
