@@ -821,11 +821,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
             }
             let uniqueLooseKeys = Set(looseKeyCounts.filter { $0.value == 1 }.keys)
 
-            // Embed map: lowercased source name → (id, mimeType). Mirrors the
-            // sourceNames variants (displayName, filename, extension-stripped)
-            // so `![[source:img.png]]` resolves the same as a cite link. Captured
-            // by the embedInfo closure below (pure data, no store access in the
-            // detached task — same pattern as isResolved).
+            // Embed map: lowercased source name → (id, mimeType). Uses the same
+            // name variants as sourceNames (displayName, filename, extension-
+            // stripped) but NOT the loose-match tier — embeds are exact-match-
+            // only by design (a loose match might embed the wrong source).
+            // Captured by the embedInfo closure below (pure data, no store
+            // access in the detached task — same pattern as isResolved).
             var embedMap: [String: (id: PageID, mimeType: String?)] = [:]
             for source in store?.sources ?? [] {
                 let names = [source.displayName, source.filename].compactMap({ $0 })

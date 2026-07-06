@@ -1,5 +1,6 @@
 import Testing
 @testable import WikiFS
+@testable import WikiFSCore
 
 /// Fidelity tests for the source web reader's Markdown→HTML renderer. The
 /// renderer receives RAW markdown (wiki links + footnotes are pre-processed into
@@ -109,5 +110,23 @@ struct MarkdownHTMLRendererTests {
         let h = WikiReaderView.documentHTML("<pre><code class=\"language-mermaid\">graph TD</code></pre>")
         #expect(!h.contains("<script>"))
         #expect(h.contains(#"class="language-mermaid""#))
+    }
+
+    // MARK: - Inline HTML passthrough (Phase 4a embeds)
+
+    @Test func rawInlineHTMLFromEmbedSurvivesRender() {
+        // The embed pre-pass emits raw inline HTML (e.g. `<img src="wiki-blob://…">`).
+        // swift-markdown parses it as InlineHTML, and the renderer must pass it
+        // through verbatim — otherwise the embed is silently dropped. This test
+        // guards against someone removing visitInlineHTML/visitHTMLBlock.
+        let id = PageID(rawValue: "01HTESTRENDER0000000000001")
+        let prepared = WikiLinkMarkdown.linkified(
+            "Here is ![[source:img.png]] inline.",
+            isResolved: { _, _ in true },
+            embedInfo: { _ in (id: id, mimeType: "image/png") }
+        )
+        let html = MarkdownHTMLRenderer.render(prepared)
+        #expect(html.contains(#"<img src="wiki-blob://source/\#(id.rawValue)""#))
+        #expect(html.contains("wiki-embed"))
     }
 }
