@@ -15,6 +15,12 @@ struct SidebarView: View {
     let fileProvider: FileProviderSpike
     /// Required to launch the LLM lint from the sidebar context menu.
     @Bindable var launcher: AgentLauncher
+    /// The Ask (read-only) conversation launcher — drives the live indicator on
+    /// `.ask` recent-conversation rows (D4).
+    @Bindable var askLauncher: AgentLauncher
+    /// The Edit conversation launcher — drives the live indicator on `.edit`
+    /// recent-conversation rows (D4).
+    @Bindable var editLauncher: AgentLauncher
     /// Files whose agent run is in flight (agent phase) — shows the
     /// "Ingesting…" spinner on those rows.
     var ingestingSourceIDs: Set<PageID> = []
@@ -177,7 +183,7 @@ struct SidebarView: View {
                     newBookmarkFolderName = ""
                 })
         case .agent:
-            AgentToolsView(store: store)
+            AgentToolsView(store: store, askLauncher: askLauncher, editLauncher: editLauncher)
         }
     }
 

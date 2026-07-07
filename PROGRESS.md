@@ -2,6 +2,29 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-08 — Phase D4: sidebar affordances
+
+**Agent sidebar (`AgentToolsView`) affordances around the unified
+`ConversationView`.** Behavior-preserving (additive); 1863 tests green (+8 new
+D4 tests).
+
+- `Sources/WikiFS/AgentToolsView.swift`: `+` New Conversation menu on the Recent
+  Conversations header (Ask default, Edit) → `store.openTab(.ask/.edit)` (draft
+  state). Row **live indicator** — a tinted `circle.fill` + "responding…"
+  caption when the matching launcher (`askLauncher` for `.ask`, `editLauncher`
+  for `.edit`) has `activeChatID == chat.id` AND `isGenerating` (pure
+  `isLiveRow(...)` predicate). **Rename Conversation…** context-menu item →
+  `.alert` + `TextField` → `store.renameChat(id:to:)` (first UI caller of the
+  tested-but-uncalled rename). Ask/Edit mode-row subtitles → "New read-only
+  conversation" / "New editing conversation".
+- `Sources/WikiFS/SidebarView.swift` + `ContentView.swift`: thread
+  `askLauncher`/`editLauncher` into `AgentToolsView`.
+- `Tests/WikiFSTests/AgentToolsD4Tests.swift` (new): 4 live-indicator predicate
+  tests + 3 rename round-trip + 1 MRU-order. Review found no issues.
+
+**Pillars 1 + 2 + sidebar done.** Remaining: pillar 3 (continue — B session
+identity + D3 `continueConversation`), pillar 4 (D5 per-mode profiles).
+
 ## 2026-07-08 — Phase D2: one conversation surface (pillar 2)
 
 **Unify live Ask/Edit conversation + persisted chat history into a single

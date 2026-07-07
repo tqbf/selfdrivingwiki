@@ -151,6 +151,8 @@ struct ContentView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(store: store, manager: manager, fileProvider: fileProvider,
                         launcher: agentLauncher,
+                        askLauncher: askLauncher,
+                        editLauncher: editLauncher,
                         ingestingSourceIDs: agentLauncher.ingestingSourceIDs,
                         extractingSourceIDs: agentLauncher.extractingSourceIDs,
                         showingAddFromZotero: $showingAddFromZotero,
