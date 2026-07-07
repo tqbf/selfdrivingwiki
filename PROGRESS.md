@@ -2,6 +2,78 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-07 — agent backend port (Phase 0) + shared render context (Phase A.1)
+
+**Two behavior-preserving slices, 1829 tests green.** Both unblock
+`plans/conversation-ui.md` without committing to an agent backend (ACP vs
+Polytoken vs Claude-CLI deferred — see `plans/agent-backend-port.md`).
+
+**Phase 0 — `AgentBackend` port.** Extracted the Claude-CLI stream-json seam
+into a swappable port so UI/persistence/conversation depend only on `AgentEvent`
++ the port, never a wire format.
+- `Sources/WikiFS/AgentBackend.swift` (new): `protocol AgentBackend: Sendable`
+  (`start`/`send`/`resume`/`cancel`), `BackendProfile`, `CLIProfile`,
+  `SessionHandle` (opaque `Sendable` token), `TurnInput`.
+- `Sources/WikiFS/ClaudeCLIBackend.swift` (new): `actor` wrapping today's
+  spawn/parse/encode verbatim; per-turn `AsyncStream` via `makeStream(of:)`;
+  `readabilityHandler` decodes off-main and yields to a `Sendable`
+  `ContinuationBox`; finish-once (idempotent at `endsGeneration` +
+  `terminationHandler`); `onTermination` distinguishes `.cancelled` (kill via
+  PID) from `.finished` (no-op); one-shot `OnExitGate` for completion. No
+  `@unchecked Sendable`.
+- `Sources/WikiFS/AgentLauncher.swift`: holds `AgentBackend` + `SessionHandle`;
+  consumes the per-turn stream (`mergeOrAppend` → `endsGeneration` →
+  gate/lock/flush, unchanged); `stopAgent` preserves the no-real-process test
+  seam; `finish` is `guard isRunning`-idempotent; watchdog now heartbeat-only
+  (`onExit` is the sole completion signal).
+- `Sources/WikiFSCore/AgentEvent.swift`: doc-only — `endsGeneration`
+  redocumented as the turn-boundary predicate; `.messageStop` is now a
+  backend-synthesized turn-boundary contract (case name + logic unchanged →
+  zero migration; `isPersistable == false`).
+- **D3 correction recorded:** `claude --resume` pins the model to the one saved
+  with the transcript (does NOT accept a switch) — model-switching is a backend
+  capability, not an assumption. `resume` stubs nil in Phase 0.
+- **Review fix:** reordered `ClaudeCLIBackend.send` to install the turn's
+  continuation BEFORE writing stdin (closed a latent race where a
+  fast-responding process could drop events into a nil box).
+- **Known deltas (acceptable):** `currentProcessID` always nil (backend owns the
+  `Process`); `BackendProfile` is somewhat CLI-shaped (generalize when a second
+  backend arrives); watchdog lost its belt-and-suspenders `Process` poll
+  (`terminationHandler` always fires).
+
+**Phase A.1 — `WikiRenderContext`.** Extracted the reader's render precompute
+into a pure `Sendable` value so chat transcripts (A.2) can render through the
+same link/embed/pin/display-name seam.
+- `Sources/WikiFSCore/WikiRenderContext.swift` (new): captures the full
+  precompute (pageTitles, pageIDToName, sourceNames, sourceIDToName,
+  uniqueLooseKeys, embedMap incl. external `EmbedTarget`s, sourceDerivedChain
+  `@vN`, siblingMaps, blobScheme); `@MainActor build(from:)`; the four pure
+  closures (`isResolved`/`embedInfo`/`displayName`/`pinnedExtractionID`) derived
+  from captured data (no store access at render time).
+- `Sources/WikiFSCore/WikiStoreModel.swift`: memoized `renderContext()`,
+  invalidated by `WikiEventBus` generation bumps in `reloadSummaries`/
+  `reloadSources` (per-delta renders never touch SQLite).
+- `Sources/WikiFS/WikiReaderView.swift`: `startLoad` refactored onto
+  `WikiRenderContext.build` (behavior-preserving); the selection-specific
+  sibling-map pick stays in the reader.
+- `Sources/WikiFSCore/WikiLinkMarkdown.swift`: `SourceEmbedInfo` now
+  `Sendable`+`Equatable` (additive; fields already were).
+- `Tests/WikiFSTests/WikiRenderContextTests.swift` (new): 12 tests (all four
+  closures + memo reuse + invalidation on page/source mutation + blob scheme).
+- **Review fix:** the nil-store `isResolved` fallback was `true` (all resolved)
+  claiming to match the old behavior — it didn't (old = empty sets → all
+  ghosts). Flipped to `false` and fixed the comment; the transcript's
+  nil-context=constant-true is an A.2 concern at `AgentTranscriptWebView`.
+
+**Build/tests:** `swift build` clean; `swift test` — 1829 tests in 150 suites
+pass (incl. the 513 KB reader render-perf benchmark). No schema change, no UI
+change, no resume. Both slices are backend-agnostic foundations for
+`plans/conversation-ui.md` Phases A.2 / B / C / D.
+
+**Next:** Phase A.2 (thread `renderContext` into `AgentTranscriptWebView` +
+`BlobSchemeHandler` + two-tier streaming render) — the pillar-1 payoff (chat
+transcripts render wikilinks/anchors/`@vN`/embeds/images correctly).
+
 ## 2026-07-06 — #129 slice 2a: the resource-change event bus
 
 **Gate met: one per-wiki `WikiEventBus` collapses the three ad-hoc change

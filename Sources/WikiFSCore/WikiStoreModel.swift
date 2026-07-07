@@ -81,6 +81,26 @@ public final class WikiStoreModel {
     /// Results of the last sources search (empty when sourceSearchQuery is empty).
     public private(set) var sourceSearchResults: [SourceSummary] = []
     @ObservationIgnored private var sourceSearchTask: Task<Void, Never>?
+
+    /// Memoized `WikiRenderContext` (Phase A.1, D1). Lazily rebuilt; invalidated
+    /// by bumping ``renderContextGeneration`` whenever pages or sources change.
+    /// Per-delta renders therefore reuse the snapshot and never touch SQLite.
+    /// `@ObservationIgnored` — the context is consumed off-main by detached
+    /// render tasks, not observed by SwiftUI.
+    @ObservationIgnored private var cachedRenderContext: WikiRenderContext?
+    /// Bumped by `reloadSummaries()` / `reloadSources()` (every page/source
+    /// mutation, local AND external — `reloadFromStore()` calls both). A change
+    /// here means the next `renderContext()` call rebuilds the snapshot. This is
+    /// the `WikiEventBus`-driven invalidation the plan calls for: local writes
+    /// self-manage through these reloads (slice 2a), and `.external` bus events
+    /// route through `reloadFromStore()` → the same reloads. Either way the
+    /// generation bumps.
+    @ObservationIgnored private var renderContextGeneration: UInt64 = 0
+    /// The snapshot captured at ``cachedRenderContext`` build time, so a reload
+    /// that leaves the generation unchanged (e.g. a bookmark-only change) doesn't
+    /// spuriously rebuild. Compared against ``renderContextGeneration``.
+    @ObservationIgnored private var renderContextBuiltAtGeneration: UInt64 = .max
+
     /// The sidebar selection: a page, the system-prompt document, or nothing.
     public var selection: WikiSelection?
     public private(set) var backStack: [WikiSelection] = []
@@ -1855,6 +1875,29 @@ public final class WikiStoreModel {
         (try? store.siblingImageResolvers()) ?? [:]
     }
 
+    /// A memoized ``WikiRenderContext`` (Phase A.1, D1) — the pure-data snapshot
+    /// of everything a markdown render needs from the store (existence/display/
+    /// loose-match sets, `embedMap` incl. external `EmbedTarget`s,
+    /// `sourceDerivedChain`, `siblingMaps`).
+    ///
+    /// Built lazily on first access and rebuilt only when pages or sources
+    /// change — `reloadSummaries()` / `reloadSources()` bump
+    /// ``renderContextGeneration`` (every local mutation routes through them, and
+    /// `.external` `WikiEventBus` events route through `reloadFromStore()` → the
+    /// same reloads). So per-delta renders reuse the snapshot and never touch
+    /// SQLite. The returned value is `Sendable` and safe to hand to a detached
+    /// render task; its closures are pure (no store access at render time).
+    public func renderContext() -> WikiRenderContext {
+        if let cached = cachedRenderContext,
+           renderContextBuiltAtGeneration == renderContextGeneration {
+            return cached
+        }
+        let built = WikiRenderContext.build(from: self)
+        cachedRenderContext = built
+        renderContextBuiltAtGeneration = renderContextGeneration
+        return built
+    }
+
     /// Save an edit as a new version in the chain. Only called when the text
     /// genuinely differs from the current head — meaningful history, not
     /// keystroke spam.
@@ -1942,6 +1985,8 @@ public final class WikiStoreModel {
     /// refresh after an external write.
     public func reloadSummaries() {
         summaries = (try? store.listPages(sortBy: pageSortOrder)) ?? []
+        // Phase A.1: any page mutation invalidates the memoized render context.
+        renderContextGeneration &+= 1
     }
 
     // MARK: - Search
@@ -2119,6 +2164,8 @@ public final class WikiStoreModel {
             }
             return (file.id, hasLogEntry)
         })
+        // Phase A.1: any source mutation invalidates the memoized render context.
+        renderContextGeneration &+= 1
     }
 
     // MARK: - Bookmark nodes (v16)

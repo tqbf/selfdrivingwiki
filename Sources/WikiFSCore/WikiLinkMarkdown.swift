@@ -29,7 +29,7 @@ public enum WikiLinkMarkdown {
     /// direct-remote `<audio>`/`<video>`, Apple Podcasts player). When `target`
     /// is non-nil the renderer emits the external element; otherwise it falls
     /// back to the byteful blob dispatch (Phase 4a), then to a cite link.
-    public struct SourceEmbedInfo {
+    public struct SourceEmbedInfo: Sendable, Equatable {
         public let id: PageID
         public let mimeType: String?
         public let target: EmbedTarget?
