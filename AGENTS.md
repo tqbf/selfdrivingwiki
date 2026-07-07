@@ -104,6 +104,21 @@ agents, NOT Polytoken):
   and `plans/graph-model-and-versioning.md` §8; regression suite:
   `swift test --filter StoreConcurrencyTests`.
 
+* **Change signaling (#129 slice 2a): the store emits at the write seam; the
+  File Provider + the model subscribe — there is no hand-fired `onPageDidChange`
+  anymore.** Every public mutating method on `SQLiteWikiStore` routes its body
+  through `mutate(event:_:)`, which emits one `ResourceChangeEvent` onto the
+  per-wiki `WikiEventBus` strictly AFTER the recursive lock is released at its
+  own depth-0 (compute-while-locked, flush-after-unlock). **Load-bearing
+  invariant: every NEW public mutating method MUST route through `mutate()` and
+  emit a `ResourceChangeEvent`, or be explicitly annotated no-emit with a reason
+  (derived embeddings, search index, migrations)** — otherwise the File Provider
+  silently goes stale (and a future kind-specific subscriber misses the change).
+  `StoreEmissionExhaustivenessTests` enforces this (parses every `public func`,
+  asserts the EMIT/READ/NO-EMIT partition is complete and every EMIT member calls
+  `mutate(`). Adding a new public mutator? Route it through `mutate()` or the
+  guard fails. See `plans/event-bus.md`.
+
 * Never use `print` for diagnostics — route all logging through `DebugLog`
   (`os_log` → Console.app, subsystem `com.selfdrivingwiki.debug`) so it's visible
   no matter how the app launched. The only exception is real CLI stdout (e.g.

@@ -27,6 +27,21 @@ final class FileProviderSpike {
     private var activeWikiID: String?
     private var activeDisplayName: String?
 
+    // MARK: - Resource-change bus subscription (slice 2a)
+    //
+    // The store emits a `ResourceChangeEvent` at the write seam; the File
+    // Provider subscribes (debounced) so local app writes refresh the mount
+    // exactly as the old `onPageDidChange` hand-fire did. Coalescing lives at the
+    // subscriber edge (§3 decision 4), reusing the pure `ChangeCoalescer`.
+
+    /// The active store's bus we currently subscribe to (weak — the store owns
+    /// it; we just hold a reference to unsubscribe on swap).
+    private weak var activeStoreBus: WikiEventBus?
+    /// The subscription token for `activeStoreBus`; unsubscribed on each swap.
+    private var activeStoreChangeToken: SubscriptionToken?
+    /// Collapses a burst of store events into a single FP signal per wiki.
+    private var signalCoalescer: ChangeCoalescer?
+
     // MARK: - Schema migration
 
     /// Bump this whenever the container hierarchy changes in a way the daemon
@@ -424,6 +439,51 @@ final class FileProviderSpike {
         ]
         for container in containers {
             await signalEnumerator(manager: manager, container: container, timeout: .seconds(3))
+        }
+    }
+
+    // MARK: - Resource-change bus → debounced FP signal (slice 2a)
+
+    /// The ~250 ms quiet window that collapses a burst of store events (a batch
+    /// `addFiles`, a save + link rewrite, …) into a single FP signal. Mirrors the
+    /// change bridge's window.
+    private static let signalCoalesceWindow: Duration = .milliseconds(250)
+
+    /// Install the debounced signaler: a real `Task.sleep`-based scheduler feeds
+    /// `ChangeCoalescer`, whose flush signals the named wiki's domain. Called once
+    /// from `wire(into:)`.
+    private func ensureSignalCoalescer() {
+        guard signalCoalescer == nil else { return }
+        signalCoalescer = ChangeCoalescer(
+            schedule: { [weak self] work in
+                guard let self else { return ChangeCoalescer.Handle(cancel: {}) }
+                let task = Task { @MainActor in
+                    try? await Task.sleep(for: Self.signalCoalesceWindow)
+                    guard !Task.isCancelled else { return }
+                    work()
+                }
+                return ChangeCoalescer.Handle { task.cancel() }
+            },
+            flush: { [weak self] wikiID in
+                Task { await self?.signalChange(forWikiID: wikiID) }
+            }
+        )
+    }
+
+    /// Subscribe the debounced FP signaler to the freshly-swapped active store's
+    /// bus (all kinds, both origins). Unsubscribes the previous store's token so a
+    /// store swap (select / create / delete) re-points cleanly with no leak.
+    func subscribeActiveStoreBus(_ bus: WikiEventBus?, wikiID: String?) {
+        ensureSignalCoalescer()
+        // Drop the previous subscription.
+        if let oldBus = activeStoreBus, let token = activeStoreChangeToken {
+            oldBus.unsubscribe(token)
+        }
+        activeStoreBus = bus
+        activeStoreChangeToken = nil
+        guard let bus, let wikiID else { return }
+        activeStoreChangeToken = bus.subscribe(nil) { [weak self] _ in
+            self?.signalCoalescer?.noteChange(forWikiID: wikiID)
         }
     }
 
