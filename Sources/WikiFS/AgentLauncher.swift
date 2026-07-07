@@ -791,6 +791,7 @@ final class AgentLauncher {
     ///   into (e.g. `store.startChat` failed) — the session simply runs unpersisted.
     func startInteractiveQuery(
         firstMessage: String,
+        firstMessageDisplay: String? = nil,
         stateMarkdown: String,
         wikiID: String,
         wikiRoot: String,
@@ -936,7 +937,7 @@ final class AgentLauncher {
             isRunning = true
             DebugLog.agent("startInteractiveQuery: spawned")
             // Start the first turn — this acquires the generation gate for turn 1.
-            sendInteractiveMessage(firstMessage)
+            sendInteractiveMessage(firstMessage, displayText: firstMessageDisplay)
             // Mirror `run()`: arm the completion watchdog so a process that exits
             // without a reconciling `onExit` still clears `isRunning`.
             // Interactive sessions stay alive between turns; the watchdog only acts
@@ -966,7 +967,7 @@ final class AgentLauncher {
     /// (from the write to stdin until the agent emits `messageStop`/`result`). The
     /// acquisition is ASYNC and may wait if another launcher is currently generating.
     /// While waiting, `isAwaitingGenerationSlot` is `true` so the UI can show a hint.
-    func sendInteractiveMessage(_ message: String) {
+    func sendInteractiveMessage(_ message: String, displayText: String? = nil) {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.shouldSendMessage(
             isRunning: isRunning,
@@ -995,7 +996,12 @@ final class AgentLauncher {
                 if ok { self.releaseGenerationSlot() }
                 return
             }
-            self.events.append(.userText(trimmed))
+            // Display the user's message (or the displayText override — D3's
+            // continue path sends a preamble to the agent but shows the user's
+            // actual message in the transcript). The full `trimmed` message
+            // (preamble) is sent to the backend below.
+            let visible = (displayText ?? trimmed).trimmingCharacters(in: .whitespacesAndNewlines)
+            self.events.append(.userText(visible))
             self.setGenerating(true)    // fires onTurnBoundary(true) → edit lock (Edit only)
             self.lastActivityAt = Date()
             // Send the turn and consume the per-turn stream. The backend writes

@@ -115,6 +115,23 @@ struct ConversationContinueD3Tests {
         #expect(preamble.contains("Here is the summary."))
     }
 
+    @Test func preambleDeduplicatesAssistantTextAndResult() {
+        // A turn typically persists BOTH `.assistantText` (streamed) and
+        // `.result` (boundary) with identical text. The preamble must include
+        // the text only ONCE — not duplicated.
+        let messages: [ChatMessage] = [
+            msg(0, .userText("What is Paris?")),
+            msg(1, .assistantText("Paris is the capital of France.")),
+            msg(2, .result(isError: false, text: "Paris is the capital of France.")),
+        ]
+        let preamble = AgentOperationRunner.continuationPreamble(
+            from: messages, newMessage: "Next", maxBytes: 10_000)
+
+        // The text appears exactly once (count the occurrences).
+        let count = preamble.components(separatedBy: "Paris is the capital of France.").count - 1
+        #expect(count == 1)
+    }
+
     @Test func preambleRespectsMaxTurns() {
         // 20 user/assistant turns, maxTurns = 4 → only the last 4 survive.
         var messages: [ChatMessage] = []

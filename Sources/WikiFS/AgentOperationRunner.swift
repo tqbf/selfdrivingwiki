@@ -345,17 +345,25 @@ enum AgentOperationRunner {
         maxTurns: Int = 10,
         maxBytes: Int = 12_000
     ) -> String {
-        // Project to (role, text) for user/assistant rows only.
-        let turns: [(role: String, text: String)] = messages.compactMap { msg in
+        // Project to (role, text) for user/assistant rows only. `.result`
+        // duplicates `.assistantText` (same turn, same text) — skip it when
+        // the preceding turn is an `.assistantText` with identical text. A
+        // standalone `.result` (no preceding `.assistantText`) is kept so a
+        // turn that only emitted a result is not lost.
+        var turns: [(role: String, text: String)] = []
+        for msg in messages {
             switch msg.event {
             case .userText(let text):
-                return ("user", text)
+                turns.append(("user", text))
             case .assistantText(let text):
-                return ("assistant", text)
+                turns.append(("assistant", text))
             case .result(_, let text) where !text.isEmpty:
-                return ("assistant", text)
+                if let last = turns.last, last.role == "assistant", last.text == text {
+                    continue  // duplicates the preceding .assistantText — skip
+                }
+                turns.append(("assistant", text))
             default:
-                return nil
+                break
             }
         }
 
@@ -485,6 +493,7 @@ enum AgentOperationRunner {
         // keyed by chatID and appends to the same row.
         await launcher.startInteractiveQuery(
             firstMessage: firstMessage,
+            firstMessageDisplay: trimmed,
             stateMarkdown: store.currentStateSnapshot().renderStateFile(),
             wikiID: wikiID,
             wikiRoot: root,
