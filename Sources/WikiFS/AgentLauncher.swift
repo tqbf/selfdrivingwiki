@@ -140,7 +140,13 @@ final class AgentLauncher {
     /// unchanged.
     var containerDirectory: URL? = nil
 
-    private var process: Process?
+    /// The agent backend. Default `ClaudeCLIBackend` (today's Claude-CLI
+    /// stream-json code, moved behind the `AgentBackend` port). Injectable so
+    /// tests can substitute a stub backend.
+    @ObservationIgnored var backend: AgentBackend = ClaudeCLIBackend()
+    /// The active session handle (nil when no session is live). Replaces the
+    /// old `process: Process?` — the launcher never touches a `Process` directly.
+    @ObservationIgnored private var sessionHandle: SessionHandle?
     /// The edit-lock release closure for the current run (nil when no lock is held).
     /// Stored so `finish()` — and thus the completion watchdog — can release the
     /// lock even when the process's `terminationHandler` never fires. Without this,
@@ -175,9 +181,6 @@ final class AgentLauncher {
     /// Backstop poller that reconciles the UI if the process `terminationHandler`
     /// is ever missed (see `startCompletionWatchdog`). Cancelled on teardown.
     private var watchdogTask: Task<Void, Never>?
-    /// Carries-over bytes from a stdout read that ended mid-line, so the parser only
-    /// ever sees complete NDJSON lines.
-    private var stdoutLineBuffer = ""
     /// True while the last row in `events` is an in-progress `.assistantText` row
     /// being grown by streamed `.assistantTextDelta` chunks (issue #121). Reset by
     /// any other event (a tool call, a turn boundary, …) so unrelated `.assistantText`
@@ -187,8 +190,6 @@ final class AgentLauncher {
     private var logHandle: FileHandle?
     /// Append-only handle to the per-run `run.stderr.log`.
     private var stderrLogHandle: FileHandle?
-    /// Writable stdin for an interactive stream-json query session.
-    private var inputHandle: FileHandle?
     /// True when the running process is waiting for user turns over stdin.
     private(set) var isInteractiveSession = false
     /// Stored, cancellable Task for the current interactive send (which waits for
@@ -628,17 +629,6 @@ final class AgentLauncher {
         let sandbox = resolveSandboxInvocation(
             wikiID: wikiID, scratch: scratch, dir: dir, pdf2mdScriptPath: pdf2mdScriptPath)
         if sandbox != nil { createSandboxTmpDir(in: scratch) }
-        let command = OperationCommand.build(
-            operation: operation,
-            wikiRoot: wikiRoot,
-            wikiID: wikiID,
-            systemPrompt: systemPrompt,
-            scratchDirectory: scratch.path,
-            wikictlDirectory: wikictlDirectory,
-            resolvedExecutable: resolvedPath,
-            command: agentConfig,
-            sandbox: sandbox
-        )
 
         // RESERVE per-run metadata. isRunning is already `true` (set above).
         let now = Date()
@@ -661,50 +651,62 @@ final class AgentLauncher {
         onLock()
         onUnlockHandler = onUnlock
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: command.executable)
-        process.arguments = command.arguments
-        process.environment = command.environment
-        process.currentDirectoryURL = scratch
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        // stdout is line-buffered NDJSON: accumulate bytes, split on newlines, and
-        // feed each COMPLETE line to the parser. Non-blocking — the handler fires on
-        // a background queue, then hops to the main actor.
-        stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor [weak self] in self?.ingestStdout(chunk) }
-        }
-        // stderr is claude's diagnostics — surfaced separately and prominently.
-        stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
-        }
-
-        process.terminationHandler = { [weak self] proc in
-            stdoutPipe.fileHandleForReading.readabilityHandler = nil
-            stderrPipe.fileHandleForReading.readabilityHandler = nil
-            let status = proc.terminationStatus
-            DebugLog.agent("terminationHandler fired: pid=\(proc.processIdentifier) status=\(status)")
-            Task { @MainActor [weak self] in
-                self?.finish(status: status)
-            }
-        }
+        // Build the backend profile. The launcher resolves app-level concerns
+        // (scratch dir, sandbox, config, executable path); the backend owns
+        // OperationCommand assembly + Process spawn + parse/encode.
+        let cli = CLIProfile(
+            operation: operation,
+            wikiRoot: wikiRoot,
+            wikiID: wikiID,
+            wikictlDirectory: wikictlDirectory,
+            resolvedExecutable: resolvedPath,
+            command: agentConfig,
+            sandbox: sandbox,
+            onStdoutChunk: { [weak self] chunk in
+                Task { @MainActor [weak self] in self?.ingestRawStdout(chunk) }
+            },
+            onStderrChunk: { [weak self] chunk in
+                Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
+            })
+        let profile = BackendProfile(
+            scratchDirectory: scratch,
+            isReadOnly: false,
+            cli: cli)
 
         do {
-            DebugLog.agent("run: spawning kind=\(operation.kind.rawValue) wikiID=\(wikiID) exe=\(command.executable)")
-            DebugLog.agent("run: command \(command.debugSummary)")
-            try process.run()
-            self.process = process
-            currentProcessID = process.processIdentifier
-            DebugLog.agent("run: spawned pid=\(process.processIdentifier) kind=\(operation.kind.rawValue)")
+            DebugLog.agent("run: spawning kind=\(operation.kind.rawValue) wikiID=\(wikiID) exe=\(resolvedPath)")
+            let session = try await backend.start(
+                profile: profile,
+                systemPrompt: systemPrompt,
+                onExit: { [weak self] status in
+                    Task { @MainActor [weak self] in
+                        self?.finish(status: Int32(status))
+                    }
+                })
+            sessionHandle = session
             startCompletionWatchdog()
+
+            // Consume the per-turn stream in a background Task (fire-and-forget:
+            // run() returns after spawn commit; the stream is drained async).
+            // This replaces the old readabilityHandler → ingestStdout path.
+            let backend = self.backend
+            let generationGateReleasesPerTurn = Self.releasesGenerationSlotPerTurn(
+                isInteractiveSession: isInteractiveSession)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let stream = await backend.send(
+                    TurnInput(userText: ""), into: session)
+                for await event in stream {
+                    self.mergeOrAppend(event)
+                    if AgentEvent.endsGeneration(event) {
+                        self.setGenerating(false)
+                        self.flushTranscript()
+                        if generationGateReleasesPerTurn {
+                            self.releaseGenerationSlot()
+                        }
+                    }
+                }
+            }
         } catch {
             DebugLog.agent("run: spawn FAILED: \(error.localizedDescription)")
             preflightError = "Failed to launch claude: \(error.localizedDescription)"
@@ -725,32 +727,26 @@ final class AgentLauncher {
         }
     }
 
-    /// Poll the spawned process's liveness as a backstop for a missed
-    /// `terminationHandler`. The handler is the primary completion signal, but if
-    /// it ever fails to fire (or the run hangs), the UI would spin forever with no
-    /// way to tell whether the child is alive. This loop logs a heartbeat for
-    /// post-hoc analysis and — if the OS reports the process gone while the UI
-    /// still thinks it is running — reconciles by calling `finish()` itself.
+    /// Heartbeat logger + stale-idle detector. Replaces the old liveness-poller
+    /// (which polled `process?.isRunning` — impossible now that `Process` lives
+    /// behind the `AgentBackend` port). The backend's `onExit` callback is the
+    /// sole completion signal: it fires exactly once from `terminationHandler`
+    /// and drives `finish()`. This watchdog logs a heartbeat for post-hoc
+    /// analysis and warns if the session has been idle for a long time, but it
+    /// no longer reconciles a missed `terminationHandler` (the `onExit` gate is
+    /// one-shot and reliable — `Process.terminationHandler` always fires on
+    /// process exit, including crash/kill).
     private func startCompletionWatchdog() {
         watchdogTask?.cancel()
         watchdogTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(3))
                 guard let self, self.isRunning else { return }
-                let alive = self.process?.isRunning ?? false
                 let pid = self.currentProcessID ?? -1
                 let idle = self.lastActivityAt.map { Date().timeIntervalSince($0) } ?? -1
                 DebugLog.agent(
-                    "heartbeat pid=\(pid) procAlive=\(alive) isRunning=\(self.isRunning) "
+                    "heartbeat pid=\(pid) isRunning=\(self.isRunning) "
                     + "events=\(self.events.count) idleSec=\(String(format: "%.1f", idle))")
-                if let proc = self.process, !proc.isRunning {
-                    let status = proc.terminationStatus
-                    DebugLog.agent(
-                        "watchdog: process exited (status=\(status)) but UI still marked "
-                        + "running — terminationHandler was missed; reconciling via finish()")
-                    self.finish(status: status)
-                    return
-                }
             }
         }
     }
@@ -838,20 +834,9 @@ final class AgentLauncher {
             editSandbox: editSandbox,
             readOnlySandbox: readOnlySandbox)
         if sandbox != nil { createSandboxTmpDir(in: scratch) }
-        let command = OperationCommand.buildInteractiveQuery(
-            operation: operation,
-            wikiRoot: wikiRoot,
-            wikiID: wikiID,
-            systemPrompt: systemPrompt,
-            scratchDirectory: scratch.path,
-            wikictlDirectory: wikictlDirectory,
-            resolvedExecutable: resolvedPath,
-            command: agentConfig,
-            sandbox: sandbox
-        )
 
         // RESERVE per-run metadata. isRunning will be set at spawn commit below
-        // (after process.run() succeeds).
+        // (after backend.start succeeds).
         let now = Date()
         runningKind = operation.kind
         runStartedAt = now
@@ -877,53 +862,45 @@ final class AgentLauncher {
         // acquired). If we set it here, `sendInteractiveMessage`'s gate-guard would
         // see `isGenerating == true` and bail — claude would block on stdin forever.
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: command.executable)
-        process.arguments = command.arguments
-        process.environment = command.environment
-        process.currentDirectoryURL = scratch
-
-        let stdinPipe = Pipe()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardInput = stdinPipe
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor [weak self] in self?.ingestStdout(chunk) }
-        }
-        stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
-        }
-
-        process.terminationHandler = { [weak self] proc in
-            stdoutPipe.fileHandleForReading.readabilityHandler = nil
-            stderrPipe.fileHandleForReading.readabilityHandler = nil
-            let status = proc.terminationStatus
-            Task { @MainActor [weak self] in
-                self?.finish(status: status)
-            }
-        }
+        // Build the backend profile (the backend owns OperationCommand assembly).
+        let cli = CLIProfile(
+            operation: operation,
+            wikiRoot: wikiRoot,
+            wikiID: wikiID,
+            wikictlDirectory: wikictlDirectory,
+            resolvedExecutable: resolvedPath,
+            command: agentConfig,
+            sandbox: sandbox,
+            onStdoutChunk: { [weak self] chunk in
+                Task { @MainActor [weak self] in self?.ingestRawStdout(chunk) }
+            },
+            onStderrChunk: { [weak self] chunk in
+                Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
+            })
+        let profile = BackendProfile(
+            scratchDirectory: scratch,
+            isReadOnly: !allowWikiEdits,
+            cli: cli)
 
         do {
-            DebugLog.agent("startInteractiveQuery: command \(command.debugSummary)")
-            try process.run()
-            self.process = process
-            inputHandle = stdinPipe.fileHandleForWriting
-            currentProcessID = process.processIdentifier
+            DebugLog.agent("startInteractiveQuery: spawning exe=\(resolvedPath)")
+            let session = try await backend.start(
+                profile: profile,
+                systemPrompt: systemPrompt,
+                onExit: { [weak self] status in
+                    Task { @MainActor [weak self] in
+                        self?.finish(status: Int32(status))
+                    }
+                })
+            sessionHandle = session
             // SPAWN COMMIT: process is alive. isRunning = true (process alive across turns).
             isInteractiveSession = true
             isRunning = true
-            DebugLog.agent("startInteractiveQuery: spawned pid=\(process.processIdentifier)")
+            DebugLog.agent("startInteractiveQuery: spawned")
             // Start the first turn — this acquires the generation gate for turn 1.
             sendInteractiveMessage(firstMessage)
             // Mirror `run()`: arm the completion watchdog so a process that exits
-            // without a reconciling `terminationHandler` still clears `isRunning`.
+            // without a reconciling `onExit` still clears `isRunning`.
             // Interactive sessions stay alive between turns; the watchdog only acts
             // when the OS reports the process gone, so a live idle session is safe.
             startCompletionWatchdog()
@@ -961,21 +938,20 @@ final class AgentLauncher {
             message: trimmed
         ) else { return }
 
-        guard let line = Self.streamJSONLine(forUserText: trimmed),
-              let data = (line + "\n").data(using: .utf8)
-        else { return }
-
         // Signal that we're waiting for the gate. The UI shows a hint; canSend = false.
         isAwaitingGenerationSlot = true
 
-        // Spawn a cancellable task that acquires the generation gate, then writes to
-        // stdin. Stored so stopAgent()/finish() can cancel a pending wait.
+        // Spawn a cancellable task that acquires the generation gate, then sends
+        // the turn to the backend and consumes the per-turn stream. Stored so
+        // stopAgent()/finish() can cancel a pending wait.
+        let backend = self.backend
+        let session = self.sessionHandle
         interactiveSendTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let ok = await self.awaitGenerationSlot()
             self.isAwaitingGenerationSlot = false
             guard ok, !Task.isCancelled, self.isInteractiveSession,
-                  self.inputHandle != nil else {
+                  let session else {
                 // Acquired the gate then bailed (cancelled or session ended) — give
                 // it back so a queued peer isn't stranded.
                 if ok { self.releaseGenerationSlot() }
@@ -984,13 +960,21 @@ final class AgentLauncher {
             self.events.append(.userText(trimmed))
             self.setGenerating(true)    // fires onTurnBoundary(true) → edit lock (Edit only)
             self.lastActivityAt = Date()
-            do {
-                try self.inputHandle?.write(contentsOf: data)
-            } catch {
-                self.ingestStderr(
-                    "Failed to send message to the Agent: \(error.localizedDescription)\n")
-                self.setGenerating(false)
-                self.releaseGenerationSlot()    // turn failed — release immediately
+            // Send the turn and consume the per-turn stream. The backend writes
+            // the NDJSON line to stdin; the stream finishes at `.messageStop`
+            // (turn boundary) or `.result` (session end).
+            let stream = await backend.send(
+                TurnInput(userText: trimmed), into: session)
+            for await event in stream {
+                self.mergeOrAppend(event)
+                if AgentEvent.endsGeneration(event) {
+                    self.setGenerating(false)
+                    self.flushTranscript()
+                    if Self.releasesGenerationSlotPerTurn(
+                        isInteractiveSession: self.isInteractiveSession) {
+                        self.releaseGenerationSlot()
+                    }
+                }
             }
         }
     }
@@ -1055,16 +1039,21 @@ final class AgentLauncher {
     func stopAgent() {
         DebugLog.agent(
             "stopAgent() requested: isRunning=\(isRunning) "
-            + "process=\(process != nil) procAlive=\(process?.isRunning ?? false) "
+            + "session=\(sessionHandle != nil) "
             + "pid=\(currentProcessID ?? -1)")
         ingestTask?.cancel()
         // Cancel any pending send (gate wait) so it doesn't fire after the session ends.
         interactiveSendTask?.cancel()
         interactiveSendTask = nil
         isAwaitingGenerationSlot = false
-        try? inputHandle?.close()
-        inputHandle = nil
-        process?.terminate()
+        // Ask the backend to cancel the session (closes stdin + terminates the
+        // process). Fire-and-forget: the onExit callback drives finish() — but
+        // we also call finish(-1) synchronously below so the UI tears down
+        // immediately without waiting for the async cancel to land.
+        if let session = sessionHandle {
+            let backend = self.backend
+            Task { await backend.cancel(session) }
+        }
         if isRunning {
             finish(status: -1)  // -1 sentinel = user-cancelled / forced teardown
         }
@@ -1095,7 +1084,6 @@ final class AgentLauncher {
         isStreamingAssistantRow = false
         rawTranscript = ""
         stderr = ""
-        stdoutLineBuffer = ""
         exitStatus = nil
         preflightError = nil
         transcriptSink = nil
@@ -1127,50 +1115,15 @@ final class AgentLauncher {
 
     // MARK: - Stream ingestion (main actor)
 
-    /// Append a raw stdout chunk: mirror it to the transcript + `run.jsonl`, then
-    /// split into complete lines and feed each to the parser.
-    private func ingestStdout(_ chunk: String) {
+    /// Mirror a raw stdout chunk to `rawTranscript` + `run.jsonl`. Called from
+    /// the backend's `onStdoutChunk` callback (which fires on the pipe's
+    /// background queue, hopped to the main actor). The line-splitting, parsing,
+    /// and event routing now happen in the backend + the per-turn `for await`
+    /// consumer — this method only owns the raw-bytes mirror.
+    private func ingestRawStdout(_ chunk: String) {
         lastActivityAt = Date()
         rawTranscript.append(chunk)
         writeLog(chunk, to: logHandle)
-
-        stdoutLineBuffer.append(chunk)
-        // Split off only the COMPLETE lines; keep any trailing partial in the buffer
-        // until its newline arrives so the parser never sees a half line.
-        while let newlineIndex = stdoutLineBuffer.firstIndex(of: "\n") {
-            let line = String(stdoutLineBuffer[..<newlineIndex])
-            stdoutLineBuffer.removeSubrange(...newlineIndex)
-            if let event = AgentEventParser.parse(line: line) {
-                mergeOrAppend(event)
-                // `.result` fires at session end (one-shot runs, or when the
-                // interactive session terminates). `.messageStop` fires at the
-                // end of EACH turn in an interactive session — Claude emits it
-                // after every response when stdin/stdout are both stream-json.
-                // Clear isGenerating on either so the per-turn edit lock releases
-                // between turns instead of staying stuck until session end.
-                if AgentEvent.endsGeneration(event) {
-                    setGenerating(false)
-                    // Turn boundary: the streamed assistant row (if any) is final now
-                    // — flush the persisted tail (issue #119).
-                    flushTranscript()
-                    // Correctness assumption: `AgentEvent.endsGeneration` is true
-                    // for `.result` and `.messageStop`. The per-turn release below
-                    // relies on `.result` firing only at interactive SESSION end
-                    // (not per turn) and `.messageStop` firing per turn — the same
-                    // assumption the pre-existing per-turn edit-lock transition
-                    // (via `setGenerating`) depends on. If that ever changes,
-                    // both the lock and the gate would need re-evaluation.
-                    //
-                    // For interactive sessions: release the generation gate per turn
-                    // so other launchers (or ingest) can generate between turns.
-                    // For one-shot runs: the gate is held through finish() — do NOT
-                    // release here; finish() handles it.
-                    if Self.releasesGenerationSlotPerTurn(isInteractiveSession: isInteractiveSession) {
-                        releaseGenerationSlot()
-                    }
-                }
-            }
-        }
     }
 
     /// Route one parsed event into `events`: either grow the in-progress streamed
@@ -1215,9 +1168,11 @@ final class AgentLauncher {
         writeLog(chunk, to: stderrLogHandle)
     }
 
-    /// Drain any trailing partial line, record the exit status, and tear down.
-    /// Guarded on `isRunning` so it runs EXACTLY ONCE per run: `stopAgent()` and
-    /// the watchdog may both race the real `terminationHandler` to call it.
+    /// Record the exit status and tear down. Guarded on `isRunning` so it runs
+    /// EXACTLY ONCE per run: `stopAgent()` and the `onExit` callback may both
+    /// race to call it. The backend drains any trailing partial line before the
+    /// stream finishes, so no line-buffer drain is needed here (the old
+    /// `stdoutLineBuffer` drain moved to the backend's terminationHandler).
     private func finish(status: Int32) {
         guard isRunning else {
             DebugLog.agent("finish: ignored (already torn down) status=\(status)")
@@ -1226,12 +1181,6 @@ final class AgentLauncher {
         DebugLog.agent("finish: status=\(status) events=\(events.count)")
         watchdogTask?.cancel()
         watchdogTask = nil
-        if !stdoutLineBuffer.isEmpty {
-            if let event = AgentEventParser.parse(line: stdoutLineBuffer) {
-                mergeOrAppend(event)
-            }
-            stdoutLineBuffer = ""
-        }
         // Session over: flush any remaining tail (a killed/died session still
         // persists its last events) THEN detach the sink — no further writes.
         flushTranscript()
@@ -1242,11 +1191,10 @@ final class AgentLauncher {
         isRunning = false
         isInteractiveSession = false
         runningKind = nil
-        process = nil
-        inputHandle = nil
+        sessionHandle = nil
         currentProcessID = nil
         ingestingSourceIDs = []
-        // Cancel any in-flight send task (gate wait or stdin write). Clear the
+        // Cancel any in-flight send task (gate wait or stream consumer). Clear the
         // awaiting flag so the UI stops showing the "Waiting…" hint.
         interactiveSendTask?.cancel()
         interactiveSendTask = nil
@@ -1258,12 +1206,12 @@ final class AgentLauncher {
         setGenerating(false)
         lastActivityAt = Date()
         // Release the edit lock (`store.isAgentRunning`) from here — NOT from the
-        // `terminationHandler` — so EVERY completion path releases it.
+        // `onExit` callback — so EVERY completion path releases it.
         releaseEditLock()
         // Release the generation gate if still held. For one-shot runs this is the
         // primary release path (they hold the gate through finish). For interactive
         // sessions this covers the edge case where the process died MID-TURN (the
-        // normal per-turn release via ingestStdout.endsGeneration didn't fire). The
+        // normal per-turn release via the stream's endsGeneration didn't fire). The
         // idempotent `releaseGenerationSlot()` guard makes this safe in all paths.
         releaseGenerationSlot()
     }
@@ -1287,7 +1235,6 @@ final class AgentLauncher {
         isStreamingAssistantRow = false
         rawTranscript = ""
         stderr = ""
-        stdoutLineBuffer = ""
         exitStatus = nil
         isInteractiveSession = false
         // Clear the per-turn callback first so this reset transition doesn't fire
@@ -1299,31 +1246,12 @@ final class AgentLauncher {
         runStartedAt = nil
         lastActivityAt = nil
         currentProcessID = nil
-        inputHandle = nil
+        sessionHandle = nil
         onUnlockHandler = nil
         // A reset starts a new run: a stale sink must never receive a new
         // session's events (issue #119).
         transcriptSink = nil
         persistedEventCount = 0
-    }
-
-    private static func streamJSONLine(forUserText text: String) -> String? {
-        let payload: [String: Any] = [
-            "type": "user",
-            "message": [
-                "role": "user",
-                "content": [
-                    [
-                        "type": "text",
-                        "text": text,
-                    ],
-                ],
-            ],
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let line = String(data: data, encoding: .utf8)
-        else { return nil }
-        return line
     }
 
     // MARK: - Backend log files

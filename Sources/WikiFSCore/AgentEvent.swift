@@ -56,12 +56,16 @@ public enum AgentEvent: Equatable, Sendable, Codable {
     case result(isError: Bool, text: String)
 
     /// A `{"type":"message_stop"}` event — marks the end of one turn in an
-    /// interactive session. Claude emits this after every response when running
-    /// with `--input-format stream-json` + `--output-format stream-json`. It is
-    /// the turn-boundary signal: the agent finished its response and is waiting
-    /// for the next user input. Without it, the only completion signal is
-    /// `.result`, which fires at session end — so `isGenerating` would stay
-    /// `true` forever between turns and the per-turn edit lock would never release.
+    /// interactive session. This is the **backend-synthesized turn-boundary
+    /// marker**: every `AgentBackend` impl MUST yield `.messageStop` at each
+    /// turn end. The CLI backend gets it from Claude's `message_stop` wire line
+    /// (emitted after every response when running with `--input-format
+    /// stream-json` + `--output-format stream-json`); a future direct-API
+    /// backend synthesizes it on per-turn stream completion. It is the
+    /// turn-boundary signal: the agent finished its response and is waiting for
+    /// the next user input. Without it, the only completion signal is `.result`,
+    /// which fires at session end — so `isGenerating` would stay `true` forever
+    /// between turns and the per-turn edit lock would never release.
     /// Not rendered in the transcript (filtered by `isInternalTranscriptEvent`).
     case messageStop
 
@@ -103,13 +107,24 @@ public enum AgentEvent: Equatable, Sendable, Codable {
         }
     }
 
-    /// Pure predicate for the "this event ends a generation" rule, extracted from
-    /// `AgentLauncher.ingestStdout` so the per-turn transition logic is unit-testable
-    /// without a live process. Returns `true` for the two turn/session boundary
-    /// events: `.result` (the terminal event at session end) and `.messageStop`
-    /// (the per-turn boundary in an interactive session). Everything else — prose,
-    /// tool calls, tool results, subagent lifecycle, raw lines — leaves a generation
-    /// in progress. See `AgentLauncher.setGenerating`.
+    /// The turn-boundary predicate: `true` for the two events that mark the end
+    /// of a generation turn — `.result` (the terminal event at session end) and
+    /// `.messageStop` (the per-turn boundary in an interactive session).
+    ///
+    /// This is the **backend-synthesized turn-boundary contract**: every
+    /// `AgentBackend` impl MUST yield `.messageStop` at each turn end (the CLI
+    /// backend gets it from the wire; a future direct-API backend synthesizes it
+    /// on per-turn stream completion). The launcher keys its generation-gate
+    /// release, edit-lock release, and transcript flush off this predicate — so
+    /// a backend that fails to synthesize `.messageStop` strands the edit lock
+    /// and the spinner.
+    ///
+    /// Everything else — prose, tool calls, tool results, subagent lifecycle,
+    /// raw lines — leaves a generation in progress. See
+    /// `AgentLauncher.setGenerating`. Pure and unit-testable without a live
+    /// process. Codable-safe: `.messageStop` is `isPersistable == false`
+    /// (`ChatModels.swift`), so it is never written to `event_json` — keeping
+    /// the case name unchanged means zero migration for existing rows.
     public static func endsGeneration(_ event: AgentEvent) -> Bool {
         if case .result = event { return true }
         if case .messageStop = event { return true }
