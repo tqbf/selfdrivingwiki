@@ -2,6 +2,66 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-06 — #129 slice 2a: the resource-change event bus
+
+**Gate met: one per-wiki `WikiEventBus` collapses the three ad-hoc change
+mechanisms; AC.1–AC.9, 1766 tests green** (the one intermittent failure is an
+unrelated MLX/Metal embedding-latency perf threshold, not a regression).
+
+A single **per-wiki resource-change event bus** replaces `onPageDidChange` (the
+~17 hand-wired model fire-sites), the `WikiChangeBridge` direct reload+signal,
+and the `ChangeCoalescer` FP-only debounce. Now every public mutating method on
+`SQLiteWikiStore` emits a thin `(wiki, kind, id, change, origin, seq)` event at
+the method-atomic write seam, and the File Provider signaler + the model's
+external-reload path both **subscribe** to one mechanism. Coalescing moved to the
+subscriber edge. Design-of-record: [`plans/event-bus.md`](plans/event-bus.md).
+
+**What shipped:**
+
+- **Bus + event types (`WikiFSCore/WikiEventBus.swift`).** `WikiEventBus`
+  (`@unchecked Sendable`, internal `NSLock` over the registry + monotone `seq`)
+  + `ResourceChangeEvent` (`kind` optional — `nil` = coarse whole-wiki change
+  for the bridge's `.external` reload). `emit` is thread-safe and dispatches each
+  `@MainActor` handler via `Task { @MainActor in … }` (single trap-free path,
+  robust to a future off-main writer). `WikiEventBusTests` (AC.1).
+- **Store emission seam (`mutate()`).** Every public mutating method routes its
+  body through `mutate(event:_:)`: compute-while-locked, flush-after-unlock at
+  the helper's **own** depth-0 (keyed off `mutateDepth`, NOT `transactionDepth`,
+  which hits 0 inside `withTransaction`'s defer *before* the lock releases).
+  Guarantees: no handler under the lock (no deadlock), subscribers read
+  committed state, nested public-calls-public emits once, throw ⇒ no emit.
+  `eventBus` added to the `WikiStore` protocol + `SQLiteWikiStore` (lock-guarded,
+  `nil` in `wikictl` → emit is a no-op).
+- **Exhaustiveness guard.** `StoreEmissionExhaustivenessTests` parses every
+  `public func`, asserts each is in exactly one of {EMIT, READ, NO-EMIT} (no
+  gaps/overlap), and that every EMIT member routes through `mutate(`. Enforces
+  the load-bearing invariant: *every new public mutator must emit or be annotated
+  no-emit* (embeddings/search-index/migrations).
+- **Subscribers.** `FileProviderSpike` subscribes a debounced
+  `signalChange(forWikiID:)` to the active store's bus (reuses `ChangeCoalescer`
+  at the subscriber edge; unsubscribes the old token on swap). `WikiStoreModel`
+  subscribes `.external`→`reloadFromStore()` and ignores `.local` (keeps
+  self-managing — the lowest-risk cut; reload-on-self-write deferred to 2b).
+- **Bridge adapter.** `WikiChangeBridge.flush` emits one coarse `.external` event
+  into the active store's bus (active wiki) or signals the FP directly (non-active
+  wiki). `wikictl` is untouched (own `nil`-bus store, Darwin notification unchanged).
+- **`onPageDidChange` fully deleted.** Property + all 17 fire-sites removed; the
+  3 existing tests that asserted the signal migrated to the bus; lingering
+  doc-comments updated. `NoOnPageDidChangeTests` guards `Sources/` against its
+  return.
+
+**Tests:** `WikiEventBusTests`, `StoreEmissionTests` (one per EMIT method),
+`StoreEmissionExhaustivenessTests`, `StoreEmissionReentrancyTests`,
+`FPIfSubscriberDebounceTests` (AC.4/AC.7 burst → one signal, fake-clock seam),
+`WikiChangeBridgeBusTests` (AC.5 `.external`→reload Core seam),
+`NoOnPageDidChangeTests` (AC.6). Test infra note: no live File-Provider/Darwin
+harness, so AC.4/AC.5 are tested at the seam with fakes (as today).
+
+**Deferred (slice 2b):** the `Resource` protocol + generic per-kind
+`changeToken`; making the model a pure reload subscriber on ALL events (then
+`origin` is removed); consuming `seq` (daemon resync handshake); bookmark FP
+projection (#125). `changeToken()` is unchanged in this slice.
+
 ## 2026-07-06 — Graph-model Phase 4 close-out: website snapshot `original_path` sibling resolution
 
 **Phase gate met: website snapshot renders with inline images (AC.1–AC.11, 1721 tests green).**

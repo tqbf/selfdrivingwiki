@@ -99,13 +99,15 @@ struct WikiStoreModelMarkdownImportTests {
 
     @Test func signalsOnPageDidChange() async throws {
         let store = try tempStore()
+        store.eventBus = WikiEventBus(wikiID: "test")
         let model = WikiStoreModel(store: store)
-        var didSignal = false
-        model.onPageDidChange = { didSignal = true }
+        let recorder = SignalRecorder()
+        store.eventBus?.subscribe(nil) { recorder.append($0) }
         let dir = try tempMarkdownDir(files: ["note.md": "# Test"])
 
         _ = await model.importFromMarkdownFolder(directory: dir)
-        #expect(didSignal)
+        try await recorder.awaitNonEmpty()
+        #expect(recorder.count > 0)
     }
 
     @Test func handlesEmptyDirectory() async throws {

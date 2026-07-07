@@ -44,9 +44,10 @@ struct WikiStoreModelZoteroIngestTests {
 
     @Test func localAttachmentLandsInSourcesList() async throws {
         let store = try tempStore()
+        store.eventBus = WikiEventBus(wikiID: "test")
         let model = WikiStoreModel(store: store)
-        var didSignal = false
-        model.onPageDidChange = { didSignal = true }
+        let recorder = SignalRecorder()
+        store.eventBus?.subscribe(nil) { recorder.append($0) }
 
         let zoteroDir = try tempZoteroDir()
         var pdf = Data("%PDF-1.7".utf8)
@@ -59,7 +60,8 @@ struct WikiStoreModelZoteroIngestTests {
 
         #expect(model.sources.count == 1)
         #expect(model.sources.first?.filename == "report.pdf")
-        #expect(didSignal)
+        try await recorder.awaitNonEmpty()
+        #expect(recorder.count > 0)
 
         let id = model.sources.first!.id
         #expect(try store.sourceContent(id: id) == pdf)  // byte-identical

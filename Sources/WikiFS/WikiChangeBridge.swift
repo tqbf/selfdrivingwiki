@@ -117,13 +117,20 @@ final class WikiChangeBridge {
         ChangeCoalescer.Handle(cancel: {})
     }
 
-    /// One coalesced flush for `wikiID`: rebuild the sidebar if it's the on-screen
-    /// wiki, then refresh that wiki's mount. Both are main-actor work.
+    /// One coalesced flush for `wikiID`. For the active wiki, emit a coarse
+    /// `.external` event into the active store's bus — the model's `.external`
+    /// subscription rebuilds its projections (replacing the old direct
+    /// `reloadFromStore()`) and the File Provider subscriber signals, both on the
+    /// same bus. For a non-active wiki there is no in-memory store/bus, so signal
+    /// the FP directly (unchanged). The Darwin notification carries no per-
+    /// resource detail, so the reload stays full-model exactly as before.
     private func flush(wikiID: String) {
-        if manager.activeWikiID == wikiID {
-            manager.activeStore?.reloadFromStore()
+        if manager.activeWikiID == wikiID, let bus = manager.activeStore?.eventBus {
+            bus.emit(ResourceChangeEvent(
+                wikiID: wikiID, kind: nil, id: "", change: .updated, origin: .external))
+        } else {
+            Task { await fileProvider.signalChange(forWikiID: wikiID) }
         }
-        Task { await fileProvider.signalChange(forWikiID: wikiID) }
     }
 
     deinit {
