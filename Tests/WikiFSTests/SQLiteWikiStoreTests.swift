@@ -66,7 +66,7 @@ struct SQLiteWikiStoreTests {
         // user_version guard: a fresh DB runs all migration steps → version 16.
         // Reopening must not re-run DDL (no-op bootstrap).
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "23")
+        #expect(userVersion == "24")
         let reopened = try SQLiteWikiStore(databaseURL: url)
         // If bootstrap weren't guarded, the CREATE TABLE would throw here.
         #expect((try? reopened.listPages(sortBy: .lastUpdated)) != nil)
@@ -323,7 +323,7 @@ struct SQLiteWikiStoreTests {
         defer { sqlite3_close(db) }
 
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "23")
+        #expect(userVersion == "24")
 
         let tables = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))
@@ -367,7 +367,7 @@ struct SQLiteWikiStoreTests {
 
     @Test func freshDBReachesUserVersion18() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
-        #expect(store.pragmaValue("user_version") == "23")
+        #expect(store.pragmaValue("user_version") == "24")
     }
 
     @Test func v11SourceLinksHasDeleteCascade() throws {
@@ -623,7 +623,7 @@ struct SQLiteWikiStoreTests {
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
         defer { sqlite3_close(db) }
 
-        #expect(scalarText(db, "PRAGMA user_version;") == "23")
+        #expect(scalarText(db, "PRAGMA user_version;") == "24")
         let tables = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"))
         for expected in ["blobs", "agents", "activities", "source_versions", "refs"] {
@@ -684,7 +684,7 @@ struct SQLiteWikiStoreTests {
 
         // Reopen → migrates 19→20.
         let store = try SQLiteWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "23")
+        #expect(store.pragmaValue("user_version") == "24")
 
         var db: OpaquePointer?
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
