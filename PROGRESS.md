@@ -2,245 +2,54 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-07-08 — Fix: hide continuation preamble from transcript; dedup assistant turns
+## 2026-07-08 — Chat UI + persistent chat (issue #119)
 
-**Two bugs in the D3 continue path, found via live UI testing.**
+**Shipped.** Ask/Edit conversations persist to the wiki's SQLite store, render
+through a unified `ConversationView` with live streaming, can be continued
+(seeded-fallback), renamed, and browsed from the sidebar. The conversation
+layer is decoupled from the Claude-CLI wire protocol behind an `AgentBackend`
+port. 1878 tests green. Design of record: `plans/chat-and-persistence.md`.
 
-- **Preamble shown as user bubble:** the `continuationPreamble` (condensed
-  transcript + "continuing an earlier conversation" header + new message) was
-  sent as the first user turn AND displayed verbatim as a user bubble. The user
-  saw the internal preamble instead of their actual message. Fix: separated
-  display text from send text — `sendInteractiveMessage` gains `displayText`
-  (shown in the transcript), `startInteractiveQuery` gains `firstMessageDisplay`.
-  `continueConversation` passes the user's actual message as `displayText` and
-  the full preamble as the send text.
-- **Duplicated assistant response in preamble:** the builder picked up BOTH
-  `.assistantText` and `.result` for the same turn (both persistable, same
-  text). Fix: deduplicate — skip `.result` when it immediately follows an
-  `.assistantText` with identical text. A standalone `.result` is still kept.
-- 1878 tests green (+1 new dedup test).
+**What shipped:**
 
-## 2026-07-08 — Fix: bump chats table migration to v25 (above main's v24)
+- **Phase 0 — `AgentBackend` port.** `protocol AgentBackend: Sendable`
+  (`start`/`send`/`resume`/`cancel`) + `ClaudeCLIBackend` (actor wrapping
+  spawn/parse/encode behind a per-turn `AsyncStream<AgentEvent>`). The
+  launcher never touches a `Process` or wire format. `resume` stubs nil.
+  Turn-boundary contract: every backend MUST yield `.messageStop` at turn end
+  (the launcher keys gate/lock/flush off `endsGeneration`). `onExit` fires
+  once via a one-shot `OnExitGate`; a per-session `currentRunToken` guard
+  prevents a stale `onExit` (D3's takeover) from tearing down the new session.
+- **Phase A.1/A.2 — `WikiRenderContext`.** Pure `Sendable` value type
+  capturing the reader's full render precompute (existence/display/loose sets,
+  embedMap, `@vN` chain, siblingMaps) + four closures. Memoized on
+  `WikiStoreModel`, invalidated by `WikiEventBus`. Threaded into
+  `AgentTranscriptWebView` (current-per-render provider) with
+  `BlobSchemeHandler` + two-tier streaming render (links-only while streaming,
+  full embeds on finalize). Reader refactored onto it (behavior-preserving).
+- **Phase D2 — unified `ConversationView`.** One surface for live (streaming)
+  + persisted (browsed) via the source-of-truth rule
+  (`activeChatID == chatID ? launcher.events : store.chatMessages`). Flip
+  gated on final flush commit (no truncation). Draft-state morph (`.ask`/`.edit`
+  → `.chat(id)` on first send via `retargetTab`). `startNewConversation`
+  retarget-back. `ChatHistoryDetailView` deleted + absorbed.
+- **Phase D3 — continue a persisted conversation (seeded-fallback).** Takeover
+  rules (idle take / between-turns stopAgent+flush-then-take / mid-gen refuse),
+  byte-capped `continuationPreamble` (user/assistant `.text` only, `.result`
+  deduplicated), same-row append (seq continues, title preserved). Display text
+  separated from send text (user sees their message, not the preamble).
+- **Phase D4 — sidebar affordances.** `+` New Conversation menu, Rename
+  Conversation context menu, live indicator (`circle.fill` + "responding…"),
+  Ask/Edit subtitles.
+- **Schema v25.** `chats` + `chat_messages` tables (one row per persistable
+  `AgentEvent`, `event_json` verbatim). Fresh-path and ladder share
+  `createChatTables()` (`IF NOT EXISTS`), enforced by
+  `FreshSchemaParityTests`.
 
-**The sidebar's Recent Conversations section was invisible — `store.chats` was
-empty because the `chats` table was never created.** Root cause: main branched
-ahead to schema v24 (graph-model Phase 2 close-out — drops the dead
-`source_markdown_versions.content` column). This branch had chats creation at
-v23. A DB opened by main (v24) would skip the v23 guard (`if version < 23` →
-false) and never call `createChatTables()`. The chats table didn't exist,
-`store.chats` was empty, and `AgentToolsView`'s `if !store.chats.isEmpty`
-guard hid the entire section.
-
-- **Fix:** moved chats-table creation from the v23 step to a new **v25** step
-  (above main's v24). `if version < 25` is true on a v24 DB, so the tables get
-  created. `CREATE TABLE IF NOT EXISTS` makes it a no-op on DBs that already
-  have them. The v23 step now matches main exactly (body-sweep only).
-- v24 (content-column drop) is intentionally absent — it will be merged from
-  main separately; the dead column is harmless (writes set it to `''`).
-- Updated 21 `user_version` assertions across 11 test files from 23 to 25.
-  1877 tests green.
-
-## 2026-07-08 — Fix: build from the correct worktree
-
-**The app showed no UI changes because it was built from `main` (schema v24,
-no chat code), not the `persisted-chat-history` worktree.** The main repo
-checkout (`/Users/wsargent/work/selfdrivingwiki`, branch `main`) was stale
-relative to the worktree. Rebuilt via `make run` from the worktree.
-
-## 2026-07-08 — Phase D3: continue a persisted conversation (seeded-fallback)
-
-**Continue a saved conversation by sending into it.** D3 only, seeded-fallback
-(no B/resume — the CLI backend stubs `resume` nil). 1877 tests green (+14 new
-D3 tests). Review found + fixed a stale-`onExit` race.
-
-- `Sources/WikiFS/AgentOperationRunner.swift`: `continueConversation(...)` —
-  takeover rules (`continueTakeoverDecision`: idle → take over; between-turns →
-  `stopAgent` [final flush persists the other conversation's tail] then take
-  over; mid-generation → refuse); `continuationPreamble(from:newMessage:maxTurns:
-  maxBytes:)` (pure, byte-capped, user/assistant `.text` only, new message in
-  full, "continuing an earlier conversation" header); starts a fresh session via
-  `startInteractiveQuery(chatID:, firstMessage: preamble)` so `activeChatID` =
-  the SAME chat row (seq continues, title preserved, `updatedAt` bumps to top).
-- `Sources/WikiFS/ConversationView.swift`: composer enabled on a persisted chat
-  when the kind's launcher is idle (slot-style hint when mid-generation);
-  `sendMessage` routes a persisted chat's send to `continueConversation`.
-- `Tests/WikiFSTests/ConversationContinueD3Tests.swift` (new): 14 tests —
-  builder (byte cap, user/assistant only, preamble, new message, maxTurns),
-  takeover matrix, same-row append (seq continues, title preserved).
-- **Review fix (load-bearing):** D3's takeover (`stopAgent` →
-  `startInteractiveQuery`) lets the old session's `onExit` fire AFTER the new
-  session starts; `onExit` was just `finish()` guarded on `isRunning`, so the
-  stale `onExit` would **tear down the new "continue" session**. Added a
-  per-session `currentRunToken: UUID?` — `onExit` captures the token at start
-  and only calls `finish` if it's still current (`run()` + `startInteractiveQuery`
-  both guarded). Tests can't catch this (no real processes); the full suite
-  confirms the guard is behavior-preserving for normal completion.
-
-**Pillars 1, 2, 3 (seeded-fallback) + sidebar done.** Remaining: pillar 4 (D5
-per-mode profiles); B (session identity / `backend.resume`) so "continue" can
-resume instead of seed.
-
-## 2026-07-08 — Phase D4: sidebar affordances
-
-**Agent sidebar (`AgentToolsView`) affordances around the unified
-`ConversationView`.** Behavior-preserving (additive); 1863 tests green (+8 new
-D4 tests).
-
-- `Sources/WikiFS/AgentToolsView.swift`: `+` New Conversation menu on the Recent
-  Conversations header (Ask default, Edit) → `store.openTab(.ask/.edit)` (draft
-  state). Row **live indicator** — a tinted `circle.fill` + "responding…"
-  caption when the matching launcher (`askLauncher` for `.ask`, `editLauncher`
-  for `.edit`) has `activeChatID == chat.id` AND `isGenerating` (pure
-  `isLiveRow(...)` predicate). **Rename Conversation…** context-menu item →
-  `.alert` + `TextField` → `store.renameChat(id:to:)` (first UI caller of the
-  tested-but-uncalled rename). Ask/Edit mode-row subtitles → "New read-only
-  conversation" / "New editing conversation".
-- `Sources/WikiFS/SidebarView.swift` + `ContentView.swift`: thread
-  `askLauncher`/`editLauncher` into `AgentToolsView`.
-- `Tests/WikiFSTests/AgentToolsD4Tests.swift` (new): 4 live-indicator predicate
-  tests + 3 rename round-trip + 1 MRU-order. Review found no issues.
-
-**Pillars 1 + 2 + sidebar done.** Remaining: pillar 3 (continue — B session
-identity + D3 `continueConversation`), pillar 4 (D5 per-mode profiles).
-
-## 2026-07-08 — Phase D2: one conversation surface (pillar 2)
-
-**Unify live Ask/Edit conversation + persisted chat history into a single
-`ConversationView`.** Behavior-preserving for both paths; 1855 tests green
-(+16 new D2 tests). D3 (continue a persisted chat) explicitly deferred —
-persisted non-live chats render read-only with composer disabled.
-
-**What changed:**
-- `Sources/WikiFS/ConversationView.swift` (new): the unified surface.
-  Source-of-truth rule: if `launcher.activeChatID == chatID`, render
-  `launcher.events` (streaming); else render
-  `store.chatMessages(chatID:).map(\.event)` (persisted). Absorbs the
-  `ChatHistoryDetailView` header (title/kind/count/date) as the idle-state
-  header. Moves all `QueryConversationView` chrome (composer, editing banner,
-  internals toggle, stop, new conversation). Composer disabled for non-live
-  chats with a "saved conversation" caption.
-- `Sources/WikiFS/AgentLauncher.swift`: `activeChatID: String?` property,
-  set in `startInteractiveQuery` (via new `chatID:` param), cleared in
-  `startNewConversation`, `finish` (AFTER flush), and `resetRunArtifacts`.
-- `Sources/WikiFS/AgentOperationRunner.swift`: passes `chatID` to the launcher;
-  calls `store.retargetActiveTabToChat(chatID:)` on first send (draft morph).
-- `Sources/WikiFSCore/WikiStoreModel.swift`: `retargetTab(id:to:)` +
-  `retargetActiveTabToChat(chatID:)` — retarget a tab IN PLACE (UUID preserved).
-- `Sources/WikiFS/WikiDetailView.swift`: `.chat(id)` → `ConversationView`;
-  `.ask`/`.edit` → `ConversationView(chatID: nil)` (draft state).
-- `Sources/WikiFS/ChatHistoryDetailView.swift`: **deleted** (absorbed into
-  `ConversationView`).
-- `Tests/WikiFSTests/ConversationViewD2Tests.swift` (new): 16 tests —
-  source-of-truth, retargetTab UUID preservation + order, draft morph,
-  startNewConversation retarget-back, persisted chat rendering.
-
-**Flip-timing (the load-bearing correctness point):**
-`activeChatID` is cleared in `finish()` AFTER `flushTranscript()` commits the
-final tail. `flushTranscript()` is synchronous — `transcriptSink?(tail)` runs
-`store.appendChatEvents` on the main actor before returning. By the time
-`activeChatID = nil` executes, `chatMessages(chatID:)` and in-memory `events[]`
-agree, so the live→persisted source flip cannot truncate. (Clearing it before
-the flush would re-source the view from the store with the last turn still
-missing → transient truncated flash.)
-
-**`QueryConversationView`** kept as a type hosting the static predicates
-(`showsNewConversationButton`, `showsEditingBanner`) — still tested, still
-referenced by `ConversationView`. No longer instantiated for routing.
-
-## 2026-07-07 — agent backend port (Phase 0) + shared render context (Phase A.1)
-
-**Two behavior-preserving slices, 1829 tests green.** Both unblock
-`plans/chat-and-persistence.md` without committing to an agent backend (ACP vs
-Polytoken vs Claude-CLI deferred — see `plans/chat-and-persistence.md`).
-
-**Phase 0 — `AgentBackend` port.** Extracted the Claude-CLI stream-json seam
-into a swappable port so UI/persistence/conversation depend only on `AgentEvent`
-+ the port, never a wire format.
-- `Sources/WikiFS/AgentBackend.swift` (new): `protocol AgentBackend: Sendable`
-  (`start`/`send`/`resume`/`cancel`), `BackendProfile`, `CLIProfile`,
-  `SessionHandle` (opaque `Sendable` token), `TurnInput`.
-- `Sources/WikiFS/ClaudeCLIBackend.swift` (new): `actor` wrapping today's
-  spawn/parse/encode verbatim; per-turn `AsyncStream` via `makeStream(of:)`;
-  `readabilityHandler` decodes off-main and yields to a `Sendable`
-  `ContinuationBox`; finish-once (idempotent at `endsGeneration` +
-  `terminationHandler`); `onTermination` distinguishes `.cancelled` (kill via
-  PID) from `.finished` (no-op); one-shot `OnExitGate` for completion. No
-  `@unchecked Sendable`.
-- `Sources/WikiFS/AgentLauncher.swift`: holds `AgentBackend` + `SessionHandle`;
-  consumes the per-turn stream (`mergeOrAppend` → `endsGeneration` →
-  gate/lock/flush, unchanged); `stopAgent` preserves the no-real-process test
-  seam; `finish` is `guard isRunning`-idempotent; watchdog now heartbeat-only
-  (`onExit` is the sole completion signal).
-- `Sources/WikiFSCore/AgentEvent.swift`: doc-only — `endsGeneration`
-  redocumented as the turn-boundary predicate; `.messageStop` is now a
-  backend-synthesized turn-boundary contract (case name + logic unchanged →
-  zero migration; `isPersistable == false`).
-- **D3 correction recorded:** `claude --resume` pins the model to the one saved
-  with the transcript (does NOT accept a switch) — model-switching is a backend
-  capability, not an assumption. `resume` stubs nil in Phase 0.
-- **Review fix:** reordered `ClaudeCLIBackend.send` to install the turn's
-  continuation BEFORE writing stdin (closed a latent race where a
-  fast-responding process could drop events into a nil box).
-- **Known deltas (acceptable):** `currentProcessID` always nil (backend owns the
-  `Process`); `BackendProfile` is somewhat CLI-shaped (generalize when a second
-  backend arrives); watchdog lost its belt-and-suspenders `Process` poll
-  (`terminationHandler` always fires).
-
-**Phase A.1 — `WikiRenderContext`.** Extracted the reader's render precompute
-into a pure `Sendable` value so chat transcripts (A.2) can render through the
-same link/embed/pin/display-name seam.
-- `Sources/WikiFSCore/WikiRenderContext.swift` (new): captures the full
-  precompute (pageTitles, pageIDToName, sourceNames, sourceIDToName,
-  uniqueLooseKeys, embedMap incl. external `EmbedTarget`s, sourceDerivedChain
-  `@vN`, siblingMaps, blobScheme); `@MainActor build(from:)`; the four pure
-  closures (`isResolved`/`embedInfo`/`displayName`/`pinnedExtractionID`) derived
-  from captured data (no store access at render time).
-- `Sources/WikiFSCore/WikiStoreModel.swift`: memoized `renderContext()`,
-  invalidated by `WikiEventBus` generation bumps in `reloadSummaries`/
-  `reloadSources` (per-delta renders never touch SQLite).
-- `Sources/WikiFS/WikiReaderView.swift`: `startLoad` refactored onto
-  `WikiRenderContext.build` (behavior-preserving); the selection-specific
-  sibling-map pick stays in the reader.
-- `Sources/WikiFSCore/WikiLinkMarkdown.swift`: `SourceEmbedInfo` now
-  `Sendable`+`Equatable` (additive; fields already were).
-- `Tests/WikiFSTests/WikiRenderContextTests.swift` (new): 12 tests (all four
-  closures + memo reuse + invalidation on page/source mutation + blob scheme).
-- **Review fix:** the nil-store `isResolved` fallback was `true` (all resolved)
-  claiming to match the old behavior — it didn't (old = empty sets → all
-  ghosts). Flipped to `false` and fixed the comment; the transcript's
-  nil-context=constant-true is an A.2 concern at `AgentTranscriptWebView`.
-
-**Build/tests:** `swift build` clean; `swift test` — 1829 tests in 150 suites
-pass (incl. the 513 KB reader render-perf benchmark). No schema change, no UI
-change, no resume. Both slices are backend-agnostic foundations for
-`plans/chat-and-persistence.md` Phases A.2 / B / C / D.
-
-**Phase A.2 — transcript render context.** Threaded the shared
-`WikiRenderContext` into `AgentTranscriptWebView` so chat transcripts (live AND
-persisted) render source references exactly like the reader.
-- `Sources/WikiFS/AgentTranscriptWebView.swift`: optional `renderContext: (() ->
-  WikiRenderContext?)?` provider (current-per-render, resolved once per
-  `apply`/`didFinish` pass) + `blobStore`; `BlobSchemeHandler` registered on the
-  transcript WKWebView (refreshed on wiki switch); `renderedMarkdown(_:context:isFinal:)`
-  threads the context's closures into `ReaderMarkdown.prepared`.
-- **Two-tier streaming render:** the trailing row patched by `apply`'s same-count
-  branch (`replaceLastRow(isStreaming: true)`) renders **links only** (nil
-  `embedInfo`) so a half-typed `![[source:…` can't churn a broken embed per token;
-  when a new event lands (turn boundary) the previous row is re-finalized
-  (`isStreaming: false` → full embeds) before new rows append.
-- `ChatHistoryDetailView` + `QueryConversationView` (via `QueryTranscriptView`)
-  pass `{ [weak store] in store?.renderContext() }` + `blobStore`.
-- `AgentActivityView`'s internals feed unchanged (nil context → constant-true).
-- `Tests/WikiFSTests/AgentTranscriptLinkifyTests.swift`: 10 new tests (healed
-  display name, `pin=` quote link, `wiki-blob://` embed, ghost, two-tier
-  streaming→finalized, nil-context preservation). Review found no issues.
-
-**Pillar 1 complete.** `swift build` clean; `swift test` — 1839 tests in 151
-suites pass. No schema change; no agent-backend/reader/`WikiRenderContext` change.
-
-**Next:** Phase B (opaque `session_id` + `backend_kind` on `chats`;
-`backend.resume` contract) or Phase C/D2 (`ConversationView` — unify live +
-persisted history into one surface).
+**Deferred:** Phase B (`backend.resume` / `--resume` — the CLI backend stubs
+nil; seeded-fallback is the working path); D5 (per-mode `BackendProfile`
+profiles); v24 merge (`source_markdown_versions.content` DROP COLUMN);
+`[[chat:…]]` wikilinks; multiple concurrent live sessions per kind.
 
 ## 2026-07-06 — #129 slice 2a: the resource-change event bus
 
