@@ -43,9 +43,34 @@ struct AgentTranscriptWebView: NSViewRepresentable {
     /// `selectPage` / `selectSource`. `nil` → links still render but don't
     /// navigate (a strict improvement over literal `[[brackets]]`).
     var onWikiLink: ((URL, Bool) -> Void)? = nil
+    /// Provider of the **current** `WikiRenderContext` (Phase A.2). A closure,
+    /// not a value: rows render incrementally over the view's life and the
+    /// resolution sets must stay current (a rename between two renders must
+    /// heal). Built where the store lives and bound to `store.renderContext()`
+    /// (the model's memo, `WikiEventBus`-invalidated). `nil` (or a nil return)
+    /// keeps the historical constant-`true` resolution — used by
+    /// `AgentActivityView`'s internals feed, where ghost styling is noise.
+    ///
+    /// The coordinator resolves this to a `WikiRenderContext?` **value** once
+    /// per render pass on the main actor (the provider reads the `@MainActor`
+    /// store), then hands the `Sendable` value to the pure static render
+    /// functions — the same compute-once/capture-pure-data discipline the
+    /// reader follows.
+    var renderContext: (() -> WikiRenderContext?)? = nil
+    /// The store backing `wiki-blob://source/<id>` blob serving for the
+    /// transcript's images/media. Registered as a `BlobSchemeHandler` on the
+    /// WKWebView (mirroring `WikiReaderView`). Weakly held by the handler.
+    var blobStore: WikiStoreModel? = nil
 
     func makeNSView(context: Context) -> WKWebView {
-        let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        // Register the blob scheme handler BEFORE the first load (same wiring
+        // as `WikiReaderView`, reader lines ~326–348) so `wiki-blob://source/<id>`
+        // images and media resolve inside chat transcripts. The handler weakly
+        // references the store; refreshed each update like `onWikiLink`.
+        let config = WKWebViewConfiguration()
+        let blobHandler = BlobSchemeHandler(store: blobStore)
+        config.setURLSchemeHandler(blobHandler, forURLScheme: BlobSchemeHandler.scheme)
+        let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.underPageBackgroundColor = .clear
@@ -53,6 +78,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
         context.coordinator.webView = webView
         context.coordinator.style = style
         context.coordinator.onWikiLink = onWikiLink
+        context.coordinator.renderContext = renderContext
         context.coordinator.reload(events: events, showsInternals: showsInternals)
         return webView
     }
@@ -60,6 +86,11 @@ struct AgentTranscriptWebView: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.style = style
         context.coordinator.onWikiLink = onWikiLink
+        context.coordinator.renderContext = renderContext
+        // Keep the blob handler's store fresh (a wiki switch swaps the store).
+        if let handler = webView.configuration.urlSchemeHandler(forURLScheme: BlobSchemeHandler.scheme) as? BlobSchemeHandler {
+            handler.store = blobStore
+        }
         context.coordinator.apply(events: events, showsInternals: showsInternals)
     }
 
@@ -71,6 +102,11 @@ struct AgentTranscriptWebView: NSViewRepresentable {
         /// Routes a clicked `wiki://` link out to the view's `onWikiLink`
         /// closure (built where the store lives). Refreshed each update.
         var onWikiLink: ((URL, Bool) -> Void)?
+        /// Provider of the current `WikiRenderContext` (Phase A.2). Refreshed
+        /// each update. Resolved to a value once per render pass (see
+        /// `currentContext`); the value is `Sendable` so it can flow into the
+        /// pure static render functions.
+        var renderContext: (() -> WikiRenderContext?)?
         private var renderedCount = 0
         private var renderedShowsInternals: Bool?
         private var isLoaded = false
@@ -79,11 +115,20 @@ struct AgentTranscriptWebView: NSViewRepresentable {
         /// `AgentLauncher` grew the last one in place" (a streamed `.assistantText`
         /// delta merge, issue #121) and patch that row instead of no-op'ing.
         private var renderedLastEvent: AgentEvent?
+        /// The full event list as last seen, used to compute `isFinal` (a row is
+        /// non-final only when it is the LAST row of a still-live event stream —
+        /// i.e. it may still grow via `replaceLastRow`). Captured in `apply`.
+        private var renderedEvents: [AgentEvent] = []
+
+        /// Resolve the provider once per render pass on the main actor. Returns
+        /// the current `WikiRenderContext` (or nil → constant-true behavior).
+        private func currentContext() -> WikiRenderContext? { renderContext?() }
 
         func reload(events: [AgentEvent], showsInternals: Bool) {
             renderedCount = 0
             renderedShowsInternals = showsInternals
             renderedLastEvent = nil
+            renderedEvents = events
             isLoaded = false
             pendingEvents = events
             webView?.loadHTMLString(Self.shellHTML, baseURL: URL(string: "about:blank"))
@@ -108,25 +153,42 @@ struct AgentTranscriptWebView: NSViewRepresentable {
                 // `.assistantText`, issue #121) rather than appending a new one —
                 // patch that row's HTML instead of treating this as a no-op.
                 if let last = events.last, last != renderedLastEvent {
-                    replaceLastRow(last)
+                    // The last row of a live stream is still growing → render it
+                    // in the streaming (links-only) tier so a half-typed
+                    // `![[source:…` never instantiates a broken iframe/player.
+                    replaceLastRow(last, isStreaming: true, allEvents: events)
                     renderedLastEvent = last
                 }
+                renderedEvents = events
                 return
             }
-            appendRows(Array(events[renderedCount...]))
+            // New rows appended: any previously-streaming last row is now FINAL
+            // (a new event landed = turn boundary). Re-render it once with the
+            // full context (embeds included), then append the new rows.
+            let context = currentContext()
+            if let prevLast = renderedEvents.last, events.count > renderedEvents.count,
+               renderedEvents.count > 0 {
+                replaceLastRow(prevLast, isStreaming: false, allEvents: events, context: context)
+            }
+            appendRows(Array(events[renderedCount...]), context: context)
             renderedCount = events.count
             renderedLastEvent = events.last
+            renderedEvents = events
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
             let toRender = pendingEvents
             pendingEvents = []
+            // Initial load: every row is final (persisted chats load all-at-once;
+            // a freshly-opened live view's events are all complete at this point).
+            let context = currentContext()
             if !toRender.isEmpty {
-                appendRows(toRender)
+                appendRows(toRender, context: context)
             }
             renderedCount = toRender.count
             renderedLastEvent = toRender.last
+            renderedEvents = toRender
         }
 
         /// Open external links in the default browser instead of navigating
@@ -157,8 +219,12 @@ struct AgentTranscriptWebView: NSViewRepresentable {
             decisionHandler(.allow)
         }
 
-        private func appendRows(_ events: [AgentEvent]) {
-            let html = events.map { Self.rowHTML(for: $0, style: style) }.joined()
+        private func appendRows(_ events: [AgentEvent], context: WikiRenderContext?) {
+            // Appended rows are always final (they're complete events). Only the
+            // actively-streaming trailing row — patched via the same-count
+            // `replaceLastRow(..., isStreaming: true)` path — uses the
+            // links-only tier.
+            let html = events.map { Self.rowHTML(for: $0, style: style, context: context, isFinal: true) }.joined()
             guard !html.isEmpty,
                   let data = try? JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed]),
                   let jsonString = String(data: data, encoding: .utf8)
@@ -169,8 +235,14 @@ struct AgentTranscriptWebView: NSViewRepresentable {
         /// Re-render the already-rendered last row in place (a streaming delta grew
         /// its content without adding a new `AgentEvent`) instead of appending a
         /// duplicate — the DOM equivalent of `apply`'s same-count branch.
-        private func replaceLastRow(_ event: AgentEvent) {
-            let html = Self.rowHTML(for: event, style: style)
+        ///
+        /// `isStreaming`: when true, the row is the actively-growing trailing row
+        /// of a live stream → render the **links-only** tier (nil `embedInfo`) so
+        /// a half-typed `![[source:…` never instantiates a broken iframe/player
+        /// that churns per token. When false, the row is being *re-finalized*
+        /// (a new event landed = turn boundary) → render the full context.
+        private func replaceLastRow(_ event: AgentEvent, isStreaming: Bool, allEvents: [AgentEvent], context: WikiRenderContext? = nil) {
+            let html = Self.rowHTML(for: event, style: style, context: context, isFinal: !isStreaming)
             guard let data = try? JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed]),
                   let jsonString = String(data: data, encoding: .utf8)
             else { return }
@@ -179,23 +251,46 @@ struct AgentTranscriptWebView: NSViewRepresentable {
 
         // MARK: - Row rendering
 
-        private static func rowHTML(for event: AgentEvent, style: VisualStyle) -> String {
+        private static func rowHTML(for event: AgentEvent, style: VisualStyle, context: WikiRenderContext?, isFinal: Bool) -> String {
             switch style {
-            case .activityFeed: feedRowHTML(for: event)
-            case .chat: chatRowHTML(for: event)
+            case .activityFeed: feedRowHTML(for: event, context: context, isFinal: isFinal)
+            case .chat: chatRowHTML(for: event, context: context, isFinal: isFinal)
             }
         }
 
         /// Render assistant/result markdown with the shared footnote + wiki-link
-        /// pre-pass (constant `true` resolution: the agent references pages it
-        /// just wrote, and the transcript has no store to check existence). User
-        /// text is intentionally NOT run through this — a user typing `[[Foo]]`
-        /// is not a link. `internal` so the linkify behavior is unit-testable.
-        static func renderedMarkdown(_ text: String) -> String {
-            MarkdownHTMLRenderer.render(ReaderMarkdown.prepared(text) { _, _ in true })
+        /// pre-pass. With a `WikiRenderContext` (Phase A.2), it threads the
+        /// context's pure `isResolved`/`embedInfo`/`displayName`/`pinnedExtractionID`
+        /// closures into `ReaderMarkdown.prepared` — so chat transcripts render
+        /// source references exactly as the reader does: healed display names,
+        /// `&pin=` URLs, ghost styling for broken links, and inline `![[source:…]]`
+        /// embeds. **Two-tier:** while a row is still streaming (`isFinal == false`),
+        /// `embedInfo` is forced to nil so a half-typed `![[source:…` never
+        /// instantiates a broken iframe/player that churns per token; the row
+        /// re-renders with embeds once it finalizes.
+        ///
+        /// nil context keeps the historical constant-`true` resolution (used by
+        /// `AgentActivityView`'s internals feed, where ghost styling is noise).
+        /// User text is intentionally NOT run through this — a user typing
+        /// `[[Foo]]` is not a link. `internal` so the linkify behavior is
+        /// unit-testable.
+        static func renderedMarkdown(_ text: String, context: WikiRenderContext? = nil, isFinal: Bool = true) -> String {
+            if let context {
+                // Two-tier: a non-final (still-streaming) row renders links only —
+                // pass nil embedInfo so a half-typed `![[source:…` can't render a
+                // broken iframe/player. The row re-renders with embeds on finalize.
+                let embedInfo = isFinal ? context.embedInfo : nil
+                let prepared = ReaderMarkdown.prepared(text,
+                    isResolved: context.isResolved,
+                    embedInfo: embedInfo,
+                    displayName: context.displayName,
+                    pinnedExtractionID: context.pinnedExtractionID)
+                return MarkdownHTMLRenderer.render(prepared)
+            }
+            return MarkdownHTMLRenderer.render(ReaderMarkdown.prepared(text) { _, _ in true })
         }
 
-        static func feedRowHTML(for event: AgentEvent) -> String {
+        static func feedRowHTML(for event: AgentEvent, context: WikiRenderContext? = nil, isFinal: Bool = true) -> String {
             switch event {
             case .userText(let text):
                 return """
@@ -205,7 +300,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
             case .systemInit(let model):
                 return "<div class=\"row row-meta\">Started · \(escape(model))</div>"
             case .assistantText(let text):
-                return "<div class=\"row row-assistant\">\(renderedMarkdown(text))</div>"
+                return "<div class=\"row row-assistant\">\(renderedMarkdown(text, context: context, isFinal: isFinal))</div>"
             case .toolUse(let name, let summary):
                 let summaryHTML = summary.isEmpty ? "" : "<span class=\"row-tool-summary\">\(escape(summary))</span>"
                 return """
@@ -223,7 +318,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
                 """
             case .result(let isError, let text):
                 let label = isError ? "Failed" : "Result"
-                let bodyHTML = text.isEmpty ? "" : renderedMarkdown(text)
+                let bodyHTML = text.isEmpty ? "" : renderedMarkdown(text, context: context, isFinal: isFinal)
                 return """
                 <div class="row row-result\(isError ? " is-error" : "")"><div class="row-label">\(label)</div>\(bodyHTML)</div>
                 """
@@ -239,7 +334,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
         /// SwiftUI rendering), no row labels. Tool calls render as a concise,
         /// muted one-line progress indicator (issue #173) — independent of the
         /// "Show internals" toggle, which still gates the full raw feed.
-        static func chatRowHTML(for event: AgentEvent) -> String {
+        static func chatRowHTML(for event: AgentEvent, context: WikiRenderContext? = nil, isFinal: Bool = true) -> String {
             switch event {
             case .userText(let text):
                 return """
@@ -247,12 +342,12 @@ struct AgentTranscriptWebView: NSViewRepresentable {
                 """
             case .assistantText(let text):
                 return """
-                <div class="row chat-row chat-assistant"><div class="bubble">\(renderedMarkdown(text))</div></div>
+                <div class="row chat-row chat-assistant"><div class="bubble">\(renderedMarkdown(text, context: context, isFinal: isFinal))</div></div>
                 """
             case .result(_, let text):
                 guard !text.isEmpty else { return "" }
                 return """
-                <div class="row chat-row chat-assistant"><div class="bubble">\(renderedMarkdown(text))</div></div>
+                <div class="row chat-row chat-assistant"><div class="bubble">\(renderedMarkdown(text, context: context, isFinal: isFinal))</div></div>
                 """
             case .toolUse(let name, let summary):
                 return chatToolRowHTML(name: name, summary: summary, isError: false)

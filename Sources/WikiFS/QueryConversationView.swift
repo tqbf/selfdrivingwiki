@@ -189,7 +189,12 @@ struct QueryConversationView: View {
                     .padding(.top, bannerTopReservation)
                     .padding(.bottom, QueryConversationMetrics.sectionSpacing)
             }
-            QueryTranscriptView(launcher: launcher, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
+            QueryTranscriptView(
+                launcher: launcher,
+                onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
+                renderContext: { [weak store] in store?.renderContext() },
+                blobStore: store
+            )
                 .frame(maxWidth: QueryConversationMetrics.chatColumnWidth, maxHeight: .infinity)
                 .padding(.top, showsEditingEnabledBanner ? 0 : QueryConversationMetrics.conversationTopInset)
             composer(maxWidth: QueryConversationMetrics.chatColumnWidth)

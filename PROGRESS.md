@@ -70,9 +70,32 @@ pass (incl. the 513 KB reader render-perf benchmark). No schema change, no UI
 change, no resume. Both slices are backend-agnostic foundations for
 `plans/conversation-ui.md` Phases A.2 / B / C / D.
 
-**Next:** Phase A.2 (thread `renderContext` into `AgentTranscriptWebView` +
-`BlobSchemeHandler` + two-tier streaming render) — the pillar-1 payoff (chat
-transcripts render wikilinks/anchors/`@vN`/embeds/images correctly).
+**Phase A.2 — transcript render context.** Threaded the shared
+`WikiRenderContext` into `AgentTranscriptWebView` so chat transcripts (live AND
+persisted) render source references exactly like the reader.
+- `Sources/WikiFS/AgentTranscriptWebView.swift`: optional `renderContext: (() ->
+  WikiRenderContext?)?` provider (current-per-render, resolved once per
+  `apply`/`didFinish` pass) + `blobStore`; `BlobSchemeHandler` registered on the
+  transcript WKWebView (refreshed on wiki switch); `renderedMarkdown(_:context:isFinal:)`
+  threads the context's closures into `ReaderMarkdown.prepared`.
+- **Two-tier streaming render:** the trailing row patched by `apply`'s same-count
+  branch (`replaceLastRow(isStreaming: true)`) renders **links only** (nil
+  `embedInfo`) so a half-typed `![[source:…` can't churn a broken embed per token;
+  when a new event lands (turn boundary) the previous row is re-finalized
+  (`isStreaming: false` → full embeds) before new rows append.
+- `ChatHistoryDetailView` + `QueryConversationView` (via `QueryTranscriptView`)
+  pass `{ [weak store] in store?.renderContext() }` + `blobStore`.
+- `AgentActivityView`'s internals feed unchanged (nil context → constant-true).
+- `Tests/WikiFSTests/AgentTranscriptLinkifyTests.swift`: 10 new tests (healed
+  display name, `pin=` quote link, `wiki-blob://` embed, ghost, two-tier
+  streaming→finalized, nil-context preservation). Review found no issues.
+
+**Pillar 1 complete.** `swift build` clean; `swift test` — 1839 tests in 151
+suites pass. No schema change; no agent-backend/reader/`WikiRenderContext` change.
+
+**Next:** Phase B (opaque `session_id` + `backend_kind` on `chats`;
+`backend.resume` contract) or Phase C/D2 (`ConversationView` — unify live +
+persisted history into one surface).
 
 ## 2026-07-06 — #129 slice 2a: the resource-change event bus
 

@@ -74,7 +74,9 @@ struct ChatHistoryDetailView: View {
             AgentTranscriptWebView(
                 events: visible,
                 style: .chat,
-                onWikiLink: WikiReaderView.onWikiLinkHandler(for: store)
+                onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
+                renderContext: { [weak store] in store?.renderContext() },
+                blobStore: store
             )
             .frame(maxWidth: ChatHistoryMetrics.chatColumnWidth, maxHeight: .infinity)
             .frame(maxWidth: .infinity, alignment: .center)

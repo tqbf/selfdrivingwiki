@@ -9,6 +9,14 @@ struct QueryTranscriptView: View {
     /// where the store lives (the parent `QueryConversationView`) and forwarded
     /// unchanged to the transcript web view.
     var onWikiLink: ((URL, Bool) -> Void)? = nil
+    /// Provider of the current `WikiRenderContext` (Phase A.2) — bound to
+    /// `store.renderContext()` by `QueryConversationView`, so live chat rows
+    /// render source references exactly as the reader does. Forwarded unchanged
+    /// to the transcript web view.
+    var renderContext: (() -> WikiRenderContext?)? = nil
+    /// The store backing `wiki-blob://` blob serving for the transcript's
+    /// images/media. Forwarded to the transcript web view.
+    var blobStore: WikiStoreModel? = nil
 
     var body: some View {
         Group {
@@ -16,8 +24,14 @@ struct QueryTranscriptView: View {
                 placeholder
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
-                AgentTranscriptWebView(events: visibleEvents, style: .chat, onWikiLink: onWikiLink)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                AgentTranscriptWebView(
+                    events: visibleEvents,
+                    style: .chat,
+                    onWikiLink: onWikiLink,
+                    renderContext: renderContext,
+                    blobStore: blobStore
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
