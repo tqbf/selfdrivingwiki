@@ -457,13 +457,22 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // the §4.4 rowid + role/pin shape. No legacy rows to backfill on a
         // brand-new DB. Shared with the v21→22 migration step.
 
-        // v23 (graph-model Phase 5 & issue #119 phase 1):
-        // - data-only link canonicalization sweep — no schema change, and a fresh DB has no rows to sweep.
-        // - persisted chat history — `chats` + `chat_messages`. Purely additive; no legacy rows to backfill on a brand-new DB.
-        // Both are shared with the v22→23 migration step.
+        // v23 (graph-model Phase 5): data-only link canonicalization sweep —
+        // no schema change, and a fresh DB has no rows to sweep. Shared with
+        // the v22→23 migration step.
+        //
+        // v24 (graph-model Phase 2 close-out, NOT yet merged from main): drops
+        // the dead `source_markdown_versions.content` column. This branch still
+        // has the column in the fresh CREATE TABLE above (writes set it to '');
+        // it is harmless and will be dropped when main's v24 is merged.
+        //
+        // v25 (issue #119 phase 1): persisted chat history — `chats` +
+        // `chat_messages`. Purely additive. Bumped above main's v24 so a DB
+        // opened by main (v24) still creates the chats tables. Shared with the
+        // v23→25 migration step. `IF NOT EXISTS` (idempotent).
         try createChatTablesV23()
 
-        try exec("PRAGMA user_version=23;")
+        try exec("PRAGMA user_version=25;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -543,10 +552,10 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// Create the two persisted-chat-history tables (issue #119 phase 1):
     /// `chats` (one row per conversation) and `chat_messages` (one row per
     /// persistable `AgentEvent`, `event_json` verbatim). Called by both the
-    /// fresh-schema fast path and the v22→23 migration step so the two stay
+    /// fresh-schema fast path and the v23→25 migration step so the two stay
     /// schema-identical (`freshFastPathMatchesStepwiseLadder`). `IF NOT
     /// EXISTS`, same rationale as `createObjectsTablesV20`: idempotent so a
-    /// DB rewound to a pre-v23 `user_version` for testing (already having
+    /// DB rewound to a pre-v25 `user_version` for testing (already having
     /// these tables from its original fresh-schema creation) can still run
     /// this step without a "table already exists" error. See
     /// `plans/persisted-chat-history.md`.
@@ -1087,14 +1096,29 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             version = 22
         }
 
-        // Step 22 → 23 (graph-model Phase 5 & issue #119 phase 1):
-        // - data-only body sweep — rewrite every resolvable `[[…]]` link in every page body to canonical ULID-stable form.
-        // - persisted chat history — `chats` + `chat_messages`. Purely additive.
+        // Step 22 → 23 (graph-model Phase 5): data-only body sweep — rewrite
+        // every resolvable `[[…]]` link in every page body to canonical
+        // ULID-stable form. (issue #119 phase 1 chats tables moved to v25 —
+        // see below — so this step matches main's v23 exactly.)
         if version < 23 {
             try migrateV22ToV23()
-            try createChatTablesV23()
             try exec("PRAGMA user_version=23;")
             version = 23
+        }
+
+        // Step 23 → 25 (issue #119 phase 1): persisted chat history — `chats` +
+        // `chat_messages`. Purely additive. Bumped above main's v24
+        // (`source_markdown_versions.content` DROP COLUMN, not yet merged into
+        // this branch) so a DB opened by main (v24) still creates the chats
+        // tables. `IF NOT EXISTS` — a no-op on a DB that already has them
+        // (e.g. a v23 DB from an earlier build of this branch that created
+        // them at v23). v24 is intentionally absent here; it will be merged
+        // from main separately (and is a no-op for fresh DBs whose `content`
+        // column is already gone — or, in this branch, still present-but-dead).
+        if version < 25 {
+            try createChatTablesV23()
+            try exec("PRAGMA user_version=25;")
+            version = 25
         }
     }
 
