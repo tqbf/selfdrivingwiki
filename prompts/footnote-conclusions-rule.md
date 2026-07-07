@@ -6,7 +6,7 @@ The `#"quote"` INSIDE the link deep-links the passage — it must be wrapped in 
 
 FOR EXTERNAL SOURCES — any paper, book, or URL NOT in the wiki's `sources/`: use `[^id]: Author (Year), "Title", Journal/Publisher. DOI or URL`. Example: `[^id]: Rosenthal (2002), "Explaining Consciousness", in Philosophy of Mind: Classical and Contemporary Readings.`
 
-NO PIPE ALIAS IN A FOOTNOTE. `[[source:X|alias]]` overrides the link's display text — do NOT use it here; put your distinguishing text as PLAIN TEXT after the link instead. `[[source:X#"quote"]]` links a PASSAGE. `#` is the anchor delimiter, `|` is the alias delimiter — never use `|` in a footnote citation.
+NO PIPE ALIAS IN A FOOTNOTE. `[[source:X|alias]]` overrides the link's display text — do NOT use it here; put your distinguishing text as PLAIN TEXT after the link instead. `[[source:X#"quote"]]` links a PASSAGE. `#` IS NOT `|` — never use `|` in a footnote citation.
 
 WRONG — do NOT do any of this: `[^id]: [[Bassham1950 - quote|source:Bassham1950#"quote"]]` `[^id]: [[source:X|Author (Year)]], Journal. Anchor: "quote"` `[^id]: [[source:X]] Author (Year), "Title", Journal.` `[^id]: Author (Year) — Source (path), page N: "quote"`
 

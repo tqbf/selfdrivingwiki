@@ -340,8 +340,6 @@ extension WikiOperation {
 
     \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
 
-    \(footnoteConclusionsRule)
-
     \(GeneratedPrompts.lintTask)
 
     \(Self.wikiRootLine(wikiRoot))
@@ -375,8 +373,6 @@ extension WikiOperation {
       \(IngestWriteRule.writes)
 
       \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
-
-      \(footnoteConclusionsRule)
 
       \(task)
 
