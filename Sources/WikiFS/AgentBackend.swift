@@ -4,7 +4,7 @@ import WikiFSCore
 /// Backend-agnostic agent contract. UI, persistence, and conversation
 /// management depend only on this + `AgentEvent` — never a wire format.
 ///
-/// Phase 0 of the agent-backend port (`plans/agent-backend-port.md`): today's
+/// Phase 0 of the agent-backend port (`plans/chat-and-persistence.md`): today's
 /// Claude-CLI/stream-json code lives behind `ClaudeCLIBackend`; a future backend
 /// (ACP, Polytoken) is a new conforming type. The launcher holds an
 /// `AgentBackend` and consumes per-turn `AsyncStream<AgentEvent>` — it never

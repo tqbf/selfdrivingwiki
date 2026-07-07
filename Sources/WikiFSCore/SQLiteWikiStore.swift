@@ -558,7 +558,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// DB rewound to a pre-v25 `user_version` for testing (already having
     /// these tables from its original fresh-schema creation) can still run
     /// this step without a "table already exists" error. See
-    /// `plans/persisted-chat-history.md`.
+    /// `plans/chat-and-persistence.md`.
     private func createChatTablesV23() throws {
         try exec("""
         CREATE TABLE IF NOT EXISTS chats (

@@ -3,7 +3,7 @@ import os
 import WikiFSCore
 
 /// The Claude-CLI stream-json backend — wraps today's spawn/parse/encode
-/// **verbatim** behind the `AgentBackend` port (`plans/agent-backend-port.md`
+/// **verbatim** behind the `AgentBackend` port (`plans/chat-and-persistence.md`
 /// Phase 0). Owns: `OperationCommand` assembly, `AgentEventParser`, the
 /// `streamJSONLine` NDJSON encoder, `Process` + pipes + readability/termination
 /// handlers, and `PathPreflight` resolution (the executable name stays a

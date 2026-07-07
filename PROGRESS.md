@@ -2,6 +2,51 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-08 — Fix: hide continuation preamble from transcript; dedup assistant turns
+
+**Two bugs in the D3 continue path, found via live UI testing.**
+
+- **Preamble shown as user bubble:** the `continuationPreamble` (condensed
+  transcript + "continuing an earlier conversation" header + new message) was
+  sent as the first user turn AND displayed verbatim as a user bubble. The user
+  saw the internal preamble instead of their actual message. Fix: separated
+  display text from send text — `sendInteractiveMessage` gains `displayText`
+  (shown in the transcript), `startInteractiveQuery` gains `firstMessageDisplay`.
+  `continueConversation` passes the user's actual message as `displayText` and
+  the full preamble as the send text.
+- **Duplicated assistant response in preamble:** the builder picked up BOTH
+  `.assistantText` and `.result` for the same turn (both persistable, same
+  text). Fix: deduplicate — skip `.result` when it immediately follows an
+  `.assistantText` with identical text. A standalone `.result` is still kept.
+- 1878 tests green (+1 new dedup test).
+
+## 2026-07-08 — Fix: bump chats table migration to v25 (above main's v24)
+
+**The sidebar's Recent Conversations section was invisible — `store.chats` was
+empty because the `chats` table was never created.** Root cause: main branched
+ahead to schema v24 (graph-model Phase 2 close-out — drops the dead
+`source_markdown_versions.content` column). This branch had chats creation at
+v23. A DB opened by main (v24) would skip the v23 guard (`if version < 23` →
+false) and never call `createChatTables()`. The chats table didn't exist,
+`store.chats` was empty, and `AgentToolsView`'s `if !store.chats.isEmpty`
+guard hid the entire section.
+
+- **Fix:** moved chats-table creation from the v23 step to a new **v25** step
+  (above main's v24). `if version < 25` is true on a v24 DB, so the tables get
+  created. `CREATE TABLE IF NOT EXISTS` makes it a no-op on DBs that already
+  have them. The v23 step now matches main exactly (body-sweep only).
+- v24 (content-column drop) is intentionally absent — it will be merged from
+  main separately; the dead column is harmless (writes set it to `''`).
+- Updated 21 `user_version` assertions across 11 test files from 23 to 25.
+  1877 tests green.
+
+## 2026-07-08 — Fix: build from the correct worktree
+
+**The app showed no UI changes because it was built from `main` (schema v24,
+no chat code), not the `persisted-chat-history` worktree.** The main repo
+checkout (`/Users/wsargent/work/selfdrivingwiki`, branch `main`) was stale
+relative to the worktree. Rebuilt via `make run` from the worktree.
+
 ## 2026-07-08 — Phase D3: continue a persisted conversation (seeded-fallback)
 
 **Continue a saved conversation by sending into it.** D3 only, seeded-fallback
@@ -105,8 +150,8 @@ referenced by `ConversationView`. No longer instantiated for routing.
 ## 2026-07-07 — agent backend port (Phase 0) + shared render context (Phase A.1)
 
 **Two behavior-preserving slices, 1829 tests green.** Both unblock
-`plans/conversation-ui.md` without committing to an agent backend (ACP vs
-Polytoken vs Claude-CLI deferred — see `plans/agent-backend-port.md`).
+`plans/chat-and-persistence.md` without committing to an agent backend (ACP vs
+Polytoken vs Claude-CLI deferred — see `plans/chat-and-persistence.md`).
 
 **Phase 0 — `AgentBackend` port.** Extracted the Claude-CLI stream-json seam
 into a swappable port so UI/persistence/conversation depend only on `AgentEvent`
@@ -168,7 +213,7 @@ same link/embed/pin/display-name seam.
 **Build/tests:** `swift build` clean; `swift test` — 1829 tests in 150 suites
 pass (incl. the 513 KB reader render-perf benchmark). No schema change, no UI
 change, no resume. Both slices are backend-agnostic foundations for
-`plans/conversation-ui.md` Phases A.2 / B / C / D.
+`plans/chat-and-persistence.md` Phases A.2 / B / C / D.
 
 **Phase A.2 — transcript render context.** Threaded the shared
 `WikiRenderContext` into `AgentTranscriptWebView` so chat transcripts (live AND
@@ -461,7 +506,7 @@ row footnoted; `PLAN.md` status + doc index updated.
 
 Ask/Edit conversations now **persist to the wiki's SQLite store** and survive
 app restarts / wiki switches; past conversations are browsable and reopenable.
-Design of record: `plans/persisted-chat-history.md`. The issue's "additional
+Design of record: `plans/chat-and-persistence.md`. The issue's "additional
 requirements" (`[[chat:…]]` links, quote anchors, `chats.jsonl`, the File
 Provider `chats/` tree, multi-concurrent live sessions, `--resume`) are
 documented follow-ups there.
