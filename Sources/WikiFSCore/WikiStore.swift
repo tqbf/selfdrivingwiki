@@ -34,6 +34,14 @@ extension WikiStoreError: LocalizedError {
 /// implementation is the source of truth; the Phase 2 File Provider extension
 /// will adopt a read-only subset (`WikiReadStore`) of this.
 public protocol WikiStore: Sendable {
+    /// Per-wiki resource-change event bus. `SQLiteWikiStore` emits one event per
+    /// public mutating method (outside its recursive lock, via `mutate()`);
+    /// `nil` for stores that never surface changes (e.g. `wikictl`'s own store,
+    /// where emit is a silent no-op). Set once by the app wiring during wiki
+    /// open; the File Provider signaler and the model's external-reload path
+    /// both subscribe to it. See `plans/event-bus.md`.
+    var eventBus: WikiEventBus? { get set }
+
     /// Page summaries ordered by the given sort criterion.
     func listPages(sortBy: PageSortOrder) throws -> [WikiPageSummary]
     func getPage(id: PageID) throws -> WikiPage

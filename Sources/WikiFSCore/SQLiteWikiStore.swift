@@ -33,6 +33,25 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// Current `withTransaction` nesting depth. 0 = no open transaction.
     /// Only ever touched while holding `lock`.
     private var transactionDepth = 0
+    /// `mutate()`'s OWN nesting depth — distinct from `transactionDepth`.
+    /// `mutate()` flushes its buffered event to `eventBus` only when this returns
+    /// to 0 (the outermost `mutate()` call), AFTER releasing the lock, so no
+    /// handler ever runs under the lock and subscribers always read committed
+    /// state. Public methods compose (the recursive lock exists for this), so
+    /// `mutate`-within-`mutate` nesting is real; only the outermost emits.
+    /// Only ever touched while holding `lock`.
+    private var mutateDepth = 0
+    /// Per-wiki resource-change bus (set once by the app wiring; `nil` in
+    /// `wikictl`, where every emit is a silent no-op). Guarded by `lock` via the
+    /// computed ``eventBus`` accessors.
+    private var _eventBus: WikiEventBus?
+    /// Per-wiki resource-change bus. Set once during wiki open (main actor) and
+    /// read inside `mutate()` (under `lock`); both accessors take the lock so the
+    /// `@unchecked Sendable` store never exposes a torn read/write.
+    public var eventBus: WikiEventBus? {
+        get { lock.lock(); defer { lock.unlock() }; return _eventBus }
+        set { lock.lock(); defer { lock.unlock() }; _eventBus = newValue }
+    }
 
     /// Open (creating if needed) the database at `databaseURL`.
     /// Tests inject a temp-dir or `:memory:` URL; the app injects
@@ -1852,7 +1871,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func createPage(title: String) throws -> WikiPage {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { page in localEvent(.page, id: page.id.rawValue, change: .created) }) {
         // Titles must stay linkable (`[[title]]`) — see WikiNameRules.
         let title = WikiNameRules.sanitized(title)
         let id = PageID(rawValue: ULID.generate())
@@ -1872,10 +1891,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             id: id, title: title, slug: slug, bodyMarkdown: "",
             createdAt: now, updatedAt: now, version: 1
         )
+        }
     }
 
     public func updatePage(id: PageID, title: String, body: String) throws {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.page, id: id.rawValue, change: .updated) }) {
         // Recompute slug from the (possibly renamed) title, then bump version
         // and updated_at. version bumps support Phase 3 change signaling.
         // Titles must stay linkable (`[[title]]`) — see WikiNameRules.
@@ -1895,10 +1915,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try stmt.bind(Date().timeIntervalSince1970, at: 5)
         _ = try stmt.step()
         guard sqlite3_changes(db) > 0 else { throw WikiStoreError.notFound(id) }
+        }
     }
 
     public func deletePage(id: PageID) throws {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.page, id: id.rawValue, change: .deleted) }) {
         // FK safety: `page_links`, `attachments`, and `source_links` all have
         // FKs onto `pages(id)` WITHOUT `ON DELETE CASCADE` (unlike `page_chunks`
         // which cascades). With `foreign_keys=ON`, deleting a page that still has
@@ -1928,6 +1949,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             stmt.reset()
             try stmt.bind(id.rawValue, at: 1)
             _ = try stmt.step()
+        }
         }
     }
 
@@ -2024,7 +2046,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
     public func replaceLinks(from pageID: PageID,
                              parsedLinks: [WikiLinkParser.ParsedLink]) throws {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.page, id: pageID.rawValue, change: .updated) }) {
         // One transaction: wipe this page's outgoing links in BOTH tables, then
         // insert the resolved subsets. Unresolved targets are OMITTED.
         // `INSERT OR IGNORE` collapses duplicate (from,to) pairs.
@@ -2104,6 +2126,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                     _ = try stmt.step()
                 }
             }
+        }
         }
     }
 
@@ -2221,7 +2244,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         originalPath: String? = nil,
         activityID: String? = nil
     ) throws -> SourceSummary {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { source in localEvent(.source, id: source.id.rawValue, change: .created) }) {
         guard data.count <= Self.ingestByteCap else {
             throw WikiStoreError.unexpected(
                 "source \(data.count) bytes exceeds cap \(Self.ingestByteCap)")
@@ -2386,6 +2409,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             zoteroItemKey: zoteroItemKey, zoteroItemTitle: zoteroItemTitle,
             displayName: displayName, role: role
         )
+        }
     }
 
     // MARK: - Graph-model Phase 4: website snapshot store primitives
@@ -2439,7 +2463,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         activityID: String,
         role: SourceRole = .media
     ) throws -> SourceSummary {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { source in localEvent(.source, id: source.id.rawValue, change: .created) }) {
         guard data.count <= Self.ingestByteCap else {
             throw WikiStoreError.unexpected(
                 "source \(data.count) bytes exceeds cap \(Self.ingestByteCap)")
@@ -2531,6 +2555,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             zoteroItemKey: nil, zoteroItemTitle: nil,
             displayName: displayName, role: role
         )
+        }
     }
 
     /// True when the source's active content version's `activity_id` has sibling
@@ -2641,7 +2666,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         provenance: SourceProvenance,
         role: SourceRole = .primary
     ) throws -> SourceSummary {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { source in localEvent(.source, id: source.id.rawValue, change: .created) }) {
 
         // Byteless dedup: a byteless source with the same external_identity
         // already exists → reject (the partial index makes this lookup fast).
@@ -2764,6 +2789,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             zoteroItemKey: nil, zoteroItemTitle: nil,
             displayName: displayName, role: role
         )
+        }
     }
 
     /// All source summaries (NO content blob), most-recent-first for the
@@ -3089,11 +3115,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func deleteSource(id: PageID) throws {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.source, id: id.rawValue, change: .deleted) }) {
         let stmt = try statement("DELETE FROM sources WHERE id = ?1;")
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         _ = try stmt.step()
+        }
     }
 
     // MARK: - Graph-model Phase 1: content versioning primitives
@@ -3114,7 +3141,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         sourceID: PageID, data: Data, mimeType: String? = nil,
         provenance: SourceProvenance? = nil
     ) throws -> SourceVersion {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.source, id: sourceID.rawValue, change: .updated) }) {
         guard data.count <= Self.ingestByteCap else {
             throw WikiStoreError.unexpected(
                 "source \(data.count) bytes exceeds cap \(Self.ingestByteCap)")
@@ -3235,6 +3262,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 externalIdentity: provenance?.externalIdentity, fetchedAt: now
             )
         }
+        }
     }
 
     /// Roll a source's active content back to a prior version — a pointer
@@ -3243,7 +3271,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// the target version's blob. The history chain is untouched (append-only).
     /// Throws `.notFound` if `versionID` does not belong to `sourceID`.
     public func rollbackSourceContent(sourceID: PageID, to versionID: PageID) throws {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.source, id: sourceID.rawValue, change: .updated) }) {
         try withTransaction {
             // Validate the target version belongs to this source; read its blob.
             let target = try statement("""
@@ -3310,6 +3338,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             if let mime { try upMime.bind(mime, at: 2) }
             _ = try upMime.step()
         }
+        }
     }
 
     /// The current `generation` of the `source-content` ref for a source, or nil
@@ -3344,7 +3373,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// (best-effort, and MLX inference must never run under an open write
     /// transaction — it would stall `wikictl`).
     public func renameSource(id: PageID, to newDisplayName: String) throws {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.source, id: id.rawValue, change: .updated) }) {
         // Display names must stay citable (`[[source:name]]`) — see WikiNameRules.
         let newDisplayName = WikiNameRules.sanitized(newDisplayName)
         let renamed = try withTransaction { () -> Bool in
@@ -3380,18 +3409,20 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         reembedSource(sourceID: id, body: headBody)
         // The FTS index title tracks the rename too (resolves display_name ?? filename).
         upsertSourceSearch(sourceID: id, body: headBody)
+        }
     }
 
     /// Stamp a source as summarized-into-the-wiki. Idempotent and a no-op
     /// for an unknown id. Called from `wikictl log append --kind ingest --source`.
     public func markSourceIngested(id: PageID) throws {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.source, id: id.rawValue, change: .updated) }) {
         let stmt = try statement(
             "UPDATE sources SET ingested_at = ?2 WHERE id = ?1;")
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         try stmt.bind(Date().timeIntervalSince1970, at: 2)
         _ = try stmt.step()
+        }
     }
 
     /// IDs of sources the agent has marked ingested — the authoritative
@@ -3498,7 +3529,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// `updated_at`. UPSERT so it works even if the singleton row is somehow
     /// missing (creates it at version 1; otherwise increments).
     public func updateSystemPrompt(body: String) throws {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.systemPrompt, id: "system-prompt", change: .updated) }) {
         let stmt = try statement("""
         INSERT INTO system_prompt (id, body_markdown, updated_at, version)
         VALUES (1, ?1, ?2, 1)
@@ -3511,6 +3542,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try stmt.bind(body, at: 1)
         try stmt.bind(Date().timeIntervalSince1970, at: 2)
         _ = try stmt.step()
+        }
     }
 
     // MARK: - Log (append-only chronological log, Phase B)
@@ -3521,7 +3553,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// id). Append-only: this never updates or UPSERTs.
     @discardableResult
     public func appendLog(kind: LogEntry.Kind, title: String, note: String?) throws -> LogEntry {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { entry in localEvent(.log, id: entry.id.rawValue, change: .created) }) {
         let id = PageID(rawValue: ULID.generate())
         let now = Date()
         let stmt = try statement("""
@@ -3536,6 +3568,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         if let note { try stmt.bind(note, at: 5) }  // else leave NULL
         _ = try stmt.step()
         return LogEntry(id: id, timestamp: now, kind: kind, title: title, note: note)
+        }
     }
 
     /// All log rows in chronological (insertion) order, oldest-first, for the
@@ -3624,7 +3657,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// it works even if the singleton row is somehow missing (creates it at version
     /// 1; otherwise increments). Mirrors `updateSystemPrompt(body:)`.
     public func updateWikiIndex(body: String) throws {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.wikiIndex, id: "wiki-index", change: .updated) }) {
         let stmt = try statement("""
         INSERT INTO wiki_index (id, body_markdown, updated_at, version)
         VALUES (1, ?1, ?2, 1)
@@ -3637,6 +3670,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try stmt.bind(body, at: 1)
         try stmt.bind(Date().timeIntervalSince1970, at: 2)
         _ = try stmt.step()
+        }
     }
 
     // MARK: - Slugs
@@ -3714,7 +3748,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         label: String?,
         targetID: PageID?
     ) throws -> BookmarkNode {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { node in localEvent(.bookmark, id: node.id, change: .created) }) {
         let id = ULID.generate()
         try withTransaction {
             // Shift siblings at >= position up by 1 within the same parent.
@@ -3768,10 +3802,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         }
         return BookmarkNode(id: id, parentID: parentID, position: position, kind: kind,
                         label: label, targetID: targetID)
+        }
     }
 
     public func updateBookmarkNode(id: String, label: String?) throws {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.bookmark, id: id, change: .updated) }) {
         let stmt = try statement("""
         UPDATE bookmark_nodes SET label = ?2 WHERE id = ?1;
         """)
@@ -3783,10 +3818,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             sqlite3_bind_null(stmt.handle, 2)
         }
         _ = try stmt.step()
+        }
     }
 
     public func deleteBookmarkNode(id: String) throws {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.bookmark, id: id, change: .deleted) }) {
         try withTransaction {
             // Capture the parent for sibling renumbering after the delete.
             let info = try statement(
@@ -3810,10 +3846,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 try renumberRootSiblings()
             }
         }
+        }
     }
 
     public func moveBookmarkNode(id: String, toParentID: String?, position: Int) throws {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.bookmark, id: id, change: .updated) }) {
         try withTransaction {
             // Read the node's current parent + position.
             let info = try statement(
@@ -3903,6 +3940,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                     try renumberRootSiblings()
                 }
             }
+        }
         }
     }
 
@@ -4145,6 +4183,65 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             }
             throw error
         }
+    }
+
+    // MARK: - Resource-change emission seam (mutate)
+
+    /// The single lock/flush seam for every public mutating method. `body` runs
+    /// under the recursive `lock` (it may call `withTransaction`, which re-enters
+    /// the recursive lock, and may compose other public methods that themselves
+    /// route through `mutate`). `event` computes the event from the result WHILE
+    /// STILL LOCKED (so it reads committed, in-transaction state). The event is
+    /// flushed to `eventBus` ONLY when `mutate`'s own nesting depth returns to 0
+    /// — the outermost `mutate()` — and strictly AFTER `lock.unlock()` has
+    /// released the outermost acquisition and the whole transaction is committed.
+    ///
+    /// This makes the §3 guarantees structural, not conventional:
+    /// (a) no handler runs under the lock → no deadlock under recursive
+    ///     composition or nested `withTransaction`;
+    /// (b) subscribers read **committed** state (the flush is post-commit);
+    /// (c) nested public-calls-public emits exactly once at the outermost exit
+    ///     (the inner event is computed but never flushed).
+    ///
+    /// The flush depth is keyed off `mutate`'s OWN counter, **not**
+    /// `transactionDepth`: that counter decrements to 0 *inside*
+    /// `withTransaction`'s `defer`, *before* the lock is released, so keying off
+    /// it would emit under the lock — the exact deadlock this avoids.
+    ///
+    /// On throw, no event is flushed (the buffered event is discarded), so no
+    /// subscriber ever acts on a rolled-back change. A throwing `event` builder
+    /// is swallowed via `try?` — the write already succeeded; event construction
+    /// must never suppress a committed mutation.
+    private func mutate<T>(
+        event: (T) throws -> ResourceChangeEvent?,
+        _ body: () throws -> T
+    ) rethrows -> T {
+        lock.lock()
+        let bus = _eventBus
+        mutateDepth += 1
+        do {
+            let result = try body()
+            let pending = try? event(result)
+            mutateDepth -= 1
+            let outermost = mutateDepth == 0
+            lock.unlock()
+            if outermost, let pending {
+                bus?.emit(pending)
+            }
+            return result
+        } catch {
+            mutateDepth -= 1
+            lock.unlock()
+            throw error
+        }
+    }
+
+    /// Build a `.local` event for emission by ``mutate``. `seq` is filled by the
+    /// bus on emit (the bus owns the monotone counter); `wikiID` comes from the
+    /// store's (per-wiki) bus. Callers pass the resource's concrete `kind` and
+    /// `id`; a `nil` bus (e.g. `wikictl`) is handled at the `mutate` flush.
+    private func localEvent(_ kind: ResourceKind, id: String, change: ChangeKind) -> ResourceChangeEvent {
+        ResourceChangeEvent(wikiID: _eventBus?.wikiID ?? "", kind: kind, id: id, change: change, origin: .local)
     }
 
     // MARK: - Statement helpers
@@ -5058,7 +5155,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     @discardableResult
     public func appendProcessedMarkdown(sourceID: PageID, content: String,
                                         origin: String, note: String?) throws -> SourceMarkdownVersion {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.source, id: sourceID.rawValue, change: .updated) }) {
         let id = PageID(rawValue: ULID.generate())
         let parentID = try processedMarkdownHead(sourceID: sourceID)?.id
         let now = Date()
@@ -5095,6 +5192,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             content: content, origin: origin, note: note, createdAt: now,
             blobHash: blobHash, mimeType: "text/markdown"
         )
+        }
     }
 
     /// Record a provenance-carrying extraction alternative (§4.5, §4.7). Creates
@@ -5110,7 +5208,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         sourceVersionID: String? = nil, note: String? = nil,
         modelVersion: String? = nil
     ) throws -> SourceMarkdownVersion {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.source, id: sourceID.rawValue, change: .updated) }) {
         let id = PageID(rawValue: ULID.generate())
         let parentID = try processedMarkdownHead(sourceID: sourceID)?.id
         let now = Date()
@@ -5180,6 +5278,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             activityID: storedActivityID, sourceVersionID: resolvedSourceVersionID,
             blobHash: storedBlobHash, mimeType: "text/markdown"
         )
+        }
     }
 
     /// True when a `source-derived` ref exists for the source (i.e. an
@@ -5200,7 +5299,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// the active HEAD via the `source-derived` ref. History is preserved.
     @discardableResult
     public func revertProcessedMarkdown(sourceID: PageID, to versionID: PageID) throws -> SourceMarkdownVersion {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.source, id: sourceID.rawValue, change: .updated) }) {
         // Read the target row — must exist and belong to sourceID. Resolve its
         // body from the blob so the returned version carries real content.
         guard let target = try? statement("""
@@ -5266,6 +5365,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             sourceVersionID: targetVersion.sourceVersionID,
             blobHash: targetBlobHash, mimeType: targetVersion.mimeType
         )
+        }
     }
 
     /// UPSERT the `source-derived` ref (generation + 1). INTERNAL — caller holds
@@ -5307,7 +5407,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// target belongs to the source, then UPSERT the `source-derived` ref. The
     /// changeToken already folds `refs.generation_sum`, so a repoint moves it.
     public func setActiveMarkdown(sourceID: PageID, to versionID: PageID) throws {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.source, id: sourceID.rawValue, change: .updated) }) {
         try withTransaction {
             // Validate the target belongs to this source.
             let check = try statement("""
@@ -5328,6 +5428,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         if let head = try? processedMarkdownHead(sourceID: sourceID) {
             reembedSource(sourceID: sourceID, body: head.content)
             upsertSourceSearch(sourceID: sourceID, body: head.content)
+        }
         }
     }
 }

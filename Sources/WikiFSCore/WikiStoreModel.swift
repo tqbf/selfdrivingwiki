@@ -153,13 +153,6 @@ public final class WikiStoreModel {
         return tree
     }
 
-    /// Invoked on the main actor after any successful persisted mutation
-    /// (save / new / rename / delete). The app wires this to the File Provider
-    /// `signalChange()` so Terminal reads see edits without relaunch (INITIAL
-    /// §6/§10). Nil-safe: tests leave it unset, and `WikiFSCore` never imports
-    /// `FileProvider` — the closure is injected from the app layer.
-    @ObservationIgnored public var onPageDidChange: (@MainActor () -> Void)?
-
     /// Live editing buffers — the single source of in-flight text.
     public var draftTitle: String = "" {
         didSet { if draftTitle != oldValue { isDraftDirty = true } }
@@ -224,6 +217,26 @@ public final class WikiStoreModel {
         // Preload the system-prompt draft so its editor has content immediately;
         // selecting it later reloads fresh from the store.
         draftSystemPrompt = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
+        subscribeToExternalChanges()
+    }
+
+    /// The per-wiki resource-change bus of the backing store (exposed so the app
+    /// layer — the File Provider signaler and the change bridge — can subscribe
+    /// to the same mechanism the store emits into).
+    public var eventBus: WikiEventBus? { store.eventBus }
+
+    /// Subscribe to the store's bus for **external** changes (a `wikictl` write
+    /// surfaced by the Darwin-notification bridge) and rebuild the list
+    /// projections. This preserves the pre-2a "model reloads only on external
+    /// writes" behavior exactly. **Local** (in-app) events are ignored: the model
+    /// keeps self-managing its own writes via `reloadSummaries()`/`reloadSources()`
+    /// (the lowest-risk cut; reload-on-self-write is deferred to slice 2b).
+    @ObservationIgnored private var externalChangeToken: SubscriptionToken?
+    private func subscribeToExternalChanges() {
+        externalChangeToken = store.eventBus?.subscribe(nil) { [weak self] event in
+            guard event.origin == .external else { return }
+            self?.reloadFromStore()
+        }
     }
 
     // MARK: - Selection / loading
@@ -764,7 +777,6 @@ public final class WikiStoreModel {
             try store.replaceLinks(from: page.id, parsedLinks: WikiLinkParser.parse(page.bodyMarkdown))
             reloadSummaries()
             openTab(.page(page.id), title: title)
-            onPageDidChange?()
         } catch {
             DebugLog.store("WikiStoreModel.newPageInNewTab failed: \(error)")
         }
@@ -891,7 +903,6 @@ public final class WikiStoreModel {
             try PageUpsert.upsert(in: store, id: id, title: draftTitle, body: draftBody)
             isDraftDirty = false
             reloadSummaries()
-            onPageDidChange?()
             // Non-blocking mermaid lint: the in-app save still succeeds (the
             // editor is the human escape from wikictl's hard block), but a broken
             // diagram is flagged so the author can fix it.
@@ -1012,7 +1023,6 @@ public final class WikiStoreModel {
             do {
                 try PageUpsert.upsert(in: store, id: pageID, title: page.title, body: fixedBody)
                 reloadSummaries()
-                onPageDidChange?()
                 if loadedPage == pageID {
                     draftBody = fixedBody
                     isDraftDirty = false
@@ -1085,7 +1095,6 @@ public final class WikiStoreModel {
         do {
             try store.updateSystemPrompt(body: draftSystemPrompt)
             isSystemPromptDirty = false
-            onPageDidChange?()
         } catch {
             DebugLog.store("WikiStoreModel.saveSystemPrompt failed: \(error)")
         }
@@ -1168,7 +1177,6 @@ public final class WikiStoreModel {
             let newSelection = WikiSelection.page(page.id)
             recordHistoryTransition(from: loadedSelection, to: newSelection)
             openTab(newSelection, title: title)
-            onPageDidChange?()
         } catch {
             DebugLog.store("WikiStoreModel.newPage failed: \(error)")
         }
@@ -1187,7 +1195,6 @@ public final class WikiStoreModel {
             for i in tabs.indices where tabs[i].selection == .page(id) {
                 tabs[i].title = newTitle
             }
-            onPageDidChange?()
         } catch {
             DebugLog.store("WikiStoreModel.rename failed: \(error)")
         }
@@ -1209,7 +1216,6 @@ public final class WikiStoreModel {
             for i in tabs.indices where tabs[i].selection == .source(id) {
                 tabs[i].title = newDisplayName
             }
-            onPageDidChange?()
         } catch {
             DebugLog.store("WikiStoreModel.renameSource failed: \(error)")
         }
@@ -1224,7 +1230,6 @@ public final class WikiStoreModel {
                 closeTab(id: tab.id)
             }
             reloadSummaries()
-            onPageDidChange?()
         } catch {
             DebugLog.store("WikiStoreModel.delete failed: \(error)")
             storeError = StoreError(
@@ -1319,8 +1324,9 @@ public final class WikiStoreModel {
     /// directory ingest is out of scope), read the bytes OFF the main thread
     /// (big files shouldn't stall the UI), then hop back to the main actor to
     /// store + reload. Per-file failures are logged and skipped so one bad drop
-    /// doesn't abort the batch. `onPageDidChange?()` fires ONCE at the end so the
-    /// daemon re-enumerates the `sources/` tree exactly once for the whole batch.
+    /// doesn't abort the batch. Each stored source emits a `source` change event
+    /// at the store seam; the File Provider subscriber debounces the whole batch
+    /// into one signal so the daemon re-enumerates `sources/` exactly once.
     ///
     /// Named `addFiles` (not `ingest`) because it only adds sources — it does NOT
     /// run the agent "Ingest into wiki" phase (see `AgentLauncher` /
@@ -1360,7 +1366,6 @@ public final class WikiStoreModel {
         reloadSources()
         if let sourceID = lastSourceID {
             openTab(.source(sourceID))
-            onPageDidChange?()
         }
         if !duplicateNames.isEmpty {
             storeError = StoreError(
@@ -1442,7 +1447,6 @@ public final class WikiStoreModel {
                 sourceID: summary.id, content: markdown, origin: "transcript", note: nil)
             reloadSources()
             openTab(.source(summary.id))
-            onPageDidChange?()
             return URLFetchService.FetchOutcome(
                 filename: transcript.filename,
                 byteSize: transcript.data.count,
@@ -1490,7 +1494,6 @@ public final class WikiStoreModel {
             role: .primary)
         reloadSources()
         openTab(.source(summary.id))
-        onPageDidChange?()
         return URLFetchService.FetchOutcome(
             filename: match.filename, byteSize: 0, kind: kind)
     }
@@ -1518,7 +1521,6 @@ public final class WikiStoreModel {
         }
         reloadSources()
         openTab(.source(summary.id))
-        onPageDidChange?()
         return URLFetchService.FetchOutcome(
             filename: snapshot.plan.filename, byteSize: snapshot.plan.data.count, kind: snapshot.plan.kind)
     }
@@ -1617,7 +1619,6 @@ public final class WikiStoreModel {
                 sourceID: id, content: content, origin: "transcript", note: nil)
         }
         reloadSources()
-        onPageDidChange?()
         return "Refreshed \(origin.displayLabel) source."
     }
 
@@ -1630,7 +1631,6 @@ public final class WikiStoreModel {
                 mimeType: nil, provenance: nil, role: .primary,
                 originalPath: nil, activityID: nil)
             reloadSources()
-            onPageDidChange?()
         } catch WikiStoreError.duplicateContent(let existing) {
             storeError = StoreError(
                 title: "Duplicate File Skipped",
@@ -1664,7 +1664,6 @@ public final class WikiStoreModel {
             let summary = try storeMaterialized(materialized)
             reloadSources()
             openTab(.source(summary.id))
-            onPageDidChange?()
         } catch {
             DebugLog.store("WikiStoreModel.ingestFromZotero failed: \(error)")
             throw error
@@ -1721,7 +1720,6 @@ public final class WikiStoreModel {
         if let sourceID = firstSourceID {
             openTab(.source(sourceID))
         }
-        onPageDidChange?()
         return (imported: imported, errors: errorMessages)
     }
 
@@ -1736,7 +1734,6 @@ public final class WikiStoreModel {
                 closeTab(id: tab.id)
             }
             reloadSources()
-            onPageDidChange?()
         } catch {
             DebugLog.store("WikiStoreModel.deleteSource failed: \(error)")
         }

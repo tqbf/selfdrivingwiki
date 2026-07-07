@@ -22,9 +22,10 @@ struct WikiStoreModelAddURLTests {
 
     @Test func htmlURLLandsAsMarkdownFileInList() async throws {
         let store = try tempStore()
+        store.eventBus = WikiEventBus(wikiID: "test")
         let model = WikiStoreModel(store: store)
-        var didSignal = false
-        model.onPageDidChange = { didSignal = true }
+        let recorder = SignalRecorder()
+        store.eventBus?.subscribe(nil) { recorder.append($0) }
 
         let fetcher = FakeFetcher(response: URLFetchService.FetchResponse(
             data: Data("<title>My Doc</title><body><h1>Heading</h1><p>Body.</p></body>".utf8),
@@ -38,7 +39,8 @@ struct WikiStoreModelAddURLTests {
         #expect(model.sources.count == 1)
         #expect(model.sources.first?.filename == "My Doc.md")
         #expect(model.sources.first?.ext == "md")
-        #expect(didSignal)
+        try await recorder.awaitNonEmpty()
+        #expect(recorder.count > 0)
 
         // Content is the converted markdown.
         let id = model.sources.first!.id

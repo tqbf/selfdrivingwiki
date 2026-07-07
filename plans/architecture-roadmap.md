@@ -91,16 +91,17 @@ That is the storage truth the access layer is built over.
 
 ### 2.2 #129 second (access layer) — best done in two decoupled slices
 
-- **(2a) The event bus.** One resource-change event fanned to every
-  subscriber, replacing today's three ad-hoc mechanisms (the ~15 hand-wired
+- **(2a) The event bus — SHIPPED.** One resource-change event fanned to every
+  subscriber, replacing today's three ad-hoc mechanisms (the ~17 hand-wired
   `onPageDidChange` sites, the `WikiChangeBridge` Darwin ingress, the
-  `ChangeCoalescer` debounce). Storage-independent — it can land early / in
-  parallel with later graph-model phases — and a **prerequisite for the thin
+  `ChangeCoalescer` debounce). Storage-independent — it landed early / in
+  parallel with later graph-model phases — and is a **prerequisite for the thin
   #162 slice** (two windows on one wiki need cross-window invalidation, which
   is just a second subscriber). It is also the direct precursor to the
   daemon's multi-client streaming: gRPC server-stream, REST SSE, and MCP
   `notifications/resources/list_changed` all multicast the *same* event.
-  Design it once, per §3 — it becomes the thing the daemon later serializes.
+  Designed once, per §3 — it becomes the thing the daemon later serializes.
+  See [`plans/event-bus.md`](event-bus.md); full test gate in `PROGRESS.md`.
 - **(2b) Resource protocol + projection dedup + generic changeToken.** Do this
   **after graph-model Phase 1**, so it models refs/blobs/byteless from the
   start instead of over the flat `sources.content` it would have to rewrite.
@@ -376,10 +377,11 @@ Record the chosen branch here when decided.
   over one store's tables); `seq` is an ephemeral in-process ordering stamp
   (§3 decision 3). Do not merge them — persisting `seq` recreates the
   event-log problem §3 deliberately avoids.
-- **Change-signal wiring** — the bus (2a) rewires the ~15 `onPageDidChange`
-  sites and subsumes `WikiChangeBridge` / `ChangeCoalescer`; #162's thin
-  slice then subscribes per-window models to it. Order: bus **before** thin
-  #162, or cross-window invalidation gets hand-wired a sixteenth way.
+- **Change-signal wiring** — the bus (2a, shipped) rewired the ~17 `onPageDidChange`
+  sites and subsumed `WikiChangeBridge` / `ChangeCoalescer` into subscribers on
+  one per-wiki `WikiEventBus`; #162's thin slice then subscribes per-window
+  models to it. The store now emits at the `mutate()` seam; the FP and the
+  model's `.external`→reload path subscribe. See [`plans/event-bus.md`](event-bus.md).
 - **`Projection.swift`** — touched by both graph-model and #129. graph-model's
   near phases mostly *punt* the projection overhaul (its §9/§10 defer it to
   late phases), so the clash is smaller than it looks — but keep #129's

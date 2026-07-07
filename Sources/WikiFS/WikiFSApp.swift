@@ -224,8 +224,8 @@ private struct LaunchLocationWarning {
 
 extension FileProviderSpike {
     /// Inject this provider's per-wiki domain side effects into the manager, and
-    /// keep the active store's `onPageDidChange` wired to `signalChange()` after
-    /// every store swap (select / create / delete).
+    /// keep the active store's resource-change bus wired to a debounced
+    /// `signalChange()` after every store swap (select / create / delete).
     @MainActor
     func wire(into manager: WikiManager) {
         manager.registerDomain = { [weak self] id, name in
@@ -239,11 +239,10 @@ extension FileProviderSpike {
         }
         manager.onActiveStoreDidChange = { [weak self, weak manager] in
             guard let self, let manager else { return }
-            // Re-point the freshly-swapped store's change hook at the active
-            // domain's signaling, and resolve the new mount path.
-            manager.activeStore?.onPageDidChange = { [weak self] in
-                Task { await self?.signalChange() }
-            }
+            // Subscribe the FP signaler to the freshly-swapped store's bus (all
+            // kinds/origins, debounced via ChangeCoalescer) so local app writes
+            // refresh the mount — replacing the old `onPageDidChange` hand-fire.
+            self.subscribeActiveStoreBus(manager.activeStore?.eventBus, wikiID: manager.activeWikiID)
             if let active = manager.activeWikiID,
                let descriptor = manager.wikis.first(where: { $0.id == active }) {
                 Task { await self.activate(id: descriptor.id, displayName: descriptor.displayName) }

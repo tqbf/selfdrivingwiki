@@ -12,8 +12,8 @@ import SQLite3
 ///
 /// File-Provider side effects are injected as closures (`registerDomain` /
 /// `removeDomain`), so this type — and thus the whole switcher logic — is
-/// unit-testable without importing `FileProvider` (the same pattern
-/// `WikiStoreModel.onPageDidChange` uses to keep `WikiFSCore` UI-free).
+/// unit-testable without importing `FileProvider` (the same pattern the store's
+/// `eventBus` subscribers use to keep `WikiFSCore` UI-free).
 @MainActor
 @Observable
 public final class WikiManager {
@@ -46,7 +46,7 @@ public final class WikiManager {
     @ObservationIgnored public var renameDomain: ((_ id: String, _ displayName: String) async -> Void)?
 
     /// Invoked after the active store swaps (select / create / migrate). The app
-    /// re-wires `onPageDidChange` to the new store's File Provider signaling.
+    /// re-subscribes the File Provider signaler to the new store's `eventBus`.
     @ObservationIgnored public var onActiveStoreDidChange: (() -> Void)?
 
     public init(
@@ -265,7 +265,14 @@ public final class WikiManager {
         let model: WikiStoreModel
         do {
             let url = databaseURL(forWikiID: id)
-            let store = try makeStore(url)
+            // `var`: the bus is set via the protocol's computed setter, which the
+            // compiler treats as mutating through the `WikiStore` existential.
+            var store = try makeStore(url)
+            // Attach the per-wiki event bus BEFORE the model is created, so the
+            // model's `.external`→reload subscription (in its init) sees it. The
+            // File Provider signaler and the change bridge subscribe to the same
+            // bus from the app layer. See `plans/event-bus.md`.
+            store.eventBus = WikiEventBus(wikiID: id)
             model = WikiStoreModel(store: store)
             if model.summaries.isEmpty { model.newPage(title: "Home") }
             // Off-main snapshot reads (debounced search) go through a read-only
@@ -278,6 +285,7 @@ public final class WikiManager {
             DebugLog.store("WikiManager: failed to open wiki \(id), using in-memory: \(error)")
             // swiftlint:disable:next force_try
             let memory = try! SQLiteWikiStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+            memory.eventBus = WikiEventBus(wikiID: id)
             model = WikiStoreModel(store: memory)
         }
         activeWikiID = id
