@@ -1,8 +1,6 @@
 FOOTNOTE EVERY CLAIM — When you write a claim, interpretation, or non-obvious fact drawn from a source, footnote it.
 
-FOR WIKI SOURCES — i.e. any file in the wiki's `sources/` directory, not just the files in this ingest batch. Before writing, check whether a source is in the wiki: search `sources.jsonl` or run `wikictl source list --json` and match by filename or display name. If it IS a wiki source, cite it with `[^id]: [[source:DisplayName#"distinctive quote from the passage"]]`. `DisplayName` is the source's display name from `sources.jsonl` or `wikictl source list`. The quote goes AFTER `#"` with NO pipe, NO "Anchor:" text, and NO journal/DOI metadata — the source already has that. Example: `[^id]: [[source:Bassham1950#"the dark reactions of photosynthesis"]] and [[Calvin Cycle#Regulation]].`
-
-THE `#"quote"` IS REQUIRED, NOT OPTIONAL. It renders as the footnote's visible label, so it is what makes each footnote visually distinct. A bare `[[source:DisplayName]]` renders as just the title — when several footnotes cite the same source they all collapse to the same title and the reader cannot tell them apart. So: never omit the quote, and when you cite the same source for MORE THAN ONE claim, use a DIFFERENT distinctive quote in each footnote — the exact passage that backs that specific claim. Two footnotes to the same source must never carry the same quote.
+FOR WIKI SOURCES — i.e. any file in the wiki's `sources/` directory, not just the files in this ingest batch. Before writing, check whether a source is in the wiki: search `sources.jsonl` or run `wikictl source list --json` and match by filename or display name. If it IS a wiki source, cite it with `[^id]: [[DisplayName - distinctive quote from the passage|source:DisplayName#"distinctive quote from the passage"]]`. `DisplayName` is the source's display name from `sources.jsonl` or `wikictl source list`. The quote goes AFTER `#"` with NO pipe, NO "Anchor:" text, and NO journal/DOI metadata — the source already has that. Example: `[^id]: [[Bassham1950 - the dark reactions of photosynthesis|source:Bassham1950#"the dark reactions of photosynthesis"]] and [[Calvin Cycle#Regulation]].`
 
 FOR EXTERNAL SOURCES — any paper, book, or URL NOT in the wiki's `sources/`: use `[^id]: Author (Year), "Title", Journal/Publisher. DOI or URL`. Example: `[^id]: Rosenthal (2002), "Explaining Consciousness", in Philosophy of Mind: Classical and Contemporary Readings.`
 
@@ -10,4 +8,4 @@ FOR EXTERNAL SOURCES — any paper, book, or URL NOT in the wiki's `sources/`: u
 
 WRONG — do NOT do any of this: `[^id]: [[source:X|Author (Year)]], Journal. Anchor: "quote"` `[^id]: [[source:X]] Author (Year), "Title", Journal.` `[^id]: Author (Year) — Source (path), page N: "quote"`
 
-RIGHT: `[^id]: [[source:DisplayName#"distinctive quote from the passage"]]`
+RIGHT: `[^id]: [[DisplayName - distinctive quote from the passage|source:DisplayName#"distinctive quote from the passage"]]`
