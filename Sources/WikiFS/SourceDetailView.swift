@@ -404,6 +404,13 @@ struct SourceDetailView: View {
                             Button("Edit", systemImage: "pencil") {
                                 editBuffer = headVersion?.content ?? ""
                                 isEditing = true
+                                // #211: focus the editor even if the user had
+                                // switched to the PDF tab, where the markdown
+                                // editor isn't rendered. Leave Split alone —
+                                // the editor is already visible there.
+                                if selectedTab == .pdf {
+                                    selectedTab = .markdown
+                                }
                             }
                             .keyboardShortcut("e", modifiers: .command)
                             .disabled(isRunning)
