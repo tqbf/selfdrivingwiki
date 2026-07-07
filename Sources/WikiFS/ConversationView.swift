@@ -78,8 +78,8 @@ struct ConversationView: View {
             }
         }
         // Reload persisted messages when the store changes (e.g. a new message
-        // appended to a persisted chat — currently impossible until D3, but
-        // keeps the persisted view live for renames/count updates).
+        // appended to a persisted chat — D3 continues append here, and this keeps
+        // the persisted view live for renames/count updates when not live).
         .onChange(of: store.chats) { _, _ in
             if let chatID, !isLiveChat {
                 persistedMessages = store.chatMessages(chatID: chatID)
@@ -283,20 +283,23 @@ struct ConversationView: View {
             )
             .frame(maxWidth: ConversationMetrics.chatColumnWidth, maxHeight: .infinity)
             .frame(maxWidth: .infinity, alignment: .center)
-            // Disabled composer with a "saved conversation" caption (D3 will wire
-            // continueConversation). Kept visible so the surface looks consistent.
+            // D3: the persisted chat's composer continues the conversation
+            // (seeded-fallback). Enabled when the kind's launcher is idle; disabled
+            // with a slot-style caption when a different conversation is responding.
             .safeAreaInset(edge: .bottom) {
-                readOnlyComposerCaption
+                persistedComposerFooter
             }
         }
     }
 
-    private var readOnlyComposerCaption: some View {
+    private var persistedComposerFooter: some View {
         VStack(spacing: 4) {
-            composer(enabled: false)
-            Text("Saved conversation — read only. Continuing a saved conversation arrives in a future update.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            composer(enabled: isComposerEnabled)
+            if let caption = persistedComposerCaption {
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
         }
         .padding(.horizontal, ConversationMetrics.conversationHorizontalInset)
         .padding(.bottom, ConversationMetrics.contentInset)
@@ -383,8 +386,26 @@ struct ConversationView: View {
         guard !message.isEmpty else { return }
         draftMessage = ""
         if launcher.isInteractiveSession {
+            // Live chat mid-session: append a turn to the existing session.
             launcher.sendInteractiveMessage(message)
+        } else if let chatID {
+            // D3: a persisted (non-live) chat — start a fresh session that
+            // continues this conversation (seeded-fallback), streaming into the
+            // SAME chat row. activeChatID = chat.id flips this view to live.
+            Task {
+                await AgentOperationRunner.continueConversation(
+                    chatID: chatID,
+                    message: message,
+                    mode: mode,
+                    store: store,
+                    launcher: launcher,
+                    manager: manager,
+                    fileProvider: fileProvider,
+                    allowWikiEdits: mode.allowsEdits
+                )
+            }
         } else {
+            // Draft state (.ask/.edit): start a NEW conversation.
             Task {
                 await AgentOperationRunner.startQueryConversation(
                     firstMessage: message,
@@ -443,16 +464,41 @@ struct ConversationView: View {
         return descriptor.displayName
     }
 
-    /// Composer is enabled ONLY for the active live chat (activeChatID ==
-    /// chatID && interactive/idle). A persisted non-live chat is read-only.
+    /// Composer is enabled for the live chat AND for a persisted (non-live) chat
+    /// whose kind's launcher is idle (D3: continue a persisted conversation). A
+    /// persisted chat whose launcher is mid-generation (a DIFFERENT conversation
+    /// is responding) disables the composer — the takeover rules refuse a
+    /// mid-generation interrupt, so the composer reflects that.
     private var isComposerEnabled: Bool {
-        // Draft state (.ask/.edit with chatID == nil): always enabled.
+        // Draft state (.ask/.edit with chatID == nil): always enabled (when a
+        // wiki is open and nothing is generating).
         guard chatID != nil else {
             return manager.activeWikiID != nil && (launcher.isInteractiveSession || !launcher.isRunning)
         }
-        // A .chat(id) tab: enabled only if it's the live chat.
-        guard isLiveChat else { return false }
-        return launcher.isInteractiveSession || !launcher.isRunning
+        // The active live chat: enabled when a turn isn't in flight.
+        if isLiveChat {
+            return launcher.isInteractiveSession || !launcher.isRunning
+        }
+        // D3: a persisted (non-live) chat is continuable when its kind's launcher
+        // is idle (`!isGenerating && !isAwaitingGenerationSlot`). If that launcher
+        // is mid-generation (a different conversation), the composer stays
+        // disabled — `continueConversation`'s takeover guard would refuse anyway.
+        return manager.activeWikiID != nil
+            && !launcher.isGenerating
+            && !launcher.isAwaitingGenerationSlot
+    }
+
+    /// The caption shown under a persisted chat's composer when it is disabled
+    /// because the kind's launcher is responding to a DIFFERENT conversation.
+    /// Mirrors the slot-style hint used elsewhere. Empty (no caption) when the
+    /// composer is enabled.
+    private var persistedComposerCaption: String? {
+        guard chatID != nil, !isLiveChat else { return nil }
+        if launcher.isGenerating || launcher.isAwaitingGenerationSlot {
+            let label = mode == .edit ? "Edit" : "Ask"
+            return "Another \(label) conversation is responding — wait or stop it."
+        }
+        return nil
     }
 
     private var canType: Bool {

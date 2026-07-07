@@ -147,6 +147,13 @@ final class AgentLauncher {
     /// The active session handle (nil when no session is live). Replaces the
     /// old `process: Process?` — the launcher never touches a `Process` directly.
     @ObservationIgnored private var sessionHandle: SessionHandle?
+    /// Per-session token: `onExit` captures the token current at session start
+    /// and only calls `finish` if it's STILL current. Prevents a stale `onExit`
+    /// (a prior session terminating after a new one started — e.g. D3's
+    /// `continueConversation` takeover: `stopAgent` → `startInteractiveQuery`)
+    /// from tearing down the new session. `finish`'s `isRunning` guard alone
+    /// can't tell the sessions apart.
+    @ObservationIgnored private var currentRunToken: UUID?
     /// The edit-lock release closure for the current run (nil when no lock is held).
     /// Stored so `finish()` — and thus the completion watchdog — can release the
     /// lock even when the process's `terminationHandler` never fires. Without this,
@@ -685,15 +692,21 @@ final class AgentLauncher {
 
         do {
             DebugLog.agent("run: spawning kind=\(operation.kind.rawValue) wikiID=\(wikiID) exe=\(resolvedPath)")
+            let runToken = UUID()
             let session = try await backend.start(
                 profile: profile,
                 systemPrompt: systemPrompt,
                 onExit: { [weak self] status in
                     Task { @MainActor [weak self] in
-                        self?.finish(status: Int32(status))
+                        // Only finish if THIS session is still current — a stale
+                        // onExit (a prior session terminating after a new one
+                        // started) must not tear down the new session.
+                        guard let self, self.currentRunToken == runToken else { return }
+                        self.finish(status: Int32(status))
                     }
                 })
             sessionHandle = session
+            currentRunToken = runToken
             startCompletionWatchdog()
 
             // Consume the per-turn stream in a background Task (fire-and-forget:
@@ -901,15 +914,23 @@ final class AgentLauncher {
 
         do {
             DebugLog.agent("startInteractiveQuery: spawning exe=\(resolvedPath)")
+            let runToken = UUID()
             let session = try await backend.start(
                 profile: profile,
                 systemPrompt: systemPrompt,
                 onExit: { [weak self] status in
                     Task { @MainActor [weak self] in
-                        self?.finish(status: Int32(status))
+                        // Only finish if THIS session is still current — a stale
+                        // onExit (a prior session terminating after a new one
+                        // started, e.g. D3's continueConversation takeover:
+                        // stopAgent → startInteractiveQuery) must not tear down
+                        // the new session.
+                        guard let self, self.currentRunToken == runToken else { return }
+                        self.finish(status: Int32(status))
                     }
                 })
             sessionHandle = session
+            currentRunToken = runToken
             // SPAWN COMMIT: process is alive. isRunning = true (process alive across turns).
             isInteractiveSession = true
             isRunning = true

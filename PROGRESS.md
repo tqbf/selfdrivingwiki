@@ -2,6 +2,39 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-08 — Phase D3: continue a persisted conversation (seeded-fallback)
+
+**Continue a saved conversation by sending into it.** D3 only, seeded-fallback
+(no B/resume — the CLI backend stubs `resume` nil). 1877 tests green (+14 new
+D3 tests). Review found + fixed a stale-`onExit` race.
+
+- `Sources/WikiFS/AgentOperationRunner.swift`: `continueConversation(...)` —
+  takeover rules (`continueTakeoverDecision`: idle → take over; between-turns →
+  `stopAgent` [final flush persists the other conversation's tail] then take
+  over; mid-generation → refuse); `continuationPreamble(from:newMessage:maxTurns:
+  maxBytes:)` (pure, byte-capped, user/assistant `.text` only, new message in
+  full, "continuing an earlier conversation" header); starts a fresh session via
+  `startInteractiveQuery(chatID:, firstMessage: preamble)` so `activeChatID` =
+  the SAME chat row (seq continues, title preserved, `updatedAt` bumps to top).
+- `Sources/WikiFS/ConversationView.swift`: composer enabled on a persisted chat
+  when the kind's launcher is idle (slot-style hint when mid-generation);
+  `sendMessage` routes a persisted chat's send to `continueConversation`.
+- `Tests/WikiFSTests/ConversationContinueD3Tests.swift` (new): 14 tests —
+  builder (byte cap, user/assistant only, preamble, new message, maxTurns),
+  takeover matrix, same-row append (seq continues, title preserved).
+- **Review fix (load-bearing):** D3's takeover (`stopAgent` →
+  `startInteractiveQuery`) lets the old session's `onExit` fire AFTER the new
+  session starts; `onExit` was just `finish()` guarded on `isRunning`, so the
+  stale `onExit` would **tear down the new "continue" session**. Added a
+  per-session `currentRunToken: UUID?` — `onExit` captures the token at start
+  and only calls `finish` if it's still current (`run()` + `startInteractiveQuery`
+  both guarded). Tests can't catch this (no real processes); the full suite
+  confirms the guard is behavior-preserving for normal completion.
+
+**Pillars 1, 2, 3 (seeded-fallback) + sidebar done.** Remaining: pillar 4 (D5
+per-mode profiles); B (session identity / `backend.resume`) so "continue" can
+resume instead of seed.
+
 ## 2026-07-08 — Phase D4: sidebar affordances
 
 **Agent sidebar (`AgentToolsView`) affordances around the unified
