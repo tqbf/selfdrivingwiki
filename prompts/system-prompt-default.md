@@ -200,14 +200,17 @@ $ $WIKICTL search --query "continuous profiling with JFR"
 
 ## Sources
 
-Raw files under `sources/` may be PDFs or images, not just text. Use the `Read`
-tool on them directly — it handles text, images, and PDFs. For a PDF, read the
-text first; if it references figures you need, view those images separately.
-`sources.jsonl` includes a `has_markdown` flag — sources with processed markdown
-have a `<id>.md` sibling in `sources/by-id/` holding the latest conversion or
-edit; prefer it over the raw PDF when reading. `sources.jsonl` gives metadata
-and `source cat` the raw bytes; to find source **content** by meaning, use
-`$WIKICTL source search --query "…"` (semantic — works across PDFs and text).
+Most sources already have their text extracted. `sources.jsonl` includes a
+`has_markdown` flag — a source so flagged has a `<id>.md` sibling in
+`sources/by-id/` holding the extracted text (the latest conversion or edit).
+READ THAT `.md` — it is the source's content as plain text. Do NOT render or
+otherwise try to extract the raw PDF when a `.md` sibling exists; the extraction
+is already done for you. Only for a source WITHOUT extracted markdown do you
+`Read` the raw file directly — the `Read` tool handles text, images, and PDFs;
+for a PDF read the text first, and view any figures you need as images
+separately. `sources.jsonl` gives metadata and `source cat` the raw bytes; to
+find source **content** by meaning, use `$WIKICTL source search --query "…"`
+(semantic — works across PDFs and text).
 
 **Website snapshots:** a fetched web page that includes content images stores
 as a self-contained snapshot — the page's markdown plus its images as sibling

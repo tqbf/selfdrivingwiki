@@ -210,14 +210,17 @@ $ $WIKICTL search --query "continuous profiling with JFR"
 
 ## Sources
 
-Raw files under `sources/` may be PDFs or images, not just text. Use the `Read`
-tool on them directly — it handles text, images, and PDFs. For a PDF, read the
-text first; if it references figures you need, view those images separately.
-`sources.jsonl` includes a `has_markdown` flag — sources with processed markdown
-have a `<id>.md` sibling in `sources/by-id/` holding the latest conversion or
-edit; prefer it over the raw PDF when reading. `sources.jsonl` gives metadata
-and `source cat` the raw bytes; to find source **content** by meaning, use
-`$WIKICTL source search --query "…"` (semantic — works across PDFs and text).
+Most sources already have their text extracted. `sources.jsonl` includes a
+`has_markdown` flag — a source so flagged has a `<id>.md` sibling in
+`sources/by-id/` holding the extracted text (the latest conversion or edit).
+READ THAT `.md` — it is the source's content as plain text. Do NOT render or
+otherwise try to extract the raw PDF when a `.md` sibling exists; the extraction
+is already done for you. Only for a source WITHOUT extracted markdown do you
+`Read` the raw file directly — the `Read` tool handles text, images, and PDFs;
+for a PDF read the text first, and view any figures you need as images
+separately. `sources.jsonl` gives metadata and `source cat` the raw bytes; to
+find source **content** by meaning, use `$WIKICTL source search --query "…"`
+(semantic — works across PDFs and text).
 
 **Website snapshots:** a fetched web page that includes content images stores
 as a self-contained snapshot — the page's markdown plus its images as sibling
@@ -288,6 +291,8 @@ After a write, read it back with `wikictl page get` (the mount lags the database
 FOOTNOTE EVERY CLAIM — When you write a claim, interpretation, or non-obvious fact drawn from a source, footnote it.
 
 FOR WIKI SOURCES — i.e. any file in the wiki's `sources/` directory, not just the files in this ingest batch. Before writing, check whether a source is in the wiki: search `sources.jsonl` or run `wikictl source list --json` and match by filename or display name. If it IS a wiki source, cite it with `[^id]: [[source:DisplayName#"distinctive quote from the passage"]]`. `DisplayName` is the source's display name from `sources.jsonl` or `wikictl source list`. The quote goes AFTER `#"` with NO pipe, NO "Anchor:" text, and NO journal/DOI metadata — the source already has that. Example: `[^id]: [[source:Bassham1950#"the dark reactions of photosynthesis"]] and [[Calvin Cycle#Regulation]].`
+
+THE `#"quote"` IS REQUIRED, NOT OPTIONAL. It renders as the footnote's visible label, so it is what makes each footnote visually distinct. A bare `[[source:DisplayName]]` renders as just the title — when several footnotes cite the same source they all collapse to the same title and the reader cannot tell them apart. So: never omit the quote, and when you cite the same source for MORE THAN ONE claim, use a DIFFERENT distinctive quote in each footnote — the exact passage that backs that specific claim. Two footnotes to the same source must never carry the same quote.
 
 FOR EXTERNAL SOURCES — any paper, book, or URL NOT in the wiki's `sources/`: use `[^id]: Author (Year), "Title", Journal/Publisher. DOI or URL`. Example: `[^id]: Rosenthal (2002), "Explaining Consciousness", in Philosophy of Mind: Classical and Contemporary Readings.`
 
