@@ -2,6 +2,50 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-08 — Phase D2: one conversation surface (pillar 2)
+
+**Unify live Ask/Edit conversation + persisted chat history into a single
+`ConversationView`.** Behavior-preserving for both paths; 1855 tests green
+(+16 new D2 tests). D3 (continue a persisted chat) explicitly deferred —
+persisted non-live chats render read-only with composer disabled.
+
+**What changed:**
+- `Sources/WikiFS/ConversationView.swift` (new): the unified surface.
+  Source-of-truth rule: if `launcher.activeChatID == chatID`, render
+  `launcher.events` (streaming); else render
+  `store.chatMessages(chatID:).map(\.event)` (persisted). Absorbs the
+  `ChatHistoryDetailView` header (title/kind/count/date) as the idle-state
+  header. Moves all `QueryConversationView` chrome (composer, editing banner,
+  internals toggle, stop, new conversation). Composer disabled for non-live
+  chats with a "saved conversation" caption.
+- `Sources/WikiFS/AgentLauncher.swift`: `activeChatID: String?` property,
+  set in `startInteractiveQuery` (via new `chatID:` param), cleared in
+  `startNewConversation`, `finish` (AFTER flush), and `resetRunArtifacts`.
+- `Sources/WikiFS/AgentOperationRunner.swift`: passes `chatID` to the launcher;
+  calls `store.retargetActiveTabToChat(chatID:)` on first send (draft morph).
+- `Sources/WikiFSCore/WikiStoreModel.swift`: `retargetTab(id:to:)` +
+  `retargetActiveTabToChat(chatID:)` — retarget a tab IN PLACE (UUID preserved).
+- `Sources/WikiFS/WikiDetailView.swift`: `.chat(id)` → `ConversationView`;
+  `.ask`/`.edit` → `ConversationView(chatID: nil)` (draft state).
+- `Sources/WikiFS/ChatHistoryDetailView.swift`: **deleted** (absorbed into
+  `ConversationView`).
+- `Tests/WikiFSTests/ConversationViewD2Tests.swift` (new): 16 tests —
+  source-of-truth, retargetTab UUID preservation + order, draft morph,
+  startNewConversation retarget-back, persisted chat rendering.
+
+**Flip-timing (the load-bearing correctness point):**
+`activeChatID` is cleared in `finish()` AFTER `flushTranscript()` commits the
+final tail. `flushTranscript()` is synchronous — `transcriptSink?(tail)` runs
+`store.appendChatEvents` on the main actor before returning. By the time
+`activeChatID = nil` executes, `chatMessages(chatID:)` and in-memory `events[]`
+agree, so the live→persisted source flip cannot truncate. (Clearing it before
+the flush would re-source the view from the store with the last turn still
+missing → transient truncated flash.)
+
+**`QueryConversationView`** kept as a type hosting the static predicates
+(`showsNewConversationButton`, `showsEditingBanner`) — still tested, still
+referenced by `ConversationView`. No longer instantiated for routing.
+
 ## 2026-07-07 — agent backend port (Phase 0) + shared render context (Phase A.1)
 
 **Two behavior-preserving slices, 1829 tests green.** Both unblock

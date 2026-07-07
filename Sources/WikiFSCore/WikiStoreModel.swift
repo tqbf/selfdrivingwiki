@@ -674,6 +674,44 @@ public final class WikiStoreModel {
         DebugLog.store("[tabs] openTabInBackground: new background tab for \(selection) (id=\(tab.id)), \(tabs.count) tabs total")
     }
 
+    /// Retarget an open tab IN PLACE to a new selection, preserving the tab's
+    /// UUID — so tab order, drag/drop position, and per-tab history survive (D2).
+    /// Used for the draft-state morph (.ask/.edit → .chat(id) on first send) and
+    /// the startNewConversation retarget-back (.chat(id) → .ask/.edit). If no tab
+    /// with `id` exists, this is a no-op. If a DIFFERENT tab already shows `to`,
+    /// that tab is focused instead (tab-reuse, same as `openTab`).
+    public func retargetTab(id: UUID, to selection: WikiSelection) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else {
+            DebugLog.tabs("[tabs] retargetTab: tab \(id) not found — no-op")
+            return
+        }
+        // If another tab already displays this selection, reuse it (focus, don't
+        // duplicate) — mirrors openTab's dedup. This handles e.g. re-clicking a
+        // chat that's already open in another tab.
+        if let existing = tabs.first(where: { $0.selection == selection }), existing.id != id {
+            selectTab(id: existing.id)
+            return
+        }
+        tabs[index].selection = selection
+        tabs[index].title = tabTitle(for: selection)
+        // If this is the active tab, sync selection + drafts so the view updates.
+        if activeTabID == id {
+            isApplyingTabSelection = true
+            self.selection = selection
+            loadDrafts(for: selection)
+            isApplyingTabSelection = false
+        }
+        DebugLog.tabs("[tabs] retargetTab: tab \(id) → \(selection)")
+    }
+
+    /// Convenience: retarget the ACTIVE tab to `.chat(chatID)`. Used by the
+    /// draft-state morph on first send (the active tab is .ask/.edit → .chat).
+    /// No-op if there is no active tab.
+    public func retargetActiveTabToChat(chatID: PageID) {
+        guard let activeID = activeTabID else { return }
+        retargetTab(id: activeID, to: .chat(chatID))
+    }
+
     /// Switch the active tab by ID. No-op if the ID is unknown or already active.
     public func selectTab(id: UUID) {
         guard tabs.contains(where: { $0.id == id }), id != activeTabID else { return }

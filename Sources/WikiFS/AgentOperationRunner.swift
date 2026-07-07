@@ -236,6 +236,14 @@ enum AgentOperationRunner {
         // a store failure yields chat == nil and the session runs unpersisted.
         let chat = store.startChat(kind: allowWikiEdits ? .edit : .ask, firstMessage: trimmed)
 
+        // D2 draft-state morph: if a chat row was created, retarget the active
+        // tab IN PLACE from the draft state (.ask/.edit) to .chat(id). The tab's
+        // UUID survives → tab order, drag/drop, and per-tab history are preserved.
+        // The conversation "becomes" its tab — reopenable, restorable like any page.
+        if let chat {
+            store.retargetActiveTabToChat(chatID: chat.id)
+        }
+
         // Edit mode takes the edit lock; Ask mode is forced read-only by the seatbelt
         // sandbox and never acquires the lock at all.
         await launcher.startInteractiveQuery(
@@ -246,6 +254,10 @@ enum AgentOperationRunner {
             systemPrompt: store.currentSystemPromptBody(),
             wikictlDirectory: HelpersLocation.wikictlDirectory,
             allowWikiEdits: allowWikiEdits,
+            // D2: pass the chat row id so the launcher records it as
+            // activeChatID — ConversationView's source-of-truth switch. `nil`
+            // when startChat failed (session runs unpersisted, no live tab).
+            chatID: chat?.id.rawValue,
             onLock: { if allowWikiEdits { store.beginAgentRun() } },
             onUnlock: { if allowWikiEdits { store.endAgentRun() } },
             // Per-turn edit lock: release between turns (re-acquire on the next

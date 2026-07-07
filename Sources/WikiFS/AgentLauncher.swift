@@ -192,6 +192,16 @@ final class AgentLauncher {
     private var stderrLogHandle: FileHandle?
     /// True when the running process is waiting for user turns over stdin.
     private(set) var isInteractiveSession = false
+    /// The chat row the current live interactive session is writing to (D2).
+    /// Set by the runner when it installs the transcript sink — this is the chat
+    /// whose `.chat(id)` tab is live-streaming. `ConversationView` uses it as the
+    /// source-of-truth switch: when `activeChatID == chatID`, render
+    /// `launcher.events` (in-memory, streaming); otherwise render the persisted
+    /// `store.chatMessages(chatID:)`. Cleared in `startNewConversation()` (retarget
+    /// back to draft) and in `finish()` AFTER the final turn-boundary flush has
+    /// committed — clearing it too early re-sources the view from the store before
+    /// the tail lands, producing a transient truncated transcript (D2 flip-timing).
+    var activeChatID: String?
     /// Stored, cancellable Task for the current interactive send (which waits for
     /// the generation gate before writing to stdin). Cancelled by `stopAgent()` and
     /// `finish()` so an in-flight gate wait doesn't outlive the session.
@@ -774,6 +784,7 @@ final class AgentLauncher {
         systemPrompt: String,
         wikictlDirectory: String,
         allowWikiEdits: Bool = false,
+        chatID: String? = nil,
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
         onTurnBoundary: @escaping @MainActor (Bool) -> Void,
@@ -857,6 +868,12 @@ final class AgentLauncher {
         // both are per-session callbacks assigned once resetRunArtifacts() has run
         // (which clears any stale sink from a prior run).
         transcriptSink = onTranscript
+        // D2: record the chat row this live session is writing to. This is the
+        // source-of-truth switch for ConversationView — when it matches a tab's
+        // chatID, that tab renders `launcher.events` (streaming) instead of the
+        // persisted store. Set here (after resetRunArtifacts cleared any prior
+        // value) so the flip is live from the first streamed token.
+        activeChatID = chatID
         // NOTE: do NOT `setGenerating(true)` here. The first turn's transition is
         // owned by `sendInteractiveMessage(firstMessage)` below (after the gate is
         // acquired). If we set it here, `sendInteractiveMessage`'s gate-guard would
@@ -1088,6 +1105,11 @@ final class AgentLauncher {
         preflightError = nil
         transcriptSink = nil
         persistedEventCount = 0
+        // D2: clear the live chat association. The retarget back to the draft
+        // state (.ask/.edit) is handled by the caller (QueryConversationView /
+        // ConversationView) via store.retargetTab, since the launcher does not
+        // know which tab it lives in.
+        activeChatID = nil
     }
 
     // MARK: - Transcript persistence (issue #119)
@@ -1185,6 +1207,15 @@ final class AgentLauncher {
         // persists its last events) THEN detach the sink — no further writes.
         flushTranscript()
         transcriptSink = nil
+        // D2 flip-timing: clear activeChatID AFTER flushTranscript() has
+        // committed the final tail. flushTranscript() is synchronous — it calls
+        // transcriptSink?(tail) which runs store.appendChatEvents on the main
+        // actor before returning. By the time we reach this line, the persisted
+        // chatMessages(chatID:) and the in-memory events[] agree, so flipping the
+        // view's source-of-truth from "live" to "persisted" cannot truncate.
+        // (If we cleared it before the flush, the view would re-source from the
+        // store with the last turn's events still missing → truncated flash.)
+        activeChatID = nil
         closeLogFiles()
         exitStatus = status
         // Clear process-alive state.
@@ -1252,6 +1283,9 @@ final class AgentLauncher {
         // session's events (issue #119).
         transcriptSink = nil
         persistedEventCount = 0
+        // D2: a stale active chat association must never survive into a new run.
+        // (startInteractiveQuery sets the fresh value right after this reset.)
+        activeChatID = nil
     }
 
     // MARK: - Backend log files
