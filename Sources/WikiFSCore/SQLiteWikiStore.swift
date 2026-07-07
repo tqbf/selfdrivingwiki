@@ -258,7 +258,6 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             id                TEXT PRIMARY KEY,
             file_id           TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
             parent_id         TEXT,
-            content           TEXT NOT NULL,
             origin            TEXT NOT NULL,
             note              TEXT,
             created_at        REAL NOT NULL,
@@ -461,7 +460,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // schema change, and a fresh DB has no rows to sweep. The run-once guard
         // is the only effect on a fresh DB. Shared with the v22→23 migration step.
 
-        try exec("PRAGMA user_version=23;")
+        // v24 (graph-model Phase 2 close-out): the inline
+        // `source_markdown_versions.content` column is dropped — it's already
+        // absent from the fresh CREATE TABLE above (blob-only). Shared with the
+        // v23→24 migration step, which drops it from an upgraded DB.
+
+        try exec("PRAGMA user_version=24;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -1059,6 +1063,20 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try exec("PRAGMA user_version=23;")
             version = 23
         }
+
+        // Step 23 → 24 (graph-model Phase 2 close-out, §4.5): the v21 step
+        // CAS-moved every legacy `source_markdown_versions.content` into a blob
+        // and set `content=''`; every write path now writes `blob_hash` +
+        // `content=''`, and every reader resolves the body from the blob. The
+        // inline `content` column and its "prefer blob, fall back to inline"
+        // read path are dead — DROP the column (mirrors the v20 `sources.content`
+        // DROP COLUMN, same pre-drop silent-data-loss guard). See
+        // `migrateV23ToV24`.
+        if version < 24 {
+            try migrateV23ToV24()
+            try exec("PRAGMA user_version=24;")
+            version = 24
+        }
     }
 
     /// The v19→20 migration step. Creates the objects tables, then — for every
@@ -1485,6 +1503,45 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 _ = try update.step()
             }
             update.reset()
+        }
+    }
+
+    /// The v23→v24 migration step (graph-model Phase 2 close-out, §4.5). Drops
+    /// the now-dead inline `source_markdown_versions.content` column — the v21
+    /// step already CAS-moved every legacy row's inline body into a blob and set
+    /// `content=''`, and every write path writes `blob_hash` + `content=''`
+    /// since. Mirrors the v20 `sources.content` DROP COLUMN exactly: one
+    /// `withTransaction`, a pre-drop silent-data-loss guard, then DROP COLUMN.
+    private func migrateV23ToV24() throws {
+        try withTransaction {
+            // Guard: a DB rewound from v24 for testing, an artificial fixture
+            // that never created `source_markdown_versions`, or a fresh DB whose
+            // content column is already gone has nothing to drop. Skip + stamp.
+            let hasSMV = try queryScalarText(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='source_markdown_versions';") != "0"
+            guard hasSMV else { return }
+            let hasContentColumn = try queryScalarText(
+                "SELECT COUNT(*) FROM pragma_table_info('source_markdown_versions') WHERE name='content';") != "0"
+            guard hasContentColumn else { return }
+
+            // Pre-drop silent-data-loss guard (parallels the v20 content guard).
+            // Every row MUST have a blob_hash — the resolved body lives in the
+            // blob, so a NULL hash means dropping `content` would lose bytes. In
+            // practice impossible post-v21, but never silently drop content.
+            let unmigrated = try statement("""
+            SELECT id FROM source_markdown_versions WHERE blob_hash IS NULL LIMIT 1;
+            """)
+            defer { unmigrated.reset() }
+            unmigrated.reset()
+            if try unmigrated.step() {
+                let badID = unmigrated.text(at: 0)
+                throw WikiStoreError.unexpected(
+                    "v24 migration: source_markdown_versions row \(badID) has NULL blob_hash — refusing to drop content column")
+            }
+
+            // Drop the dead inline column. macOS 15 ships SQLite ≥ 3.43
+            // (`DROP COLUMN` since 3.35) — same precedent as the v20 step.
+            try exec("ALTER TABLE source_markdown_versions DROP COLUMN content;")
         }
     }
 
@@ -4667,11 +4724,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     /// The shared SELECT-list + LEFT JOIN that resolves a CAS'd row's content from
-    /// its blob (falling back to the inline column for any unmigrated row). Used by
-    /// every Swift-decode reader so they all honor the resolved-body invariant.
+    /// its blob. The inline `content` column was dropped in v24; the empty-string
+    /// default is defensive null handling for a row whose blob is somehow absent.
+    /// Used by every Swift-decode reader so they all honor the resolved-body invariant.
     private static let smvSelectColumns = """
     smv.id, smv.file_id, smv.parent_id,
-    COALESCE(CAST(b.content AS TEXT), smv.content),
+    COALESCE(CAST(b.content AS TEXT), ''),
     smv.origin, smv.note, smv.created_at,
     smv.activity_id, smv.source_version_id, smv.blob_hash, smv.mime_type
     """
@@ -4969,18 +5027,18 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
         let stmt = try statement("""
         INSERT INTO source_markdown_versions
-          (id, file_id, parent_id, content, origin, note, created_at,
+          (id, file_id, parent_id, origin, note, created_at,
            blob_hash, mime_type)
-        VALUES (?1, ?2, ?3, '', ?5, ?6, ?7, ?8, 'text/markdown');
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'text/markdown');
         """)
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         try stmt.bind(sourceID.rawValue, at: 2)
         if let parentID { try stmt.bind(parentID.rawValue, at: 3) }
-        try stmt.bind(origin, at: 5)
-        if let note { try stmt.bind(note, at: 6) }
-        try stmt.bind(now.timeIntervalSince1970, at: 7)
-        try stmt.bind(blobHash, at: 8)
+        try stmt.bind(origin, at: 4)
+        if let note { try stmt.bind(note, at: 5) }
+        try stmt.bind(now.timeIntervalSince1970, at: 6)
+        try stmt.bind(blobHash, at: 7)
         _ = try stmt.step()
 
         // Re-embed the source from the just-written content + its name so content
@@ -5050,9 +5108,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             storedBlobHash = blobHash
             let ins = try statement("""
             INSERT INTO source_markdown_versions
-              (id, file_id, parent_id, content, origin, note, created_at,
+              (id, file_id, parent_id, origin, note, created_at,
                activity_id, source_version_id, blob_hash, mime_type)
-            VALUES (?1, ?2, ?3, '', 'extraction', ?4, ?5, ?6, ?7, ?8, 'text/markdown');
+            VALUES (?1, ?2, ?3, 'extraction', ?4, ?5, ?6, ?7, ?8, 'text/markdown');
             """)
             ins.reset()
             try ins.bind(id.rawValue, at: 1)
@@ -5138,9 +5196,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try withTransaction {
             let ins = try statement("""
             INSERT INTO source_markdown_versions
-              (id, file_id, parent_id, content, origin, note, created_at,
+              (id, file_id, parent_id, origin, note, created_at,
                activity_id, source_version_id, blob_hash, mime_type)
-            VALUES (?1, ?2, ?3, '', 'revert', ?4, ?5, ?6, ?7, ?8, ?9);
+            VALUES (?1, ?2, ?3, 'revert', ?4, ?5, ?6, ?7, ?8, ?9);
             """)
             ins.reset()
             try ins.bind(id.rawValue, at: 1)
