@@ -1187,6 +1187,23 @@ public final class WikiStoreModel {
         try? store.vacuumBlobs(dryRun: dryRun)
     }
 
+    /// Run the activity-GC sweep against the active store (issue #257).
+    /// Returns nil only if the store call throws.
+    @discardableResult
+    public func performActivityVacuum(dryRun: Bool) -> ActivityVacuumReport? {
+        try? store.vacuumActivities(dryRun: dryRun)
+    }
+
+    /// Run both GC sweeps (blobs + activities) in one call. Each runs in its
+    /// own transaction — they are independent and idempotent, so a partial
+    /// failure is safe to retry. Returns nil only if both throw.
+    public func performVacuumAll(dryRun: Bool) -> VacuumReport? {
+        let blobs = performBlobVacuum(dryRun: dryRun)
+        let activities = performActivityVacuum(dryRun: dryRun)
+        guard let blobs, let activities else { return nil }
+        return VacuumReport(blobs: blobs, activities: activities)
+    }
+
     // MARK: - Agent run lock (Phase C, decision #6)
 
     /// The SINGLE mutation point for `isAgentRunning`. Every public entry point

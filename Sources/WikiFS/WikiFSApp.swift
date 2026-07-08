@@ -127,25 +127,19 @@ struct WikiFSApp: App {
                 .alert(
                     "Vacuum Orphaned Storage",
                     isPresented: Binding(
-                        get: { manager.pendingBlobVacuum != nil },
-                        set: { if !$0 { manager.pendingBlobVacuum = nil } }
+                        get: { manager.pendingVacuumAll != nil },
+                        set: { if !$0 { manager.pendingVacuumAll = nil } }
                     ),
-                    presenting: manager.pendingBlobVacuum
+                    presenting: manager.pendingVacuumAll
                 ) { report in
-                    if report.orphanCount == 0 {
+                    if report.isEmpty {
                         Button("OK", role: .cancel) {}
                     } else {
                         Button("Cancel", role: .cancel) {}
-                        Button("Vacuum", role: .destructive) { manager.applyBlobVacuum() }
+                        Button("Vacuum", role: .destructive) { manager.applyVacuumAll() }
                     }
                 } message: { report in
-                    if report.orphanCount == 0 {
-                        Text("No orphaned blobs found — nothing to reclaim.")
-                    } else {
-                        let bytes = ByteCountFormatter.string(
-                            fromByteCount: Int64(report.bytesReclaimed), countStyle: .file)
-                        Text("\(report.orphanCount) orphan blob\(report.orphanCount == 1 ? "" : "s"), \(bytes) reclaimable. This removes blobs no source references and cannot be undone.")
-                    }
+                    Text(report.alertMessage)
                 }
                 .task {
                     fileProvider.wire(into: manager)
@@ -174,7 +168,7 @@ struct WikiFSApp: App {
         .windowToolbarStyle(.unified)
         .commands {
             ClaudePromptHelpCommands()
-            BlobVacuumCommands(manager: manager)
+            VacuumCommands(manager: manager)
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { manager.activeStore?.flushPendingSaves() }

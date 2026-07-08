@@ -832,6 +832,42 @@ struct WikiCtlCommandTests {
         #expect(applied.command == .admin(.vacuumBlobs(dryRun: false, json: true)))
     }
 
+    // MARK: - admin vacuum-activities parsing (issue #257)
+
+    @Test func adminVacuumActivitiesDefaultsToDryRunNoJSON() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "admin", "vacuum-activities"], env: noEnv)
+        #expect(invocation.command == .admin(.vacuumActivities(dryRun: true, json: false)))
+    }
+
+    @Test func adminVacuumActivitiesApplyAndJSON() throws {
+        let applied = try ArgumentParser.parse(
+            ["--wiki", "W", "admin", "vacuum-activities", "--apply"], env: noEnv)
+        #expect(applied.command == .admin(.vacuumActivities(dryRun: false, json: false)))
+
+        let json = try ArgumentParser.parse(
+            ["--wiki", "W", "admin", "vacuum-activities", "--apply", "--json"], env: noEnv)
+        #expect(json.command == .admin(.vacuumActivities(dryRun: false, json: true)))
+    }
+
+    // MARK: - admin vacuum-all parsing (issue #257)
+
+    @Test func adminVacuumAllDefaultsToDryRunNoJSON() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "admin", "vacuum-all"], env: noEnv)
+        #expect(invocation.command == .admin(.vacuumAll(dryRun: true, json: false)))
+    }
+
+    @Test func adminVacuumAllApplyAndJSON() throws {
+        let applied = try ArgumentParser.parse(
+            ["--wiki", "W", "admin", "vacuum-all", "--apply"], env: noEnv)
+        #expect(applied.command == .admin(.vacuumAll(dryRun: false, json: false)))
+
+        let json = try ArgumentParser.parse(
+            ["--wiki", "W", "admin", "vacuum-all", "--apply", "--json"], env: noEnv)
+        #expect(json.command == .admin(.vacuumAll(dryRun: false, json: true)))
+    }
+
     @Test func adminRequiresSubcommand() {
         #expect(throws: ArgumentParser.Failure.self) {
             try ArgumentParser.parse(["--wiki", "W", "admin"], env: noEnv)
@@ -948,5 +984,148 @@ struct WikiCtlCommandTests {
         #expect(object?["orphanCount"] as? Int == 1)
         #expect(object?["bytesReclaimed"] as? Int == 5)
         #expect(object?["applied"] as? Bool == false)
+    }
+
+    // MARK: - activity GC (store vacuumActivities, issue #257)
+
+    /// `vacuumActivities` reaches an orphan the same way `vacuumBlobs` does:
+    /// a source's import activity lives in `activities`; deleting the source
+    /// cascades the version row that referenced it but leaves the activity
+    /// behind — exactly the leak the GC reclaims.
+    @Test func activityVacuumDryRunReportsOrphanFromDeletedSource() throws {
+        let store = try tempStore()
+        let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43]))
+        _ = try store.addSource(filename: "b.bin", data: Data([0x01, 0x02, 0x03]))
+
+        // Nothing orphaned while both sources exist.
+        #expect(try store.vacuumActivities(dryRun: true) == .init(orphanCount: 0, applied: false))
+
+        try store.deleteSource(id: a.id)
+
+        // Dry run reports the orphan but does NOT delete it.
+        let report1 = try store.vacuumActivities(dryRun: true)
+        #expect(report1 == .init(orphanCount: 1, applied: false))
+        // Re-running the dry run still sees the same orphan.
+        let report2 = try store.vacuumActivities(dryRun: true)
+        #expect(report2.orphanCount == 1)
+    }
+
+    @Test func activityVacuumApplyReclaimsOrphanAndPreservesReferencedActivity() throws {
+        let store = try tempStore()
+        let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43]))
+        let b = try store.addSource(filename: "b.bin", data: Data([0x01, 0x02, 0x03]))
+        try store.deleteSource(id: a.id)
+
+        let applied = try store.vacuumActivities(dryRun: false)
+        #expect(applied == .init(orphanCount: 1, applied: true))
+
+        // The still-referenced source reads back fine (its activity survived).
+        #expect(try store.sourceContent(id: b.id) == Data([0x01, 0x02, 0x03]))
+
+        // The orphan is gone; a follow-up sweep is a no-op (idempotent).
+        #expect(try store.vacuumActivities(dryRun: false).orphanCount == 0)
+        #expect(try store.vacuumActivities(dryRun: true).orphanCount == 0)
+    }
+
+    @Test func activityVacuumIsNoOpWhenEverythingIsReferenced() throws {
+        let store = try tempStore()
+        _ = try store.addSource(filename: "a.bin", data: Data("hello".utf8))
+        _ = try store.addSource(filename: "b.bin", data: Data("world!".utf8))
+
+        let applied = try store.vacuumActivities(dryRun: false)
+        #expect(applied.orphanCount == 0)
+    }
+
+    // MARK: - admin vacuum-activities dispatch (issue #257)
+
+    @Test func adminVacuumActivitiesDryRunDoesNotCommit() throws {
+        let store = try tempStore()
+        let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43]))
+        try store.deleteSource(id: a.id)
+
+        let result = try AdminCommand.run(.vacuumActivities(dryRun: true, json: false), in: store)
+        #expect(!result.didCommit)
+        guard case .text(let text) = result.payload else {
+            Issue.record("expected text payload"); return
+        }
+        #expect(text.contains("1 orphaned activity"))
+        #expect(text.contains("reclaimable"))
+        // Dry run left the orphan in place.
+        #expect(try store.vacuumActivities(dryRun: true).orphanCount == 1)
+    }
+
+    @Test func adminVacuumActivitiesApplyCommits() throws {
+        let store = try tempStore()
+        let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43]))
+        try store.deleteSource(id: a.id)
+
+        let result = try AdminCommand.run(.vacuumActivities(dryRun: false, json: false), in: store)
+        #expect(result.didCommit)
+        // The apply actually deleted the orphan.
+        #expect(try store.vacuumActivities(dryRun: true).orphanCount == 0)
+    }
+
+    @Test func adminVacuumActivitiesJSONPayloadMatchesReport() throws {
+        let store = try tempStore()
+        let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43]))
+        try store.deleteSource(id: a.id)
+
+        let result = try AdminCommand.run(.vacuumActivities(dryRun: true, json: true), in: store)
+        guard case .text(let text) = result.payload else {
+            Issue.record("expected text payload"); return
+        }
+        let data = text.data(using: .utf8)!
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        #expect(object?["orphanCount"] as? Int == 1)
+        #expect(object?["applied"] as? Bool == false)
+    }
+
+    // MARK: - admin vacuum-all dispatch (issue #257)
+
+    @Test func adminVacuumAllDryRunReportsBoth() throws {
+        let store = try tempStore()
+        let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43, 0x44, 0x45]))
+        try store.deleteSource(id: a.id)
+
+        let result = try AdminCommand.run(.vacuumAll(dryRun: true, json: false), in: store)
+        #expect(!result.didCommit)
+        guard case .text(let text) = result.payload else {
+            Issue.record("expected text payload"); return
+        }
+        // Both blob and activity orphans are reported in the combined output.
+        #expect(text.contains("1 orphan blob"))
+        #expect(text.contains("1 orphaned activity"))
+        // Dry run left both in place.
+        #expect(try store.vacuumBlobs(dryRun: true).orphanCount == 1)
+        #expect(try store.vacuumActivities(dryRun: true).orphanCount == 1)
+    }
+
+    @Test func adminVacuumAllApplyCommitsAndReclaimsBoth() throws {
+        let store = try tempStore()
+        let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43, 0x44, 0x45]))
+        try store.deleteSource(id: a.id)
+
+        let result = try AdminCommand.run(.vacuumAll(dryRun: false, json: false), in: store)
+        #expect(result.didCommit)
+        // Both orphans are gone.
+        #expect(try store.vacuumBlobs(dryRun: true).orphanCount == 0)
+        #expect(try store.vacuumActivities(dryRun: true).orphanCount == 0)
+    }
+
+    @Test func adminVacuumAllJSONPayloadHasBothSections() throws {
+        let store = try tempStore()
+        let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43, 0x44, 0x45]))
+        try store.deleteSource(id: a.id)
+
+        let result = try AdminCommand.run(.vacuumAll(dryRun: true, json: true), in: store)
+        guard case .text(let text) = result.payload else {
+            Issue.record("expected text payload"); return
+        }
+        let data = text.data(using: .utf8)!
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let blobs = object?["blobs"] as? [String: Any]
+        let activities = object?["activities"] as? [String: Any]
+        #expect(blobs?["orphanCount"] as? Int == 1)
+        #expect(activities?["orphanCount"] as? Int == 1)
     }
 }

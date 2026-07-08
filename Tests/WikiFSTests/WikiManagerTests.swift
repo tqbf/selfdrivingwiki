@@ -393,4 +393,32 @@ struct WikiManagerTests {
         manager.previewBlobVacuum()
         #expect(manager.pendingBlobVacuum == nil)
     }
+
+    // MARK: - Vacuum All (#257) — Help-menu preview/apply state flow
+
+    /// The combined vacuum-all flow mirrors the blob-only flow: preview runs a
+    /// read-only dry run and surfaces a combined report; apply clears it.
+    @Test func vacuumAllPreviewSetsReportAndApplyClearsIt() {
+        let manager = WikiManager(containerDirectory: tempDirectory())
+        manager.bootstrap()
+
+        manager.previewVacuumAll()
+        let report = manager.pendingVacuumAll
+        #expect(report != nil)
+        #expect(report?.blobs.orphanCount == 0)
+        #expect(report?.activities.orphanCount == 0)
+        #expect(report?.isEmpty == true)
+
+        manager.applyVacuumAll()
+        #expect(manager.pendingVacuumAll == nil)
+    }
+
+    @Test func vacuumAllPreviewIsNoOpWithoutActiveStore() {
+        let manager = WikiManager(containerDirectory: tempDirectory())
+        manager.bootstrap(activateNow: false)
+        #expect(manager.activeStore == nil)
+
+        manager.previewVacuumAll()
+        #expect(manager.pendingVacuumAll == nil)
+    }
 }

@@ -754,7 +754,8 @@ same commit as the fold.
 > moves the token *forward* (generation+1), never back. **But** `deleteSource`
 > cascades `source_versions` and `refs` rows, which legitimately *lowers*
 > `svCount` and `refsGenSum` (and `activities` rows persist — no cascade from
-> sources). The token only needs to *change* on any mutation, which it does; the
+> sources; orphaned activities are reclaimable via `vacuumActivities` /
+> `vacuum-all`, issue #257). The token only needs to *change* on any mutation, which it does; the
 > strict "never decreases" framing holds for appends/repoints but NOT deletes.
 > This is intentional: rollback changes the bytes the projection serves, so
 > consumers must refresh. Consequence: the token can never express "the wiki
@@ -849,7 +850,7 @@ longer needs to be revisited for these.
 | 3 | [#255](https://github.com/tqbf/selfdrivingwiki/issues/255) — Editor ergonomics for canonical `[[page:ULID\|Title]]` | §13 Q3 |
 | 4 | [#256](https://github.com/tqbf/selfdrivingwiki/issues/256) — Off-main bulk jobs with progress | §13 Q4 |
 | 5 | [#249](https://github.com/tqbf/selfdrivingwiki/issues/249) — `json-render` generative-UI spec + runtime | §13 Q5 / Phase 4 |
-| 6 | [#257](https://github.com/tqbf/selfdrivingwiki/issues/257) — Activity lifecycle on source delete | §13 Q6 |
+| 6 | [#257](https://github.com/tqbf/selfdrivingwiki/issues/257) — Activity lifecycle on source delete ✅ shipped | §13 Q6 |
 | 7 | [#250](https://github.com/tqbf/selfdrivingwiki/issues/250) — Snapshot-aware refresh | Phase 4 |
 | 8 | [#251](https://github.com/tqbf/selfdrivingwiki/issues/251) — `apple-ttml` transcript-level PROV | Phase 4 |
 | 9 | [#252](https://github.com/tqbf/selfdrivingwiki/issues/252) — Content-version pinning for byte embeds | Phase 6 |

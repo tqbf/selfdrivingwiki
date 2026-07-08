@@ -107,6 +107,11 @@ public enum ArgumentParser {
                                                provider, appending a new version
       admin vacuum-blobs [--apply] [--json]   report (and with --apply, reclaim)
                                                blobs no version row references
+      admin vacuum-activities [--apply] [--json]
+                                             report (and with --apply, reclaim)
+                                               activities no version row references
+      admin vacuum-all [--apply] [--json]    report (and with --apply, reclaim)
+                                               both orphaned blobs and activities
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -308,6 +313,16 @@ public enum ArgumentParser {
             // `--json` selects machine-readable output.
             let options = try Options(rest, booleanFlags: ["--apply", "--json"])
             return .admin(.vacuumBlobs(
+                dryRun: !options.flag("--apply"), json: options.flag("--json")))
+        case "vacuum-activities":
+            // Same flags as vacuum-blobs (issue #257).
+            let options = try Options(rest, booleanFlags: ["--apply", "--json"])
+            return .admin(.vacuumActivities(
+                dryRun: !options.flag("--apply"), json: options.flag("--json")))
+        case "vacuum-all":
+            // Combined: both blob + activity orphans in one pass (issue #257).
+            let options = try Options(rest, booleanFlags: ["--apply", "--json"])
+            return .admin(.vacuumAll(
                 dryRun: !options.flag("--apply"), json: options.flag("--json")))
         default:
             throw Failure.usage("admin: unknown subcommand \(sub.debugDescription)")

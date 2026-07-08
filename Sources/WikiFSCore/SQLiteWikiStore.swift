@@ -137,7 +137,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         guard !closed else { return }
         closed = true
         statements.removeAll()
-        sqlite3_close(db)
+        Self.checkpointAndClose(db)
     }
 
     /// Explicitly close the database connection. After calling this, the store
@@ -151,6 +151,18 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         guard !closed else { return }
         closed = true
         statements.removeAll()
+        Self.checkpointAndClose(db)
+    }
+
+    /// Force-checkpoint the WAL to zero length, then close. `sqlite3_close`'s
+    /// own internal checkpoint can race with a new connection opening the same
+    /// file under CI load, intermittently producing SQLITE_ERROR on the new
+    /// connection's writes (#223, #234). An explicit TRUNCATE checkpoint
+    /// flushes all committed frames into the main file first so `sqlite3_close`
+    /// has nothing left to do. Harmless on non-WAL / read-only connections
+    /// (the pragma is a no-op and the return value is unchecked).
+    nonisolated private static func checkpointAndClose(_ db: OpaquePointer) {
+        sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE);", nil, nil, nil)
         sqlite3_close(db)
     }
 
@@ -3387,6 +3399,52 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 _ = try deleter.step()
             }
             return BlobVacuumReport(orphanCount: orphanCount, bytesReclaimed: bytes, applied: !dryRun)
+        }
+    }
+
+    // MARK: - Activity GC (graph-model §13 / issue #257)
+
+    /// An activity is orphaned when no version row references its id. The two
+    /// reachability edges into `activities` are
+    /// `source_versions.activity_id` and `source_markdown_versions.activity_id`.
+    /// Each subquery filters out NULLs: without that, SQLite's three-valued
+    /// `NOT IN (…, NULL, …)` logic would suppress live orphans. Shared by the
+    /// count SELECT and the DELETE so the report always matches what's reclaimed.
+    private static let orphanActivityPredicate = """
+        id NOT IN (SELECT activity_id FROM source_versions            WHERE activity_id IS NOT NULL)
+        AND id NOT IN (SELECT activity_id FROM source_markdown_versions WHERE activity_id IS NOT NULL)
+    """
+
+    /// Sweep **orphaned** activity rows — activities no version references.
+    /// Deleting a source cascades its `source_versions`/
+    /// `source_markdown_versions` rows but leaves their activities behind; this
+    /// is the lazy reclamation for that leak (#257). Mirrors `vacuumBlobs`:
+    /// `dryRun == true` (the `wikictl admin vacuum-activities` default) reports
+    /// the orphan count WITHOUT deleting; `dryRun == false` (`--apply`) deletes
+    /// them. Count + delete run in ONE transaction, so the report is always
+    /// exactly what was (or would be) reclaimed.
+    ///
+    /// **NO_EMIT** (see `StoreEmissionExhaustivenessTests`): vacuuming orphans
+    /// changes no projected `ResourceKind` — activities fold into the
+    /// changeToken only through their referencing version rows, so the served
+    /// tree and token are unaffected by a count-only change. It does NOT route
+    /// through `mutate()` and emits no event.
+    @discardableResult
+    public func vacuumActivities(dryRun: Bool) throws -> ActivityVacuumReport {
+        try withTransaction {
+            let counter = try statement(
+                "SELECT COUNT(*) FROM activities WHERE \(Self.orphanActivityPredicate);")
+            defer { counter.reset() }
+            _ = try counter.step()
+            let orphanCount = Int(counter.int(at: 0))
+
+            if !dryRun {
+                let deleter = try statement(
+                    "DELETE FROM activities WHERE \(Self.orphanActivityPredicate);")
+                defer { deleter.reset() }
+                _ = try deleter.step()
+            }
+            return ActivityVacuumReport(orphanCount: orphanCount, applied: !dryRun)
         }
     }
 
