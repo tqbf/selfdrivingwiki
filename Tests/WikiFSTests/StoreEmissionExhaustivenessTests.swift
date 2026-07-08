@@ -70,7 +70,7 @@ struct StoreEmissionExhaustivenessTests {
         "createPage", "updatePage", "deletePage", "replaceLinks",
         "addSource", "addSnapshotImage", "addBytelessSource", "deleteSource",
         "appendContentVersion", "rollbackSourceContent", "renameSource",
-        "markSourceIngested", "updateSystemPrompt", "appendLog", "updateWikiIndex",
+        "setSourceDisplayName", "markSourceIngested", "updateSystemPrompt", "appendLog", "updateWikiIndex",
         "createBookmarkNode", "updateBookmarkNode", "deleteBookmarkNode",
         "moveBookmarkNode", "appendProcessedMarkdown", "recordMarkdownExtraction",
         "revertProcessedMarkdown", "setActiveMarkdown",

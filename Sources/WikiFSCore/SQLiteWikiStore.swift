@@ -3553,6 +3553,23 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    /// Set a source's `display_name` without the link-rewrite/FTS machinery of
+    /// `renameSource`. Used at ingest time when the display name is known before
+    /// any links exist (e.g. a URL-ingested HTML page whose storage filename has
+    /// `.md` appended but whose display name should be the clean page title).
+    public func setSourceDisplayName(id: PageID, displayName: String) throws {
+        try mutate(event: { _ in localEvent(.source, id: id.rawValue, change: .updated) }) {
+        let stmt = try statement("""
+        UPDATE sources SET display_name = ?2, updated_at = ?3, version = version + 1 WHERE id = ?1;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        try stmt.bind(WikiNameRules.sanitized(displayName), at: 2)
+        try stmt.bind(Date().timeIntervalSince1970, at: 3)
+        _ = try stmt.step()
+        }
+    }
+
     /// Stamp a source as summarized-into-the-wiki. Idempotent and a no-op
     /// for an unknown id. Called from `wikictl log append --kind ingest --source`.
     public func markSourceIngested(id: PageID) throws {

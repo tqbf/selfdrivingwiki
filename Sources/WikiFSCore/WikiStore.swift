@@ -145,6 +145,8 @@ public protocol WikiStore: Sendable {
     /// that points at it. Transactional — source row + all affected pages + their
     /// link rows in one commit. Fragment and alias are preserved.
     func renameSource(id: PageID, to newDisplayName: String) throws
+    /// Set display_name without the link-rewrite/FTS overhead of renameSource.
+    func setSourceDisplayName(id: PageID, displayName: String) throws
 
     /// Stamp a source as summarized-into-the-wiki. The agent calls this on
     /// successful completion via `wikictl log append --kind ingest --source <id>`;
