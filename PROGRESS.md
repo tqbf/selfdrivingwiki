@@ -2,6 +2,31 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-07 — Refresh button only when applicable + on the action row (#218)
+
+**Shipped.** The source detail view no longer offers Refresh on sources that
+can't actually be refreshed, and Refresh now lives on the primary action row
+(with Extract/Ingest) instead of the utility row.
+
+- **Authoritative gate.** Added `WikiStoreModel.isSourceRefreshable(for:)` — the
+  single source of truth the UI gates on. It mirrors what
+  `SourceRefreshService.materialize` + the `performRefresh` snapshot guard will
+  actually do: `website` is refreshable *unless* it's a snapshot with image
+  siblings (the D3 guard); `apple-podcast` only when the build compiled
+  `PODCAST_TRANSCRIPTS` **and** the `podcast-token-helper` binary is present at
+  runtime; everything else (local-file, Zotero, folder, unknown, missing
+  origin/plan) is not. This fixes the prior gap where the view's own string
+  check (`agentName == website|apple-podcast`) showed Refresh for podcast
+  sources with no helper and for image snapshots — both of which always errored.
+- **View.** `SourceDetailView.isRefreshable` is now `@State` loaded per-file in
+  `.task(id:)`/`.onAppear` and reset in `.onChange(of: file.id)` (alongside
+  `origin`), so `body` stays free of DB/filesystem probes. The Refresh button
+  moved from the utility `HStack` (Edit/Show in List/Share/Reveal/Outline) to
+  the primary action `HStack`, right after Ingest.
+- **Tests.** Gate coverage in `SourceRefreshTests` (website = true, local-file =
+  false) and `SnapshotRefreshGuardTests` (image snapshot = false, imageless
+  website = true). Build + 10 refresh-suite tests green.
+
 ## 2026-07-08 — Chat UI + persistent chat (issue #119)
 
 **Shipped.** Ask/Edit conversations persist to the wiki's SQLite store, render

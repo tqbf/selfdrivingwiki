@@ -134,4 +134,29 @@ struct SourceRefreshTests {
         #expect(headAfter.content == "SPEAKER_1: v2 transcript.")
     }
     #endif
+
+    // MARK: - Refreshability gate (#218): the detail view should only offer
+    // Refresh when `refreshSource(_:)` would actually succeed.
+
+    @Test func websiteSourceIsRefreshable() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let fetcher = SwapFetcher(htmlResponse(
+            "<html><body>plain</body></html>", url: "https://example.com/a"))
+        _ = try await model.addURL("https://example.com/a", fetcher: fetcher)
+        let source = try #require(try store.listSources().first { $0.role == .primary })
+        #expect(model.isSourceRefreshable(for: source.id) == true)
+    }
+
+    @Test func localFileSourceIsNotRefreshableGate() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        // A local-file source has no URL to re-fetch.
+        _ = try store.addSource(
+            filename: "notes.txt", data: Data("hello".utf8),
+            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            provenance: nil)
+        let source = try #require(try store.listSources().first)
+        #expect(model.isSourceRefreshable(for: source.id) == false)
+    }
 }

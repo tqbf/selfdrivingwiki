@@ -47,6 +47,12 @@ struct SourceDetailView: View {
     @State private var isRefreshing = false
     /// Set when a refresh fails — surfaced inline below the action row.
     @State private var refreshError: String?
+    /// Whether THIS source can actually be refreshed — the authoritative gate
+    /// from `store.isSourceRefreshable(for:)` (mirrors the refresh service's real
+    /// decision, incl. the snapshot-with-images guard and podcast-helper
+    /// availability). Loaded per-file alongside `origin` so `body` stays free of
+    /// DB/filesystem probes.
+    @State private var isRefreshable = false
     /// Tracks the active tab ID as of the last resolved update cycle — used to
     /// distinguish tab switches from in-tab file navigation.
     @State private var lastKnownActiveTabID: UUID? = nil
@@ -103,13 +109,6 @@ struct SourceDetailView: View {
         if let pinID = store.consumePendingPinnedExtraction(for: store.selection) {
             pinnedExtraction = store.processedMarkdownVersion(for: pinID)
         }
-    }
-
-    /// `true` when the source's origin is a refreshable provider (website or
-    /// Apple Podcast). Import-only providers (local-file, Zotero, folder) carry
-    /// no URL to re-fetch.
-    private var isRefreshable: Bool {
-        origin?.agentName == "website" || origin?.agentName == "apple-podcast"
     }
 
     private var showTabs: Bool { isPDF && hasMarkdown }
@@ -177,6 +176,7 @@ struct SourceDetailView: View {
         .onAppear {
             headVersion = store.processedMarkdownHead(for: file)
             origin = store.sourceOrigin(for: file.id)
+            isRefreshable = store.isSourceRefreshable(for: file.id)
             lastKnownActiveTabID = store.activeTabID
             consumePinnedExtraction()
         }
@@ -195,6 +195,7 @@ struct SourceDetailView: View {
             showReingestConfirmation = false
             headVersion = nil
             origin = nil
+            isRefreshable = false
             selectedTab = .markdown
             pdfQuote = nil
             pinnedExtraction = nil
@@ -205,6 +206,7 @@ struct SourceDetailView: View {
         .task(id: file.id) {
             headVersion = store.processedMarkdownHead(for: file)
             origin = store.sourceOrigin(for: file.id)
+            isRefreshable = store.isSourceRefreshable(for: file.id)
         }
         .task(id: PDFTaskKey(sourceID: file.id, anchorVersion: store.pendingScrollAnchorVersion)) {
             // Only consume for un-extracted PDFs (the markdown side handles
@@ -396,6 +398,17 @@ struct SourceDetailView: View {
                                           && !launcher.extractingSourceIDs.contains(file.id)))
                         }
                         ingestButton
+                        // Refresh lives on the primary action row (with Extract /
+                        // Ingest), not the utility row — re-fetching is a primary
+                        // source action. Only shown when the source can actually be
+                        // refreshed (see `isRefreshable`).
+                        if isRefreshable {
+                            Button("Refresh", systemImage: "arrow.clockwise") {
+                                Task { await runRefresh() }
+                            }
+                            .disabled(isRefreshing || store.isAgentRunning)
+                            .help("Re-fetch this source and append a new version")
+                        }
                     }
                     // Row 2 — secondary / utility actions: Edit, Show in List,
                     // Share, Reveal in Finder, Outline.
@@ -422,13 +435,6 @@ struct SourceDetailView: View {
                             store.requestSidebarReveal(.source(file.id))
                         }
                         .help("Reveal this source in the sidebar")
-                        if isRefreshable {
-                            Button("Refresh", systemImage: "arrow.clockwise") {
-                                Task { await runRefresh() }
-                            }
-                            .disabled(isRefreshing || store.isAgentRunning)
-                            .help("Re-fetch this source and append a new version")
-                        }
                         if fileProvider.path != nil {
                             Button("Share", systemImage: "square.and.arrow.up") {
                                 Task {

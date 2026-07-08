@@ -1855,6 +1855,32 @@ public final class WikiStoreModel {
         try? store.sourceOrigin(sourceID: id)
     }
 
+    /// `true` iff `refreshSource(_:)` would actually succeed for this source —
+    /// the single source of truth the detail view gates the Refresh button on.
+    /// Mirrors `SourceRefreshService.materialize` + the `performRefresh` snapshot
+    /// guard so the UI only offers Refresh when it can work:
+    /// - `"website"` → refreshable, unless it's a snapshot with image siblings
+    ///   (the single-source refresh guard, D3, would orphan them).
+    /// - `"apple-podcast"` → refreshable only when this build compiled podcast
+    ///   support AND the `podcast-token-helper` binary is present at runtime.
+    /// - Everything else (local-file, Zotero, folder, unknown, missing origin)
+    ///   is import-only and not refreshable.
+    public func isSourceRefreshable(for id: PageID) -> Bool {
+        guard let origin = sourceOrigin(for: id), origin.plan != nil else { return false }
+        switch origin.agentName {
+        case "website":
+            return !((try? store.hasImageSiblings(sourceID: id)) ?? false)
+        case "apple-podcast":
+            #if PODCAST_TRANSCRIPTS
+            return ApplePodcastTranscriptService.bundled() != nil
+            #else
+            return false
+            #endif
+        default:
+            return false
+        }
+    }
+
     // MARK: - Processed markdown versions (v8)
 
     /// The latest (HEAD) processed markdown version for a file. Every source has a
