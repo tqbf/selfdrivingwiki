@@ -2435,11 +2435,37 @@ public final class WikiStoreModel {
         do {
             let title = ChatSummary.title(fromFirstMessage: firstMessage)
             let chat = try store.createChat(kind: kind, title: title)
+            // Seed the first user message immediately (seq 0) so a chat is never
+            // titled-but-empty — even if the agent session dies before its first
+            // turn produces any events (the orphan-chat bug: a `chats` row with a
+            // title but zero `chat_messages`). The launcher is told the message is
+            // already persisted (firstMessagePrePersisted) so it marks the event as
+            // flushed and does NOT double-insert it on the first transcript flush.
+            try store.appendChatMessages(chatID: chat.id, events: [.userText(firstMessage)])
             reloadChats()
             return chat
         } catch {
             DebugLog.store("WikiStoreModel.startChat failed: \(error)")
             return nil
+        }
+    }
+
+    /// Roll back a chat created by `startChat` when its session never started
+    /// (preflight/spawn failure in `startQueryConversation`). Deletes the row
+    /// (and its seeded first message, via `ON DELETE CASCADE`) and reverts the
+    /// tab that was retargeted to it back to the draft composer — so the user
+    /// isn't left on a dead `.chat` selection. Best-effort: a store failure is
+    /// logged, never thrown.
+    public func rollbackChatCreation(id: PageID, toDraft draft: WikiSelection) {
+        do {
+            try store.deleteChat(id: id)
+        } catch {
+            DebugLog.store("WikiStoreModel.rollbackChatCreation failed: \(error)")
+        }
+        reloadChats()
+        // Revert the tab we retargeted to `.chat(id)` back to the draft composer.
+        if let tab = tabs.first(where: { $0.selection == .chat(id) }) {
+            retargetTab(id: tab.id, to: draft)
         }
     }
 
