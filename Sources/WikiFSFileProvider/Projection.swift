@@ -71,6 +71,15 @@ struct Projection {
         static let claudeMD = NSFileProviderItemIdentifier(WikiFSContainerID.claudeMD)
         static let agentsMD = NSFileProviderItemIdentifier(WikiFSContainerID.agentsMD)
 
+        // Bookmarks (#125, Phase D): a top-level `bookmarks/` tree mirroring the
+        // user-defined folder/ref structure. Folders and refs each carry the
+        // bookmark-node ULID (NOT the target's ULID) so one bookmark can point
+        // at the same page as another without colliding.
+        static let bookmarks = NSFileProviderItemIdentifier(WikiFSContainerID.bookmarks)
+        static let bookmarkFolderPrefix = WikiFSContainerID.bookmarkFolderPrefix
+        static let bookmarkPageRefPrefix = WikiFSContainerID.bookmarkPageRefPrefix
+        static let bookmarkSourceRefPrefix = WikiFSContainerID.bookmarkSourceRefPrefix
+
         // Phase B: two more root-level read-only docs. `log.md` renders the
         // append-only `log` table as grep-able lines; `index.md` serves the
         // singleton `wiki_index` body verbatim.
@@ -144,6 +153,32 @@ struct Projection {
             if raw.hasPrefix(sourceMarkdownByNamePrefix) { return String(raw.dropFirst(sourceMarkdownByNamePrefix.count)) }
             return nil
         }
+
+        // MARK: Bookmark identifiers (Phase D)
+
+        static func bookmarkFolder(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(bookmarkFolderPrefix + ulid)
+        }
+        static func bookmarkPageRef(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(bookmarkPageRefPrefix + ulid)
+        }
+        static func bookmarkSourceRef(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(bookmarkSourceRefPrefix + ulid)
+        }
+
+        /// Extract the bookmark-node ULID from any bookmark identifier, or nil.
+        static func bookmarkULID(from id: NSFileProviderItemIdentifier) -> String? {
+            let raw = id.rawValue
+            for p in [bookmarkFolderPrefix, bookmarkPageRefPrefix, bookmarkSourceRefPrefix] {
+                if raw.hasPrefix(p) { return String(raw.dropFirst(p.count)) }
+            }
+            return nil
+        }
+
+        /// True if `id` is any bookmark identifier (folder or ref).
+        static func isBookmark(_ id: NSFileProviderItemIdentifier) -> Bool {
+            bookmarkULID(from: id) != nil
+        }
     }
 
     // MARK: - Static content
@@ -166,6 +201,7 @@ struct Projection {
     - `pages/by-title/`
     - `sources/by-id/`
     - `sources/by-name/`
+    - `bookmarks/`
     - `manifest.json`
     - `indexes/pages.jsonl`
     - `indexes/links.jsonl`
@@ -617,6 +653,176 @@ struct Projection {
         manifestIndex, pagesJSONLIndex, linksJSONLIndex, sourcesJSONLIndex
     ]
 
+    // MARK: - Nested resource projections (slice 2b, Phase D)
+
+    /// Describes a nested (folder-tree) resource projection — a top-level
+    /// folder containing user-defined subfolders and leaf refs, like bookmarks.
+    /// Mirrors `FlatResourceProjection` (Phase B) / `SingletonDoc` (Phase C):
+    /// the dispatch sites iterate a registry of these. The key difference from a
+    /// flat projection is that nesting is arbitrary-depth: `childrenOf` resolves
+    /// any container (the topLevel or a folder) to its children.
+    ///
+    /// Value type with closures, not a protocol w/ associated types (D2). The
+    /// closures are same-file, so they may call `Projection`'s `private` seam.
+    struct NestedResourceProjection: @unchecked Sendable {
+        let topLevel: NSFileProviderItemIdentifier
+        /// Does this projection own `id` — any node (folder or leaf) in this tree?
+        let owns: (NSFileProviderItemIdentifier) -> Bool
+        /// Resolve a single node by identifier (folder or leaf), or nil.
+        let nodeFor: (Projection, NSFileProviderItemIdentifier) -> ProjectedNode?
+        /// Enumerate the children of a container (topLevel or a folder). Returns
+        /// `[]` for leaf identifiers (they have no children).
+        let childrenOf: (Projection, NSFileProviderItemIdentifier) -> [ProjectedNode]
+        /// Serve content bytes for a leaf identifier, or nil.
+        let contentFor: (Projection, NSFileProviderItemIdentifier) -> Data?
+        /// Emit ALL nodes at every depth (for the working set).
+        let allNodes: (Projection) -> [ProjectedNode]
+    }
+
+    static let bookmarksProjection = NestedResourceProjection(
+        topLevel: Identity.bookmarks,
+        owns: { Identity.isBookmark($0) },
+        nodeFor: { $0.bookmarkNode(for: $1) },
+        childrenOf: { $0.bookmarkChildren(of: $1) },
+        contentFor: { $0.bookmarkContent(for: $1) },
+        allNodes: { $0.allBookmarkNodes() }
+    )
+
+    /// Nested-resource projections, in tree order. `node`/`children`/`contents`/
+    /// working-set iterate this.
+    static let nestedProjections: [NestedResourceProjection] = [bookmarksProjection]
+
+    // MARK: - Bookmark projection helpers (Phase D)
+
+    /// Map a `BookmarkNode` to its File Provider identifier (kind-dispatched).
+    static func bookmarkID(for node: BookmarkNode) -> NSFileProviderItemIdentifier {
+        switch node.kind {
+        case .folder:      return Identity.bookmarkFolder(node.id)
+        case .pageRef:     return Identity.bookmarkPageRef(node.id)
+        case .sourceRef:   return Identity.bookmarkSourceRef(node.id)
+        }
+    }
+
+    /// Resolve the File Provider parent identifier for a bookmark node (root →
+    /// the `bookmarks` folder; nested → the parent's folder identifier).
+    static func bookmarkParent(for node: BookmarkNode) -> NSFileProviderItemIdentifier {
+        if let parentID = node.parentID {
+            return Identity.bookmarkFolder(parentID)
+        }
+        return Identity.bookmarks
+    }
+
+    /// Replace the path separator in a display name (folders are virtual, but
+    /// Finder/Terminal users see the name).
+    static func sanitizeFilename(_ name: String) -> String {
+        name.replacingOccurrences(of: "/", with: "-")
+    }
+
+    /// Build a `ProjectedNode` for one bookmark node, resolving the target for
+    /// refs. Stale refs (target deleted) render as a small placeholder file so
+    /// the tree shape is preserved. All bookmark nodes are versioned by the
+    /// change token so any mutation re-fetches them.
+    private func bookmarkNodeItem(
+        for node: BookmarkNode, in store: SQLiteWikiStore
+    ) -> ProjectedNode {
+        let id = Self.bookmarkID(for: node)
+        let parent = Self.bookmarkParent(for: node)
+        let version = Data(changeToken().utf8)
+        switch node.kind {
+        case .folder:
+            return .folder(id: id, parent: parent, name: node.label ?? "Untitled")
+        case .pageRef:
+            if let targetID = node.targetID,
+               let page = try? store.getPage(id: targetID) {
+                let body = Data(PageMarkdownFormat.fileContent(for: page).utf8)
+                let name = Self.sanitizeFilename(page.title) + ".md"
+                return .file(id: id, parent: parent, name: name, size: body.count,
+                             version: version, metadataVersion: version,
+                             created: page.createdAt, modified: page.updatedAt)
+            }
+            let body = Data("# Stale reference\n\nThis bookmark points to a deleted page.".utf8)
+            return .file(id: id, parent: parent, name: "Stale Reference.md",
+                         size: body.count, version: version, metadataVersion: version,
+                         created: nil, modified: nil)
+        case .sourceRef:
+            if let targetID = node.targetID,
+               let source = try? store.getSource(id: targetID) {
+                let humanName = source.displayName ?? source.filename
+                return .file(id: id, parent: parent,
+                             name: Self.sanitizeFilename(humanName),
+                             size: source.byteSize,
+                             version: version, metadataVersion: version,
+                             created: source.createdAt, modified: source.updatedAt,
+                             ingestedExt: source.ext, mimeType: source.mimeType)
+            }
+            let body = Data("# Stale reference\n\nThis bookmark points to a deleted source.".utf8)
+            return .file(id: id, parent: parent, name: "Stale Reference.txt",
+                         size: body.count, version: version, metadataVersion: version,
+                         created: nil, modified: nil)
+        }
+    }
+
+    /// Resolve a single bookmark node by identifier (for `node(for:)`).
+    private func bookmarkNode(for id: NSFileProviderItemIdentifier) -> ProjectedNode? {
+        guard let ulid = Identity.bookmarkULID(from: id),
+              let store = openReadStore(),
+              let nodes = try? store.listBookmarkNodes(),
+              let node = nodes.first(where: { $0.id == ulid }) else { return nil }
+        return bookmarkNodeItem(for: node, in: store)
+    }
+
+    /// Enumerate the children of a bookmark container (the topLevel folder or a
+    /// nested folder). Leaf identifiers return `[]`.
+    private func bookmarkChildren(of container: NSFileProviderItemIdentifier) -> [ProjectedNode] {
+        let parentID: String?
+        if container == Identity.bookmarks {
+            parentID = nil
+        } else if container.rawValue.hasPrefix(Identity.bookmarkFolderPrefix),
+                  let ulid = Identity.bookmarkULID(from: container) {
+            parentID = ulid
+        } else {
+            return []
+        }
+        guard let store = openReadStore(),
+              let nodes = try? store.listBookmarkNodes() else { return [] }
+        return nodes
+            .filter { $0.parentID == parentID }
+            .sorted { $0.position < $1.position }
+            .compactMap { bookmarkNodeItem(for: $0, in: store) }
+    }
+
+    /// Serve content for a bookmark ref leaf, resolving the target. Folders
+    /// return nil. Stale refs serve a placeholder.
+    private func bookmarkContent(for id: NSFileProviderItemIdentifier) -> Data? {
+        guard let ulid = Identity.bookmarkULID(from: id),
+              let store = openReadStore(),
+              let nodes = try? store.listBookmarkNodes(),
+              let node = nodes.first(where: { $0.id == ulid }) else { return nil }
+        switch node.kind {
+        case .folder:
+            return nil
+        case .pageRef:
+            guard let targetID = node.targetID,
+                  let page = try? store.getPage(id: targetID) else {
+                return Data("# Stale reference\n\nThis bookmark points to a deleted page.".utf8)
+            }
+            return Data(PageMarkdownFormat.fileContent(for: page).utf8)
+        case .sourceRef:
+            guard let targetID = node.targetID else {
+                return Data("# Stale reference\n\nThis bookmark points to a deleted source.".utf8)
+            }
+            return (try? store.sourceContent(id: targetID))
+                ?? Data("# Stale reference\n\nThis bookmark points to a deleted source.".utf8)
+        }
+    }
+
+    /// Emit ALL bookmark nodes at every depth (for the working set).
+    private func allBookmarkNodes() -> [ProjectedNode] {
+        guard let store = openReadStore(),
+              let nodes = try? store.listBookmarkNodes() else { return [] }
+        return nodes.compactMap { bookmarkNodeItem(for: $0, in: store) }
+    }
+
     // MARK: - Metadata resolution
 
     /// Resolve a single item's metadata by identifier.
@@ -644,6 +850,8 @@ struct Projection {
             return .folder(id: id, parent: Identity.pages, name: "by-title")
         case Identity.indexes:
             return .folder(id: id, parent: .rootContainer, name: "indexes")
+        case Identity.bookmarks:
+            return .folder(id: id, parent: .rootContainer, name: "bookmarks")
         case Identity.sources:
             return .folder(id: id, parent: .rootContainer, name: "sources")
         case Identity.sourcesByID:
@@ -659,6 +867,10 @@ struct Projection {
         // and the source-markdown sibling); container identifiers return nil.
         for projection in Self.flatProjections where projection.owns(id) {
             return projection.nodeForLeaf(self, id)
+        }
+        // Nested leaf/folder resolution (slice 2b Phase D).
+        for projection in Self.nestedProjections where projection.owns(id) {
+            return projection.nodeFor(self, id)
         }
         return nil
     }
@@ -760,6 +972,10 @@ struct Projection {
             for projection in Self.flatProjections {
                 if let n = node(for: projection.topLevel) { nodes.append(n) }
             }
+            // Nested-resource top-level folders (bookmarks).
+            for projection in Self.nestedProjections {
+                if let n = node(for: projection.topLevel) { nodes.append(n) }
+            }
             // The indexes folder.
             if let n = node(for: Identity.indexes) { nodes.append(n) }
             return nodes
@@ -790,6 +1006,10 @@ struct Projection {
                     if let n = doc.nodeFor(self, entry.id, entry.name) { nodes.append(n) }
                 }
             }
+            // Nested-resource nodes at all depths (Phase D).
+            for projection in Self.nestedProjections {
+                nodes += projection.allNodes(self)
+            }
             return nodes
         default:
             break
@@ -806,6 +1026,12 @@ struct Projection {
             }
             if container == projection.byNameContainer {
                 return projection.enumerate(self, true)
+            }
+        }
+        // Nested-resource containers (slice 2b Phase D).
+        for projection in Self.nestedProjections {
+            if container == projection.topLevel || projection.owns(container) {
+                return projection.childrenOf(self, container)
             }
         }
         return []
@@ -872,6 +1098,10 @@ struct Projection {
         // flat-resource projection's `contentForLeaf`.
         for projection in Self.flatProjections where projection.owns(id) {
             return projection.contentForLeaf(self, id)
+        }
+        // Nested leaf content (slice 2b Phase D).
+        for projection in Self.nestedProjections where projection.owns(id) {
+            return projection.contentFor(self, id)
         }
         return nil
     }

@@ -229,6 +229,13 @@ projection (the dedup must not change served bytes). Each phase is one PR.
 - Wires up the `bookmark` `ResourceKind` the bus already emits.
 - **Gate:** a bookmark folder with nested children + a ref leaf enumerates and
   reads in the mount; create/rename/move/delete re-fetches via the bus.
+- ↳ *Phase D shipped (2026-07-08).* `NestedResourceProjection` descriptor +
+  `bookmarksProjection` instance drive every dispatch site. Bookmark node
+  builders resolve folders→directories, page refs→`<title>.md`, source refs→
+  `<filename>`, stale refs→placeholder. `BookmarkTokenContributor` appends the
+  12th token fold. Identifier scheme: `bookmark-folder:`/`bookmark-page-ref:`/
+  `bookmark-source-ref:<ULID>`. 8 new `ProjectionTreeTests`. Gate met (1914
+  tests green). **Slice 2b COMPLETE.**
 
 ### Phase E — DEFERRED to its own slice (not in 2b)
 

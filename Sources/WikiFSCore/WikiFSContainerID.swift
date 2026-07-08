@@ -75,4 +75,12 @@ public enum WikiFSContainerID {
     public static func sourceByName(_ ulid: String) -> String {
         sourceByNamePrefix + ulid
     }
+
+    // Bookmarks (#125, Phase D). A top-level `bookmarks/` tree mirrors the
+    // user-defined folder/ref structure from `bookmark_nodes`. Folders are
+    // directories; page/source refs are leaf files serving the target's content.
+    public static let bookmarks = "bookmarks"
+    public static let bookmarkFolderPrefix = "bookmark-folder:"
+    public static let bookmarkPageRefPrefix = "bookmark-page-ref:"
+    public static let bookmarkSourceRefPrefix = "bookmark-source-ref:"
 }

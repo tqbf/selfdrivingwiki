@@ -18,12 +18,10 @@ struct ChangeTokenContributorTests {
     /// `StoreEmissionExhaustivenessTests` for mutating methods).
     @Test func contributorsCoverAllResourceKinds() throws {
         let contributing = Set(SQLiteWikiStore.tokenContributors.map(\.kind))
-        // `bookmark` is in the vocabulary (the bus already emits it) but is not
-        // yet projected and does not yet move the token. Phase D (bookmarks
-        // projection, #125) adds its fold and removes it from this set.
-        let notYetFolded: Set<ResourceKind> = [.bookmark]
-        #expect(contributing == Set(ResourceKind.allCases).subtracting(notYetFolded))
-        #expect(contributing.isDisjoint(with: notYetFolded))
+        // Every ResourceKind now contributes a token fragment (Phase D added
+        // the bookmark fold). Adding a new case to `ResourceKind` without
+        // registering a contributor fails this test.
+        #expect(contributing == Set(ResourceKind.allCases))
         // The registry is never empty (a deleted contributor would silently
         // shrink the token and break byte-identity).
         #expect(!SQLiteWikiStore.tokenContributors.isEmpty)
@@ -35,8 +33,8 @@ struct ChangeTokenContributorTests {
     @Test func contributorOrderMatchesHistoricalLayout() throws {
         let kinds = SQLiteWikiStore.tokenContributors.map(\.kind)
         // pages | sources(table) | systemPrompt | log | wikiIndex |
-        // source(derived) | source(graph folds)
+        // source(derived) | source(graph folds) | bookmark
         #expect(kinds == [.page, .source, .systemPrompt, .log, .wikiIndex,
-                          .source, .source])
+                          .source, .source, .bookmark])
     }
 }

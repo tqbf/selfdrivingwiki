@@ -147,7 +147,7 @@ struct ProjectionTreeTests {
             "README.md", "CLAUDE.md", "AGENTS.md",
             "index.md", "log.md", "WIKI-STRUCTURE.md", "TREE.md",
             "manifest.json",
-            "pages", "sources", "indexes"
+            "pages", "sources", "bookmarks", "indexes"
         ])
     }
 
@@ -248,5 +248,138 @@ struct ProjectionTreeTests {
         #expect(ids.contains(Projection.Identity.indexPagesJSONL))
         #expect(ids.contains(Projection.Identity.indexLinksJSONL))
         #expect(ids.contains(Projection.Identity.indexSourcesJSONL))
+    }
+
+    // MARK: - Bookmarks projection (Phase D)
+
+    /// Seed a wiki with a bookmark tree: a root folder "Research" holding a
+    /// nested "Papers" folder, plus a page ref and a source ref at the root.
+    private struct Bookmarked {
+        let projection: Projection
+        let store: SQLiteWikiStore
+        let pages: [WikiPage]
+        let pdfSource: SourceSummary
+        let folderNode: BookmarkNode
+        let nestedNode: BookmarkNode
+        let pageRefNode: BookmarkNode
+        let sourceRefNode: BookmarkNode
+    }
+
+    private func seedBookmarks() throws -> Bookmarked {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-bm-\(UUID().uuidString).sqlite")
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let alpha = try store.createPage(title: "Alpha")
+        try store.updatePage(id: alpha.id, title: "Alpha", body: "Alpha body")
+        let pdfSource = try store.addSource(
+            filename: "doc.pdf", data: Data("%PDF-1.4 fake".utf8),
+            mimeType: "application/pdf")
+        let pages = try store.listAllPagesOrderedByID()
+        let folderNode = try store.createBookmarkNode(
+            parentID: nil, position: 0, kind: .folder, label: "Research", targetID: nil)
+        let pageRefNode = try store.createBookmarkNode(
+            parentID: nil, position: 1, kind: .pageRef, label: nil, targetID: pages[0].id)
+        let sourceRefNode = try store.createBookmarkNode(
+            parentID: nil, position: 2, kind: .sourceRef, label: nil, targetID: pdfSource.id)
+        let nestedNode = try store.createBookmarkNode(
+            parentID: folderNode.id, position: 0, kind: .folder, label: "Papers", targetID: nil)
+        let projection = Projection(wikiID: "proj-bm-\(UUID().uuidString)", databaseURL: url)
+        return Bookmarked(projection: projection, store: store, pages: pages,
+                          pdfSource: pdfSource, folderNode: folderNode, nestedNode: nestedNode,
+                          pageRefNode: pageRefNode, sourceRefNode: sourceRefNode)
+    }
+
+    @Test func bookmarksFolderEnumeratesRootChildren() throws {
+        let b = try seedBookmarks()
+        let children = b.projection.children(of: Projection.Identity.bookmarks)
+        // position order: folder, page ref, source ref.
+        #expect(children.count == 3)
+        #expect(children[0].name == "Research")
+        #expect(children[0].isFolder)
+        #expect(children[1].name == "Alpha.md")
+        #expect(!children[1].isFolder)
+        #expect(children[2].name == "doc.pdf")
+        #expect(!children[2].isFolder)
+    }
+
+    @Test func nestedBookmarkFolderEnumeratesChildren() throws {
+        let b = try seedBookmarks()
+        let folderID = Projection.Identity.bookmarkFolder(b.nestedNode.id)
+        let children = b.projection.children(of: folderID)
+        // "Papers" folder has no children yet.
+        #expect(children.isEmpty)
+    }
+
+    @Test func bookmarkFolderNodeResolves() throws {
+        let b = try seedBookmarks()
+        let id = Projection.Identity.bookmarkFolder(b.folderNode.id)
+        guard let node = b.projection.node(for: id) else {
+            Issue.record("folder node not found"); return
+        }
+        #expect(node.isFolder)
+        #expect(node.name == "Research")
+        #expect(node.parent == Projection.Identity.bookmarks)
+    }
+
+    @Test func bookmarkPageRefServesTargetContent() throws {
+        let b = try seedBookmarks()
+        let id = Projection.Identity.bookmarkPageRef(b.pageRefNode.id)
+        guard let node = b.projection.node(for: id) else {
+            Issue.record("page ref node not found"); return
+        }
+        #expect(!node.isFolder)
+        #expect(node.name == "Alpha.md")
+        let expected = Data(PageMarkdownFormat.fileContent(for: b.pages[0]).utf8)
+        #expect(b.projection.contents(for: id) == expected)
+    }
+
+    @Test func bookmarkSourceRefServesTargetContent() throws {
+        let b = try seedBookmarks()
+        let id = Projection.Identity.bookmarkSourceRef(b.sourceRefNode.id)
+        guard let node = b.projection.node(for: id) else {
+            Issue.record("source ref node not found"); return
+        }
+        #expect(!node.isFolder)
+        #expect(node.name == "doc.pdf")
+        let expected = try b.store.sourceContent(id: b.pdfSource.id)
+        #expect(b.projection.contents(for: id) == expected)
+    }
+
+    @Test func staleBookmarkRefRendersPlaceholder() throws {
+        let b = try seedBookmarks()
+        // A ref to a page that doesn't exist.
+        let stale = try b.store.createBookmarkNode(
+            parentID: nil, position: 99, kind: .pageRef, label: nil,
+            targetID: PageID(rawValue: "does-not-exist"))
+        let id = Projection.Identity.bookmarkPageRef(stale.id)
+        guard let node = b.projection.node(for: id) else {
+            Issue.record("stale node not found"); return
+        }
+        #expect(node.name == "Stale Reference.md")
+        let content = b.projection.contents(for: id)
+        #expect(content != nil)
+        #expect(String(data: content!, encoding: .utf8)?.contains("deleted") == true)
+    }
+
+    @Test func workingSetIncludesAllBookmarkNodes() throws {
+        let b = try seedBookmarks()
+        let ids = Set(b.projection.children(of: .workingSet).map(\.id))
+        #expect(ids.contains(Projection.Identity.bookmarkFolder(b.folderNode.id)))
+        #expect(ids.contains(Projection.Identity.bookmarkFolder(b.nestedNode.id)))
+        #expect(ids.contains(Projection.Identity.bookmarkPageRef(b.pageRefNode.id)))
+        #expect(ids.contains(Projection.Identity.bookmarkSourceRef(b.sourceRefNode.id)))
+    }
+
+    @Test func emptyBookmarksFolderIsStillListedAtRoot() throws {
+        let b = try seedBookmarks()
+        // The bookmarks folder always appears at root even when empty — delete
+        // all nodes and verify root children still lists it.
+        for node in try b.store.listBookmarkNodes() {
+            try b.store.deleteBookmarkNode(id: node.id)
+        }
+        let names = b.projection.children(of: .rootContainer).map(\.name)
+        #expect(names.contains("bookmarks"))
+        // The folder is now empty.
+        #expect(b.projection.children(of: Projection.Identity.bookmarks).isEmpty)
     }
 }

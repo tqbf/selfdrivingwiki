@@ -155,78 +155,78 @@ struct SQLiteWikiStoreTests {
         // A fresh DB seeds the system_prompt AND wiki_index singletons at version
         // 1, has no log rows, no source_markdown_versions, and no sources →
         // trailing ":1:0:1:0:0:0:0".
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0")
+        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0:0")
 
         // Create bumps page COUNT and SUM (version starts at 1).
         let a = try store.createPage(title: "Alpha")
-        #expect(try store.changeToken() == "1:1:0:0:1:0:1:0:0:0:0")
+        #expect(try store.changeToken() == "1:1:0:0:1:0:1:0:0:0:0:0")
 
         // Update bumps that row's version by 1 → SUM increments.
         try store.updatePage(id: a.id, title: "Alpha", body: "edited")
-        #expect(try store.changeToken() == "1:2:0:0:1:0:1:0:0:0:0")
+        #expect(try store.changeToken() == "1:2:0:0:1:0:1:0:0:0:0:0")
 
         // A SECOND page that is NOT the global-max version must STILL advance the
         // token — the MAX-vs-SUM correctness lock. b starts at version 1, yet
         // count:sum changes (2 pages, sum 2+1=3).
         let b = try store.createPage(title: "Beta")
-        #expect(try store.changeToken() == "2:3:0:0:1:0:1:0:0:0:0")
+        #expect(try store.changeToken() == "2:3:0:0:1:0:1:0:0:0:0:0")
 
         try store.updatePage(id: b.id, title: "Beta", body: "beta edit")
-        #expect(try store.changeToken() == "2:4:0:0:1:0:1:0:0:0:0")
+        #expect(try store.changeToken() == "2:4:0:0:1:0:1:0:0:0:0:0")
 
         // Delete changes page COUNT and SUM.
         try store.deletePage(id: b.id)
-        #expect(try store.changeToken() == "1:2:0:0:1:0:1:0:0:0:0")
+        #expect(try store.changeToken() == "1:2:0:0:1:0:1:0:0:0:0:0")
     }
 
     /// The token MUST advance on ingest AND on delete (else the `files/` tree
     /// would never refresh — the orchestrator-critical fold-in).
     @Test func changeTokenAdvancesOnIngestAndDelete() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0")
+        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0:0")
 
         // Ingest bumps the file COUNT and SUM (version 1). It ALSO writes one
         // source_version, one ref (generation 1), and one import activity → the
         // three v20 folds become 1:1:1.
         let f = try store.addSource(filename: "a.txt", data: Data("hi".utf8))
-        #expect(try store.changeToken() == "0:0:1:1:1:0:1:0:1:1:1")
+        #expect(try store.changeToken() == "0:0:1:1:1:0:1:0:1:1:1:0")
 
         // A second file.
         _ = try store.addSource(filename: "b.txt", data: Data("yo".utf8))
-        #expect(try store.changeToken() == "0:0:2:2:1:0:1:0:2:2:2")
+        #expect(try store.changeToken() == "0:0:2:2:1:0:1:0:2:2:2:0")
 
         // Delete the first → file COUNT/SUM, svCount, and refsGenSum drop. The
         // import ACTIVITY is provenance (no cascade from sources) so actCount
         // stays at 2 — but the token still changes (svCount/refsGenSum moved).
         try store.deleteSource(id: f.id)
-        #expect(try store.changeToken() == "0:0:1:1:1:0:1:0:1:1:2")
+        #expect(try store.changeToken() == "0:0:1:1:1:0:1:0:1:1:2:0")
     }
 
     /// The token MUST advance when a processed markdown version is appended,
     /// or the `sources/` tree would never learn of new extracts.
     @Test func changeTokenAdvancesOnAppendProcessedMarkdown() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0")
+        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0:0")
 
         // Add a source first.
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf content".utf8))
-        #expect(try store.changeToken() == "0:0:1:1:1:0:1:0:1:1:1")
+        #expect(try store.changeToken() == "0:0:1:1:1:0:1:0:1:1:1:0")
 
         // Append processed markdown — smvCount goes 0 → 1.
         _ = try store.appendProcessedMarkdown(
             sourceID: source.id, content: "# Extracted", origin: "test", note: nil)
-        #expect(try store.changeToken() == "0:0:1:1:1:0:1:1:1:1:1")
+        #expect(try store.changeToken() == "0:0:1:1:1:0:1:1:1:1:1:0")
 
         // Append another version — smvCount advances again.
         _ = try store.appendProcessedMarkdown(
             sourceID: source.id, content: "# Edited", origin: "test", note: "edit")
-        #expect(try store.changeToken() == "0:0:1:1:1:0:1:2:1:1:1")
+        #expect(try store.changeToken() == "0:0:1:1:1:0:1:2:1:1:1:0")
 
         // Deleting the source removes its markdown versions + content versions +
         // ref (CASCADE), but the import activity persists (provenance) →
         // actCount stays 1.
         try store.deleteSource(id: source.id)
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:1")
+        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:1:0")
     }
 
     /// processedMarkdownHeadsBySource returns one row per source, keyed by
