@@ -42,6 +42,10 @@ struct SourceDetailView: View {
     @State private var origin: SourceOrigin?
     @State private var isEditing = false
     @State private var editBuffer = ""
+    /// Pending scroll-to-heading for the editor (outline click while editing).
+    @State private var editorScrollRequest: EditorScrollRequest?
+    /// Caret position in the editor, for outline cursor tracking (issue #268).
+    @State private var caretCharIndex: Int?
     @State private var isExtracting = false
     /// True while a source refresh (re-fetch via provider) is in flight.
     @State private var isRefreshing = false
@@ -169,14 +173,7 @@ struct SourceDetailView: View {
                 tabPicker
             }
             Divider().opacity(PageEditorMetrics.dividerOpacity)
-            HStack(spacing: 0) {
-                contentArea
-                if isOutlineExpanded, let markdown = currentMarkdownContent {
-                    PageOutlineView(markdown: markdown) { slug in
-                        store.jumpToAnchorInCurrentSelection(slug)
-                    }
-                }
-            }
+            contentAndOutline
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .textBackgroundColor))
@@ -283,7 +280,7 @@ struct SourceDetailView: View {
             if let id = store.activeTabID {
                 store.setTabEditing(tabID: id, isEditing: newValue)
             }
-            if !newValue { shouldRestoreEditing = false }
+            if !newValue { shouldRestoreEditing = false; caretCharIndex = nil }
         }
     }
 
@@ -583,6 +580,33 @@ struct SourceDetailView: View {
         }
     }
 
+    // MARK: - Content + Outline
+
+    /// The content area plus the optional outline sidebar. Extracted from
+    /// `body` so the type-checker can resolve each subtree independently.
+    @ViewBuilder
+    private var contentAndOutline: some View {
+        HStack(spacing: 0) {
+            contentArea
+            if isOutlineExpanded, let markdown = currentMarkdownContent {
+                outlineView(markdown: markdown)
+            }
+        }
+    }
+
+    private func outlineView(markdown: String) -> some View {
+        PageOutlineView(markdown: markdown,
+                        caretCharIndex: caretCharIndex) { heading in
+            if isEditing {
+                editorScrollRequest = EditorScrollRequest(
+                    charOffset: heading.charOffset,
+                    version: (editorScrollRequest?.version ?? 0) + 1)
+            } else {
+                store.jumpToAnchorInCurrentSelection(heading.id)
+            }
+        }
+    }
+
     // MARK: - Content area
 
     @ViewBuilder
@@ -652,9 +676,13 @@ struct SourceDetailView: View {
     @ViewBuilder
     private var markdownContent: some View {
         if isEditing {
-            TextEditor(text: $editBuffer)
-                .font(.system(size: 13 * editorZoom, design: .monospaced))
-                .scrollContentBackground(.hidden)
+            ScrollableTextEditor(
+                text: $editBuffer,
+                font: NSFont.monospacedSystemFont(
+                    ofSize: CGFloat(13 * editorZoom), weight: .regular),
+                scrollRequest: editorScrollRequest,
+                onCaretChange: { caretCharIndex = $0 }
+            )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(PageEditorMetrics.contentInset)
                 .zoomShortcuts($editorZoom)
