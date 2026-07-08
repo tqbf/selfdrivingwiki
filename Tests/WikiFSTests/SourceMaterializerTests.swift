@@ -212,12 +212,47 @@ struct SourceMaterializerTests {
         let provider = ZoteroMaterializer(
             attachment: attachment, parentItem: parent, zoteroDir: dir)
         let source = try await provider.materialize()
+        // AC.4 — assert filename + bytes (not just provenance fields).
+        #expect(source.filename == "paper.pdf")
+        #expect(source.data == Data("%PDF".utf8))
         let prov = try #require(source.provenance)
         #expect(prov.agentName == "zotero")
         #expect(prov.activityKind == "import")
         #expect(prov.externalIdentity == "PARENT1")
         #expect(source.zoteroItemKey == "PARENT1")
         #expect(source.zoteroItemTitle == "My Paper")
+    }
+
+    /// AC.3 — a Zotero HTML attachment now routes through format dispatch and
+    /// converts to Markdown (matching what `WebsiteMaterializer` would produce).
+    /// Before this refactor it was stored as raw HTML — a latent bug.
+    @Test func zoteroHtmlAttachmentConvertsToMarkdown() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("prov-zotero-html-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let attachmentDir = dir.appendingPathComponent("storage", isDirectory: true)
+            .appendingPathComponent("HTML1234", isDirectory: true)
+        try FileManager.default.createDirectory(at: attachmentDir, withIntermediateDirectories: true)
+        let htmlFile = attachmentDir.appendingPathComponent("page.html")
+        try Data("<html><head><title>Zotero Page</title></head><body><p>Hello world</p></body></html>".utf8)
+            .write(to: htmlFile)
+
+        let attachment = ZoteroAttachment(
+            key: "HTML1234", parentItem: "PARENT1", linkMode: "imported_file",
+            filename: "page.html", contentType: "text/html", title: nil)
+        let parent = ZoteroItem(
+            key: "PARENT1", version: 1, itemType: "journalArticle",
+            title: "HTML Paper", creatorSummary: "Doe", date: "2024")
+        let provider = ZoteroMaterializer(
+            attachment: attachment, parentItem: parent, zoteroDir: dir)
+        let source = try await provider.materialize()
+
+        // The HTML is converted to Markdown; the filename derives from <title>.
+        #expect(source.filename == "Zotero Page.md")
+        let md = String(data: source.data, encoding: .utf8) ?? ""
+        #expect(md.contains("Hello world"))
+        #expect(!md.contains("<html>"))
     }
 
     @Test func addSourceZoteroPersistsAgentAndRetainedColumns() async throws {

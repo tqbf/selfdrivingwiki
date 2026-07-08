@@ -802,6 +802,15 @@ verbs) carry over from the draft verbatim. Two grounding notes:
 > Source refresh is live via `SourceRefreshService` + `refreshSource`. The
 > transcript-level `apple-ttml` extract PROV is deferred to Phase 4 (no consumer
 > until the alternatives UI gains a podcast transcript backend).
+>
+> **Format/origin separation (#263, 2026-07-08).** The format-dispatch logic
+> formerly hidden inside `plan(for:)` was extracted into a standalone,
+> URL-independent `FormatMaterializer.dispatch(data:contentType:stem:extensionHint:)`.
+> Every byte-producing origin (`WebsiteMaterializer`, `LocalFileMaterializer`,
+> `ZoteroMaterializer`) now routes through it — fixing the Zotero bypass (HTML
+> attachments convert to Markdown instead of storing raw HTML). The
+> `SourceMaterializer` protocol and conformer names are unchanged; see
+> [`plans/source-format-materializers.md`](source-format-materializers.md).
 
 ## 12. Phases
 

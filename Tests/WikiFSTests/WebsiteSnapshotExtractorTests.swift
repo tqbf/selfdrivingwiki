@@ -37,8 +37,8 @@ struct WebsiteSnapshotExtractorTests {
         externalRef: "https://example.com/page",
         externalIdentity: "https://example.com/page")
 
-    private let dummyPlan = URLFetchService.StorePlan(
-        filename: "Page.md", data: Data("placeholder".utf8), kind: .htmlConverted)
+    private let dummyPlan = FormatPlan(
+        filename: "Page.md", data: Data("placeholder".utf8), format: .htmlConverted)
 
     // MARK: - AC.2: relative srcs + absolute normalization (D4)
 

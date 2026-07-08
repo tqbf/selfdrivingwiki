@@ -201,14 +201,14 @@ public enum WebsiteSnapshotExtractor {
     ///   - fetcher: The injected fetcher (fake in CI, `URLSessionFetcher` in app).
     ///   - filename: The resolved page filename (from `<title>` or URL stem).
     ///   - provenance: The shared fetch provenance for the whole snapshot.
-    ///   - plan: The dispatch plan (for `kind` + filename propagation).
+    ///   - plan: The dispatch plan (for `format` + filename propagation).
     public static func snapshot(
         html: String,
         finalURL: URL,
         fetcher: any URLFetchService.URLResourceFetcher,
         filename: String,
         provenance: SourceProvenance,
-        plan: URLFetchService.StorePlan
+        plan: FormatPlan
     ) async throws -> WebsiteSnapshot {
 
         // 1. Scope to main content + extract images (pure). All src variants are
@@ -302,8 +302,8 @@ public enum WebsiteSnapshotExtractor {
             data: Data(markdown.utf8),
             mimeType: nil,
             provenance: provenance)
-        let snapshotPlan = URLFetchService.StorePlan(
-            filename: filename, data: Data(markdown.utf8), kind: plan.kind)
+        let snapshotPlan = FormatPlan(
+            filename: filename, data: Data(markdown.utf8), format: .htmlConverted)
         return WebsiteSnapshot(page: page, images: images, plan: snapshotPlan)
     }
 }
