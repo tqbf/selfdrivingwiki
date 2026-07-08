@@ -125,8 +125,8 @@ import SQLite3
         let ladder = try fingerprint(at: ladderURL)
 
         // Both must report head version 22.
-        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "25")
-        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "25")
+        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "26")
+        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "26")
 
         if fast != ladder {
             Issue.record("fresh fast-path schema drifted from the stepwise ladder:\n--- fast ---\n\(fast)\n--- ladder ---\n\(ladder)")
@@ -206,7 +206,7 @@ import SQLite3
         // 3. Reopen → runs the v20→v21 backfill.
         sqlite3_close(db)
         let migrated = try SQLiteWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "25")
+        #expect(migrated.pragmaValue("user_version") == "26")
 
         // 4. The legacy extraction row was backfilled: blob_hash + activity_id + source_version_id set.
         #expect(migrated.scalarText(
@@ -268,7 +268,7 @@ import SQLite3
         sqlite3_close(db)
 
         let migrated = try SQLiteWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "25")
+        #expect(migrated.pragmaValue("user_version") == "26")
         let db2 = try open(url)
         defer { sqlite3_close(db2) }
         let roleCol = columns(db2, "sources").first { $0.name == "role" }
@@ -343,7 +343,7 @@ import SQLite3
 
         // Reopen → v22 migration rebuilds source_links.
         let migrated = try SQLiteWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "25")
+        #expect(migrated.pragmaValue("user_version") == "26")
         let db2 = try open(url)
         defer { sqlite3_close(db2) }
 

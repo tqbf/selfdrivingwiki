@@ -6,9 +6,9 @@ Newest first. To get up to speed: read `PLAN.md` then this file.
 
 **Shipped (on `fix/finish-smv-cas-drop`; tests green).** Completes the
 content-addressed-storage model for derived markdown: the dead inline
-`source_markdown_versions.content` column is dropped (v24), so every derived-
+`source_markdown_versions.content` column is dropped (v26), so every derived-
 markdown body lives ONLY in `blobs` (CAS), joined via `blob_hash`. The fresh
-schema omits the column; the ladder drops it idempotently at v23→24.
+schema omits the column; the ladder drops it idempotently at v25→26 (appended at the top — a DB already at v25 would skip a `version < 24` step).
 
 **Why.** The store's blob-join readers (`smvSelectColumns`) still selected
 `smv.content` as a fallback — but the column had already been dropped on the
@@ -28,12 +28,14 @@ bytes via a different path, so only podcasts were visibly broken.
   `recordMarkdownExtraction`, `revertProcessedMarkdown`) — `content` column +
   the literal `''` value removed; `appendProcessedMarkdown` bind indices
   renumbered (the other two used literal origins, so binds were unchanged).
-- **v24 ladder step** (between v23 and v25) — `ALTER TABLE … DROP COLUMN
-  content`, guarded idempotent (`pragma_table_info` check → no-op where the
-  column is already gone: fresh DBs, DBs already at v24+). The live DB (v25,
-  column already dropped) is fixed with NO migration run — the new blob-only
-  reads simply resolve. DBs still carrying the column (≤v23) drop it after the
-  v21 backfill has CAS'd every row.
+- **v26 ladder step** (appended at the top — NOT inserted at the reserved v24
+  slot) — `ALTER TABLE … DROP COLUMN content`, guarded idempotent
+  (`pragma_table_info` check → no-op where the column is already gone: fresh
+  DBs, a DB already migrated past it). Appended rather than v24 because a step
+  guarded `version < 24` would be skipped by DBs already at v25 (the live DB);
+  v26 runs on every DB < 26. The live DB (v25, column already dropped) runs it
+  as a no-op and stamps 26; DBs still carrying the column drop it after the v21
+  backfill has CAS'd every row.
 - **`FreshSchemaParityTests.v20ToV21MigrationLossless`** — re-creates the
   `content` column when rewinding to v20 (to seed genuine legacy inline rows),
   and now asserts the column is **dropped** (was: "cleared to ''").
@@ -43,7 +45,7 @@ bytes via a different path, so only podcasts were visibly broken.
 
 **Gate:** full suite green — **1895 tests** (156 suites); migration parity
 (`freshFastPathMatchesStepwiseLadder`) holds (fresh == stepwise, both
-column-less at v25).
+column-less at v26).
 
 **Files:** `Sources/WikiFSCore/SQLiteWikiStore.swift`,
 `Tests/WikiFSTests/FreshSchemaParityTests.swift`,
