@@ -1761,24 +1761,30 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// connection (the v4/v5 tables absent), exactly like the `spVersion` fold.
     public func changeToken() throws -> String {
         lock.lock(); defer { lock.unlock() }
-        let pages = try statement("SELECT COUNT(*), COALESCE(SUM(version), 0) FROM pages;")
-        defer { pages.reset() }
-        guard try pages.step() else { return "0:0:0:0:0:0:0:0:0:0:0" }
-        let pCount = pages.int(at: 0)
-        let pSum = pages.int(at: 1)
-        let (fCount, fSum) = sourceCountSum()
-        let spVersion = systemPromptVersion()
-        let logCount = logRowCount()
-        let idxVersion = wikiIndexVersion()
-        let smvCount = sourceMarkdownVersionCount()
-        // v20 folds: source_versions count, refs generation sum, activities
-        // count. All three are change-detector folds (not monotone — a source
-        // delete legitimately lowers them). The token only needs to CHANGE on
-        // any mutation, which it does.
-        let svCount = sourceVersionCount()
-        let refsGenSum = refsGenerationSum()
-        let actCount = activitiesCount()
-        return "\(pCount):\(pSum):\(fCount):\(fSum):\(spVersion):\(logCount):\(idxVersion):\(smvCount):\(svCount):\(refsGenSum):\(actCount)"
+        // Assembled from per-kind ``ChangeTokenContributor``s (slice 2b). The
+        // registry joins fragments in registration order; today's order
+        // reproduces the historical 11-field token byte-for-byte — the ~20
+        // hardcoded-literal assertions in SQLiteWikiStoreTests / LogIndexTests
+        // / SystemPromptTests enforce that. Each contributor runs under this
+        // lock and reads committed state via the private `*Count`/`*Version`
+        // helpers below (values only — no statement handle crosses the call;
+        // `docs/skills/sqlite-concurrency/SKILL.md`).
+        return try Self.tokenContributors
+            .map { try $0.fragment(in: self) }
+            .joined(separator: ":")
+    }
+
+    /// `COUNT`/`SUM(version)` over `pages`. Unlike the resilient `*Count`/
+    /// `*Version` helpers below (which `try?` and return `0` on a missing
+    /// table), this one `try`s and therefore **throws** if the `pages` table is
+    /// absent — matching the pre-2b `changeToken()` behavior (the pages fold was
+    /// the only one that could throw). The `step` guard is defensive
+    /// (`COUNT(*)` always yields a row); kept for parity.
+    private func pageCountSum() throws -> (Int64, Int64) {
+        let stmt = try statement("SELECT COUNT(*), COALESCE(SUM(version), 0) FROM pages;")
+        defer { stmt.reset() }
+        guard try stmt.step() else { return (0, 0) }
+        return (stmt.int(at: 0), stmt.int(at: 1))
     }
 
     /// COUNT/SUM(version) over `sources`, resilient to the table not
@@ -1872,6 +1878,81 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         defer { stmt.reset() }
         guard (try? stmt.step()) == true else { return 0 }
         return stmt.int(at: 0)
+    }
+
+    // MARK: - changeToken contributors (slice 2b)
+
+    /// The per-kind contributors whose fragments join into ``changeToken()``.
+    /// Order is load-bearing: it reproduces the historical 11-field token
+    /// byte-for-byte. A kind may appear more than once (the historical layout
+    /// interleaves the system-prompt/log/index folds between the `sources`
+    /// table fold and the graph-model source folds). `internal` so the
+    /// contributor-exhaustiveness test can read it (`@testable import`).
+    static let tokenContributors: [any ChangeTokenContributor] = [
+        PagesTokenContributor(),
+        SourceTableTokenContributor(),
+        SystemPromptTokenContributor(),
+        LogTokenContributor(),
+        WikiIndexTokenContributor(),
+        SourceDerivedTokenContributor(),
+        SourceGraphTokenContributor(),
+    ]
+
+    private struct PagesTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .page
+        func fragment(in store: SQLiteWikiStore) throws -> String {
+            let (count, sum) = try store.pageCountSum()
+            return "\(count):\(sum)"
+        }
+    }
+
+    private struct SourceTableTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .source
+        func fragment(in store: SQLiteWikiStore) throws -> String {
+            let (count, sum) = store.sourceCountSum()
+            return "\(count):\(sum)"
+        }
+    }
+
+    private struct SystemPromptTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .systemPrompt
+        func fragment(in store: SQLiteWikiStore) throws -> String {
+            "\(store.systemPromptVersion())"
+        }
+    }
+
+    private struct LogTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .log
+        func fragment(in store: SQLiteWikiStore) throws -> String {
+            "\(store.logRowCount())"
+        }
+    }
+
+    private struct WikiIndexTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .wikiIndex
+        func fragment(in store: SQLiteWikiStore) throws -> String {
+            "\(store.wikiIndexVersion())"
+        }
+    }
+
+    /// The derived-alternative fold: the `source_markdown_versions` row count.
+    /// Logically a source concern; appears after the index fold in the
+    /// historical layout, so it is its own contributor in registry order.
+    private struct SourceDerivedTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .source
+        func fragment(in store: SQLiteWikiStore) throws -> String {
+            "\(store.sourceMarkdownVersionCount())"
+        }
+    }
+
+    /// The graph-model source folds: `source_versions` count, `refs` generation
+    /// sum, `activities` count. Appended at the token tail by Phase 1 (v20);
+    /// logically source provenance/version state.
+    private struct SourceGraphTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .source
+        func fragment(in store: SQLiteWikiStore) throws -> String {
+            "\(store.sourceVersionCount()):\(store.refsGenerationSum()):\(store.activitiesCount())"
+        }
     }
 
     public func getPage(id: PageID) throws -> WikiPage {
