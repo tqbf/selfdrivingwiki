@@ -527,9 +527,15 @@ struct PageOutlineView: View {
                 let afterPounds = trimmed.dropFirst(level)
                 guard afterPounds.first?.isWhitespace == true else { continue }
                 
-                let text = afterPounds.trimmingCharacters(in: .whitespaces)
+                let rawText = afterPounds.trimmingCharacters(in: .whitespaces)
+                guard !rawText.isEmpty else { continue }
+
+                // Strip inline markdown (links, code spans, emphasis) so the
+                // outline shows plain text — matching the HTML renderer's
+                // heading anchor IDs (which use Swift-Markdown's plainText).
+                let text = Self.stripInlineMarkup(rawText)
                 guard !text.isEmpty else { continue }
-                
+
                 let slug = AnchorBlock.makeSlug(text, counts: &slugCounts)
                 items.append(HeadingItem(id: slug, text: text, level: level,
                                          charOffset: charOffset))
@@ -537,6 +543,37 @@ struct PageOutlineView: View {
         }
         
         headings = items
+    }
+
+    // MARK: - Inline markup stripping
+
+    /// Strip inline markdown so heading text reads as plain text in the
+    /// outline. Handles the cases most likely in headings: links
+    /// (`[text](url)` → `text`), code spans (`` `text` `` → `text`), and
+    /// emphasis (`**bold**`, `*italic*`, `__bold__`, `_italic_` → `text`).
+    /// This mirrors what Swift-Markdown's `plainText` does in the HTML
+    /// renderer, keeping the outline's display + slug in sync with the
+    /// rendered anchor IDs.
+    private static let linkAndCodeRegexes: [NSRegularExpression] = {
+        [
+            try? NSRegularExpression(pattern: #"\[([^\]]*)\]\([^)]*\)"#),  // links
+            try? NSRegularExpression(pattern: #"`([^`]*)`"#),              // code spans
+        ].compactMap { $0 }
+    }()
+
+    static func stripInlineMarkup(_ text: String) -> String {
+        var result = text
+        for regex in linkAndCodeRegexes {
+            result = regex.stringByReplacingMatches(
+                in: result, range: NSRange(result.startIndex..., in: result),
+                withTemplate: "$1")
+        }
+        // Emphasis markers — strip ** before *, __ before _ to avoid
+        // mismatched pairs. Use simple replacement (safe in headings where
+        // these are virtually always emphasis, not literal characters).
+        result = result.replacingOccurrences(of: "**", with: "")
+        result = result.replacingOccurrences(of: "__", with: "")
+        return result
     }
 }
 
