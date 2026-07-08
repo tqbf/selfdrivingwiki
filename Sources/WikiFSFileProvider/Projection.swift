@@ -26,6 +26,20 @@ struct Projection {
     /// `openReadStore()` maps it to `<ulid>.sqlite` in the App Group container.
     let wikiID: String
 
+    /// Optional override for the wiki DB URL. Production (the File Provider
+    /// extension) leaves this `nil` and resolves the wiki's DB via
+    /// `DatabaseLocation` (the App Group container — unavailable outside the
+    /// entitled sandbox). Tests inject a temp URL so the projection tree
+    /// (`node`/`children`/`contents`) is exercisable end-to-end. Slice 2b: the
+    /// projection previously had NO integration coverage for this reason.
+    let databaseURL: URL?
+
+    /// `databaseURL` defaults to `nil` (production resolves via `DatabaseLocation`).
+    init(wikiID: String, databaseURL: URL? = nil) {
+        self.wikiID = wikiID
+        self.databaseURL = databaseURL
+    }
+
     // MARK: - Identity
 
     /// Stable virtual identifiers. The page identifiers carry the full ULID.
@@ -260,8 +274,8 @@ struct Projection {
     /// File Provider domain carries) — the multi-wiki crux: same projection code,
     /// different DB per domain. Returns nil if the container/DB is unavailable.
     private func openReadStore() -> SQLiteWikiStore? {
-        guard let url = DatabaseLocation.extensionContainerURL(forWikiID: wikiID) else { return nil }
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID)
+        guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
         return try? SQLiteWikiStore(readOnlyURL: url)
     }
 
@@ -386,6 +400,105 @@ struct Projection {
         return token
     }
 
+    // MARK: - Flat resource projections (slice 2b)
+
+    /// Describes how one flat resource kind (`pages`, `sources`) projects onto
+    /// the File Provider tree: a top-level folder holding two view containers
+    /// (`by-id` + `by-name`/`by-title`), each enumerating its rows as leaf nodes.
+    /// The generic `node`/`children`/`contents`/working-set logic iterates a
+    /// registry of these (`flatProjections`) instead of switch-ing per kind, so a
+    /// new flat kind is "add a descriptor", not "add four switch arms". (Phase D
+    /// adds a nested descriptor shape for bookmarks.)
+    ///
+    /// Value type with closures, not a protocol w/ associated types: the
+    /// per-kind store methods differ in signature, and only the dispatch varies
+    /// (`owns`/`enumerate`/`nodeForLeaf`/`contentForLeaf`). The closures are
+    /// same-file, so they may call `Projection`'s `private` read seam.
+    struct FlatResourceProjection: @unchecked Sendable {
+        let topLevel: NSFileProviderItemIdentifier
+        let byIDContainer: NSFileProviderItemIdentifier
+        let byNameContainer: NSFileProviderItemIdentifier
+        /// Does this projection own `id` — a leaf under either view, including
+        /// any sibling family (e.g. the source `.md` node)? Dispatches
+        /// `node(for:)` / `contents(for:)`. Container identifiers return false.
+        let owns: (NSFileProviderItemIdentifier) -> Bool
+        /// Enumerate the leaf nodes for a view, ordered by ULID. 1 node/row for
+        /// pages; 1 or 2 for sources (verbatim + optional `.md` sibling).
+        let enumerate: (Projection, Bool /*isByName*/) -> [ProjectedNode]
+        /// Resolve a single leaf node, or nil (for `node(for:)`).
+        let nodeForLeaf: (Projection, NSFileProviderItemIdentifier) -> ProjectedNode?
+        /// Serve the content bytes for a leaf, or nil (for `contents(for:)`).
+        let contentForLeaf: (Projection, NSFileProviderItemIdentifier) -> Data?
+    }
+
+    static let pagesProjection = FlatResourceProjection(
+        topLevel: Identity.pages,
+        byIDContainer: Identity.pagesByID,
+        byNameContainer: Identity.pagesByTitle,
+        owns: { Identity.pageULID(from: $0) != nil },
+        enumerate: { $0.pageNodes(byTitle: $1) },
+        nodeForLeaf: { projection, id in
+            guard let ulid = Identity.pageULID(from: id),
+                  let store = projection.openReadStore(),
+                  let page = try? store.getPage(id: PageID(rawValue: ulid)) else { return nil }
+            return Self.pageFileNode(for: id, page: page)
+        },
+        contentForLeaf: { projection, id in
+            guard let ulid = Identity.pageULID(from: id),
+                  let store = projection.openReadStore(),
+                  let page = try? store.getPage(id: PageID(rawValue: ulid)) else { return nil }
+            return Data(PageMarkdownFormat.fileContent(for: page).utf8)
+        }
+    )
+
+    static let sourcesProjection = FlatResourceProjection(
+        topLevel: Identity.sources,
+        byIDContainer: Identity.sourcesByID,
+        byNameContainer: Identity.sourcesByName,
+        // Owns both the verbatim source leaves and the `.md` sibling family.
+        owns: { id in Identity.sourceMarkdownULID(from: id) != nil
+                || Identity.fileULID(from: id) != nil },
+        enumerate: { $0.sourceNodes(byName: $1) },
+        nodeForLeaf: { projection, id in
+            // Markdown sibling first (its prefix family is distinct from the
+            // verbatim source prefixes, but checked first for clarity).
+            if let ulid = Identity.sourceMarkdownULID(from: id) {
+                guard let store = projection.openReadStore(),
+                      let file = try? store.getSource(id: PageID(rawValue: ulid)),
+                      let head = try? store.processedMarkdownHead(sourceID: PageID(rawValue: ulid)) else {
+                    return nil
+                }
+                return Self.sourceMarkdownNode(for: id, source: file, head: head)
+            }
+            if let ulid = Identity.fileULID(from: id) {
+                guard let store = projection.openReadStore(),
+                      let file = try? store.getSource(id: PageID(rawValue: ulid)) else { return nil }
+                return Self.sourceNode(for: id, file: file)
+            }
+            return nil
+        },
+        contentForLeaf: { projection, id in
+            if let ulid = Identity.sourceMarkdownULID(from: id) {
+                guard let store = projection.openReadStore(),
+                      let head = try? store.processedMarkdownHead(sourceID: PageID(rawValue: ulid)) else {
+                    return nil
+                }
+                return Data(head.content.utf8)
+            }
+            if let ulid = Identity.fileULID(from: id) {
+                guard let store = projection.openReadStore(),
+                      let data = try? store.sourceContent(id: PageID(rawValue: ulid)) else { return nil }
+                return data
+            }
+            return nil
+        }
+    )
+
+    /// The flat-resource projections, in tree order (pages before sources —
+    /// matches the historical root/working-set layout). `node`/`children`/
+    /// `contents`/working-set iterate this.
+    static let flatProjections: [FlatResourceProjection] = [pagesProjection, sourcesProjection]
+
     // MARK: - Metadata resolution
 
     /// Resolve a single item's metadata by identifier.
@@ -436,33 +549,14 @@ struct Projection {
         default:
             break
         }
-        // Processed markdown head (source-markdown-by-id: / source-markdown-by-name:).
-        // Must come before the verbatim-source check below so the two identifier
-        // families don't collide.
-        if let ulid = Identity.sourceMarkdownULID(from: id) {
-            guard let store = openReadStore(),
-                  let file = try? store.getSource(id: PageID(rawValue: ulid)),
-                  let head = try? store.processedMarkdownHead(sourceID: PageID(rawValue: ulid)) else {
-                return nil
-            }
-            return Self.sourceMarkdownNode(for: id, source: file, head: head)
+        // Flat leaf resolution (slice 2b): dispatch to the owning flat-resource
+        // projection. Each projection's `owns(_:)` recognizes its own leaf
+        // identifier families (page-by-id/title, source-by-id/name, and the
+        // source-markdown sibling); container identifiers return nil here.
+        for projection in Self.flatProjections where projection.owns(id) {
+            return projection.nodeForLeaf(self, id)
         }
-        // Ingested-file leaf (file-by-id: / file-by-name:). Resolve the embedded
-        // ULID and look up the summary; resilient to a missing table (the read
-        // throws → nil → the node simply isn't found, never an enumeration error).
-        if let ulid = Identity.fileULID(from: id) {
-            guard let store = openReadStore(),
-                  let file = try? store.getSource(id: PageID(rawValue: ulid)) else {
-                return nil
-            }
-            return Self.sourceNode(for: id, file: file)
-        }
-        guard let ulid = Identity.pageULID(from: id),
-              let store = openReadStore(),
-              let page = try? store.getPage(id: PageID(rawValue: ulid)) else {
-            return nil
-        }
-        return Self.pageFileNode(for: id, page: page)
+        return nil
     }
 
     /// Build a file node for a processed markdown head (the `.md` sibling of a
@@ -560,48 +654,50 @@ struct Projection {
                 node(for: Identity.sources),
                 node(for: Identity.indexes),
             ].compactMap { $0 }
-        case Identity.pages:
-            return [
-                node(for: Identity.pagesByID),
-                node(for: Identity.pagesByTitle),
-            ].compactMap { $0 }
-        case Identity.sources:
-            return [
-                node(for: Identity.sourcesByID),
-                node(for: Identity.sourcesByName),
-            ].compactMap { $0 }
         case Identity.indexes:
             return [
                 node(for: Identity.indexPagesJSONL),
                 node(for: Identity.indexLinksJSONL),
                 node(for: Identity.indexSourcesJSONL),
             ].compactMap { $0 }
-        case Identity.pagesByID:
-            return pageNodes(byTitle: false)
-        case Identity.pagesByTitle:
-            return pageNodes(byTitle: true)
-        case Identity.sourcesByID:
-            return sourceNodes(byName: false)
-        case Identity.sourcesByName:
-            return sourceNodes(byName: true)
         case .workingSet:
             // The working set is the set of items the daemon actively tracks for
-            // change. Re-emit ALL page nodes (both views) and ALL ingested-file
-            // nodes (both views) PLUS the generated index nodes so a working-set
-            // `enumerateChanges` after a signal carries the new itemVersions and
-            // the daemon invalidates its materialized copies (the index bytes
-            // derive from page + file content, so a mutation must invalidate them).
-            return pageNodes(byTitle: false) + pageNodes(byTitle: true)
-                + sourceNodes(byName: false) + sourceNodes(byName: true)
-                + [Identity.manifest, Identity.indexPagesJSONL,
-                   Identity.indexLinksJSONL, Identity.indexSourcesJSONL,
-                   Identity.claudeMD, Identity.agentsMD,
-                   Identity.indexMD, Identity.logMD,
-                   Identity.wikiStructureMD, Identity.treeMD]
-                    .compactMap { node(for: $0) }
+            // change. Re-emit EVERY flat kind's leaves (both views) PLUS the
+            // generated index + root-doc nodes so a working-set `enumerateChanges`
+            // after a signal carries the new itemVersions and the daemon
+            // invalidates its materialized copies (those bytes derive from page +
+            // source content, so any mutation must invalidate them). (slice 2b:
+            // the flat contribution is registry-driven.)
+            var nodes: [ProjectedNode] = []
+            for projection in Self.flatProjections {
+                nodes += projection.enumerate(self, false)
+                nodes += projection.enumerate(self, true)
+            }
+            nodes += [Identity.manifest, Identity.indexPagesJSONL,
+                      Identity.indexLinksJSONL, Identity.indexSourcesJSONL,
+                      Identity.claudeMD, Identity.agentsMD,
+                      Identity.indexMD, Identity.logMD,
+                      Identity.wikiStructureMD, Identity.treeMD]
+                .compactMap { node(for: $0) }
+            return nodes
         default:
-            return []
+            break
         }
+        // Flat-resource containers (slice 2b): a top-level folder yields its two
+        // view containers; a view container enumerates its rows (ordered by ULID).
+        for projection in Self.flatProjections {
+            if container == projection.topLevel {
+                return [node(for: projection.byIDContainer),
+                        node(for: projection.byNameContainer)].compactMap { $0 }
+            }
+            if container == projection.byIDContainer {
+                return projection.enumerate(self, false)
+            }
+            if container == projection.byNameContainer {
+                return projection.enumerate(self, true)
+            }
+        }
+        return []
     }
 
     /// All page rows projected as file nodes under the given view, ordered by id
@@ -674,31 +770,12 @@ struct Projection {
             || id == Identity.indexLinksJSONL || id == Identity.indexSourcesJSONL {
             return indexData(for: id)
         }
-        // Processed markdown head: serve the head content from
-        // `source_markdown_versions`. Must come before the verbatim-source check
-        // so the two identifier families don't collide.
-        if let sourceULID = Identity.sourceMarkdownULID(from: id) {
-            guard let store = openReadStore(),
-                  let head = try? store.processedMarkdownHead(sourceID: PageID(rawValue: sourceULID)) else {
-                return nil
-            }
-            return Data(head.content.utf8)
+        // Flat leaf content (slice 2b): dispatch to the owning flat-resource
+        // projection's `contentForLeaf`.
+        for projection in Self.flatProjections where projection.owns(id) {
+            return projection.contentForLeaf(self, id)
         }
-        // Ingested sources: serve the verbatim bytes from SQLite (raw, no
-        // conversion). Resilient to a missing row/table → nil (noSuchItem).
-        if let fileULID = Identity.fileULID(from: id) {
-            guard let store = openReadStore(),
-                  let data = try? store.sourceContent(id: PageID(rawValue: fileULID)) else {
-                return nil
-            }
-            return data
-        }
-        guard let ulid = Identity.pageULID(from: id),
-              let store = openReadStore(),
-              let page = try? store.getPage(id: PageID(rawValue: ulid)) else {
-            return nil
-        }
-        return Data(PageMarkdownFormat.fileContent(for: page).utf8)
+        return nil
     }
 }
 
