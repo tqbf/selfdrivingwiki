@@ -3318,21 +3318,6 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         AND hash NOT IN (SELECT blob_hash      FROM source_markdown_versions WHERE blob_hash IS NOT NULL)
     """
 
-    /// `vacuumBlobs(dryRun:)` result. `bytesReclaimed` is the SUM of orphan
-    /// `byte_size`; on a dry run it is the bytes that *would* be reclaimed.
-    public struct BlobVacuumReport: Equatable, Sendable {
-        public let orphanCount: Int
-        public let bytesReclaimed: Int
-        /// `true` only when the call actually deleted rows (dry run = false).
-        public let applied: Bool
-
-        public init(orphanCount: Int, bytesReclaimed: Int, applied: Bool) {
-            self.orphanCount = orphanCount
-            self.bytesReclaimed = bytesReclaimed
-            self.applied = applied
-        }
-    }
-
     /// Sweep **orphaned** blob rows — blobs no version references. Deleting a
     /// source cascades its `source_versions`/`source_markdown_versions` rows but
     /// leaves their blobs behind; this is the lazy reclamation for that leak.

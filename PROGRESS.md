@@ -30,16 +30,24 @@ default is a safe **dry run**; `--apply` deletes. Nothing depends on eager GC.
   `Options` generalized from a hardcoded `--json` valueless flag to a
   `booleanFlags` set so `--apply` works; `usageText` gains the `admin` line.
 - **`main.swift`** — `execute()` dispatches `.admin`.
-- **Tests (11 new, in `WikiCtlCommandTests`):** parser (default dry-run,
-  `--apply`, `--json`, missing/unknown subcommand); store GC via the realistic
-  add→delete→vacuum flow (orphan reported, dry-run no-op, `--apply` reclaims the
-  orphan while preserving a referenced blob, idempotent re-run, no-op when
-  everything referenced); `AdminCommand.run` dispatch (dry-run doesn't commit,
-  apply commits, JSON payload parses + matches the report).
+- **Tests (13 new):** parser (default dry-run, `--apply`, `--json`,
+  missing/unknown subcommand); store GC via the realistic add→delete→vacuum flow
+  (orphan reported, dry-run no-op, `--apply` reclaims the orphan while preserving
+  a referenced blob, idempotent re-run, no-op when everything referenced);
+  `AdminCommand.run` dispatch (dry-run doesn't commit, apply commits, JSON parses
+  + matches the report); `WikiManager` preview/apply state flow (2 in
+  `WikiManagerTests`).
 
-**Gate:** `swift test` exit 0 — 1972 tests in 160 suites (was 1914 → +11 here,
-rest from other in-flight work). Resolves §13 Q1; `plans/graph-model-and-versioning.md`
-§4.1/§13 marked shipped.
+**Also surfaced in the app UI** (Help menu → "Vacuum Orphaned Storage…"): a
+read-only dry-run preview drives a confirm `.alert` (Cancel + destructive
+Vacuum; `ByteCountFormatter` for the byte count; "no orphans" empty state).
+`BlobVacuumReport` + `vacuumBlobs(dryRun:)` were promoted to the `WikiStore`
+protocol (the `@MainActor` model only ever calls protocol methods — no downcast);
+`WikiStoreModel.performBlobVacuum` + `WikiManager.previewBlobVacuum`/
+`applyBlobVacuum` wire the menu to the active wiki's store.
+
+**Gate:** `swift test` exit 0 — 1974 tests in 160 suites. Resolves §13 Q1;
+`plans/graph-model-and-versioning.md` §4.1/§13 marked shipped.
 
 ## 2026-07-08 — #263: Separate source origin from materialized format
 

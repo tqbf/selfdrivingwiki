@@ -31,7 +31,7 @@ public enum AdminCommand {
         }
     }
 
-    private static func format(_ report: SQLiteWikiStore.BlobVacuumReport, json: Bool) -> String {
+    private static func format(_ report: BlobVacuumReport, json: Bool) -> String {
         if json {
             return """
             {"orphanCount":\(report.orphanCount),"bytesReclaimed":\(report.bytesReclaimed),"applied":\(report.applied)}

@@ -359,4 +359,38 @@ struct WikiManagerTests {
         // The stray legacy file was left untouched (not adopted, not renamed).
         #expect(FileManager.default.fileExists(atPath: legacy.path))
     }
+
+    // MARK: - Blob GC (#253) — Help-menu preview/apply state flow
+
+    /// The Help-menu flow: `previewBlobVacuum()` runs a read-only dry run and
+    /// surfaces the report on `pendingBlobVacuum` (drives the confirm alert);
+    /// `applyBlobVacuum()` runs the delete and clears the pending state. A fresh
+    /// wiki has no sources, so the preview reports zero orphans (the "nothing to
+    /// reclaim" path). The reclaim-itself logic is covered by the store-level
+    /// tests in `WikiCtlCommandTests`.
+    @Test func blobVacuumPreviewSetsReportAndApplyClearsIt() {
+        let manager = WikiManager(containerDirectory: tempDirectory())
+        manager.bootstrap()
+
+        manager.previewBlobVacuum()
+        let report = manager.pendingBlobVacuum
+        #expect(report != nil)
+        #expect(report?.orphanCount == 0)
+        #expect(report?.bytesReclaimed == 0)
+        #expect(report?.applied == false)
+
+        manager.applyBlobVacuum()
+        #expect(manager.pendingBlobVacuum == nil)
+    }
+
+    /// With no active store (deferred bootstrap), the preview is a guarded
+    /// no-op — it must not crash or fabricate a report.
+    @Test func blobVacuumPreviewIsNoOpWithoutActiveStore() {
+        let manager = WikiManager(containerDirectory: tempDirectory())
+        manager.bootstrap(activateNow: false)
+        #expect(manager.activeStore == nil)
+
+        manager.previewBlobVacuum()
+        #expect(manager.pendingBlobVacuum == nil)
+    }
 }

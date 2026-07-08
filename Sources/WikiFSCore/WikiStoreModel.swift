@@ -1176,6 +1176,17 @@ public final class WikiStoreModel {
         flushPendingSystemPromptSave()
     }
 
+    // MARK: - Blob GC (#253)
+
+    /// Run a blob-GC pass against the underlying store. `dryRun` true previews
+    /// (read-only count + bytes); false deletes the orphans in one transaction.
+    /// Routes through the @MainActor model per the SQLite write discipline.
+    /// Returns nil only if the store call throws.
+    @discardableResult
+    public func performBlobVacuum(dryRun: Bool) -> BlobVacuumReport? {
+        try? store.vacuumBlobs(dryRun: dryRun)
+    }
+
     // MARK: - Agent run lock (Phase C, decision #6)
 
     /// The SINGLE mutation point for `isAgentRunning`. Every public entry point
