@@ -33,6 +33,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// Current `withTransaction` nesting depth. 0 = no open transaction.
     /// Only ever touched while holding `lock`.
     private var transactionDepth = 0
+    /// Guards against double-close (`close()` then `deinit`). `sqlite3_close`
+    /// on an already-closed handle returns SQLITE_MISUSE; the flag keeps it clean.
+    private var closed = false
     /// `mutate()`'s OWN nesting depth — distinct from `transactionDepth`.
     /// `mutate()` flushes its buffered event to `eventBus` only when this returns
     /// to 0 (the outermost `mutate()` call), AFTER releasing the lock, so no
@@ -131,6 +134,22 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     deinit {
         // Finalize every cached statement before closing the connection,
         // otherwise sqlite3_close returns SQLITE_BUSY and leaks the handle.
+        guard !closed else { return }
+        closed = true
+        statements.removeAll()
+        sqlite3_close(db)
+    }
+
+    /// Explicitly close the database connection. After calling this, the store
+    /// must not be used further. `deinit` normally handles this, but ARC does not
+    /// guarantee deinit timing — callers that need a second raw connection on the
+    /// same file (e.g. tests inserting corrupt data) must call this to quiesce the
+    /// WAL before opening the new connection.
+    public func close() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed else { return }
+        closed = true
         statements.removeAll()
         sqlite3_close(db)
     }
