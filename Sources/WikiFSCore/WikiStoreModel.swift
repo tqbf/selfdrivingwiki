@@ -1612,7 +1612,7 @@ public final class WikiStoreModel {
             filename: snapshot.page.filename, data: snapshot.page.data,
             mimeType: snapshot.page.mimeType, zoteroItemTitle: snapshot.page.zoteroItemTitle)
         var summary: SourceSummary
-        if snapshot.plan.kind == .htmlConverted && !snapshot.images.isEmpty {
+        if snapshot.plan.format == .htmlConverted && !snapshot.images.isEmpty {
             summary = try storeSnapshot(snapshot)
         } else {
             summary = try storeMaterialized(snapshot.page, resolvedDisplayName: resolvedDisplayName)
@@ -1620,14 +1620,15 @@ public final class WikiStoreModel {
         // HTML-converted sources have ".md" appended to the storage filename;
         // set a clean display name (the page title without the extension) so
         // the UI shows "How to Do Thing" instead of "How to Do Thing.md".
-        if snapshot.plan.kind == .htmlConverted {
+        if snapshot.plan.format == .htmlConverted {
             let cleanTitle = (snapshot.page.filename as NSString).deletingPathExtension
             try? store.setSourceDisplayName(id: summary.id, displayName: cleanTitle)
         }
         reloadSources()
         openTab(.source(summary.id))
         return URLFetchService.FetchOutcome(
-            filename: snapshot.plan.filename, byteSize: snapshot.plan.data.count, kind: snapshot.plan.kind)
+            filename: snapshot.plan.filename, byteSize: snapshot.plan.data.count,
+            kind: URLFetchService.mapFormat(snapshot.plan.format))
     }
 
     /// Phase 4 — store a website snapshot: one shared fetch activity (committed

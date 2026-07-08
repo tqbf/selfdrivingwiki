@@ -169,13 +169,15 @@ public struct LocalFileMaterializer: SourceMaterializer {
         let data = try await Task.detached(priority: .userInitiated) {
             try Data(contentsOf: url)
         }.value
-        // Preserve the pre-Phase-3 addFiles dispatch: derive mime from the ext,
-        // run the bytes through URLFetchService.plan(for:) so content-sniffing +
-        // extension inference stay identical, and pass the UTType mime explicitly.
+        // Derive mime from the ext, then route through format dispatch (same
+        // pipeline as website/Zotero sources — content-sniffing + extension
+        // inference). Pass the UTType mime explicitly.
         let ext = (url.lastPathComponent as NSString).pathExtension.lowercased()
         let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
-        let response = URLFetchService.FetchResponse(data: data, contentType: mimeType, finalURL: url)
-        let plan = URLFetchService.plan(for: response)
+        let (stem, extHint) = URLFetchService.nameHint(for: url)
+        let plan = FormatMaterializer.dispatch(
+            data: data, contentType: mimeType,
+            stem: stem, extensionHint: extHint)
         return MaterializedSource(
             filename: plan.filename,
             data: plan.data,
@@ -191,13 +193,13 @@ public struct LocalFileMaterializer: SourceMaterializer {
 // MARK: - WebsiteMaterializer
 
 /// Materializes a fetched URL: normalizes → fetches → dispatches by content type
-/// (HTML→Markdown / PDF / text / binary), reusing `URLFetchService.plan(for:)`
-/// unchanged. Records `agentName = "website"`, `activityKind = "fetch"`,
-/// `plan` = the request URL, and `externalIdentity`/`externalRef` = the resolved
-/// final URL.
+/// (HTML→Markdown / PDF / text / binary) via `FormatMaterializer.dispatch`
+/// (through `URLFetchService.nameHint(for:)`). Records `agentName = "website"`,
+/// `activityKind = "fetch"`, `plan` = the request URL, and
+/// `externalIdentity`/`externalRef` = the resolved final URL.
 ///
 /// `materializeWithPlan()` returns the `MaterializedSource` alongside the
-/// computed dispatch `StorePlan`, so `addURL` can build its `FetchOutcome`
+/// computed dispatch `FormatPlan`, so `addURL` can build its `FetchOutcome`
 /// (kind/size) without a second fetch. A pure struct — `materialize()` is the
 /// protocol-conformant projection that discards the plan.
 public struct WebsiteMaterializer: SourceMaterializer {
@@ -216,14 +218,17 @@ public struct WebsiteMaterializer: SourceMaterializer {
 
     /// The full materialization, returning the dispatch plan alongside the
     /// `MaterializedSource` (so the caller can report kind/size).
-    public func materializeWithPlan() async throws -> (source: MaterializedSource, plan: URLFetchService.StorePlan) {
+    public func materializeWithPlan() async throws -> (source: MaterializedSource, plan: FormatPlan) {
         guard let url = URLFetchService.normalizeURL(rawInput) else {
             throw URLFetchService.FetchError.invalidURL(
                 rawInput.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         let response = try await fetcher.fetch(url)
         guard !response.data.isEmpty else { throw URLFetchService.FetchError.empty }
-        let plan = URLFetchService.plan(for: response)
+        let (stem, extHint) = URLFetchService.nameHint(for: response.finalURL)
+        let plan = FormatMaterializer.dispatch(
+            data: response.data, contentType: response.contentType,
+            stem: stem, extensionHint: extHint)
         let finalURLString = response.finalURL.absoluteString
         let source = MaterializedSource(
             filename: plan.filename,
@@ -260,7 +265,10 @@ public struct WebsiteMaterializer: SourceMaterializer {
         let response = try await fetcher.fetch(url)
         guard !response.data.isEmpty else { throw URLFetchService.FetchError.empty }
 
-        let plan = URLFetchService.plan(for: response)
+        let (stem, extHint) = URLFetchService.nameHint(for: response.finalURL)
+        let plan = FormatMaterializer.dispatch(
+            data: response.data, contentType: response.contentType,
+            stem: stem, extensionHint: extHint)
         let finalURLString = response.finalURL.absoluteString
         let provenance = SourceProvenance(
             agentName: agentName,
@@ -269,7 +277,7 @@ public struct WebsiteMaterializer: SourceMaterializer {
             externalRef: finalURLString,
             externalIdentity: finalURLString)
 
-        if plan.kind == .htmlConverted {
+        if plan.format == .htmlConverted {
             // HTML: full snapshot — extract + download images, rewrite srcs.
             let html = URLFetchService.decodeText(response.data)
             return try await WebsiteSnapshotExtractor.snapshot(
@@ -322,9 +330,9 @@ public struct SnapshotImage: Sendable, Equatable {
 public struct WebsiteSnapshot: Sendable {
     public let page: MaterializedSource
     public let images: [SnapshotImage]
-    public let plan: URLFetchService.StorePlan
+    public let plan: FormatPlan
 
-    public init(page: MaterializedSource, images: [SnapshotImage], plan: URLFetchService.StorePlan) {
+    public init(page: MaterializedSource, images: [SnapshotImage], plan: FormatPlan) {
         self.page = page
         self.images = images
         self.plan = plan
@@ -411,9 +419,22 @@ public struct ZoteroMaterializer: SourceMaterializer {
             let data = try await Task.detached(priority: .userInitiated) {
                 try Data(contentsOf: path)
             }.value
+            // Derive (stem, extensionHint) from the attachment filename and route
+            // through format dispatch — the SAME pipeline as website/local-file
+            // sources. This fixes a latent bug: a Zotero HTML attachment is now
+            // converted to Markdown instead of stored as raw HTML.
+            let filename = path.lastPathComponent
+            let ns = filename as NSString
+            let stem = ns.deletingPathExtension
+            let extRaw = ns.pathExtension.lowercased()
+            let plan = FormatMaterializer.dispatch(
+                data: data, contentType: attachment.contentType,
+                stem: stem, extensionHint: extRaw.isEmpty ? nil : extRaw)
             return MaterializedSource(
-                filename: path.lastPathComponent,
-                data: data,
+                filename: plan.filename,
+                data: plan.data,
+                // Pass nil so the store sniffs (the dispatch plan already
+                // converted HTML→Markdown; mime is for the stored artifact).
                 mimeType: nil,
                 zoteroItemKey: parentItem.key,
                 zoteroItemTitle: parentItem.title,

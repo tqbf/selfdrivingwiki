@@ -154,96 +154,71 @@ public struct URLFetchService {
         public let kind: FetchOutcome.Kind
     }
 
+    /// The single source of truth for URL→(stem, extension) extraction. Returns
+    /// the pre-computed filename stem (extension already deleted) and the
+    /// lowercased extension hint (or `nil`). For root URLs the host is returned
+    /// as-is (e.g. `"example.com"` — NOT with `.com` stripped).
+    static func nameHint(for url: URL) -> (stem: String, ext: String?) {
+        let last = url.lastPathComponent
+        if !last.isEmpty, last != "/" {
+            let ns = last as NSString
+            let stem = ns.deletingPathExtension
+            if !stem.isEmpty {
+                let ext = ns.pathExtension.lowercased()
+                return (stem, ext.isEmpty ? nil : ext)
+            }
+        }
+        // Root URL: host as-is (no extension deletion — preserves "example.com").
+        if let host = url.host, !host.isEmpty { return (host, nil) }
+        return ("download", nil)
+    }
+
+    /// Map the format-layer `SourceFormat` to the UI-facing `FetchOutcome.Kind`.
+    static func mapFormat(_ format: SourceFormat) -> FetchOutcome.Kind {
+        switch format {
+        case .htmlConverted: return .htmlConverted
+        case .pdf: return .pdf
+        case .text: return .text
+        case .binary: return .binary
+        }
+    }
+
+    /// The decision about what bytes to store under what filename — now a thin
+    /// wrapper that delegates to the URL-independent `FormatMaterializer.dispatch`.
+    /// The URL-specific `nameHint(for:)` extracts `(stem, extensionHint)` from
+    /// `response.finalURL`; the format layer does the rest.
     public static func plan(for response: FetchResponse) -> StorePlan {
-        let mime = normalizedMIME(response.contentType)
-
-        // Content-sniff the bytes when the declared type is one a misconfigured /
-        // interstitial-serving host commonly lies about: `text/html`, missing, or a
-        // generic `application/octet-stream`. If the bytes carry a known binary magic
-        // number (e.g. a Dropbox interstitial that slipped past the normalizer but
-        // actually returned a `%PDF`), store them verbatim as the SNIFFED type instead
-        // of running HTML→Markdown on binary garbage. We trust an explicit, specific
-        // declared type (`application/pdf`, `image/png`, …) and only sniff the
-        // ambiguous ones, so a server that knows what it's serving wins.
-        if shouldSniff(mime), let sniffed = sniffContentType(response.data) {
-            let ext = binaryExtension(forMIME: sniffed, url: response.finalURL)
-            let stem = stemFromURL(response.finalURL, droppingExtension: ext)
-            let filename = ext.isEmpty ? sanitizeStem(stem) : ensureExtension(sanitizeStem(stem), ext: ext)
-            let kind: FetchOutcome.Kind = sniffed == "application/pdf" ? .pdf : .binary
-            return StorePlan(filename: filename, data: response.data, kind: kind)
-        }
-
-        if mime == "text/html" || mime == "application/xhtml+xml" {
-            let html = decodeText(response.data)
-            let result = HTMLToMarkdown.convert(html)
-            let stem = result.title.flatMap { nonEmpty($0) } ?? stemFromURL(response.finalURL)
-            let filename = ensureExtension(sanitizeStem(stem), ext: "md")
-            return StorePlan(filename: filename, data: Data(result.markdown.utf8), kind: .htmlConverted)
-        }
-
-        if mime == "application/pdf" {
-            let stem = stemFromURL(response.finalURL, droppingExtension: "pdf")
-            let filename = ensureExtension(sanitizeStem(stem), ext: "pdf")
-            return StorePlan(filename: filename, data: response.data, kind: .pdf)
-        }
-
-        if let mime, mime.hasPrefix("text/") {
-            let ext = textExtension(forMIME: mime, url: response.finalURL)
-            let stem = stemFromURL(response.finalURL, droppingExtension: ext)
-            let filename = ensureExtension(sanitizeStem(stem), ext: ext)
-            return StorePlan(filename: filename, data: response.data, kind: .text)
-        }
-
-        // Anything else: keep bytes verbatim with a best-effort extension.
-        let ext = binaryExtension(forMIME: mime, url: response.finalURL)
-        let stem = stemFromURL(response.finalURL, droppingExtension: ext)
-        let filename = ext.isEmpty ? sanitizeStem(stem) : ensureExtension(sanitizeStem(stem), ext: ext)
-        return StorePlan(filename: filename, data: response.data, kind: .binary)
+        let (stem, extHint) = nameHint(for: response.finalURL)
+        let fp = FormatMaterializer.dispatch(
+            data: response.data, contentType: response.contentType,
+            stem: stem, extensionHint: extHint)
+        return StorePlan(filename: fp.filename, data: fp.data, kind: mapFormat(fp.format))
     }
 
-    // MARK: - Content sniffing (pure)
+    // MARK: - Content sniffing (thin forwarders to FormatMaterializer)
 
-    /// Whether a declared MIME is ambiguous enough to second-guess via the bytes:
-    /// `text/html` (the interstitial case), a missing type, or the catch-all
-    /// `application/octet-stream`. A specific declared type is trusted as-is.
     static func shouldSniff(_ mime: String?) -> Bool {
-        switch mime {
-        case nil, "text/html", "application/xhtml+xml", "application/octet-stream":
-            return true
-        default:
-            return false
-        }
+        FormatMaterializer.shouldSniff(mime)
     }
 
-    /// Detect a known binary content type from leading magic-number bytes, else
-    /// `nil` (so the caller falls back to the declared type). Delegates to the
-    /// shared `ContentSniff` helper so the store and other ingest paths share
-    /// one implementation.
     static func sniffContentType(_ data: Data) -> String? {
-        ContentSniff.mimeType(of: data)
+        FormatMaterializer.sniffContentType(data)
     }
 
-    // MARK: - Helpers (pure)
+    // MARK: - Helpers (thin forwarders to FormatMaterializer)
 
-    /// Lowercased MIME with any `; charset=…` parameter and whitespace stripped.
     static func normalizedMIME(_ raw: String?) -> String? {
-        guard let raw else { return nil }
-        let base = raw.split(separator: ";", maxSplits: 1).first.map(String.init) ?? raw
-        let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return trimmed.isEmpty ? nil : trimmed
+        FormatMaterializer.normalizedMIME(raw)
     }
 
-    /// Decode response bytes as text — UTF-8 first, then Latin-1 (which never fails)
-    /// so a mis-declared charset still produces *something* the HTML walker can chew.
     static func decodeText(_ data: Data) -> String {
-        if let utf8 = String(data: data, encoding: .utf8) { return utf8 }
-        return String(decoding: data, as: UTF8.self)  // lossy, never nil
+        FormatMaterializer.decodeText(data)
     }
 
     /// The filename stem from a URL: the last path component without its extension,
-    /// else the host. `droppingExtension` removes a trailing `.<ext>` if the path
-    /// component already carries it (so we don't double it).
-    static func stemFromURL(_ url: URL, droppingExtension ext: String = "") -> String {
+    /// else the host. Kept here for backward compat (its test calls it directly);
+    /// `plan(for:)` uses `nameHint(for:)` instead.
+    static func stemFromURL(_ url: URL) -> String {
         let last = url.lastPathComponent
         if !last.isEmpty, last != "/" {
             let ns = last as NSString
@@ -256,64 +231,21 @@ public struct URLFetchService {
         return "download"
     }
 
-    /// Sanitize a stem into a safe filename component. Reuses `FilenameEscaping`'s
-    /// title rules (collapse whitespace, strip control chars, replace `/`/`:`,
-    /// leading-dot guard, trim trailing dots/spaces, empty→untitled), then caps the
-    /// length so a giant `<title>` can't make an unwieldy filename.
     static func sanitizeStem(_ stem: String) -> String {
-        let escaped = FilenameEscaping.escapeTitle(stem)
-        let capped = String(escaped.prefix(80)).trimmingCharacters(in: .whitespaces)
-        return capped.isEmpty ? "untitled" : capped
+        FormatMaterializer.sanitizeStem(stem)
     }
 
-    /// Append `.ext` unless the stem already ends in it (case-insensitive).
     static func ensureExtension(_ stem: String, ext: String) -> String {
-        let lower = stem.lowercased()
-        if lower.hasSuffix(".\(ext)") { return stem }
-        return "\(stem).\(ext)"
+        FormatMaterializer.ensureExtension(stem, ext: ext)
     }
 
-    /// Extension for a `text/*` response: map the common ones, else fall back to the
-    /// URL's extension, else `txt`.
     static func textExtension(forMIME mime: String, url: URL) -> String {
-        switch mime {
-        case "text/markdown", "text/x-markdown": return "md"
-        case "text/plain": return "txt"
-        case "text/csv": return "csv"
-        case "text/css": return "css"
-        case "text/javascript": return "js"
-        default:
-            let urlExt = (url.lastPathComponent as NSString).pathExtension.lowercased()
-            return urlExt.isEmpty ? "txt" : urlExt
-        }
+        let ext = (url.lastPathComponent as NSString).pathExtension.lowercased()
+        return FormatMaterializer.textExtension(forMIME: mime, extensionHint: ext.isEmpty ? nil : ext)
     }
 
-    /// Extension for a non-text response: from the MIME subtype when recognizable,
-    /// else the URL's extension, else empty (no extension).
     static func binaryExtension(forMIME mime: String?, url: URL) -> String {
-        if let mime {
-            switch mime {
-            case "image/jpeg": return "jpg"
-            case "image/png": return "png"
-            case "image/gif": return "gif"
-            case "image/webp": return "webp"
-            case "image/svg+xml": return "svg"
-            case "application/json": return "json"
-            case "application/zip": return "zip"
-            case "application/epub+zip": return "epub"
-            default:
-                // Use the subtype if it looks like a clean extension token.
-                if let sub = mime.split(separator: "/").last,
-                   sub.allSatisfy({ $0.isLetter || $0.isNumber }), !sub.isEmpty {
-                    return String(sub)
-                }
-            }
-        }
-        return (url.lastPathComponent as NSString).pathExtension.lowercased()
-    }
-
-    private static func nonEmpty(_ s: String) -> String? {
-        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.isEmpty ? nil : t
+        let ext = (url.lastPathComponent as NSString).pathExtension.lowercased()
+        return FormatMaterializer.binaryExtension(forMIME: mime, extensionHint: ext.isEmpty ? nil : ext)
     }
 }

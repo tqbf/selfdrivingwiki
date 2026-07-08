@@ -30,10 +30,10 @@ struct WikiStoreModelZoteroIngestTests {
         try data.write(to: dir.appendingPathComponent(filename))
     }
 
-    private func attachment(key: String, linkMode: String = "imported_file", filename: String?) -> ZoteroAttachment {
+    private func attachment(key: String, linkMode: String = "imported_file", filename: String?, contentType: String = "application/pdf") -> ZoteroAttachment {
         ZoteroAttachment(
             key: key, parentItem: "PARENT1", linkMode: linkMode,
-            filename: filename, contentType: "application/pdf", title: nil)
+            filename: filename, contentType: contentType, title: nil)
     }
 
     private func parentItem(key: String = "PARENT1", title: String? = "Sample Paper") -> ZoteroItem {
@@ -130,7 +130,7 @@ struct WikiStoreModelZoteroIngestTests {
         try await model.ingestFromZotero(
             attachment(key: "K1", filename: "paper.pdf"), parentItem: parentItem(), zoteroDir: zoteroDir)
         try await model.ingestFromZotero(
-            attachment(key: "K1", filename: "notes.md"), parentItem: parentItem(), zoteroDir: zoteroDir)
+            attachment(key: "K1", filename: "notes.md", contentType: "text/markdown"), parentItem: parentItem(), zoteroDir: zoteroDir)
 
         #expect(model.sources.count == 2)
         let filenames = Set(model.sources.map(\.filename))
