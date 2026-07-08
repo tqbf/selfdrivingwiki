@@ -820,48 +820,29 @@ Ordered by dependency; each gate is demoable.
 | ↳ *Phase 5 shipped (v23, 2026-07-06).* `WikiLinkRewriter.canonicalize` rewrites resolvable `[[…]]` to `[[page:ULID\|alias]]`/`[[source:ULID\|alias]]` at the shared `PageUpsert` seam; `replaceLinks` validates canonical targets by id (name fallback for ULID-shaped titles); `linkified` resolves ULID→current name at render + emits `?id=` URLs; id-based click routing; v22→23 data-only body sweep (token advances); `renameSource`'s body-rewrite loop deleted (rename = one-row metadata update, self-heals at render). Gate met (AC.1–AC.9, 1617 tests green). `rewriteSourceBase` + its 28-test suite removed. | | |
 | **6 — Pinning** | `@vN` parse/resolve, `pinned_version_id`, quote-against-pinned-version | `[[source:X@v3#"quote"]]` highlights after X is reprocessed |
 | ↳ *Phase 6 shipped (2026-07-06).* `@vN` pins the Nth derived-markdown extraction (oldest = `v1`). Pin-aware parse (`splitVersionPin`, `ParsedLink.versionPin`, pin-distinct dedup) + canonicalize (preserves `@vN` verbatim, ULID fast-path on bare base). `replaceLinks` resolves the ordinal→smv id and writes `pinned_version_id` (NULL for out-of-range/unpinned). Render linkification emits `&pin=<smvID>` **only for pinned quote links** (non-quote pins open HEAD). `WikiLinkRoute.source` carries `pin`; `selectSource(byID:pinnedExtractionID:)` + set-once/consume-once `pendingPinnedExtraction` hand the pinned id to the destination; `SourceDetailView` renders the pinned extraction's content so the highlighter finds the quote. No schema change (`pinned_version_id` shipped v22); no `user_version` bump; no changeToken change. Gate met (AC.1–AC.10, 1653 tests green). Content-version pinning for byte embeds (§7) + PDF-only-source quotes deferred. | | |
-| **7 — New providers** | git@SHA, Tavily, Slack, archives, Apple Podcasts — each a leaf | Each materializes a frozen, provenance-carrying source |
+| **7 — New providers** | git@SHA, Tavily, Slack, archives — each a leaf → [#261](https://github.com/tqbf/selfdrivingwiki/issues/261) | Each materializes a frozen, provenance-carrying source |
 
 Phase 5 depends only on 0 (it can move earlier if rename pain dominates);
 6 depends on 1+5; everything else is ordered as listed.
 
-## 13. Open questions
+## 13. Tracked follow-ups (moved to GitHub issues)
 
-1. **Blob GC trigger** — lazy `vacuum-blobs` only, or also opportunistic sweep
-   on source delete? (Lazy-only is safe; sweep is an optimization.)
-2. **Forward links** — unresolved link targets currently vanish from the
-   graph; a `pending_links` table would make "pages wanting a source named X"
-   queryable. Deferred; the save-time normalizer makes it easy to add.
-3. **Editor ergonomics** for canonical links — pretty-display/edit affordance
-   over `[[page:ULID|Title]]` in the raw TextEditor. Deferred until Phase 5
-   feedback.
-4. **Off-main bulk jobs** — with a method-atomic store the blocking-modal
-   upgrade could become a background job with progress; needs a
-   model-coordination design (who reloads, when) before any change.
-5. **json-render runtime choice** — which renderer/spec dialect the WKWebView
-   mounts; the schema is agnostic (it's a mime + a blob).
-6. **Activity lifecycle on source delete (revisit at Phase 2/3).** `activities`
-   has no FK to `sources` (it references `agents`), so `deleteSource` cascades
-   `source_versions` + `refs` but **leaves activities orphaned** — they persist
-   as durable PROV-DM history (Model A, §4.7). Consequence: `activities` grows
-   unbounded on source deletes, and the `actCount` changeToken fold is monotone
-   (only `svCount`/`refsGenSum` drop on delete — see the §10 caveat). In Phase 1
-   this is harmless: every activity is a synthetic `'legacy-import'`/`'import'`/
-   `'fetch'` stub carrying no real provenance (§3), so the orphans are pure dead
-   weight. **Revisit when real provenance lands (Phase 2 extraction activities,
-   Phase 3 provider fetches):** if provenance turns out worth keeping, keep Model
-   A and add an activity-GC pass that sweeps only synthetic legacy activities; if
-   not, add an explicit cascade in `deleteSource` (delete activities referenced
-   solely by the source's versions — a 5–10 line explicit delete, *not* a FK
-   change, since the FK runs `source_versions → activities` child→parent and
-   SQLite cannot auto-cascade it; a future multi-input extraction activity also
-   makes a single `activities.source_id` FK wrong).
+All open questions and deferred items have been promoted to enhancement
+issues so they are tracked independently of this design doc. The doc no
+longer needs to be revisited for these.
 
-## 14. Explicitly deferred (unchanged from the draft)
-
-Page versioning and wiki-level snapshots stay out of scope — but note the
-model now makes them nearly free when wanted: pages become owners of version
-rows with a `page-content` ref kind, and agent-vs-human edit conflicts become
-divergent versions instead of clobbers. Vector search remains ancillary
-derived data, never versioned. The File Provider projection overhaul remains a
-late phase.
+| # | Issue | Origin |
+|---|-------|--------|
+| 1 | [#253](https://github.com/tqbf/selfdrivingwiki/issues/253) — Blob GC: sweep orphaned blobs | §13 Q1 |
+| 2 | [#254](https://github.com/tqbf/selfdrivingwiki/issues/254) — Forward links: `pending_links` table | §13 Q2 |
+| 3 | [#255](https://github.com/tqbf/selfdrivingwiki/issues/255) — Editor ergonomics for canonical `[[page:ULID\|Title]]` | §13 Q3 |
+| 4 | [#256](https://github.com/tqbf/selfdrivingwiki/issues/256) — Off-main bulk jobs with progress | §13 Q4 |
+| 5 | [#249](https://github.com/tqbf/selfdrivingwiki/issues/249) — `json-render` generative-UI spec + runtime | §13 Q5 / Phase 4 |
+| 6 | [#257](https://github.com/tqbf/selfdrivingwiki/issues/257) — Activity lifecycle on source delete | §13 Q6 |
+| 7 | [#250](https://github.com/tqbf/selfdrivingwiki/issues/250) — Snapshot-aware refresh | Phase 4 |
+| 8 | [#251](https://github.com/tqbf/selfdrivingwiki/issues/251) — `apple-ttml` transcript-level PROV | Phase 4 |
+| 9 | [#252](https://github.com/tqbf/selfdrivingwiki/issues/252) — Content-version pinning for byte embeds | Phase 6 |
+| 10 | [#258](https://github.com/tqbf/selfdrivingwiki/issues/258) — Page versioning | §14 |
+| 11 | [#259](https://github.com/tqbf/selfdrivingwiki/issues/259) — Wiki-level snapshots | §14 |
+| 12 | [#260](https://github.com/tqbf/selfdrivingwiki/issues/260) — File Provider projection overhaul | §14 |
+| 13 | [#261](https://github.com/tqbf/selfdrivingwiki/issues/261) — New providers (git, Tavily, Slack, archives) | Phase 7 |
