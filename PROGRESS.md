@@ -5879,3 +5879,33 @@ once" cross-view signal (issue #183 design):
 
 **Build/tests:** `swift build` clean; `swift test` — 1466 tests pass.
 
+---
+
+### Issue #229 — PDF source add by URL can fail "database is locked" (PR #247)
+
+**Problem.** `DisplayNameResolver.resolve()` — which invokes PDFKit's
+whole-file parse for PDFs — ran **inside** `SQLiteWikiStore.addSource`'s
+`mutate()` closure, under the recursive lock and before the write transaction
+opened. For a large PDF this parse can take seconds, delaying the `BEGIN` long
+enough for another writer (File Provider, daemon, concurrent write) to hold the
+DB write lock past the 5 s `busy_timeout`, surfacing as "database is locked".
+
+**Fix.** Two-part:
+1. **Out of the locked path:** `addSource` (and `addSnapshotImage`) now compute
+   `ext` / `mime` / `displayName` **before** `mutate()` acquires the recursive
+   lock. The locked body keeps only the dup-check SELECT + INSERT transaction.
+   Added a `resolvedDisplayName: String??` parameter to `addSource` (and a
+   `WikiStore` protocol-extension convenience overload since protocol methods
+   can't have default args) so callers can skip the in-method parse entirely.
+2. **Off the main actor:** `WikiStoreModel.preResolveDisplayName()` runs
+   `DisplayNameResolver.resolve()` on a `Task.detached` for **PDFs only**
+   (non-PDFs return `nil` → resolve inline). Wired into `addURLViaWebsite`,
+   `addFiles`, and `ingestFromZotero`.
+
+**Key files:** `SQLiteWikiStore.swift` (`addSource` / `addSnapshotImage`),
+`WikiStore.swift` (protocol + extension), `WikiStoreModel.swift`
+(`preResolveDisplayName`, `storeMaterialized`, three ingest paths).
+
+**Build/tests:** `swift build` clean; `swift test` — 1930 tests pass
+(1927 existing + 3 new for the `resolvedDisplayName` tri-state bypass).
+

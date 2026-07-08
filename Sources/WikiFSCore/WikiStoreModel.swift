@@ -1365,18 +1365,46 @@ public final class WikiStoreModel {
 
     // MARK: - Provider-backed ingest seam (Phase 3a)
 
+    /// Pre-resolve a source's display name off the main actor. Only PDFs
+    /// trigger the expensive PDFKit whole-file parse, so this is a no-op
+    /// (returns `nil` → ``SQLiteWikiStore/addSource`` resolves inline) for all
+    /// other types whose metadata parsing is fast. For PDFs, the result is
+    /// computed on a detached task and handed to ``storeMaterialized`` via
+    /// ``resolvedDisplayName``, keeping the PDFKit work off the main actor and
+    /// out of the store's locked write path (issue #229).
+    ///
+    /// Returns `String??`:
+    /// - `nil` → "resolve in-method" (non-PDF or caller chose not to pre-resolve)
+    /// - `.some(result)` → use `result` as the ``DisplayNameResolver`` output
+    private func preResolveDisplayName(
+        filename: String, data: Data, mimeType: String?, zoteroItemTitle: String?
+    ) async -> String?? {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        let isPDF = ext == "pdf" || mimeType?.lowercased() == "application/pdf"
+        guard isPDF else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            DisplayNameResolver.resolve(
+                filename: filename, data: data, mimeType: mimeType,
+                zoteroItemTitle: zoteroItemTitle)
+        }.value
+    }
+
     /// The single store-write seam every provider-backed ingest flows through.
     /// Materialization (bytes + provenance) happens off-main inside the provider;
     /// this does the main-actor `store.addSource` write, threading the
     /// `MaterializedSource`'s provenance + retained Zotero columns through. Each
     /// caller wraps its OWN duplicate/error handling around this throw.
     @discardableResult
-    private func storeMaterialized(_ m: MaterializedSource) throws -> SourceSummary {
+    private func storeMaterialized(
+        _ m: MaterializedSource,
+        resolvedDisplayName: String?? = nil
+    ) throws -> SourceSummary {
         try store.addSource(
             filename: m.filename, data: m.data,
             zoteroItemKey: m.zoteroItemKey, zoteroItemTitle: m.zoteroItemTitle,
             mimeType: m.mimeType, provenance: m.provenance, role: .primary,
-            originalPath: nil, activityID: nil)
+            originalPath: nil, activityID: nil,
+            resolvedDisplayName: resolvedDisplayName)
     }
 
     /// Ingest dropped files. For each URL: reject directories (a recursive
@@ -1410,8 +1438,13 @@ public final class WikiStoreModel {
                 continue
             }
 
+            // Pre-resolve display name off-main for PDFs (issue #229).
+            let resolvedDisplayName = await preResolveDisplayName(
+                filename: materialized.filename, data: materialized.data,
+                mimeType: materialized.mimeType, zoteroItemTitle: materialized.zoteroItemTitle)
+
             do {
-                let summary = try storeMaterialized(materialized)
+                let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
                 lastSourceID = summary.id
             } catch WikiStoreError.duplicateContent(let existing) {
                 // Byte-identical to an already-stored source — skip rather than
@@ -1572,11 +1605,17 @@ public final class WikiStoreModel {
     ) async throws -> URLFetchService.FetchOutcome {
         let provider = WebsiteProvider(rawInput: rawInput, fetcher: fetcher)
         let snapshot = try await provider.materializeSnapshot()
+        // Pre-resolve the page's display name off the main actor so a PDF
+        // source's PDFKit parse doesn't block the UI or delay the store write
+        // (issue #229). Non-PDFs are unaffected (helper returns nil → inline).
+        let resolvedDisplayName = await preResolveDisplayName(
+            filename: snapshot.page.filename, data: snapshot.page.data,
+            mimeType: snapshot.page.mimeType, zoteroItemTitle: snapshot.page.zoteroItemTitle)
         var summary: SourceSummary
         if snapshot.plan.kind == .htmlConverted && !snapshot.images.isEmpty {
             summary = try storeSnapshot(snapshot)
         } else {
-            summary = try storeMaterialized(snapshot.page)
+            summary = try storeMaterialized(snapshot.page, resolvedDisplayName: resolvedDisplayName)
         }
         // HTML-converted sources have ".md" appended to the storage filename;
         // set a clean display name (the page title without the extension) so
@@ -1726,8 +1765,12 @@ public final class WikiStoreModel {
         // Resolve + read off the main actor (the provider materializes, throwing
         // ZoteroFetchError.unavailable when the attachment isn't local).
         let materialized = try await provider.materialize()
+        // Pre-resolve display name off-main for PDFs (issue #229).
+        let resolvedDisplayName = await preResolveDisplayName(
+            filename: materialized.filename, data: materialized.data,
+            mimeType: materialized.mimeType, zoteroItemTitle: materialized.zoteroItemTitle)
         do {
-            let summary = try storeMaterialized(materialized)
+            let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
             reloadSources()
             openTab(.source(summary.id))
         } catch {

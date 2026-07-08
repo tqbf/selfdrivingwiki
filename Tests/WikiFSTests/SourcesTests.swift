@@ -458,6 +458,50 @@ struct SourcesTests {
         #expect(result == "Zotero Title")
     }
 
+    // MARK: - resolvedDisplayName bypass (issue #229)
+
+    @Test func resolvedDisplayNameBypassesInMethodResolve() throws {
+        // PDF data WITH a /Title — DisplayNameResolver.resolve would return
+        // "My PDF Document" if called. Passing resolvedDisplayName: .some("Pre")
+        // must bypass that entirely and use the pre-resolved value.
+        let pdfData = try minimalPDF(title: "My PDF Document")
+        let store = try tempStore()
+        let summary = try store.addSource(
+            filename: "report.pdf", data: pdfData,
+            zoteroItemKey: nil, zoteroItemTitle: nil,
+            mimeType: "application/pdf", provenance: nil, role: .primary,
+            originalPath: nil, activityID: nil,
+            resolvedDisplayName: .some("Pre-Resolved Title"))
+        #expect(summary.displayName == "Pre-Resolved Title")
+    }
+
+    @Test func resolvedDisplayNameNilBypassSkipsResolve() throws {
+        // PDF data WITH a /Title, but caller passes .some(nil) → store must
+        // NOT call DisplayNameResolver.resolve (which would return "My PDF
+        // Document"); it uses nil → display_name stays NULL (filename fallback).
+        let pdfData = try minimalPDF(title: "My PDF Document")
+        let store = try tempStore()
+        let summary = try store.addSource(
+            filename: "report.pdf", data: pdfData,
+            zoteroItemKey: nil, zoteroItemTitle: nil,
+            mimeType: "application/pdf", provenance: nil, role: .primary,
+            originalPath: nil, activityID: nil,
+            resolvedDisplayName: .some(nil))
+        #expect(summary.displayName == nil)
+    }
+
+    @Test func resolvedDisplayNameDefaultsToInMethodResolve() throws {
+        // resolvedDisplayName: nil (default) → resolve in-method as before.
+        let md = "# Inline Title\nbody"
+        let store = try tempStore()
+        let summary = try store.addSource(
+            filename: "note.md", data: Data(md.utf8),
+            zoteroItemKey: nil, zoteroItemTitle: nil,
+            mimeType: nil, provenance: nil, role: .primary,
+            originalPath: nil, activityID: nil)
+        #expect(summary.displayName == "Inline Title")
+    }
+
     // MARK: - DisplayNameResolver helpers
 
     /// Build a minimal valid PDF with an optional /Title in the Info dict,
