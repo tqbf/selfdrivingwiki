@@ -28,6 +28,7 @@ struct ConversationView: View {
 
     @State private var draftMessage = ""
     @State private var showsInternals = false
+    @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: ConversationMetrics.composerFont)
     @State private var persistedMessages: [ChatMessage] = []
 
     /// True when this surface is rendering the active live session (D2
@@ -344,14 +345,26 @@ struct ConversationView: View {
     private func composer(enabled: Bool) -> some View {
         let sendActive = canSend && enabled
         return HStack(alignment: .bottom, spacing: 10) {
-            TextField("Ask a question, or ask the Agent to update the wiki…", text: $draftMessage, axis: .vertical)
-                .font(.body)
-                .textFieldStyle(.plain)
-                .lineLimit(1...6)
+            ComposerTextView(
+                text: $draftMessage,
+                isEditable: enabled,
+                font: ConversationMetrics.composerFont,
+                onSubmit: sendMessage,
+                measuredHeight: $composerHeight
+            )
+                .frame(height: composerHeight)
                 .padding(.leading, ConversationMetrics.composerHorizontalPadding)
                 .padding(.vertical, ConversationMetrics.composerVerticalPadding)
-                .onSubmit(sendMessage)
-                .disabled(!enabled)
+                .overlay(alignment: .topLeading) {
+                    if draftMessage.isEmpty {
+                        Text("Ask a question, or ask the Agent to update the wiki…")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .allowsHitTesting(false)
+                            .padding(.leading, ConversationMetrics.composerHorizontalPadding)
+                            .padding(.vertical, ConversationMetrics.composerVerticalPadding + ComposerTextView.Metrics.verticalInsetPerSide)
+                    }
+                }
 
             Button(action: sendMessage) {
                 Image(systemName: sendButtonIcon)
@@ -364,6 +377,7 @@ struct ConversationView: View {
                 .disabled(!sendActive)
                 .keyboardShortcut(.return, modifiers: .command)
                 .help(sendButtonTitle)
+                .padding(.bottom, ConversationMetrics.sendButtonBottomInset)
         }
         .padding(.trailing, ConversationMetrics.composerButtonInset)
         .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
@@ -545,4 +559,15 @@ enum ConversationMetrics {
     static let composerVerticalPadding: CGFloat = 16
     static let composerButtonInset: CGFloat = 8
     static let sendButtonSize: CGFloat = 42
+    /// Font for `ComposerTextView` — matches the previous `TextField`'s
+    /// `.font(.body)`, expressed as an `NSFont` since the composer is
+    /// AppKit-backed.
+    static var composerFont: NSFont { .preferredFont(forTextStyle: .body) }
+    /// Bottom inset that vertically centers the send button in a ONE-line
+    /// capsule. Derived, not hardcoded, so a font or padding change can't
+    /// silently un-center the button.
+    static var sendButtonBottomInset: CGFloat {
+        (ComposerTextView.oneLineHeight(for: composerFont)
+            + composerVerticalPadding * 2 - sendButtonSize) / 2
+    }
 }
