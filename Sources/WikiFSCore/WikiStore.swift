@@ -45,6 +45,54 @@ public struct BlobVacuumReport: Equatable, Sendable {
     }
 }
 
+/// Result of an activity-GC sweep (`WikiStore.vacuumActivities`). Activities
+/// carry no byte payload, so the report is just a count + whether the delete
+/// ran. `applied` is `true` only when the call actually deleted rows.
+public struct ActivityVacuumReport: Equatable, Sendable {
+    public let orphanCount: Int
+    public let applied: Bool
+
+    public init(orphanCount: Int, applied: Bool) {
+        self.orphanCount = orphanCount
+        self.applied = applied
+    }
+}
+
+/// Combined result of a `vacuum-all` sweep (blobs + activities). Used by the
+/// app's Help-menu confirm flow and the `wikictl admin vacuum-all` command so
+/// a single pass reports everything reclaimable.
+public struct VacuumReport: Equatable, Sendable {
+    public let blobs: BlobVacuumReport
+    public let activities: ActivityVacuumReport
+
+    public init(blobs: BlobVacuumReport, activities: ActivityVacuumReport) {
+        self.blobs = blobs
+        self.activities = activities
+    }
+
+    /// `true` when neither sweep found anything to reclaim.
+    public var isEmpty: Bool { blobs.orphanCount == 0 && activities.orphanCount == 0 }
+
+    /// Human-readable summary for the vacuum confirm alert. Handles the empty
+    /// case, pluralization, and byte formatting so the SwiftUI alert body stays
+    /// a one-liner (keeps the type checker happy in the complex app-scene body).
+    public var alertMessage: String {
+        if isEmpty {
+            return "No orphaned blobs or activities found — nothing to reclaim."
+        }
+        let bytes = ByteCountFormatter.string(
+            fromByteCount: Int64(blobs.bytesReclaimed), countStyle: .file)
+        var parts: [String] = []
+        if blobs.orphanCount > 0 {
+            parts.append("\(blobs.orphanCount) orphan blob\(blobs.orphanCount == 1 ? "" : "s"), \(bytes)")
+        }
+        if activities.orphanCount > 0 {
+            parts.append("\(activities.orphanCount) orphaned activit\(activities.orphanCount == 1 ? "y" : "ies")")
+        }
+        return "\(parts.joined(separator: "; ")) reclaimable. This removes data no source references and cannot be undone."
+    }
+}
+
 /// Read/write storage interface for wiki pages (INITIAL.md §3). The SQLite
 /// implementation is the source of truth; the Phase 2 File Provider extension
 /// will adopt a read-only subset (`WikiReadStore`) of this.
@@ -424,6 +472,16 @@ public protocol WikiStore: Sendable {
     /// store: vacuuming orphans changes no projected `ResourceKind`.
     @discardableResult
     func vacuumBlobs(dryRun: Bool) throws -> BlobVacuumReport
+
+    /// Sweep **orphaned** activity rows — activities no version references (the
+    /// leak left by `deleteSource`, which cascades version rows but not their
+    /// activities, issue #257). `dryRun == true` reports the orphan count
+    /// WITHOUT deleting; `false` deletes them in one transaction. Classified
+    /// NO_EMIT: vacuuming orphans changes no projected `ResourceKind` (the
+    /// `activities` count folds into the changeToken but the token only needs
+    /// to *change* on mutation, which a GC delete does).
+    @discardableResult
+    func vacuumActivities(dryRun: Bool) throws -> ActivityVacuumReport
 }
 
 // MARK: - addSource default-argument convenience

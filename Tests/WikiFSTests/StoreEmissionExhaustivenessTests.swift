@@ -85,6 +85,9 @@ struct StoreEmissionExhaustivenessTests {
         // ResourceKind (blobs fold into the changeToken only via their version
         // rows), so no event is emitted.
         "vacuumBlobs",
+        // Activity GC (#257): same rationale — vacuuming orphaned activities
+        // changes no projected ResourceKind.
+        "vacuumActivities",
     ]
 
     /// Every EMIT member must route through `mutate()` (AC.2). A newly added
