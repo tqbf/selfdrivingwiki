@@ -3303,6 +3303,52 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    // MARK: - Blob GC (graph-model §13 / issue #253)
+
+    /// A blob is orphaned when no version row references its hash. The three
+    /// reachability edges into `blobs` are `source_versions.blob_hash`,
+    /// `source_versions.thumbnail_hash`, and `source_markdown_versions.blob_hash`
+    /// (chunks/embeddings/attachments store bytes inline, so they don't count).
+    /// Each subquery filters out NULLs: without that, SQLite's three-valued
+    /// `NOT IN (…, NULL, …)` logic would suppress live orphans. Shared by the
+    /// count SELECT and the DELETE so the report always matches what's reclaimed.
+    private static let orphanBlobPredicate = """
+        hash NOT IN (SELECT blob_hash        FROM source_versions            WHERE blob_hash IS NOT NULL)
+        AND hash NOT IN (SELECT thumbnail_hash FROM source_versions          WHERE thumbnail_hash IS NOT NULL)
+        AND hash NOT IN (SELECT blob_hash      FROM source_markdown_versions WHERE blob_hash IS NOT NULL)
+    """
+
+    /// Sweep **orphaned** blob rows — blobs no version references. Deleting a
+    /// source cascades its `source_versions`/`source_markdown_versions` rows but
+    /// leaves their blobs behind; this is the lazy reclamation for that leak.
+    /// `dryRun == true` (the `wikictl admin vacuum-blobs` default) reports the
+    /// orphan count + reclaimable bytes WITHOUT deleting; `dryRun == false`
+    /// (`--apply`) deletes them. Count + delete run in ONE transaction, so the
+    /// report is always exactly what was (or would be) reclaimed.
+    ///
+    /// **NO_EMIT** (see `StoreEmissionExhaustivenessTests`): vacuuming orphans
+    /// changes no projected `ResourceKind` — blobs fold into the changeToken only
+    /// through their referencing version rows, so the served tree and token are
+    /// unaffected. It does NOT route through `mutate()` and emits no event.
+    @discardableResult
+    public func vacuumBlobs(dryRun: Bool) throws -> BlobVacuumReport {
+        try withTransaction {
+            let counter = try statement(
+                "SELECT COUNT(*), COALESCE(SUM(byte_size), 0) FROM blobs WHERE \(Self.orphanBlobPredicate);")
+            defer { counter.reset() }
+            _ = try counter.step()   // COUNT always yields exactly one row.
+            let orphanCount = Int(counter.int(at: 0))
+            let bytes = Int(counter.int(at: 1))
+
+            if !dryRun {
+                let deleter = try statement("DELETE FROM blobs WHERE \(Self.orphanBlobPredicate);")
+                defer { deleter.reset() }
+                _ = try deleter.step()
+            }
+            return BlobVacuumReport(orphanCount: orphanCount, bytesReclaimed: bytes, applied: !dryRun)
+        }
+    }
+
     // MARK: - Graph-model Phase 1: content versioning primitives
 
     /// Append a new content version for a source (the store-level refresh/

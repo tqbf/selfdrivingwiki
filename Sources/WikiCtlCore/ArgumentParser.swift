@@ -61,6 +61,8 @@ public enum ArgumentParser {
         case sourceSetActive(SourceCommand.Selector, versionID: PageID)
         /// Re-fetch a source via its provider, appending a new version (Phase 3b).
         case sourceRefresh(SourceCommand.Selector)
+        /// Maintenance operations (the `admin …` family). Currently: blob GC.
+        case admin(AdminCommand.Action)
     }
 
     public enum Failure: Error, Equatable, CustomStringConvertible {
@@ -103,6 +105,8 @@ public enum ArgumentParser {
                                               as the active HEAD (extraction alt)
       source refresh (--id X | --name N)      re-fetch a website source via its
                                                provider, appending a new version
+      admin vacuum-blobs [--apply] [--json]   report (and with --apply, reclaim)
+                                               blobs no version row references
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -139,6 +143,8 @@ public enum ArgumentParser {
             command = try parseSearchCommand(Array(args.dropFirst()))
         case "source":
             command = try parseSourceCommand(Array(args.dropFirst()))
+        case "admin":
+            command = try parseAdminCommand(Array(args.dropFirst()))
         default:
             throw Failure.usage("unknown command \((args.first ?? "").debugDescription)")
         }
@@ -293,6 +299,21 @@ public enum ArgumentParser {
         }
     }
 
+    private static func parseAdminCommand(_ args: [String]) throws -> Command {
+        guard let sub = args.first else { throw Failure.usage("admin: missing subcommand") }
+        let rest = Array(args.dropFirst())
+        switch sub {
+        case "vacuum-blobs":
+            // `--apply` opts INTO deletion; the default is a safe dry run.
+            // `--json` selects machine-readable output.
+            let options = try Options(rest, booleanFlags: ["--apply", "--json"])
+            return .admin(.vacuumBlobs(
+                dryRun: !options.flag("--apply"), json: options.flag("--json")))
+        default:
+            throw Failure.usage("admin: unknown subcommand \(sub.debugDescription)")
+        }
+    }
+
     private static func parseIndexCommand(_ args: [String]) throws -> Command {
         guard let sub = args.first else { throw Failure.usage("index: missing subcommand") }
         guard sub == "set" else {
@@ -311,15 +332,16 @@ public enum ArgumentParser {
         private var values: [String: String] = [:]
         private var flags: Set<String> = []
 
-        init(_ tokens: [String]) throws {
+        init(_ tokens: [String], booleanFlags: Set<String> = ["--json"]) throws {
             var index = 0
             while index < tokens.count {
                 let token = tokens[index]
                 guard token.hasPrefix("--") else {
                     throw Failure.usage("unexpected argument \(token.debugDescription)")
                 }
-                // `--json` is the only valueless flag; everything else takes a value.
-                if token == "--json" {
+                // A valueless boolean flag (e.g. `--json`, `--apply`); everything
+                // else takes a value.
+                if booleanFlags.contains(token) {
                     flags.insert(token)
                     index += 1
                     continue

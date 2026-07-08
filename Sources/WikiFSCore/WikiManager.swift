@@ -28,6 +28,12 @@ public final class WikiManager {
     /// no per-wiki filtering is needed anywhere downstream.
     public private(set) var activeStore: WikiStoreModel?
 
+    /// Non-nil while the "Vacuum Orphaned Storage…" confirm alert is on screen
+    /// (Help menu → `previewBlobVacuum()`). Carries the dry-run report shown in
+    /// the alert; cleared on Cancel / Vacuum. Lives on the manager (not the
+    /// model) so the app-scene alert has a stable observable across wiki switches.
+    public var pendingBlobVacuum: BlobVacuumReport?
+
     /// The App Group container directory holding every `<ulid>.sqlite` and the
     /// `wikis.json` registry. Injected so tests can use a temp dir.
     private let containerDirectory: URL
@@ -120,6 +126,23 @@ public final class WikiManager {
         if let first = registry.mostRecentlyUsed {
             openActive(first.id)
         }
+    }
+
+    // MARK: - Blob GC (#253)
+
+    /// Preview orphaned blob storage for the active wiki (Help menu). Runs a
+    /// read-only dry run, then sets `pendingBlobVacuum` so the app-scene confirm
+    /// alert appears. No-op when no wiki is active.
+    public func previewBlobVacuum() {
+        guard let model = activeStore else { return }
+        pendingBlobVacuum = model.performBlobVacuum(dryRun: true)
+    }
+
+    /// Delete the orphaned blobs (the alert's Vacuum button), then clear the
+    /// pending report. Runs against whichever store is active at click time.
+    public func applyBlobVacuum() {
+        _ = activeStore?.performBlobVacuum(dryRun: false)
+        pendingBlobVacuum = nil
     }
 
     /// Register one File Provider domain per wiki (generalizes the single-domain

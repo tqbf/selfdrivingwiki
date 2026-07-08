@@ -132,6 +132,8 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
         semaphore.wait()
         if let error = box.error { throw error }
         return box.result ?? SourceCommand.Result(payload: .text(""), didCommit: false)
+    case .admin(let action):
+        return try AdminCommand.run(action, in: store)
     }
 }
 

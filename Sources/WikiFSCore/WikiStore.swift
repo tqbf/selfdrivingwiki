@@ -30,6 +30,21 @@ extension WikiStoreError: LocalizedError {
     public var errorDescription: String? { description }
 }
 
+/// Result of a blob-GC sweep (`WikiStore.vacuumBlobs`). `bytesReclaimed` is the
+/// SUM of orphan `byte_size`; on a dry run it is the bytes that *would* be
+/// reclaimed. `applied` is `true` only when the call actually deleted rows.
+public struct BlobVacuumReport: Equatable, Sendable {
+    public let orphanCount: Int
+    public let bytesReclaimed: Int
+    public let applied: Bool
+
+    public init(orphanCount: Int, bytesReclaimed: Int, applied: Bool) {
+        self.orphanCount = orphanCount
+        self.bytesReclaimed = bytesReclaimed
+        self.applied = applied
+    }
+}
+
 /// Read/write storage interface for wiki pages (INITIAL.md §3). The SQLite
 /// implementation is the source of truth; the Phase 2 File Provider extension
 /// will adopt a read-only subset (`WikiReadStore`) of this.
@@ -398,6 +413,17 @@ public protocol WikiStore: Sendable {
     /// Delete a chat. `ON DELETE CASCADE` removes its messages. No error if
     /// `id` doesn't exist.
     func deleteChat(id: PageID) throws
+
+    // MARK: - Blob GC (#253)
+
+    /// Sweep **orphaned** blob rows — blobs no version references (the leak left
+    /// by `deleteSource`, which cascades version rows but not their blobs).
+    /// `dryRun == true` reports the orphan count + reclaimable bytes WITHOUT
+    /// deleting; `false` deletes them in one transaction, so the returned report
+    /// matches exactly what was reclaimed. Classified NO_EMIT on the concrete
+    /// store: vacuuming orphans changes no projected `ResourceKind`.
+    @discardableResult
+    func vacuumBlobs(dryRun: Bool) throws -> BlobVacuumReport
 }
 
 // MARK: - addSource default-argument convenience

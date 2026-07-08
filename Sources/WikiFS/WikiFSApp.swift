@@ -124,6 +124,29 @@ struct WikiFSApp: App {
                 } message: { warning in
                     Text(warning.message)
                 }
+                .alert(
+                    "Vacuum Orphaned Storage",
+                    isPresented: Binding(
+                        get: { manager.pendingBlobVacuum != nil },
+                        set: { if !$0 { manager.pendingBlobVacuum = nil } }
+                    ),
+                    presenting: manager.pendingBlobVacuum
+                ) { report in
+                    if report.orphanCount == 0 {
+                        Button("OK", role: .cancel) {}
+                    } else {
+                        Button("Cancel", role: .cancel) {}
+                        Button("Vacuum", role: .destructive) { manager.applyBlobVacuum() }
+                    }
+                } message: { report in
+                    if report.orphanCount == 0 {
+                        Text("No orphaned blobs found — nothing to reclaim.")
+                    } else {
+                        let bytes = ByteCountFormatter.string(
+                            fromByteCount: Int64(report.bytesReclaimed), countStyle: .file)
+                        Text("\(report.orphanCount) orphan blob\(report.orphanCount == 1 ? "" : "s"), \(bytes) reclaimable. This removes blobs no source references and cannot be undone.")
+                    }
+                }
                 .task {
                     fileProvider.wire(into: manager)
                     // First render already loaded the wiki list (reloadData, no
@@ -151,6 +174,7 @@ struct WikiFSApp: App {
         .windowToolbarStyle(.unified)
         .commands {
             ClaudePromptHelpCommands()
+            BlobVacuumCommands(manager: manager)
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { manager.activeStore?.flushPendingSaves() }
