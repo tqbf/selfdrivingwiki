@@ -777,7 +777,7 @@ struct WikiCtlCommandTests {
         let fetcher = RefreshFakeFetcher(response: URLFetchService.FetchResponse(
             data: Data("<html><body>v1</body></html>".utf8),
             contentType: "text/html", finalURL: URL(string: "https://example.com/p")!))
-        let provider = WebsiteProvider(rawInput: "https://example.com/p", fetcher: fetcher)
+        let provider = WebsiteMaterializer(rawInput: "https://example.com/p", fetcher: fetcher)
         let source = try await provider.materialize()
         let summary = try store.addSource(
             filename: source.filename, data: source.data,

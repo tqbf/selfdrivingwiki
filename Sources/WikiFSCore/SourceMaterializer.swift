@@ -1,23 +1,23 @@
 import Foundation
 import UniformTypeIdentifiers
 
-/// Phase 3a — the provider protocol that owns *materialization* (bytes +
+/// Phase 3a — the materializer protocol that owns *materialization* (bytes +
 /// filename + mime + PROV provenance) for every ingest entry point. The four
-/// ingest paths (drag-drop, URL, Zotero, Markdown-folder) each build a provider,
+/// ingest paths (drag-drop, URL, Zotero, Markdown-folder) each build a materializer,
 /// `materialize()` into a `MaterializedSource`, and flow through the single
 /// `WikiStoreModel.storeMaterialized(_:)` → `store.addSource(provenance:)` seam.
 ///
-/// A provider materializes bytes/provenance **only** — it never writes the store
+/// A materializer produces bytes/provenance **only** — it never writes the store
 /// (single-writer discipline: the `@MainActor` model owns the write, exactly as
 /// today). Network/file I/O inside `materialize()` runs off the main actor.
 ///
-/// See `plans/graph-model-and-versioning.md` §11 (provider protocol).
+/// See `plans/graph-model-and-versioning.md` §11 (materializer protocol).
 
 // MARK: - Provenance descriptor
 
 /// The PROV-DM descriptor threaded into `addSource`/`appendContentVersion`. When
 /// present, the store swaps the synthetic `legacy-import` agent/activity stub for
-/// a **real** provider agent + a `fetch`/`import` activity carrying `plan`/
+/// a **real** materializer agent + a `fetch`/`import` activity carrying `plan`/
 /// `external_ref`, and writes `external_identity` on the v1 version.
 ///
 /// Every column this populates already exists and was previously stubbed NULL
@@ -29,14 +29,14 @@ public struct SourceProvenance: Sendable, Equatable {
     public let agentName: String
     /// `agents.kind` (PROV agent kind). Defaults to `"software"`.
     public let agentKind: String
-    /// `agents.version` — a tool/model version, if known. `nil` for local providers.
+    /// `agents.version` — a tool/model version, if known. `nil` for local materializers.
     public let agentVersion: String?
     /// `activities.kind` — `"fetch"` for URL/website, `"import"` for local/
     /// Zotero/folder.
     public let activityKind: String
     /// `activities.plan` — the recipe. For website = the request URL string.
     public let plan: String?
-    /// `activities.external_ref` — provider-scoped stable identity for this
+    /// `activities.external_ref` — materializer-scoped stable identity for this
     /// *activity* (e.g. the final resolved URL). Per-ingest, NOT per-agent.
     public let externalRef: String?
     /// `source_versions.external_identity` — the canonical external id (resolved
@@ -64,10 +64,10 @@ public struct SourceProvenance: Sendable, Equatable {
 
 // MARK: - Materialized source
 
-/// A provider's output: the bytes to store + the provenance to record. Carries
+/// A materializer's output: the bytes to store + the provenance to record. Carries
 /// **no store handle** — the store owns the write (`storeMaterialized` →
 /// `addSource`). Also carries the retained Zotero legacy columns so the
-/// `ZoteroProvider` can populate both the PROV layer and the legacy columns in
+/// `ZoteroMaterializer` can populate both the PROV layer and the legacy columns in
 /// one call (§4.2: zotero columns are "legacy provenance, retained").
 public struct MaterializedSource: Sendable {
     public let filename: String
@@ -96,11 +96,11 @@ public struct MaterializedSource: Sendable {
 
 // MARK: - Provider protocol
 
-/// Materializes bytes + provenance for one ingest. Each provider turns its input
+/// Materializes bytes + provenance for one ingest. Each materializer turns its input
 /// into a `MaterializedSource`; the caller then stores it through the shared
-/// `storeMaterialized(_:)` seam. A provider NEVER writes the store.
-public protocol SourceProvider: Sendable {
-    /// The agent name this provider records (`"local-file"`, `"website"`, …).
+/// `storeMaterialized(_:)` seam. A materializer NEVER writes the store.
+public protocol SourceMaterializer: Sendable {
+    /// The agent name this materializer records (`"local-file"`, `"website"`, …).
     var agentName: String { get }
     /// Produce the bytes + provenance. Network/file I/O here may run off-main.
     func materialize() async throws -> MaterializedSource
@@ -151,12 +151,12 @@ public struct SourceOrigin: Sendable, Equatable {
     }
 }
 
-// MARK: - LocalFileProvider
+// MARK: - LocalFileMaterializer
 
 /// Materializes a drag-dropped / picked file: reads the bytes (off-main), sniffs
 /// the MIME type, and records `agentName = "local-file"` with an `import`
 /// activity (no external identity).
-public struct LocalFileProvider: SourceProvider {
+public struct LocalFileMaterializer: SourceMaterializer {
     public let agentName = "local-file"
     public let fileURL: URL
 
@@ -188,7 +188,7 @@ public struct LocalFileProvider: SourceProvider {
     }
 }
 
-// MARK: - WebsiteProvider
+// MARK: - WebsiteMaterializer
 
 /// Materializes a fetched URL: normalizes → fetches → dispatches by content type
 /// (HTML→Markdown / PDF / text / binary), reusing `URLFetchService.plan(for:)`
@@ -200,7 +200,7 @@ public struct LocalFileProvider: SourceProvider {
 /// computed dispatch `StorePlan`, so `addURL` can build its `FetchOutcome`
 /// (kind/size) without a second fetch. A pure struct — `materialize()` is the
 /// protocol-conformant projection that discards the plan.
-public struct WebsiteProvider: SourceProvider {
+public struct WebsiteMaterializer: SourceMaterializer {
     public let agentName = "website"
     public let rawInput: String
     public let fetcher: any URLFetchService.URLResourceFetcher
@@ -331,7 +331,7 @@ public struct WebsiteSnapshot: Sendable {
     }
 }
 
-// MARK: - ApplePodcastProvider
+// MARK: - ApplePodcastMaterializer
 
 #if PODCAST_TRANSCRIPTS
 /// Materializes an Apple Podcasts episode transcript: the fetch (token signing →
@@ -339,14 +339,14 @@ public struct WebsiteSnapshot: Sendable {
 /// `MaterializedSource` with `agentName = "apple-podcast"`, `activityKind = "fetch"`,
 /// `plan`/`externalRef` = the episode's `podcasts.apple.com` URL, and
 /// `externalIdentity` = the numeric episode ID (`i=` value). This is the first real
-/// consumer of the `SourceProvider` protocol; `addURL` routes recognized episode
-/// URLs here instead of `WebsiteProvider`.
+/// consumer of the `SourceMaterializer` protocol; `addURL` routes recognized episode
+/// URLs here instead of `WebsiteMaterializer`.
 ///
 /// Holds the page URL separately from `EpisodeRef` so the provenance records the
 /// canonical `podcasts.apple.com` link (not the episode ID alone) — the ID is what
 /// the AMP endpoint wants, but the URL is what the user pasted and what the Origin
 /// row should surface.
-public struct ApplePodcastProvider: SourceProvider {
+public struct ApplePodcastMaterializer: SourceMaterializer {
     public let agentName = "apple-podcast"
     public let episode: PodcastEpisodeURL.EpisodeRef
     public let pageURL: URL
@@ -366,7 +366,7 @@ public struct ApplePodcastProvider: SourceProvider {
         let episode = self.episode
         let fetcher = self.fetcher
         // The transcript fetch (helper subprocess + two HTTP round-trips) is
-        // off-main; the provider never touches the store.
+        // off-main; the materializer never touches the store.
         let transcript = try await Task.detached(priority: .userInitiated) {
             try await fetcher.transcript(for: episode)
         }.value
@@ -387,13 +387,13 @@ public struct ApplePodcastProvider: SourceProvider {
 }
 #endif
 
-// MARK: - ZoteroProvider
+// MARK: - ZoteroMaterializer
 
 /// Materializes a Zotero attachment: resolves its local file (off-main read),
 /// recording `agentName = "zotero"`, `activityKind = "import"`,
 /// `externalIdentity` = the parent item key. Also populates the retained legacy
 /// `zoteroItemKey`/`zoteroItemTitle` columns (§4.2).
-public struct ZoteroProvider: SourceProvider {
+public struct ZoteroMaterializer: SourceMaterializer {
     public let agentName = "zotero"
     public let attachment: ZoteroAttachment
     public let parentItem: ZoteroItem
@@ -429,15 +429,15 @@ public struct ZoteroProvider: SourceProvider {
     }
 }
 
-// MARK: - MarkdownFolderProvider
+// MARK: - MarkdownFolderMaterializer
 
 /// Materializes one `.md`/`.markdown` file from a folder import: the
 /// `MarkdownFolderReader.walk` does the batch off-main discovery + read, and this
-/// provider adapts each walked file into a `MaterializedSource` with
+/// materializer adapts each walked file into a `MaterializedSource` with
 /// `agentName = "markdown-folder"` (so "everything from a folder import" is a
 /// join). Takes the pre-read `(filename, data)` from the walk to avoid a
 /// double-read.
-public struct MarkdownFolderProvider: SourceProvider {
+public struct MarkdownFolderMaterializer: SourceMaterializer {
     public let agentName = "markdown-folder"
     public let filename: String
     public let data: Data

@@ -117,7 +117,7 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
         // because `DispatchSemaphore.wait()` blocks only the main thread; the
         // async task signals from its own continuation thread, which never needs
         // to acquire the main thread to signal (signaling is thread-agnostic).
-        // WebsiteProvider does not hop to the main actor, so no deadlock.
+        // WebsiteMaterializer does not hop to the main actor, so no deadlock.
         let box = RefreshResultBox()
         let semaphore = DispatchSemaphore(value: 0)
         Task {
