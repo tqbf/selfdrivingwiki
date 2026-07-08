@@ -11,6 +11,10 @@ struct PageDetailView: View {
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
     @State private var isEditing = false
+    /// Pending scroll-to-heading for the editor (outline click while editing).
+    @State private var editorScrollRequest: EditorScrollRequest?
+    /// Caret position in the editor, for outline cursor tracking (issue #268).
+    @State private var caretCharIndex: Int?
     /// Tracks the active tab ID at the end of the last resolved update cycle.
     /// Used to distinguish tab switches (activeTabID changes) from in-tab
     /// navigation (activeTabID stays, selection changes) when deciding whether
@@ -135,39 +139,7 @@ struct PageDetailView: View {
             // both are present to avoid stacked notification noise.
             saveWarningBanner
 
-            HStack(spacing: 0) {
-                Group {
-                    // Content — swaps between reader and editor, header stays put.
-                    if isEditing {
-                        TextEditor(text: $store.draftBody)
-                            .font(.system(size: 13 * editorZoom, design: .monospaced))
-                            .scrollContentBackground(.hidden)
-                            .padding(.horizontal, PageEditorMetrics.contentInset)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .frame(minHeight: PageEditorMetrics.editorMinHeight)
-                            .onChange(of: store.draftBody) { store.bodyChanged() }
-                            .zoomShortcuts($editorZoom)
-                            .zoomScroll($editorZoom)
-                    } else {
-                        WikiReaderView(markdown: store.draftBody,
-                                        currentSelection: store.selection,
-                                        store: store,
-                                        fileProvider: fileProvider,
-                                        findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
-                            .frame(maxWidth: .infinity)
-                            .frame(minHeight: PageEditorMetrics.previewMinHeight)
-                            .zoomShortcuts($readerZoom)
-                            .zoomScroll($readerZoom)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                
-                if isOutlineExpanded {
-                    PageOutlineView(markdown: store.draftBody) { slug in
-                        store.jumpToAnchorInCurrentSelection(slug)
-                    }
-                }
-            }
+            contentAndOutline
         }
         .background(Color(nsColor: .textBackgroundColor))
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
@@ -189,6 +161,7 @@ struct PageDetailView: View {
             if let id = store.activeTabID {
                 store.setTabEditing(tabID: id, isEditing: newValue)
             }
+            if !newValue { caretCharIndex = nil }
         }
         .onChange(of: store.isAgentRunning) { _, isRunning in
             if isRunning { isEditing = false }
@@ -210,6 +183,67 @@ struct PageDetailView: View {
             guard findModel.currentMatchIndex > 0 else { return }
             findVersion &+= 1
         }
+    }
+
+    // MARK: - Content + Outline
+
+    /// The main content area (reader or editor) plus the optional outline
+    /// sidebar. Extracted from `body` so the type-checker can resolve each
+    /// subtree independently.
+    @ViewBuilder
+    private var contentAndOutline: some View {
+        HStack(spacing: 0) {
+            Group {
+                if isEditing {
+                    editorContent
+                } else {
+                    readerContent
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            if isOutlineExpanded {
+                PageOutlineView(markdown: store.draftBody,
+                                caretCharIndex: caretCharIndex) { heading in
+                    if isEditing {
+                        editorScrollRequest = EditorScrollRequest(
+                            charOffset: heading.charOffset,
+                            version: (editorScrollRequest?.version ?? 0) + 1)
+                    } else {
+                        store.jumpToAnchorInCurrentSelection(heading.id)
+                    }
+                }
+            }
+        }
+    }
+
+    private var editorContent: some View {
+        ScrollableTextEditor(
+            text: $store.draftBody,
+            font: NSFont.monospacedSystemFont(
+                ofSize: CGFloat(13 * editorZoom), weight: .regular),
+            scrollRequest: editorScrollRequest,
+            onCaretChange: { caretCharIndex = $0 }
+        )
+        .padding(.horizontal, PageEditorMetrics.contentInset)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(minHeight: PageEditorMetrics.editorMinHeight)
+        .onChange(of: store.draftBody) { store.bodyChanged() }
+        .zoomShortcuts($editorZoom)
+        .zoomScroll($editorZoom)
+    }
+
+    private var readerContent: some View {
+        WikiReaderView(markdown: store.draftBody,
+                        currentSelection: store.selection,
+                        store: store,
+                        fileProvider: fileProvider,
+                        findText: findText, findVersion: findVersion,
+                        findOccurrence: findOccurrence)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: PageEditorMetrics.previewMinHeight)
+            .zoomShortcuts($readerZoom)
+            .zoomScroll($readerZoom)
     }
 
     // MARK: - Find bar
@@ -328,15 +362,43 @@ struct HeadingItem: Identifiable, Hashable {
     let id: String // The anchor slug
     let text: String
     let level: Int
+    /// NSString (UTF-16) character offset of this heading's line start within
+    /// the source markdown. Used by the editor to scroll to this heading
+    /// (issue #268) and by the outline to determine which heading the caret
+    /// is currently inside.
+    let charOffset: Int
 }
 
 struct PageOutlineView: View {
     let markdown: String
-    let onSelect: (String) -> Void
+    /// The caret's character index within the source text, or `nil` when not
+    /// editing. When non-nil, the heading containing the caret is highlighted
+    /// and the outline scrolls to keep it visible (issue #268).
+    var caretCharIndex: Int? = nil
+    let onSelect: (HeadingItem) -> Void
     
     @State private var headings: [HeadingItem] = []
     @AppStorage("outlineWidth") private var outlineWidth: Double = 75.0
     @State private var dragStartWidth: Double? = nil
+    /// Tracks which heading the outline last scrolled itself to, so we only
+    /// auto-scroll when the active heading actually changes (not on every
+    /// keystroke that stays within the same heading).
+    @State private var scrolledToHeadingID: String? = nil
+    
+    /// The id of the heading whose `charOffset` is closest to (but not after)
+    /// the caret, or `nil` if there is no caret or no preceding heading.
+    private var activeHeadingID: String? {
+        guard let caret = caretCharIndex, !headings.isEmpty else { return nil }
+        var active: HeadingItem?
+        for heading in headings {
+            if heading.charOffset <= caret {
+                active = heading
+            } else {
+                break
+            }
+        }
+        return active?.id
+    }
     
     var body: some View {
         HStack(spacing: 0) {
@@ -379,32 +441,52 @@ struct PageOutlineView: View {
                     
                 Divider()
                 
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 6) {
-                        ForEach(headings) { heading in
-                            Button(action: {
-                                onSelect(heading.id)
-                            }) {
-                                Text(heading.text)
-                                    .font(.system(size: 13))
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                                    .padding(.leading, CGFloat((heading.level - 1) * 12))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
-                            .onHover { isHovering in
-                                if isHovering {
-                                    NSCursor.pointingHand.push()
-                                } else {
-                                    NSCursor.pop()
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 6) {
+                            ForEach(headings) { heading in
+                                let isActive = heading.id == activeHeadingID
+                                Button(action: {
+                                    onSelect(heading)
+                                }) {
+                                    Text(heading.text)
+                                        .font(.system(size: 13))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                        .padding(.leading, CGFloat((heading.level - 1) * 12))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(isActive ? .primary : .secondary)
+                                .background(
+                                    isActive
+                                        ? Color.accentColor.opacity(0.12)
+                                        : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 4)
+                                )
+                                .id(heading.id)
+                                .onHover { isHovering in
+                                    if isHovering {
+                                        NSCursor.pointingHand.push()
+                                    } else {
+                                        NSCursor.pop()
+                                    }
                                 }
                             }
                         }
+                        .padding()
                     }
-                    .padding()
+                    .onChange(of: caretCharIndex) { _, _ in
+                        let target = activeHeadingID
+                        guard target != scrolledToHeadingID else { return }
+                        scrolledToHeadingID = target
+                        if let target {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                proxy.scrollTo(target, anchor: .center)
+                            }
+                        }
+                    }
                 }
             }
             .frame(width: outlineWidth)
@@ -421,17 +503,22 @@ struct PageOutlineView: View {
     private func parseHeadings() {
         var items: [HeadingItem] = []
         var slugCounts: [String: Int] = [:]
-        
-        let lines = markdown.components(separatedBy: .newlines)
         var inFence = false
         
-        for line in lines {
+        // charOffset tracks the NSString (UTF-16) character offset of each
+        // line's start — the same coordinate space NSTextView uses for ranges.
+        var charOffset = 0
+        
+        for line in markdown.components(separatedBy: .newlines) {
+            let lineUTF16Length = (line as NSString).length
+            defer { charOffset += lineUTF16Length + 1 } // +1 for the \n
+            
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("```") {
                 inFence.toggle()
                 continue
             }
-            if inFence { continue }
+            guard !inFence else { continue }
             
             if trimmed.hasPrefix("#") {
                 let level = trimmed.prefix(while: { $0 == "#" }).count
@@ -444,7 +531,8 @@ struct PageOutlineView: View {
                 guard !text.isEmpty else { continue }
                 
                 let slug = AnchorBlock.makeSlug(text, counts: &slugCounts)
-                items.append(HeadingItem(id: slug, text: text, level: level))
+                items.append(HeadingItem(id: slug, text: text, level: level,
+                                         charOffset: charOffset))
             }
         }
         
