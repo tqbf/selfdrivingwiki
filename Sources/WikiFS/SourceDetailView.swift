@@ -47,6 +47,12 @@ struct SourceDetailView: View {
     @State private var isRefreshing = false
     /// Set when a refresh fails — surfaced inline below the action row.
     @State private var refreshError: String?
+    /// Whether THIS source can actually be refreshed — the authoritative gate
+    /// from `store.isSourceRefreshable(for:)` (mirrors the refresh service's real
+    /// decision, incl. the snapshot-with-images guard and podcast-helper
+    /// availability). Loaded per-file alongside `origin` so `body` stays free of
+    /// DB/filesystem probes.
+    @State private var isRefreshable = false
     /// Tracks the active tab ID as of the last resolved update cycle — used to
     /// distinguish tab switches from in-tab file navigation.
     @State private var lastKnownActiveTabID: UUID? = nil
@@ -105,14 +111,14 @@ struct SourceDetailView: View {
         }
     }
 
-    /// `true` when the source's origin is a refreshable provider (website or
-    /// Apple Podcast). Import-only providers (local-file, Zotero, folder) carry
-    /// no URL to re-fetch.
-    private var isRefreshable: Bool {
-        origin?.agentName == "website" || origin?.agentName == "apple-podcast"
-    }
-
     private var showTabs: Bool { isPDF && hasMarkdown }
+
+    /// A PDF with no markdown derivation yet — the gate for the prominent
+    /// "Extract" call-to-action. Also the exclusivity guard for the source's
+    /// single "act on this source's content" affordance: an unextracted PDF
+    /// shows Extract, so Refresh is suppressed until it has a derivation
+    /// (one affordance per source).
+    private var needsExtraction: Bool { isPDF && !hasMarkdown }
 
     /// `true` when this source has ≥2 extraction alternatives — the gate for the
     /// "Compare Extractions…" button (compare is meaningless with one).
@@ -177,6 +183,7 @@ struct SourceDetailView: View {
         .onAppear {
             headVersion = store.processedMarkdownHead(for: file)
             origin = store.sourceOrigin(for: file.id)
+            isRefreshable = store.isSourceRefreshable(for: file.id)
             lastKnownActiveTabID = store.activeTabID
             consumePinnedExtraction()
         }
@@ -195,6 +202,7 @@ struct SourceDetailView: View {
             showReingestConfirmation = false
             headVersion = nil
             origin = nil
+            isRefreshable = false
             selectedTab = .markdown
             pdfQuote = nil
             pinnedExtraction = nil
@@ -205,6 +213,7 @@ struct SourceDetailView: View {
         .task(id: file.id) {
             headVersion = store.processedMarkdownHead(for: file)
             origin = store.sourceOrigin(for: file.id)
+            isRefreshable = store.isSourceRefreshable(for: file.id)
         }
         .task(id: PDFTaskKey(sourceID: file.id, anchorVersion: store.pendingScrollAnchorVersion)) {
             // Only consume for un-extracted PDFs (the markdown side handles
@@ -374,7 +383,7 @@ struct SourceDetailView: View {
                         if isPDF, hasMarkdown, let head = headVersion {
                             extractionProvenanceChip(head: head)
                         }
-                        if isPDF, !hasMarkdown {
+                        if needsExtraction {
                             // No derivation yet → Extract is the call-to-action:
                             // prominent and leftmost, with Ingest stepped down to
                             // secondary until there's markdown worth ingesting.
@@ -396,6 +405,18 @@ struct SourceDetailView: View {
                                           && !launcher.extractingSourceIDs.contains(file.id)))
                         }
                         ingestButton
+                        // The source's content affordance is one-per-source: an
+                        // unextracted PDF shows Extract (above) to gain a readable
+                        // derivation, so Refresh is suppressed until it has one.
+                        // Every other refreshable (live) source offers Refresh to
+                        // re-fetch and append a new version.
+                        if isRefreshable, !needsExtraction {
+                            Button("Refresh", systemImage: "arrow.clockwise") {
+                                Task { await runRefresh() }
+                            }
+                            .disabled(isRefreshing || store.isAgentRunning)
+                            .help("Re-fetch this source and append a new version")
+                        }
                     }
                     // Row 2 — secondary / utility actions: Edit, Show in List,
                     // Share, Reveal in Finder, Outline.
@@ -422,13 +443,6 @@ struct SourceDetailView: View {
                             store.requestSidebarReveal(.source(file.id))
                         }
                         .help("Reveal this source in the sidebar")
-                        if isRefreshable {
-                            Button("Refresh", systemImage: "arrow.clockwise") {
-                                Task { await runRefresh() }
-                            }
-                            .disabled(isRefreshing || store.isAgentRunning)
-                            .help("Re-fetch this source and append a new version")
-                        }
                         if fileProvider.path != nil {
                             Button("Share", systemImage: "square.and.arrow.up") {
                                 Task {
@@ -528,8 +542,9 @@ struct SourceDetailView: View {
     // MARK: - Provider origin (Phase 3a)
 
     /// Inline origin tag for non-Zotero providers, shown on the metadata line:
-    /// website → a clickable link to the origin URL; local-file → "File";
-    /// markdown-folder → "Folder". Mirrors the inline Zotero tag's styling.
+    /// website → a clickable link to the origin URL; apple-podcast → a clickable
+    /// link to the episode; markdown-folder → "Folder"; local-file → "File".
+    /// Mirrors the inline Zotero tag's styling.
     @ViewBuilder
     private func providerOriginTag(_ origin: SourceOrigin) -> some View {
         switch origin.agentName {
@@ -548,6 +563,21 @@ struct SourceDetailView: View {
             }
         case "markdown-folder":
             Label("Folder", systemImage: "folder")
+        case "apple-podcast":
+            // Byteless source (a transcript) — link to the episode page, like the
+            // website tag. Never "File": a podcast source carries no file bytes.
+            let urlString = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
+            if let url = URL(string: urlString), url.scheme != nil {
+                Button {
+                    NSWorkspace.shared.open(url)
+                } label: {
+                    Label("Apple Podcast", systemImage: "waveform")
+                }
+                .buttonStyle(.link)
+                .help("Open episode: \(urlString)")
+            } else {
+                Label("Apple Podcast", systemImage: "waveform")
+            }
         default:
             Label("File", systemImage: "doc")
         }

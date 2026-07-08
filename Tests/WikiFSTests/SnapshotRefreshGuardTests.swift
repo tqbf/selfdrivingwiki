@@ -103,4 +103,45 @@ struct SnapshotRefreshGuardTests {
         let versionAfter = try #require(verAfter)
         #expect(versionAfter.id != versionBefore.id)
     }
+
+    // MARK: - Refreshability gate (#218): a snapshot with image siblings hides
+    // Refresh entirely (the single-source refresh guard would orphan the images).
+
+    @Test func snapshotWithImagesIsNotRefreshableGate() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+
+        let html = """
+        <html><head><title>Guarded</title></head><body><article>
+        <p>v1 content</p>
+        <img src="images/logo.png">
+        </article></body></html>
+        """
+        let fetcher = MultiURLFetcher(responses: [
+            "https://example.com/g": URLFetchService.FetchResponse(
+                data: Data(html.utf8), contentType: "text/html",
+                finalURL: URL(string: "https://example.com/g")!),
+            "https://example.com/images/logo.png": pngResponse(url: "https://example.com/images/logo.png"),
+        ])
+        _ = try await model.addURL("https://example.com/g", fetcher: fetcher)
+
+        let pageID = try store.listSources().first { $0.role == .primary }!.id
+        #expect(model.isSourceRefreshable(for: pageID) == false)
+    }
+
+    @Test func imagelessWebsiteSourceIsRefreshableGate() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+
+        let html = "<html><head><title>Plain</title></head><body><p>v1</p></body></html>"
+        let fetcher = MultiURLFetcher(responses: [
+            "https://example.com/p": URLFetchService.FetchResponse(
+                data: Data(html.utf8), contentType: "text/html",
+                finalURL: URL(string: "https://example.com/p")!),
+        ])
+        _ = try await model.addURL("https://example.com/p", fetcher: fetcher)
+
+        let pageID = try store.listSources().first { $0.role == .primary }!.id
+        #expect(model.isSourceRefreshable(for: pageID) == true)
+    }
 }
