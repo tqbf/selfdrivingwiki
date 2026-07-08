@@ -185,6 +185,10 @@ import SQLite3
         let db = try open(url)
         defer { sqlite3_close(db) }
         exec(db, "PRAGMA user_version=20;")
+        // The fresh schema no longer has the `content` column (dropped at v24,
+        // CAS-only). Re-create it to faithfully simulate a genuine v20-era smv
+        // row with inline content, so the v20→v21 backfill has something to CAS.
+        exec(db, "ALTER TABLE source_markdown_versions ADD COLUMN content TEXT NOT NULL DEFAULT '';")
         let legacyID = "01JLEGACY0000000000000000V"
         exec(db, """
         INSERT INTO source_markdown_versions (id, file_id, parent_id, content, origin, note, created_at)
@@ -212,16 +216,17 @@ import SQLite3
         #expect(migrated.scalarText(
             "SELECT source_version_id FROM source_markdown_versions WHERE id='\(legacyID)';")
             == (contentVersionID ?? ""))
-        // Inline content was cleared.
+        // The inline `content` column is dropped entirely (v24, CAS-only): the
+        // body lives only in `blobs`, so there is no per-row content to clear.
         #expect(migrated.scalarText(
-            "SELECT content FROM source_markdown_versions WHERE id='\(legacyID)';") == "")
+            "SELECT COUNT(*) FROM pragma_table_info('source_markdown_versions') WHERE name='content';") == "0")
 
         // 4b. The user-edit row IS CAS'd (blob_hash set, content cleared) but has
         //     NO activity_id — it must not be mislabeled as a legacy extraction.
         #expect(migrated.scalarText(
             "SELECT blob_hash FROM source_markdown_versions WHERE id='\(editID)';") != "")
-        #expect(migrated.scalarText(
-            "SELECT content FROM source_markdown_versions WHERE id='\(editID)';") == "")
+        // (The edit row's inline `content` is gone with the column — asserted
+        // DB-wide above; its body is in `blobs` like every other row.)
         #expect(migrated.scalarText(
             "SELECT activity_id FROM source_markdown_versions WHERE id='\(editID)';") == "")
 

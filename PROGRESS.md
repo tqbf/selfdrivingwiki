@@ -2,6 +2,53 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-07 — Graph-model v24: finish the CAS-only drop (`source_markdown_versions.content`)
+
+**Shipped (on `fix/finish-smv-cas-drop`; tests green).** Completes the
+content-addressed-storage model for derived markdown: the dead inline
+`source_markdown_versions.content` column is dropped (v24), so every derived-
+markdown body lives ONLY in `blobs` (CAS), joined via `blob_hash`. The fresh
+schema omits the column; the ladder drops it idempotently at v23→24.
+
+**Why.** The store's blob-join readers (`smvSelectColumns`) still selected
+`smv.content` as a fallback — but the column had already been dropped on the
+live wiki DB (v25), so every read of a derived-markdown HEAD threw
+`no such column: smv.content`. Byteless sources — the two Apple Podcast
+transcripts — project their `.md` from exactly that HEAD read, so they
+materialized as **0-byte files** while their ~69 KB + ~31 KB transcripts sat
+intact (and unreadable) in `blobs`. Non-byteless sources project their own raw
+bytes via a different path, so only podcasts were visibly broken.
+
+**What shipped:**
+- **Fresh `CREATE TABLE source_markdown_versions`** — `content` removed (the
+  body is CAS'd in `blobs`).
+- **`smvSelectColumns`** — `COALESCE(CAST(b.content AS TEXT), smv.content)` →
+  `COALESCE(CAST(b.content AS TEXT), '')` (blob-only; no inline fallback).
+- **The three smv INSERTs** (`appendProcessedMarkdown`,
+  `recordMarkdownExtraction`, `revertProcessedMarkdown`) — `content` column +
+  the literal `''` value removed; `appendProcessedMarkdown` bind indices
+  renumbered (the other two used literal origins, so binds were unchanged).
+- **v24 ladder step** (between v23 and v25) — `ALTER TABLE … DROP COLUMN
+  content`, guarded idempotent (`pragma_table_info` check → no-op where the
+  column is already gone: fresh DBs, DBs already at v24+). The live DB (v25,
+  column already dropped) is fixed with NO migration run — the new blob-only
+  reads simply resolve. DBs still carrying the column (≤v23) drop it after the
+  v21 backfill has CAS'd every row.
+- **`FreshSchemaParityTests.v20ToV21MigrationLossless`** — re-creates the
+  `content` column when rewinding to v20 (to seed genuine legacy inline rows),
+  and now asserts the column is **dropped** (was: "cleared to ''").
+- **New `ProcessedMarkdownTests.transcriptResolvesFromBlobOnCasOnlyDB`** — pins
+  the fix: a `transcript`-origin body round-trips through `processedMarkdownHead`
+  on a column-less DB, with the body in `blobs`.
+
+**Gate:** full suite green — **1895 tests** (156 suites); migration parity
+(`freshFastPathMatchesStepwiseLadder`) holds (fresh == stepwise, both
+column-less at v25).
+
+**Files:** `Sources/WikiFSCore/SQLiteWikiStore.swift`,
+`Tests/WikiFSTests/FreshSchemaParityTests.swift`,
+`Tests/WikiFSTests/ProcessedMarkdownTests.swift`.
+
 ## 2026-07-07 — #129 slice 2b, Phase B: generic flat projection (pages + sources)
 
 **Shipped (on `feature/129-2b-phase-b-flat-projection`; tests green).** Phase B:
