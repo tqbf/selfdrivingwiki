@@ -178,27 +178,42 @@ import SQLite3
 
     @Test func chatMessagesSkipsRowWithCorruptEventJSON() throws {
         let url = tempDatabaseURL()
-        let store = try SQLiteWikiStore(databaseURL: url)
-        let chat = try store.createChat(kind: .ask, title: "Conversation")
-        let inserted = try store.appendChatMessages(chatID: chat.id, events: [
-            .userText("before"), .assistantText("after"),
-        ])
-        #expect(inserted.count == 2)
+
+        // Seed via the store in a scope, then let it CLOSE before the raw insert.
+        // The original opened a second raw connection while the store stayed open
+        // on the same WAL file; under CI load that raw INSERT intermittently
+        // returned SQLITE_ERROR (a second connection can fail to read the WAL
+        // sidecars / schema while the writer is active). Closing the store first
+        // checkpoints + quiesces the DB so the raw write runs against a clean
+        // file. (`SQLiteWikiStore.deinit` closes the connection.)
+        let chatID: PageID
+        do {
+            let store = try SQLiteWikiStore(databaseURL: url)
+            let chat = try store.createChat(kind: .ask, title: "Conversation")
+            let inserted = try store.appendChatMessages(chatID: chat.id, events: [
+                .userText("before"), .assistantText("after"),
+            ])
+            #expect(inserted.count == 2)
+            chatID = chat.id
+        }
 
         // Hand-insert a corrupt row between the two valid ones via a raw
-        // connection (a future/garbled event_json a WikiStore method would
-        // never write, but a bad row should never brick the rest of history).
+        // connection on the now-quiescent DB (a future/garbled event_json a
+        // WikiStore method would never write, but a bad row should never brick
+        // the rest of history).
         var raw: OpaquePointer?
         #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
         let corruptSQL = """
         INSERT INTO chat_messages (id, chat_id, seq, role, event_json, text, created_at)
-        VALUES ('01CORRUPTROW000000000000A', '\(chat.id.rawValue)', 1_000,
+        VALUES ('01CORRUPTROW000000000000A', '\(chatID.rawValue)', 1_000,
                 'assistant', '{not valid json', '', 999.0);
         """
         #expect(sqlite3_exec(raw, corruptSQL, nil, nil, nil) == SQLITE_OK)
         sqlite3_close(raw)
 
-        let messages = try store.chatMessages(chatID: chat.id)
+        // Reopen and read: the corrupt row is skipped, the two valid ones survive.
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let messages = try store.chatMessages(chatID: chatID)
         #expect(messages.count == 2)
         #expect(messages.map(\.event) == [.userText("before"), .assistantText("after")])
     }
