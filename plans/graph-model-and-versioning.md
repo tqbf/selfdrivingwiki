@@ -140,7 +140,10 @@ CREATE TABLE blobs (
   `source_versions.thumbnail_hash`, or `source_markdown_versions.blob_hash`
   references it. Deleting a source cascades its versions; a lazy
   `wikictl admin vacuum-blobs` (and an app maintenance hook) sweeps orphans.
-  Nothing depends on eager GC.
+  Nothing depends on eager GC. **Resolved (#253, shipped):** lazy-only —
+  `SQLiteWikiStore.vacuumBlobs(dryRun:)` + `wikictl admin vacuum-blobs [--apply]
+  [--json]`. Dry-run is the default (`--apply` deletes); NO_EMIT (blob GC changes
+  no projected `ResourceKind`). No opportunistic sweep on `deleteSource`.
 - The 100 MB `ingestByteCap` stays, enforced at ingest before hashing.
 
 ### 4.2 `agents` + `activities` + `source_versions` — the append-only history
@@ -841,7 +844,7 @@ longer needs to be revisited for these.
 
 | # | Issue | Origin |
 |---|-------|--------|
-| 1 | [#253](https://github.com/tqbf/selfdrivingwiki/issues/253) — Blob GC: sweep orphaned blobs | §13 Q1 |
+| 1 | [#253](https://github.com/tqbf/selfdrivingwiki/issues/253) — Blob GC: sweep orphaned blobs ✅ shipped | §13 Q1 |
 | 2 | [#254](https://github.com/tqbf/selfdrivingwiki/issues/254) — Forward links: `pending_links` table | §13 Q2 |
 | 3 | [#255](https://github.com/tqbf/selfdrivingwiki/issues/255) — Editor ergonomics for canonical `[[page:ULID\|Title]]` | §13 Q3 |
 | 4 | [#256](https://github.com/tqbf/selfdrivingwiki/issues/256) — Off-main bulk jobs with progress | §13 Q4 |

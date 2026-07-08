@@ -2,6 +2,45 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-08 — #253: Blob GC — sweep orphaned blobs
+
+**Shipped (on `feature/253-blob-gc`; 1972 tests green).** Lazy reclamation of
+orphaned `blobs` rows — blobs no version references. Deleting a source cascades
+its `source_versions`/`source_markdown_versions` rows but leaves the blobs they
+pointed at behind; `wikictl admin vacuum-blobs` now sweeps them.
+
+**Open question resolved (§13 Q1):** **lazy-only.** No opportunistic sweep in
+`deleteSource` (matches the plan's "nothing depends on eager GC"). The CLI
+default is a safe **dry run**; `--apply` deletes. Nothing depends on eager GC.
+
+**What shipped:**
+- **`SQLiteWikiStore.vacuumBlobs(dryRun:)`** (+ `BlobVacuumReport`) — one
+  reachability predicate (a blob is orphaned when no
+  `source_versions.blob_hash` / `source_versions.thumbnail_hash` /
+  `source_markdown_versions.blob_hash` cites it; each subquery filters NULLs so
+  SQLite's three-valued `NOT IN` never suppresses a live orphan). Count SELECT +
+  DELETE share the predicate in ONE `withTransaction`, so the report always
+  matches what's reclaimed. **NO_EMIT** (added to `StoreEmissionExhaustivenessTests`'
+  `noEmit`: vacuuming orphans changes no projected `ResourceKind` — blobs fold
+  into the changeToken only via their version rows).
+- **`AdminCommand.swift`** (new, `WikiCtlCore`) — the `admin …` family. First
+  subcommand `vacuum-blobs`; `didCommit` true only when `--apply` actually
+  deleted (a dry run never wakes the change bridge). Text + JSON output.
+- **`ArgumentParser.swift`** — `Command.admin` case + `parseAdminCommand`;
+  `Options` generalized from a hardcoded `--json` valueless flag to a
+  `booleanFlags` set so `--apply` works; `usageText` gains the `admin` line.
+- **`main.swift`** — `execute()` dispatches `.admin`.
+- **Tests (11 new, in `WikiCtlCommandTests`):** parser (default dry-run,
+  `--apply`, `--json`, missing/unknown subcommand); store GC via the realistic
+  add→delete→vacuum flow (orphan reported, dry-run no-op, `--apply` reclaims the
+  orphan while preserving a referenced blob, idempotent re-run, no-op when
+  everything referenced); `AdminCommand.run` dispatch (dry-run doesn't commit,
+  apply commits, JSON payload parses + matches the report).
+
+**Gate:** `swift test` exit 0 — 1972 tests in 160 suites (was 1914 → +11 here,
+rest from other in-flight work). Resolves §13 Q1; `plans/graph-model-and-versioning.md`
+§4.1/§13 marked shipped.
+
 ## 2026-07-08 — #263: Separate source origin from materialized format
 
 **Shipped (code-only refactor; 1974 tests green).** Extracted the format-dispatch

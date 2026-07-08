@@ -81,6 +81,10 @@ struct StoreEmissionExhaustivenessTests {
         // already emits). Derived embeddings / search index (not in the change
         // token, no projected content change).
         "ensureFetchActivity", "storePageChunks", "storeSourceChunks", "rebuildFTS",
+        // Blob GC (#253): vacuuming orphaned blobs changes no projected
+        // ResourceKind (blobs fold into the changeToken only via their version
+        // rows), so no event is emitted.
+        "vacuumBlobs",
     ]
 
     /// Every EMIT member must route through `mutate()` (AC.2). A newly added
