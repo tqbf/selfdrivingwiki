@@ -1571,11 +1571,18 @@ public final class WikiStoreModel {
     ) async throws -> URLFetchService.FetchOutcome {
         let provider = WebsiteProvider(rawInput: rawInput, fetcher: fetcher)
         let snapshot = try await provider.materializeSnapshot()
-        let summary: SourceSummary
+        var summary: SourceSummary
         if snapshot.plan.kind == .htmlConverted && !snapshot.images.isEmpty {
             summary = try storeSnapshot(snapshot)
         } else {
             summary = try storeMaterialized(snapshot.page)
+        }
+        // HTML-converted sources have ".md" appended to the storage filename;
+        // set a clean display name (the page title without the extension) so
+        // the UI shows "How to Do Thing" instead of "How to Do Thing.md".
+        if snapshot.plan.kind == .htmlConverted {
+            let cleanTitle = (snapshot.page.filename as NSString).deletingPathExtension
+            try? store.setSourceDisplayName(id: summary.id, displayName: cleanTitle)
         }
         reloadSources()
         openTab(.source(summary.id))
