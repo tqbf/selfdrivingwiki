@@ -450,7 +450,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             position      INTEGER NOT NULL DEFAULT 0,
             kind          TEXT NOT NULL,
             label         TEXT,
-            target_id     TEXT
+            target_id     TEXT,
+            created_at    REAL NOT NULL DEFAULT 0,
+            updated_at    REAL NOT NULL DEFAULT 0
         );
         """)
         try exec("CREATE INDEX bookmark_nodes_parent ON bookmark_nodes(parent_id, position);")
@@ -491,7 +493,13 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // `source_markdown_versions.content` column — the body lives only in
         // `blobs` (CAS-only). The fresh path omits the column entirely (nothing
         // to drop); the ladder drops it in the v25→26 step.
-        try exec("PRAGMA user_version=26;")
+        //
+        // v27 (issue #242): bookmark nodes gain `created_at`/`updated_at`
+        // timestamps so the UI can show "date added"/"date updated" (companion
+        // sort/filter in #241). The fresh-path table def already includes both
+        // columns; a brand-new DB has no rows to backfill. Shared with the
+        // v26→27 migration step.
+        try exec("PRAGMA user_version=27;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -1154,6 +1162,39 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             }
             try exec("PRAGMA user_version=26;")
             version = 26
+        }
+
+        // Step 26 → 27 (issue #242): add `created_at`/`updated_at` to
+        // `bookmark_nodes` so the UI can show "date added"/"date updated"
+        // (companion sort/filter in #241). Additive ALTER (NOT NULL DEFAULT 0),
+        // then backfill every existing row to `now` — legacy nodes have no
+        // recorded creation time, so migration time is the best available proxy
+        // (and on a brand-new DB forced through the ladder there are no rows).
+        // Column defs match the fresh-path CREATE TABLE byte-for-byte — the
+        // `freshFastPathMatchesStepwiseLadder` parity test compares defaults.
+        // Idempotent: pragma_table_info-guarded so a rewound-for-testing DB
+        // stamps v27 without re-adding the columns.
+        if version < 27 {
+            // `bookmark_nodes` is created at v16, so any DB that reached here
+            // through the real ladder already has it. But hand-crafted test
+            // fixtures (e.g. a minimal v19 DB with only `sources`) may be
+            // stamped at ≥16 without the table — skip the column work in that
+            // case rather than crash mid-migration. There's nothing to backfill
+            // when the table is absent.
+            let tableExists = try queryScalarText(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='bookmark_nodes';") != "0"
+            if tableExists {
+                let hasCreatedAt = try queryScalarText(
+                    "SELECT COUNT(*) FROM pragma_table_info('bookmark_nodes') WHERE name='created_at';") != "0"
+                if !hasCreatedAt {
+                    try exec("ALTER TABLE bookmark_nodes ADD COLUMN created_at REAL NOT NULL DEFAULT 0;")
+                    try exec("ALTER TABLE bookmark_nodes ADD COLUMN updated_at REAL NOT NULL DEFAULT 0;")
+                    let now = Date().timeIntervalSince1970
+                    try exec("UPDATE bookmark_nodes SET created_at = \(now), updated_at = \(now);")
+                }
+            }
+            try exec("PRAGMA user_version=27;")
+            version = 27
         }
     }
 
@@ -3965,7 +4006,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // each parent. SQLite lacks NULLS FIRST, so `parent_id IS NULL DESC`
         // sorts NULL parents before non-NULL.
         let stmt = try statement("""
-        SELECT id, parent_id, position, kind, label, target_id
+        SELECT id, parent_id, position, kind, label, target_id, created_at, updated_at
         FROM bookmark_nodes
         ORDER BY parent_id IS NULL DESC, parent_id, position;
         """)
@@ -3978,7 +4019,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 position: Int(stmt.int(at: 2)),
                 kind: BookmarkNodeKind(rawValue: stmt.text(at: 3)) ?? .folder,
                 label: sqlite3_column_type(stmt.handle, 4) == SQLITE_NULL ? nil : stmt.text(at: 4),
-                targetID: sqlite3_column_type(stmt.handle, 5) == SQLITE_NULL ? nil : PageID(rawValue: stmt.text(at: 5))
+                targetID: sqlite3_column_type(stmt.handle, 5) == SQLITE_NULL ? nil : PageID(rawValue: stmt.text(at: 5)),
+                createdAt: Date(timeIntervalSince1970: stmt.double(at: 6)),
+                updatedAt: Date(timeIntervalSince1970: stmt.double(at: 7))
             ))
         }
         return out
@@ -3993,6 +4036,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     ) throws -> BookmarkNode {
         try mutate(event: { node in localEvent(.bookmark, id: node.id, change: .created) }) {
         let id = ULID.generate()
+        let now = Date().timeIntervalSince1970
         try withTransaction {
             // Shift siblings at >= position up by 1 within the same parent.
             // SQLite's `IS` operator matches NULL=NULL (unlike `=`), so
@@ -4011,8 +4055,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             _ = try shift.step()
 
             let ins = try statement("""
-            INSERT INTO bookmark_nodes (id, parent_id, position, kind, label, target_id)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6);
+            INSERT INTO bookmark_nodes (id, parent_id, position, kind, label, target_id, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);
             """)
             ins.reset()
             try ins.bind(id, at: 1)
@@ -4033,6 +4077,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             } else {
                 sqlite3_bind_null(ins.handle, 6)
             }
+            try ins.bind(now, at: 7)
+            try ins.bind(now, at: 8)
             _ = try ins.step()
 
             // Defense-in-depth: renumber siblings so positions stay contiguous
@@ -4043,15 +4089,17 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 try renumberRootSiblings()
             }
         }
+        let stamp = Date(timeIntervalSince1970: now)
         return BookmarkNode(id: id, parentID: parentID, position: position, kind: kind,
-                        label: label, targetID: targetID)
+                        label: label, targetID: targetID, createdAt: stamp, updatedAt: stamp)
         }
     }
 
     public func updateBookmarkNode(id: String, label: String?) throws {
         try mutate(event: { _ in localEvent(.bookmark, id: id, change: .updated) }) {
+        let now = Date().timeIntervalSince1970
         let stmt = try statement("""
-        UPDATE bookmark_nodes SET label = ?2 WHERE id = ?1;
+        UPDATE bookmark_nodes SET label = ?2, updated_at = ?3 WHERE id = ?1;
         """)
         stmt.reset()
         try stmt.bind(id, at: 1)
@@ -4060,6 +4108,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         } else {
             sqlite3_bind_null(stmt.handle, 2)
         }
+        try stmt.bind(now, at: 3)
         _ = try stmt.step()
         }
     }
@@ -4167,6 +4216,19 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             }
             try upd.bind(Int64(position), at: 3)
             _ = try upd.step()
+
+            // Step 2b: A move to a NEW parent is a meaningful change — bump
+            // updated_at so a "date updated" sort reflects it. A pure same-
+            // parent reorder is NOT bumped (organizing siblings shouldn't
+            // reshuffle the recency view). See BookmarkNode.updatedAt.
+            if !sameParent {
+                let bump = try statement(
+                    "UPDATE bookmark_nodes SET updated_at = ?2 WHERE id = ?1;")
+                bump.reset()
+                try bump.bind(id, at: 1)
+                try bump.bind(Date().timeIntervalSince1970, at: 2)
+                _ = try bump.step()
+            }
 
             // Step 3: Renumber siblings on both old and new parent (or root) so
             // positions are contiguous. The shift in step 1 may leave a gap at
