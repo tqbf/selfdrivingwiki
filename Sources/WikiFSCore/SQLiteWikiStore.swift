@@ -2383,9 +2383,43 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         provenance: SourceProvenance? = nil,
         role: SourceRole = .primary,
         originalPath: String? = nil,
-        activityID: String? = nil
+        activityID: String? = nil,
+        /// Pre-resolved display name from ``DisplayNameResolver/resolve``.
+        /// `nil` (default) → resolve in-method (still before the locked path).
+        /// Non-`nil` → use directly, skipping the (potentially expensive PDFKit)
+        /// parse — callers that pre-resolve off-main pass this to keep the
+        /// store write fast (issue #229).
+        resolvedDisplayName: String?? = nil
     ) throws -> SourceSummary {
-        try mutate(event: { source in localEvent(.source, id: source.id.rawValue, change: .created) }) {
+        // Resolve the display name BEFORE entering the locked ``mutate`` path.
+        // For PDFs, ``DisplayNameResolver`` invokes PDFKit — a multi-second,
+        // whole-file parse. Running it under the recursive lock delays the
+        // write transaction long enough to collide with another connection
+        // (File Provider, daemon, concurrent write) holding the DB write lock
+        // past the 5 s ``busy_timeout``, surfacing as "database is locked".
+        // Callers that pre-resolve off-main (addURL, addFiles, Zotero) pass
+        // ``resolvedDisplayName`` to skip the in-method parse entirely (#229).
+        let ext = (filename as NSString).pathExtension.lowercased()
+        let mime = mimeType
+            ?? ContentSniff.mimeType(of: data)
+            ?? (ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType)
+        // The citable name (`[[source:name]]`) must stay linkable — see
+        // WikiNameRules. Sanitize the resolved display name; when metadata
+        // yields none and the raw FILENAME is unlinkable, store its sanitized
+        // form as the display name (the filename itself stays verbatim — it is
+        // the file's identity on the mount).
+        let displayName: String?
+        if let resolved = resolvedDisplayName ?? DisplayNameResolver.resolve(
+            filename: filename, data: data, mimeType: mime,
+            zoteroItemTitle: zoteroItemTitle) {
+            displayName = WikiNameRules.sanitized(resolved)
+        } else if !WikiNameRules.isLinkable(filename) {
+            displayName = WikiNameRules.sanitized(filename)
+        } else {
+            displayName = nil
+        }
+
+        return try mutate(event: { source in localEvent(.source, id: source.id.rawValue, change: .created) }) {
         guard data.count <= Self.ingestByteCap else {
             throw WikiStoreError.unexpected(
                 "source \(data.count) bytes exceeds cap \(Self.ingestByteCap)")
@@ -2406,26 +2440,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         dupStmt.reset()
 
         let id = PageID(rawValue: ULID.generate())
-        let ext = (filename as NSString).pathExtension.lowercased()
-        let mime = mimeType
-            ?? ContentSniff.mimeType(of: data)
-            ?? (ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType)
         let now = Date()
-        // The citable name (`[[source:name]]`) must stay linkable — see
-        // WikiNameRules. Sanitize the resolved display name; when metadata
-        // yields none and the raw FILENAME is unlinkable, store its sanitized
-        // form as the display name (the filename itself stays verbatim — it is
-        // the file's identity on the mount).
-        let displayName: String?
-        if let resolved = DisplayNameResolver.resolve(
-            filename: filename, data: data, mimeType: mime,
-            zoteroItemTitle: zoteroItemTitle) {
-            displayName = WikiNameRules.sanitized(resolved)
-        } else if !WikiNameRules.isLinkable(filename) {
-            displayName = WikiNameRules.sanitized(filename)
-        } else {
-            displayName = nil
-        }
+
 
         let stmt = try statement("""
         INSERT INTO sources
@@ -2604,7 +2620,22 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         activityID: String,
         role: SourceRole = .media
     ) throws -> SourceSummary {
-        try mutate(event: { source in localEvent(.source, id: source.id.rawValue, change: .created) }) {
+        // Resolve display name BEFORE the locked path (same discipline as
+        // addSource — issue #229). Snapshot images are never PDFs, so this is
+        // always fast, but the pattern is identical for consistency.
+        let ext = (filename as NSString).pathExtension.lowercased()
+        let mime = ContentSniff.mimeType(of: data) ?? mimeType
+        let displayName: String?
+        if let resolved = DisplayNameResolver.resolve(
+            filename: filename, data: data, mimeType: mime, zoteroItemTitle: nil) {
+            displayName = WikiNameRules.sanitized(resolved)
+        } else if !WikiNameRules.isLinkable(filename) {
+            displayName = WikiNameRules.sanitized(filename)
+        } else {
+            displayName = nil
+        }
+
+        return try mutate(event: { source in localEvent(.source, id: source.id.rawValue, change: .created) }) {
         guard data.count <= Self.ingestByteCap else {
             throw WikiStoreError.unexpected(
                 "source \(data.count) bytes exceeds cap \(Self.ingestByteCap)")
@@ -2612,18 +2643,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let contentHash = SHA256.hash(data: data)
             .map { String(format: "%02x", $0) }.joined()
         let id = PageID(rawValue: ULID.generate())
-        let ext = (filename as NSString).pathExtension.lowercased()
-        let mime = ContentSniff.mimeType(of: data) ?? mimeType
         let now = Date()
-        let displayName: String? = {
-            if let resolved = DisplayNameResolver.resolve(
-                filename: filename, data: data, mimeType: mime, zoteroItemTitle: nil) {
-                return WikiNameRules.sanitized(resolved)
-            } else if !WikiNameRules.isLinkable(filename) {
-                return WikiNameRules.sanitized(filename)
-            }
-            return nil
-        }()
 
         try withTransaction {
             let sourceID = id.rawValue

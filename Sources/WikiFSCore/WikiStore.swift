@@ -95,7 +95,8 @@ public protocol WikiStore: Sendable {
         provenance: SourceProvenance?,
         role: SourceRole,
         originalPath: String?,
-        activityID: String?
+        activityID: String?,
+        resolvedDisplayName: String??
     ) throws -> SourceSummary
 
     /// Store a **byteless** source: a source whose identity row + v1 content
@@ -397,4 +398,32 @@ public protocol WikiStore: Sendable {
     /// Delete a chat. `ON DELETE CASCADE` removes its messages. No error if
     /// `id` doesn't exist.
     func deleteChat(id: PageID) throws
+}
+
+// MARK: - addSource default-argument convenience
+
+extension WikiStore {
+    /// Convenience overload so existing callers that don't pre-resolve a
+    /// display name can omit `resolvedDisplayName` (defaults to `nil` → resolve
+    /// in-method). Protocol requirements can't have default arguments, so this
+    /// extension provides the zero-arg-by-default entry point.
+    @discardableResult
+    func addSource(
+        filename: String,
+        data: Data,
+        zoteroItemKey: String?,
+        zoteroItemTitle: String?,
+        mimeType: String?,
+        provenance: SourceProvenance?,
+        role: SourceRole,
+        originalPath: String?,
+        activityID: String?
+    ) throws -> SourceSummary {
+        try addSource(
+            filename: filename, data: data,
+            zoteroItemKey: zoteroItemKey, zoteroItemTitle: zoteroItemTitle,
+            mimeType: mimeType, provenance: provenance, role: role,
+            originalPath: originalPath, activityID: activityID,
+            resolvedDisplayName: nil)
+    }
 }
