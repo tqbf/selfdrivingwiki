@@ -22,6 +22,31 @@ struct ProcessedMarkdownTests {
         try store.addSource(filename: filename, data: data)
     }
 
+    /// Regression for the byteless-podcast bug: on a CAS-only DB (the
+    /// `source_markdown_versions.content` column dropped at v24), a derived
+    /// transcript written via `appendProcessedMarkdown(origin: "transcript")`
+    /// lives ONLY in `blobs` and must round-trip through `processedMarkdownHead`.
+    /// Previously the blob-join reader still selected the dropped `smv.content`
+    /// column → `no such column: smv.content` → byteless sources (Apple Podcast
+    /// transcripts) projected as empty `.md` files. This pins the fix: no inline
+    /// column, body resolves from the blob.
+    @Test func transcriptResolvesFromBlobOnCasOnlyDB() throws {
+        let store = try tempStore()
+        let source = try seedSource(in: store)
+        let body = "SPEAKER_1: transcript body that must survive the CAS-only round-trip."
+
+        _ = try store.appendProcessedMarkdown(
+            sourceID: source.id, content: body, origin: "transcript", note: nil)
+
+        // The inline `content` column is gone (CAS-only, v24).
+        #expect(store.scalarText(
+            "SELECT COUNT(*) FROM pragma_table_info('source_markdown_versions') WHERE name='content';") == "0")
+        // ... yet the body resolves through the blob join.
+        let head = try store.processedMarkdownHead(sourceID: source.id)
+        #expect(head?.content == body)
+        #expect(head?.blobHash?.isEmpty == false)
+    }
+
     /// Build a v7 DB by hand (pages + sources + system_prompt + log +
     /// wiki_index + page_embeddings), then open it with SQLiteWikiStore — the
     /// store runs the v7→v8 migration step. Used to verify stepwise upgrade.
@@ -87,7 +112,7 @@ struct ProcessedMarkdownTests {
 
     @Test func freshDBHasV8Schema() throws {
         let store = try tempStore()
-        #expect(store.pragmaValue("user_version") == "25")
+        #expect(store.pragmaValue("user_version") == "26")
     }
 
     @Test func v7DBUpgradesToV8PreservingData() throws {
@@ -103,7 +128,7 @@ struct ProcessedMarkdownTests {
 
         // Opening runs v7→v8→…→v15 migration.
         let store = try SQLiteWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "25")
+        #expect(store.pragmaValue("user_version") == "26")
         // Pre-existing file is intact.
         let content = try store.sourceContent(
             id: PageID(rawValue: "01J00000000000000000000000"))

@@ -258,7 +258,6 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             id                TEXT PRIMARY KEY,
             file_id           TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
             parent_id         TEXT,
-            content           TEXT NOT NULL,
             origin            TEXT NOT NULL,
             note              TEXT,
             created_at        REAL NOT NULL,
@@ -461,18 +460,19 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // no schema change, and a fresh DB has no rows to sweep. Shared with
         // the v22→23 migration step.
         //
-        // v24 (graph-model Phase 2 close-out, NOT yet merged from main): drops
-        // the dead `source_markdown_versions.content` column. This branch still
-        // has the column in the fresh CREATE TABLE above (writes set it to '');
-        // it is harmless and will be dropped when main's v24 is merged.
+        // v24: reserved slot, never stamped. The `source_markdown_versions.content`
+        // drop lands as v26 below — appended at the top (not inserted here) so a
+        // DB already at v25 actually runs it (`version < 24` would skip v25 DBs).
         //
         // v25 (issue #119 phase 1): persisted chat history — `chats` +
-        // `chat_messages`. Purely additive. Bumped above main's v24 so a DB
-        // opened by main (v24) still creates the chats tables. Shared with the
-        // v23→25 migration step. `IF NOT EXISTS` (idempotent).
+        // `chat_messages`. Purely additive. `IF NOT EXISTS` (idempotent).
         try createChatTablesV23()
 
-        try exec("PRAGMA user_version=25;")
+        // v26 (graph-model Phase 2 close-out): drops the dead
+        // `source_markdown_versions.content` column — the body lives only in
+        // `blobs` (CAS-only). The fresh path omits the column entirely (nothing
+        // to drop); the ladder drops it in the v25→26 step.
+        try exec("PRAGMA user_version=26;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -1107,18 +1107,34 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         }
 
         // Step 23 → 25 (issue #119 phase 1): persisted chat history — `chats` +
-        // `chat_messages`. Purely additive. Bumped above main's v24
-        // (`source_markdown_versions.content` DROP COLUMN, not yet merged into
-        // this branch) so a DB opened by main (v24) still creates the chats
-        // tables. `IF NOT EXISTS` — a no-op on a DB that already has them
-        // (e.g. a v23 DB from an earlier build of this branch that created
-        // them at v23). v24 is intentionally absent here; it will be merged
-        // from main separately (and is a no-op for fresh DBs whose `content`
-        // column is already gone — or, in this branch, still present-but-dead).
+        // `chat_messages`. Purely additive. `IF NOT EXISTS` — a no-op on a DB
+        // that already has them. (v24 is a reserved slot, never stamped; the
+        // smv.content drop is appended as v26 below so DBs already at v25 run it.)
         if version < 25 {
             try createChatTablesV23()
             try exec("PRAGMA user_version=25;")
             version = 25
+        }
+
+        // Step 25 → 26 (graph-model Phase 2 close-out): drop the now-dead
+        // `source_markdown_versions.content` column. Post-v21 every derived-
+        // markdown row is content-addressed in `blobs` (the inline column was
+        // `''` and unread), so finishing the CAS-only model removes it
+        // entirely. Appended at the TOP — not inserted at the reserved v24 slot
+        // — because a DB already at v25 would skip a `version < 24` step; the
+        // drop must be the newest version to run on every existing DB. Idempotent:
+        // a no-op where the column is already gone (fresh DBs never create it).
+        // Without this, the store's blob-only readers throw
+        // `no such column: smv.content` against a column-less DB — the bug that
+        // left byteless podcast transcripts projecting as empty `.md` files.
+        if version < 26 {
+            let hasSMVContent = try queryScalarText(
+                "SELECT COUNT(*) FROM pragma_table_info('source_markdown_versions') WHERE name='content';") != "0"
+            if hasSMVContent {
+                try exec("ALTER TABLE source_markdown_versions DROP COLUMN content;")
+            }
+            try exec("PRAGMA user_version=26;")
+            version = 26
         }
     }
 
@@ -4943,10 +4959,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     ///   6 created_at, 7 activity_id, 8 source_version_id, 9 blob_hash, 10 mime_type.
     ///
     /// The `content` column passed in MUST be the resolved body — i.e. the
-    /// SELECT computes `COALESCE(CAST(blobs.content AS TEXT), smv.content)` so
-    /// CAS rows (whose inline column is `''`) decode to real markdown. This keeps
-    /// `.content` always the full text (the resolved-body invariant) without
-    /// issuing a per-row blob read inside the caller's cursor.
+    /// SELECT computes `COALESCE(CAST(blobs.content AS TEXT), '')` (CAS-only:
+    /// the inline `source_markdown_versions.content` column was dropped at v24,
+    /// so the body lives only in `blobs`). This keeps `.content` always the full
+    /// text (the resolved-body invariant) without a per-row blob read inside the
+    /// caller's cursor.
     private func sourceMarkdownVersion(from stmt: SQLiteStatement) -> SourceMarkdownVersion {
         func textOrNull(_ col: Int32) -> String? {
             sqlite3_column_type(stmt.handle, col) == SQLITE_NULL ? nil : stmt.text(at: col)
@@ -4972,7 +4989,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// every Swift-decode reader so they all honor the resolved-body invariant.
     private static let smvSelectColumns = """
     smv.id, smv.file_id, smv.parent_id,
-    COALESCE(CAST(b.content AS TEXT), smv.content),
+    COALESCE(CAST(b.content AS TEXT), ''),
     smv.origin, smv.note, smv.created_at,
     smv.activity_id, smv.source_version_id, smv.blob_hash, smv.mime_type
     """
@@ -5270,18 +5287,18 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
         let stmt = try statement("""
         INSERT INTO source_markdown_versions
-          (id, file_id, parent_id, content, origin, note, created_at,
+          (id, file_id, parent_id, origin, note, created_at,
            blob_hash, mime_type)
-        VALUES (?1, ?2, ?3, '', ?5, ?6, ?7, ?8, 'text/markdown');
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'text/markdown');
         """)
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         try stmt.bind(sourceID.rawValue, at: 2)
         if let parentID { try stmt.bind(parentID.rawValue, at: 3) }
-        try stmt.bind(origin, at: 5)
-        if let note { try stmt.bind(note, at: 6) }
-        try stmt.bind(now.timeIntervalSince1970, at: 7)
-        try stmt.bind(blobHash, at: 8)
+        try stmt.bind(origin, at: 4)
+        if let note { try stmt.bind(note, at: 5) }
+        try stmt.bind(now.timeIntervalSince1970, at: 6)
+        try stmt.bind(blobHash, at: 7)
         _ = try stmt.step()
 
         // Re-embed the source from the just-written content + its name so content
@@ -5351,9 +5368,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             storedBlobHash = blobHash
             let ins = try statement("""
             INSERT INTO source_markdown_versions
-              (id, file_id, parent_id, content, origin, note, created_at,
+              (id, file_id, parent_id, origin, note, created_at,
                activity_id, source_version_id, blob_hash, mime_type)
-            VALUES (?1, ?2, ?3, '', 'extraction', ?4, ?5, ?6, ?7, ?8, 'text/markdown');
+            VALUES (?1, ?2, ?3, 'extraction', ?4, ?5, ?6, ?7, ?8, 'text/markdown');
             """)
             ins.reset()
             try ins.bind(id.rawValue, at: 1)
@@ -5439,9 +5456,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try withTransaction {
             let ins = try statement("""
             INSERT INTO source_markdown_versions
-              (id, file_id, parent_id, content, origin, note, created_at,
+              (id, file_id, parent_id, origin, note, created_at,
                activity_id, source_version_id, blob_hash, mime_type)
-            VALUES (?1, ?2, ?3, '', 'revert', ?4, ?5, ?6, ?7, ?8, ?9);
+            VALUES (?1, ?2, ?3, 'revert', ?4, ?5, ?6, ?7, ?8, ?9);
             """)
             ins.reset()
             try ins.bind(id.rawValue, at: 1)
