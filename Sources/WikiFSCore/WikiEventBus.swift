@@ -1,10 +1,8 @@
 import Foundation
 
-/// The kind of resource that changed. Extensible — `chat`/others are added as
-/// rows later (`plans/architecture-roadmap.md` §3 decision 5).
-public enum ResourceKind: String, Sendable {
-    case page, source, systemPrompt, wikiIndex, log, bookmark
-}
+// `ResourceKind` (and the `Resource` / `ChangeTokenContributor` abstractions)
+// now live in `Resource.swift` (slice 2b) next to the access layer that owns
+// them; the bus is a consumer of kinds, not their home.
 
 /// How a resource changed.
 public enum ChangeKind: String, Sendable {

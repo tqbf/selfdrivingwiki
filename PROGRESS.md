@@ -2,6 +2,74 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-07 — #129 slice 2b, Phase A: changeToken contributor registry
+
+**Shipped (on `feature/129-2b-resource-abstraction`; tests green).** Phase A of
+slice 2b: the storage-seam refactor that turns `changeToken()` into a
+composition of per-kind fold contributors instead of one hardcoded 11-field
+literal. **No projection change; token byte-identical.** Design of record:
+[`plans/resource-abstraction.md`](plans/resource-abstraction.md).
+
+**What shipped:**
+- **`Resource.swift` (new).** `protocol Resource` (the leaf: id/name/kind —
+  conformers arrive in Phase B/D), `ResourceKind` re-homed here from
+  `WikiEventBus.swift` (now `CaseIterable`; the bus is a consumer, not the
+  owner), and `protocol ChangeTokenContributor` (`kind` + `fragment(in:)`).
+- **`SQLiteWikiStore.changeToken()`.** Rewritten to
+  `Self.tokenContributors.map { try $0.fragment(in: self) }.joined(separator: ":")`
+  under the recursive lock. A registry of 7 private contributor structs
+  reproduces the historical 11-field order byte-for-byte: `pages(count:sum)` |
+  `sources-table(count:sum)` | `systemPrompt` | `log` | `wikiIndex` |
+  `source-derived(smv count)` | `source-graph(sv count : refs gen sum :
+  activities count)`. The inline pages query became a `pageCountSum()` helper
+  (kept throwing — it was the only fold that could throw); the resilient
+  `*Count`/`*Version` helpers stay private (contributors are same-file, so the
+  method-atomic lock invariant is unchanged — no statement handle crosses a
+  call).
+- **`ChangeTokenContributorTests` (new).** Coverage: every `ResourceKind`
+  either contributes or is explicitly not-yet-folded (today only `bookmark` is
+  excluded — Phase D adds it). Order: the registry kind sequence matches the
+  documented historical layout.
+
+**Gate:** full suite green (**1884 tests**); the ~20 hardcoded-literal
+`changeToken` assertions across `SQLiteWikiStoreTests` / `LogIndexTests` /
+`SystemPromptTests` / `BytelessEmbedIntegrationTests` pass unchanged (the
+byte-identical proof). No schema change; no `user_version` bump.
+
+**Next:** Phase B — generic flat projection; retrofit pages + sources onto a
+`FlatResourceProjection` descriptor.
+
+## 2026-07-07 — #129 slice 2b planned (Resource abstraction)
+
+**Planned (not yet built).** Design of record at
+[`plans/resource-abstraction.md`](plans/resource-abstraction.md). The second
+slice of the #129 access layer: a `Resource` leaf protocol + projection
+descriptors + a composed `changeToken`, so a new resource kind gets File
+Provider projection + future MCP/REST for free and the per-kind duplication in
+`Projection.swift` collapses.
+
+**Grounded findings.** `changeToken()` is one hardcoded 11-field fold; the
+by-id/by-name pattern is duplicated across `pages` and `sources` (+ the `.md`
+sibling) in `Projection.swift` (748 lines); singleton docs and generated
+indexes each have bespoke builders; bookmarks (#125) and chats (#119) exist in
+the store but project nothing; the bus already carries a `ResourceKind`
+vocabulary including `bookmark`.
+
+**Decisions of record.** D1 — `Resource` covers the leaf, nesting is a
+descriptor; D2 — genericize `Projection`, NOT the `WikiStore` protocol (blast
+radius stays where the duplication is); D3 — one whole-DB `changeToken` stays,
+construction becomes a per-kind contributor registry (graph-model's source
+folds become the source resource's contribution).
+
+**Phases (operator-confirmed scope).** A (protocol + `changeToken` contributor
+registry, format-compatible) → B (generic flat projection; retrofit
+pages+sources) → C (singleton-doc + generated-index descriptors) → D (bookmarks
+projection #125, the nested-shape capstone). Phase E (model reload-on-self-write,
+drops the 2a `origin` field) **deferred** to its own slice — 2b carries no
+UX-regression risk. Retrofit-first: prove the dedup on the two existing flat
+kinds before nesting. Each phase is one PR; gates are a green suite +
+byte-identical projection.
+
 ## 2026-07-07 — Refresh button only when applicable + on the action row (#218)
 
 **Shipped.** The source detail view no longer offers Refresh on sources that
