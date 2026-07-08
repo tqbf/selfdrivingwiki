@@ -2,35 +2,6 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-07-08 — Fix: prevent titled-but-empty orphan chats (PR #265)
-
-**Problem:** a persisted chat could appear in Recent Chats with a title but be
-empty when opened — a `chats` row with zero `chat_messages`. Confirmed live:
-one `edit` chat with `created_at == updated_at` and 0 messages.
-
-**Root cause:** `WikiStoreModel.startChat` created the row eagerly at session
-start (title from the first message), but `chat_messages` were written lazily —
-only at turn boundaries / `finish()`, and the first `.userText` wasn't appended
-to `events[]` until the generation gate was acquired. A session that died before
-its first turn (preflight/spawn failure, immediate exit) left a titled-but-empty
-orphan.
-
-**Fix (`fix/orphan-chat-empty`):**
-- `startChat` now **seeds** the first user message as `chat_messages` seq 0 at
-  creation → a chat is never titled-but-empty even if the agent never responds.
-- `AgentLauncher` gains `firstMessagePrePersisted` (fresh-chat path) → marks the
-  seeded event already-flushed (`persistedEventCount` bumped past it) so the
-  first `flushTranscript()` doesn't double-insert it.
-- `AgentOperationRunner` **rolls back** the chat (`rollbackChatCreation`) on
-  preflight/spawn failure — deletes the row, reverts the retargeted tab to draft.
-- **Data:** deleted the orphan row from the live Malleable Software DB; WAL
-  checkpointed.
-- **Docs:** `AGENTS.md` gains a **Local data** section (App Group container path,
-  per-dev `appGroupID` resolution, `wikis.json` registry, TCC/FDA caveat).
-- **Tests:** `OrphanChatSeedingTests` (7); full suite 1940 green. Chat mutators
-  stay plain lock-guarded (not `mutate()`-emitting) — chats aren't File Provider
-  resources, so `StoreEmissionExhaustivenessTests` still holds.
-
 ## 2026-07-08 — #129 Phase E: model subscribes to ALL events; `origin` removed
 
 **Shipped (on `feature/129-phase-e-reload-on-self-write`; tests green).** The
