@@ -212,6 +212,12 @@ projection (the dedup must not change served bytes). Each phase is one PR.
   `IndexCache`/`indexFileNode`).
 - **Gate:** `ProjectionTests` byte-identical; the root + `indexes/` trees
   unchanged.
+- ↳ *Phase C shipped (2026-07-08).* `SingletonDoc` (5 instances: readme,
+  systemPrompt dual-alias, wikiIndex, log, wikiStructure dual-alias) +
+  `GeneratedIndex` (4 instances: manifest root-level + 3 jsonl under `indexes/`)
+  descriptors drive every dispatch site. `generateIndexData` deleted;
+  `indexFileNode` takes a descriptor. 12 new `ProjectionTreeTests`. Gate met
+  (1906 tests green; byte-identical).
 
 ### Phase D — Bookmarks File Provider projection (#125) via `NestedResourceProjection`
 
