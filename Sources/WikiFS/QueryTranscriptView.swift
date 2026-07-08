@@ -9,6 +9,14 @@ struct QueryTranscriptView: View {
     /// where the store lives (the parent `QueryConversationView`) and forwarded
     /// unchanged to the transcript web view.
     var onWikiLink: ((URL, Bool) -> Void)? = nil
+    /// Provider of the current `WikiRenderContext` (Phase A.2) — bound to
+    /// `store.renderContext()` by `QueryConversationView`, so live chat rows
+    /// render source references exactly as the reader does. Forwarded unchanged
+    /// to the transcript web view.
+    var renderContext: (() -> WikiRenderContext?)? = nil
+    /// The store backing `wiki-blob://` blob serving for the transcript's
+    /// images/media. Forwarded to the transcript web view.
+    var blobStore: WikiStoreModel? = nil
 
     var body: some View {
         Group {
@@ -16,14 +24,47 @@ struct QueryTranscriptView: View {
                 placeholder
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
-                AgentTranscriptWebView(events: visibleEvents, style: .chat, onWikiLink: onWikiLink)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                AgentTranscriptWebView(
+                    events: visibleEvents,
+                    style: .chat,
+                    onWikiLink: onWikiLink,
+                    renderContext: renderContext,
+                    blobStore: blobStore
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
 
     private var visibleEvents: [AgentEvent] {
-        launcher.events.filter { event in
+        launcher.events.transcriptVisible
+    }
+
+    private var placeholder: some View {
+        VStack(spacing: 7) {
+            Text(launcher.isRunning ? "Waiting for the Agent..." : "Ask a question to start a conversation.")
+                .font(.headline)
+                .fontWeight(.medium)
+                .foregroundStyle(.primary)
+            Text("Answers appear here; one-line tool-call summaries show as the agent works. Full detail is available under “Show internals.”")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .multilineTextAlignment(.center)
+        .padding(QueryTranscriptMetrics.emptyStatePadding)
+    }
+}
+
+private enum QueryTranscriptMetrics {
+    static let emptyStatePadding: CGFloat = 24
+}
+
+extension [AgentEvent] {
+    /// The transcript-visible subset shared by the live Query page and the
+    /// read-only chat-history view, so a persisted conversation re-renders
+    /// exactly like it looked live.
+    var transcriptVisible: [AgentEvent] {
+        filter { event in
             switch event {
             case .result(_, let text):
                 return !hasAssistantText(matching: text)
@@ -46,29 +87,11 @@ struct QueryTranscriptView: View {
     private func hasAssistantText(matching text: String) -> Bool {
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return false }
-        return launcher.events.contains { event in
+        return contains { event in
             if case .assistantText(let assistantText) = event {
                 return assistantText.trimmingCharacters(in: .whitespacesAndNewlines) == normalized
             }
             return false
         }
     }
-
-    private var placeholder: some View {
-        VStack(spacing: 7) {
-            Text(launcher.isRunning ? "Waiting for the Agent..." : "Ask a question to start a conversation.")
-                .font(.headline)
-                .fontWeight(.medium)
-                .foregroundStyle(.primary)
-            Text("Answers appear here; one-line tool-call summaries show as the agent works. Full detail is available under “Show internals.”")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-        .multilineTextAlignment(.center)
-        .padding(QueryTranscriptMetrics.emptyStatePadding)
-    }
-}
-
-private enum QueryTranscriptMetrics {
-    static let emptyStatePadding: CGFloat = 24
 }

@@ -81,6 +81,26 @@ public final class WikiStoreModel {
     /// Results of the last sources search (empty when sourceSearchQuery is empty).
     public private(set) var sourceSearchResults: [SourceSummary] = []
     @ObservationIgnored private var sourceSearchTask: Task<Void, Never>?
+
+    /// Memoized `WikiRenderContext` (Phase A.1, D1). Lazily rebuilt; invalidated
+    /// by bumping ``renderContextGeneration`` whenever pages or sources change.
+    /// Per-delta renders therefore reuse the snapshot and never touch SQLite.
+    /// `@ObservationIgnored` — the context is consumed off-main by detached
+    /// render tasks, not observed by SwiftUI.
+    @ObservationIgnored private var cachedRenderContext: WikiRenderContext?
+    /// Bumped by `reloadSummaries()` / `reloadSources()` (every page/source
+    /// mutation, local AND external — `reloadFromStore()` calls both). A change
+    /// here means the next `renderContext()` call rebuilds the snapshot. This is
+    /// the `WikiEventBus`-driven invalidation the plan calls for: local writes
+    /// self-manage through these reloads (slice 2a), and `.external` bus events
+    /// route through `reloadFromStore()` → the same reloads. Either way the
+    /// generation bumps.
+    @ObservationIgnored private var renderContextGeneration: UInt64 = 0
+    /// The snapshot captured at ``cachedRenderContext`` build time, so a reload
+    /// that leaves the generation unchanged (e.g. a bookmark-only change) doesn't
+    /// spuriously rebuild. Compared against ``renderContextGeneration``.
+    @ObservationIgnored private var renderContextBuiltAtGeneration: UInt64 = .max
+
     /// The sidebar selection: a page, the system-prompt document, or nothing.
     public var selection: WikiSelection?
     public private(set) var backStack: [WikiSelection] = []
@@ -130,6 +150,17 @@ public final class WikiStoreModel {
 
     /// Flat bookmark nodes, rebuilt from store after mutation (§3.1 pattern).
     public private(set) var bookmarkNodes: [BookmarkNode] = []
+
+    /// Persisted chat summaries (issue #119), most-recently-updated first —
+    /// rebuilt from `store.listChats()` after every mutation (§3.1 pattern),
+    /// like `bookmarkNodes`.
+    public private(set) var chats: [ChatSummary] = []
+
+    /// Rebuild `chats` from the store. Best-effort (`try?`) — the history list
+    /// degrading to empty on a store hiccup must never crash the sidebar.
+    public func reloadChats() {
+        chats = (try? store.listChats()) ?? []
+    }
 
     /// Computed tree for the Bookmarks section.
     public var bookmarkTree: [BookmarkTreeItem] {
@@ -202,6 +233,7 @@ public final class WikiStoreModel {
         reloadSummaries()
         reloadSources()
         reloadBookmarkNodes()
+        reloadChats()
         // Preload the system-prompt draft so its editor has content immediately;
         // selecting it later reloads fresh from the store.
         draftSystemPrompt = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
@@ -642,6 +674,44 @@ public final class WikiStoreModel {
         DebugLog.store("[tabs] openTabInBackground: new background tab for \(selection) (id=\(tab.id)), \(tabs.count) tabs total")
     }
 
+    /// Retarget an open tab IN PLACE to a new selection, preserving the tab's
+    /// UUID — so tab order, drag/drop position, and per-tab history survive (D2).
+    /// Used for the draft-state morph (.ask/.edit → .chat(id) on first send) and
+    /// the startNewConversation retarget-back (.chat(id) → .ask/.edit). If no tab
+    /// with `id` exists, this is a no-op. If a DIFFERENT tab already shows `to`,
+    /// that tab is focused instead (tab-reuse, same as `openTab`).
+    public func retargetTab(id: UUID, to selection: WikiSelection) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else {
+            DebugLog.tabs("[tabs] retargetTab: tab \(id) not found — no-op")
+            return
+        }
+        // If another tab already displays this selection, reuse it (focus, don't
+        // duplicate) — mirrors openTab's dedup. This handles e.g. re-clicking a
+        // chat that's already open in another tab.
+        if let existing = tabs.first(where: { $0.selection == selection }), existing.id != id {
+            selectTab(id: existing.id)
+            return
+        }
+        tabs[index].selection = selection
+        tabs[index].title = tabTitle(for: selection)
+        // If this is the active tab, sync selection + drafts so the view updates.
+        if activeTabID == id {
+            isApplyingTabSelection = true
+            self.selection = selection
+            loadDrafts(for: selection)
+            isApplyingTabSelection = false
+        }
+        DebugLog.tabs("[tabs] retargetTab: tab \(id) → \(selection)")
+    }
+
+    /// Convenience: retarget the ACTIVE tab to `.chat(chatID)`. Used by the
+    /// draft-state morph on first send (the active tab is .ask/.edit → .chat).
+    /// No-op if there is no active tab.
+    public func retargetActiveTabToChat(chatID: PageID) {
+        guard let activeID = activeTabID else { return }
+        retargetTab(id: activeID, to: .chat(chatID))
+    }
+
     /// Switch the active tab by ID. No-op if the ID is unknown or already active.
     public func selectTab(id: UUID) {
         guard tabs.contains(where: { $0.id == id }), id != activeTabID else { return }
@@ -777,7 +847,7 @@ public final class WikiStoreModel {
         mermaidSaveWarning = nil
         var restoredFromPendingDraft = false
         switch newValue {
-        case .ask, .edit, .lint, .bookmark:
+        case .ask, .edit, .lint, .bookmark, .chat:
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
@@ -1843,6 +1913,29 @@ public final class WikiStoreModel {
         (try? store.siblingImageResolvers()) ?? [:]
     }
 
+    /// A memoized ``WikiRenderContext`` (Phase A.1, D1) — the pure-data snapshot
+    /// of everything a markdown render needs from the store (existence/display/
+    /// loose-match sets, `embedMap` incl. external `EmbedTarget`s,
+    /// `sourceDerivedChain`, `siblingMaps`).
+    ///
+    /// Built lazily on first access and rebuilt only when pages or sources
+    /// change — `reloadSummaries()` / `reloadSources()` bump
+    /// ``renderContextGeneration`` (every local mutation routes through them, and
+    /// `.external` `WikiEventBus` events route through `reloadFromStore()` → the
+    /// same reloads). So per-delta renders reuse the snapshot and never touch
+    /// SQLite. The returned value is `Sendable` and safe to hand to a detached
+    /// render task; its closures are pure (no store access at render time).
+    public func renderContext() -> WikiRenderContext {
+        if let cached = cachedRenderContext,
+           renderContextBuiltAtGeneration == renderContextGeneration {
+            return cached
+        }
+        let built = WikiRenderContext.build(from: self)
+        cachedRenderContext = built
+        renderContextBuiltAtGeneration = renderContextGeneration
+        return built
+    }
+
     /// Save an edit as a new version in the chain. Only called when the text
     /// genuinely differs from the current head — meaningful history, not
     /// keystroke spam.
@@ -1920,6 +2013,7 @@ public final class WikiStoreModel {
     public func reloadFromStore() {
         reloadSummaries()
         reloadSources()
+        reloadChats()
         pruneHistoryToCurrentStore()
     }
 
@@ -1929,6 +2023,8 @@ public final class WikiStoreModel {
     /// refresh after an external write.
     public func reloadSummaries() {
         summaries = (try? store.listPages(sortBy: pageSortOrder)) ?? []
+        // Phase A.1: any page mutation invalidates the memoized render context.
+        renderContextGeneration &+= 1
     }
 
     // MARK: - Search
@@ -2106,6 +2202,8 @@ public final class WikiStoreModel {
             }
             return (file.id, hasLogEntry)
         })
+        // Phase A.1: any source mutation invalidates the memoized render context.
+        renderContextGeneration &+= 1
     }
 
     // MARK: - Bookmark nodes (v16)
@@ -2204,22 +2302,90 @@ public final class WikiStoreModel {
     private func pruneHistoryToCurrentStore() {
         let pageIDs = Set(summaries.map(\.id))
         let sourceIDs = Set(sources.map(\.id))
-        backStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, sourceIDs: sourceIDs) }
-        forwardStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, sourceIDs: sourceIDs) }
+        let chatIDs = Set(chats.map(\.id))
+        backStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, sourceIDs: sourceIDs, chatIDs: chatIDs) }
+        forwardStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, sourceIDs: sourceIDs, chatIDs: chatIDs) }
     }
 
     private func isAvailableHistorySelection(
         _ value: WikiSelection,
         pageIDs: Set<PageID>,
-        sourceIDs: Set<PageID>
+        sourceIDs: Set<PageID>,
+        chatIDs: Set<PageID>
     ) -> Bool {
         switch value {
         case .page(let id):
             pageIDs.contains(id)
         case .source(let id):
             sourceIDs.contains(id)
+        case .chat(let id):
+            chatIDs.contains(id)
         case .ask, .edit, .systemPrompt, .changeLog, .lint, .bookmark:
             true
+        }
+    }
+
+    // MARK: - Persisted chats (issue #119)
+
+    /// Create a persisted chat, titled from the first user message. Returns nil
+    /// (logging via DebugLog.store) on store failure — persistence must never
+    /// block a conversation from starting.
+    @discardableResult
+    public func startChat(kind: ChatKind, firstMessage: String) -> ChatSummary? {
+        do {
+            let title = ChatSummary.title(fromFirstMessage: firstMessage)
+            let chat = try store.createChat(kind: kind, title: title)
+            reloadChats()
+            return chat
+        } catch {
+            DebugLog.store("WikiStoreModel.startChat failed: \(error)")
+            return nil
+        }
+    }
+
+    /// Append the persistable subset of `events` to a chat. Non-persistable
+    /// events (deltas, messageStop, raw) are filtered here as defense in depth.
+    public func appendChatEvents(chatID: PageID, events: [AgentEvent]) {
+        let persistable = events.filter(\.isPersistable)
+        guard !persistable.isEmpty else { return }
+        do {
+            try store.appendChatMessages(chatID: chatID, events: persistable)
+            reloadChats()  // cheap — keeps updated_at ordering + counts live.
+        } catch {
+            DebugLog.store("WikiStoreModel.appendChatEvents failed: \(error)")
+        }
+    }
+
+    public func chatMessages(chatID: PageID) -> [ChatMessage] {
+        (try? store.chatMessages(chatID: chatID)) ?? []
+    }
+
+    public func renameChat(id: PageID, to title: String) {
+        do {
+            try store.renameChat(id: id, to: title)
+            reloadChats()
+        } catch {
+            DebugLog.store("WikiStoreModel.renameChat failed: \(error)")
+            storeError = StoreError(
+                title: "Couldn't Rename Conversation",
+                message: "Could not rename the conversation: \(error.localizedDescription)")
+        }
+    }
+
+    public func deleteChat(id: PageID) {
+        do {
+            try store.deleteChat(id: id)
+            removeFromHistory(.chat(id))
+            // Close any tab showing this deleted chat.
+            if let tab = tabs.first(where: { $0.selection == .chat(id) }) {
+                closeTab(id: tab.id)
+            }
+            reloadChats()
+        } catch {
+            DebugLog.store("WikiStoreModel.deleteChat failed: \(error)")
+            storeError = StoreError(
+                title: "Couldn't Delete Conversation",
+                message: "Could not delete the conversation: \(error.localizedDescription)")
         }
     }
 }

@@ -130,18 +130,24 @@ struct WikiDetailView: View {
                     .fill(Color.accentColor.opacity(isSidebarDropTargeted ? 0.08 : 0))
             }
         case .ask:
-            QueryConversationView(
+            // D2: draft state — empty composer until the first send retargets the
+            // tab to .chat(id). chatID == nil signals the draft state.
+            ConversationView(
                 mode: .ask,
-                launcher: askLauncher,
+                chatID: nil,
                 store: store,
+                launcher: askLauncher,
                 manager: manager,
                 fileProvider: fileProvider
             )
         case .edit:
-            QueryConversationView(
+            // D2: draft state — empty composer until the first send retargets the
+            // tab to .chat(id). chatID == nil signals the draft state.
+            ConversationView(
                 mode: .edit,
-                launcher: editLauncher,
+                chatID: nil,
                 store: store,
+                launcher: editLauncher,
                 manager: manager,
                 fileProvider: fileProvider
             )
@@ -197,6 +203,21 @@ struct WikiDetailView: View {
             } description: {
                 Text("Bookmark folders are managed in the sidebar.")
             }
+        case .chat(let id):
+            // D2: unified surface. Resolve the mode from the chat's kind so the
+            // correct launcher (ask vs edit) is bound — a persisted .ask chat's
+            // composer belongs to askLauncher, etc. Falls back to .ask if the
+            // chat is missing (deleted mid-view).
+            let chatMode: QueryMode = store.chats.first { $0.id == id }?.kind == .edit ? .edit : .ask
+            let chatLauncher = chatMode == .edit ? editLauncher : askLauncher
+            ConversationView(
+                mode: chatMode,
+                chatID: id,
+                store: store,
+                launcher: chatLauncher,
+                manager: manager,
+                fileProvider: fileProvider
+            )
         }
     }
 

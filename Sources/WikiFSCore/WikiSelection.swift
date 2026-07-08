@@ -21,4 +21,7 @@ public enum WikiSelection: Hashable, Sendable {
     /// A bookmark node (folder, page ref, source ref) — by node id. Selecting
     /// a bookmark folder highlights it but does not open a tab.
     case bookmark(String)
+    /// A persisted agent conversation, by id — opened read-only from chat
+    /// history (issue #119).
+    case chat(PageID)
 }

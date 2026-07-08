@@ -258,6 +258,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             id                TEXT PRIMARY KEY,
             file_id           TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
             parent_id         TEXT,
+            content           TEXT NOT NULL,
             origin            TEXT NOT NULL,
             note              TEXT,
             created_at        REAL NOT NULL,
@@ -456,16 +457,22 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // the §4.4 rowid + role/pin shape. No legacy rows to backfill on a
         // brand-new DB. Shared with the v21→22 migration step.
 
-        // v23 (graph-model Phase 5): data-only link canonicalization sweep — no
-        // schema change, and a fresh DB has no rows to sweep. The run-once guard
-        // is the only effect on a fresh DB. Shared with the v22→23 migration step.
+        // v23 (graph-model Phase 5): data-only link canonicalization sweep —
+        // no schema change, and a fresh DB has no rows to sweep. Shared with
+        // the v22→23 migration step.
+        //
+        // v24 (graph-model Phase 2 close-out, NOT yet merged from main): drops
+        // the dead `source_markdown_versions.content` column. This branch still
+        // has the column in the fresh CREATE TABLE above (writes set it to '');
+        // it is harmless and will be dropped when main's v24 is merged.
+        //
+        // v25 (issue #119 phase 1): persisted chat history — `chats` +
+        // `chat_messages`. Purely additive. Bumped above main's v24 so a DB
+        // opened by main (v24) still creates the chats tables. Shared with the
+        // v23→25 migration step. `IF NOT EXISTS` (idempotent).
+        try createChatTablesV23()
 
-        // v24 (graph-model Phase 2 close-out): the inline
-        // `source_markdown_versions.content` column is dropped — it's already
-        // absent from the fresh CREATE TABLE above (blob-only). Shared with the
-        // v23→24 migration step, which drops it from an upgraded DB.
-
-        try exec("PRAGMA user_version=24;")
+        try exec("PRAGMA user_version=25;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -540,6 +547,41 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             PRIMARY KEY (kind, owner_id)
         );
         """)
+    }
+
+    /// Create the two persisted-chat-history tables (issue #119 phase 1):
+    /// `chats` (one row per conversation) and `chat_messages` (one row per
+    /// persistable `AgentEvent`, `event_json` verbatim). Called by both the
+    /// fresh-schema fast path and the v23→25 migration step so the two stay
+    /// schema-identical (`freshFastPathMatchesStepwiseLadder`). `IF NOT
+    /// EXISTS`, same rationale as `createObjectsTablesV20`: idempotent so a
+    /// DB rewound to a pre-v25 `user_version` for testing (already having
+    /// these tables from its original fresh-schema creation) can still run
+    /// this step without a "table already exists" error. See
+    /// `plans/chat-and-persistence.md`.
+    private func createChatTablesV23() throws {
+        try exec("""
+        CREATE TABLE IF NOT EXISTS chats (
+            id         TEXT PRIMARY KEY,
+            kind       TEXT NOT NULL,
+            title      TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
+        """)
+        try exec("CREATE INDEX IF NOT EXISTS chats_updated ON chats(updated_at);")
+        try exec("""
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id         TEXT PRIMARY KEY,
+            chat_id    TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+            seq        INTEGER NOT NULL,
+            role       TEXT NOT NULL,
+            event_json TEXT NOT NULL,
+            text       TEXT NOT NULL DEFAULT '',
+            created_at REAL NOT NULL
+        );
+        """)
+        try exec("CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_seq ON chat_messages(chat_id, seq);")
     }
 
     /// The stepwise, idempotent migration ladder keyed on `PRAGMA user_version`.
@@ -1056,26 +1098,27 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
         // Step 22 → 23 (graph-model Phase 5): data-only body sweep — rewrite
         // every resolvable `[[…]]` link in every page body to canonical
-        // ULID-stable form. No schema change; the version bump is a run-once
-        // guard (the v18 name-sanitization precedent). See `migrateV22ToV23`.
+        // ULID-stable form. (issue #119 phase 1 chats tables moved to v25 —
+        // see below — so this step matches main's v23 exactly.)
         if version < 23 {
             try migrateV22ToV23()
             try exec("PRAGMA user_version=23;")
             version = 23
         }
 
-        // Step 23 → 24 (graph-model Phase 2 close-out, §4.5): the v21 step
-        // CAS-moved every legacy `source_markdown_versions.content` into a blob
-        // and set `content=''`; every write path now writes `blob_hash` +
-        // `content=''`, and every reader resolves the body from the blob. The
-        // inline `content` column and its "prefer blob, fall back to inline"
-        // read path are dead — DROP the column (mirrors the v20 `sources.content`
-        // DROP COLUMN, same pre-drop silent-data-loss guard). See
-        // `migrateV23ToV24`.
-        if version < 24 {
-            try migrateV23ToV24()
-            try exec("PRAGMA user_version=24;")
-            version = 24
+        // Step 23 → 25 (issue #119 phase 1): persisted chat history — `chats` +
+        // `chat_messages`. Purely additive. Bumped above main's v24
+        // (`source_markdown_versions.content` DROP COLUMN, not yet merged into
+        // this branch) so a DB opened by main (v24) still creates the chats
+        // tables. `IF NOT EXISTS` — a no-op on a DB that already has them
+        // (e.g. a v23 DB from an earlier build of this branch that created
+        // them at v23). v24 is intentionally absent here; it will be merged
+        // from main separately (and is a no-op for fresh DBs whose `content`
+        // column is already gone — or, in this branch, still present-but-dead).
+        if version < 25 {
+            try createChatTablesV23()
+            try exec("PRAGMA user_version=25;")
+            version = 25
         }
     }
 
@@ -1503,45 +1546,6 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 _ = try update.step()
             }
             update.reset()
-        }
-    }
-
-    /// The v23→v24 migration step (graph-model Phase 2 close-out, §4.5). Drops
-    /// the now-dead inline `source_markdown_versions.content` column — the v21
-    /// step already CAS-moved every legacy row's inline body into a blob and set
-    /// `content=''`, and every write path writes `blob_hash` + `content=''`
-    /// since. Mirrors the v20 `sources.content` DROP COLUMN exactly: one
-    /// `withTransaction`, a pre-drop silent-data-loss guard, then DROP COLUMN.
-    private func migrateV23ToV24() throws {
-        try withTransaction {
-            // Guard: a DB rewound from v24 for testing, an artificial fixture
-            // that never created `source_markdown_versions`, or a fresh DB whose
-            // content column is already gone has nothing to drop. Skip + stamp.
-            let hasSMV = try queryScalarText(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='source_markdown_versions';") != "0"
-            guard hasSMV else { return }
-            let hasContentColumn = try queryScalarText(
-                "SELECT COUNT(*) FROM pragma_table_info('source_markdown_versions') WHERE name='content';") != "0"
-            guard hasContentColumn else { return }
-
-            // Pre-drop silent-data-loss guard (parallels the v20 content guard).
-            // Every row MUST have a blob_hash — the resolved body lives in the
-            // blob, so a NULL hash means dropping `content` would lose bytes. In
-            // practice impossible post-v21, but never silently drop content.
-            let unmigrated = try statement("""
-            SELECT id FROM source_markdown_versions WHERE blob_hash IS NULL LIMIT 1;
-            """)
-            defer { unmigrated.reset() }
-            unmigrated.reset()
-            if try unmigrated.step() {
-                let badID = unmigrated.text(at: 0)
-                throw WikiStoreError.unexpected(
-                    "v24 migration: source_markdown_versions row \(badID) has NULL blob_hash — refusing to drop content column")
-            }
-
-            // Drop the dead inline column. macOS 15 ships SQLite ≥ 3.43
-            // (`DROP COLUMN` since 3.35) — same precedent as the v20 step.
-            try exec("ALTER TABLE source_markdown_versions DROP COLUMN content;")
         }
     }
 
@@ -4004,6 +4008,165 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    // MARK: - Persisted chats (v23)
+
+    @discardableResult
+    public func createChat(kind: ChatKind, title: String) throws -> ChatSummary {
+        lock.lock(); defer { lock.unlock() }
+        let id = PageID(rawValue: ULID.generate())
+        let now = Date()
+        let stmt = try statement("""
+        INSERT INTO chats (id, kind, title, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5);
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        try stmt.bind(kind.rawValue, at: 2)
+        try stmt.bind(title, at: 3)
+        try stmt.bind(now.timeIntervalSince1970, at: 4)
+        try stmt.bind(now.timeIntervalSince1970, at: 5)
+        _ = try stmt.step()
+        return ChatSummary(id: id, kind: kind, title: title, createdAt: now, updatedAt: now, messageCount: 0)
+    }
+
+    /// Empty `events` is a no-op (returns `[]` without touching `updated_at`) —
+    /// checked BEFORE opening a transaction, so an idle flush never bumps
+    /// `updated_at` and reorders the history list.
+    @discardableResult
+    public func appendChatMessages(chatID: PageID, events: [AgentEvent]) throws -> [ChatMessage] {
+        lock.lock(); defer { lock.unlock() }
+        guard !events.isEmpty else { return [] }
+        return try withTransaction {
+            let exists = try statement("SELECT 1 FROM chats WHERE id = ?1;")
+            exists.reset()
+            try exists.bind(chatID.rawValue, at: 1)
+            guard try exists.step() else {
+                throw WikiStoreError.notFound(chatID)
+            }
+
+            // Dense per-chat seq, continuing from the current max (-1 when empty
+            // so the first row lands at 0).
+            let maxSeq = try statement(
+                "SELECT COALESCE(MAX(seq), -1) FROM chat_messages WHERE chat_id = ?1;")
+            maxSeq.reset()
+            try maxSeq.bind(chatID.rawValue, at: 1)
+            _ = try maxSeq.step()
+            var nextSeq = Int(maxSeq.int(at: 0)) + 1
+
+            let now = Date()
+            let encoder = JSONEncoder()
+            let ins = try statement("""
+            INSERT INTO chat_messages (id, chat_id, seq, role, event_json, text, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);
+            """)
+            var inserted: [ChatMessage] = []
+            for event in events {
+                let json = String(data: try encoder.encode(event), encoding: .utf8) ?? "{}"
+                let messageID = PageID(rawValue: ULID.generate())
+                ins.reset()
+                try ins.bind(messageID.rawValue, at: 1)
+                try ins.bind(chatID.rawValue, at: 2)
+                try ins.bind(Int64(nextSeq), at: 3)
+                try ins.bind(event.chatRole, at: 4)
+                try ins.bind(json, at: 5)
+                try ins.bind(event.plainText, at: 6)
+                try ins.bind(now.timeIntervalSince1970, at: 7)
+                _ = try ins.step()
+                inserted.append(ChatMessage(
+                    id: messageID, chatID: chatID, seq: nextSeq, event: event, createdAt: now))
+                nextSeq += 1
+            }
+
+            let touch = try statement("UPDATE chats SET updated_at = ?2 WHERE id = ?1;")
+            touch.reset()
+            try touch.bind(chatID.rawValue, at: 1)
+            try touch.bind(now.timeIntervalSince1970, at: 2)
+            _ = try touch.step()
+
+            return inserted
+        }
+    }
+
+    public func listChats() throws -> [ChatSummary] {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement("""
+        SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
+               (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id)
+        FROM chats c
+        ORDER BY c.updated_at DESC, c.rowid DESC;
+        """)
+        defer { stmt.reset() }
+        var out: [ChatSummary] = []
+        while try stmt.step() {
+            out.append(ChatSummary(
+                id: PageID(rawValue: stmt.text(at: 0)),
+                kind: ChatKind(rawValue: stmt.text(at: 1)) ?? .ask,
+                title: stmt.text(at: 2),
+                createdAt: Date(timeIntervalSince1970: stmt.double(at: 3)),
+                updatedAt: Date(timeIntervalSince1970: stmt.double(at: 4)),
+                messageCount: Int(stmt.int(at: 5))
+            ))
+        }
+        return out
+    }
+
+    /// Tolerant read: a row whose `event_json` fails to decode (a future event
+    /// case, or hand-corrupted data) is skipped rather than failing the whole
+    /// read — a bad row must never brick the rest of a chat's history.
+    public func chatMessages(chatID: PageID) throws -> [ChatMessage] {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement("""
+        SELECT id, seq, event_json, created_at FROM chat_messages
+        WHERE chat_id = ?1 ORDER BY seq ASC;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(chatID.rawValue, at: 1)
+        let decoder = JSONDecoder()
+        var out: [ChatMessage] = []
+        while try stmt.step() {
+            guard
+                let data = stmt.text(at: 2).data(using: .utf8),
+                let event = try? decoder.decode(AgentEvent.self, from: data)
+            else { continue }
+            out.append(ChatMessage(
+                id: PageID(rawValue: stmt.text(at: 0)),
+                chatID: chatID,
+                seq: Int(stmt.int(at: 1)),
+                event: event,
+                createdAt: Date(timeIntervalSince1970: stmt.double(at: 3))
+            ))
+        }
+        return out
+    }
+
+    public func renameChat(id: PageID, to title: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try withTransaction {
+            let exists = try statement("SELECT 1 FROM chats WHERE id = ?1;")
+            exists.reset()
+            try exists.bind(id.rawValue, at: 1)
+            guard try exists.step() else {
+                throw WikiStoreError.notFound(id)
+            }
+            let upd = try statement("UPDATE chats SET title = ?2, updated_at = ?3 WHERE id = ?1;")
+            upd.reset()
+            try upd.bind(id.rawValue, at: 1)
+            try upd.bind(title, at: 2)
+            try upd.bind(Date().timeIntervalSince1970, at: 3)
+            _ = try upd.step()
+        }
+    }
+
+    /// `ON DELETE CASCADE` (`PRAGMA foreign_keys=ON`, set at open) removes the
+    /// chat's messages. No error if `id` doesn't exist.
+    public func deleteChat(id: PageID) throws {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement("DELETE FROM chats WHERE id = ?1;")
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        _ = try stmt.step()
+    }
+
     // MARK: - Transactions
 
     /// Run `body` atomically. The outermost call issues `BEGIN IMMEDIATE`
@@ -4724,12 +4887,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     /// The shared SELECT-list + LEFT JOIN that resolves a CAS'd row's content from
-    /// its blob. The inline `content` column was dropped in v24; the empty-string
-    /// default is defensive null handling for a row whose blob is somehow absent.
-    /// Used by every Swift-decode reader so they all honor the resolved-body invariant.
+    /// its blob (falling back to the inline column for any unmigrated row). Used by
+    /// every Swift-decode reader so they all honor the resolved-body invariant.
     private static let smvSelectColumns = """
     smv.id, smv.file_id, smv.parent_id,
-    COALESCE(CAST(b.content AS TEXT), ''),
+    COALESCE(CAST(b.content AS TEXT), smv.content),
     smv.origin, smv.note, smv.created_at,
     smv.activity_id, smv.source_version_id, smv.blob_hash, smv.mime_type
     """
@@ -5027,18 +5189,18 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
         let stmt = try statement("""
         INSERT INTO source_markdown_versions
-          (id, file_id, parent_id, origin, note, created_at,
+          (id, file_id, parent_id, content, origin, note, created_at,
            blob_hash, mime_type)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'text/markdown');
+        VALUES (?1, ?2, ?3, '', ?5, ?6, ?7, ?8, 'text/markdown');
         """)
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         try stmt.bind(sourceID.rawValue, at: 2)
         if let parentID { try stmt.bind(parentID.rawValue, at: 3) }
-        try stmt.bind(origin, at: 4)
-        if let note { try stmt.bind(note, at: 5) }
-        try stmt.bind(now.timeIntervalSince1970, at: 6)
-        try stmt.bind(blobHash, at: 7)
+        try stmt.bind(origin, at: 5)
+        if let note { try stmt.bind(note, at: 6) }
+        try stmt.bind(now.timeIntervalSince1970, at: 7)
+        try stmt.bind(blobHash, at: 8)
         _ = try stmt.step()
 
         // Re-embed the source from the just-written content + its name so content
@@ -5108,9 +5270,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             storedBlobHash = blobHash
             let ins = try statement("""
             INSERT INTO source_markdown_versions
-              (id, file_id, parent_id, origin, note, created_at,
+              (id, file_id, parent_id, content, origin, note, created_at,
                activity_id, source_version_id, blob_hash, mime_type)
-            VALUES (?1, ?2, ?3, 'extraction', ?4, ?5, ?6, ?7, ?8, 'text/markdown');
+            VALUES (?1, ?2, ?3, '', 'extraction', ?4, ?5, ?6, ?7, ?8, 'text/markdown');
             """)
             ins.reset()
             try ins.bind(id.rawValue, at: 1)
@@ -5196,9 +5358,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try withTransaction {
             let ins = try statement("""
             INSERT INTO source_markdown_versions
-              (id, file_id, parent_id, origin, note, created_at,
+              (id, file_id, parent_id, content, origin, note, created_at,
                activity_id, source_version_id, blob_hash, mime_type)
-            VALUES (?1, ?2, ?3, 'revert', ?4, ?5, ?6, ?7, ?8, ?9);
+            VALUES (?1, ?2, ?3, '', 'revert', ?4, ?5, ?6, ?7, ?8, ?9);
             """)
             ins.reset()
             try ins.bind(id.rawValue, at: 1)

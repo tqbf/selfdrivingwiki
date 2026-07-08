@@ -812,84 +812,22 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 ReaderTiming.point("click.to-startLoad", ms: Self.elapsedMs(since: click))
             }
 
-            // Build existence sets on the main actor (the store is @MainActor)
-            // so the off-main convert can resolve links without crossing actor
-            // boundaries — giving real ghost-link coloring. Sources match by
-            // either display name or filename (lowercased, case-insensitive),
-            // AND each name with its path extension stripped — mirroring
-            // resolveSourceByName's fallback, so a `[[source:Paper]]` link also
-            // resolves against a source whose filename is "Paper.pdf".
-            let pageTitles = Set((store?.summaries ?? []).map { $0.title.lowercased() })
-            // Phase 5: id-keyed maps for canonical-link display-at-render. A
-            // stored `[[page:ULID|Stale Title]]` resolves ULID → the CURRENT
-            // title here, so a rename self-heals visually without touching bytes.
-            let pageIDToName = Dictionary(uniqueKeysWithValues:
-                (store?.summaries ?? []).map { ($0.id, $0.title) })
-            let sourceNames = Set((store?.sources ?? [])
-                .flatMap { source -> [String] in
-                    let names = [source.displayName, source.filename].compactMap { $0 }
-                    let stripped = names.map { ($0 as NSString).deletingPathExtension }
-                    return (names + stripped).map { $0.lowercased() }
-                })
-            // Phase 5: source id → current display name (or filename fallback),
-            // for canonical source-link display-at-render.
-            let sourceIDToName = Dictionary(uniqueKeysWithValues:
-                (store?.sources ?? []).map { ($0.id, $0.displayName ?? $0.filename) })
-            // Lenient tier, mirroring resolveSourceByName's pass 3 so ghost
-            // styling agrees with navigation: loose keys (extension + trailing
-            // "(…)" stripped) that are UNIQUE across sources.
-            var looseKeyCounts: [String: Int] = [:]
-            for source in store?.sources ?? [] {
-                let effective = source.displayName ?? source.filename
-                looseKeyCounts[WikiNameRules.looseMatchKey(effective), default: 0] += 1
-            }
-            let uniqueLooseKeys = Set(looseKeyCounts.filter { $0.value == 1 }.keys)
-
-            // Embed map: lowercased source name → SourceEmbedInfo. Uses the same
-            // name variants as sourceNames (displayName, filename, extension-
-            // stripped) but NOT the loose-match tier — embeds are exact-match-
-            // only by design (a loose match might embed the wrong source).
-            // Phase 5: the source's own id (lowercased) is ALSO a key so a
-            // canonical `![[source:ULID|Name]]` embed resolves by id.
-            // Phase 4b: each byteless source carries an optional external
-            // EmbedTarget (provider iframe / direct-remote native tag / Apple
-            // Podcasts player) resolved from the batched embedDescriptors()
-            // query — merged here so the render closure stays pure (no store
-            // access in the detached task, same pattern as isResolved).
-            // Captured by the embedInfo closure below (pure data, no store
-            // access in the detached task — same pattern as isResolved).
-            let embedDescriptorMap = store?.embedDescriptors() ?? [:]
-            var embedMap: [String: WikiLinkMarkdown.SourceEmbedInfo] = [:]
-            for source in store?.sources ?? [] {
-                let target = embedDescriptorMap[source.id].flatMap { ExternalEmbed.target(for: $0) }
-                let info = WikiLinkMarkdown.SourceEmbedInfo(
-                    id: source.id, mimeType: source.mimeType, target: target)
-                let names = [source.displayName, source.filename].compactMap({ $0 })
-                let stripped = names.map { ($0 as NSString).deletingPathExtension }
-                for name in (names + stripped).map({ $0.lowercased() }) {
-                    embedMap[name] = info
-                }
-                embedMap[source.id.rawValue.lowercased()] = info
-            }
-
-            // Phase 6: source id → ULID-asc [smvID] chain (chronological; index 0
-            // = v1). The render precompute builds this once so `linkified` can
-            // resolve an `@vN` ordinal per occurrence without per-link SQL. Pure
-            // data captured by the detached task (same pattern as embedMap).
-            let sourceDerivedChain = store?.sourceDerivedChains() ?? [:]
-
-            // Phase 4: sibling-image resolver maps. For each source,
-            // [original_path → sibling sourceID]. Captured as pure data for the
-            // detached task (same pattern as embedMap / sourceDerivedChain).
-            let siblingMaps = store?.siblingImageResolvers() ?? [:]
-            // The rendered source's own map (nil for pages — no sibling images).
+            // Phase A.1: the full render precompute (existence/display/loose
+            // sets, embedMap incl. external EmbedTargets, sourceDerivedChain,
+            // siblingMaps) now lives in `WikiRenderContext` — built once on the
+            // main actor and memoized on the store (`store.renderContext()`),
+            // invalidated by WikiEventBus-driven reloads. The detached convert
+            // task consumes the context's pure closures — no store access
+            // off-main, the same compute-once/capture-pure-data discipline as
+            // before, just lifted to a shared seam (so chat transcripts can
+            // render through it too in Phase A.2).
+            let context: WikiRenderContext? = store.map { WikiRenderContext.build(from: $0) }
+            // The rendered source's own sibling map (nil for pages — no sibling
+            // images). Selection-specific, so it stays here, not in the context.
             var renderedSourceMap: [String: PageID]? = nil
             if case .source(let sourceID) = currentSelection {
-                renderedSourceMap = siblingMaps[sourceID]
+                renderedSourceMap = context?.siblingMaps[sourceID]
             }
-            // Capture the blob scheme string on the main actor (the static
-            // property is main-actor-isolated; the detached task can't read it).
-            let blobScheme = BlobSchemeHandler.scheme
 
             let loadStartVal = loadStart
             convertTask = Task.detached(priority: .userInitiated) { [weak self] in
@@ -899,37 +837,37 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     ReaderTiming.point("webview.task-start", ms: Self.elapsedMs(since: ls))
                 }
                 // Shared pre-pass (footnotes + wiki links) + swift-markdown HTML
-                // render, both off the main actor. isResolved resolves against
-                // the precomputed existence sets so missing links style as ghosts.
-                // embedInfo resolves `![[source:…]]` embeds to (id, mimeType) for
-                // inline HTML rendering (<img>/<video>/<audio>/<iframe>).
+                // render, both off the main actor. The context's closures resolve
+                // against the precomputed existence sets so missing links style as
+                // ghosts; embedInfo resolves `![[source:…]]` embeds to
+                // (id, mimeType) for inline HTML rendering. When `context` is nil
+                // (no store — unreachable in practice: the coordinator's store is
+                // set in updateNSView before startLoad runs), fall back to EMPTY
+                // resolution: all links ghost, no embeds — matching the
+                // pre-refactor `store == nil` behavior (empty existence sets, NOT
+                // constant-true). The transcript's nil-context=constant-true
+                // contract (Phase A.2) is a separate concern, handled at the
+                // AgentTranscriptWebView layer, not here.
+                let isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool
+                let embedInfo: ((String) -> WikiLinkMarkdown.SourceEmbedInfo?)?
+                let displayName: (PageID, WikiLinkParser.ParsedLink.LinkType) -> String?
+                let pinnedExtractionID: ((PageID, Int) -> PageID?)?
+                if let context {
+                    isResolved = context.isResolved
+                    embedInfo = context.embedInfo
+                    displayName = context.displayName
+                    pinnedExtractionID = context.pinnedExtractionID
+                } else {
+                    isResolved = { _, _ in false }
+                    embedInfo = nil
+                    displayName = { _, _ in nil }
+                    pinnedExtractionID = nil
+                }
                 let prepared = ReaderMarkdown.prepared(markdown,
-                    isResolved: { name, kind in
-                        // Phase 5: canonical ULID targets check id-keyed
-                        // existence; legacy/forward links check name sets.
-                        if WikiLinkParser.isCanonicalULID(name) {
-                            let id = PageID(rawValue: name)
-                            return kind == .source
-                                ? sourceIDToName[id] != nil
-                                : pageIDToName[id] != nil
-                        }
-                        return kind == .source
-                            ? sourceNames.contains(name.lowercased())
-                                || uniqueLooseKeys.contains(WikiNameRules.looseMatchKey(name))
-                            : pageTitles.contains(name.lowercased())
-                    },
-                    embedInfo: { name in embedMap[name.lowercased()] },
-                    displayName: { id, kind in
-                        kind == .source ? sourceIDToName[id] : pageIDToName[id]
-                    },
-                    pinnedExtractionID: { sourceID, ordinal in
-                        // Phase 6: resolve a 1-based ordinal into the source's
-                        // ULID-asc chain. Out-of-range → nil (link opens HEAD).
-                        guard let chain = sourceDerivedChain[sourceID],
-                              ordinal >= 1 else { return nil }
-                        let idx = ordinal - 1
-                        return idx < chain.count ? chain[idx] : nil
-                    }
+                    isResolved: isResolved,
+                    embedInfo: embedInfo,
+                    displayName: displayName,
+                    pinnedExtractionID: pinnedExtractionID
                 )
                 let body = MarkdownHTMLRenderer.render(prepared, imageResolver: { src in
                     // Phase 4: rewrite a relative image src to its stored blob.
@@ -937,7 +875,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     // (nil for pages → no-op). The renderer already filters out
                     // absolute/data:/wiki: srcs before calling us.
                     guard let map = renderedSourceMap, let siblingID = map[src] else { return nil }
-                    return "\(blobScheme)://source/\(siblingID.rawValue)"
+                    return "\(WikiLinkMarkdown.blobScheme)://source/\(siblingID.rawValue)"
                 })
                 let html = WikiReaderView.documentHTML(body)
                 let convertMs = Self.elapsedMs(since: t0)

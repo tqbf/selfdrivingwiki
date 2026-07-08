@@ -26,7 +26,7 @@ struct QueryConversationView: View {
         VStack(spacing: 0) {
             ZStack(alignment: .topTrailing) {
                 content
-                if showsDebugControls {
+                if showsDebugControls || showsNewConversation {
                     controls
                         .padding(.top, QueryConversationMetrics.debugTopInset)
                         .padding(.trailing, QueryConversationMetrics.contentInset)
@@ -52,39 +52,51 @@ struct QueryConversationView: View {
     }
 
     private var controls: some View {
-        // Only shown during an active query run or while awaiting the gate
-        // (gated by `showsDebugControls`). The spinner shows only while generating;
-        // the stop button shows in both states.
+        // Shown when `showsDebugControls` (active query run / awaiting the gate) OR
+        // `showsNewConversation` (a query session is live, or a finished transcript
+        // is still visible). The New Conversation button comes first, then the
+        // existing spinner/menu/stop cluster (only when `showsDebugControls` holds).
         HStack(spacing: 8) {
-            if launcher.isGenerating {
-                ProgressView()
-                    .controlSize(.small)
-            }
-            Menu {
-                Toggle("Show internals", isOn: $showsInternals)
-                if let status = launcher.exitStatus {
-                    Label(status == 0 ? "Ended" : "Exited \(status)", systemImage: status == 0 ? "checkmark.circle" : "xmark.circle")
+            if showsNewConversation {
+                Button(action: { launcher.startNewConversation() }) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Color.secondary)
                 }
-                if let logURL = launcher.logFileURL {
-                    Button("Reveal Log", systemImage: "doc.text.magnifyingglass") {
-                        NSWorkspace.shared.activateFileViewerSelecting([logURL])
+                .buttonStyle(.borderless)
+                .help("New conversation — clears this chat. It stays available in history.")
+            }
+            if showsDebugControls {
+                if launcher.isGenerating {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Menu {
+                    Toggle("Show internals", isOn: $showsInternals)
+                    if let status = launcher.exitStatus {
+                        Label(status == 0 ? "Ended" : "Exited \(status)", systemImage: status == 0 ? "checkmark.circle" : "xmark.circle")
                     }
+                    if let logURL = launcher.logFileURL {
+                        Button("Reveal Log", systemImage: "doc.text.magnifyingglass") {
+                            NSWorkspace.shared.activateFileViewerSelecting([logURL])
+                        }
+                    }
+                } label: {
+                    Label("Activity", systemImage: "ellipsis.circle")
                 }
-            } label: {
-                Label("Activity", systemImage: "ellipsis.circle")
+                .labelStyle(.iconOnly)
+                .menuStyle(.borderlessButton)
+                .help("Show activity and transcript internals")
+                // Stop button: visible while generating OR awaiting the generation slot.
+                // Wired to stopAgent() which cancels any pending send and terminates the process.
+                Button(action: { launcher.stopAgent() }) {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Color.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Stop the current response")
             }
-            .labelStyle(.iconOnly)
-            .menuStyle(.borderlessButton)
-            .help("Show activity and transcript internals")
-            // Stop button: visible while generating OR awaiting the generation slot.
-            // Wired to stopAgent() which cancels any pending send and terminates the process.
-            Button(action: { launcher.stopAgent() }) {
-                Image(systemName: "stop.circle.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.secondary)
-            }
-            .buttonStyle(.borderless)
-            .help("Stop the current response")
         }
     }
 
@@ -93,6 +105,24 @@ struct QueryConversationView: View {
         // the generation slot (stop only — the session is live but waiting its turn).
         (launcher.isGenerating || launcher.isAwaitingGenerationSlot)
             && launcher.runningKind == .query
+    }
+
+    /// The New Conversation affordance shows whenever a query session is live OR
+    /// a finished transcript is still visible — the two states where the user has
+    /// context worth discarding. Never for a non-query run.
+    static func showsNewConversationButton(
+        isRunning: Bool, isInteractiveSession: Bool,
+        runningKind: WikiOperation.Kind?, hasVisibleConversation: Bool
+    ) -> Bool {
+        (isRunning && isInteractiveSession && runningKind == .query) || hasVisibleConversation
+    }
+
+    private var showsNewConversation: Bool {
+        Self.showsNewConversationButton(
+            isRunning: launcher.isRunning,
+            isInteractiveSession: launcher.isInteractiveSession,
+            runningKind: launcher.runningKind,
+            hasVisibleConversation: hasVisibleConversation)
     }
 
     @ViewBuilder
@@ -159,7 +189,12 @@ struct QueryConversationView: View {
                     .padding(.top, bannerTopReservation)
                     .padding(.bottom, QueryConversationMetrics.sectionSpacing)
             }
-            QueryTranscriptView(launcher: launcher, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
+            QueryTranscriptView(
+                launcher: launcher,
+                onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
+                renderContext: { [weak store] in store?.renderContext() },
+                blobStore: store
+            )
                 .frame(maxWidth: QueryConversationMetrics.chatColumnWidth, maxHeight: .infinity)
                 .padding(.top, showsEditingEnabledBanner ? 0 : QueryConversationMetrics.conversationTopInset)
             composer(maxWidth: QueryConversationMetrics.chatColumnWidth)
