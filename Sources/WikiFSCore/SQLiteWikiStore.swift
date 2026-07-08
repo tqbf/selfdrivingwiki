@@ -1896,6 +1896,16 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         return stmt.int(at: 0)
     }
 
+    /// Phase D fold: the `bookmark_nodes` table's row COUNT. Resilient to the
+    /// table not existing yet (pre-v17 read connection).
+    private func bookmarkNodesCount() -> Int64 {
+        guard let stmt = try? statement(
+            "SELECT COUNT(*) FROM bookmark_nodes;") else { return 0 }
+        defer { stmt.reset() }
+        guard (try? stmt.step()) == true else { return 0 }
+        return stmt.int(at: 0)
+    }
+
     // MARK: - changeToken contributors (slice 2b)
 
     /// The per-kind contributors whose fragments join into ``changeToken()``.
@@ -1912,6 +1922,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         WikiIndexTokenContributor(),
         SourceDerivedTokenContributor(),
         SourceGraphTokenContributor(),
+        BookmarkTokenContributor(),
     ]
 
     private struct PagesTokenContributor: ChangeTokenContributor {
@@ -1968,6 +1979,15 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let kind: ResourceKind = .source
         func fragment(in store: SQLiteWikiStore) throws -> String {
             "\(store.sourceVersionCount()):\(store.refsGenerationSum()):\(store.activitiesCount())"
+        }
+    }
+
+    /// Phase D fold: the `bookmark_nodes` row count. A bookmark create/delete
+    /// bumps the token so the File Provider re-enumerates the `bookmarks/` tree.
+    private struct BookmarkTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .bookmark
+        func fragment(in store: SQLiteWikiStore) throws -> String {
+            "\(store.bookmarkNodesCount())"
         }
     }
 

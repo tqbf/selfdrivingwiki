@@ -66,3 +66,20 @@ Pure functions (no SwiftUI) that convert flat `[BookmarkNode]` into a
 - Dynamic views / saved searches (`.dynamic` kind was cut — store + tree builder + UI were simplified)
 - Adding refs from the Pages/Sources sidebar context menu
 - `wikictl` CLI commands for bookmark-node CRUD
+
+## File Provider projection (#129 slice 2b Phase D, shipped)
+
+Bookmarks now project to the File Provider mount as a read-only `bookmarks/`
+tree mirroring the sidebar structure:
+
+- Folders → directories (`bookmark-folder:<ULID>`)
+- Page refs → `<title>.md` files serving the target page's content
+  (`bookmark-page-ref:<ULID>`)
+- Source refs → `<filename>` files serving the target source's bytes
+  (`bookmark-source-ref:<ULID>`)
+- Stale refs (target deleted) → small placeholder files preserving tree shape
+
+A `NestedResourceProjection` descriptor drives all dispatch (`node`/`children`/
+`contents`/working set). A `BookmarkTokenContributor` appends a
+`bookmark_nodes` count fold to the change token so any mutation re-fetches.
+No schema change (the existing `bookmark_nodes` table is read as-is).
