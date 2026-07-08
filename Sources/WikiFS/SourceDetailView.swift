@@ -113,6 +113,13 @@ struct SourceDetailView: View {
 
     private var showTabs: Bool { isPDF && hasMarkdown }
 
+    /// A PDF with no markdown derivation yet — the gate for the prominent
+    /// "Extract" call-to-action. Also the exclusivity guard for the source's
+    /// single "act on this source's content" affordance: an unextracted PDF
+    /// shows Extract, so Refresh is suppressed until it has a derivation
+    /// (one affordance per source).
+    private var needsExtraction: Bool { isPDF && !hasMarkdown }
+
     /// `true` when this source has ≥2 extraction alternatives — the gate for the
     /// "Compare Extractions…" button (compare is meaningless with one).
     private var hasMultipleExtractions: Bool {
@@ -376,7 +383,7 @@ struct SourceDetailView: View {
                         if isPDF, hasMarkdown, let head = headVersion {
                             extractionProvenanceChip(head: head)
                         }
-                        if isPDF, !hasMarkdown {
+                        if needsExtraction {
                             // No derivation yet → Extract is the call-to-action:
                             // prominent and leftmost, with Ingest stepped down to
                             // secondary until there's markdown worth ingesting.
@@ -398,11 +405,12 @@ struct SourceDetailView: View {
                                           && !launcher.extractingSourceIDs.contains(file.id)))
                         }
                         ingestButton
-                        // Refresh lives on the primary action row (with Extract /
-                        // Ingest), not the utility row — re-fetching is a primary
-                        // source action. Only shown when the source can actually be
-                        // refreshed (see `isRefreshable`).
-                        if isRefreshable {
+                        // The source's content affordance is one-per-source: an
+                        // unextracted PDF shows Extract (above) to gain a readable
+                        // derivation, so Refresh is suppressed until it has one.
+                        // Every other refreshable (live) source offers Refresh to
+                        // re-fetch and append a new version.
+                        if isRefreshable, !needsExtraction {
                             Button("Refresh", systemImage: "arrow.clockwise") {
                                 Task { await runRefresh() }
                             }
@@ -534,8 +542,9 @@ struct SourceDetailView: View {
     // MARK: - Provider origin (Phase 3a)
 
     /// Inline origin tag for non-Zotero providers, shown on the metadata line:
-    /// website → a clickable link to the origin URL; local-file → "File";
-    /// markdown-folder → "Folder". Mirrors the inline Zotero tag's styling.
+    /// website → a clickable link to the origin URL; apple-podcast → a clickable
+    /// link to the episode; markdown-folder → "Folder"; local-file → "File".
+    /// Mirrors the inline Zotero tag's styling.
     @ViewBuilder
     private func providerOriginTag(_ origin: SourceOrigin) -> some View {
         switch origin.agentName {
@@ -554,6 +563,21 @@ struct SourceDetailView: View {
             }
         case "markdown-folder":
             Label("Folder", systemImage: "folder")
+        case "apple-podcast":
+            // Byteless source (a transcript) — link to the episode page, like the
+            // website tag. Never "File": a podcast source carries no file bytes.
+            let urlString = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
+            if let url = URL(string: urlString), url.scheme != nil {
+                Button {
+                    NSWorkspace.shared.open(url)
+                } label: {
+                    Label("Apple Podcast", systemImage: "waveform")
+                }
+                .buttonStyle(.link)
+                .help("Open episode: \(urlString)")
+            } else {
+                Label("Apple Podcast", systemImage: "waveform")
+            }
         default:
             Label("File", systemImage: "doc")
         }
