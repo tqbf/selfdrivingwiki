@@ -137,7 +137,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         guard !closed else { return }
         closed = true
         statements.removeAll()
-        sqlite3_close(db)
+        Self.checkpointAndClose(db)
     }
 
     /// Explicitly close the database connection. After calling this, the store
@@ -151,6 +151,18 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         guard !closed else { return }
         closed = true
         statements.removeAll()
+        Self.checkpointAndClose(db)
+    }
+
+    /// Force-checkpoint the WAL to zero length, then close. `sqlite3_close`'s
+    /// own internal checkpoint can race with a new connection opening the same
+    /// file under CI load, intermittently producing SQLITE_ERROR on the new
+    /// connection's writes (#223, #234). An explicit TRUNCATE checkpoint
+    /// flushes all committed frames into the main file first so `sqlite3_close`
+    /// has nothing left to do. Harmless on non-WAL / read-only connections
+    /// (the pragma is a no-op and the return value is unchecked).
+    nonisolated private static func checkpointAndClose(_ db: OpaquePointer) {
+        sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE);", nil, nil, nil)
         sqlite3_close(db)
     }
 
