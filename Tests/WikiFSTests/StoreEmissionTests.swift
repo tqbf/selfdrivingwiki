@@ -72,7 +72,6 @@ import Foundation
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .page)
         #expect(events.last?.change == .created)
-        #expect(events.last?.origin == .local)
         #expect(events.last?.id == page.id.rawValue)
     }
 

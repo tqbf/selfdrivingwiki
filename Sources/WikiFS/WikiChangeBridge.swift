@@ -127,7 +127,7 @@ final class WikiChangeBridge {
     private func flush(wikiID: String) {
         if manager.activeWikiID == wikiID, let bus = manager.activeStore?.eventBus {
             bus.emit(ResourceChangeEvent(
-                wikiID: wikiID, kind: nil, id: "", change: .updated, origin: .external))
+                wikiID: wikiID, kind: nil, id: "", change: .updated))
         } else {
             Task { await fileProvider.signalChange(forWikiID: wikiID) }
         }

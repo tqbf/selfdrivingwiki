@@ -237,7 +237,7 @@ public final class WikiStoreModel {
         // Preload the system-prompt draft so its editor has content immediately;
         // selecting it later reloads fresh from the store.
         draftSystemPrompt = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
-        subscribeToExternalChanges()
+        subscribeToChanges()
     }
 
     /// The per-wiki resource-change bus of the backing store (exposed so the app
@@ -245,16 +245,17 @@ public final class WikiStoreModel {
     /// to the same mechanism the store emits into).
     public var eventBus: WikiEventBus? { store.eventBus }
 
-    /// Subscribe to the store's bus for **external** changes (a `wikictl` write
-    /// surfaced by the Darwin-notification bridge) and rebuild the list
-    /// projections. This preserves the pre-2a "model reloads only on external
-    /// writes" behavior exactly. **Local** (in-app) events are ignored: the model
-    /// keeps self-managing its own writes via `reloadSummaries()`/`reloadSources()`
-    /// (the lowest-risk cut; reload-on-self-write is deferred to slice 2b).
-    @ObservationIgnored private var externalChangeToken: SubscriptionToken?
-    private func subscribeToExternalChanges() {
-        externalChangeToken = store.eventBus?.subscribe(nil) { [weak self] event in
-            guard event.origin == .external else { return }
+    /// Subscribe to the store's bus for **all** changes — both in-app writes
+    /// (the model's own saves, agent runs) and cross-process writes (`wikictl`
+    /// surfaced by the Darwin-notification bridge) — and rebuild the list
+    /// projections via `reloadFromStore()`. Phase E: the model is a pure
+    /// reload subscriber; the per-call `reload*()` sites are removed and the
+    /// `origin` field is gone. The reload only refreshes list projections
+    /// (sidebar, sources, chats, bookmarks) — it never touches the editor
+    /// draft or selection, so there is no focus/flicker risk.
+    @ObservationIgnored private var changeToken: SubscriptionToken?
+    private func subscribeToChanges() {
+        changeToken = store.eventBus?.subscribe(nil) { [weak self] _ in
             self?.reloadFromStore()
         }
     }

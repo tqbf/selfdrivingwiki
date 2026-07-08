@@ -4399,7 +4399,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// store's (per-wiki) bus. Callers pass the resource's concrete `kind` and
     /// `id`; a `nil` bus (e.g. `wikictl`) is handled at the `mutate` flush.
     private func localEvent(_ kind: ResourceKind, id: String, change: ChangeKind) -> ResourceChangeEvent {
-        ResourceChangeEvent(wikiID: _eventBus?.wikiID ?? "", kind: kind, id: id, change: change, origin: .local)
+        ResourceChangeEvent(wikiID: _eventBus?.wikiID ?? "", kind: kind, id: id, change: change)
     }
 
     // MARK: - Statement helpers

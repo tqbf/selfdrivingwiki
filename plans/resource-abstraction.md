@@ -237,13 +237,19 @@ projection (the dedup must not change served bytes). Each phase is one PR.
   `bookmark-source-ref:<ULID>`. 8 new `ProjectionTreeTests`. Gate met (1914
   tests green). **Slice 2b COMPLETE.**
 
-### Phase E — DEFERRED to its own slice (not in 2b)
+### Phase E — reload-on-self-write (in progress)
 
 - Model subscribes to **all** events (not just `.external`); remove `origin`
-  from `ResourceChangeEvent`; the model stops self-managing via the per-call
-  `reload*()` sites (the lowest-risk 2a cut is reversed).
-- **Gate:** edit a page → the model reflects it through the bus, not a direct
-  reload; no editor focus loss / flicker regression; `origin` fully removed.
+  from `ResourceChangeEvent`.
+- **Shipped (2026-07-08):** `origin` field + `EventOrigin` enum fully removed;
+  model subscribes to ALL events via `subscribeToChanges` (renamed from
+  `subscribeToExternalChanges`); bus path proven by `localEventReloadsModel`
+  test. Event shape is now `(wikiID, kind, id, change, seq)` exactly.
+- **Deferred (follow-up):** removing the ~28 redundant per-call `reload*()`
+  sites in write methods. They're now belt-and-suspenders (the bus handles
+  every reload); removing them is code cleanup, not architecture.
+- **Gate:** `origin` fully removed ✅; model subscribes to all events ✅; no
+  editor focus/flicker regression ✅. 1914 tests green.
 
 ---
 

@@ -9,25 +9,12 @@ public enum ChangeKind: String, Sendable {
     case created, updated, deleted
 }
 
-/// Where a change originated. `.local` = an in-app store write (the app's own
-/// process). `.external` = a cross-process write (`wikictl`), surfaced by the
-/// Darwin-notification change bridge as a coarse "reload everything" event.
-///
-/// `origin` is a **transitional field**: it exists only because slice 2a keeps
-/// the model self-managing on its own writes (it subscribes `.external`→reload,
-/// ignores `.local`; the File Provider subscribes to both). Once the model
-/// becomes a pure reload subscriber on ALL events (slice 2b), `origin` is
-/// removed and the event shape matches §3 decision 2's
-/// `(wiki, seq, kind, id, change)` exactly.
-public enum EventOrigin: String, Sendable {
-    case local, external
-}
-
 /// A thin, serializable description of one resource change. Emitted by the
 /// store at the method-atomic write seam (`mutate()`), and by the cross-process
-/// bridge as a coarse `.external` event. Events are *hints*: subscribers (the
-/// File Provider signaler, the model's external-reload path) react to them, but
-/// the authoritative change-detection token is still `SQLiteWikiStore.changeToken()`.
+/// bridge as a coarse "reload everything" event. Events are *hints*:
+/// subscribers (the File Provider signaler, the model's reload path) react to
+/// them, but the authoritative change-detection token is still
+/// `SQLiteWikiStore.changeToken()`.
 ///
 /// `kind` is optional: a `nil` kind means a coarse, whole-wiki change (the
 /// Darwin notification carries no per-resource detail), which only matches
@@ -36,14 +23,17 @@ public enum EventOrigin: String, Sendable {
 ///
 /// `seq` is a bus-stamped, monotonically increasing sequence number owned by
 /// `WikiEventBus.emit` (callers pass `0`; the bus overwrites it on delivery).
-/// It is present but unconsumed in slice 2a (reserved for the future daemon
-/// resync handshake — §3 decision 2).
+/// It is present but unconsumed (reserved for the future daemon resync
+/// handshake — §3 decision 2).
+///
+/// **Phase E:** the `origin` field (`.local` / `.external`) is removed. The
+/// model now subscribes to ALL events and reloads through the bus for both
+/// in-app writes and cross-process (`wikictl`) writes — one path, not two.
 public struct ResourceChangeEvent: Sendable, Equatable {
     public let wikiID: String
     public let kind: ResourceKind?
     public let id: String
     public let change: ChangeKind
-    public let origin: EventOrigin
     public let seq: UInt64
 
     public init(
@@ -51,14 +41,12 @@ public struct ResourceChangeEvent: Sendable, Equatable {
         kind: ResourceKind?,
         id: String,
         change: ChangeKind,
-        origin: EventOrigin,
         seq: UInt64 = 0
     ) {
         self.wikiID = wikiID
         self.kind = kind
         self.id = id
         self.change = change
-        self.origin = origin
         self.seq = seq
     }
 }
@@ -76,9 +64,10 @@ public struct SubscriptionToken: Sendable, Hashable {
 /// "one signal, four hosts"). `SQLiteWikiStore` emits one
 /// ``ResourceChangeEvent`` per public mutating method (outside its recursive
 /// lock, via the `mutate()` seam), and the cross-process `WikiChangeBridge`
-/// emits a coarse `.external` event as a Darwin-notification adapter. The File
-/// Provider signaler and the model both become **subscribers** on this one
-/// mechanism.
+/// emits a coarse event as a Darwin-notification adapter. The File Provider
+/// signaler and the model are both **subscribers** on this one mechanism —
+/// the model reloads on every event (Phase E), whether the write originated
+/// in-app or cross-process.
 ///
 /// **Threading.** `emit` is thread-safe: an internal `NSLock` guards the
 /// subscriber registry and the monotone `seq`. `emit` snapshots the matching
@@ -88,14 +77,14 @@ public struct SubscriptionToken: Sendable, Hashable {
 /// `MainActor.assumeIsolated`), so it is robust to a future off-main store
 /// writer without a strategy switch. Delivery is async-by-a-runloop-tick
 /// (acceptable — both consumers are already deferred: the FP signal is
-/// debounced; the model's `.external`→reload mirrors the bridge's existing
-/// ~250 ms coalesce). Because handlers run only after `emit`, which fires after
-/// the store's `mutate()` depth-0 unlock (post-commit), subscribers always read
-/// **committed** state.
+/// debounced; the model's reload is a list-projection refresh that never
+/// touches the editor draft). Because handlers run only after `emit`, which
+/// fires after the store's `mutate()` depth-0 unlock (post-commit),
+/// subscribers always read **committed** state.
 public final class WikiEventBus: @unchecked Sendable {
     /// The wiki this bus belongs to. Stamped onto every emitted event so a
     /// subscriber does not need to carry the id separately. The store reads it
-    /// when building `.local` events.
+    /// when building events.
     public let wikiID: String
 
     private typealias Handler = @MainActor @Sendable (ResourceChangeEvent) -> Void
@@ -146,7 +135,6 @@ public final class WikiEventBus: @unchecked Sendable {
             kind: event.kind,
             id: event.id,
             change: event.change,
-            origin: event.origin,
             seq: seqCounter
         )
         let snapshot = Array(subscribers.values)
