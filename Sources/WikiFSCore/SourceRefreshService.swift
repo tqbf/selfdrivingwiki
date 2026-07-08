@@ -8,8 +8,8 @@ import Foundation
 /// single-writer-discipline invariant).
 ///
 /// Provider reconstruction keys off `SourceOrigin.agentName`:
-/// - `"website"` → `WebsiteProvider` (refresh appends a content version).
-/// - `"apple-podcast"` → `ApplePodcastProvider` (refresh appends a derived
+/// - `"website"` → `WebsiteMaterializer` (refresh appends a content version).
+/// - `"apple-podcast"` → `ApplePodcastMaterializer` (refresh appends a derived
 ///   markdown version — byteless sources have no content to refresh).
 /// - Everything else (`local-file`, `zotero`, `markdown-folder`,
 ///   `legacy-import`, `unknown`) → `.notRefreshable` (import-only).
@@ -97,10 +97,10 @@ public struct SourceRefreshService: Sendable {
         guard let urlString = origin.plan, let url = URL(string: urlString) else {
             throw RefreshError.missingPlan
         }
-        let provider = WebsiteProvider(rawInput: urlString, fetcher: fetcher)
+        let provider = WebsiteMaterializer(rawInput: urlString, fetcher: fetcher)
         let source = try await provider.materialize()
         guard let prov = source.provenance else {
-            // WebsiteProvider always records provenance — defensive.
+            // WebsiteMaterializer always records provenance — defensive.
             throw RefreshError.missingPlan
         }
         _ = url // validated above; the provider re-normalizes from the raw string
@@ -127,7 +127,7 @@ public struct SourceRefreshService: Sendable {
         // The provider's materialize() runs the transcript fetch off-main
         // (Task.detached inside). Byteless source → only the derived markdown
         // (transcript) changes on refresh; the content version never does.
-        let provider = ApplePodcastProvider(episode: episode, pageURL: pageURL, fetcher: svc)
+        let provider = ApplePodcastMaterializer(episode: episode, pageURL: pageURL, fetcher: svc)
         let transcript = try await provider.materialize()
         let markdown = String(data: transcript.data, encoding: .utf8) ?? ""
         return .derivedMarkdown(content: markdown)

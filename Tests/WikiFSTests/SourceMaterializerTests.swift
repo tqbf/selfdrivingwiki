@@ -7,7 +7,7 @@ import CryptoKit
 /// Phase 3a tests: provider materialization + real provenance persistence.
 /// Covers AC.1–AC.5 (website/Zotero/local/folder provenance, agent idempotency,
 /// and the legacy nil-provenance fallback regression).
-struct SourceProviderTests {
+struct SourceMaterializerTests {
 
     // MARK: - Test doubles
 
@@ -43,13 +43,13 @@ struct SourceProviderTests {
         return try #require(origin)
     }
 
-    // MARK: - AC.1: WebsiteProvider + store provenance
+    // MARK: - AC.1: WebsiteMaterializer + store provenance
 
     @Test func websiteProviderRecordsOriginURL() async throws {
         let fetcher = FakeFetcher(response: htmlResponse(
             "<html><head><title>Example</title></head><body><p>Hi</p></body></html>",
             url: "https://example.com/page"))
-        let provider = WebsiteProvider(rawInput: "example.com/page", fetcher: fetcher)
+        let provider = WebsiteMaterializer(rawInput: "example.com/page", fetcher: fetcher)
         let (source, _) = try await provider.materializeWithPlan()
         let prov = try #require(source.provenance)
         #expect(prov.agentName == "website")
@@ -64,7 +64,7 @@ struct SourceProviderTests {
         let fetcher = FakeFetcher(response: htmlResponse(
             "<html><head><title>Test</title></head><body>x</body></html>",
             url: "https://example.com/article"))
-        let provider = WebsiteProvider(rawInput: "https://example.com/article", fetcher: fetcher)
+        let provider = WebsiteMaterializer(rawInput: "https://example.com/article", fetcher: fetcher)
         let (source, _) = try await provider.materializeWithPlan()
         let summary = try store.addSource(
             filename: source.filename, data: source.data,
@@ -87,10 +87,10 @@ struct SourceProviderTests {
         let html = { (title: String) in
             "<html><head><title>\(title)</title></head><body>x</body></html>"
         }
-        let p1 = WebsiteProvider(rawInput: "https://a.com/one", fetcher: FakeFetcher(
+        let p1 = WebsiteMaterializer(rawInput: "https://a.com/one", fetcher: FakeFetcher(
             response: htmlResponse(html("One").replacingOccurrences(of: "x", with: "alpha"),
                                    url: "https://a.com/one")))
-        let p2 = WebsiteProvider(rawInput: "https://b.com/two", fetcher: FakeFetcher(
+        let p2 = WebsiteMaterializer(rawInput: "https://b.com/two", fetcher: FakeFetcher(
             response: htmlResponse(html("Two").replacingOccurrences(of: "x", with: "beta"),
                                    url: "https://b.com/two")))
 
@@ -120,9 +120,9 @@ struct SourceProviderTests {
         let html = { (title: String, body: String) in
             "<html><head><title>\(title)</title></head><body>\(body)</body></html>"
         }
-        let p1 = WebsiteProvider(rawInput: "https://a.com", fetcher: FakeFetcher(
+        let p1 = WebsiteMaterializer(rawInput: "https://a.com", fetcher: FakeFetcher(
             response: htmlResponse(html("A", "alpha"), url: "https://a.com")))
-        let p2 = WebsiteProvider(rawInput: "https://b.com", fetcher: FakeFetcher(
+        let p2 = WebsiteMaterializer(rawInput: "https://b.com", fetcher: FakeFetcher(
             response: htmlResponse(html("B", "beta"), url: "https://b.com")))
         let (m1, _) = try await p1.materializeWithPlan()
         let (m2, _) = try await p2.materializeWithPlan()
@@ -143,7 +143,7 @@ struct SourceProviderTests {
         #expect(actCount == "2")
     }
 
-    // MARK: - AC.3: LocalFileProvider + MarkdownFolderProvider
+    // MARK: - AC.3: LocalFileMaterializer + MarkdownFolderMaterializer
 
     @Test func localFileProviderReadsBytesAndSetsProvenance() async throws {
         let dir = FileManager.default.temporaryDirectory
@@ -153,7 +153,7 @@ struct SourceProviderTests {
         let fileURL = dir.appendingPathComponent("note.md")
         try Data("# Hello".utf8).write(to: fileURL)
 
-        let provider = LocalFileProvider(fileURL: fileURL)
+        let provider = LocalFileMaterializer(fileURL: fileURL)
         let source = try await provider.materialize()
         #expect(source.data == Data("# Hello".utf8))
         let prov = try #require(source.provenance)
@@ -163,7 +163,7 @@ struct SourceProviderTests {
     }
 
     @Test func markdownFolderProviderSetsFolderProvenance() async throws {
-        let provider = MarkdownFolderProvider(
+        let provider = MarkdownFolderMaterializer(
             filename: "Note.md", data: Data("# Body".utf8), mimeType: "text/markdown")
         let source = try await provider.materialize()
         let prov = try #require(source.provenance)
@@ -174,9 +174,9 @@ struct SourceProviderTests {
 
     @Test func addSourceLocalAndFolderRecordDistinctAgents() async throws {
         let store = try tempStore()
-        let local = try await LocalFileProvider(fileURL: writeTempFile(
+        let local = try await LocalFileMaterializer(fileURL: writeTempFile(
             "local.txt", Data("x".utf8))).materialize()
-        let folder = try await MarkdownFolderProvider(
+        let folder = try await MarkdownFolderMaterializer(
             filename: "f.md", data: Data("y".utf8)).materialize()
         let s1 = try store.addSource(
             filename: local.filename, data: local.data, zoteroItemKey: nil, zoteroItemTitle: nil,
@@ -189,7 +189,7 @@ struct SourceProviderTests {
         #expect(try store.sourceOrigin(sourceID: s2.id)?.agentName == "markdown-folder")
     }
 
-    // MARK: - AC.2: ZoteroProvider
+    // MARK: - AC.2: ZoteroMaterializer
 
     @Test func zoteroProviderSetsItemKeyProvenance() async throws {
         let dir = FileManager.default.temporaryDirectory
@@ -209,7 +209,7 @@ struct SourceProviderTests {
         let parent = ZoteroItem(
             key: "PARENT1", version: 1, itemType: "journalArticle",
             title: "My Paper", creatorSummary: "Doe", date: "2024")
-        let provider = ZoteroProvider(
+        let provider = ZoteroMaterializer(
             attachment: attachment, parentItem: parent, zoteroDir: dir)
         let source = try await provider.materialize()
         let prov = try #require(source.provenance)
@@ -415,12 +415,12 @@ struct SourceProviderTests {
     private static let chinaTalkEpisode = PodcastEpisodeURL.EpisodeRef(id: "1000774368453", slug: "chinatalk")
     private static let chinaTalkPageURL = URL(string: "https://podcasts.apple.com/us/podcast/chinatalk/id1289062927?i=1000774368453")!
 
-    /// AC.5 — `ApplePodcastProvider.materialize()` produces provenance that
+    /// AC.5 — `ApplePodcastMaterializer.materialize()` produces provenance that
     /// survives a store round-trip: agentName, externalIdentity (episode ID),
     /// plan (the page URL), and the displayLabel.
     @Test func applePodcastProviderPersistsProvenance() async throws {
         let store = try tempStore()
-        let provider = ApplePodcastProvider(
+        let provider = ApplePodcastMaterializer(
             episode: Self.chinaTalkEpisode,
             pageURL: Self.chinaTalkPageURL,
             fetcher: FakePodcastFetcher())

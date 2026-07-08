@@ -1429,7 +1429,7 @@ public final class WikiStoreModel {
                 continue
             }
             // Materialize off-main (read + dispatch), store on the main actor.
-            let provider = LocalFileProvider(fileURL: url)
+            let provider = LocalFileMaterializer(fileURL: url)
             let materialized: MaterializedSource
             do {
                 materialized = try await provider.materialize()
@@ -1522,7 +1522,7 @@ public final class WikiStoreModel {
             }
             let pageURL = URLFetchService.normalizeURL(rawInput)
                 ?? URL(string: "https://podcasts.apple.com")!
-            let provider = ApplePodcastProvider(episode: episode, pageURL: pageURL, fetcher: svc)
+            let provider = ApplePodcastMaterializer(episode: episode, pageURL: pageURL, fetcher: svc)
             let transcript = try await provider.materialize()
             // §11 byteless model: the source is byteless (a pointer to the
             // external episode), and the transcript markdown is stored as the
@@ -1592,7 +1592,7 @@ public final class WikiStoreModel {
 
     /// The web-fetch ingest path (HTML→md / PDF / text / binary), shared by both
     /// the feature-on and feature-off `addURL` overloads. Validate + fetch OFF the
-    /// main actor (the GET shouldn't stall the UI); the WebsiteProvider owns
+    /// main actor (the GET shouldn't stall the UI); the WebsiteMaterializer owns
     /// normalize→fetch→dispatch (materialization). Then store the result HERE on
     /// the main actor, where we own `store`.
     ///
@@ -1603,7 +1603,7 @@ public final class WikiStoreModel {
         _ rawInput: String,
         fetcher: any URLFetchService.URLResourceFetcher
     ) async throws -> URLFetchService.FetchOutcome {
-        let provider = WebsiteProvider(rawInput: rawInput, fetcher: fetcher)
+        let provider = WebsiteMaterializer(rawInput: rawInput, fetcher: fetcher)
         let snapshot = try await provider.materializeSnapshot()
         // Pre-resolve the page's display name off the main actor so a PDF
         // source's PDFKit parse doesn't block the UI or delay the store write
@@ -1760,7 +1760,7 @@ public final class WikiStoreModel {
         parentItem: ZoteroItem,
         zoteroDir: URL
     ) async throws {
-        let provider = ZoteroProvider(
+        let provider = ZoteroMaterializer(
             attachment: attachment, parentItem: parentItem, zoteroDir: zoteroDir)
         // Resolve + read off the main actor (the provider materializes, throwing
         // ZoteroFetchError.unavailable when the attachment isn't local).
@@ -1807,7 +1807,7 @@ public final class WikiStoreModel {
         for file in result.files {
             let ext = (file.filename as NSString).pathExtension.lowercased()
             let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
-            let provider = MarkdownFolderProvider(
+            let provider = MarkdownFolderMaterializer(
                 filename: file.filename, data: file.data, mimeType: mimeType)
             do {
                 let materialized = try await provider.materialize()
