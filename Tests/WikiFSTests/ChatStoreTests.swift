@@ -201,8 +201,16 @@ import SQLite3
         // connection on the now-quiescent DB (a future/garbled event_json a
         // WikiStore method would never write, but a bad row should never brick
         // the rest of history).
+        //
+        // The store from the `do` block above may not be finalized by ARC yet
+        // (Swift doesn't guarantee deinit timing), so the WAL might still be
+        // held by the store's connection. We open with an explicit busy timeout
+        // and disable FK enforcement — the corrupt row is deliberately not
+        // validated by the store's own write path.
         var raw: OpaquePointer?
         #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        sqlite3_busy_timeout(raw, 5000)
+        sqlite3_exec(raw, "PRAGMA foreign_keys=OFF;", nil, nil, nil)
         let corruptSQL = """
         INSERT INTO chat_messages (id, chat_id, seq, role, event_json, text, created_at)
         VALUES ('01CORRUPTROW000000000000A', '\(chatID.rawValue)', 1_000,
