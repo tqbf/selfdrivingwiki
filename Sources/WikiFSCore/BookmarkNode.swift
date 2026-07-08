@@ -23,6 +23,13 @@ public struct BookmarkNode: Identifiable, Hashable, Sendable {
     public var label: String?
     /// Page/source id for refs; `nil` otherwise.
     public var targetID: PageID?
+    /// When the node was first created (issue #242). Epoch default lets
+    /// in-memory fixtures omit it; the store always stamps a real value.
+    public var createdAt: Date
+    /// When the node last changed in a way the user would consider an "update"
+    /// (label rename or a move to a new parent). Pure same-parent reordering
+    /// does NOT bump this — see `moveBookmarkNode`.
+    public var updatedAt: Date
 
     public init(
         id: String,
@@ -30,7 +37,9 @@ public struct BookmarkNode: Identifiable, Hashable, Sendable {
         position: Int,
         kind: BookmarkNodeKind,
         label: String?,
-        targetID: PageID?
+        targetID: PageID?,
+        createdAt: Date = Date(timeIntervalSince1970: 0),
+        updatedAt: Date = Date(timeIntervalSince1970: 0)
     ) {
         self.id = id
         self.parentID = parentID
@@ -38,6 +47,8 @@ public struct BookmarkNode: Identifiable, Hashable, Sendable {
         self.kind = kind
         self.label = label
         self.targetID = targetID
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 
     /// Builds a slash-delimited display path for a folder by walking its

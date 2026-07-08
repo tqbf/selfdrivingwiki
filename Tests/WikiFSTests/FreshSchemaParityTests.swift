@@ -125,8 +125,8 @@ import SQLite3
         let ladder = try fingerprint(at: ladderURL)
 
         // Both must report head version 22.
-        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "26")
-        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "26")
+        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "27")
+        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "27")
 
         if fast != ladder {
             Issue.record("fresh fast-path schema drifted from the stepwise ladder:\n--- fast ---\n\(fast)\n--- ladder ---\n\(ladder)")
@@ -206,7 +206,7 @@ import SQLite3
         // 3. Reopen → runs the v20→v21 backfill.
         sqlite3_close(db)
         let migrated = try SQLiteWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "26")
+        #expect(migrated.pragmaValue("user_version") == "27")
 
         // 4. The legacy extraction row was backfilled: blob_hash + activity_id + source_version_id set.
         #expect(migrated.scalarText(
@@ -268,7 +268,7 @@ import SQLite3
         sqlite3_close(db)
 
         let migrated = try SQLiteWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "26")
+        #expect(migrated.pragmaValue("user_version") == "27")
         let db2 = try open(url)
         defer { sqlite3_close(db2) }
         let roleCol = columns(db2, "sources").first { $0.name == "role" }
@@ -343,7 +343,7 @@ import SQLite3
 
         // Reopen → v22 migration rebuilds source_links.
         let migrated = try SQLiteWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "26")
+        #expect(migrated.pragmaValue("user_version") == "27")
         let db2 = try open(url)
         defer { sqlite3_close(db2) }
 
@@ -373,5 +373,55 @@ import SQLite3
         try migrated.deleteSource(id: source.id)
         #expect(scalarText(db2,
             "SELECT COUNT(*) FROM source_links WHERE to_source_id='\(sourceID)';") == "0")
+    }
+
+    // MARK: - v27 (issue #242): bookmark timestamps
+
+    /// v26→v27 migration adds `created_at`/`updated_at` to `bookmark_nodes` and
+    /// backfills every legacy row to the migration time (legacy nodes have no
+    /// recorded creation time). AC: columns appear NOT NULL DEFAULT 0 (matching
+    /// the fresh-path def — parity), and a pre-existing row's timestamps are
+    /// non-epoch and ~now after reopening.
+    @Test func v26ToV27AddsAndBackfillsBookmarkTimestamps() throws {
+        let url = tempURL()
+        let nodeID: String
+        do {
+            let store = try SQLiteWikiStore(databaseURL: url)
+            let node = try store.createBookmarkNode(
+                parentID: nil, position: 0, kind: .folder, label: "Legacy", targetID: nil)
+            nodeID = node.id
+        }
+
+        // Simulate a genuine v26 DB: the fresh schema already has the columns,
+        // so drop them and rewind the stamp to before #242.
+        let db = try open(url)
+        exec(db, "ALTER TABLE bookmark_nodes DROP COLUMN created_at;")
+        exec(db, "ALTER TABLE bookmark_nodes DROP COLUMN updated_at;")
+        exec(db, "PRAGMA user_version=26;")
+        sqlite3_close(db)
+
+        let reopenStart = Date()
+        let migrated = try SQLiteWikiStore(databaseURL: url)
+        #expect(migrated.pragmaValue("user_version") == "27")
+        let db2 = try open(url)
+        defer { sqlite3_close(db2) }
+
+        // Columns exist, NOT NULL, default 0 (matches the fresh-path CREATE
+        // TABLE byte-for-byte — the parity test compares defaults).
+        let createdCol = columns(db2, "bookmark_nodes").first { $0.name == "created_at" }
+        #expect(createdCol?.notnull == 1, "bookmark_nodes.created_at must be NOT NULL")
+        #expect(createdCol?.dflt == "0")
+        let updatedCol = columns(db2, "bookmark_nodes").first { $0.name == "updated_at" }
+        #expect(updatedCol?.notnull == 1, "bookmark_nodes.updated_at must be NOT NULL")
+        #expect(updatedCol?.dflt == "0")
+
+        // The legacy row was backfilled: both timestamps equal (migration
+        // time), non-epoch, and within a tight window of the reopen.
+        let nodes = try migrated.listBookmarkNodes()
+        let reloaded = try #require(nodes.first { $0.id == nodeID })
+        #expect(reloaded.createdAt == reloaded.updatedAt)
+        #expect(reloaded.createdAt.timeIntervalSince1970 > 0)
+        #expect(reloaded.createdAt > reopenStart.addingTimeInterval(-5))
+        #expect(reloaded.createdAt < Date().addingTimeInterval(5))
     }
 }

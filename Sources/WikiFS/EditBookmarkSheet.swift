@@ -44,6 +44,23 @@ struct EditBookmarkSheet: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+
+                // Timestamps (read-only) — issue #242. Relative date mirrors
+                // RecentChatRow's treatment of chat.updatedAt; the absolute date
+                // is the tooltip for precision. "Updated" only appears when the
+                // node has actually changed since creation.
+                if let node {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Added \(node.createdAt, format: .relative(presentation: .named))")
+                            .help(node.createdAt.formatted(.dateTime))
+                        if node.updatedAt > node.createdAt {
+                            Text("Updated \(node.updatedAt, format: .relative(presentation: .named))")
+                                .help(node.updatedAt.formatted(.dateTime))
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
             }
 
             Spacer()
@@ -82,7 +99,7 @@ struct EditBookmarkSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 340, height: 200)
+        .frame(width: 340, height: 240)
         .onAppear {
             name = node?.label ?? ""
         }

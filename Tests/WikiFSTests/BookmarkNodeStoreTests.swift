@@ -19,7 +19,7 @@ import SQLite3
     @Test func freshDBHasBookmarkNodesTable() throws {
         let url = tempDatabaseURL()
         let store = try SQLiteWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "26")
+        #expect(store.pragmaValue("user_version") == "27")
 
         // The table exists.
         let nodes = try store.listBookmarkNodes()
@@ -37,7 +37,7 @@ import SQLite3
 
         // Reopen — triggers migration to v16.
         let reopened = try SQLiteWikiStore(databaseURL: url)
-        #expect(reopened.pragmaValue("user_version") == "26")
+        #expect(reopened.pragmaValue("user_version") == "27")
 
         // Existing data is intact.
         let pages = try reopened.listPages(sortBy: .lastUpdated)
@@ -360,5 +360,75 @@ import SQLite3
         let nodes = try store.listBookmarkNodes()
         let moved = nodes.first { $0.id == a.id }
         #expect(moved?.parentID == b.id)
+    }
+
+    // MARK: - Timestamps (issue #242)
+
+    @Test func createBookmarkNodeStampsCreatedAtAndUpdatedAt() throws {
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let before = Date().addingTimeInterval(-1)
+        let node = try store.createBookmarkNode(
+            parentID: nil, position: 0, kind: .folder, label: "F", targetID: nil)
+        let after = Date().addingTimeInterval(1)
+
+        // Create stamps both timestamps equally, ~now.
+        #expect(node.createdAt == node.updatedAt)
+        #expect(node.createdAt > before)
+        #expect(node.createdAt < after)
+
+        // Persisted identically (round-trips through listBookmarkNodes).
+        let reloaded = try store.listBookmarkNodes().first { $0.id == node.id }
+        #expect(reloaded?.createdAt == node.createdAt)
+        #expect(reloaded?.updatedAt == node.updatedAt)
+    }
+
+    @Test func updateBookmarkNodeBumpsUpdatedAtNotCreatedAt() throws {
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let node = try store.createBookmarkNode(
+            parentID: nil, position: 0, kind: .folder, label: "Old", targetID: nil)
+        let originalCreatedAt = node.createdAt
+
+        try store.updateBookmarkNode(id: node.id, label: "New")
+
+        let reloaded = try store.listBookmarkNodes().first { $0.id == node.id }!
+        #expect(reloaded.label == "New")
+        #expect(reloaded.createdAt == originalCreatedAt)
+        #expect(reloaded.updatedAt > originalCreatedAt)
+    }
+
+    @Test func moveAcrossParentBumpsUpdatedAt() throws {
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let parentA = try store.createBookmarkNode(
+            parentID: nil, position: 0, kind: .folder, label: "A", targetID: nil)
+        let parentB = try store.createBookmarkNode(
+            parentID: nil, position: 1, kind: .folder, label: "B", targetID: nil)
+        let child = try store.createBookmarkNode(
+            parentID: parentA.id, position: 0, kind: .folder, label: "C", targetID: nil)
+        let originalUpdatedAt = child.updatedAt
+
+        // Cross-folder move → updatedAt bumps.
+        try store.moveBookmarkNode(id: child.id, toParentID: parentB.id, position: 0)
+
+        let reloaded = try store.listBookmarkNodes().first { $0.id == child.id }!
+        #expect(reloaded.parentID == parentB.id)
+        #expect(reloaded.updatedAt > originalUpdatedAt)
+    }
+
+    @Test func reorderWithinSameParentDoesNotBumpUpdatedAt() throws {
+        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        _ = try store.createBookmarkNode(
+            parentID: nil, position: 0, kind: .folder, label: "A", targetID: nil)
+        _ = try store.createBookmarkNode(
+            parentID: nil, position: 1, kind: .folder, label: "B", targetID: nil)
+        let c = try store.createBookmarkNode(
+            parentID: nil, position: 2, kind: .folder, label: "C", targetID: nil)
+        let originalUpdatedAt = c.updatedAt
+
+        // Pure same-parent reorder (C → position 0) leaves updatedAt untouched.
+        try store.moveBookmarkNode(id: c.id, toParentID: nil, position: 0)
+
+        let reloaded = try store.listBookmarkNodes().first { $0.id == c.id }!
+        #expect(reloaded.position == 0)
+        #expect(reloaded.updatedAt == originalUpdatedAt)
     }
 }
