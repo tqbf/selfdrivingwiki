@@ -137,4 +137,116 @@ struct ProjectionTreeTests {
         #expect(ids.contains(Projection.Identity.sourceByID(s.pdfSource.id.rawValue)))
         #expect(ids.contains(Projection.Identity.sourceMarkdownByID(s.pdfSource.id.rawValue)))
     }
+
+    // MARK: - Singleton docs + generated indexes (Phase C)
+
+    @Test func rootChildrenOrderMatchesHistoricalLayout() throws {
+        let s = try seed()
+        let names = s.projection.children(of: .rootContainer).map(\.name)
+        #expect(names == [
+            "README.md", "CLAUDE.md", "AGENTS.md",
+            "index.md", "log.md", "WIKI-STRUCTURE.md", "TREE.md",
+            "manifest.json",
+            "pages", "sources", "indexes"
+        ])
+    }
+
+    @Test func readmeNodeIsStatic() throws {
+        let s = try seed()
+        guard let node = s.projection.node(for: Projection.Identity.readme) else {
+            Issue.record("readme node not found"); return
+        }
+        #expect(node.name == "README.md")
+        #expect(node.size == Projection.readmeBytes.count)
+        #expect(s.projection.contents(for: Projection.Identity.readme) == Projection.readmeBytes)
+    }
+
+    @Test func systemPromptServesIdenticalBytesForBothAliases() throws {
+        let s = try seed()
+        let claude = s.projection.contents(for: Projection.Identity.claudeMD)
+        let agents = s.projection.contents(for: Projection.Identity.agentsMD)
+        #expect(claude != nil)
+        #expect(claude == agents)
+        #expect(s.projection.node(for: Projection.Identity.claudeMD)?.name == "CLAUDE.md")
+        #expect(s.projection.node(for: Projection.Identity.agentsMD)?.name == "AGENTS.md")
+    }
+
+    @Test func wikiIndexNodeServesContent() throws {
+        let s = try seed()
+        let data = s.projection.contents(for: Projection.Identity.indexMD)
+        #expect(data != nil)
+        #expect(s.projection.node(for: Projection.Identity.indexMD)?.name == "index.md")
+    }
+
+    @Test func logNodeServesContent() throws {
+        let s = try seed()
+        let data = s.projection.contents(for: Projection.Identity.logMD)
+        #expect(data != nil)
+        #expect(s.projection.node(for: Projection.Identity.logMD)?.name == "log.md")
+    }
+
+    @Test func wikiStructureServesIdenticalBytesForBothAliases() throws {
+        let s = try seed()
+        let structure = s.projection.contents(for: Projection.Identity.wikiStructureMD)
+        let tree = s.projection.contents(for: Projection.Identity.treeMD)
+        #expect(structure != nil)
+        #expect(structure == tree)
+        #expect(s.projection.node(for: Projection.Identity.wikiStructureMD)?.name == "WIKI-STRUCTURE.md")
+        #expect(s.projection.node(for: Projection.Identity.treeMD)?.name == "TREE.md")
+    }
+
+    @Test func indexesChildrenAreTheThreeJsonlFiles() throws {
+        let s = try seed()
+        let names = s.projection.children(of: Projection.Identity.indexes).map(\.name)
+        #expect(names == ["pages.jsonl", "links.jsonl", "sources.jsonl"])
+    }
+
+    @Test func manifestNodeSizeMatchesContent() throws {
+        let s = try seed()
+        guard let node = s.projection.node(for: Projection.Identity.manifest) else {
+            Issue.record("manifest node not found"); return
+        }
+        let data = s.projection.contents(for: Projection.Identity.manifest)
+        #expect(data != nil)
+        #expect(node.size == data?.count)
+    }
+
+    @Test func pagesJsonlCountMatchesPageCount() throws {
+        let s = try seed()
+        guard let data = s.projection.contents(for: Projection.Identity.indexPagesJSONL) else {
+            Issue.record("pages.jsonl not found"); return
+        }
+        let lines = String(data: data, encoding: .utf8)?
+            .split(separator: "\n").filter { !$0.isEmpty }
+        #expect(lines?.count == s.pages.count)
+    }
+
+    @Test func sourcesJsonlCountMatchesSourceCount() throws {
+        let s = try seed()
+        guard let data = s.projection.contents(for: Projection.Identity.indexSourcesJSONL) else {
+            Issue.record("sources.jsonl not found"); return
+        }
+        let lines = String(data: data, encoding: .utf8)?
+            .split(separator: "\n").filter { !$0.isEmpty }
+        // text source + pdf source = 2.
+        #expect(lines?.count == 2)
+    }
+
+    @Test func workingSetExcludesReadmeAndIncludesDocsAndIndexes() throws {
+        let s = try seed()
+        let ids = Set(s.projection.children(of: .workingSet).map(\.id))
+        // README is static — excluded from the working set.
+        #expect(!ids.contains(Projection.Identity.readme))
+        // Non-static singleton docs + generated indexes included.
+        #expect(ids.contains(Projection.Identity.claudeMD))
+        #expect(ids.contains(Projection.Identity.agentsMD))
+        #expect(ids.contains(Projection.Identity.indexMD))
+        #expect(ids.contains(Projection.Identity.logMD))
+        #expect(ids.contains(Projection.Identity.wikiStructureMD))
+        #expect(ids.contains(Projection.Identity.treeMD))
+        #expect(ids.contains(Projection.Identity.manifest))
+        #expect(ids.contains(Projection.Identity.indexPagesJSONL))
+        #expect(ids.contains(Projection.Identity.indexLinksJSONL))
+        #expect(ids.contains(Projection.Identity.indexSourcesJSONL))
+    }
 }
