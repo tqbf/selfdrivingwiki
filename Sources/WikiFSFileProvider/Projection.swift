@@ -26,6 +26,20 @@ struct Projection {
     /// `openReadStore()` maps it to `<ulid>.sqlite` in the App Group container.
     let wikiID: String
 
+    /// Optional override for the wiki DB URL. Production (the File Provider
+    /// extension) leaves this `nil` and resolves the wiki's DB via
+    /// `DatabaseLocation` (the App Group container — unavailable outside the
+    /// entitled sandbox). Tests inject a temp URL so the projection tree
+    /// (`node`/`children`/`contents`) is exercisable end-to-end. Slice 2b: the
+    /// projection previously had NO integration coverage for this reason.
+    let databaseURL: URL?
+
+    /// `databaseURL` defaults to `nil` (production resolves via `DatabaseLocation`).
+    init(wikiID: String, databaseURL: URL? = nil) {
+        self.wikiID = wikiID
+        self.databaseURL = databaseURL
+    }
+
     // MARK: - Identity
 
     /// Stable virtual identifiers. The page identifiers carry the full ULID.
@@ -260,8 +274,8 @@ struct Projection {
     /// File Provider domain carries) — the multi-wiki crux: same projection code,
     /// different DB per domain. Returns nil if the container/DB is unavailable.
     private func openReadStore() -> SQLiteWikiStore? {
-        guard let url = DatabaseLocation.extensionContainerURL(forWikiID: wikiID) else { return nil }
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID)
+        guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
         return try? SQLiteWikiStore(readOnlyURL: url)
     }
 
