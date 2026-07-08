@@ -2,6 +2,41 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-07 — #129 slice 2b, Phase B: generic flat projection (pages + sources)
+
+**Shipped (on `feature/129-2b-phase-b-flat-projection`; tests green).** Phase B:
+the projection dedup. The by-id/by-name pattern duplicated across `pages` and
+`sources` (+ the `.md` sibling) in `Projection.swift` collapses to a registry of
+`FlatResourceProjection` descriptors; `node(for:)` / `children(of:)` /
+`contents(for:)` / the working set are now registry-driven for the flat kinds.
+**Behavior byte-identical.**
+
+**Test-gap discovery (material).** `ProjectionTests` only covered the *pure*
+`Identity` / `sourceMarkdownNode` functions — `node` / `children` / `contents`
+had NO integration coverage (they hard-resolved the App Group container, nil
+outside the entitled sandbox). So the byte-identical gate could not rest on
+existing tests.
+
+**What shipped:**
+- **B.0 — DB-path seam + characterization tests.** `Projection` gained a
+  `databaseURL` injection (`init(wikiID:databaseURL:)`; default nil = production
+  via `DatabaseLocation`), making the tree exercisable. New `ProjectionTreeTests`
+  (10 tests) capture the current node/children/contents/working-set behavior for
+  pages + sources + the `.md` sibling rule — the byte-identical contract.
+- **B.2 — descriptor + registry.** `FlatResourceProjection` (value type w/
+  closures; `@unchecked Sendable`) holds `topLevel` / `byID` / `byName` containers
+  + `owns` / `enumerate` / `nodeForLeaf` / `contentForLeaf`. `pagesProjection` +
+  `sourcesProjection` are registered in `flatProjections`; the four dispatch sites
+  iterate it. The pure builders (`pageFileNode` / `sourceNode` /
+  `sourceMarkdownNode`) and `Identity` are unchanged (still tested). The non-flat
+  kinds (README, singletons, generated indexes) stay per-kind — Phase C
+  descriptor-izes them.
+
+**Gate:** full suite green (**1894 tests**, +10); the 10 characterization tests
++ 12 pure `ProjectionTests` pass unchanged (byte-identical). No schema change.
+
+**Next:** Phase C — singleton-doc + generated-index descriptors.
+
 ## 2026-07-07 — #129 slice 2b, Phase A: changeToken contributor registry
 
 **Shipped (on `feature/129-2b-resource-abstraction`; tests green).** Phase A of
