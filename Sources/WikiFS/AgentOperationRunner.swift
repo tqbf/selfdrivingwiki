@@ -258,6 +258,9 @@ enum AgentOperationRunner {
             // activeChatID — ConversationView's source-of-truth switch. `nil`
             // when startChat failed (session runs unpersisted, no live tab).
             chatID: chat?.id.rawValue,
+            // The model seeded the first user message at chat creation; tell the
+            // launcher so it skips double-inserting it on the first flush.
+            firstMessagePrePersisted: chat != nil,
             onLock: { if allowWikiEdits { store.beginAgentRun() } },
             onUnlock: { if allowWikiEdits { store.endAgentRun() } },
             // Per-turn edit lock: release between turns (re-acquire on the next
@@ -272,6 +275,18 @@ enum AgentOperationRunner {
                 return { [weak store] events in store?.appendChatEvents(chatID: chat.id, events: events) }
             }
         )
+
+        // If the session never started — a preflight failure (e.g. the agent
+        // binary wasn't found) or a spawn failure — `startInteractiveQuery` sets
+        // `preflightError` synchronously before returning. The chat row the model
+        // just created (with its seeded first message) would otherwise linger in
+        // history as a dead conversation. Roll it back: drop the row and revert
+        // the tab to the draft composer. (A process that spawns OK then dies
+        // immediately isn't caught here, but seeding guarantees that chat still
+        // holds its first message — never titled-but-empty.)
+        if let chat, launcher.preflightError != nil {
+            store.rollbackChatCreation(id: chat.id, toDraft: allowWikiEdits ? .edit : .ask)
+        }
     }
 
     // MARK: - Continue a persisted conversation (D3, seeded-fallback)

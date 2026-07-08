@@ -141,6 +141,54 @@ codegen'd into the checked-in `Sources/WikiFSCore/GeneratedPrompts.swift` by
 the `.md` and the regenerated `.swift`. CI runs `make check-prompts` and fails
 on drift, so a stale generated file blocks the build.
 
+## Local data — finding the SQLite wiki databases
+
+**The SQLite DB is the source of truth.** Every wiki is one `<ulid>.sqlite` file in
+the **App Group container** (`~/Library/Group Containers/<appGroupID>/`). The
+`pages/`, `sources/`, `indexes/` folders you may see elsewhere (e.g. an iCloud
+Drive folder) are the **File Provider's read-only filesystem projection** — a
+mirror of the DB, not the data store. Don't dig through those for chat/page data;
+read the DB.
+
+**The container path is per-developer.** `appGroupID` resolves at runtime
+(`Sources/WikiFSCore/WikiIdentifiers.swift`), first hit wins:
+
+1. env `WIKI_APP_GROUP_ID`
+2. Info.plist key `WIKIAppGroupID` (injected by `build.sh`)
+3. sidecar `wiki-identifiers.env` beside the executable
+4. `signing/local.config` key `APP_GROUP` (gitignored, per-developer)
+5. compiled default `group.org.sockpuppet.wiki`
+
+So the literal path is `~/Library/Group Containers/<that id>/<ulid>.sqlite`.
+`wikis.json` in the same container is the registry: it maps display name → ULID
+(see `Sources/WikiFSCore/WikiRegistry.swift`). The legacy single-wiki DB is
+`WikiFS.sqlite`. The DB runs in WAL mode, so expect `<ulid>.sqlite`,
+`-wal`, and `-shm` sidecars.
+
+**⚠️ TCC gotcha — the container is protected.** A plain shell gets
+`Operation not permitted` / `authorization denied` on `ls`, `cat`, and even
+`sqlite3` against files in the container. To read the DB you must either give the
+terminal/daemon process **Full Disk Access** (System Settings → Privacy &
+Security), or read it through the app / bundled `wikictl` (which has access).
+
+**Quick locator that works regardless of developer** (needs FDA on the shell):
+
+```bash
+# Resolve THIS machine's app-group id from the built app (or signing/local.config).
+defaults read "$(mdfind -name WikiFS.app | head -1)/Contents/Info" WIKIAppGroupID \
+  2>/dev/null || grep '^APP_GROUP=' signing/local.config | cut -d= -f2 | tr -d '"'
+# Then list the wikis and open one.
+C="$HOME/Library/Group Containers/$(…resolved id…)"
+cat "$C/wikis.json"                      # registry: name → ULID
+sqlite3 "$C/<ulid>.sqlite" ".tables"     # pages, chats, chat_messages, …
+```
+
+Schema lives in `Sources/WikiFSCore/SQLiteWikiStore.swift`
+(`createFreshSchemaV20` / `createChatTablesV23` / the `migrate(from:)` ladder).
+Persistent chats are two tables: `chats` (one row per conversation) and
+`chat_messages` (one row per persistable `AgentEvent`) — see
+`plans/chat-and-persistence.md`.
+
 ## Testing
 
 **Swift** (from repo root):

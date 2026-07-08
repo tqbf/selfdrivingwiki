@@ -179,34 +179,28 @@ import SQLite3
     @Test func chatMessagesSkipsRowWithCorruptEventJSON() throws {
         let url = tempDatabaseURL()
 
-        // Seed via the store in a scope, then let it CLOSE before the raw insert.
-        // The original opened a second raw connection while the store stayed open
-        // on the same WAL file; under CI load that raw INSERT intermittently
-        // returned SQLITE_ERROR (a second connection can fail to read the WAL
-        // sidecars / schema while the writer is active). Closing the store first
-        // checkpoints + quiesces the DB so the raw write runs against a clean
-        // file. (`SQLiteWikiStore.deinit` closes the connection.)
-        let chatID: PageID
-        do {
-            let store = try SQLiteWikiStore(databaseURL: url)
-            let chat = try store.createChat(kind: .ask, title: "Conversation")
-            let inserted = try store.appendChatMessages(chatID: chat.id, events: [
-                .userText("before"), .assistantText("after"),
-            ])
-            #expect(inserted.count == 2)
-            chatID = chat.id
-        }
+        // Seed via the store, then explicitly close the connection before the
+        // raw insert. Opening a second raw connection while the store's WAL-holding
+        // connection is still live intermittently returned SQLITE_ERROR under CI
+        // load (the raw INSERT can fail to acquire the write lock). Previous fixes
+        // (#223, #234) relied on the store leaving a `do { }` scope to trigger
+        // `deinit` — but ARC does not guarantee deinit timing, so the race
+        // recurred. `store.close()` closes the connection synchronously:
+        // `sqlite3_close` checkpoints + quiesces the WAL when it's the last open
+        // connection, so the raw write runs against a clean file.
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let chat = try store.createChat(kind: .ask, title: "Conversation")
+        let inserted = try store.appendChatMessages(chatID: chat.id, events: [
+            .userText("before"), .assistantText("after"),
+        ])
+        #expect(inserted.count == 2)
+        let chatID = chat.id
+        store.close()
 
         // Hand-insert a corrupt row between the two valid ones via a raw
         // connection on the now-quiescent DB (a future/garbled event_json a
         // WikiStore method would never write, but a bad row should never brick
         // the rest of history).
-        //
-        // The store from the `do` block above may not be finalized by ARC yet
-        // (Swift doesn't guarantee deinit timing), so the WAL might still be
-        // held by the store's connection. We open with an explicit busy timeout
-        // and disable FK enforcement — the corrupt row is deliberately not
-        // validated by the store's own write path.
         var raw: OpaquePointer?
         #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
         sqlite3_busy_timeout(raw, 5000)
@@ -220,8 +214,8 @@ import SQLite3
         sqlite3_close(raw)
 
         // Reopen and read: the corrupt row is skipped, the two valid ones survive.
-        let store = try SQLiteWikiStore(databaseURL: url)
-        let messages = try store.chatMessages(chatID: chatID)
+        let reader = try SQLiteWikiStore(databaseURL: url)
+        let messages = try reader.chatMessages(chatID: chatID)
         #expect(messages.count == 2)
         #expect(messages.map(\.event) == [.userText("before"), .assistantText("after")])
     }

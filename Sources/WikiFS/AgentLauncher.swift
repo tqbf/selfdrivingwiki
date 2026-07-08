@@ -185,6 +185,14 @@ final class AgentLauncher {
     /// `flushTranscript()` incremental — each call only sends events appended since
     /// the last flush — and idempotent when nothing new arrived since the last call.
     private var persistedEventCount = 0
+    /// One-shot: true when the first user message of this session was already
+    /// persisted at chat-creation time (by `WikiStoreModel.startChat`). The first
+    /// `sendInteractiveMessage` consumes it — after appending `.userText` to
+    /// `events` for live display, it bumps `persistedEventCount` past it so the
+    /// next `flushTranscript()` skips it (no duplicate `chat_messages` row).
+    /// Reset by `resetRunArtifacts()`. Only set on the fresh-chat path; the
+    /// continue path (D3) leaves it false (no seeding for an existing chat).
+    private var firstMessagePrePersisted = false
     /// Backstop poller that reconciles the UI if the process `terminationHandler`
     /// is ever missed (see `startCompletionWatchdog`). Cancelled on teardown.
     private var watchdogTask: Task<Void, Never>?
@@ -799,6 +807,7 @@ final class AgentLauncher {
         wikictlDirectory: String,
         allowWikiEdits: Bool = false,
         chatID: String? = nil,
+        firstMessagePrePersisted: Bool = false,
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
         onTurnBoundary: @escaping @MainActor (Bool) -> Void,
@@ -810,6 +819,9 @@ final class AgentLauncher {
 
         // Preflight (no gate held — early returns here don't need gate release).
         resetRunArtifacts()
+        // Consumed by the first `sendInteractiveMessage` to skip re-persisting
+        // the user message the model already seeded at chat creation.
+        self.firstMessagePrePersisted = firstMessagePrePersisted
 
         // Load agent command config fresh at spawn time.
         let dir = containerDirectory ?? (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
@@ -1002,6 +1014,14 @@ final class AgentLauncher {
             // (preamble) is sent to the backend below.
             let visible = (displayText ?? trimmed).trimmingCharacters(in: .whitespacesAndNewlines)
             self.events.append(.userText(visible))
+            // The fresh-chat path seeds this first user message at chat-creation
+            // time (WikiStoreModel.startChat). Mark it flushed so the next
+            // flushTranscript() doesn't double-insert it — the row already exists
+            // at seq 0; it stays in `events` only for live transcript display.
+            if self.firstMessagePrePersisted {
+                self.persistedEventCount = self.events.count
+                self.firstMessagePrePersisted = false
+            }
             self.setGenerating(true)    // fires onTurnBoundary(true) → edit lock (Edit only)
             self.lastActivityAt = Date()
             // Send the turn and consume the per-turn stream. The backend writes
@@ -1310,6 +1330,7 @@ final class AgentLauncher {
         // session's events (issue #119).
         transcriptSink = nil
         persistedEventCount = 0
+        firstMessagePrePersisted = false
         // D2: a stale active chat association must never survive into a new run.
         // (startInteractiveQuery sets the fresh value right after this reset.)
         activeChatID = nil
