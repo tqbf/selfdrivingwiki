@@ -423,10 +423,9 @@ Record the chosen branch here when decided.
 
 ## 7. Explicitly deferred / out of scope here
 
-- Page versioning and wiki-level snapshots (graph-model §14) — the model makes
-  them nearly free when wanted; not imminent.
-- Editor ergonomics for canonical `[[page:ULID|Title]]` links (graph-model §13
-  open question #3) — deferred until Phase 5 feedback.
+- Page versioning and wiki-level snapshots → [#258](https://github.com/tqbf/selfdrivingwiki/issues/258) / [#259](https://github.com/tqbf/selfdrivingwiki/issues/259).
+- Editor ergonomics for canonical `[[page:ULID|Title]]` links → [#255](https://github.com/tqbf/selfdrivingwiki/issues/255).
+- File Provider projection overhaul → [#260](https://github.com/tqbf/selfdrivingwiki/issues/260).
 - Non-localhost auth for the daemon (#187 open question) — anything beyond
   `127.0.0.1` needs an auth story; gated on the daemon, not before.
 - **FP extension ↔ daemon transport** — the extension currently reads SQLite
