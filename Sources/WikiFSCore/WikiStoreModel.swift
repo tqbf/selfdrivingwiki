@@ -2085,13 +2085,36 @@ public final class WikiStoreModel {
     /// Rebuild the sidebar lists from the store — used by the Phase A change
     /// bridge after an EXTERNAL write (a `wikictl` call) lands in this wiki's DB,
     /// so the on-screen sidebar reflects pages/files the CLI wrote. Always a full
-    /// rebuild from source, never an incremental patch (§3.1 / §3.2). The active
-    /// editing draft is untouched — only the list projections refresh.
+    /// rebuild from source, never an incremental patch (§3.1 / §3.2).
+    ///
+    /// Also refreshes the currently-displayed page's draft when the draft is
+    /// clean (no unsaved user edits) so content written by the agent — which
+    /// goes through the store directly, bypassing the model's draft system —
+    /// appears in the reader/editor immediately (issue: stale UI after agent
+    /// page write). When the draft IS dirty, the user's in-flight edits win.
     public func reloadFromStore() {
         reloadSummaries()
         reloadSources()
         reloadChats()
         pruneHistoryToCurrentStore()
+        reloadCurrentDraftIfClean()
+    }
+
+    /// Re-read the current page's draft (title + body) from the store when the
+    /// draft is clean (`!isDraftDirty`). This lets external writes (agent runs,
+    /// `wikictl`) refresh the on-screen content. When the user has unsaved
+    /// edits, those are preserved — the guard skips the reload entirely.
+    private func reloadCurrentDraftIfClean() {
+        guard !isDraftDirty else { return }
+        if case .page(let id) = selection, loadedPage == id,
+           let page = try? store.getPage(id: id) {
+            draftTitle = page.title
+            draftBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
+            // The didSets on draftTitle/draftBody set isDraftDirty = true when
+            // the value changes; reset since this is a clean reload from the
+            // store (the draft now matches persisted state again).
+            isDraftDirty = false
+        }
     }
 
     /// Rebuild the sidebar page list from the store using the current sort order.
