@@ -38,6 +38,7 @@ struct ConversationView: View {
     @State private var showsInternals = false
     @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: ConversationMetrics.composerFont)
     @State private var persistedMessages: [ChatMessage] = []
+    @AppStorage("conversation.zoom") private var conversationZoom = Double(ZoomScale.defaultScale)
 
     /// True when this surface is rendering the active live session (D2
     /// source-of-truth rule). The view sources from `launcher.events`; when
@@ -59,6 +60,11 @@ struct ConversationView: View {
             }
             .frame(minWidth: PageEditorMetrics.detailMinWidth)
             .background(Color(nsColor: .textBackgroundColor))
+        }
+        .zoomShortcuts($conversationZoom)
+        .zoomScroll($conversationZoom)
+        .onChange(of: conversationZoom) { _, _ in
+            composerHeight = ComposerTextView.oneLineHeight(for: composerFont)
         }
         .onChange(of: launcher.isRunning) { _, isRunning in
             // Belt-and-suspenders: clear the internals toggle when a run ends so a
@@ -166,6 +172,10 @@ struct ConversationView: View {
     @ViewBuilder
     private var liveConversation: some View {
         VStack(spacing: 0) {
+            if let chat = chatSummary {
+                header(for: chat)
+                Divider().opacity(PageEditorMetrics.dividerOpacity)
+            }
             if showsEditingEnabledBanner {
                 editingEnabledBanner
                     .padding(.top, bannerTopReservation)
@@ -175,10 +185,11 @@ struct ConversationView: View {
                 launcher: launcher,
                 onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
                 renderContext: { [weak store] in store?.renderContext() },
-                blobStore: store
+                blobStore: store,
+                zoom: conversationZoom
             )
                 .frame(maxWidth: ConversationMetrics.chatColumnWidth, maxHeight: .infinity)
-                .padding(.top, showsEditingEnabledBanner ? 0 : ConversationMetrics.conversationTopInset)
+                .padding(.top, showsEditingEnabledBanner || chatSummary != nil ? 0 : ConversationMetrics.conversationTopInset)
             liveComposer
                 .padding(.horizontal, ConversationMetrics.conversationHorizontalInset)
                 .padding(.top, ConversationMetrics.sectionSpacing)
@@ -241,8 +252,6 @@ struct ConversationView: View {
                 .lineLimit(1)
                 .textSelection(.enabled)
             HStack(spacing: 6) {
-                Text(chat.kind == .ask ? "Ask" : "Edit")
-                Text("·")
                 Text("\(chat.messageCount) message\(chat.messageCount == 1 ? "" : "s")")
                 Text("·")
                 Text(chat.updatedAt, format: .dateTime)
@@ -271,7 +280,8 @@ struct ConversationView: View {
                 style: .chat,
                 onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
                 renderContext: { [weak store] in store?.renderContext() },
-                blobStore: store
+                blobStore: store,
+                zoom: conversationZoom
             )
             .frame(maxWidth: ConversationMetrics.chatColumnWidth, maxHeight: .infinity)
             .frame(maxWidth: .infinity, alignment: .center)
@@ -340,13 +350,21 @@ struct ConversationView: View {
 
     // MARK: - Composer
 
+    /// The composer's AppKit font, scaled by the persisted conversation zoom so
+    /// ⌘+/⌘− resize the input alongside the transcript (parity with the page
+    /// editor's `editor.zoom`).
+    private var composerFont: NSFont {
+        let base = ConversationMetrics.composerFont
+        return base.withSize(base.pointSize * CGFloat(conversationZoom))
+    }
+
     private func composer(enabled: Bool) -> some View {
         let sendActive = canSend && enabled
         return HStack(alignment: .bottom, spacing: 10) {
             ComposerTextView(
                 text: $draftMessage,
                 isEditable: enabled,
-                font: ConversationMetrics.composerFont,
+                font: composerFont,
                 onSubmit: sendMessage,
                 measuredHeight: $composerHeight
             )
