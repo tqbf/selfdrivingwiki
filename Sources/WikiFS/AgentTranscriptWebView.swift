@@ -440,7 +440,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
           body {
             font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
             font-size: 13px; line-height: 1.5; color: var(--text);
-            padding: 10px; -webkit-font-smoothing: antialiased;
+            padding: 10px 0; -webkit-font-smoothing: antialiased;
           }
           .row { margin: 0 0 8px; }
           .row-label { font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 2px; }
