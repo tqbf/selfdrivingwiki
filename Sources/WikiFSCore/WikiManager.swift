@@ -223,6 +223,16 @@ public final class WikiManager {
         await renameDomain?(id, trimmed)
     }
 
+    /// Set (or clear, with `nil`) a wiki's home page — the page its home button
+    /// navigates to.
+    public func setHomePage(id: String, pageID: PageID?) {
+        guard descriptorExists(id) else { return }
+        var registry = WikiRegistry.load(from: containerDirectory)
+        registry.setHomePage(id: id, pageID: pageID)
+        try? registry.save(to: containerDirectory)
+        wikis = registry.wikis
+    }
+
     /// Export one wiki as a single SQLite file. A WAL checkpoint runs first so
     /// the copied `.sqlite` contains the latest committed pages, files, prompt,
     /// index, and log without requiring `-wal` / `-shm` sidecars.

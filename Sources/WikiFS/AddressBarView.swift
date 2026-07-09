@@ -33,6 +33,9 @@ struct AddressBarView: View {
     /// the field (`OmniboxLayout.leadingChrome`): with the sidebar hidden the detail
     /// region spans the whole window and includes the traffic-light + toggle zone.
     var sidebarVisible: Bool
+    /// The active wiki's configured home page (issue #280). `nil` hides the home
+    /// button — there's nowhere to navigate to yet.
+    var homePageID: PageID?
 
     @State private var queryText = ""
     @State private var results: [WikiPageSummary] = []
@@ -70,6 +73,12 @@ struct AddressBarView: View {
                 store.navigateForward()
             }
             .keyboardShortcut("]", modifiers: .command)
+
+            if let homePageID {
+                navButton("house", help: "Go to home page", enabled: true) {
+                    _ = store.selectPage(byID: homePageID)
+                }
+            }
 
             omniboxField
         }

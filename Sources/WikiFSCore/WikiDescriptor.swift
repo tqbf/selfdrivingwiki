@@ -27,11 +27,17 @@ public struct WikiDescriptor: Codable, Identifiable, Equatable, Sendable {
     /// the switcher and which wiki the app opens on launch.
     public var lastUsedAt: Date
 
-    public init(id: String, displayName: String, createdAt: Date, lastUsedAt: Date) {
+    /// The page this wiki's home button navigates to. `nil` means no home page
+    /// has been set (the button is hidden). References a page's stable ID, not
+    /// its title, so a page rename doesn't orphan the setting.
+    public var homePageID: PageID?
+
+    public init(id: String, displayName: String, createdAt: Date, lastUsedAt: Date, homePageID: PageID? = nil) {
         self.id = id
         self.displayName = displayName
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
+        self.homePageID = homePageID
     }
 
     /// Mint a fresh descriptor with a new ULID. `createdAt`/`lastUsedAt` are the

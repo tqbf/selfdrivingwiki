@@ -239,6 +239,14 @@ struct ContentView: View {
         return wiki.displayName
     }
 
+    /// The active wiki's configured home page, if any (issue #280). `nil` hides
+    /// the omnibox home button.
+    private var activeHomePageID: PageID? {
+        guard let id = manager.activeWikiID,
+              let wiki = manager.wikis.first(where: { $0.id == id }) else { return nil }
+        return wiki.homePageID
+    }
+
     /// The selected-document/source detail pane, extracted so the `HStack`'s
     /// view builder stays under the type-checker's complexity budget.
     // MARK: - Detail column (extracted so `body` stays type-checkable; the
@@ -301,6 +309,7 @@ struct ContentView: View {
                                wikiName: activeWikiName,
                                detailWidth: detailWidth,
                                sidebarVisible: columnVisibility != .detailOnly,
+                               homePageID: activeHomePageID,
                                onAddToBookmarks: { omniboxBookmarkContext = $0 })
             }
 
