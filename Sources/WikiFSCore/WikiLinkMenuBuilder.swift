@@ -70,8 +70,8 @@ public enum WikiLinkMenuBuilder {
         // openInBackgroundTab is handled directly in willOpenMenu so it
         // sits right below WebKit's "Open Link".
         switch WikiLinkMarkdown.resolvedKind(from: url) {
-        case .page?, .source?:
-            // Resolved link — the target page/source exists, so offer to file it
+        case .page?, .source?, .chat?:
+            // Resolved link — the target page/source/chat exists, so offer to file it
             // into a bookmark folder directly (issue #188).
             return [.addBookmark]
         case nil:

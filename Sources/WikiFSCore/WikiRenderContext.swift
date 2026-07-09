@@ -48,6 +48,10 @@ public struct WikiRenderContext: Sendable {
     /// `PageID` → current display name (or filename fallback), for canonical
     /// `[[source:ULID|…]]` display-at-render.
     public let sourceIDToName: [PageID: String]
+    /// Lowercased chat titles — drives legacy/forward `[[chat:Name]]` existence.
+    public let chatTitles: Set<String>
+    /// `PageID` → current title, for canonical `[[chat:ULID|…]]` display-at-render.
+    public let chatIDToName: [PageID: String]
     /// Loose-match keys (extension + trailing "(…)" stripped) that are UNIQUE
     /// across sources — the lenient tier mirroring `resolveSourceByName` pass 3,
     /// so ghost styling agrees with navigation.
@@ -94,6 +98,8 @@ public struct WikiRenderContext: Sendable {
         pageIDToName: [PageID: String],
         sourceNames: Set<String>,
         sourceIDToName: [PageID: String],
+        chatTitles: Set<String>,
+        chatIDToName: [PageID: String],
         uniqueLooseKeys: Set<String>,
         embedMap: [String: WikiLinkMarkdown.SourceEmbedInfo],
         sourceDerivedChain: [PageID: [PageID]],
@@ -104,6 +110,8 @@ public struct WikiRenderContext: Sendable {
         self.pageIDToName = pageIDToName
         self.sourceNames = sourceNames
         self.sourceIDToName = sourceIDToName
+        self.chatTitles = chatTitles
+        self.chatIDToName = chatIDToName
         self.uniqueLooseKeys = uniqueLooseKeys
         self.embedMap = embedMap
         self.sourceDerivedChain = sourceDerivedChain
@@ -133,6 +141,10 @@ public struct WikiRenderContext: Sendable {
         let sourceIDToName = Dictionary(
             uniqueKeysWithValues:
                 store.sources.map { ($0.id, $0.displayName ?? $0.filename) })
+
+        let chatTitles = Set(store.chats.map { $0.title.lowercased() })
+        let chatIDToName = Dictionary(
+            uniqueKeysWithValues: store.chats.map { ($0.id, $0.title) })
 
         // Lenient tier mirroring resolveSourceByName pass 3: loose keys
         // (extension + trailing "(…)" stripped) UNIQUE across sources.
@@ -168,6 +180,8 @@ public struct WikiRenderContext: Sendable {
             pageIDToName: pageIDToName,
             sourceNames: sourceNames,
             sourceIDToName: sourceIDToName,
+            chatTitles: chatTitles,
+            chatIDToName: chatIDToName,
             uniqueLooseKeys: uniqueLooseKeys,
             embedMap: embedMap,
             sourceDerivedChain: sourceDerivedChain,
@@ -187,14 +201,18 @@ public struct WikiRenderContext: Sendable {
         { name, kind in
             if WikiLinkParser.isCanonicalULID(name) {
                 let id = PageID(rawValue: name)
-                return kind == .source
-                    ? sourceIDToName[id] != nil
-                    : pageIDToName[id] != nil
+                switch kind {
+                case .source: return sourceIDToName[id] != nil
+                case .chat:   return chatIDToName[id] != nil
+                case .page:   return pageIDToName[id] != nil
+                }
             }
-            return kind == .source
-                ? sourceNames.contains(name.lowercased())
-                    || uniqueLooseKeys.contains(WikiNameRules.looseMatchKey(name))
-                : pageTitles.contains(name.lowercased())
+            switch kind {
+            case .source: return sourceNames.contains(name.lowercased())
+                || uniqueLooseKeys.contains(WikiNameRules.looseMatchKey(name))
+            case .chat:   return chatTitles.contains(name.lowercased())
+            case .page:   return pageTitles.contains(name.lowercased())
+            }
         }
     }
 
@@ -211,7 +229,11 @@ public struct WikiRenderContext: Sendable {
     /// `nil` when the id isn't known (the renderer keeps the alias).
     public var displayName: (PageID, WikiLinkParser.ParsedLink.LinkType) -> String? {
         { id, kind in
-            kind == .source ? sourceIDToName[id] : pageIDToName[id]
+            switch kind {
+            case .source: return sourceIDToName[id]
+            case .chat:   return chatIDToName[id]
+            case .page:   return pageIDToName[id]
+            }
         }
     }
 

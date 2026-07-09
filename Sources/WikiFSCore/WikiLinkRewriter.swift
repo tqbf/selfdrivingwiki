@@ -27,7 +27,8 @@ public enum WikiLinkRewriter {
     public static func canonicalize(
         in body: String,
         resolvePage: (String) throws -> PageID?,
-        resolveSource: (String) throws -> PageID?
+        resolveSource: (String) throws -> PageID?,
+        resolveChat: (String) throws -> PageID? = { _ in nil }
     ) throws -> String? {
         let ns = body as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
@@ -73,9 +74,13 @@ public enum WikiLinkRewriter {
             let raw = fragment.map { "\(bareTarget)#\($0)" } ?? bareTarget
             var resolved: (id: PageID, fragment: String?)?
             for split in WikiLinkResolver.candidateSplits(of: raw) {
-                if let id = try kind == .source
-                    ? resolveSource(split.base)
-                    : resolvePage(split.base) {
+                let id: PageID?
+                switch kind {
+                case .source: id = try resolveSource(split.base)
+                case .chat:   id = try resolveChat(split.base)
+                case .page:   id = try resolvePage(split.base)
+                }
+                if let id {
                     resolved = (id, split.fragment)
                     break
                 }
@@ -85,7 +90,12 @@ public enum WikiLinkRewriter {
             // Canonical target portion: kind:ULID (+ @vN pin + #fragment if any).
             // Phase 6: the pin is preserved verbatim (`@v3`), not resolved here —
             // it stays in the body as the per-occurrence source of truth.
-            let prefix = kind == .source ? "source:" : "page:"
+            let prefix: String
+            switch kind {
+            case .source: prefix = "source:"
+            case .chat:   prefix = "chat:"
+            case .page:   prefix = "page:"
+            }
             let canonicalTarget = prefix + resolvedID.rawValue
                 + (pin.map { "@v\($0)" } ?? "")
                 + (resolvedFragment.map { "#\($0)" } ?? "")

@@ -12,6 +12,7 @@ import Foundation
 ///   * `[[Title]]`            → target = "Title",  linkText = "Title"
 ///   * `[[Target|alias]]`     → target = "Target", linkText = "alias"
 ///   * `[[source:Name]]`      → linkType = .source, target = "Name"
+///   * `[[chat:Title]]`       → linkType = .chat, target = "Title"
 ///   * `[[page:Title]]`       → linkType = .page (explicit; escape hatch)
 ///
 /// Rules:
@@ -27,7 +28,7 @@ public enum WikiLinkParser {
     /// A single parsed link reference: the kind + the bare target (prefix-stripped)
     /// and the display text to record in the link tables.
     public struct ParsedLink: Equatable, Sendable {
-        public enum LinkType: String, Equatable, Sendable { case page, source }
+        public enum LinkType: String, Equatable, Sendable { case page, source, chat }
 
         public let linkType: LinkType
         public let target: String       // prefix-stripped, whitespace-collapsed (BASE only)
@@ -76,6 +77,7 @@ public enum WikiLinkParser {
     public static func classify(_ target: String) -> (ParsedLink.LinkType, String) {
         if let rest = peel(prefix: "page:", off: target)   { return (.page,   WikiText.normalized(rest)) }
         if let rest = peel(prefix: "source:", off: target) { return (.source, WikiText.normalized(rest)) }
+        if let rest = peel(prefix: "chat:", off: target)   { return (.chat,   WikiText.normalized(rest)) }
         return (.page, target) // target already normalized by the caller
     }
 
@@ -83,7 +85,7 @@ public enum WikiLinkParser {
     /// the remainder is empty/whitespace (e.g. `[[source:]]`, `[[page:   ]]`). Both
     /// parse() and WikiLinkMarkdown.linkified() use this to emit literal text.
     public static func isEmptyPrefix(_ target: String) -> Bool {
-        for prefix in ["page:", "source:"] {
+        for prefix in ["page:", "source:", "chat:"] {
             guard target.hasPrefix(prefix) else { continue }
             let rest = String(target.dropFirst(prefix.count))
             return rest.allSatisfy(\.isWhitespace)
@@ -204,9 +206,10 @@ public enum WikiLinkParser {
             // Detect the `!` embed prefix. Embeds are source-only: a `![[Page]]`
             // is not a valid embed, so skip it entirely (AC.2). A `![[source:X]]`
             // sets isEmbed=true and uses a distinct dedup key so the cite and
-            // embed edges coexist in `source_links_edge` (AC.3).
+            // embed edges coexist in `source_links_edge` (AC.3). Chat links are
+            // also never embeds — `![[chat:…]]` is invalid and skipped.
             let isEmbed = WikiLinkSpan.isEmbedPrefix(ns, match.range)
-            if isEmbed && kind == .page { continue }
+            if isEmbed && kind != .source { continue }
 
             // De-dupe by the RAW target (base + fragment), not the base alone:
             // two `#`-containing titles (e.g. `[[C# Guide]]` / `[[C# Notes]]`)

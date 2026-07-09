@@ -14,9 +14,9 @@ import Testing
 /// display names, `&pin=` quote links, `![[source:…]]` embeds via `wiki-blob://`,
 /// and ghost styling for broken links. See the "Phase A.2" section below.
 @MainActor
-struct AgentTranscriptLinkifyTests {
+struct ChatWebViewLinkifyTests {
 
-    private typealias Transcript = AgentTranscriptWebView.Coordinator
+    private typealias Transcript = ChatWebView.Coordinator
 
     @Test func renderedMarkdownLinkifiesWikiLinks() {
         let html = Transcript.renderedMarkdown("See [[Page Name]] here.")
@@ -124,7 +124,7 @@ struct AgentTranscriptLinkifyTests {
 @MainActor
 struct AgentTranscriptRenderContextTests {
 
-    private typealias Transcript = AgentTranscriptWebView.Coordinator
+    private typealias Transcript = ChatWebView.Coordinator
 
     private func tempDatabaseURL() -> URL {
         let dir = FileManager.default.temporaryDirectory

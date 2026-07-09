@@ -432,6 +432,12 @@ public final class WikiStoreModel {
         do { return try store.resolveSourceByName(displayName) } catch { return nil }
     }
 
+    /// Resolve a chat title to its id (lowest-ULID on a duplicate-title
+    /// collision). Best-effort: `nil` on any error or when no chat matches.
+    public func chatID(forTitle title: String) -> PageID? {
+        do { return try store.resolveChatByTitle(title) } catch { return nil }
+    }
+
     /// Navigate to the source with `displayName` from a clicked
     /// `[[source:display-name]]` link in the preview. Resolves display name → id
     /// (most-recently-updated on collision) and records navigation history. A
@@ -484,6 +490,36 @@ public final class WikiStoreModel {
             navigateCurrentTab(to: target)
         }
         return true
+    }
+
+    // MARK: - Chat link resolution
+
+    /// Navigate to the chat with `id` from a clicked canonical
+    /// `wiki://chat?id=<ULID>` link. A direct selection — no title resolution,
+    /// so it is stable across renames. Returns `false` when the id names no
+    /// loaded chat (a deleted target), so the caller can fall back to
+    /// title-based selection.
+    @discardableResult
+    public func selectChat(byID id: PageID, openInNewTab: Bool = false) -> Bool {
+        guard chats.contains(where: { $0.id == id }) else { return false }
+        let target = WikiSelection.chat(id)
+        recordHistoryTransition(from: loadedSelection, to: target)
+        if openInNewTab {
+            openTab(target)
+        } else {
+            navigateCurrentTab(to: target)
+        }
+        return true
+    }
+
+    /// Navigate to the chat with `title` from a clicked `[[chat:Title]]` link.
+    /// Resolves title → id via `resolveChatByTitle` (lowest-ULID on a duplicate-
+    /// title collision) and records navigation history. Returns whether
+    /// navigation happened.
+    @discardableResult
+    public func selectChat(byTitle title: String, openInNewTab: Bool = false) -> Bool {
+        guard let id = (try? store.resolveChatByTitle(title)) ?? nil else { return false }
+        return selectChat(byID: id, openInNewTab: openInNewTab)
     }
 
     /// The pending scroll/highlight target set by `selectPage`/`selectSource` and
@@ -2458,7 +2494,7 @@ public final class WikiStoreModel {
 
     /// Create a persisted chat, titled from the first user message. Returns nil
     /// (logging via DebugLog.store) on store failure — persistence must never
-    /// block a conversation from starting.
+    /// block a chat from starting.
     @discardableResult
     public func startChat(kind: ChatKind, firstMessage: String) -> ChatSummary? {
         do {
@@ -2522,8 +2558,8 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.renameChat failed: \(error)")
             storeError = StoreError(
-                title: "Couldn't Rename Conversation",
-                message: "Could not rename the conversation: \(error.localizedDescription)")
+                title: "Couldn't Rename Chat",
+                message: "Could not rename the chat: \(error.localizedDescription)")
         }
     }
 
@@ -2539,8 +2575,8 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.deleteChat failed: \(error)")
             storeError = StoreError(
-                title: "Couldn't Delete Conversation",
-                message: "Could not delete the conversation: \(error.localizedDescription)")
+                title: "Couldn't Delete Chat",
+                message: "Could not delete the chat: \(error.localizedDescription)")
         }
     }
 }

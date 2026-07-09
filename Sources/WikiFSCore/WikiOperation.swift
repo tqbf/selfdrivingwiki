@@ -326,7 +326,7 @@ extension WikiOperation {
 
     \(answerCitationRule)
 
-    \(GeneratedPrompts.queryConversationReadwrite)
+    \(GeneratedPrompts.chat)
 
     \(Self.wikiRootLine(wikiRoot))
     """

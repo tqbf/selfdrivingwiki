@@ -33,7 +33,7 @@ public protocol Resource: Sendable {
 /// lives next to the `Resource` abstraction that owns it (the bus is one
 /// *consumer* of kinds, not their home).
 public enum ResourceKind: String, Sendable, CaseIterable {
-    case page, source, systemPrompt, wikiIndex, log, bookmark
+    case page, source, systemPrompt, wikiIndex, log, bookmark, chat
 }
 
 /// Declares one resource kind's contribution to the whole-wiki

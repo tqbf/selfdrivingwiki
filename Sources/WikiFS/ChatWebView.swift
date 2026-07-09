@@ -24,13 +24,13 @@ import WikiFSCore
 /// A versioned request to scroll the chat transcript to a user turn. Mirrors the
 /// reader's anchor-version pattern: `version` bumps to signal a new request;
 /// `turnIndex` is the 0-based index among the `.chat-user` rows the transcript
-/// renders. Consumed in `AgentTranscriptWebView.updateNSView`.
+/// renders. Consumed in `ChatWebView.updateNSView`.
 struct ChatScrollRequest: Equatable {
     let version: Int
     let turnIndex: Int
 }
 
-struct AgentTranscriptWebView: NSViewRepresentable {
+struct ChatWebView: NSViewRepresentable {
     /// `.activityFeed` is the inspector look (labeled rows, tool calls,
     /// diagnostics). `.chat` is the Query page look (right-aligned capsule
     /// for the user, plain prose for the assistant, no row labels).

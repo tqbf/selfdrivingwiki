@@ -18,7 +18,7 @@ import Foundation
 ///
 /// Resolution is injected as a closure (`isResolved`) rather than reaching for a
 /// store, so the function stays pure and the caller decides what "exists" means:
-///   * a target that resolves → `wiki://page?title=…` or `wiki://source?title=…`
+///   * a target that resolves → `wiki://page?title=…` or `wiki://source?title=…` or `wiki://chat?title=…`
 ///   * a target that does NOT  → `wiki://missing?title=…` (still a link
 ///     so the view can style it dimmed, but the click handler no-ops on it).
 public enum WikiLinkMarkdown {
@@ -50,6 +50,8 @@ public enum WikiLinkMarkdown {
     public static let blobScheme = "wiki-blob"
     /// Host for a link whose target resolves to a real page (navigates).
     public static let resolvedHost = "page"
+    /// Host for a link whose target resolves to a real chat (navigates).
+    public static let chatHost = "chat"
     /// Host for a link whose target has no page/source (rendered dimmed, inert).
     public static let unresolvedHost = "missing"
 
@@ -255,7 +257,7 @@ public enum WikiLinkMarkdown {
     public static func target(from url: URL) -> String? {
         guard url.scheme == scheme,
               let host = url.host,
-              host == resolvedHost || host == "source" || host == unresolvedHost,
+              host == resolvedHost || host == "source" || host == chatHost || host == unresolvedHost,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let title = components.queryItems?.first(where: { $0.name == "title" })?.value,
               !title.isEmpty
@@ -271,7 +273,7 @@ public enum WikiLinkMarkdown {
     public static func id(from url: URL) -> PageID? {
         guard url.scheme == scheme,
               let host = url.host,
-              host == resolvedHost || host == "source",
+              host == resolvedHost || host == "source" || host == chatHost,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let idString = components.queryItems?.first(where: { $0.name == "id" })?.value,
               !idString.isEmpty
@@ -298,7 +300,7 @@ public enum WikiLinkMarkdown {
     /// view's `OpenURLAction` to extract the anchor for scroll-to.
     public static func fragment(from url: URL) -> String? {
         guard url.scheme == scheme, let host = url.host,
-              host == resolvedHost || host == "source" || host == unresolvedHost || host == "anchor"
+              host == resolvedHost || host == "source" || host == chatHost || host == unresolvedHost || host == "anchor"
         else { return nil }
         return url.fragment?.removingPercentEncoding
     }
@@ -312,6 +314,7 @@ public enum WikiLinkMarkdown {
         switch host {
         case resolvedHost:   return .page     // "page"
         case "source":       return .source
+        case chatHost:       return .chat     // "chat"
         default:             return nil       // "missing", "anchor", or anything else → inert
         }
     }
@@ -337,7 +340,7 @@ public enum WikiLinkMarkdown {
                                      pinID: PageID? = nil) -> String {
         let host: String
         if resolved {
-            host = kind == .source ? "source" : resolvedHost
+            host = kind == .source ? "source" : (kind == .chat ? chatHost : resolvedHost)
         } else {
             host = unresolvedHost
         }

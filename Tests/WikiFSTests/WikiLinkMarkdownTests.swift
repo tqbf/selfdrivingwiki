@@ -590,6 +590,61 @@ struct WikiLinkMarkdownTests {
         #expect(!out.contains("<img"))
     }
 
+    // MARK: - chat: link rendering
+
+    @Test func resolvedChatLinkUsesChatHost() {
+        let out = WikiLinkMarkdown.linkified("[[chat:My Conversation]]") { _, _ in true }
+        #expect(out == "[My Conversation](wiki://chat?title=My%20Conversation)")
+    }
+
+    @Test func unresolvedChatLinkUsesMissingHost() {
+        let out = WikiLinkMarkdown.linkified("[[chat:Ghost]]") { _, _ in false }
+        #expect(out == "[Ghost](wiki://missing?title=Ghost)")
+    }
+
+    @Test func chatLinkWithAliasPreservesDisplay() {
+        let out = WikiLinkMarkdown.linkified("[[chat:My Conversation|the chat]]") { _, _ in true }
+        #expect(out.contains("the chat"))
+        #expect(out.contains("wiki://chat?title=My%20Conversation"))
+    }
+
+    @Test func resolvedKindReturnsChatForChatHost() {
+        let url = URL(string: "wiki://chat?title=X")!
+        #expect(WikiLinkMarkdown.resolvedKind(from: url) == .chat)
+    }
+
+    @Test func targetFromAcceptsChatHost() {
+        let url = URL(string: "wiki://chat?title=My%20Conversation")!
+        #expect(WikiLinkMarkdown.target(from: url) == "My Conversation")
+    }
+
+    @Test func isResolvedURLTrueForChatHost() {
+        #expect(WikiLinkMarkdown.isResolvedURL(URL(string: "wiki://chat?title=X")!))
+    }
+
+    @Test func chatLinkWithFragmentRendersFragmentInURL() {
+        let out = WikiLinkMarkdown.linkified("[[chat:Conv#Section]]") { name, kind in
+            name == "Conv" && kind == .chat
+        }
+        #expect(out == "[Conv](wiki://chat?title=Conv#Section)")
+    }
+
+    @Test func emptyChatPrefixRendersAsLiteral() {
+        // [[chat:]] should stay verbatim, not become a link.
+        let out = WikiLinkMarkdown.linkified("before [[chat:]] after") { _, _ in true }
+        #expect(out.contains("[[chat:]]"))
+        #expect(!out.contains("wiki://"))
+    }
+
+    @Test func chatEmbedPrefixConsumedAndRendersAsLink() {
+        // `![[chat:…]]` is not a valid embed — the `!` is consumed and it
+        // renders as a normal chat link (consistent with `![[Page]]`).
+        let out = WikiLinkMarkdown.linkified("![[chat:Conv]]") { _, _ in true }
+        #expect(out.contains("wiki://chat?title=Conv"))
+        #expect(!out.contains("<img"))
+        #expect(!out.contains("!"))
+    }
+
     // Pull the URL substring out of a single `[text](url)` for assertions.
     private func extractURL(_ markdownLink: String) -> String {
         guard let open = markdownLink.lastIndex(of: "("),

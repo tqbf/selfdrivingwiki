@@ -29,7 +29,7 @@ struct QueryTranscriptView: View {
                 placeholder
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
-                AgentTranscriptWebView(
+                ChatWebView(
                     events: visibleEvents,
                     style: .chat,
                     onWikiLink: onWikiLink,

@@ -435,6 +435,9 @@ final class FileProviderSpike {
             NSFileProviderItemIdentifier(WikiFSContainerID.sources),
             NSFileProviderItemIdentifier(WikiFSContainerID.sourcesByID),
             NSFileProviderItemIdentifier(WikiFSContainerID.sourcesByName),
+            NSFileProviderItemIdentifier(WikiFSContainerID.chats),
+            NSFileProviderItemIdentifier(WikiFSContainerID.chatsByID),
+            NSFileProviderItemIdentifier(WikiFSContainerID.chatsByName),
             .workingSet,
         ]
         for container in containers {

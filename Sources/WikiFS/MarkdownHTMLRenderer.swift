@@ -120,7 +120,12 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                     tooltip = "#\(frag)"
                 }
             } else if let title = WikiLinkMarkdown.target(from: url) {
-                let prefix = url.host == "source" ? "source:" : ""
+                let prefix: String
+                switch url.host {
+                case "source": prefix = "source:"
+                case "chat":   prefix = "chat:"
+                default:       prefix = ""
+                }
                 let frag = WikiLinkMarkdown.fragment(from: url)
                 let fragSuffix = frag.map { "#\($0)" } ?? ""
                 tooltip = "[[\(prefix)\(title)\(fragSuffix)]]"

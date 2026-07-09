@@ -336,7 +336,7 @@ struct ConversationView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         } else {
-            AgentTranscriptWebView(
+            ChatWebView(
                 events: visible,
                 style: .chat,
                 onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),

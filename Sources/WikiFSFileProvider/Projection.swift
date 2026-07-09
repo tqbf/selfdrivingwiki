@@ -66,6 +66,16 @@ struct Projection {
         static let sourcesByName = NSFileProviderItemIdentifier(WikiFSContainerID.sourcesByName)
         static let indexSourcesJSONL = NSFileProviderItemIdentifier(WikiFSContainerID.indexSourcesJSONL)
 
+        // Chats (#119 follow-on): a top-level `chats/` tree with `by-id` and
+        // `by-name` views, plus `indexes/chats.jsonl`. Each chat renders as a
+        // readable `.md` transcript.
+        static let chats = NSFileProviderItemIdentifier(WikiFSContainerID.chats)
+        static let chatsByID = NSFileProviderItemIdentifier(WikiFSContainerID.chatsByID)
+        static let chatsByName = NSFileProviderItemIdentifier(WikiFSContainerID.chatsByName)
+        static let indexChatsJSONL = NSFileProviderItemIdentifier(WikiFSContainerID.indexChatsJSONL)
+        static let chatByIDPrefix = WikiFSContainerID.chatByIDPrefix
+        static let chatByNamePrefix = WikiFSContainerID.chatByNamePrefix
+
         // System prompt (v3): the same singleton document under two root-level
         // names (identical bytes) — `CLAUDE.md` and `AGENTS.md`.
         static let claudeMD = NSFileProviderItemIdentifier(WikiFSContainerID.claudeMD)
@@ -154,6 +164,26 @@ struct Projection {
             return nil
         }
 
+        // MARK: Chat identifiers (#119 follow-on)
+
+        static func chatByID(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(chatByIDPrefix + ulid)
+        }
+
+        static func chatByName(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(chatByNamePrefix + ulid)
+        }
+
+        /// Extract the embedded ULID from a `chat-by-id:` / `chat-by-name:`
+        /// identifier, or nil if it isn't a chat identifier. The full ULID is in
+        /// the identifier — never the filename (INITIAL §6).
+        static func chatULID(from id: NSFileProviderItemIdentifier) -> String? {
+            let raw = id.rawValue
+            if raw.hasPrefix(chatByIDPrefix) { return String(raw.dropFirst(chatByIDPrefix.count)) }
+            if raw.hasPrefix(chatByNamePrefix) { return String(raw.dropFirst(chatByNamePrefix.count)) }
+            return nil
+        }
+
         // MARK: Bookmark identifiers (Phase D)
 
         static func bookmarkFolder(_ ulid: String) -> NSFileProviderItemIdentifier {
@@ -202,10 +232,13 @@ struct Projection {
     - `sources/by-id/`
     - `sources/by-name/`
     - `bookmarks/`
+    - `chats/by-id/`
+    - `chats/by-name/`
     - `manifest.json`
     - `indexes/pages.jsonl`
     - `indexes/links.jsonl`
     - `indexes/sources.jsonl`
+    - `indexes/chats.jsonl`
 
     """.utf8)
 
@@ -380,7 +413,9 @@ struct Projection {
         let store = openReadStore()
         let pageCount = (try? store?.listAllPagesOrderedByID())??.count ?? 0
         let sourceCount = (try? store?.listAllSourcesOrderedByID())??.count ?? 0
-        return Data(WikiTreeRenderer.render(pageCount: pageCount, sourceCount: sourceCount).utf8)
+        let chatCount = (try? store?.listAllChatsOrderedByID())??.count ?? 0
+        return Data(WikiTreeRenderer.render(pageCount: pageCount, sourceCount: sourceCount,
+                                            chatCount: chatCount).utf8)
     }
 
     /// Build a root-level layout-map file node. Versioned by the change token (like
@@ -501,10 +536,33 @@ struct Projection {
         }
     )
 
+    static let chatsProjection = FlatResourceProjection(
+        topLevel: Identity.chats,
+        byIDContainer: Identity.chatsByID,
+        byNameContainer: Identity.chatsByName,
+        owns: { Identity.chatULID(from: $0) != nil },
+        enumerate: { $0.chatNodes(byName: $1) },
+        nodeForLeaf: { projection, id in
+            guard let ulid = Identity.chatULID(from: id),
+                  let store = projection.openReadStore(),
+                  let chats = try? store.listAllChatsOrderedByID(),
+                  let chat = chats.first(where: { $0.id.rawValue == ulid }) else { return nil }
+            return Self.chatFileNode(for: id, chat: chat, in: store)
+        },
+        contentForLeaf: { projection, id in
+            guard let ulid = Identity.chatULID(from: id),
+                  let store = projection.openReadStore(),
+                  let chats = try? store.listAllChatsOrderedByID(),
+                  let chat = chats.first(where: { $0.id.rawValue == ulid }),
+                  let messages = try? store.chatMessages(chatID: chat.id) else { return nil }
+            return Data(ChatTranscriptRenderer.render(summary: chat, messages: messages).utf8)
+        }
+    )
+
     /// The flat-resource projections, in tree order (pages before sources —
     /// matches the historical root/working-set layout). `node`/`children`/
     /// `contents`/working-set iterate this.
-    static let flatProjections: [FlatResourceProjection] = [pagesProjection, sourcesProjection]
+    static let flatProjections: [FlatResourceProjection] = [pagesProjection, sourcesProjection, chatsProjection]
 
     // MARK: - Singleton-doc + generated-index projections (slice 2b, Phase C)
 
@@ -611,7 +669,9 @@ struct Projection {
             // file_count must be resilient to a pre-migration `ingested_files`:
             // a `nil` read → 0, so the manifest still generates.
             let sourceCount = (try? store.listAllSourcesOrderedByID())?.count ?? 0
-            return IndexGenerators.manifest(pages: pages, sourceCount: sourceCount, generatedAt: Date())
+            let chatCount = (try? store.listAllChatsOrderedByID())?.count ?? 0
+            return IndexGenerators.manifest(pages: pages, sourceCount: sourceCount,
+                                            chatCount: chatCount, generatedAt: Date())
         }
     )
 
@@ -646,11 +706,22 @@ struct Projection {
         }
     )
 
+    static let chatsJSONLIndex = GeneratedIndex(
+        id: Identity.indexChatsJSONL, name: "chats.jsonl", parent: Identity.indexes,
+        generate: { projection in
+            guard let store = projection.openReadStore() else { return nil }
+            // Resilient to the `chats` table not existing yet → empty index,
+            // never nil, so enumeration of `indexes/` never errors pre-migration.
+            let chats = (try? store.listAllChatsOrderedByID()) ?? []
+            return IndexGenerators.chatsJSONL(chats: chats)
+        }
+    )
+
     /// Generated indexes in tree order. Root-level files (manifest.json) have
     /// `parent == .rootContainer`; JSONL files live under `indexes/`. The root
     /// and `indexes/` children lists filter on `parent`.
     static let generatedIndexes: [GeneratedIndex] = [
-        manifestIndex, pagesJSONLIndex, linksJSONLIndex, sourcesJSONLIndex
+        manifestIndex, pagesJSONLIndex, linksJSONLIndex, sourcesJSONLIndex, chatsJSONLIndex
     ]
 
     // MARK: - Nested resource projections (slice 2b, Phase D)
@@ -858,6 +929,12 @@ struct Projection {
             return .folder(id: id, parent: Identity.sources, name: "by-id")
         case Identity.sourcesByName:
             return .folder(id: id, parent: Identity.sources, name: "by-name")
+        case Identity.chats:
+            return .folder(id: id, parent: .rootContainer, name: "chats")
+        case Identity.chatsByID:
+            return .folder(id: id, parent: Identity.chats, name: "by-id")
+        case Identity.chatsByName:
+            return .folder(id: id, parent: Identity.chats, name: "by-name")
         default:
             break
         }
@@ -1077,6 +1154,47 @@ struct Projection {
                 : Identity.sourceMarkdownByID(row.id)
             return [verbatimNode, Self.sourceMarkdownNode(for: markdownID, source: summary, head: head)]
         }
+    }
+
+    /// All chat summaries projected as file nodes under the given view, ordered
+    /// by id (ULID == creation order). Mirrors `pageNodes(byTitle:)`. Resilient
+    /// to the `chats` table not existing yet (pre-migration) → empty, so
+    /// enumeration never errors.
+    private func chatNodes(byName: Bool) -> [ProjectedNode] {
+        guard let store = openReadStore(),
+              let chats = try? store.listAllChatsOrderedByID() else { return [] }
+        return chats.map { chat in
+            let id = byName ? Identity.chatByName(chat.id.rawValue)
+                            : Identity.chatByID(chat.id.rawValue)
+            return Self.chatFileNode(for: id, chat: chat, in: store)
+        }
+    }
+
+    /// Build a file node for one chat row, under whichever view `id` belongs to.
+    /// Sized from the rendered transcript so `documentSize` matches the bytes
+    /// `contents(for:)` serves (else `cat` truncates). Versioned by the chat's
+    /// `updated_at` so any message append (which bumps `updated_at`) re-fetches
+    /// the node. Like `pageFileNode(for:page:)`.
+    static func chatFileNode(for id: NSFileProviderItemIdentifier,
+                             chat: ChatSummary,
+                             in store: SQLiteWikiStore) -> ProjectedNode {
+        let raw = id.rawValue
+        let isByName = raw.hasPrefix(Identity.chatByNamePrefix)
+        let name = isByName
+            ? FilenameEscaping.byTitleFilename(title: chat.title, pageID: chat.id.rawValue)
+            : FilenameEscaping.byIDFilename(pageID: chat.id.rawValue)
+        let parent = isByName ? Identity.chatsByName : Identity.chatsByID
+        // Render once for size; `contents(for:)` renders again independently (the
+        // read store is cheap + WAL — same pattern as pages). The renderer is
+        // deterministic, so the two renders agree byte-for-byte.
+        let messages = (try? store.chatMessages(chatID: chat.id)) ?? []
+        let rendered = Data(ChatTranscriptRenderer.render(summary: chat, messages: messages).utf8)
+        let version = Data(String(chat.updatedAt.timeIntervalSince1970).utf8)
+        return .file(
+            id: id, parent: parent, name: name, size: rendered.count,
+            version: version, metadataVersion: version,
+            created: chat.createdAt, modified: chat.updatedAt
+        )
     }
 
     // MARK: - Content

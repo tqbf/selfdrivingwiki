@@ -387,4 +387,58 @@ struct WikiLinkParserTests {
         #expect(links.count == 1)
         #expect(links[0].isEmbed == false)
     }
+
+    // MARK: - chat: prefix
+
+    @Test func parsesChatPrefixLink() {
+        let links = WikiLinkParser.parse("See [[chat:My Conversation]].")
+        #expect(links.count == 1)
+        #expect(links[0].linkType == .chat)
+        #expect(links[0].target == "My Conversation")
+        #expect(links[0].linkText == "My Conversation")
+    }
+
+    @Test func chatLinkWithAliasPreservesAlias() {
+        let links = WikiLinkParser.parse("[[chat:My Conversation|the chat]]")
+        #expect(links[0].linkType == .chat)
+        #expect(links[0].target == "My Conversation")
+        #expect(links[0].linkText == "the chat")
+    }
+
+    @Test func chatPrefixNormalizesRemainder() {
+        let links = WikiLinkParser.parse("[[chat:  X  ]]")
+        #expect(links[0].linkType == .chat)
+        #expect(links[0].target == "X")
+    }
+
+    @Test func emptyChatTargetIsSkipped() {
+        let links = WikiLinkParser.parse("[[chat:]] and [[chat:   ]]")
+        #expect(links.isEmpty)
+    }
+
+    @Test func chatEmbedIsNotParsed() {
+        // `![[chat:…]]` is invalid — embeds are source-only → skip.
+        #expect(WikiLinkParser.parse("![[chat:My Conversation]]").isEmpty)
+    }
+
+    @Test func classifyChatPrefix() {
+        let (kind, target) = WikiLinkParser.classify("chat:My Conversation")
+        #expect(kind == .chat)
+        #expect(target == "My Conversation")
+    }
+
+    @Test func pagePrefixEscapesChatPrefixTitle() {
+        // A page literally titled "chat:foo" is reachable via [[page:chat:foo]].
+        let links = WikiLinkParser.parse("[[page:chat:foo]]")
+        #expect(links[0].linkType == .page)
+        #expect(links[0].target == "chat:foo")
+    }
+
+    @Test func sourcePrefixTakesPrecedenceOverChat() {
+        // source: > chat: — a source literally named "chat:X" is reachable
+        // via [[source:chat:X]] (classify checks source: before chat:).
+        let (kind, target) = WikiLinkParser.classify("source:chat:X")
+        #expect(kind == .source)
+        #expect(target == "chat:X")
+    }
 }
