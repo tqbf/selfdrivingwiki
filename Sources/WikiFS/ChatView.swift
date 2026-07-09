@@ -55,7 +55,10 @@ struct ChatView: View {
     /// `launcher.events`; everything else renders the persisted rows. Both are
     /// `transcriptVisible`-filtered. Extracted as a static func so the selection
     /// logic is unit-testable without a SwiftUI view tree.
-    static func displayMessages(
+    ///
+    /// `nonisolated`: this is a pure array selector (no view/actor state), so it
+    /// can be called from nonisolated test contexts without crossing the main actor.
+    nonisolated static func displayMessages(
         isLiveChat: Bool,
         launcherEvents: [AgentEvent],
         persistedEvents: [AgentEvent]
