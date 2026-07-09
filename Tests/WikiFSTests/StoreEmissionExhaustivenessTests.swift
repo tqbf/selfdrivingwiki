@@ -81,7 +81,7 @@ struct StoreEmissionExhaustivenessTests {
         // Provenance helper (its effect folds into the snapshot/source flow that
         // already emits). Derived embeddings / search index (not in the change
         // token, no projected content change).
-        "ensureFetchActivity", "storePageChunks", "storeSourceChunks", "rebuildFTS",
+        "ensureFetchActivity", "storePageChunks", "storeSourceChunks", "storeChatChunks", "rebuildFTS",
         // Blob GC (#253): vacuuming orphaned blobs changes no projected
         // ResourceKind (blobs fold into the changeToken only via their version
         // rows), so no event is emitted.

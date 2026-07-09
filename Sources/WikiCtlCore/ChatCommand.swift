@@ -32,6 +32,7 @@ public enum ChatCommand {
     public enum Action: Equatable {
         case list(json: Bool)
         case get(Selector)
+        case search(query: String, limit: Int)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -51,6 +52,8 @@ public enum ChatCommand {
             return try list(in: store, json: json)
         case .get(let selector):
             return try get(selector, in: store)
+        case .search(let query, let limit):
+            return try search(query: query, limit: limit, in: store)
         }
     }
 
@@ -89,6 +92,23 @@ public enum ChatCommand {
         let messages = try store.chatMessages(chatID: id)
         let transcript = ChatTranscriptRenderer.render(summary: summary, messages: messages)
         return Result(output: transcript, didCommit: false)
+    }
+
+    // MARK: - search
+
+    /// Hybrid (FTS + semantic) search over chat conversations. Mirrors
+    /// `PageCommand.search` / `SourceCommand.search`: ranks chats by how well
+    /// their message text matches the query. Output is TSV
+    /// (id <tab> title <tab> kind <tab> messages), best match first.
+    private static func search(
+        query: String, limit: Int, in store: WikiStore
+    ) throws -> Result {
+        let results = try store.searchSimilarChats(query: query, limit: limit)
+        let output = results.map { chat in
+            let title = chat.title.replacingOccurrences(of: "\t", with: " ")
+            return "\(chat.id.rawValue)\t\(title)\t\(chat.kind.rawValue)\t\(chat.messageCount)"
+        }.joined(separator: "\n")
+        return Result(output: output, didCommit: false)
     }
 
     // MARK: - Selector resolution

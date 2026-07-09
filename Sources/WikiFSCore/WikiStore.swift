@@ -470,6 +470,22 @@ public protocol WikiStore: Sendable {
     /// ULID wins on a duplicate-title collision.
     func resolveChatByTitle(_ title: String) throws -> PageID?
 
+    // MARK: - Semantic chat search (v28 chat chunk embeddings)
+
+    /// Store or replace ALL chunk embeddings for a chat. Mirrors
+    /// `storePageChunks`/`storeSourceChunks` (used by the bulk search-index
+    /// upgrade; incremental appends embed inline).
+    func storeChatChunks(id: PageID, chunks: [Data]) throws
+
+    /// Chats with no chunk embeddings yet, as `(id, embeddable text)`. Mirrors
+    /// `missingPageEmbeddingWork`/`missingSourceEmbeddingWork`.
+    func missingChatEmbeddingWork() -> [(id: PageID, text: String)]
+
+    /// Search chats semantically + lexically (hybrid RRF, same as
+    /// `searchSimilar`/`searchSimilarSources`). Falls back to FTS5 only when the
+    /// vec extension or embedding model is unavailable.
+    func searchSimilarChats(query: String, limit: Int) throws -> [ChatSummary]
+
     // MARK: - Blob GC (#253)
 
     /// Sweep **orphaned** blob rows — blobs no version references (the leak left

@@ -122,11 +122,11 @@ The wiki is projected read-only at `$WIKI_ROOT`. Browse it with
   the current name), so a `source rename` or a page re-title never rewrites
   other pages' bodies.
 - **Link to chats** — `[[chat:Title]]` navigates to a persisted chat
-  (Ask or Edit). Find the title with `wikictl chat list`; read a transcript with
-  `wikictl chat get --id <id>` or `--title "Title"`. Chats project as
-  `chats/by-id/<ULID>.md` on the mount. The canonical form
-  `[[chat:01J…|Title]]` is stable across renames. Chat links cannot be embeds
-  (`![[chat:…]]` is invalid).
+  (Ask or Edit). Find the title with `wikictl chat list` (or `wikictl chat search`
+  to find one by meaning); read a transcript with `wikictl chat get --id <id>` or
+  `--title "Title"`. Chats project as `chats/by-id/<ULID>.md` on the mount. The
+  canonical form `[[chat:01J…|Title]]` is stable across renames. Chat links
+  cannot be embeds (`![[chat:…]]` is invalid).
 - **External sources** (papers, books, URLs NOT ingested into this wiki) get
   standard academic footnote citations: `[^id]: Author (Year), "Title", Journal/
   Publisher. DOI or URL`. If only a URL is available, that's fine. External
@@ -193,6 +193,9 @@ $WIKICTL source cat --id I | --name N       write raw source bytes to stdout
 $WIKICTL source export --id I | --name N [--out <path>]
                                             materialize a source to disk, print its path
 $WIKICTL source search --query "…" [--limit N]   semantic search of sources — find source material by meaning; defaults to 10, max 100
+$WIKICTL chat list [--json]                   list chats (id / title / kind / message count)
+$WIKICTL chat get --id I | --title T          print a chat transcript as markdown
+$WIKICTL chat search --query "…" [--limit N]  semantic search of chats — find past conversations by meaning; defaults to 10, max 100
 ```
 
 **Read back what you just wrote with `$WIKICTL page get`** — the mount lags a
@@ -200,12 +203,13 @@ few seconds behind the database, so `cat`-ing a path under `$WIKI_ROOT`
 immediately after a write may show stale bytes. `$WIKICTL page get` reads the
 database directly and is always current.
 
-**Search is semantic — match by meaning, not keywords.** Both `$WIKICTL
-search` (pages) and `$WIKICTL source search` (sources) rank by similarity, so
-phrase a query as a concept or whole question ("continuous profiling with
-JFR") rather than a bare word. Output is ranked `id<TAB>title` (or
-`id<TAB>name`) lines, best match first; read a hit with `$WIKICTL page get
---id <id>`, or `source cat` / `source export` for sources. Example:
+**Search is semantic — match by meaning, not keywords.** `$WIKICTL search`
+(pages), `$WIKICTL source search` (sources), and `$WIKICTL chat search` (past
+conversations) all rank by similarity, so phrase a query as a concept or whole
+question ("continuous profiling with JFR") rather than a bare word. Output is
+ranked `id<TAB>title` (or `id<TAB>name`) lines, best match first; read a hit with
+`$WIKICTL page get --id <id>`, `source cat` / `source export` for sources, or
+`chat get` for a conversation transcript. Example:
 
 ```
 $ $WIKICTL search --query "continuous profiling with JFR"

@@ -501,6 +501,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // `chat_messages`. Purely additive. `IF NOT EXISTS` (idempotent).
         try createChatTablesV23()
 
+        // v28 (issue #245): semantic + FTS search over chats — `chat_chunks` +
+        // `chat_search` + `chats_fts`. Purely additive. Shared with the v27→28
+        // migration step so the fresh path and ladder stay schema-identical.
+        try createChatSearchTables()
+
         // v26 (graph-model Phase 2 close-out): drops the dead
         // `source_markdown_versions.content` column — the body lives only in
         // `blobs` (CAS-only). The fresh path omits the column entirely (nothing
@@ -511,7 +516,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // sort/filter in #241). The fresh-path table def already includes both
         // columns; a brand-new DB has no rows to backfill. Shared with the
         // v26→27 migration step.
-        try exec("PRAGMA user_version=27;")
+        try exec("PRAGMA user_version=28;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -621,6 +626,64 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         );
         """)
         try exec("CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_seq ON chat_messages(chat_id, seq);")
+    }
+
+    /// Create the chat-search tables (issue #245): `chat_chunks` (per-chunk
+    /// cosine embeddings, mirroring `page_chunks`/`source_chunks`) and the
+    /// `chat_search` FTS sidecar + `chats_fts` external-content index (mirroring
+    /// `source_search`/`sources_fts`). Called by both the fresh-schema fast path
+    /// and the v27→28 migration step so the two stay schema-identical
+    /// (`freshFastPathMatchesStepwiseLadder`). `IF NOT EXISTS` — idempotent so a
+    /// DB rewound to a pre-v28 `user_version` for testing can still run it.
+    ///
+    /// `chat_search` is one row per chat (title + concatenated message text) —
+    /// the chat body is multi-row (spread across `chat_messages`), so like
+    /// sources it needs a sidecar rather than the inline-`pages` external-content
+    /// pattern. Kept fresh by `appendChatMessages`/`renameChat`.
+    private func createChatSearchTables() throws {
+        try exec("""
+        CREATE TABLE IF NOT EXISTS chat_chunks (
+            chat_id   TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+            chunk_idx INTEGER NOT NULL,
+            embedding BLOB NOT NULL,
+            PRIMARY KEY (chat_id, chunk_idx)
+        ) WITHOUT ROWID;
+        """)
+        try exec("""
+        CREATE TABLE IF NOT EXISTS chat_search (
+            chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+            title   TEXT NOT NULL,
+            body    TEXT NOT NULL
+        );
+        """)
+        // FTS5/BM25 (v28): external-content over `chat_search`, kept in sync by
+        // AFTER INSERT/UPDATE/DELETE triggers — mirrors `sources_fts`.
+        try exec("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS chats_fts USING fts5(
+            title, body,
+            content='chat_search', content_rowid='rowid',
+            tokenize='porter');
+        """)
+        try exec("""
+        CREATE TRIGGER IF NOT EXISTS chats_fts_ai AFTER INSERT ON chat_search BEGIN
+          INSERT INTO chats_fts(rowid, title, body)
+            VALUES (new.rowid, new.title, new.body);
+        END;
+        """)
+        try exec("""
+        CREATE TRIGGER IF NOT EXISTS chats_fts_ad AFTER DELETE ON chat_search BEGIN
+          INSERT INTO chats_fts(chats_fts, rowid, title, body)
+            VALUES ('delete', old.rowid, old.title, old.body);
+        END;
+        """)
+        try exec("""
+        CREATE TRIGGER IF NOT EXISTS chats_fts_au AFTER UPDATE ON chat_search BEGIN
+          INSERT INTO chats_fts(chats_fts, rowid, title, body)
+            VALUES ('delete', old.rowid, old.title, old.body);
+          INSERT INTO chats_fts(rowid, title, body)
+            VALUES (new.rowid, new.title, new.body);
+        END;
+        """)
     }
 
     /// The stepwise, idempotent migration ladder keyed on `PRAGMA user_version`.
@@ -1207,6 +1270,17 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             }
             try exec("PRAGMA user_version=27;")
             version = 27
+        }
+
+        // Step 27 → 28 (issue #245): semantic + FTS search over chats. Adds
+        // `chat_chunks` (per-chunk cosine embeddings) + the `chat_search` FTS
+        // sidecar + `chats_fts` external-content index, mirroring the existing
+        // pages/sources search pipeline. Purely additive (`IF NOT EXISTS`); a
+        // brand-new DB forced through the ladder has no chat rows to index.
+        if version < 28 {
+            try createChatSearchTables()
+            try exec("PRAGMA user_version=28;")
+            version = 28
         }
     }
 
@@ -4427,7 +4501,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     public func appendChatMessages(chatID: PageID, events: [AgentEvent]) throws -> [ChatMessage] {
         guard !events.isEmpty else { return [] }
         return try mutate(event: { _ in localEvent(.chat, id: chatID.rawValue, change: .updated) }) {
-        return try withTransaction {
+        let inserted = try withTransaction {
             let exists = try statement("SELECT 1 FROM chats WHERE id = ?1;")
             exists.reset()
             try exists.bind(chatID.rawValue, at: 1)
@@ -4474,9 +4548,97 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try touch.bind(now.timeIntervalSince1970, at: 2)
             _ = try touch.step()
 
+            // Keep the chat full-text index fresh (title + the now-concatenated
+            // message body) so keyword search finds the new messages immediately.
+            // Inside the same transaction so the FTS sidecar never lags the rows.
+            upsertChatSearch(chatID: chatID)
+
             return inserted
         }
+        // Incrementally re-embed only the newly-appended conversational messages
+        // (user/assistant) so semantic search finds them. Embedding is inference
+        // — run outside the transaction (like reembedSource), still inside
+        // mutate so the chunk write is serialized with other store calls.
+        reembedChatMessages(chatID: chatID, events: events)
+        return inserted
         }
+    }
+
+    /// Rebuild the one-row-per-chat full-text sidecar: title (current) + the
+    /// concatenated `plainText` of every message in `seq` order. `INSERT OR
+    /// REPLACE` fires the ad+ai triggers, so `chats_fts` updates automatically.
+    /// Best-effort (mirrors `upsertSourceSearch`). Called from
+    /// `appendChatMessages` (inside the insert transaction) and `renameChat`.
+    private func upsertChatSearch(chatID: PageID) {
+        guard let titleStmt = try? statement("SELECT title FROM chats WHERE id = ?1;") else { return }
+        defer { titleStmt.reset() }
+        let title: String
+        let body: String
+        do {
+            try titleStmt.bind(chatID.rawValue, at: 1)
+            guard try titleStmt.step() else { return }
+            title = titleStmt.text(at: 0)
+        } catch {
+            DebugLog.store("upsertChatSearch[\(chatID.rawValue)] title lookup failed — \(error)")
+            return
+        }
+        do {
+            let bodyStmt = try statement(
+                "SELECT COALESCE(GROUP_CONCAT(text, '\n'), '') FROM chat_messages WHERE chat_id = ?1;")
+            defer { bodyStmt.reset() }
+            try bodyStmt.bind(chatID.rawValue, at: 1)
+            _ = try bodyStmt.step()
+            body = bodyStmt.text(at: 0)
+        } catch {
+            DebugLog.store("upsertChatSearch[\(chatID.rawValue)] body lookup failed — \(error)")
+            return
+        }
+        guard let stmt = try? statement("""
+        INSERT OR REPLACE INTO chat_search (chat_id, title, body) VALUES (?1, ?2, ?3);
+        """) else { return }
+        defer { stmt.reset() }
+        do {
+            try stmt.bind(chatID.rawValue, at: 1)
+            try stmt.bind(title, at: 2)
+            try stmt.bind(body, at: 3)
+            _ = try stmt.step()
+        } catch {
+            DebugLog.store("upsertChatSearch[\(chatID.rawValue)] insert failed — \(error)")
+        }
+    }
+
+    /// Incrementally embed only the newly-appended messages (not the whole
+    /// conversation). Chats are append-only and grow over a session; unlike
+    /// pages/sources (which re-chunk the whole document on content change), a
+    /// chat append must NOT re-embed prior turns. Only `user`/`assistant`
+    /// messages are embedded — that is the "what was discussed" prose a query
+    /// recalls; tool/system chatter is noise for semantic ranking (it is still
+    /// in the FTS body for lexical search). Each message's `plainText` is chunked
+    /// + embedded, then appended at continuing `chunk_idx` (after the chat's
+    /// current max). Best-effort: a no-op when vec is unavailable or the model
+    /// returns nothing (the version still commits; chunks fill in on the next
+    /// search-index upgrade). Mirrors `reembedSource`.
+    private func reembedChatMessages(chatID: PageID, events: [AgentEvent]) {
+        guard isVecAvailable() else { return }
+        // Collect the embeddable text from new user/assistant messages only.
+        let texts = events.compactMap { event -> String? in
+            let role = event.chatRole
+            guard role == "user" || role == "assistant" else { return nil }
+            let text = event.plainText
+            return text.isEmpty ? nil : text
+        }
+        guard !texts.isEmpty else { return }
+        // Embed each message and flatten into one ordered chunk list.
+        var chunks: [Data] = []
+        for text in texts {
+            chunks.append(contentsOf: EmbeddingService.chunkedEmbeddings(for: text))
+        }
+        guard !chunks.isEmpty else {
+            DebugLog.store("reembedChatMessages[\(chatID.rawValue)] no chunks (model unavailable?) msgs=\(texts.count)")
+            return
+        }
+        DebugLog.store("reembedChatMessages[\(chatID.rawValue)] msgs=\(texts.count) chunks=\(chunks.count)")
+        try? appendChatChunks(chatID: chatID, chunks: chunks)
     }
 
     public func listChats() throws -> [ChatSummary] {
@@ -4546,6 +4708,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try upd.bind(title, at: 2)
             try upd.bind(Date().timeIntervalSince1970, at: 3)
             _ = try upd.step()
+            // Refresh the FTS sidecar title so keyword search reflects the new
+            // name (the body is unchanged; upsertChatSearch rebuilds title+body
+            // in one row). A no-op if no chat_search row exists yet (a chat with
+            // no messages has nothing to index; it gets created on first append).
+            upsertChatSearch(chatID: id)
         }
         }
     }
@@ -4788,6 +4955,43 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try replaceChunks(table: "page_chunks", idColumn: "page_id", id: id, chunks: chunks)
     }
 
+    /// Store/replace ALL chunk embeddings for a chat (delete-then-insert, via
+    /// `replaceChunks`). Used by the bulk search-index upgrade
+    /// (`missingChatEmbeddingWork` → `upgradeSearchIndex`). Incremental appends
+    /// go through `appendChatChunks` instead (chats are append-only).
+    public func storeChatChunks(id: PageID, chunks: [Data]) throws {
+        lock.lock(); defer { lock.unlock() }
+        try replaceChunks(table: "chat_chunks", idColumn: "chat_id", id: id, chunks: chunks)
+    }
+
+    /// Append chunk blobs to a chat WITHOUT deleting existing rows, continuing
+    /// `chunk_idx` after the chat's current max. This is the incremental write
+    /// path: a chat append embeds only the new messages and appends their
+    /// chunks, never touching prior turns (unlike `replaceChunks`). Owns its own
+    /// transaction so the chunk insert is atomic. Internal callers only.
+    private func appendChatChunks(chatID: PageID, chunks: [Data]) throws {
+        try withTransaction {
+            let maxStmt = try statement(
+                "SELECT COALESCE(MAX(chunk_idx), -1) FROM chat_chunks WHERE chat_id = ?1;")
+            defer { maxStmt.reset() }
+            try maxStmt.bind(chatID.rawValue, at: 1)
+            _ = try maxStmt.step()
+            var idx = Int(maxStmt.int(at: 0)) + 1
+            let ins = try statement("""
+            INSERT INTO chat_chunks (chat_id, chunk_idx, embedding) VALUES (?1, ?2, ?3);
+            """)
+            defer { ins.reset() }
+            for blob in chunks {
+                try ins.bind(chatID.rawValue, at: 1)
+                try ins.bind(Int64(idx), at: 2)
+                try ins.bind(blob, at: 3)
+                _ = try ins.step()
+                ins.reset()
+                idx += 1
+            }
+        }
+    }
+
     // MARK: - Search (hybrid: FTS5 + semantic vec0, fused via RRF)
 
     /// The single hybrid search flow used by BOTH page and source search, so the
@@ -5023,6 +5227,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             guard stored != activeIdentifier else { return }
             try exec("DELETE FROM page_chunks;")
             try exec("DELETE FROM source_chunks;")
+            try exec("DELETE FROM chat_chunks;")
             let stmt = try statement("INSERT OR REPLACE INTO embedding_meta(id, embedder) VALUES (1, ?1);")
             defer { stmt.reset() }
             try stmt.bind(activeIdentifier, at: 1)
@@ -5074,6 +5279,25 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             DebugLog.store("ensureSearchIndexes: source_search backfill failed — \(error)")
         }
 
+        // 2b. Backfill the chat full-text sidecar for any chat still lacking a
+        //     row (a chat created before v28, or one whose append predates the
+        //     sidecar). One row per chat: title + concatenated message text. The
+        //     AFTER-INSERT trigger on chat_search keeps chats_fts in sync.
+        do {
+            let stmt = try statement("""
+            INSERT OR IGNORE INTO chat_search (chat_id, title, body)
+            SELECT c.id, c.title,
+                   COALESCE((SELECT GROUP_CONCAT(m.text, '\n')
+                             FROM chat_messages m WHERE m.chat_id = c.id), '')
+            FROM chats c
+            WHERE c.id NOT IN (SELECT chat_id FROM chat_search);
+            """)
+            defer { stmt.reset() }
+            _ = try stmt.step()
+        } catch {
+            DebugLog.store("ensureSearchIndexes: chat_search backfill failed — \(error)")
+        }
+
         // 3. Rebuild an FTS index only when its term index is empty. NOTE: a bare
         //    `count(*)` on an *external-content* FTS5 table is optimized to read
         //    the CONTENT table, so `count(*) FROM pages_fts` always equals
@@ -5091,6 +5315,10 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             do { try exec("INSERT INTO sources_fts(sources_fts) VALUES ('rebuild');")
             } catch { DebugLog.store("ensureSearchIndexes: sources_fts rebuild failed — \(error)") }
         }
+        if rowCount("chats") > 0 && ftsIndexRowCount("chats_fts") == 0 {
+            do { try exec("INSERT INTO chats_fts(chats_fts) VALUES ('rebuild');")
+            } catch { DebugLog.store("ensureSearchIndexes: chats_fts rebuild failed — \(error)") }
+        }
 
         // 4. Chunk embeddings are NOT computed here. The bulk embed is a one-time,
         //    blocking, main-thread-only upgrade (`WikiStoreModel.upgradeSearchIndex`)
@@ -5098,7 +5326,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         //    search works immediately; semantic search fills in once the upgrade
         //    has run. See `docs/skills/sqlite-concurrency/SKILL.md`.
 
-        DebugLog.store("ensureSearchIndexes: pages_fts=\(rowCount("pages_fts"))/\(rowCount("pages")) sources_fts=\(rowCount("sources_fts"))/\(rowCount("sources")) pageChunks=\(rowCount("page_chunks")) sourceChunks=\(rowCount("source_chunks"))")
+        DebugLog.store("ensureSearchIndexes: pages_fts=\(rowCount("pages_fts"))/\(rowCount("pages")) sources_fts=\(rowCount("sources_fts"))/\(rowCount("sources")) chats_fts=\(rowCount("chats_fts"))/\(rowCount("chats")) pageChunks=\(rowCount("page_chunks")) sourceChunks=\(rowCount("source_chunks")) chatChunks=\(rowCount("chat_chunks"))")
     }
 
     /// Snapshot of pages that have no chunk embeddings yet: `(id, embeddable
@@ -5137,6 +5365,35 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         FROM sources s
         LEFT JOIN source_chunks sc ON sc.source_id = s.id
         WHERE sc.source_id IS NULL;
+        """) else { return out }
+        defer { stmt.reset() }
+        while (try? stmt.step()) ?? false {
+            let id = PageID(rawValue: stmt.text(at: 0))
+            let title = stmt.text(at: 1)
+            let body = sqlite3_column_type(stmt.handle, 2) == SQLITE_NULL ? "" : stmt.text(at: 2)
+            out.append((id, body.isEmpty ? title : "\(title)\n\n\(body)"))
+        }
+        return out
+    }
+
+    /// Snapshot of chats that have no chunk embeddings yet: `(id, embeddable
+    /// text)`. The text is the chat title + the `plainText` of its user +
+    /// assistant messages (the conversational prose a query recalls — tool/
+    /// system chatter is excluded, matching the incremental write path). Read on
+    /// the main actor by `upgradeSearchIndex`; the MLX inference runs off-main
+    /// but the SQLite read/write stays on main. Mirrors
+    /// ``missingPageEmbeddingWork``/``missingSourceEmbeddingWork``.
+    public func missingChatEmbeddingWork() -> [(id: PageID, text: String)] {
+        lock.lock(); defer { lock.unlock() }
+        var out: [(id: PageID, text: String)] = []
+        guard let stmt = try? statement("""
+        SELECT c.id, c.title,
+               COALESCE((SELECT GROUP_CONCAT(m.text, '\n')
+                         FROM chat_messages m
+                         WHERE m.chat_id = c.id AND m.role IN ('user', 'assistant')), '')
+        FROM chats c
+        LEFT JOIN chat_chunks cc ON cc.chat_id = c.id
+        WHERE cc.chat_id IS NULL;
         """) else { return out }
         defer { stmt.reset() }
         while (try? stmt.step()) ?? false {
@@ -5257,6 +5514,85 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         var out: [SourceSummary] = []
         while try stmt.step() { out.append(sourceSummary(from: stmt)) }
         return out
+    }
+
+    // MARK: - Chat search (issue #245: semantic + FTS over chats)
+
+    /// Hybrid search over chats — the same RRF fusion as pages/sources. Lexical
+    /// (FTS over the `chat_search` sidecar) + semantic (vec0 cosine over
+    /// `chat_chunks`, ranked by each chat's best-matching message chunk). Falls
+    /// back to FTS-only when vec or the model is unavailable. Mirrors
+    /// `searchSimilar`/`searchSimilarSources`.
+    public func searchSimilarChats(query: String, limit: Int) throws -> [ChatSummary] {
+        lock.lock(); defer { lock.unlock() }
+        return try hybridSearch(
+            kind: "chats", query: query, limit: limit, id: \.id,
+            fts: { try searchChatsFTS(query: query, limit: $0) },
+            semantic: { try searchChatsSemantic(blob: $0, limit: $1) })
+    }
+
+    /// Lexical search over chats (FTS5 bm25) via the `chat_search` sidecar.
+    /// Mirrors `searchSourcesFTS`.
+    private func searchChatsFTS(query: String, limit: Int) throws -> [ChatSummary] {
+        let q = Self.ftsMatch(query)
+        guard !q.isEmpty else { return [] }
+        let sql = """
+        SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
+               (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id)
+        FROM chats_fts
+        JOIN chat_search cs ON cs.rowid = chats_fts.rowid
+        JOIN chats c ON c.id = cs.chat_id
+        WHERE chats_fts MATCH ?1
+        ORDER BY rank
+        LIMIT ?2;
+        """
+        let stmt = try statement(sql)
+        defer { stmt.reset() }
+        try stmt.bind(q, at: 1)
+        try stmt.bind(Int64(limit), at: 2)
+        var out: [ChatSummary] = []
+        while try stmt.step() { out.append(Self.chatSummary(from: stmt)) }
+        return out
+    }
+
+    /// Semantic (vec0 cosine) pass over chats. Ranks by each chat's
+    /// BEST-matching message chunk (lowest cosine distance over all its chunks).
+    /// Best-first. Only chats with at least one chunk appear here. Mirrors
+    /// `searchSourcesSemantic`.
+    private func searchChatsSemantic(blob queryBlob: Data, limit: Int) throws -> [ChatSummary] {
+        let sql = """
+        SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
+               (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id)
+        FROM (
+            SELECT chat_id, MIN(vec_distance_cosine(embedding, ?1)) AS best
+            FROM chat_chunks GROUP BY chat_id
+        ) r
+        JOIN chats c ON c.id = r.chat_id
+        ORDER BY r.best ASC
+        LIMIT ?2;
+        """
+        let stmt = try statement(sql)
+        defer { stmt.reset() }
+        try stmt.bind(queryBlob, at: 1)
+        try stmt.bind(Int64(limit), at: 2)
+        var out: [ChatSummary] = []
+        while try stmt.step() { out.append(Self.chatSummary(from: stmt)) }
+        return out
+    }
+
+    /// Decode a `ChatSummary` from the shared 6-column SELECT
+    /// `(id, kind, title, created_at, updated_at, message_count)`. Used by both
+    /// `searchChatsFTS` and `searchChatsSemantic` so the column order can never
+    /// drift between them.
+    private static func chatSummary(from stmt: SQLiteStatement) -> ChatSummary {
+        ChatSummary(
+            id: PageID(rawValue: stmt.text(at: 0)),
+            kind: ChatKind(rawValue: stmt.text(at: 1)) ?? .ask,
+            title: stmt.text(at: 2),
+            createdAt: Date(timeIntervalSince1970: stmt.double(at: 3)),
+            updatedAt: Date(timeIntervalSince1970: stmt.double(at: 4)),
+            messageCount: Int(stmt.int(at: 5))
+        )
     }
 
     /// Best-effort re-chunk + re-embed of a source after its content/name
