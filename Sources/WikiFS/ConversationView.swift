@@ -310,6 +310,28 @@ struct ConversationView: View {
                     }
                     .help("Reveal this conversation in the sidebar")
                 }
+                if fileProvider.path != nil, let chatID {
+                    Button("Share", systemImage: "square.and.arrow.up") {
+                        Task {
+                            guard let url = await fileProvider.resolveChatByNameURL(id: chatID) else { return }
+                            let picker = NSSharingServicePicker(items: [url])
+                            let mouseScreen = NSEvent.mouseLocation
+                            guard let window = NSApplication.shared.keyWindow,
+                                  let contentView = window.contentView else { return }
+                            let windowPoint = window.convertPoint(fromScreen: mouseScreen)
+                            let viewPoint = contentView.convert(windowPoint, from: nil)
+                            picker.show(
+                                relativeTo: NSRect(origin: viewPoint,
+                                                   size: NSSize(width: 1, height: 1)),
+                                of: contentView, preferredEdge: .minY)
+                        }
+                    }
+                    .help("Share this conversation")
+                    Button("Reveal in Finder", systemImage: "folder") {
+                        Task { await fileProvider.revealChatInFinder(id: chatID) }
+                    }
+                    .help("Reveal this conversation file in Finder")
+                }
                 Button {
                     chatOutlineExpanded.toggle()
                 } label: {
