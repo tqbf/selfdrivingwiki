@@ -6,9 +6,9 @@ import WikiFSCore
 /// `Catalog`. Owns:
 ///   * the identity ↔ row mapping (virtual ids; paths are presentation only),
 ///   * the static `README.md` bytes,
-///   * `node(for:)` / `children(of:)` / `contents(for:)`, each opening a
-///     fresh, short-lived read store (INITIAL §10 — the app is the only writer;
-///     WAL + `query_only` reads are safe concurrently).
+///   * `node(for:)` / `children(of:)` / `contents(for:)`, each sharing ONE
+///     short-lived read store per call (via `ReadScope` — #291); the app is
+///     the only writer, and WAL + `query_only` reads are safe concurrently.
 ///
 /// The id embedded in a page identifier is ALWAYS the full ULID, never the
 /// filename — filenames are derived for presentation (INITIAL §6).
@@ -39,6 +39,14 @@ struct Projection {
         self.wikiID = wikiID
         self.databaseURL = databaseURL
     }
+
+    /// Request-scoped read-store cache. The public entry points
+    /// (`children`/`node`/`contents`) set this on a scoped copy so every
+    /// `openReadStore()` / `changeToken()` call within one logical operation
+    /// reuses ONE SQLite connection + ONE token snapshot — collapsing the N+1
+    /// store opens that made `children(of: .workingSet)` take 165 s+ (#291).
+    /// Nil (the default) for standalone calls → each opens its own, as before.
+    var readStoreHolder: ReadScope?
 
     // MARK: - Identity
 
@@ -313,11 +321,61 @@ struct Projection {
 
     // MARK: - Read store
 
-    /// Open a fresh, short-lived read-only store at THIS wiki's `<ulid>.sqlite`
-    /// in the App Group container. The wiki is selected by `wikiID` (the ULID the
-    /// File Provider domain carries) — the multi-wiki crux: same projection code,
-    /// different DB per domain. Returns nil if the container/DB is unavailable.
+    /// A request-scoped cache for ONE read-only store + its change token. The
+    /// public entry points (`children`/`node`/`contents`) create one of these on
+    /// a scoped copy of the projection so every `openReadStore()` and
+    /// `changeToken()` call within that operation reuses the same connection,
+    /// instead of opening a fresh store (with pragma setup + vec0 registration
+    /// + WAL checkpoint on close) for each leaf node (#291).
+    ///
+    /// Thread-safe (NSLock-guarded): the holder is a reference type shared
+    /// across value-type projection copies, so the lock guards the lazy open
+    /// and token cache even if two copies race (in practice each scope is
+    /// single-threaded — one File Provider callback).
+    final class ReadScope: @unchecked Sendable {
+        private let databaseURL: URL?
+        private let wikiID: String
+        private let lock = NSLock()
+        private var cachedStore: SQLiteWikiStore?
+        private var cachedToken: String?
+
+        init(databaseURL: URL?, wikiID: String) {
+            self.databaseURL = databaseURL
+            self.wikiID = wikiID
+        }
+
+        /// Lazily open ONE store; subsequent calls return the same connection.
+        var store: SQLiteWikiStore? {
+            lock.lock(); defer { lock.unlock() }
+            if cachedStore == nil {
+                let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID)
+                if let url, FileManager.default.fileExists(atPath: url.path) {
+                    cachedStore = try? SQLiteWikiStore(readOnlyURL: url)
+                }
+            }
+            return cachedStore
+        }
+
+        /// The cached token, or nil if not yet computed.
+        var token: String? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedToken
+        }
+
+        /// Cache the token (called once per scope, on first `changeToken()`).
+        func cacheToken(_ value: String) {
+            lock.lock(); defer { lock.unlock() }
+            cachedToken = value
+        }
+    }
+
+    /// Open a read-only store at THIS wiki's `<ulid>.sqlite` in the App Group
+    /// container. Within a read scope (`readStoreHolder` set) the SAME connection
+    /// is reused for every call; outside a scope a fresh, short-lived store is
+    /// opened each time (the historical behavior). Returns nil if the
+    /// container/DB is unavailable.
     private func openReadStore() -> SQLiteWikiStore? {
+        if let scope = readStoreHolder { return scope.store }
         let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID)
         guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
         return try? SQLiteWikiStore(readOnlyURL: url)
@@ -440,9 +498,18 @@ struct Projection {
     /// `SQLiteWikiStore.changeToken()`). Opens a short-lived read store; returns
     /// a safe `"0:0"` default if the DB is unavailable so the enumerator can
     /// still answer (and a later real token simply differs → re-sync).
+    ///
+    /// Within a read scope the token is computed once and cached, so every node
+    /// built during one enumeration pass gets a CONSISTENT version (previously
+    /// each call queried independently, risking slight drift mid-pass) and avoids
+    /// N redundant queries (#291).
     func changeToken() -> String {
+        if let scope = readStoreHolder, let cached = scope.token {
+            return cached
+        }
         guard let store = openReadStore(),
               let token = try? store.changeToken() else { return "0:0" }
+        readStoreHolder?.cacheToken(token)
         return token
     }
 
@@ -922,8 +989,19 @@ struct Projection {
 
     // MARK: - Metadata resolution
 
-    /// Resolve a single item's metadata by identifier.
+    /// Resolve a single item's metadata by identifier. Opens ONE shared read
+    /// store for the whole resolution (including any change-token reads),
+    /// collapsing what was previously 1–3 independent store opens per call.
     func node(for id: NSFileProviderItemIdentifier) -> ProjectedNode? {
+        var scoped = self
+        scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
+        return scoped.nodeResolved(for: id)
+    }
+
+    /// Store-sharing implementation of `node(for:)`. Called on a scoped copy
+    /// carrying a `ReadScope` so every `openReadStore()` / `changeToken()` within
+    /// this resolution reuses one connection (#291).
+    private func nodeResolved(for id: NSFileProviderItemIdentifier) -> ProjectedNode? {
         if id == .rootContainer {
             return .folder(id: .rootContainer, parent: .rootContainer, name: "Self Driving Wiki")
         }
@@ -1054,10 +1132,20 @@ struct Projection {
 
     // MARK: - Enumeration
 
-    /// Children of a container. Root → README + pages; pages → by-id + by-title;
-    /// by-id/by-title → one file per page row (ordered by ULID == creation
-    /// order). Other containers (files) → empty.
+    /// Children of a container. Opens ONE shared read store for the whole
+    /// enumeration pass — the fix for #291 where `children(of: .workingSet)`
+    /// opened ~35 independent SQLite connections (one per leaf, per index, per
+    /// doc, plus one per `changeToken()` call).
     func children(of container: NSFileProviderItemIdentifier) -> [ProjectedNode] {
+        var scoped = self
+        scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
+        return scoped.childrenResolved(of: container)
+    }
+
+    /// Store-sharing implementation of `children(of:)`. Called on a scoped copy
+    /// carrying a `ReadScope` so every `openReadStore()` / `changeToken()` within
+    /// this enumeration reuses one connection (#291).
+    private func childrenResolved(of container: NSFileProviderItemIdentifier) -> [ProjectedNode] {
         switch container {
         case .rootContainer:
             var nodes: [ProjectedNode] = []
@@ -1073,14 +1161,14 @@ struct Projection {
             }
             // Flat-resource top-level folders.
             for projection in Self.flatProjections {
-                if let n = node(for: projection.topLevel) { nodes.append(n) }
+                if let n = nodeResolved(for: projection.topLevel) { nodes.append(n) }
             }
             // Nested-resource top-level folders (bookmarks).
             for projection in Self.nestedProjections {
-                if let n = node(for: projection.topLevel) { nodes.append(n) }
+                if let n = nodeResolved(for: projection.topLevel) { nodes.append(n) }
             }
             // The indexes folder.
-            if let n = node(for: Identity.indexes) { nodes.append(n) }
+            if let n = nodeResolved(for: Identity.indexes) { nodes.append(n) }
             return nodes
         case Identity.indexes:
             return Self.generatedIndexes
@@ -1121,8 +1209,8 @@ struct Projection {
         // view containers; a view container enumerates its rows (ordered by ULID).
         for projection in Self.flatProjections {
             if container == projection.topLevel {
-                return [node(for: projection.byIDContainer),
-                        node(for: projection.byNameContainer)].compactMap { $0 }
+                return [nodeResolved(for: projection.byIDContainer),
+                        nodeResolved(for: projection.byNameContainer)].compactMap { $0 }
             }
             if container == projection.byIDContainer {
                 return projection.enumerate(self, false)
@@ -1226,8 +1314,16 @@ struct Projection {
     // MARK: - Content
 
     /// Materialize the bytes for a file identifier. README is static; page files
-    /// read the live body from SQLite. Folders return nil.
+    /// read the live body from SQLite. Folders return nil. Opens ONE shared read
+    /// store for the whole resolution (#291).
     func contents(for id: NSFileProviderItemIdentifier) -> Data? {
+        var scoped = self
+        scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
+        return scoped.contentsResolved(for: id)
+    }
+
+    /// Store-sharing implementation of `contents(for:)`.
+    private func contentsResolved(for id: NSFileProviderItemIdentifier) -> Data? {
         // Singleton docs (slice 2b Phase C): dispatch to the matching doc.
         for doc in Self.singletonDocs where doc.entries.contains(where: { $0.id == id }) {
             return doc.contentFor(self)

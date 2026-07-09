@@ -29,8 +29,10 @@ jobs:
         # by name: `swift test` does not yet filter by tag (SwiftPM's --skip is
         # name-regex only; tag filtering is xcodebuild-only). The full suite
         # (including these) must be run locally before merge — see AGENTS.md.
+        # ProjectionTreeTests un-skipped after #291 (ReadScope): ~32 s on CI
+        # hardware (~2–3x slower), down from 165 s+ per working-set test.
         env:
-          SKIP: 'ProjectionTreeTests|EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests'
+          SKIP: 'EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests'
         run: swift test --skip "$SKIP" || xcrun swift test --skip "$SKIP"
 
   python:
