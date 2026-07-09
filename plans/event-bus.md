@@ -86,8 +86,12 @@ lock — the exact deadlock (a) prevents.
 **Emitters:**
 - `SQLiteWikiStore` — one `.local` event per public mutating method (23 methods;
   see the Appendix of the shipped plan / `StoreEmissionExhaustivenessTests`).
-- `WikiChangeBridge.flush` — one coarse `.external` event into the active
-  store's bus (active wiki), or a direct FP signal (non-active wiki).
+- `WikiChangeBridge.flush` — **always** signals the File Provider for the
+  changed wiki (direct, not via the bus subscriber), **and** emits one coarse
+  event into the active store's bus when the changed wiki is the one on screen
+  (issue #303: the old either/or could miss the model reload if `activeWikiID`
+  changed during the coalesce window, and the active wiki's FP was only refreshed
+  transitively via the bus subscriber with an extra debounce).
 - `wikictl` (separate process) is **untouched**: it opens its own store with a
   `nil` bus (emit is a no-op) and keeps posting the Darwin notification.
 

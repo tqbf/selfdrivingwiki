@@ -117,19 +117,30 @@ final class WikiChangeBridge {
         ChangeCoalescer.Handle(cancel: {})
     }
 
-    /// One coalesced flush for `wikiID`. For the active wiki, emit a coarse
-    /// `.external` event into the active store's bus — the model's `.external`
-    /// subscription rebuilds its projections (replacing the old direct
-    /// `reloadFromStore()`) and the File Provider subscriber signals, both on the
-    /// same bus. For a non-active wiki there is no in-memory store/bus, so signal
-    /// the FP directly (unchanged). The Darwin notification carries no per-
-    /// resource detail, so the reload stays full-model exactly as before.
+    /// One coalesced flush for `wikiID`. Always signals the File Provider for
+    /// the changed wiki — a `wikictl` write can land in any wiki's DB, and that
+    /// wiki's filesystem projection must refresh regardless of which wiki is on
+    /// screen. Additionally, when the changed wiki IS the active one, emits a
+    /// coarse event into the active store's bus so the on-screen model reloads
+    /// its projections (sidebar, sources, chats). For a non-active wiki there is
+    /// no in-memory store/bus, so only the FP is signaled; the model reads fresh
+    /// data when the user later switches to that wiki (`WikiManager.openActive`).
+    ///
+    /// Issue #303: the previous either/or structure (bus-OR-FP) meant the active
+    /// wiki's FP was refreshed only transitively via the bus subscriber (which
+    /// adds a second debounce), and in the edge case where `activeWikiID`
+    /// changed during the coalesce window the model reload was skipped entirely.
+    /// Now both paths fire unconditionally for their respective targets.
     private func flush(wikiID: String) {
+        // Always refresh the File Provider — direct, not via the bus subscriber,
+        // so the mount is consistent for every wiki the bridge observes.
+        Task { await fileProvider.signalChange(forWikiID: wikiID) }
+
+        // If the changed wiki is the one on screen, also poke the bus so the
+        // model rebuilds its projections (sidebar, sources, chats, draft).
         if manager.activeWikiID == wikiID, let bus = manager.activeStore?.eventBus {
             bus.emit(ResourceChangeEvent(
                 wikiID: wikiID, kind: nil, id: "", change: .updated))
-        } else {
-            Task { await fileProvider.signalChange(forWikiID: wikiID) }
         }
     }
 
