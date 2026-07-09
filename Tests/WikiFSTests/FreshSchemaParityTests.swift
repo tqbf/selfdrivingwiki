@@ -8,7 +8,8 @@ import SQLite3
 /// any drift (a forgotten table/column/index/FK/trigger) would silently make
 /// fresh dbs differ from upgraded ones. This forces a fresh db through the FULL
 /// ladder and compares the two schema-identical.
-@Suite struct FreshSchemaParityTests {
+@Suite(.tags(.integration))
+struct FreshSchemaParityTests {
 
     private func tempURL() -> URL {
         let dir = FileManager.default.temporaryDirectory
