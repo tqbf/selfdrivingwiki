@@ -276,15 +276,17 @@ struct AddressBarView: View {
     private enum BookmarkTarget {
         case page(PageID)
         case source(PageID)
+        case chat(PageID)
     }
 
-    /// The current selection, when it's something that can be bookmarked (a page
-    /// or a source). Non-bookmarkable selections (log, ask, …) return `nil` so no
-    /// plus appears.
+    /// The current selection, when it's something that can be bookmarked (a page,
+    /// a source, or a chat). Non-bookmarkable selections (log, ask, …) return
+    /// `nil` so no plus appears.
     private var bookmarkTarget: BookmarkTarget? {
         switch store.activeTab?.selection {
         case .page(let id): return .page(id)
         case .source(let id): return .source(id)
+        case .chat(let id): return .chat(id)
         default: return nil
         }
     }
@@ -295,6 +297,8 @@ struct AddressBarView: View {
             onAddToBookmarks(BookmarkTargetPickerContext(kind: .pages, ids: [id]))
         case .source(let id):
             onAddToBookmarks(BookmarkTargetPickerContext(kind: .sources, ids: [id]))
+        case .chat(let id):
+            onAddToBookmarks(BookmarkTargetPickerContext(kind: .chats, ids: [id]))
         }
     }
 
@@ -309,17 +313,17 @@ struct AddressBarView: View {
 
     // MARK: - Address string
 
-    /// Whether readable content (a page, source, or document) is loaded in the
-    /// active tab. When false (no tab, or a non-content selection), the bar is in
-    /// its empty / search-first state: a leading search glyph, auto-focus, and the
-    /// "Search for pages" placeholder.
+    /// Whether readable content (a page, source, chat, or document) is loaded in
+    /// the active tab. When false (no tab, or a non-content selection), the bar is
+    /// in its empty / search-first state: a leading search glyph, auto-focus, and
+    /// the "Search for pages" placeholder.
     private var hasContentLoaded: Bool {
         !addressString.isEmpty
     }
 
     /// Resolves the active selection to its wikilink notation. Non-page
-    /// selections show a best-effort pseudo-wikilink so the bar is never blank
-    /// when something is open.
+    /// selections (source, chat, …) show a best-effort pseudo-wikilink so the
+    /// bar is never blank when something is open.
     private var addressString: String {
         guard let selection = store.activeTab?.selection else { return "" }
         switch selection {
@@ -341,10 +345,9 @@ struct AddressBarView: View {
             return "[[lint]]"
         case .bookmark:
             return ""
-        case .chat:
-            // `[[chat:…]]` wikilink resolution is a deferred follow-up phase
-            // (plans/chat-and-persistence.md) — no pseudo-notation yet.
-            return ""
+        case .chat(let id):
+            let title = store.chats.first { $0.id == id }?.title ?? ""
+            return title.isEmpty ? "" : "[[chat:\(title)]]"
         }
     }
 }

@@ -89,6 +89,7 @@ struct Projection {
         static let bookmarkFolderPrefix = WikiFSContainerID.bookmarkFolderPrefix
         static let bookmarkPageRefPrefix = WikiFSContainerID.bookmarkPageRefPrefix
         static let bookmarkSourceRefPrefix = WikiFSContainerID.bookmarkSourceRefPrefix
+        static let bookmarkChatRefPrefix = WikiFSContainerID.bookmarkChatRefPrefix
 
         // Phase B: two more root-level read-only docs. `log.md` renders the
         // append-only `log` table as grep-able lines; `index.md` serves the
@@ -195,11 +196,14 @@ struct Projection {
         static func bookmarkSourceRef(_ ulid: String) -> NSFileProviderItemIdentifier {
             NSFileProviderItemIdentifier(bookmarkSourceRefPrefix + ulid)
         }
+        static func bookmarkChatRef(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(bookmarkChatRefPrefix + ulid)
+        }
 
         /// Extract the bookmark-node ULID from any bookmark identifier, or nil.
         static func bookmarkULID(from id: NSFileProviderItemIdentifier) -> String? {
             let raw = id.rawValue
-            for p in [bookmarkFolderPrefix, bookmarkPageRefPrefix, bookmarkSourceRefPrefix] {
+            for p in [bookmarkFolderPrefix, bookmarkPageRefPrefix, bookmarkSourceRefPrefix, bookmarkChatRefPrefix] {
                 if raw.hasPrefix(p) { return String(raw.dropFirst(p.count)) }
             }
             return nil
@@ -771,6 +775,7 @@ struct Projection {
         case .folder:      return Identity.bookmarkFolder(node.id)
         case .pageRef:     return Identity.bookmarkPageRef(node.id)
         case .sourceRef:   return Identity.bookmarkSourceRef(node.id)
+        case .chatRef:     return Identity.bookmarkChatRef(node.id)
         }
     }
 
@@ -830,6 +835,20 @@ struct Projection {
             return .file(id: id, parent: parent, name: "Stale Reference.txt",
                          size: body.count, version: version, metadataVersion: version,
                          created: nil, modified: nil)
+        case .chatRef:
+            if let targetID = node.targetID,
+               let chat = (try? store.listAllChatsOrderedByID())?.first(where: { $0.id == targetID }) {
+                let messages = (try? store.chatMessages(chatID: chat.id)) ?? []
+                let body = Data(ChatTranscriptRenderer.render(summary: chat, messages: messages).utf8)
+                let name = Self.sanitizeFilename(chat.title) + ".md"
+                return .file(id: id, parent: parent, name: name, size: body.count,
+                             version: version, metadataVersion: version,
+                             created: chat.createdAt, modified: chat.updatedAt)
+            }
+            let body = Data("# Stale reference\n\nThis bookmark points to a deleted conversation.".utf8)
+            return .file(id: id, parent: parent, name: "Stale Reference.md",
+                         size: body.count, version: version, metadataVersion: version,
+                         created: nil, modified: nil)
         }
     }
 
@@ -884,6 +903,13 @@ struct Projection {
             }
             return (try? store.sourceContent(id: targetID))
                 ?? Data("# Stale reference\n\nThis bookmark points to a deleted source.".utf8)
+        case .chatRef:
+            guard let targetID = node.targetID,
+                  let chat = (try? store.listAllChatsOrderedByID())?.first(where: { $0.id == targetID }) else {
+                return Data("# Stale reference\n\nThis bookmark points to a deleted conversation.".utf8)
+            }
+            let messages = (try? store.chatMessages(chatID: chat.id)) ?? []
+            return Data(ChatTranscriptRenderer.render(summary: chat, messages: messages).utf8)
         }
     }
 

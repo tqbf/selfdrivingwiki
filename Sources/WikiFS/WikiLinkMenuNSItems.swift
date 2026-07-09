@@ -52,9 +52,8 @@ enum WikiLinkMenuNSItems {
                     guard let id = store.sourceID(forDisplayName: target) else { continue }
                     ctx = BookmarkTargetPickerContext(kind: .sources, ids: [id])
                 case .chat:
-                    // Chat bookmarking is not yet supported in the bookmark
-                    // picker — skip this item for chat links.
-                    continue
+                    guard let id = store.chatID(forTitle: target) else { continue }
+                    ctx = BookmarkTargetPickerContext(kind: .chats, ids: [id])
                 case nil:
                     continue
                 }

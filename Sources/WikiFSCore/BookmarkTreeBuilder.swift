@@ -26,6 +26,7 @@ public struct BookmarkTreeItem: Identifiable, Hashable, Sendable {
         switch node.kind {
         case .pageRef: return node.targetID.map { WikiSelection.page($0) }
         case .sourceRef: return node.targetID.map { WikiSelection.source($0) }
+        case .chatRef: return node.targetID.map { WikiSelection.chat($0) }
         case .folder: return nil
         }
     }
@@ -61,7 +62,7 @@ public func buildBookmarkTree(nodes: [BookmarkNode]) -> [BookmarkTreeItem] {
             // Always expandable — empty array when no children.
             let children = buildChildren(of: node.id)
             return BookmarkTreeItem(id: node.id, node: node, children: children)
-        case .pageRef, .sourceRef:
+        case .pageRef, .sourceRef, .chatRef:
             // Leaf — no disclosure triangle.
             return BookmarkTreeItem(id: node.id, node: node, children: nil)
         }

@@ -346,6 +346,21 @@ final class FileProviderSpike {
         await launch(url: url, with: appURL)
     }
 
+    /// Open a chat transcript in its default app, in the ACTIVE wiki's domain.
+    /// Resolves the chat's user-visible URL via its `chat-by-name` identifier
+    /// (the same resolution `revealChatInFinder` uses) and hands it to
+    /// `NSWorkspace`. Pass `appURL` to launch a specific app instead of the
+    /// default handler. Mirrors `openPage`.
+    func openChat(id: PageID, with appURL: URL? = nil) async {
+        guard let url = await resolveChatByNameURL(id: id) else {
+            DebugLog.agent("openChat: FAILED resolving URL for id=\(id.rawValue)")
+            status = "Couldn’t resolve conversation for open."
+            return
+        }
+        DebugLog.agent("openChat: resolved url=\(url.path) app=\(appURL?.lastPathComponent ?? "default")")
+        await launch(url: url, with: appURL)
+    }
+
     /// Hand a resolved mount URL to `NSWorkspace`. With `appURL == nil` this is
     /// the default-handler launch (sync `open(_:)`); otherwise it launches the
     /// chosen app with `open(_:withApplicationAt:configuration:)`. Updates

@@ -69,11 +69,16 @@ struct EditBookmarkSheet: View {
                 if node?.kind != .folder, node?.label != nil {
                     Button("Reset Name") {
                         let fallback: String
-                        if let n = node, n.kind == .pageRef {
-                            fallback = n.targetID.flatMap { id in
+                        switch node?.kind {
+                        case .pageRef:
+                            fallback = node?.targetID.flatMap { id in
                                 store.summaries.first { $0.id == id }?.title
                             } ?? ""
-                        } else {
+                        case .chatRef:
+                            fallback = node?.targetID.flatMap { id in
+                                store.chats.first { $0.id == id }?.title
+                            } ?? ""
+                        default:
                             fallback = node?.targetID.flatMap { id in
                                 store.sources.first { $0.id == id }?.effectiveName
                             } ?? ""

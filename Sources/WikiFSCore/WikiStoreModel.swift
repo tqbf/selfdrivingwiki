@@ -2430,6 +2430,20 @@ public final class WikiStoreModel {
         }
     }
 
+    /// Add a chat reference to a folder. Pass `position` to insert at a specific
+    /// sibling index (the store shifts later siblings down); omit it to append.
+    public func addChatRef(parentID: String?, chatID: PageID, position: Int? = nil) {
+        let pos = position ?? bookmarkNodes.filter { $0.parentID == parentID }.count
+        do {
+            _ = try store.createBookmarkNode(
+                parentID: parentID, position: pos, kind: .chatRef,
+                label: nil, targetID: chatID)
+            reloadBookmarkNodes()
+        } catch {
+            DebugLog.store("WikiStoreModel.addChatRef failed: \(error)")
+        }
+    }
+
     /// Rename a folder.
     public func renameBookmarkNode(id: String, to label: String) {
         do {

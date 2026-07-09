@@ -83,6 +83,7 @@ public enum WikiFSContainerID {
     public static let bookmarkFolderPrefix = "bookmark-folder:"
     public static let bookmarkPageRefPrefix = "bookmark-page-ref:"
     public static let bookmarkSourceRefPrefix = "bookmark-source-ref:"
+    public static let bookmarkChatRefPrefix = "bookmark-chat-ref:"
 
     // Chats (#119 follow-on). A top-level `chats/` tree with `by-id` and
     // `by-name` views, each chat rendered as a readable `.md` transcript file.

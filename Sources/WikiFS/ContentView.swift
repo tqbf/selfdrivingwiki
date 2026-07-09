@@ -132,6 +132,7 @@ struct ContentView: View {
                         switch ctx.kind {
                         case .pages: store.addPageRef(parentID: parentID, pageID: id)
                         case .sources: store.addSourceRef(parentID: parentID, sourceID: id)
+                        case .chats: store.addChatRef(parentID: parentID, chatID: id)
                         }
                     }
                 }

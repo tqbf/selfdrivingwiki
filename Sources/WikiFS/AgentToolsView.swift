@@ -1,12 +1,12 @@
 import SwiftUI
 import WikiFSCore
 
-/// The Chats section — a small SwiftUI `List` of the conversation entry plus the
-/// "Recent Conversations" history. Mirrors the Pages/Sources/Bookmarks tabs:
-/// single-purpose, focused on one content type. Maintenance/diagnostic surfaces
-/// (Lint, Instructions, Activity) moved to the app's maintenance menu (issue
-/// #282). These are navigation items, so single-click selects AND opens (the
-/// binding's `set` calls `store.openTab`). No per-row gesture, so no latency.
+/// The Chats section — a small SwiftUI `List` of the wiki's chat history.
+/// Mirrors the Pages/Sources/Bookmarks tabs: single-purpose, focused on one
+/// content type. Maintenance/diagnostic surfaces (Lint, Instructions,
+/// Activity) moved to the app's maintenance menu (issue #282). These are
+/// navigation items, so single-click selects AND opens (the binding's `set`
+/// calls `store.openTab`). No per-row gesture, so no latency.
 struct AgentToolsView: View {
     @Bindable var store: WikiStoreModel
     /// The Ask (read-only) conversation launcher — backs the live indicator on
@@ -24,43 +24,27 @@ struct AgentToolsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Chats").font(.headline).foregroundStyle(.primary)
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            chatsHeader
             Divider()
             List(selection: Binding(
                 get: { store.activeTab?.selection },
                 set: { sel in if let sel { store.openTab(sel) } }
             )) {
-                SidebarModeRow(title: "Conversation", subtitle: "Ask questions or update the wiki",
-                    systemImage: "bubble.left.and.text.bubble.right")
-                    .tag(WikiSelection.edit)
-                    .help("Chat with the agent — ask questions, or ask it to update the wiki. It proposes changes and waits for your approval before writing.")
-
-                if !store.chats.isEmpty {
-                    Section {
-                        ForEach(store.chats) { chat in
-                            RecentChatRow(
-                                chat: chat,
-                                isLive: isLive(chat)
-                            )
-                                .tag(WikiSelection.chat(chat.id))
-                                .contextMenu {
-                                    Button("Rename Conversation…") {
-                                        renameDraft = chat.title
-                                        renamingChat = chat
-                                    }
-                                    Button("Delete Conversation", role: .destructive) {
-                                        store.deleteChat(id: chat.id)
-                                    }
-                                }
+                ForEach(store.chats) { chat in
+                    RecentChatRow(
+                        chat: chat,
+                        isLive: isLive(chat)
+                    )
+                        .tag(WikiSelection.chat(chat.id))
+                        .contextMenu {
+                            Button("Rename Conversation…") {
+                                renameDraft = chat.title
+                                renamingChat = chat
+                            }
+                            Button("Delete Conversation", role: .destructive) {
+                                store.deleteChat(id: chat.id)
+                            }
                         }
-                    } header: {
-                        recentConversationsHeader
-                    }
                 }
             }
             .listStyle(.inset)
@@ -90,17 +74,20 @@ struct AgentToolsView: View {
         }
     }
 
-    // MARK: - Recent Conversations header
+    // MARK: - Chats header
 
-    /// The "Recent Conversations" header: the title on the left, a `+` menu on
-    /// the right. The `+` opens the draft state for a mode (Ask default, Edit
-    /// second) by retargeting/opening a tab to `.ask` / `.edit` — the same
-    /// draft state `ConversationView` renders with `chatID == nil`. This reuses
-    /// the existing `store.openTab` path rather than duplicating tab logic.
-    /// (D4)
-    private var recentConversationsHeader: some View {
+    /// Section header: title on the leading edge, a `+` button on the trailing
+    /// edge — mirrors `BookmarksContainerView`'s `bookmarksHeader` (native
+    /// macOS pattern: Photos, Mail, Finder sidebar section headers). The `+`
+    /// opens the draft state for a mode (Ask default, Edit second) by
+    /// retargeting/opening a tab to `.ask` / `.edit` — the same draft state
+    /// `ConversationView` renders with `chatID == nil`. This reuses the
+    /// existing `store.openTab` path rather than duplicating tab logic. (D4)
+    private var chatsHeader: some View {
         HStack {
-            Text("Recent Conversations")
+            Text("Chats")
+                .font(.headline)
+                .foregroundStyle(.primary)
             Spacer()
             Button {
                 store.openTab(.edit)
@@ -113,7 +100,8 @@ struct AgentToolsView: View {
             .fixedSize()
             .help("New Conversation")
         }
-        .textCase(nil)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
     // MARK: - Live indicator
@@ -149,10 +137,8 @@ struct AgentToolsView: View {
     }
 }
 
-/// One row in the "Recent Conversations" section — mirrors `SidebarModeRow`'s
-/// layout but needs a `Text(_:format:)` subtitle (relative timestamp) instead
-/// of a plain `String`, so it can't reuse that view unmodified. When `isLive`
-/// is true a small tinted `circle.fill` + "responding…" caption is shown so the
+/// One row in the "Recent Conversations" section. When `isLive` is true a
+/// small tinted `circle.fill` + "responding…" caption is shown so the
 /// one-per-kind live-session constraint is *visible* instead of surprising.
 /// (D4)
 private struct RecentChatRow: View {

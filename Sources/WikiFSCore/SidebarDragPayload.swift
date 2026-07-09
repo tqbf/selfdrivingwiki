@@ -2,7 +2,7 @@ import Foundation
 
 /// Internal drag payload for a sidebar row dragged onto the welcome screen
 /// (issue #133). Carries just enough to resolve the drop to a `WikiSelection`:
-/// a kind (page or source) and the target's stable id.
+/// a kind (page, source, or chat) and the target's stable id.
 ///
 /// This type lives in the model layer (no `Transferable` conformance here) so it
 /// can be unit-tested directly; the app layer adds the `Transferable` conformance
@@ -16,11 +16,12 @@ public struct SidebarDragPayload: Codable, Sendable, Hashable {
     public enum Kind: String, Sendable, Codable {
         case page
         case source
+        case chat
     }
 
-    /// Whether the target is a page or a source.
+    /// Whether the target is a page, a source, or a chat.
     public let kind: Kind
-    /// `PageID.rawValue` of the target page/source.
+    /// `PageID.rawValue` of the target page/source/chat.
     public let id: String
 
     public init(kind: Kind, id: String) {
@@ -34,6 +35,7 @@ public struct SidebarDragPayload: Codable, Sendable, Hashable {
         switch kind {
         case .page:   return .page(pageID)
         case .source: return .source(pageID)
+        case .chat:   return .chat(pageID)
         }
     }
 }
