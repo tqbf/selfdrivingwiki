@@ -323,6 +323,14 @@ final class FileProviderSpike {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    /// Reveal a chat transcript file in Finder via its `chat-by-name` leaf
+    /// identifier. Mirrors `revealPageInFinder`. Best-effort: silently no-ops if
+    /// the domain isn't active or the daemon can't resolve the item.
+    func revealChatInFinder(id: PageID) async {
+        guard let url = await resolveChatByNameURL(id: id) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
     /// Open a page in its default app (e.g. a Markdown editor), in the ACTIVE
     /// wiki’s domain. Resolves the page’s user-visible URL via its
     /// `page-by-title` identifier (the same resolution `share`/`reveal` use) and
@@ -407,6 +415,29 @@ final class FileProviderSpike {
                 timeout: .seconds(5))
         } catch {
             DebugLog.fileprovider("resolvePageByTitleURL: failed — \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// Resolve the user-visible URL for sharing a chat via its `chat-by-name`
+    /// leaf identifier. Mirrors `resolvePageByTitleURL`/`resolveSourceByNameURL`
+    /// — the daemon returns the canonical URL directly, so no path construction
+    /// and no cold-cache race. Returns `nil` if the domain isn't active or the
+    /// daemon can't resolve the item.
+    func resolveChatByNameURL(id: PageID) async -> URL? {
+        guard let wikiID = activeWikiID else { return nil }
+        let domain = domain(id: wikiID, displayName: wikiID)
+        guard let manager = NSFileProviderManager(for: domain) else { return nil }
+        let identifier = NSFileProviderItemIdentifier(WikiFSContainerID.chatByName(id.rawValue))
+        do {
+            let url = try await userVisibleURL(
+                manager: manager,
+                itemIdentifier: identifier,
+                timeout: .seconds(5))
+            DebugLog.fileprovider("resolveChatByNameURL: resolved \(url.lastPathComponent)")
+            return url
+        } catch {
+            DebugLog.fileprovider("resolveChatByNameURL: failed — \(error.localizedDescription)")
             return nil
         }
     }
