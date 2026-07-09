@@ -365,6 +365,15 @@ extension PagesListViewController {
             menu.addItem(menuItem(
                 title: "Rename",
                 systemImage: "pencil", action: #selector(renameAction(_:)), payload: payload))
+            if isCurrentHomePage(clicked.id) {
+                menu.addItem(menuItem(
+                    title: "Clear Home Page",
+                    systemImage: "house.slash", action: #selector(clearHomePageAction(_:)), payload: payload))
+            } else {
+                menu.addItem(menuItem(
+                    title: "Set as Home Page",
+                    systemImage: "house", action: #selector(setHomePageAction(_:)), payload: payload))
+            }
         }
 
         menu.addItem(menuItem(
@@ -372,6 +381,14 @@ extension PagesListViewController {
             systemImage: "trash", action: #selector(deleteAction(_:)), payload: payload))
 
         return menu
+    }
+
+    /// Whether `pageID` is the active wiki's configured home page (issue #280) —
+    /// decides "Set as Home Page" vs. "Clear Home Page" in the context menu.
+    private func isCurrentHomePage(_ pageID: PageID) -> Bool {
+        guard let manager, let wikiID = manager.activeWikiID,
+              let wiki = manager.wikis.first(where: { $0.id == wikiID }) else { return false }
+        return wiki.homePageID == pageID
     }
 
     private func menuItem(title: String, systemImage: String,
@@ -413,6 +430,15 @@ extension PagesListViewController {
     }
     @objc private func renameAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onRename(p.clicked) }
+    }
+    @objc private func setHomePageAction(_ sender: NSMenuItem) {
+        guard let p = sender.representedObject as? PagesMenuPayload,
+              let manager, let wikiID = manager.activeWikiID else { return }
+        manager.setHomePage(id: wikiID, pageID: p.clicked.id)
+    }
+    @objc private func clearHomePageAction(_ sender: NSMenuItem) {
+        guard let manager, let wikiID = manager.activeWikiID else { return }
+        manager.setHomePage(id: wikiID, pageID: nil)
     }
     @objc private func deleteAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onDelete(p.effectiveIDs) }

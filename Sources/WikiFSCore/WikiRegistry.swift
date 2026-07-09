@@ -48,6 +48,12 @@ public struct WikiRegistry: Codable, Equatable, Sendable {
         wikis[index].displayName = displayName
     }
 
+    /// Set (or clear, with `nil`) a wiki's home page. No-op if the id is unknown.
+    public mutating func setHomePage(id: String, pageID: PageID?) {
+        guard let index = wikis.firstIndex(where: { $0.id == id }) else { return }
+        wikis[index].homePageID = pageID
+    }
+
     /// Mark a wiki as just-used: bump `lastUsedAt` and move it to the front so MRU
     /// ordering (and the launch pick) stays correct.
     public mutating func touch(id: String, now: Date = Date()) {
