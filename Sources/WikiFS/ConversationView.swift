@@ -39,6 +39,8 @@ struct ConversationView: View {
     @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: ConversationMetrics.composerFont)
     @State private var persistedMessages: [ChatMessage] = []
     @AppStorage("conversation.zoom") private var conversationZoom = Double(ZoomScale.defaultScale)
+    @AppStorage("isChatOutlineExpanded") private var chatOutlineExpanded = false
+    @State private var outlineScroll: ChatScrollRequest? = nil
 
     /// True when this surface is rendering the active live session (D2
     /// source-of-truth rule). The view sources from `launcher.events`; when
@@ -50,12 +52,21 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ZStack(alignment: .topTrailing) {
-                content
-                if showsDebugControls {
-                    controls
-                        .padding(.top, ConversationMetrics.debugTopInset)
-                        .padding(.trailing, ConversationMetrics.contentInset)
+            HStack(spacing: 0) {
+                ZStack(alignment: .topTrailing) {
+                    content
+                    if showsDebugControls {
+                        controls
+                            .padding(.top, ConversationMetrics.debugTopInset)
+                            .padding(.trailing, ConversationMetrics.contentInset)
+                    }
+                }
+                if chatOutlineExpanded {
+                    ChatOutlineView(turns: chatTurns) { turnIndex in
+                        outlineScroll = ChatScrollRequest(
+                            version: (outlineScroll?.version ?? 0) + 1,
+                            turnIndex: turnIndex)
+                    }
                 }
             }
             .frame(minWidth: PageEditorMetrics.detailMinWidth)
@@ -186,7 +197,8 @@ struct ConversationView: View {
                 onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
                 renderContext: { [weak store] in store?.renderContext() },
                 blobStore: store,
-                zoom: conversationZoom
+                zoom: conversationZoom,
+                scrollRequest: outlineScroll
             )
                 .frame(maxWidth: ConversationMetrics.chatColumnWidth, maxHeight: .infinity)
                 .padding(.horizontal, PageEditorMetrics.contentInset)
@@ -244,21 +256,44 @@ struct ConversationView: View {
         store.chats.first { $0.id == chatID }
     }
 
+    /// User turns (questions) in display order — the chat outline entries. Sourced
+    /// from the SAME transcript-visible events the web view renders, so outline
+    /// index `i` matches the i-th `.chat-user` row.
+    private var chatTurns: [String] {
+        let events = isLiveChat
+            ? launcher.events.transcriptVisible
+            : persistedMessages.map(\.event).transcriptVisible
+        return events.compactMap { event in
+            if case .userText(let text) = event { return text }
+            return nil
+        }
+    }
+
     @ViewBuilder
     private func header(for chat: ChatSummary) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(chat.title)
-                .font(.largeTitle)
-                .bold()
-                .lineLimit(1)
-                .textSelection(.enabled)
-            HStack(spacing: 6) {
-                Text("\(chat.messageCount) message\(chat.messageCount == 1 ? "" : "s")")
-                Text("·")
-                Text(chat.updatedAt, format: .dateTime)
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(chat.title)
+                    .font(.largeTitle)
+                    .bold()
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+                HStack(spacing: 6) {
+                    Text("\(chat.messageCount) message\(chat.messageCount == 1 ? "" : "s")")
+                    Text("·")
+                    Text(chat.updatedAt, format: .dateTime)
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
             }
-            .font(.callout)
-            .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Button {
+                chatOutlineExpanded.toggle()
+            } label: {
+                Image(systemName: "sidebar.right")
+            }
+            .buttonStyle(.borderless)
+            .help("Toggle Outline")
         }
         .padding(.horizontal, PageEditorMetrics.contentInset)
         .padding(.top, PageEditorMetrics.contentInset)
@@ -282,7 +317,8 @@ struct ConversationView: View {
                 onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
                 renderContext: { [weak store] in store?.renderContext() },
                 blobStore: store,
-                zoom: conversationZoom
+                zoom: conversationZoom,
+                scrollRequest: outlineScroll
             )
             .frame(maxWidth: ConversationMetrics.chatColumnWidth, maxHeight: .infinity)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -586,5 +622,53 @@ enum ConversationMetrics {
     static var sendButtonBottomInset: CGFloat {
         (ComposerTextView.oneLineHeight(for: composerFont)
             + composerVerticalPadding * 2 - sendButtonSize) / 2
+    }
+}
+
+/// Right-side outline for a conversation: lists the user's turns (questions) in
+/// order. Clicking a turn scrolls the transcript web view to that message via a
+/// versioned `ChatScrollRequest`. Mirrors the page outline's shape (divider +
+/// "Outline" header + scrollable list).
+struct ChatOutlineView: View {
+    let turns: [String]
+    let onSelect: (Int) -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(width: 1)
+                .frame(maxHeight: .infinity)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Outline")
+                    .font(.headline)
+                    .padding([.horizontal, .top])
+                    .padding(.bottom, 8)
+                Divider()
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(turns.enumerated()), id: \.offset) { index, turn in
+                            Button {
+                                onSelect(index)
+                            } label: {
+                                Text(turn.isEmpty ? "(empty)" : turn)
+                                    .font(.callout)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 4)
+                                    .padding(.horizontal, 8)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+            }
+            .frame(width: 240)
+            .background(Color(nsColor: .textBackgroundColor))
+        }
     }
 }

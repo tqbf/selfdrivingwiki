@@ -21,6 +21,15 @@ import WikiFSCore
 /// full reload — so an in-progress text selection survives a streaming run. A
 /// count *decrease* (a reset) or a `showsInternals` change (which changes which
 /// underlying events are visible) forces a full rebuild.
+/// A versioned request to scroll the chat transcript to a user turn. Mirrors the
+/// reader's anchor-version pattern: `version` bumps to signal a new request;
+/// `turnIndex` is the 0-based index among the `.chat-user` rows the transcript
+/// renders. Consumed in `AgentTranscriptWebView.updateNSView`.
+struct ChatScrollRequest: Equatable {
+    let version: Int
+    let turnIndex: Int
+}
+
 struct AgentTranscriptWebView: NSViewRepresentable {
     /// `.activityFeed` is the inspector look (labeled rows, tool calls,
     /// diagnostics). `.chat` is the Query page look (right-aligned capsule
@@ -66,6 +75,9 @@ struct AgentTranscriptWebView: NSViewRepresentable {
     /// `readerZoom`). Defaults to 1× so callers that don't pass a value render
     /// at native size.
     var zoom: Double = Double(ZoomScale.defaultScale)
+    /// Versioned request to scroll to a user turn (outline click). `nil` (default)
+    /// never scrolls; consumed in `updateNSView`.
+    var scrollRequest: ChatScrollRequest? = nil
 
     func makeNSView(context: Context) -> WKWebView {
         // Register the blob scheme handler BEFORE the first load (same wiring
@@ -99,6 +111,13 @@ struct AgentTranscriptWebView: NSViewRepresentable {
             handler.store = blobStore
         }
         context.coordinator.apply(events: events, showsInternals: showsInternals)
+        // Outline click → scroll the i-th user bubble into view. Only fires when
+        // the version advances, so unrelated re-renders (streaming) don't re-scroll.
+        if let req = scrollRequest, req.version != context.coordinator.appliedScrollVersion {
+            context.coordinator.appliedScrollVersion = req.version
+            let js = "(function(){var u=document.querySelectorAll('.chat-user');var el=u[\(req.turnIndex)];if(el){el.scrollIntoView({block:'start'});}})()"
+            webView.evaluateJavaScript(js, completionHandler: nil)
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -114,6 +133,9 @@ struct AgentTranscriptWebView: NSViewRepresentable {
         /// `currentContext`); the value is `Sendable` so it can flow into the
         /// pure static render functions.
         var renderContext: (() -> WikiRenderContext?)?
+        /// Last chat-outline scroll request applied, so an unchanged request
+        /// doesn't re-scroll on every re-render.
+        var appliedScrollVersion: Int = -1
         private var renderedCount = 0
         private var renderedShowsInternals: Bool?
         private var isLoaded = false

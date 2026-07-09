@@ -20,6 +20,8 @@ struct QueryTranscriptView: View {
     /// Page-zoom multiplier forwarded to the transcript web view. Bound to the
     /// `conversation.zoom` AppStorage by the conversation surface.
     var zoom: Double = Double(ZoomScale.defaultScale)
+    /// Versioned scroll-to-turn request, forwarded to the transcript web view.
+    var scrollRequest: ChatScrollRequest? = nil
 
     var body: some View {
         Group {
@@ -33,7 +35,8 @@ struct QueryTranscriptView: View {
                     onWikiLink: onWikiLink,
                     renderContext: renderContext,
                     blobStore: blobStore,
-                    zoom: zoom
+                    zoom: zoom,
+                    scrollRequest: scrollRequest
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
