@@ -122,6 +122,8 @@ struct SidebarView: View {
                    !store.sourceSearchResults.contains(where: { $0.id == id }) {
                     store.sourceSearchQuery = ""
                 }
+            case .chat:
+                selectedSection = .chats
             default:
                 break
             }

@@ -26,29 +26,41 @@ struct AgentToolsView: View {
         VStack(spacing: 0) {
             chatsHeader
             Divider()
-            List(selection: Binding(
-                get: { store.activeTab?.selection },
-                set: { sel in if let sel { store.openTab(sel) } }
-            )) {
-                ForEach(store.chats) { chat in
-                    RecentChatRow(
-                        chat: chat,
-                        isLive: isLive(chat)
-                    )
-                        .tag(WikiSelection.chat(chat.id))
-                        .contextMenu {
-                            Button("Rename Conversation…") {
-                                renameDraft = chat.title
-                                renamingChat = chat
+            ScrollViewReader { proxy in
+                List(selection: Binding(
+                    get: { store.activeTab?.selection },
+                    set: { sel in if let sel { store.openTab(sel) } }
+                )) {
+                    ForEach(store.chats) { chat in
+                        RecentChatRow(
+                            chat: chat,
+                            isLive: isLive(chat)
+                        )
+                            .tag(WikiSelection.chat(chat.id))
+                            .contextMenu {
+                                Button("Rename Conversation…") {
+                                    renameDraft = chat.title
+                                    renamingChat = chat
+                                }
+                                Button("Delete Conversation", role: .destructive) {
+                                    store.deleteChat(id: chat.id)
+                                }
                             }
-                            Button("Delete Conversation", role: .destructive) {
-                                store.deleteChat(id: chat.id)
-                            }
-                        }
+                    }
+                }
+                .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+                // "Show In List" reveal: a detail-view button requested that a
+                // chat be surfaced. The active tab already selects this chat
+                // (we're viewing it), so the row is highlighted — we only need
+                // to scroll it into view. `.onAppear` covers the freshly-mounted
+                // case (SidebarView just switched to the Chats section);
+                // `.onChange` covers the already-visible case.
+                .onAppear { revealPendingChat(proxy: proxy) }
+                .onChange(of: store.pendingSidebarRevealVersion) { _, _ in
+                    revealPendingChat(proxy: proxy)
                 }
             }
-            .listStyle(.inset)
-            .scrollContentBackground(.hidden)
         }
         // Rename alert: a single `.alert` driven by `renamingChat`, with a text
         // field. Commit on the primary action, dismiss otherwise. The store
@@ -123,6 +135,21 @@ struct AgentToolsView: View {
             isGenerating: match.isGenerating,
             chatID: chat.id
         )
+    }
+
+    /// Scroll to the chat row requested by the "Show In List" button, then
+    /// consume the pending reveal so it fires exactly once. The scroll is
+    /// deferred to the next runloop pass so the List has laid out its rows
+    /// when this view was just mounted by the section switch in `SidebarView`.
+    private func revealPendingChat(proxy: ScrollViewProxy) {
+        guard let pending = store.pendingSidebarReveal,
+              case .chat(let id) = pending else { return }
+        store.consumePendingSidebarReveal()
+        DispatchQueue.main.async {
+            withAnimation {
+                proxy.scrollTo(WikiSelection.chat(id), anchor: .center)
+            }
+        }
     }
 
     /// Pure predicate for the row live indicator: a row shows a "responding…"
