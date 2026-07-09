@@ -50,6 +50,42 @@ struct ChatView: View {
         return launcher.activeChatID == chatID.rawValue
     }
 
+    /// Pure source-of-truth selector (D2): the live session streams from
+    /// `launcher.events`; everything else renders the persisted rows. Both are
+    /// `transcriptVisible`-filtered. Extracted as a static func so the selection
+    /// logic is unit-testable without a SwiftUI view tree.
+    static func displayMessages(
+        isLiveChat: Bool,
+        launcherEvents: [AgentEvent],
+        persistedEvents: [AgentEvent]
+    ) -> [AgentEvent] {
+        (isLiveChat ? launcherEvents : persistedEvents).transcriptVisible
+    }
+
+    /// The transcript-visible events this surface renders — `launcher.events`
+    /// when live, the persisted rows otherwise. Fed to the single
+    /// `ChatTranscriptView` (replacing the old live/persisted dual render sites).
+    private var displayMessages: [AgentEvent] {
+        Self.displayMessages(
+            isLiveChat: isLiveChat,
+            launcherEvents: launcher.events,
+            persistedEvents: persistedMessages.map(\.event))
+    }
+
+    /// Empty-state message for the transcript placeholder. The live streaming
+    /// case overlays "Waiting for the Agent…" via `transcriptIsRunning`; the
+    /// idle/persisted cases show their own message here.
+    private var transcriptEmptyMessage: String {
+        isLiveChat ? "Ask a question to start a chat." : "No messages were persisted for this chat."
+    }
+
+    /// True only when THIS surface is the active live stream — so a persisted
+    /// chat never shows the "Waiting for the Agent…" placeholder even while its
+    /// launcher is generating a different chat.
+    private var transcriptIsRunning: Bool {
+        isLiveChat && launcher.isRunning
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .topTrailing) {
@@ -156,16 +192,21 @@ struct ChatView: View {
             AgentActivityView(launcher: launcher, showsResultEvents: false, showsInternals: true, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(ChatMetrics.contentInset)
-        } else if isLiveChat || chatID == nil {
-            // Live session or draft state: same path as ChatView.
-            if hasVisibleChat {
-                liveChat
-            } else {
-                emptyState
+        } else if chatID == nil {
+            // Draft state (.ask/.edit): big "Ask X" + composer until the first
+            // send retargets the tab to .chat(id).
+            emptyState
+        } else if !isLiveChat && chatSummary == nil {
+            // Persisted chat that no longer exists in the store.
+            ContentUnavailableView {
+                Label("Chat Missing", systemImage: "bubble.left.and.bubble.right")
+            } description: {
+                Text("This chat is no longer available.")
             }
         } else {
-            // Persisted non-live chat: read-only header + transcript.
-            persistedChat
+            // Live or persisted chat: one transcript + one composer (the D2
+            // source-of-truth rule selects launcher.events vs persisted rows).
+            chatSurface
         }
     }
 
@@ -189,10 +230,15 @@ struct ChatView: View {
         }
     }
 
-    // MARK: - Live chat (streaming)
+    // MARK: - Unified chat surface (live + persisted)
 
+    /// One transcript + one composer for both the live (streaming) and persisted
+    /// (read-only) chat. The D2 source-of-truth rule picks the event source via
+    /// `displayMessages`; only the empty-state message + the composer's caption
+    /// differ (persisted shows "No messages…" / the "another chat is responding"
+    /// caption; live shows the streaming placeholder).
     @ViewBuilder
-    private var liveChat: some View {
+    private var chatSurface: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let chat = chatSummary {
                 header(for: chat)
@@ -206,7 +252,9 @@ struct ChatView: View {
                             .padding(.bottom, ChatMetrics.sectionSpacing)
                     }
                     ChatTranscriptView(
-                        launcher: launcher,
+                        events: displayMessages,
+                        emptyStateMessage: transcriptEmptyMessage,
+                        isRunning: transcriptIsRunning,
                         onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
                         renderContext: { [weak store] in store?.renderContext() },
                         blobStore: store,
@@ -216,7 +264,7 @@ struct ChatView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.horizontal, PageEditorMetrics.contentInset)
                         .padding(.top, showsEditingEnabledBanner || chatSummary != nil ? 0 : ChatMetrics.chatTopInset)
-                    liveComposer
+                    chatComposer
                         .padding(.horizontal, PageEditorMetrics.contentInset)
                         .padding(.top, ChatMetrics.sectionSpacing)
                         .padding(.bottom, ChatMetrics.contentInset)
@@ -237,50 +285,38 @@ struct ChatView: View {
                 .font(.largeTitle)
                 .fontWeight(.regular)
                 .multilineTextAlignment(.center)
-            liveComposer
+            composer(enabled: isComposerEnabled)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, ChatMetrics.emptyStateHorizontalInset)
         .padding(.bottom, ChatMetrics.emptyStateBottomBias)
     }
 
-    private var liveComposer: some View {
-        composer(enabled: isComposerEnabled)
-    }
-
-    // MARK: - Persisted chat (read-only)
-
-    @ViewBuilder
-    private var persistedChat: some View {
-        if let chat = chatSummary {
-            VStack(alignment: .leading, spacing: 0) {
-                header(for: chat)
-                Divider().opacity(PageEditorMetrics.dividerOpacity)
-                withChatOutline {
-                    persistedTranscript
-                }
-            }
-        } else {
-            ContentUnavailableView {
-                Label("Chat Missing", systemImage: "bubble.left.and.bubble.right")
-            } description: {
-                Text("This chat is no longer available.")
+    /// The composer, placed once as a VStack sibling below the transcript (the
+    /// live placement). For a persisted (non-live) chat it also carries the
+    /// "another chat is responding" caption when the kind's launcher is busy.
+    private var chatComposer: some View {
+        VStack(spacing: 4) {
+            composer(enabled: isComposerEnabled)
+            if let caption = persistedComposerCaption {
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             }
         }
     }
+
+    // MARK: - Persisted chat summary
 
     private var chatSummary: ChatSummary? {
         store.chats.first { $0.id == chatID }
     }
 
     /// User turns (questions) in display order — the chat outline entries. Sourced
-    /// from the SAME transcript-visible events the web view renders, so outline
-    /// index `i` matches the i-th `.chat-user` row.
+    /// from `displayMessages` (the SAME transcript-visible events the web view
+    /// renders), so outline index `i` matches the i-th `.chat-user` row.
     private var chatTurns: [String] {
-        let events = isLiveChat
-            ? launcher.events.transcriptVisible
-            : persistedMessages.map(\.event).transcriptVisible
-        return events.compactMap { event in
+        displayMessages.compactMap { event in
             if case .userText(let text) = event { return text }
             return nil
         }
@@ -345,51 +381,6 @@ struct ChatView: View {
         .padding(.horizontal, PageEditorMetrics.contentInset)
         .padding(.top, PageEditorMetrics.contentInset)
         .padding(.bottom, ChatMetrics.sectionSpacing)
-    }
-
-    @ViewBuilder
-    private var persistedTranscript: some View {
-        let visible = persistedMessages.map(\.event).transcriptVisible
-        if visible.isEmpty {
-            VStack(spacing: 7) {
-                Text("No messages were persisted for this chat.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        } else {
-            ChatWebView(
-                events: visible,
-                style: .chat,
-                onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
-                renderContext: { [weak store] in store?.renderContext() },
-                blobStore: store,
-                zoom: chatZoom,
-                scrollRequest: outlineScroll
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .padding(.horizontal, PageEditorMetrics.contentInset)
-            // D3: the persisted chat's composer continues the chat
-            // (seeded-fallback). Enabled when the kind's launcher is idle; disabled
-            // with a slot-style caption when a different chat is responding.
-            .safeAreaInset(edge: .bottom) {
-                persistedComposerFooter
-            }
-        }
-    }
-
-    private var persistedComposerFooter: some View {
-        VStack(spacing: 4) {
-            composer(enabled: isComposerEnabled)
-            if let caption = persistedComposerCaption {
-                Text(caption)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .padding(.horizontal, PageEditorMetrics.contentInset)
-        .padding(.bottom, ChatMetrics.contentInset)
-        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Editing banner
@@ -546,30 +537,6 @@ struct ChatView: View {
     }
 
     // MARK: - Derived state
-
-    private var hasVisibleChat: Bool {
-        if isLiveChat {
-            return launcher.events.contains { event in
-                switch event {
-                case .userText:
-                    return true
-                case .assistantText(let text), .result(_, let text):
-                    return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                case .systemInit, .toolUse, .toolResult, .subagent, .messageStop, .raw, .assistantTextDelta:
-                    return false
-                }
-            }
-        }
-        // Persisted chat or draft: check if there are any visible persisted rows.
-        return persistedMessages.map(\.event).transcriptVisible.contains { event in
-            switch event {
-            case .userText: return true
-            case .assistantText(let text), .result(_, let text):
-                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            default: return false
-            }
-        }
-    }
 
     private var activeWikiName: String {
         guard let id = manager.activeWikiID,

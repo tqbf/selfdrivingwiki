@@ -1,18 +1,30 @@
 import SwiftUI
 import WikiFSCore
 
-/// Output-first chat surface for the dedicated Query page. Internal stream-json
-/// bookkeeping stays in AgentActivityView behind "Show internals".
+/// The reusable chat-transcript component for BOTH the live (streaming) and the
+/// persisted (read-only) chat surfaces. Rendered from a caller-supplied `events`
+/// array (already `transcriptVisible`-filtered), so the live path feeds
+/// `launcher.events` and the persisted path feeds `store.chatMessages` through
+/// the same view — collapsing the old dual render sites in `ChatView`.
 struct ChatTranscriptView: View {
-    @Bindable var launcher: AgentLauncher
+    /// The transcript-visible events to render (caller pre-filters via
+    /// `[AgentEvent].transcriptVisible`).
+    let events: [AgentEvent]
+    /// Idle/fallback empty-state message. Overridden by "Waiting for the
+    /// Agent…" while `isRunning` (the live streaming case).
+    var emptyStateMessage: String
+    /// True while a live session is streaming into this transcript. Shows the
+    /// "Waiting for the Agent…" placeholder and the streaming hint; the
+    /// persisted surface passes `false` (it is never the active stream).
+    var isRunning: Bool = false
     /// Forwards wiki-link clicks in the transcript to the detail column. Built
-    /// where the store lives (the parent `ChatView`) and forwarded
-    /// unchanged to the transcript web view.
+    /// where the store lives (the parent `ChatView`) and forwarded unchanged to
+    /// the transcript web view.
     var onWikiLink: ((URL, Bool) -> Void)? = nil
     /// Provider of the current `WikiRenderContext` (Phase A.2) — bound to
-    /// `store.renderContext()` by `ChatView`, so live chat rows
-    /// render source references exactly as the reader does. Forwarded unchanged
-    /// to the transcript web view.
+    /// `store.renderContext()` by `ChatView`, so chat rows render source
+    /// references exactly as the reader does. Forwarded unchanged to the
+    /// transcript web view.
     var renderContext: (() -> WikiRenderContext?)? = nil
     /// The store backing `wiki-blob://` blob serving for the transcript's
     /// images/media. Forwarded to the transcript web view.
@@ -25,12 +37,12 @@ struct ChatTranscriptView: View {
 
     var body: some View {
         Group {
-            if visibleEvents.isEmpty {
+            if events.isEmpty {
                 placeholder
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
                 ChatWebView(
-                    events: visibleEvents,
+                    events: events,
                     style: .chat,
                     onWikiLink: onWikiLink,
                     renderContext: renderContext,
@@ -43,19 +55,20 @@ struct ChatTranscriptView: View {
         }
     }
 
-    private var visibleEvents: [AgentEvent] {
-        launcher.events.transcriptVisible
-    }
-
     private var placeholder: some View {
         VStack(spacing: 7) {
-            Text(launcher.isRunning ? "Waiting for the Agent..." : "Ask a question to start a chat.")
+            Text(isRunning ? "Waiting for the Agent..." : emptyStateMessage)
                 .font(.headline)
                 .fontWeight(.medium)
                 .foregroundStyle(.primary)
-            Text("Answers appear here; one-line tool-call summaries show as the agent works. Full detail is available under “Show internals.”")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            // The streaming hint only applies while the agent is actively
+            // working this transcript; a persisted (read-only) empty state shows
+            // just its message.
+            if isRunning {
+                Text("Answers appear here; one-line tool-call summaries show as the agent works. Full detail is available under “Show internals.”")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
         }
         .multilineTextAlignment(.center)
         .padding(ChatTranscriptMetrics.emptyStatePadding)
@@ -67,7 +80,7 @@ private enum ChatTranscriptMetrics {
 }
 
 extension [AgentEvent] {
-    /// The transcript-visible subset shared by the live Query page and the
+    /// The transcript-visible subset shared by the live chat surface and the
     /// read-only chat-history view, so a persisted chat re-renders
     /// exactly like it looked live.
     var transcriptVisible: [AgentEvent] {
