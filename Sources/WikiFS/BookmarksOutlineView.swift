@@ -226,6 +226,8 @@ final class BookmarksOutlineViewController: NSViewController {
             return node.targetID.flatMap { id in store.summaries.first { $0.id == id }?.title } ?? "(missing)"
         case .sourceRef:
             return node.targetID.flatMap { id in store.sources.first { $0.id == id }?.effectiveName } ?? "(missing)"
+        case .chatRef:
+            return node.targetID.flatMap { id in store.chats.first { $0.id == id }?.title } ?? "(missing)"
         case .folder:
             return node.label ?? "Untitled"
         }
@@ -240,6 +242,9 @@ final class BookmarksOutlineViewController: NSViewController {
         case .sourceRef:
             let isStale = node.targetID.flatMap { id in store?.sources.first { $0.id == id } } == nil
             return isStale ? "exclamationmark.triangle" : "doc"
+        case .chatRef:
+            let isStale = node.targetID.flatMap { id in store?.chats.first { $0.id == id } } == nil
+            return isStale ? "exclamationmark.triangle" : "bubble.left.and.bubble.right"
         }
     }
 
@@ -255,9 +260,15 @@ final class BookmarksOutlineViewController: NSViewController {
             }
             return
         }
-        // Open page/source ref.
+        // Open page/source/chat ref.
         if let targetID = item.targetID {
-            let sel: WikiSelection = item.kind == .pageRef ? .page(targetID) : .source(targetID)
+            let sel: WikiSelection
+            switch item.kind {
+            case .pageRef: sel = .page(targetID)
+            case .sourceRef: sel = .source(targetID)
+            case .chatRef: sel = .chat(targetID)
+            case .folder: return
+            }
             callbacks?.onOpen([sel])
         }
     }
@@ -298,9 +309,8 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
         guard let node = item as? BookmarkNode else { return nil }
         let payloads: [SidebarDragPayload]
         switch node.kind {
-        case .pageRef, .sourceRef:
-            if let targetID = node.targetID {
-                let kind: SidebarDragPayload.Kind = (node.kind == .pageRef) ? .page : .source
+        case .pageRef, .sourceRef, .chatRef:
+            if let targetID = node.targetID, let kind = dragKind(for: node.kind) {
                 payloads = [SidebarDragPayload(kind: kind, id: targetID.rawValue)]
             } else {
                 payloads = []
@@ -312,18 +322,25 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
         return SidebarDragPasteboardItem(payloads: payloads, bookmarkNodeID: node.id)
     }
 
-    /// Recursively collects the resolved page/source target for every leaf
+    /// Recursively collects the resolved page/source/chat target for every leaf
     /// reachable under `folderID`, walking into nested subfolders too.
     private func leafPayloads(under folderID: String) -> [SidebarDragPayload] {
         children(of: folderID).flatMap { child -> [SidebarDragPayload] in
-            switch child.kind {
-            case .pageRef, .sourceRef:
-                guard let targetID = child.targetID else { return [] }
-                let kind: SidebarDragPayload.Kind = (child.kind == .pageRef) ? .page : .source
-                return [SidebarDragPayload(kind: kind, id: targetID.rawValue)]
-            case .folder:
-                return leafPayloads(under: child.id)
+            guard let targetID = child.targetID, let kind = dragKind(for: child.kind) else {
+                return child.kind == .folder ? leafPayloads(under: child.id) : []
             }
+            return [SidebarDragPayload(kind: kind, id: targetID.rawValue)]
+        }
+    }
+
+    /// Maps a leaf `BookmarkNodeKind` to its `SidebarDragPayload.Kind`; `nil`
+    /// for `.folder` (folders have no target of their own to drag).
+    private func dragKind(for kind: BookmarkNodeKind) -> SidebarDragPayload.Kind? {
+        switch kind {
+        case .pageRef: return .page
+        case .sourceRef: return .source
+        case .chatRef: return .chat
+        case .folder: return nil
         }
     }
 
@@ -550,8 +567,10 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
         let isBatch = effectiveNodes.count > 1
         let count = effectiveNodes.count
 
-        // Leaf nodes (pageRef / sourceRef) that can be opened as tabs.
-        let openableNodes = effectiveNodes.filter { $0.kind == .pageRef || $0.kind == .sourceRef }
+        // Leaf nodes (pageRef / sourceRef / chatRef) that can be opened as tabs.
+        let openableNodes = effectiveNodes.filter {
+            $0.kind == .pageRef || $0.kind == .sourceRef || $0.kind == .chatRef
+        }
         let openCount = openableNodes.count
 
         let menu = NSMenu()
@@ -576,6 +595,8 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
                 case .sourceRef:
                     let src = store?.sources.first { $0.id == clicked.targetID }
                     type = OpenWithMenu.contentType(mimeType: src?.mimeType, filename: src?.filename)
+                case .chatRef:
+                    type = OpenWithMenu.pageContentType
                 case .folder:
                     type = .data
                 }
@@ -646,9 +667,13 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
     /// Filters effective nodes to openable leaves and maps them to `WikiSelection`.
     private func openableSelections(from nodes: [BookmarkNode]) -> [WikiSelection] {
         nodes.compactMap { node -> WikiSelection? in
-            guard node.kind == .pageRef || node.kind == .sourceRef,
-                  let targetID = node.targetID else { return nil }
-            return node.kind == .pageRef ? .page(targetID) : .source(targetID)
+            guard let targetID = node.targetID else { return nil }
+            switch node.kind {
+            case .pageRef: return .page(targetID)
+            case .sourceRef: return .source(targetID)
+            case .chatRef: return .chat(targetID)
+            case .folder: return nil
+            }
         }
     }
 
@@ -668,6 +693,8 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
                 await fileProvider.openPage(id: targetID, with: appURL)
             case .sourceRef:
                 await fileProvider.openSource(id: targetID, with: appURL)
+            case .chatRef:
+                await fileProvider.openChat(id: targetID, with: appURL)
             case .folder:
                 break
             }

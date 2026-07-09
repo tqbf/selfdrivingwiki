@@ -1,12 +1,23 @@
 import SwiftUI
 import WikiFSCore
 
+/// What kind of item a `BookmarkTargetPickerContext` carries. Distinct from
+/// `ItemPickerKind` (which drives the folder-level "Add Page…/Add Source…"
+/// browse-and-pick flow and has no chat case) — this one backs the "already
+/// have the item(s), pick a destination folder" flow, which does support chats.
+enum BookmarkRefKind: String {
+    case pages
+    case sources
+    case chats
+}
+
 /// Fixed item selection carried into the bookmark-target picker — the "inverse"
 /// of `PickerContext`. Here the items are already chosen (a multi-row selection
-/// from the Pages/Sources list) and the user picks the destination folder.
+/// from the Pages/Sources list, or the active chat) and the user picks the
+/// destination folder.
 struct BookmarkTargetPickerContext: Identifiable {
     let id = UUID()
-    let kind: ItemPickerKind
+    let kind: BookmarkRefKind
     let ids: [PageID]
 }
 
@@ -14,13 +25,13 @@ struct BookmarkTargetPickerContext: Identifiable {
 /// picks (or creates) the destination bookmark folder. Confirming calls
 /// `onConfirm` with the chosen folder's id (or `nil` for the bookmarks root),
 /// and the caller creates one ref per selected item via
-/// `WikiStoreModel.addPageRef` / `addSourceRef`.
+/// `WikiStoreModel.addPageRef` / `addSourceRef` / `addChatRef`.
 ///
 /// Reads `store.bookmarkNodes` live so an inline "Create" folder shows up
 /// immediately and auto-selects.
 struct BookmarkTargetPickerSheet: View {
     @Bindable var store: WikiStoreModel
-    let kind: ItemPickerKind
+    let kind: BookmarkRefKind
     let ids: [PageID]
     /// Receives the chosen destination folder id (`nil` = bookmarks root).
     let onConfirm: (String?) -> Void
@@ -116,8 +127,13 @@ struct BookmarkTargetPickerSheet: View {
     }
 
     private var headerTitle: String {
-        let noun = (kind == .pages) ? "Page" : "Source"
-        let plural = (kind == .pages) ? "Pages" : "Sources"
+        let noun: String
+        let plural: String
+        switch kind {
+        case .pages: noun = "Page"; plural = "Pages"
+        case .sources: noun = "Source"; plural = "Sources"
+        case .chats: noun = "Conversation"; plural = "Conversations"
+        }
         let count = ids.count
         let nounText = count == 1 ? noun : plural
         return "Add \(count == 1 ? "" : "\(count) ")\(nounText) to Bookmarks"

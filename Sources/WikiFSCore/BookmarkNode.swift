@@ -9,6 +9,8 @@ public enum BookmarkNodeKind: String, Sendable, Codable {
     case pageRef = "page_ref"
     /// A reference to a source (leaf).
     case sourceRef = "source_ref"
+    /// A reference to a chat conversation (leaf).
+    case chatRef = "chat_ref"
 }
 
 /// One row in the `bookmark_nodes` table — the persistent organizational tree for

@@ -289,11 +289,17 @@ struct ConversationView: View {
     @ViewBuilder
     private func header(for chat: ChatSummary) -> some View {
         VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
-            Text(chat.title)
-                .font(.largeTitle)
-                .bold()
-                .lineLimit(1)
-                .textSelection(.enabled)
+            Label {
+                Text(chat.title)
+                    .font(.largeTitle)
+                    .bold()
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+            } icon: {
+                Image(systemName: chat.kind == .ask ? "bubble.left.and.bubble.right" : "square.and.pencil")
+                    .font(.largeTitle)
+                    .foregroundStyle(.secondary)
+            }
 
             HStack(spacing: 6) {
                 Text("\(chat.messageCount) message\(chat.messageCount == 1 ? "" : "s")")
