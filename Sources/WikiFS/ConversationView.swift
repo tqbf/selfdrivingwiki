@@ -343,7 +343,6 @@ struct ConversationView: View {
                 } label: {
                     Image(systemName: "sidebar.right")
                 }
-                .buttonStyle(.borderless)
                 .help("Toggle Outline")
             }
         }

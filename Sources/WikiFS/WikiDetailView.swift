@@ -70,7 +70,7 @@ struct WikiDetailView: View {
                         introRow(title: "Pages", description: "Create and edit markdown notes with deep wiki-linking.", systemImage: "doc.text")
                         introRow(title: "Sources", description: "Manage and ingest raw material from URLs, folders, or Zotero.", systemImage: "tray.full")
                         introRow(title: "Bookmarks", description: "Organize pages and sources into a custom folder tree for quick access.", systemImage: "bookmark")
-                        introRow(title: "Agent", description: "Query the agent, check wiki health, and view system logs.", systemImage: "sparkles")
+                        introRow(title: "Chats", description: "Ask questions and edit your wiki through conversation.", systemImage: "bubble.left.and.bubble.right")
                     }
                     .frame(maxWidth: 400)
 
