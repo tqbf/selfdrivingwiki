@@ -61,6 +61,11 @@ struct AgentTranscriptWebView: NSViewRepresentable {
     /// transcript's images/media. Registered as a `BlobSchemeHandler` on the
     /// WKWebView (mirroring `WikiReaderView`). Weakly held by the handler.
     var blobStore: WikiStoreModel? = nil
+    /// Page-zoom multiplier applied to the transcript web view via
+    /// `WKWebView.pageZoom` (same mechanism as `WikiReaderView`'s
+    /// `readerZoom`). Defaults to 1× so callers that don't pass a value render
+    /// at native size.
+    var zoom: Double = Double(ZoomScale.defaultScale)
 
     func makeNSView(context: Context) -> WKWebView {
         // Register the blob scheme handler BEFORE the first load (same wiring
@@ -74,6 +79,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.underPageBackgroundColor = .clear
+        webView.pageZoom = zoom
         webView.allowsBackForwardNavigationGestures = false
         context.coordinator.webView = webView
         context.coordinator.style = style
@@ -84,6 +90,7 @@ struct AgentTranscriptWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        webView.pageZoom = zoom
         context.coordinator.style = style
         context.coordinator.onWikiLink = onWikiLink
         context.coordinator.renderContext = renderContext

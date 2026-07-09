@@ -163,6 +163,9 @@ struct ComposerTextView: NSViewRepresentable {
         if textView.isEditable != isEditable {
             textView.isEditable = isEditable
         }
+        if textView.font != font {
+            textView.font = font
+        }
         textView.setAccessibilityPlaceholderValue(placeholderText)
         context.coordinator.recomputeHeight(for: textView)
     }

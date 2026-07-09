@@ -3,10 +3,8 @@ import Testing
 @testable import WikiFS
 import WikiFSCore
 
-/// Tests for the New Conversation affordance (PR #198 semantics, `plans/
-/// persisted-chat-history.md`): the pure `showsNewConversationButton` predicate
-/// on `QueryConversationView`, and `AgentLauncher.startNewConversation()`'s
-/// clearing/guard behavior.
+/// Tests for `AgentLauncher.startNewConversation()`'s clearing/guard behavior
+/// (PR #198 semantics, `plans/persisted-chat-history.md`).
 @MainActor
 struct QueryNewConversationTests {
 
@@ -14,42 +12,6 @@ struct QueryNewConversationTests {
         let launcher = AgentLauncher()
         launcher.resolveClaude = { .found(path: "/usr/bin/true") }
         return launcher
-    }
-
-    // MARK: - showsNewConversationButton predicate matrix
-
-    @Test func predicateTrueWhileLiveQuerySession() {
-        #expect(QueryConversationView.showsNewConversationButton(
-            isRunning: true, isInteractiveSession: true,
-            runningKind: .query, hasVisibleConversation: false))
-    }
-
-    @Test func predicateFalseForNonQueryRunEvenIfInteractive() {
-        // Guards against a non-query run (ingest/lint) ever showing the button
-        // via the "live session" arm.
-        #expect(!QueryConversationView.showsNewConversationButton(
-            isRunning: true, isInteractiveSession: true,
-            runningKind: .ingest, hasVisibleConversation: false))
-    }
-
-    @Test func predicateFalseWhenRunningButNotInteractive() {
-        #expect(!QueryConversationView.showsNewConversationButton(
-            isRunning: true, isInteractiveSession: false,
-            runningKind: .query, hasVisibleConversation: false))
-    }
-
-    @Test func predicateTrueWhenIdleButTranscriptVisible() {
-        // A finished transcript still visible is worth discarding even though
-        // nothing is running.
-        #expect(QueryConversationView.showsNewConversationButton(
-            isRunning: false, isInteractiveSession: false,
-            runningKind: nil, hasVisibleConversation: true))
-    }
-
-    @Test func predicateFalseWhenIdleAndNoVisibleConversation() {
-        #expect(!QueryConversationView.showsNewConversationButton(
-            isRunning: false, isInteractiveSession: false,
-            runningKind: nil, hasVisibleConversation: false))
     }
 
     // MARK: - startNewConversation() clears idle state

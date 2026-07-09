@@ -17,6 +17,9 @@ struct QueryTranscriptView: View {
     /// The store backing `wiki-blob://` blob serving for the transcript's
     /// images/media. Forwarded to the transcript web view.
     var blobStore: WikiStoreModel? = nil
+    /// Page-zoom multiplier forwarded to the transcript web view. Bound to the
+    /// `conversation.zoom` AppStorage by the conversation surface.
+    var zoom: Double = Double(ZoomScale.defaultScale)
 
     var body: some View {
         Group {
@@ -29,7 +32,8 @@ struct QueryTranscriptView: View {
                     style: .chat,
                     onWikiLink: onWikiLink,
                     renderContext: renderContext,
-                    blobStore: blobStore
+                    blobStore: blobStore,
+                    zoom: zoom
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

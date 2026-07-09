@@ -34,15 +34,10 @@ struct AgentToolsView: View {
                 get: { store.activeTab?.selection },
                 set: { sel in if let sel { store.openTab(sel) } }
             )) {
-                SidebarModeRow(title: "Ask", subtitle: "New read-only conversation",
+                SidebarModeRow(title: "Conversation", subtitle: "Ask questions or update the wiki",
                     systemImage: "bubble.left.and.text.bubble.right")
-                    .tag(WikiSelection.ask)
-                    .help("Chat with the agent — read-only, the agent cannot write the wiki.")
-
-                SidebarModeRow(title: "Edit", subtitle: "New editing conversation",
-                    systemImage: "square.and.pencil")
                     .tag(WikiSelection.edit)
-                    .help("Chat with the agent and let it update the wiki.")
+                    .help("Chat with the agent — ask questions, or ask it to update the wiki. It proposes changes and waits for your approval before writing.")
 
                 SidebarModeRow(title: "Lint", subtitle: "Health-check the wiki",
                     systemImage: "checkmark.shield")
@@ -121,15 +116,14 @@ struct AgentToolsView: View {
         HStack {
             Text("Recent Conversations")
             Spacer()
-            Menu {
-                Button("Ask") { store.openTab(.ask) }
-                Button("Edit") { store.openTab(.edit) }
+            Button {
+                store.openTab(.edit)
             } label: {
                 Image(systemName: "plus")
                     .font(.body)
                     .foregroundStyle(.secondary)
             }
-            .menuStyle(.borderlessButton)
+            .buttonStyle(.borderless)
             .fixedSize()
             .help("New Conversation")
         }
