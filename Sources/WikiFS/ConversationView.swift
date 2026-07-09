@@ -52,21 +52,12 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                ZStack(alignment: .topTrailing) {
-                    content
-                    if showsDebugControls {
-                        controls
-                            .padding(.top, ConversationMetrics.debugTopInset)
-                            .padding(.trailing, ConversationMetrics.contentInset)
-                    }
-                }
-                if chatOutlineExpanded {
-                    ChatOutlineView(turns: chatTurns) { turnIndex in
-                        outlineScroll = ChatScrollRequest(
-                            version: (outlineScroll?.version ?? 0) + 1,
-                            turnIndex: turnIndex)
-                    }
+            ZStack(alignment: .topTrailing) {
+                content
+                if showsDebugControls {
+                    controls
+                        .padding(.top, ConversationMetrics.debugTopInset)
+                        .padding(.trailing, ConversationMetrics.contentInset)
                 }
             }
             .frame(minWidth: PageEditorMetrics.detailMinWidth)
@@ -178,6 +169,25 @@ struct ConversationView: View {
         }
     }
 
+    // MARK: - Content + outline
+
+    /// Wraps `content` with the optional right-side chat outline. Placed BELOW
+    /// the header so the title pane spans full width and the outline sits beside
+    /// the transcript (matching the page detail's content+outline layout).
+    @ViewBuilder
+    private func withChatOutline<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        HStack(spacing: 0) {
+            content()
+            if chatOutlineExpanded {
+                ChatOutlineView(turns: chatTurns) { turnIndex in
+                    outlineScroll = ChatScrollRequest(
+                        version: (outlineScroll?.version ?? 0) + 1,
+                        turnIndex: turnIndex)
+                }
+            }
+        }
+    }
+
     // MARK: - Live conversation (streaming)
 
     @ViewBuilder
@@ -187,26 +197,30 @@ struct ConversationView: View {
                 header(for: chat)
                 Divider().opacity(PageEditorMetrics.dividerOpacity)
             }
-            if showsEditingEnabledBanner {
-                editingEnabledBanner
-                    .padding(.top, bannerTopReservation)
-                    .padding(.bottom, ConversationMetrics.sectionSpacing)
+            withChatOutline {
+                VStack(spacing: 0) {
+                    if showsEditingEnabledBanner {
+                        editingEnabledBanner
+                            .padding(.top, bannerTopReservation)
+                            .padding(.bottom, ConversationMetrics.sectionSpacing)
+                    }
+                    QueryTranscriptView(
+                        launcher: launcher,
+                        onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
+                        renderContext: { [weak store] in store?.renderContext() },
+                        blobStore: store,
+                        zoom: conversationZoom,
+                        scrollRequest: outlineScroll
+                    )
+                        .frame(maxWidth: ConversationMetrics.chatColumnWidth, maxHeight: .infinity)
+                        .padding(.horizontal, PageEditorMetrics.contentInset)
+                        .padding(.top, showsEditingEnabledBanner || chatSummary != nil ? 0 : ConversationMetrics.conversationTopInset)
+                    liveComposer
+                        .padding(.horizontal, PageEditorMetrics.contentInset)
+                        .padding(.top, ConversationMetrics.sectionSpacing)
+                        .padding(.bottom, ConversationMetrics.contentInset)
+                }
             }
-            QueryTranscriptView(
-                launcher: launcher,
-                onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
-                renderContext: { [weak store] in store?.renderContext() },
-                blobStore: store,
-                zoom: conversationZoom,
-                scrollRequest: outlineScroll
-            )
-                .frame(maxWidth: ConversationMetrics.chatColumnWidth, maxHeight: .infinity)
-                .padding(.horizontal, PageEditorMetrics.contentInset)
-                .padding(.top, showsEditingEnabledBanner || chatSummary != nil ? 0 : ConversationMetrics.conversationTopInset)
-            liveComposer
-                .padding(.horizontal, PageEditorMetrics.contentInset)
-                .padding(.top, ConversationMetrics.sectionSpacing)
-                .padding(.bottom, ConversationMetrics.contentInset)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
@@ -241,7 +255,9 @@ struct ConversationView: View {
             VStack(alignment: .leading, spacing: 0) {
                 header(for: chat)
                 Divider().opacity(PageEditorMetrics.dividerOpacity)
-                persistedTranscript
+                withChatOutline {
+                    persistedTranscript
+                }
             }
         } else {
             ContentUnavailableView {
