@@ -6,6 +6,7 @@ import CryptoKit
 
 /// Store-level tests: persistence across reopen, pragmas + schema, slug
 /// collision handling, and ULID ordering.
+@Suite(.tags(.integration))
 struct SQLiteWikiStoreTests {
 
     /// Make a fresh on-disk DB URL in a unique temp directory.

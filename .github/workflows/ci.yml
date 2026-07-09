@@ -23,8 +23,15 @@ jobs:
         run: make check-prompts
       - name: Build
         run: swift build || xcrun swift build
-      - name: Test
-        run: swift test || xcrun swift test
+      - name: Test (fast tier — slow SQLite suites skipped, issue #292)
+        # CI runs only the fast tier. The slow SQLite integration suites
+        # (tagged .integration in Tests/WikiFSTests/TestTags.swift) are skipped
+        # by name: `swift test` does not yet filter by tag (SwiftPM's --skip is
+        # name-regex only; tag filtering is xcodebuild-only). The full suite
+        # (including these) must be run locally before merge — see AGENTS.md.
+        env:
+          SKIP: 'ProjectionTreeTests|EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests'
+        run: swift test --skip "$SKIP" || xcrun swift test --skip "$SKIP"
 
   python:
     runs-on: ubuntu-latest

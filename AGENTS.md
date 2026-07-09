@@ -194,9 +194,20 @@ Persistent chats are two tables: `chats` (one row per conversation) and
 **Swift** (from repo root):
 ```
 swift build          # compile
-swift test           # full suite
+swift test           # full suite (run locally before merge)
+# fast tier — what CI runs; skips the slow SQLite integration suites:
+swift test --skip 'ProjectionTreeTests|EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests'
 swift test --filter PdfExtractionServiceTests  # pdf extraction only
 ```
+
+CI runs the **fast tier** only (issue #292): it skips the slow SQLite
+integration suites, which open real databases and dominate runtime (notably
+`ProjectionTreeTests` working-set tests at 165s+ each, #291). They are tagged
+`.integration` (`Tests/WikiFSTests/TestTags.swift`); note `swift test` does not
+yet filter by tag, so CI skips them by name. **Run the full `swift test` locally
+before merging** so those suites aren't skipped. To mark a new slow suite, add
+`.tags(.integration)` AND append its name to the CI skip regex in
+`.github/workflows/ci.yml`.
 
 **Python / pdf2md** (from `tools/pdf2md`):
 ```
