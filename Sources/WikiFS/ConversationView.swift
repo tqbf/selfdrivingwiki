@@ -213,7 +213,7 @@ struct ConversationView: View {
                         zoom: conversationZoom,
                         scrollRequest: outlineScroll
                     )
-                        .frame(maxWidth: ConversationMetrics.chatColumnWidth, maxHeight: .infinity)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.horizontal, PageEditorMetrics.contentInset)
                         .padding(.top, showsEditingEnabledBanner || chatSummary != nil ? 0 : ConversationMetrics.conversationTopInset)
                     liveComposer
@@ -345,8 +345,7 @@ struct ConversationView: View {
                 zoom: conversationZoom,
                 scrollRequest: outlineScroll
             )
-            .frame(maxWidth: ConversationMetrics.chatColumnWidth, maxHeight: .infinity)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .padding(.horizontal, PageEditorMetrics.contentInset)
             // D3: the persisted chat's composer continues the conversation
             // (seeded-fallback). Enabled when the kind's launcher is idle; disabled
@@ -385,7 +384,7 @@ struct ConversationView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .frame(maxWidth: ConversationMetrics.chatColumnWidth)
+        .frame(maxWidth: .infinity)
         .background(.orange.opacity(0.15))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay {
@@ -465,7 +464,7 @@ struct ConversationView: View {
                 .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
         }
         .shadow(color: Color.black.opacity(0.06), radius: 18, x: 0, y: 8)
-        .frame(maxWidth: ConversationMetrics.chatColumnWidth)
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Send logic
@@ -629,7 +628,6 @@ enum ConversationMetrics {
     static let debugTopInset: CGFloat = 18
     static let controlsBandHeight: CGFloat = 28
     static let conversationTopInset: CGFloat = 56
-    static let chatColumnWidth: CGFloat = 900
     static let emptyStateHorizontalInset: CGFloat = 72
     static let emptyStateSpacing: CGFloat = 28
     static let emptyStateBottomBias: CGFloat = 96
