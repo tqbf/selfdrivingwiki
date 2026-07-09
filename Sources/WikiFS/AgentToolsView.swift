@@ -1,11 +1,12 @@
 import SwiftUI
 import WikiFSCore
 
-/// The Agent section — a small SwiftUI `List` of the agent mode entries (Ask /
-/// Edit / Lint / Activity / Instructions). These are navigation items, so
-/// single-click selects AND opens (the binding's `set` calls `store.openTab`),
-/// restoring the behavior the shared-`List` had before the double-click
-/// experiment. No per-row gesture, so no latency.
+/// The Chats section — a small SwiftUI `List` of the conversation entry plus the
+/// "Recent Conversations" history. Mirrors the Pages/Sources/Bookmarks tabs:
+/// single-purpose, focused on one content type. Maintenance/diagnostic surfaces
+/// (Lint, Instructions, Activity) moved to the app's maintenance menu (issue
+/// #282). These are navigation items, so single-click selects AND opens (the
+/// binding's `set` calls `store.openTab`). No per-row gesture, so no latency.
 struct AgentToolsView: View {
     @Bindable var store: WikiStoreModel
     /// The Ask (read-only) conversation launcher — backs the live indicator on
@@ -24,7 +25,7 @@ struct AgentToolsView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Agent").font(.headline).foregroundStyle(.primary)
+                Text("Chats").font(.headline).foregroundStyle(.primary)
                 Spacer()
             }
             .padding(.horizontal, 12)
@@ -38,21 +39,6 @@ struct AgentToolsView: View {
                     systemImage: "bubble.left.and.text.bubble.right")
                     .tag(WikiSelection.edit)
                     .help("Chat with the agent — ask questions, or ask it to update the wiki. It proposes changes and waits for your approval before writing.")
-
-                SidebarModeRow(title: "Lint", subtitle: "Health-check the wiki",
-                    systemImage: "checkmark.shield")
-                    .tag(WikiSelection.lint)
-                    .help("Check the wiki for stale content, broken links, and inconsistencies")
-
-                SidebarModeRow(title: "Activity", subtitle: "Operation log",
-                    systemImage: "clock.arrow.circlepath")
-                    .tag(WikiSelection.changeLog)
-                    .help("Operation history, projected read-only as log.md")
-
-                SidebarModeRow(title: "Instructions", subtitle: "Agent prompt",
-                    systemImage: "sparkles")
-                    .tag(WikiSelection.systemPrompt)
-                    .help("Agent instructions, projected read-only as CLAUDE.md and AGENTS.md")
 
                 if !store.chats.isEmpty {
                     Section {

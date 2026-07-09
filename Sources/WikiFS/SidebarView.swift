@@ -1,10 +1,10 @@
 import SwiftUI
 import WikiFSCore
 
-/// Sidebar host: a section-selector bar (Pages / Sources / Bookmarks / Agent)
+/// Sidebar host: a section-selector bar (Pages / Sources / Bookmarks / Chats)
 /// above the active section's view. Each section is now an independent view:
 /// Pages, Sources, and Bookmarks are native AppKit `NSTableView`/`NSOutlineView`
-/// (instant selection, native double-click); Agent is a small SwiftUI `List`.
+/// (instant selection, native double-click); Chats is a small SwiftUI `List`.
 /// The shared SwiftUI `List(selection:)` and cross-section multi-select
 /// machinery are gone — each view owns its selection.
 struct SidebarView: View {
@@ -47,7 +47,7 @@ struct SidebarView: View {
     /// The sidebar's sections. Each gets an icon in the selector bar and, when
     /// selected, fills the list below.
     enum SidebarSection: String, CaseIterable, Identifiable {
-        case pages, sources, bookmarks, agent
+        case pages, sources, bookmarks, chats
 
         var id: String { rawValue }
 
@@ -56,7 +56,7 @@ struct SidebarView: View {
             case .pages: "Pages"
             case .sources: "Sources"
             case .bookmarks: "Bookmarks"
-            case .agent: "Agent"
+            case .chats: "Chats"
             }
         }
 
@@ -65,7 +65,7 @@ struct SidebarView: View {
             case .pages: "doc.text"
             case .sources: "tray.full"
             case .bookmarks: "bookmark"
-            case .agent: "sparkles"
+            case .chats: "bubble.left.and.bubble.right"
             }
         }
     }
@@ -182,7 +182,7 @@ struct SidebarView: View {
                     showingNewBookmarkFolder = true
                     newBookmarkFolderName = ""
                 })
-        case .agent:
+        case .chats:
             AgentToolsView(store: store, askLauncher: askLauncher, editLauncher: editLauncher)
         }
     }
