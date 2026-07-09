@@ -24,22 +24,25 @@ struct IndexGeneratorTests {
     @Test func manifestIsValidJSONWithCorrectCount() throws {
         let pages = [page("A", "Home", updatedAt: 1), page("B", "Other", updatedAt: 2)]
         let data = IndexGenerators.manifest(pages: pages, sourceCount: 3,
-                                            generatedAt: Date(timeIntervalSince1970: 0))
+                                            chatCount: 0, generatedAt: Date(timeIntervalSince1970: 0))
         let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         #expect(obj?["name"] as? String == "Self Driving Wiki")
         #expect(obj?["version"] as? Int == 1)
         #expect(obj?["page_count"] as? Int == 2)
         #expect(obj?["file_count"] as? Int == 3)
+        #expect(obj?["chat_count"] as? Int == 0)
         let paths = obj?["paths"] as? [String: Any]
         #expect(paths?["page_index"] as? String == "indexes/pages.jsonl")
         #expect(paths?["link_index"] as? String == "indexes/links.jsonl")
         #expect(paths?["sources_by_id"] as? String == "sources/by-id")
         #expect(paths?["source_index"] as? String == "indexes/sources.jsonl")
+        #expect(paths?["chats_by_id"] as? String == "chats/by-id")
+        #expect(paths?["chat_index"] as? String == "indexes/chats.jsonl")
     }
 
     @Test func manifestGeneratedAtIsISO8601UTC() throws {
         let data = IndexGenerators.manifest(pages: [], sourceCount: 0,
-                                            generatedAt: Date(timeIntervalSince1970: 0))
+                                            chatCount: 0, generatedAt: Date(timeIntervalSince1970: 0))
         let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         #expect(obj?["generated_at"] as? String == "1970-01-01T00:00:00Z")
     }
@@ -207,8 +210,8 @@ struct IndexGeneratorTests {
     @Test func bytesAreDeterministicForFixedInput() {
         let pages = [page("A", "Home", updatedAt: 1), page("B", "Other", updatedAt: 2)]
         let date = Date(timeIntervalSince1970: 12345)
-        #expect(IndexGenerators.manifest(pages: pages, sourceCount: 1, generatedAt: date)
-                == IndexGenerators.manifest(pages: pages, sourceCount: 1, generatedAt: date))
+        #expect(IndexGenerators.manifest(pages: pages, sourceCount: 1, chatCount: 0, generatedAt: date)
+                == IndexGenerators.manifest(pages: pages, sourceCount: 1, chatCount: 0, generatedAt: date))
         #expect(IndexGenerators.pagesJSONL(pages: pages) == IndexGenerators.pagesJSONL(pages: pages))
         let links = [IndexGenerators.LinkRow(from: "A", to: "B", linkText: "x")]
         #expect(IndexGenerators.linksJSONL(links: links) == IndexGenerators.linksJSONL(links: links))
@@ -231,7 +234,7 @@ struct IndexGeneratorTests {
         let links = try store.listAllLinks()
 
         let manifest = try JSONSerialization.jsonObject(
-            with: IndexGenerators.manifest(pages: pages, sourceCount: 0, generatedAt: Date())) as? [String: Any]
+            with: IndexGenerators.manifest(pages: pages, sourceCount: 0, chatCount: 0, generatedAt: Date())) as? [String: Any]
         #expect(manifest?["page_count"] as? Int == 2)
 
         let pagesLines = String(decoding: IndexGenerators.pagesJSONL(pages: pages), as: UTF8.self)
@@ -253,7 +256,7 @@ struct IndexGeneratorTests {
 
     @Test func manifestAdvertisesSourcePaths() throws {
         let data = IndexGenerators.manifest(pages: [], sourceCount: 0,
-                                            generatedAt: Date(timeIntervalSince1970: 0))
+                                            chatCount: 0, generatedAt: Date(timeIntervalSince1970: 0))
         let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         let paths = obj?["paths"] as? [String: Any]
         #expect(paths?["sources_by_id"] as? String == "sources/by-id")

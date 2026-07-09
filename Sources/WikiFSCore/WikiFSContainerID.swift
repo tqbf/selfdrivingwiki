@@ -83,4 +83,31 @@ public enum WikiFSContainerID {
     public static let bookmarkFolderPrefix = "bookmark-folder:"
     public static let bookmarkPageRefPrefix = "bookmark-page-ref:"
     public static let bookmarkSourceRefPrefix = "bookmark-source-ref:"
+
+    // Chats (#119 follow-on). A top-level `chats/` tree with `by-id` and
+    // `by-name` views, each chat rendered as a readable `.md` transcript file.
+    // The app's `signalChange()` signals `.rootContainer` (+ the working set)
+    // so a chat create/rename/delete/append refreshes the projection.
+    public static let chats = "chats"
+    public static let chatsByID = "chats-by-id"
+    public static let chatsByName = "chats-by-name"
+    public static let indexChatsJSONL = "index-chats-jsonl"
+
+    /// Prefix for a single chat's `by-id` LEAF identifier (carries the full
+    /// ULID, never the title — INITIAL §6). Shared so the extension's
+    /// `Projection.Identity.chatByID(_:)` and the app build the same identifier.
+    public static let chatByIDPrefix = "chat-by-id:"
+
+    /// Build the `by-id` leaf identifier string for a chat's ULID.
+    public static func chatByID(_ ulid: String) -> String {
+        chatByIDPrefix + ulid
+    }
+
+    /// Prefix for a single chat's `by-name` LEAF identifier.
+    public static let chatByNamePrefix = "chat-by-name:"
+
+    /// Build the `by-name` leaf identifier string for a chat's ULID.
+    public static func chatByName(_ ulid: String) -> String {
+        chatByNamePrefix + ulid
+    }
 }

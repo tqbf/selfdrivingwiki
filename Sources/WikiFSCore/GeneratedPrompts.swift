@@ -121,6 +121,12 @@ The wiki is projected read-only at `$WIKI_ROOT`. Browse it with
   title. Renames self-heal at render (the alias is stale but the display shows
   the current name), so a `source rename` or a page re-title never rewrites
   other pages' bodies.
+- **Link to chats** — `[[chat:Title]]` navigates to a persisted chat
+  (Ask or Edit). Find the title with `wikictl chat list`; read a transcript with
+  `wikictl chat get --id <id>` or `--title "Title"`. Chats project as
+  `chats/by-id/<ULID>.md` on the mount. The canonical form
+  `[[chat:01J…|Title]]` is stable across renames. Chat links cannot be embeds
+  (`![[chat:…]]` is invalid).
 - **External sources** (papers, books, URLs NOT ingested into this wiki) get
   standard academic footnote citations: `[^id]: Author (Year), "Title", Journal/
   Publisher. DOI or URL`. If only a URL is available, that's fine. External
@@ -355,7 +361,7 @@ read-only — WRITE only through the `wikictl` command (see the cheatsheet
 below). `wikictl` already targets THIS wiki via the `$WIKI_DB` environment
 variable, so never pass `--wiki`.
 
-Current contents: {{pageCount}} page{{pageNoun}}, {{sourceCount}} source{{sourceNoun}}.
+Current contents: {{pageCount}} page{{pageNoun}}, {{sourceCount}} source{{sourceNoun}}, {{chatCount}} chat{{chatNoun}}.
 
 ## Layout
 
@@ -364,14 +370,17 @@ Current contents: {{pageCount}} page{{pageNoun}}, {{sourceCount}} source{{source
 - `WIKI-STRUCTURE.md` — this orientation map.
 - `TREE.md`           — legacy alias for `WIKI-STRUCTURE.md`.
 - `CLAUDE.md` / `AGENTS.md` — the agent system prompt (identical bytes).
-- `manifest.json`     — generated wiki manifest (page/source counts, generated_at).
+- `manifest.json`     — generated wiki manifest (page/source/chat counts, generated_at).
 - `pages/by-title/`   — one file per wiki page, named by title.
 - `pages/by-id/`      — the same pages, named by ULID.
 - `sources/by-name/`  — raw immutable sources, named by original filename.
 - `sources/by-id/`    — the same sources, named by ULID.
+- `chats/by-name/`    — one file per persisted chat, named by title.
+- `chats/by-id/`      — the same chats, named by ULID.
 - `indexes/pages.jsonl`   — machine index of every page (id, title, path).
 - `indexes/links.jsonl`   — machine index of the [[wiki-link]] graph.
 - `indexes/sources.jsonl` — machine index of every source.
+- `indexes/chats.jsonl`   — machine index of every chat.
 
 ## wikictl cheatsheet
 
@@ -421,8 +430,8 @@ When answering, use the Query workflow from your instructions. Pull fresh pages 
 
 """#
 
-    static let queryConversationReadwrite = #"""
-ROLE — You are in an interactive Query conversation for this wiki. The user may ask questions, ask follow-ups, ask you to inspect sources, or ask you to update the wiki. Do not assume every answer should be written back. Answer in chat by default. Only change the wiki when the user explicitly asks you to save, update, add, rewrite, log, or otherwise persist something.
+    static let chat = #"""
+ROLE — You are in an interactive chat for this wiki. The user may ask questions, ask follow-ups, ask you to inspect sources, or ask you to update the wiki. Do not assume every answer should be written back. Answer in chat by default. Only change the wiki when the user explicitly asks you to save, update, add, rewrite, log, or otherwise persist something.
 
 STYLE — Do the wiki/source inspection silently. Do NOT narrate process steps like "I'll check the wiki", "I'll consult the sources", "I'll read WIKI_STATE", or "I found this in the wiki" unless the user explicitly asks how you did it. Do not advertise capabilities or ask generic "what would you like me to do" setup questions. Reply directly and concisely to the user's actual message; when a source materially supports the answer, cite it per the CITE SOURCES rule above.
 

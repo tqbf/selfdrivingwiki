@@ -320,6 +320,50 @@ import Foundation
         #expect(events.last?.id == node.id)
     }
 
+    // MARK: - Chats (#119)
+
+    @Test func createChatEmitsChatCreated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .ask, title: "Test Chat")
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .created)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
+    @Test func appendChatMessagesEmitsChatUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .ask, title: "Test Chat")
+        try await drain(rec)
+        _ = try store.appendChatMessages(chatID: chat.id, events: [AgentEvent.userText("test")])
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
+    @Test func renameChatEmitsChatUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .ask, title: "Test Chat")
+        try await drain(rec)
+        try store.renameChat(id: chat.id, to: "Renamed")
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
+    @Test func deleteChatEmitsChatDeleted() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .ask, title: "Test Chat")
+        try await drain(rec)
+        try store.deleteChat(id: chat.id)
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .deleted)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
     // MARK: - Nil-bus store (wikictl path)
 
     @Test func nilBusStoreEmitsSilently() throws {

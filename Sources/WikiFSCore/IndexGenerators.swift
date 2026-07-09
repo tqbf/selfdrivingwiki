@@ -82,13 +82,17 @@ public enum IndexGenerators {
     public static let linkIndexPath = "indexes/links.jsonl"
     public static let sourcesByIDPath = "sources/by-id"
     public static let sourceIndexPath = "indexes/sources.jsonl"
+    public static let chatsByIDPath = "chats/by-id"
+    public static let chatIndexPath = "indexes/chats.jsonl"
 
     /// `manifest.json` — a machine-readable summary of the projection. `pages`
     /// is the page list (used for `page_count`); `sourceCount` is the source
-    /// count; `generatedAt` is stamped into `generated_at` as ISO-8601 UTC.
-    /// Hand-built with a fixed key order so the byte count is stable for a given
-    /// (page_count, source_count, generatedAt).
-    public static func manifest(pages: [WikiPage], sourceCount: Int, generatedAt: Date) -> Data {
+    /// count; `chatCount` is the chat count; `generatedAt` is stamped into
+    /// `generated_at` as ISO-8601 UTC. Hand-built with a fixed key order so the
+    /// byte count is stable for a given
+    /// (page_count, source_count, chat_count, generatedAt).
+    public static func manifest(pages: [WikiPage], sourceCount: Int,
+                                chatCount: Int, generatedAt: Date) -> Data {
         let iso = iso8601(generatedAt)
         let json = """
         {
@@ -97,13 +101,16 @@ public enum IndexGenerators {
           "generated_at": "\(iso)",
           "page_count": \(pages.count),
           "file_count": \(sourceCount),
+          "chat_count": \(chatCount),
           "paths": {
             "pages_by_id": "\(pagesByIDPath)",
             "pages_by_title": "\(pagesByTitlePath)",
             "page_index": "\(pageIndexPath)",
             "link_index": "\(linkIndexPath)",
             "sources_by_id": "\(sourcesByIDPath)",
-            "source_index": "\(sourceIndexPath)"
+            "source_index": "\(sourceIndexPath)",
+            "chats_by_id": "\(chatsByIDPath)",
+            "chat_index": "\(chatIndexPath)"
           }
         }
 
@@ -161,6 +168,26 @@ public enum IndexGenerators {
             let mime = source.mime.map { jsonString($0) } ?? "null"
             let hasMarkdown = source.hasMarkdown ? "true" : "false"
             out += "{\"id\":\(id),\"name\":\(name),\"path\":\(path),\"size\":\(size),\"mime\":\(mime),\"has_markdown\":\(hasMarkdown)}\n"
+        }
+        return Data(out.utf8)
+    }
+
+    /// `indexes/chats.jsonl` — one JSON object per line, one line per chat,
+    /// ordered as given (the caller passes chats ordered by id == creation
+    /// order). Keys in fixed order: id, title, kind, created_at, updated_at,
+    /// message_count. `path` points at the canonical `chats/by-id/<id>.md`
+    /// location (each chat renders as a Markdown transcript).
+    public static func chatsJSONL(chats: [ChatSummary]) -> Data {
+        var out = ""
+        for chat in chats {
+            let id = jsonString(chat.id.rawValue)
+            let title = jsonString(chat.title)
+            let kind = jsonString(chat.kind.rawValue)
+            let path = jsonString("\(chatsByIDPath)/\(chat.id.rawValue).md")
+            let createdAt = jsonNumber(chat.createdAt.timeIntervalSince1970)
+            let updatedAt = jsonNumber(chat.updatedAt.timeIntervalSince1970)
+            let messageCount = String(chat.messageCount)
+            out += "{\"id\":\(id),\"title\":\(title),\"kind\":\(kind),\"path\":\(path),\"created_at\":\(createdAt),\"updated_at\":\(updatedAt),\"message_count\":\(messageCount)}\n"
         }
         return Data(out.utf8)
     }

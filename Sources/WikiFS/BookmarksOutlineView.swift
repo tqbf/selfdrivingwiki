@@ -359,6 +359,8 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
             DebugLog.tabs("[drop] wiki-link bookmark drop: not a resolvable wiki URL \(url.absoluteString)")
             return false
         }
+        // Chat links are not bookmarkable yet — reject the drop.
+        guard kind != .chat else { return false }
         // Phase 5: prefer the canonical `?id=<ULID>` when present (a direct id —
         // no name resolution, stable across renames); validate it names a real
         // row so a bookmark to a since-deleted target falls back to title-based
@@ -399,6 +401,10 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
         switch kind {
         case .page:   store.addPageRef(parentID: parentID, pageID: resolved, position: position)
         case .source: store.addSourceRef(parentID: parentID, sourceID: resolved, position: position)
+        case .chat:
+            // Chat refs aren't a bookmark target yet (no `addChatRef`); reject
+            // the drop so a chat wiki-link drag is a no-op rather than a crash.
+            return false
         }
         DebugLog.tabs("[drop] wiki-link bookmark created: kind=\(kind) title=\"\(title)\" parentID=\(parentID ?? "root") position=\(position)")
         return true

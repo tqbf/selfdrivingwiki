@@ -225,7 +225,7 @@ struct OperationCommandTests {
     let promptIndex = cmd.arguments.firstIndex(of: "--append-system-prompt")!
     let prompt = cmd.arguments[promptIndex + 1]
 
-    #expect(prompt.contains("interactive Query conversation"))
+    #expect(prompt.contains("interactive chat"))
     #expect(prompt.contains("Answer in chat by default"))
     #expect(prompt.contains("Only change the wiki when the user explicitly asks"))
     #expect(prompt.contains("Do the wiki/source inspection silently"))

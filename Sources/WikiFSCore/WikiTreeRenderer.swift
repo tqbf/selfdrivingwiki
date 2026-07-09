@@ -18,14 +18,17 @@ import Foundation
 /// counts — see `Projection.treeNode(for:)`.
 public enum WikiTreeRenderer {
 
-    /// Render the `TREE.md` body for a wiki with `pageCount` pages and `sourceCount`
-    /// sources. Deterministic: same counts → identical bytes.
-    public static func render(pageCount: Int, sourceCount: Int) -> String {
+    /// Render the `TREE.md` body for a wiki with `pageCount` pages,
+    /// `sourceCount` sources, and `chatCount` chats. Deterministic: same counts
+    /// → identical bytes.
+    public static func render(pageCount: Int, sourceCount: Int, chatCount: Int) -> String {
         PromptTemplate.fill(GeneratedPrompts.wikiTreeRender, [
             "pageCount": "\(pageCount)",
             "pageNoun": pageCount == 1 ? "" : "s",
             "sourceCount": "\(sourceCount)",
             "sourceNoun": sourceCount == 1 ? "" : "s",
+            "chatCount": "\(chatCount)",
+            "chatNoun": chatCount == 1 ? "" : "s",
         ])
     }
 }

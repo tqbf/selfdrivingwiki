@@ -134,6 +134,9 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
         return box.result ?? SourceCommand.Result(payload: .text(""), didCommit: false)
     case .admin(let action):
         return try AdminCommand.run(action, in: store)
+    case .chat(let action):
+        let r = try ChatCommand.run(action, in: store)
+        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     }
 }
 

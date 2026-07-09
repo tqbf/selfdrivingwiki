@@ -147,7 +147,7 @@ struct ProjectionTreeTests {
             "README.md", "CLAUDE.md", "AGENTS.md",
             "index.md", "log.md", "WIKI-STRUCTURE.md", "TREE.md",
             "manifest.json",
-            "pages", "sources", "bookmarks", "indexes"
+            "pages", "sources", "chats", "bookmarks", "indexes"
         ])
     }
 
@@ -198,7 +198,7 @@ struct ProjectionTreeTests {
     @Test func indexesChildrenAreTheThreeJsonlFiles() throws {
         let s = try seed()
         let names = s.projection.children(of: Projection.Identity.indexes).map(\.name)
-        #expect(names == ["pages.jsonl", "links.jsonl", "sources.jsonl"])
+        #expect(names == ["pages.jsonl", "links.jsonl", "sources.jsonl", "chats.jsonl"])
     }
 
     @Test func manifestNodeSizeMatchesContent() throws {
@@ -381,5 +381,117 @@ struct ProjectionTreeTests {
         #expect(names.contains("bookmarks"))
         // The folder is now empty.
         #expect(b.projection.children(of: Projection.Identity.bookmarks).isEmpty)
+    }
+
+    // MARK: - Chats projection (#119)
+
+    /// A seeded projection with chats: two chats, the first carrying a short
+    /// transcript. Mirrors `seed()` / `seedBookmarks()` (own temp DB + store).
+    private struct Chatted {
+        let projection: Projection
+        let store: SQLiteWikiStore
+        let chats: [ChatSummary]
+    }
+
+    /// Seed a wiki with two `.ask` chats — the first with a two-message
+    /// transcript, the second empty — so tree-shape and content tests have
+    /// realistic rows.
+    private func seedChats() throws -> Chatted {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-chat-\(UUID().uuidString).sqlite")
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let first = try store.createChat(kind: .ask, title: "Test Chat")
+        _ = try store.appendChatMessages(
+            chatID: first.id, events: [.userText("Hello"), .assistantText("Hi there")])
+        _ = try store.createChat(kind: .ask, title: "Second Chat")
+        let chats = try store.listAllChatsOrderedByID()   // ULID (creation) order
+        let projection = Projection(wikiID: "proj-chat-\(UUID().uuidString)", databaseURL: url)
+        return Chatted(projection: projection, store: store, chats: chats)
+    }
+
+    @Test func chatsFolderResolvesAtRoot() throws {
+        let c = try seedChats()
+        guard let node = c.projection.node(for: Projection.Identity.chats) else {
+            Issue.record("chats folder node not found"); return
+        }
+        #expect(node.parent == .rootContainer)
+        #expect(node.name == "chats")
+        #expect(node.isFolder)
+    }
+
+    @Test func chatsFolderHasByIDAndByName() throws {
+        let c = try seedChats()
+        let ids = c.projection.children(of: Projection.Identity.chats).map(\.id)
+        #expect(ids == [Projection.Identity.chatsByID, Projection.Identity.chatsByName])
+    }
+
+    @Test func chatsByIDChildrenMatchChatCount() throws {
+        let c = try seedChats()
+        let nodes = c.projection.children(of: Projection.Identity.chatsByID)
+        #expect(nodes.count == c.chats.count)
+    }
+
+    @Test func chatNodeResolvesWithContent() throws {
+        let c = try seedChats()
+        let chat = c.chats[0]
+        let id = Projection.Identity.chatByID(chat.id.rawValue)
+        guard let node = c.projection.node(for: id) else {
+            Issue.record("chat-by-id node not found"); return
+        }
+        #expect(node.size > 0)
+        guard let data = c.projection.contents(for: id),
+              let markdown = String(data: data, encoding: .utf8) else {
+            Issue.record("chat content not served"); return
+        }
+        #expect(markdown.contains(chat.title) == true)
+    }
+
+    @Test func chatByNameNodeResolves() throws {
+        let c = try seedChats()
+        let chat = c.chats[0]
+        let id = Projection.Identity.chatByName(chat.id.rawValue)
+        guard let node = c.projection.node(for: id) else {
+            Issue.record("chat-by-name node not found"); return
+        }
+        #expect(node.size > 0)
+        guard let data = c.projection.contents(for: id),
+              let markdown = String(data: data, encoding: .utf8) else {
+            Issue.record("chat-by-name content not served"); return
+        }
+        #expect(markdown.contains(chat.title) == true)
+    }
+
+    @Test func workingSetIncludesChatNodes() throws {
+        let c = try seedChats()
+        let ids = Set(c.projection.children(of: .workingSet).map(\.id))
+        // Every chat appears in the working set under its by-id view.
+        for chat in c.chats {
+            #expect(ids.contains(Projection.Identity.chatByID(chat.id.rawValue)))
+        }
+    }
+
+    @Test func emptyChatsFolderStillListedAtRoot() throws {
+        // No chats at all, but the `chats` folder still appears at root.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-chat-empty-\(UUID().uuidString).sqlite")
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let projection = Projection(wikiID: "proj-chat-empty-\(UUID().uuidString)", databaseURL: url)
+        _ = store  // seed nothing
+        let names = projection.children(of: .rootContainer).map(\.name)
+        #expect(names.contains("chats"))
+        #expect(projection.children(of: Projection.Identity.chatsByID).isEmpty)
+    }
+
+    @Test func chatsJsonlCountMatchesChatCount() throws {
+        let c = try seedChats()
+        // `chats.jsonl` is listed under `indexes/`.
+        let indexIds = Set(c.projection.children(of: Projection.Identity.indexes).map(\.id))
+        #expect(indexIds.contains(Projection.Identity.indexChatsJSONL))
+        guard let data = c.projection.contents(for: Projection.Identity.indexChatsJSONL) else {
+            Issue.record("chats.jsonl not served"); return
+        }
+        let lines = String(data: data, encoding: .utf8)?
+            .split(separator: "\n").filter { !$0.isEmpty }
+        #expect(lines?.count == c.chats.count)
     }
 }

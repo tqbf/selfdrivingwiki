@@ -37,7 +37,7 @@ struct AgentActivityView: View {
             }
         }
         // Selection + copy across the whole feed now happens inside
-        // `AgentTranscriptWebView`'s single document; this only covers the
+        // `ChatWebView`'s single document; this only covers the
         // placeholder/banner `Text` views outside it.
         .textSelection(.enabled)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
@@ -50,7 +50,7 @@ struct AgentActivityView: View {
                 .padding(ActivityMetrics.padding)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
-            AgentTranscriptWebView(events: renderedEvents, style: .activityFeed, showsInternals: showsInternals, onWikiLink: onWikiLink)
+            ChatWebView(events: renderedEvents, style: .activityFeed, showsInternals: showsInternals, onWikiLink: onWikiLink)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }

@@ -10,7 +10,7 @@ import Testing
 struct WikiTreeRendererTests {
 
     @Test func rendersTheFixedLayoutAndCheatsheet() {
-        let body = WikiTreeRenderer.render(pageCount: 3, sourceCount: 2)
+        let body = WikiTreeRenderer.render(pageCount: 3, sourceCount: 2, chatCount: 1)
         // The full projection layout the agent needs to navigate.
         #expect(body.contains("index.md"))
         #expect(body.contains("log.md"))
@@ -22,7 +22,10 @@ struct WikiTreeRendererTests {
         #expect(body.contains("pages/by-id/"))
         #expect(body.contains("sources/by-name/"))
         #expect(body.contains("sources/by-id/"))
+        #expect(body.contains("chats/by-name/"))
+        #expect(body.contains("chats/by-id/"))
         #expect(body.contains("indexes/"))
+        #expect(body.contains("indexes/chats.jsonl"))
         // The wikictl cheatsheet uses the file-first body delivery form.
         #expect(body.contains("wikictl page upsert --title T --body-file ./body.md"))
         #expect(body.contains("wikictl index set --body-file ./index.md"))
@@ -34,22 +37,25 @@ struct WikiTreeRendererTests {
     }
 
     @Test func foldsInTheLiveCounts() {
-        let body = WikiTreeRenderer.render(pageCount: 7, sourceCount: 4)
+        let body = WikiTreeRenderer.render(pageCount: 7, sourceCount: 4, chatCount: 6)
         #expect(body.contains("7 pages"))
         #expect(body.contains("4 sources"))
+        #expect(body.contains("6 chats"))
     }
 
     @Test func singularizesCountsOfOne() {
-        let body = WikiTreeRenderer.render(pageCount: 1, sourceCount: 1)
+        let body = WikiTreeRenderer.render(pageCount: 1, sourceCount: 1, chatCount: 1)
         #expect(body.contains("1 page,"))
-        #expect(body.contains("1 source."))
+        #expect(body.contains("1 source,"))
+        #expect(body.contains("1 chat."))
         #expect(!body.contains("1 pages"))
         #expect(!body.contains("1 sources"))
+        #expect(!body.contains("1 chats"))
     }
 
     @Test func isDeterministicForFixedCounts() {
         // Same counts → byte-identical body (no timestamps / nondeterminism).
-        #expect(WikiTreeRenderer.render(pageCount: 5, sourceCount: 9)
-            == WikiTreeRenderer.render(pageCount: 5, sourceCount: 9))
+        #expect(WikiTreeRenderer.render(pageCount: 5, sourceCount: 9, chatCount: 2)
+            == WikiTreeRenderer.render(pageCount: 5, sourceCount: 9, chatCount: 2))
     }
 }

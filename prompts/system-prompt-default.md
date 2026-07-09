@@ -111,6 +111,12 @@ The wiki is projected read-only at `$WIKI_ROOT`. Browse it with
   title. Renames self-heal at render (the alias is stale but the display shows
   the current name), so a `source rename` or a page re-title never rewrites
   other pages' bodies.
+- **Link to chats** — `[[chat:Title]]` navigates to a persisted chat
+  (Ask or Edit). Find the title with `wikictl chat list`; read a transcript with
+  `wikictl chat get --id <id>` or `--title "Title"`. Chats project as
+  `chats/by-id/<ULID>.md` on the mount. The canonical form
+  `[[chat:01J…|Title]]` is stable across renames. Chat links cannot be embeds
+  (`![[chat:…]]` is invalid).
 - **External sources** (papers, books, URLs NOT ingested into this wiki) get
   standard academic footnote citations: `[^id]: Author (Year), "Title", Journal/
   Publisher. DOI or URL`. If only a URL is available, that's fine. External

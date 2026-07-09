@@ -63,6 +63,8 @@ public enum ArgumentParser {
         case sourceRefresh(SourceCommand.Selector)
         /// Maintenance operations (the `admin …` family). Currently: blob GC.
         case admin(AdminCommand.Action)
+        /// Chat commands: list, read chat transcripts from SQLite.
+        case chat(ChatCommand.Action)
     }
 
     public enum Failure: Error, Equatable, CustomStringConvertible {
@@ -112,6 +114,8 @@ public enum ArgumentParser {
                                                activities no version row references
       admin vacuum-all [--apply] [--json]    report (and with --apply, reclaim)
                                                both orphaned blobs and activities
+      chat list [--json]                     list chats (TSV, or JSON lines)
+      chat get  (--id X | --title T)         print a chat transcript as markdown
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -150,6 +154,8 @@ public enum ArgumentParser {
             command = try parseSourceCommand(Array(args.dropFirst()))
         case "admin":
             command = try parseAdminCommand(Array(args.dropFirst()))
+        case "chat":
+            command = try parseChatCommand(Array(args.dropFirst()))
         default:
             throw Failure.usage("unknown command \((args.first ?? "").debugDescription)")
         }
@@ -329,6 +335,23 @@ public enum ArgumentParser {
         }
     }
 
+    private static func parseChatCommand(_ args: [String]) throws -> Command {
+        guard let sub = args.first else { throw Failure.usage("chat: missing subcommand") }
+        let rest = Array(args.dropFirst())
+        let options = try Options(rest)
+
+        switch sub {
+        case "list":
+            return .chat(.list(json: options.flag("--json")))
+
+        case "get":
+            return .chat(.get(try options.requireChatSelector()))
+
+        default:
+            throw Failure.usage("chat: unknown subcommand \(sub.debugDescription)")
+        }
+    }
+
     private static func parseIndexCommand(_ args: [String]) throws -> Command {
         guard let sub = args.first else { throw Failure.usage("index: missing subcommand") }
         guard sub == "set" else {
@@ -374,6 +397,20 @@ public enum ArgumentParser {
 
         /// A `--title X` or `--id Y` page selector (exactly one required).
         func requireSelector() throws -> PageCommand.Selector {
+            switch (values["--id"], values["--title"]) {
+            case (let id?, nil):
+                return .id(PageID(rawValue: id))
+            case (nil, let title?):
+                return .title(title)
+            case (.some, .some):
+                throw Failure.usage("pass exactly one of --id / --title, not both")
+            case (nil, nil):
+                throw Failure.usage("pass one of --id / --title")
+            }
+        }
+
+        /// A `--id Y` or `--title T` chat selector (exactly one required).
+        func requireChatSelector() throws -> ChatCommand.Selector {
             switch (values["--id"], values["--title"]) {
             case (let id?, nil):
                 return .id(PageID(rawValue: id))

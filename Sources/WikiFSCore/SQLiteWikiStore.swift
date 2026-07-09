@@ -589,7 +589,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     /// Create the two persisted-chat-history tables (issue #119 phase 1):
-    /// `chats` (one row per conversation) and `chat_messages` (one row per
+    /// `chats` (one row per chat) and `chat_messages` (one row per
     /// persistable `AgentEvent`, `event_json` verbatim). Called by both the
     /// fresh-schema fast path and the v23→25 migration step so the two stay
     /// schema-identical (`freshFastPathMatchesStepwiseLadder`). `IF NOT
@@ -1610,6 +1610,14 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 ? { [self] in try self.resolveSourceByName($0) }
                 : { _ in nil }
 
+            // The chats table may also be absent in a minimal/corrupted fixture
+            // — guard it the same way so `[[chat:…]]` spans are left as-written.
+            let hasChats = try queryScalarText(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='chats';") != "0"
+            let resolveChat: (String) throws -> PageID? = hasChats
+                ? { [self] in try self.resolveChatByTitle($0) }
+                : { _ in nil }
+
             // Snapshot id + body under the write lock. The canonicalizer is pure
             // (resolvers are read-only lookups), so collecting first then rewriting
             // avoids a statement handle spanning the reparse.
@@ -1626,7 +1634,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             for row in rows {
                 guard let canonical = try WikiLinkRewriter.canonicalize(
                     in: row.body, resolvePage: resolveTitleToID,
-                    resolveSource: resolveSource) else { continue }
+                    resolveSource: resolveSource,
+                    resolveChat: resolveChat) else { continue }
                 update.reset()
                 try update.bind(row.id, at: 1)
                 try update.bind(canonical, at: 2)
@@ -1978,6 +1987,25 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         return stmt.int(at: 0)
     }
 
+    /// The `chats` table's row COUNT, resilient to the table not existing yet
+    /// (a read connection opened against a pre-v25 DB). On any failure returns
+    /// `0` so `changeToken()` still answers.
+    private func chatCount() -> Int64 {
+        guard let stmt = try? statement("SELECT COUNT(*) FROM chats;") else { return 0 }
+        defer { stmt.reset() }
+        guard (try? stmt.step()) == true else { return 0 }
+        return stmt.int(at: 0)
+    }
+
+    /// The `chat_messages` table's row COUNT, resilient to the table not
+    /// existing yet. On any failure returns `0`.
+    private func chatMessageCount() -> Int64 {
+        guard let stmt = try? statement("SELECT COUNT(*) FROM chat_messages;") else { return 0 }
+        defer { stmt.reset() }
+        guard (try? stmt.step()) == true else { return 0 }
+        return stmt.int(at: 0)
+    }
+
     // MARK: - changeToken contributors (slice 2b)
 
     /// The per-kind contributors whose fragments join into ``changeToken()``.
@@ -1995,6 +2023,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         SourceDerivedTokenContributor(),
         SourceGraphTokenContributor(),
         BookmarkTokenContributor(),
+        ChatTokenContributor(),
     ]
 
     private struct PagesTokenContributor: ChangeTokenContributor {
@@ -2060,6 +2089,16 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let kind: ResourceKind = .bookmark
         func fragment(in store: SQLiteWikiStore) throws -> String {
             "\(store.bookmarkNodesCount())"
+        }
+    }
+
+    /// Chat fold (#119 follow-on): the `chats` row count + `chat_messages` row
+    /// count. A chat create/delete bumps the count; a message append bumps the
+    /// message count. Both advance the token so the FP re-enumerates `chats/`.
+    private struct ChatTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .chat
+        func fragment(in store: SQLiteWikiStore) throws -> String {
+            "\(store.chatCount()):\(store.chatMessageCount())"
         }
     }
 
@@ -2254,6 +2293,13 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         switch link.linkType {
         case .page:   return (try? getPage(id: id)) != nil ? id : nil
         case .source: return (try? getSource(id: id)) != nil ? id : nil
+        case .chat:
+            // Direct existence check — no `getChat` entity fetch needed; the
+            // canonical resolver only needs to know whether the id is live.
+            let stmt = try statement("SELECT 1 FROM chats WHERE id = ?1;")
+            stmt.reset()
+            try stmt.bind(id.rawValue, at: 1)
+            return (try stmt.step()) ? id : nil
         }
     }
 
@@ -2337,6 +2383,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                     try stmt.bind(link.linkText, at: 3)
                     try stmt.bind(pinID?.rawValue, at: 4)
                     _ = try stmt.step()
+                case .chat:
+                    // Chat links are resolved at render time (no persisted graph
+                    // edge in page_links/source_links today). Intentionally a
+                    // no-op here so a `[[chat:…]]` in a page body never errors.
+                    continue
                 }
             }
         }
@@ -4351,7 +4402,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
     @discardableResult
     public func createChat(kind: ChatKind, title: String) throws -> ChatSummary {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { chat in localEvent(.chat, id: chat.id.rawValue, change: .created) }) {
         let id = PageID(rawValue: ULID.generate())
         let now = Date()
         let stmt = try statement("""
@@ -4366,6 +4417,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try stmt.bind(now.timeIntervalSince1970, at: 5)
         _ = try stmt.step()
         return ChatSummary(id: id, kind: kind, title: title, createdAt: now, updatedAt: now, messageCount: 0)
+        }
     }
 
     /// Empty `events` is a no-op (returns `[]` without touching `updated_at`) —
@@ -4373,8 +4425,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// `updated_at` and reorders the history list.
     @discardableResult
     public func appendChatMessages(chatID: PageID, events: [AgentEvent]) throws -> [ChatMessage] {
-        lock.lock(); defer { lock.unlock() }
         guard !events.isEmpty else { return [] }
+        return try mutate(event: { _ in localEvent(.chat, id: chatID.rawValue, change: .updated) }) {
         return try withTransaction {
             let exists = try statement("SELECT 1 FROM chats WHERE id = ?1;")
             exists.reset()
@@ -4423,6 +4475,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             _ = try touch.step()
 
             return inserted
+        }
         }
     }
 
@@ -4479,7 +4532,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func renameChat(id: PageID, to title: String) throws {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.chat, id: id.rawValue, change: .updated) }) {
         try withTransaction {
             let exists = try statement("SELECT 1 FROM chats WHERE id = ?1;")
             exists.reset()
@@ -4494,16 +4547,59 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try upd.bind(Date().timeIntervalSince1970, at: 3)
             _ = try upd.step()
         }
+        }
     }
 
     /// `ON DELETE CASCADE` (`PRAGMA foreign_keys=ON`, set at open) removes the
     /// chat's messages. No error if `id` doesn't exist.
     public func deleteChat(id: PageID) throws {
-        lock.lock(); defer { lock.unlock() }
+        try mutate(event: { _ in localEvent(.chat, id: id.rawValue, change: .deleted) }) {
         let stmt = try statement("DELETE FROM chats WHERE id = ?1;")
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         _ = try stmt.step()
+        }
+    }
+
+    /// All chat summaries ordered by ULID (creation order) — for the File
+    /// Provider projection, which needs stable creation-order enumeration (not
+    /// the sidebar's most-recently-updated-first). Mirrors
+    /// `listAllPagesOrderedByID()`.
+    public func listAllChatsOrderedByID() throws -> [ChatSummary] {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement("""
+        SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
+               (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id)
+        FROM chats c
+        ORDER BY c.id ASC;
+        """)
+        defer { stmt.reset() }
+        var out: [ChatSummary] = []
+        while try stmt.step() {
+            out.append(ChatSummary(
+                id: PageID(rawValue: stmt.text(at: 0)),
+                kind: ChatKind(rawValue: stmt.text(at: 1)) ?? .ask,
+                title: stmt.text(at: 2),
+                createdAt: Date(timeIntervalSince1970: stmt.double(at: 3)),
+                updatedAt: Date(timeIntervalSince1970: stmt.double(at: 4)),
+                messageCount: Int(stmt.int(at: 5))
+            ))
+        }
+        return out
+    }
+
+    /// Resolve a `[[chat:…]]` target to a chat id. Case-insensitive; on a
+    /// duplicate-title collision, the oldest chat wins (lowest ULID — stable
+    /// identity, like `resolveTitleToID` for pages). Used by the wikilink
+    /// resolution path and the `WikiLinkRewriter` canonicalizer.
+    public func resolveChatByTitle(_ title: String) throws -> PageID? {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement(
+            "SELECT id FROM chats WHERE title = ?1 COLLATE NOCASE ORDER BY id ASC LIMIT 1;")
+        defer { stmt.reset() }
+        try stmt.bind(title, at: 1)
+        guard try stmt.step() else { return nil }
+        return PageID(rawValue: stmt.text(at: 0))
     }
 
     // MARK: - Transactions

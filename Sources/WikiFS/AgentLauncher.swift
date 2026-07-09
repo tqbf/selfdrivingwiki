@@ -1197,7 +1197,7 @@ final class AgentLauncher {
 
     /// Route one parsed event into `events`: either grow the in-progress streamed
     /// assistant row in place, or append a new row (the existing, non-streaming
-    /// behavior). This is what lets `AgentTranscriptWebView` patch a live row
+    /// behavior). This is what lets `ChatWebView` patch a live row
     /// instead of only ever appending (issue #121).
     private func mergeOrAppend(_ event: AgentEvent) {
         switch event {

@@ -462,6 +462,14 @@ public protocol WikiStore: Sendable {
     /// `id` doesn't exist.
     func deleteChat(id: PageID) throws
 
+    /// All chat summaries ordered by ULID (creation order) — for the File
+    /// Provider projection. Mirrors `listAllPagesOrderedByID()`.
+    func listAllChatsOrderedByID() throws -> [ChatSummary]
+
+    /// Resolve a `[[chat:…]]` target to a chat id. Case-insensitive; lowest
+    /// ULID wins on a duplicate-title collision.
+    func resolveChatByTitle(_ title: String) throws -> PageID?
+
     // MARK: - Blob GC (#253)
 
     /// Sweep **orphaned** blob rows — blobs no version references (the leak left

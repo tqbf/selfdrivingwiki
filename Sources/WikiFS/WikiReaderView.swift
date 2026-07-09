@@ -108,6 +108,7 @@ struct WikiReaderView: View {
         switch WikiLinkMarkdown.resolvedKind(from: url) {
         case .page:   return .page(title: title, id: id, fragment: frag)
         case .source: return .source(title: title, id: id, fragment: frag, pin: WikiLinkMarkdown.pin(from: url))
+        case .chat:   return .chat(title: title, id: id)
         case nil:     return .inert
         }
     }
@@ -119,7 +120,7 @@ struct WikiReaderView: View {
     ///
     /// Built where the store lives (and the navigation detail column is wired)
     /// and forwarded unchanged down through the intermediate views to
-    /// `AgentTranscriptWebView`. Pass `nil` where navigation is impossible.
+    /// `ChatWebView`. Pass `nil` where navigation is impossible.
     @MainActor
     static func onWikiLinkHandler(for store: WikiStoreModel) -> (URL, Bool) -> Void {
         { url, openInNewTab in
@@ -130,6 +131,9 @@ struct WikiReaderView: View {
             case .source(let title, let id, let frag, let pin):
                 if let id, store.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab, pinnedExtractionID: pin) { }
                 else { store.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab) }
+            case .chat(let title, let id):
+                if let id, store.selectChat(byID: id, openInNewTab: openInNewTab) { }
+                else { store.selectChat(byTitle: title, openInNewTab: openInNewTab) }
             case .samePageAnchor, .inert:      break
             }
         }
@@ -283,6 +287,10 @@ enum WikiLinkRoute: Equatable, Sendable {
     /// `pin` is the pinned-extraction smv id when the URL carried `&pin=` (Phase 6:
     /// a pinned quote link); nil otherwise (opens HEAD).
     case source(title: String, id: PageID?, fragment: String?, pin: PageID?)
+    /// Resolved chat link — navigate to a persisted chat. `id` is the
+    /// canonical ULID when the URL carried `?id=`; nil for legacy `?title=`-only
+    /// links, which resolve by `title` as the transition fallback.
+    case chat(title: String, id: PageID?)
     /// Unresolved (`wiki://missing`) or un-classifiable — inert.
     case inert
 }
@@ -467,6 +475,8 @@ final class WikiReaderWebView: WKWebView {
                     if let id = store.pageID(forTitle: target) { store.openTabInBackground(.page(id)) }
                 case .source:
                     if let id = store.sourceID(forDisplayName: target) { store.openTabInBackground(.source(id)) }
+                case .chat:
+                    if let id = store.chatID(forTitle: target) { store.openTabInBackground(.chat(id)) }
                 case nil: break
                 }
             }
@@ -513,6 +523,9 @@ final class WikiReaderWebView: WKWebView {
                 if let id = store.sourceID(forDisplayName: target) {
                     shareURLTask = Task { await fp.resolveSourceByNameURL(id: id) }
                 } else { shareURLTask = nil }
+            case .chat?:
+                // Chat sharing via File Provider URL is not yet wired — no-op.
+                shareURLTask = nil
             case nil:
                 shareURLTask = nil
             }
@@ -847,7 +860,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 // pre-refactor `store == nil` behavior (empty existence sets, NOT
                 // constant-true). The transcript's nil-context=constant-true
                 // contract (Phase A.2) is a separate concern, handled at the
-                // AgentTranscriptWebView layer, not here.
+                // ChatWebView layer, not here.
                 let isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool
                 let embedInfo: ((String) -> WikiLinkMarkdown.SourceEmbedInfo?)?
                 let displayName: (PageID, WikiLinkParser.ParsedLink.LinkType) -> String?
@@ -1064,6 +1077,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
             case .source(let title, let id, let frag, let pin):
                 if let id, store?.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab, pinnedExtractionID: pin) == true { }
                 else { store?.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab) }
+            case .chat(let title, let id):
+                if let id, store?.selectChat(byID: id, openInNewTab: openInNewTab) == true { }
+                else { store?.selectChat(byTitle: title, openInNewTab: openInNewTab) }
             case .inert:
                 break
             }

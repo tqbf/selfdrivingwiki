@@ -64,7 +64,8 @@ public enum PageUpsert {
         // are left byte-identical. `nil` = nothing changed → write the body as-is.
         let canonicalBody = (try WikiLinkRewriter.canonicalize(
             in: body, resolvePage: store.resolveTitleToID,
-            resolveSource: store.resolveSourceByName)) ?? body
+            resolveSource: store.resolveSourceByName,
+            resolveChat: store.resolveChatByTitle)) ?? body
         let outcome = try writePage(in: store, id: id, title: title, body: canonicalBody)
         // Parse the CANONICAL body so link rows match the stored bytes exactly.
         try store.replaceLinks(from: outcome.id, parsedLinks: WikiLinkParser.parse(canonicalBody))

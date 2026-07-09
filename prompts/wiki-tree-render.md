@@ -5,7 +5,7 @@ read-only — WRITE only through the `wikictl` command (see the cheatsheet
 below). `wikictl` already targets THIS wiki via the `$WIKI_DB` environment
 variable, so never pass `--wiki`.
 
-Current contents: {{pageCount}} page{{pageNoun}}, {{sourceCount}} source{{sourceNoun}}.
+Current contents: {{pageCount}} page{{pageNoun}}, {{sourceCount}} source{{sourceNoun}}, {{chatCount}} chat{{chatNoun}}.
 
 ## Layout
 
@@ -14,14 +14,17 @@ Current contents: {{pageCount}} page{{pageNoun}}, {{sourceCount}} source{{source
 - `WIKI-STRUCTURE.md` — this orientation map.
 - `TREE.md`           — legacy alias for `WIKI-STRUCTURE.md`.
 - `CLAUDE.md` / `AGENTS.md` — the agent system prompt (identical bytes).
-- `manifest.json`     — generated wiki manifest (page/source counts, generated_at).
+- `manifest.json`     — generated wiki manifest (page/source/chat counts, generated_at).
 - `pages/by-title/`   — one file per wiki page, named by title.
 - `pages/by-id/`      — the same pages, named by ULID.
 - `sources/by-name/`  — raw immutable sources, named by original filename.
 - `sources/by-id/`    — the same sources, named by ULID.
+- `chats/by-name/`    — one file per persisted chat, named by title.
+- `chats/by-id/`      — the same chats, named by ULID.
 - `indexes/pages.jsonl`   — machine index of every page (id, title, path).
 - `indexes/links.jsonl`   — machine index of the [[wiki-link]] graph.
 - `indexes/sources.jsonl` — machine index of every source.
+- `indexes/chats.jsonl`   — machine index of every chat.
 
 ## wikictl cheatsheet
 
