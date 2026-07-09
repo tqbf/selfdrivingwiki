@@ -79,12 +79,26 @@ struct ChatWebView: NSViewRepresentable {
     /// never scrolls; consumed in `updateNSView`.
     var scrollRequest: ChatScrollRequest? = nil
 
+    /// Name of the `WKScriptMessage` channel the per-bubble "Copy" button posts
+    /// to (issue #285). The JS click listener calls
+    /// `window.webkit.messageHandlers.copyText.postMessage(text)`; the coordinator
+    /// writes `text` to `NSPasteboard`.
+    static let copyMessageName = "copyText"
+
     func makeNSView(context: Context) -> WKWebView {
         // Register the blob scheme handler BEFORE the first load (same wiring
         // as `WikiReaderView`, reader lines ~326–348) so `wiki-blob://source/<id>`
         // images and media resolve inside chat transcripts. The handler weakly
         // references the store; refreshed each update like `onWikiLink`.
         let config = WKWebViewConfiguration()
+        // Message handler for the per-bubble "Copy" button (issue #285): the JS
+        // click listener posts the raw markdown text; the coordinator writes it
+        // to NSPasteboard. Retained by the content controller; the coordinator
+        // holds the webView weakly so there's no cycle (same pattern as
+        // WikiReaderView's LinkHoverMessageHandler).
+        let cc = WKUserContentController()
+        cc.add(context.coordinator, name: Self.copyMessageName)
+        config.userContentController = cc
         let blobHandler = BlobSchemeHandler(store: blobStore)
         config.setURLSchemeHandler(blobHandler, forURLScheme: BlobSchemeHandler.scheme)
         let webView = WKWebView(frame: .zero, configuration: config)
@@ -122,7 +136,7 @@ struct ChatWebView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         var style: VisualStyle = .activityFeed
         /// Routes a clicked `wiki://` link out to the view's `onWikiLink`
@@ -278,6 +292,22 @@ struct ChatWebView: NSViewRepresentable {
             webView?.evaluateJavaScript("replaceLastRow(\(jsonString))", completionHandler: nil)
         }
 
+        // MARK: - Copy button (issue #285)
+
+        /// Receives the raw markdown text from the JS click listener and writes it
+        /// to the system pasteboard. Called on the main thread by WebKit.
+        func userContentController(
+            _ userContentController: WKUserContentController,
+            didReceive message: WKScriptMessage
+        ) {
+            guard message.name == ChatWebView.copyMessageName,
+                  let text = message.body as? String
+            else { return }
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+        }
+
         // MARK: - Row rendering
 
         private static func rowHTML(for event: AgentEvent, style: VisualStyle, context: WikiRenderContext?, isFinal: Bool) -> String {
@@ -370,14 +400,10 @@ struct ChatWebView: NSViewRepresentable {
                 <div class="row chat-row chat-user"><div class="bubble">\(escapePreservingBreaks(text))</div></div>
                 """
             case .assistantText(let text):
-                return """
-                <div class="row chat-row chat-assistant"><div class="bubble">\(renderedMarkdown(text, context: context, isFinal: isFinal))</div></div>
-                """
+                return assistantBubbleHTML(text: text, context: context, isFinal: isFinal)
             case .result(_, let text):
                 guard !text.isEmpty else { return "" }
-                return """
-                <div class="row chat-row chat-assistant"><div class="bubble">\(renderedMarkdown(text, context: context, isFinal: isFinal))</div></div>
-                """
+                return assistantBubbleHTML(text: text, context: context, isFinal: isFinal)
             case .toolUse(let name, let summary):
                 return chatToolRowHTML(name: name, summary: summary, isError: false)
             case .toolResult(let isError, let summary):
@@ -388,6 +414,19 @@ struct ChatWebView: NSViewRepresentable {
             case .systemInit, .subagent, .messageStop, .raw, .assistantTextDelta:
                 return ""
             }
+        }
+
+        /// A chat-style assistant bubble (markdown prose + a hover-revealed "Copy"
+        /// button). Shared by `.assistantText` and `.result` rows (issue #285).
+        /// The button's `data-copy` attribute carries the **raw markdown** (HTML-
+        /// attribute-escaped) — not the rendered HTML — so the clipboard gets the
+        /// plain text the user would have drag-selected.
+        private static func assistantBubbleHTML(text: String, context: WikiRenderContext?, isFinal: Bool) -> String {
+            """
+            <div class="row chat-row chat-assistant"><div class="bubble">\
+            <button class="copy-btn" type="button" data-copy="\(htmlAttributeEscape(text))">Copy</button>\
+            \(renderedMarkdown(text, context: context, isFinal: isFinal))</div></div>
+            """
         }
 
         /// A single muted, left-aligned progress line for a tool call — the
@@ -411,6 +450,13 @@ struct ChatWebView: NSViewRepresentable {
 
         private static func escapePreservingBreaks(_ s: String) -> String {
             escape(s).replacingOccurrences(of: "\n", with: "<br>")
+        }
+
+        /// Escapes a string for safe embedding in a double-quoted HTML attribute
+        /// value. The DOM decodes entities when reading `.dataset`, so JS receives
+        /// the original text verbatim — no JSON round-trip needed.
+        private static func htmlAttributeEscape(_ s: String) -> String {
+            escape(s).replacingOccurrences(of: "\"", with: "&quot;")
         }
 
         /// Minimal document the whole feed lives in — internal scrolling
@@ -469,6 +515,18 @@ struct ChatWebView: NSViewRepresentable {
             background: var(--code-bg); border-radius: 14px;
             padding: 11px 16px; white-space: pre-wrap; font-size: 13.5px;
           }
+          .chat-assistant .bubble { position: relative; }
+          .copy-btn {
+            position: absolute; top: 0; right: 0;
+            opacity: 0; transition: opacity 0.15s ease;
+            -webkit-appearance: none; appearance: none;
+            background: var(--code-bg); border: none; border-radius: 5px;
+            padding: 2px 7px; font: inherit; font-size: 11px;
+            color: var(--muted); cursor: pointer; line-height: 1.4;
+          }
+          .chat-assistant:hover .copy-btn { opacity: 0.75; }
+          .copy-btn:hover { opacity: 1; color: var(--text); }
+          .copy-btn.copied { opacity: 1; color: #34c759; }
           .chat-tool {
             justify-content: flex-start; align-items: baseline;
             gap: 6px; font-size: 11.5px; color: var(--muted);
@@ -521,6 +579,26 @@ struct ChatWebView: NSViewRepresentable {
             }
             window.scrollTo(0, document.body.scrollHeight);
           }
+          // Delegated click handler for the per-bubble "Copy" button (issue #285).
+          // Works on dynamically-appended rows since it's on `document`. Posts the
+          // raw markdown text (from `data-copy`) to the Swift message handler, then
+          // briefly shows "Copied" feedback.
+          document.addEventListener('click', function(e) {
+            var btn = e.target.closest && e.target.closest('.copy-btn');
+            if (!btn) return;
+            e.preventDefault();
+            var text = btn.dataset.copy || '';
+            try {
+              window.webkit.messageHandlers.copyText.postMessage(text);
+            } catch (err) { /* handler not registered — no-op */ }
+            var orig = btn.textContent;
+            btn.textContent = 'Copied';
+            btn.classList.add('copied');
+            setTimeout(function() {
+              btn.textContent = orig;
+              btn.classList.remove('copied');
+            }, 1200);
+          });
         </script>
         </body></html>
         """

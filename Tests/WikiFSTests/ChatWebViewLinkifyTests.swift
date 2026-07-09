@@ -90,6 +90,47 @@ struct ChatWebViewLinkifyTests {
         #expect(html.isEmpty)
     }
 
+    // MARK: - Copy button (issue #285)
+
+    @Test func chatAssistantRowHasCopyButtonWithRawText() {
+        let html = Transcript.chatRowHTML(for: .assistantText("Hello **world**."))
+        #expect(html.contains("copy-btn"))
+        // The raw markdown (not rendered HTML) is in data-copy.
+        #expect(html.contains(#"data-copy="Hello **world**.""#))
+    }
+
+    @Test func chatResultRowHasCopyButtonWithRawText() {
+        let html = Transcript.chatRowHTML(for: .result(isError: false, text: "Done."))
+        #expect(html.contains("copy-btn"))
+        #expect(html.contains(#"data-copy="Done.""#))
+    }
+
+    @Test func chatUserRowHasNoCopyButton() {
+        let html = Transcript.chatRowHTML(for: .userText("Hello"))
+        #expect(!html.contains("copy-btn"))
+    }
+
+    @Test func chatToolRowsHaveNoCopyButton() {
+        let toolUse = Transcript.chatRowHTML(for: .toolUse(name: "Read", inputSummary: "x"))
+        let toolResult = Transcript.chatRowHTML(for: .toolResult(isError: true, summary: "fail"))
+        #expect(!toolUse.contains("copy-btn"))
+        #expect(!toolResult.contains("copy-btn"))
+    }
+
+    @Test func copyDataAttributeEscapesHtmlSpecialChars() {
+        let html = Transcript.chatRowHTML(for: .assistantText(#"Say "hi" <b> & bye"#))
+        #expect(html.contains("data-copy="))
+        // Double quotes → &quot;, < → &lt;, > → &gt;, & → &amp;.
+        #expect(html.contains("&quot;hi&quot;"))
+        #expect(html.contains("&lt;b&gt;"))
+        #expect(html.contains("&amp; bye"))
+    }
+
+    @Test func emptyResultRowHasNoCopyButton() {
+        let html = Transcript.chatRowHTML(for: .result(isError: false, text: ""))
+        #expect(html.isEmpty)
+    }
+
     // MARK: - Phase A.2: nil-context path is behavior-preserving
     //
     // The historical callers that pass NO context (e.g. AgentActivityView's
@@ -211,9 +252,13 @@ struct AgentTranscriptRenderContextTests {
         let row = Transcript.chatRowHTML(
             for: .assistantText("See [[source:\(paperID.rawValue)|stale]]."),
             context: ctx, isFinal: true)
-        // The healed name appears inside the chat bubble; the stale alias does not.
+        // The healed name appears inside the chat bubble's link; the stale alias
+        // does not. Note: the raw text survives in the copy button's `data-copy`
+        // attribute (issue #285), so we check the *rendered link* text, not the
+        // whole row.
         #expect(row.contains("My Paper"))
-        #expect(!row.contains("stale"))
+        #expect(row.contains(">My Paper</a>"))
+        #expect(!row.contains(">stale</a>"))
     }
 
     // MARK: - Two-tier streaming render (isFinal)
