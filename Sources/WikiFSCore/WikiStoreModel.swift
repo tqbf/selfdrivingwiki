@@ -514,10 +514,18 @@ public final class WikiStoreModel {
     /// so it is stable across renames. Returns `false` when the id names no
     /// loaded chat (a deleted target), so the caller can fall back to
     /// title-based selection.
+    ///
+    /// - Parameter anchor: optional `#"quote"` fragment from a
+    ///   `[[chat:Title#"quote"]]` link (issue #281); the destination `ChatView`
+    ///   resolves it to a message, scrolls it into view, and highlights the
+    ///   passage — the chat analogue of `selectSource(anchor:)`. Mirrors the
+    ///   page/source anchor seam: tagged with `.chat(id)` + versioned.
     @discardableResult
-    public func selectChat(byID id: PageID, openInNewTab: Bool = false) -> Bool {
+    public func selectChat(byID id: PageID, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
         guard chats.contains(where: { $0.id == id }) else { return false }
         let target = WikiSelection.chat(id)
+        pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
+        pendingScrollAnchorVersion += 1
         recordHistoryTransition(from: loadedSelection, to: target)
         if openInNewTab {
             openTab(target)
@@ -530,11 +538,12 @@ public final class WikiStoreModel {
     /// Navigate to the chat with `title` from a clicked `[[chat:Title]]` link.
     /// Resolves title → id via `resolveChatByTitle` (lowest-ULID on a duplicate-
     /// title collision) and records navigation history. Returns whether
-    /// navigation happened.
+    /// navigation happened. `anchor` carries an optional `#"quote"` fragment
+    /// (issue #281); see `selectChat(byID:anchor:)`.
     @discardableResult
-    public func selectChat(byTitle title: String, openInNewTab: Bool = false) -> Bool {
+    public func selectChat(byTitle title: String, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
         guard let id = (try? store.resolveChatByTitle(title)) ?? nil else { return false }
-        return selectChat(byID: id, openInNewTab: openInNewTab)
+        return selectChat(byID: id, anchor: anchor, openInNewTab: openInNewTab)
     }
 
     /// The pending scroll/highlight target set by `selectPage`/`selectSource` and

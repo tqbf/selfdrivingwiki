@@ -34,6 +34,9 @@ struct ChatTranscriptView: View {
     var zoom: Double = Double(ZoomScale.defaultScale)
     /// Versioned scroll-to-turn request, forwarded to the transcript web view.
     var scrollRequest: ChatScrollRequest? = nil
+    /// Versioned quote-anchor highlight request (`[[chat:Title#"quote"]]`,
+    /// issue #281), forwarded to the transcript web view.
+    var quoteAnchor: ChatHighlightRequest? = nil
 
     var body: some View {
         Group {
@@ -48,7 +51,8 @@ struct ChatTranscriptView: View {
                     renderContext: renderContext,
                     blobStore: blobStore,
                     zoom: zoom,
-                    scrollRequest: scrollRequest
+                    scrollRequest: scrollRequest,
+                    quoteAnchor: quoteAnchor
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
