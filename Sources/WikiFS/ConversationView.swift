@@ -178,6 +178,7 @@ struct ConversationView: View {
     private func withChatOutline<C: View>(@ViewBuilder _ content: () -> C) -> some View {
         HStack(spacing: 0) {
             content()
+                .frame(maxWidth: .infinity, alignment: .leading)
             if chatOutlineExpanded {
                 ChatOutlineView(turns: chatTurns) { turnIndex in
                     outlineScroll = ChatScrollRequest(
@@ -657,18 +658,50 @@ struct ChatOutlineView: View {
     let turns: [String]
     let onSelect: (Int) -> Void
 
+    @AppStorage("chatOutlineWidth") private var outlineWidth: Double = 240
+    @State private var dragStartWidth: Double? = nil
+
     var body: some View {
         HStack(spacing: 0) {
+            // Draggable divider on the outline's leading edge. A 1pt separator
+            // line with a wider invisible hit area so it's easy to grab.
             Rectangle()
                 .fill(Color(nsColor: .separatorColor))
                 .frame(width: 1)
                 .frame(maxHeight: .infinity)
+                .padding(.horizontal, 4)
+                .contentShape(Rectangle())
+                .onHover { isHovering in
+                    if isHovering {
+                        NSCursor.resizeLeftRight.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            if dragStartWidth == nil {
+                                dragStartWidth = outlineWidth
+                            }
+                            if let start = dragStartWidth {
+                                let newWidth = start - Double(value.translation.width)
+                                outlineWidth = max(60, min(600, newWidth))
+                            }
+                        }
+                        .onEnded { _ in
+                            dragStartWidth = nil
+                        }
+                )
+                .zIndex(1)
+
             VStack(alignment: .leading, spacing: 0) {
                 Text("Outline")
                     .font(.headline)
-                    .padding([.horizontal, .top])
-                    .padding(.bottom, 8)
+                    .padding()
+
                 Divider()
+
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
                         ForEach(Array(turns.enumerated()), id: \.offset) { index, turn in
@@ -691,8 +724,8 @@ struct ChatOutlineView: View {
                     .padding(.vertical, 6)
                 }
             }
-            .frame(width: 240)
-            .background(Color(nsColor: .textBackgroundColor))
+            .frame(width: outlineWidth)
+            .background(Color(nsColor: .windowBackgroundColor))
         }
     }
 }
