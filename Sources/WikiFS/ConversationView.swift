@@ -189,13 +189,14 @@ struct ConversationView: View {
                 zoom: conversationZoom
             )
                 .frame(maxWidth: ConversationMetrics.chatColumnWidth, maxHeight: .infinity)
+                .padding(.horizontal, PageEditorMetrics.contentInset)
                 .padding(.top, showsEditingEnabledBanner || chatSummary != nil ? 0 : ConversationMetrics.conversationTopInset)
             liveComposer
-                .padding(.horizontal, ConversationMetrics.conversationHorizontalInset)
+                .padding(.horizontal, PageEditorMetrics.contentInset)
                 .padding(.top, ConversationMetrics.sectionSpacing)
                 .padding(.bottom, ConversationMetrics.contentInset)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
 
     private var emptyState: some View {
@@ -284,7 +285,8 @@ struct ConversationView: View {
                 zoom: conversationZoom
             )
             .frame(maxWidth: ConversationMetrics.chatColumnWidth, maxHeight: .infinity)
-            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, PageEditorMetrics.contentInset)
             // D3: the persisted chat's composer continues the conversation
             // (seeded-fallback). Enabled when the kind's launcher is idle; disabled
             // with a slot-style caption when a different conversation is responding.
@@ -303,7 +305,7 @@ struct ConversationView: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .padding(.horizontal, ConversationMetrics.conversationHorizontalInset)
+        .padding(.horizontal, PageEditorMetrics.contentInset)
         .padding(.bottom, ConversationMetrics.contentInset)
         .frame(maxWidth: .infinity)
     }
@@ -565,7 +567,6 @@ enum ConversationMetrics {
     static let sectionSpacing: CGFloat = 16
     static let debugTopInset: CGFloat = 18
     static let controlsBandHeight: CGFloat = 28
-    static let conversationHorizontalInset: CGFloat = 48
     static let conversationTopInset: CGFloat = 56
     static let chatColumnWidth: CGFloat = 900
     static let emptyStateHorizontalInset: CGFloat = 72
