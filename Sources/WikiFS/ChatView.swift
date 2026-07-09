@@ -41,6 +41,7 @@ struct ChatView: View {
     @AppStorage("chat.zoom") private var chatZoom = Double(ZoomScale.defaultScale)
     @AppStorage("isChatOutlineExpanded") private var chatOutlineExpanded = false
     @State private var outlineScroll: ChatScrollRequest? = nil
+    @State private var quoteAnchor: ChatHighlightRequest? = nil
 
     /// True when this surface is rendering the active live session (D2
     /// source-of-truth rule). The view sources from `launcher.events`; when
@@ -137,6 +138,26 @@ struct ChatView: View {
             if let chatID, !isLiveChat {
                 persistedMessages = store.chatMessages(chatID: chatID)
             }
+        }
+        // Resolve a `[[chat:Title#"quote"]]` quote anchor (issue #281) to a
+        // message highlight. Keyed on (chatID, anchorVersion, messageCount):
+        // the anchorVersion dimension re-fires on a re-click to the same chat,
+        // and the messageCount dimension re-fires once a persisted chat's
+        // messages load — so the set-once anchor is consumed only when the
+        // transcript is ready (it survives the 0→N load).
+        .task(id: ChatAnchorTaskKey(
+            chatID: chatID,
+            anchorVersion: store.pendingScrollAnchorVersion,
+            messageCount: displayMessages.count)) {
+            guard let chatID, !displayMessages.isEmpty else { return }
+            guard let fragment = store.consumePendingScrollAnchor(for: .chat(chatID)) else { return }
+            let quote = ChatQuoteResolver.quoteText(fragment)
+            guard !quote.isEmpty,
+                  ChatQuoteResolver.messageIndex(of: fragment, in: displayMessages) != nil
+            else { return }
+            quoteAnchor = ChatHighlightRequest(
+                version: (quoteAnchor?.version ?? 0) + 1,
+                quote: quote)
         }
     }
 
@@ -259,7 +280,8 @@ struct ChatView: View {
                         renderContext: { [weak store] in store?.renderContext() },
                         blobStore: store,
                         zoom: chatZoom,
-                        scrollRequest: outlineScroll
+                        scrollRequest: outlineScroll,
+                        quoteAnchor: quoteAnchor
                     )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.horizontal, PageEditorMetrics.contentInset)
@@ -607,6 +629,16 @@ struct ChatView: View {
     private var sendButtonIcon: String {
         launcher.isInteractiveSession ? "arrow.up.circle.fill" : "play.circle.fill"
     }
+}
+
+/// `Hashable` key for the `ChatView` quote-anchor consume task (issue #281).
+/// Re-fires the task when the chat changes, a new anchor is pending, or the
+/// transcript's message count changes (so the anchor is consumed only once the
+/// persisted messages have loaded).
+private struct ChatAnchorTaskKey: Hashable {
+    let chatID: PageID?
+    let anchorVersion: Int
+    let messageCount: Int
 }
 
 // Shared metrics for the chat surface (mirrors the original

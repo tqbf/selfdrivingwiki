@@ -108,7 +108,7 @@ struct WikiReaderView: View {
         switch WikiLinkMarkdown.resolvedKind(from: url) {
         case .page:   return .page(title: title, id: id, fragment: frag)
         case .source: return .source(title: title, id: id, fragment: frag, pin: WikiLinkMarkdown.pin(from: url))
-        case .chat:   return .chat(title: title, id: id)
+        case .chat:   return .chat(title: title, id: id, fragment: frag)
         case nil:     return .inert
         }
     }
@@ -131,9 +131,9 @@ struct WikiReaderView: View {
             case .source(let title, let id, let frag, let pin):
                 if let id, store.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab, pinnedExtractionID: pin) { }
                 else { store.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab) }
-            case .chat(let title, let id):
-                if let id, store.selectChat(byID: id, openInNewTab: openInNewTab) { }
-                else { store.selectChat(byTitle: title, openInNewTab: openInNewTab) }
+            case .chat(let title, let id, let frag):
+                if let id, store.selectChat(byID: id, anchor: frag, openInNewTab: openInNewTab) { }
+                else { store.selectChat(byTitle: title, anchor: frag, openInNewTab: openInNewTab) }
             case .samePageAnchor, .inert:      break
             }
         }
@@ -289,8 +289,10 @@ enum WikiLinkRoute: Equatable, Sendable {
     case source(title: String, id: PageID?, fragment: String?, pin: PageID?)
     /// Resolved chat link — navigate to a persisted chat. `id` is the
     /// canonical ULID when the URL carried `?id=`; nil for legacy `?title=`-only
-    /// links, which resolve by `title` as the transition fallback.
-    case chat(title: String, id: PageID?)
+    /// links, which resolve by `title` as the transition fallback. `fragment`
+    /// carries a `#"quote"` passage (issue #281): the destination `ChatView`
+    /// resolves it to a message and highlights the passage.
+    case chat(title: String, id: PageID?, fragment: String?)
     /// Unresolved (`wiki://missing`) or un-classifiable — inert.
     case inert
 }
@@ -1077,9 +1079,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
             case .source(let title, let id, let frag, let pin):
                 if let id, store?.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab, pinnedExtractionID: pin) == true { }
                 else { store?.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab) }
-            case .chat(let title, let id):
-                if let id, store?.selectChat(byID: id, openInNewTab: openInNewTab) == true { }
-                else { store?.selectChat(byTitle: title, openInNewTab: openInNewTab) }
+            case .chat(let title, let id, let frag):
+                if let id, store?.selectChat(byID: id, anchor: frag, openInNewTab: openInNewTab) == true { }
+                else { store?.selectChat(byTitle: title, anchor: frag, openInNewTab: openInNewTab) }
             case .inert:
                 break
             }

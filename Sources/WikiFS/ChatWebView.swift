@@ -30,6 +30,17 @@ struct ChatScrollRequest: Equatable {
     let turnIndex: Int
 }
 
+/// A versioned request to highlight a quoted passage in the chat transcript and
+/// scroll it into view — the rendering half of `[[chat:Title#"quote"]]` (issue
+/// #281). Mirrors the reader's anchor-version pattern: `version` bumps to signal
+/// a new request (so a re-click to the same chat re-fires); `quote` is the
+/// passage text (delimiters already stripped). Consumed in
+/// `ChatWebView.updateNSView`/`didFinish` via `window.find` + `<mark sdwhl>`.
+struct ChatHighlightRequest: Equatable {
+    let version: Int
+    let quote: String
+}
+
 struct ChatWebView: NSViewRepresentable {
     /// `.activityFeed` is the inspector look (labeled rows, tool calls,
     /// diagnostics). `.chat` is the Query page look (right-aligned capsule
@@ -78,6 +89,11 @@ struct ChatWebView: NSViewRepresentable {
     /// Versioned request to scroll to a user turn (outline click). `nil` (default)
     /// never scrolls; consumed in `updateNSView`.
     var scrollRequest: ChatScrollRequest? = nil
+    /// Versioned request to highlight + scroll to a `[[chat:Title#"quote"]]`
+    /// passage (issue #281). `nil` (default) never highlights; consumed in
+    /// `updateNSView` (re-click on a loaded transcript) and `didFinish` (fresh
+    /// load). The coordinator stashes it and applies once rows are rendered.
+    var quoteAnchor: ChatHighlightRequest? = nil
 
     /// Name of the `WKScriptMessage` channel the per-bubble "Copy" button posts
     /// to (issue #285). The JS click listener calls
@@ -132,6 +148,15 @@ struct ChatWebView: NSViewRepresentable {
             let js = "(function(){var u=document.querySelectorAll('.chat-user');var el=u[\(req.turnIndex)];if(el){el.scrollIntoView({block:'start'});}})()"
             webView.evaluateJavaScript(js, completionHandler: nil)
         }
+        // Quote-anchor highlight (issue #281): stash the latest quote and ask
+        // the coordinator to apply it. The coordinator guards on "loaded", so a
+        // request that lands before rows render is deferred and picked up by
+        // `didFinish` once the transcript is in the DOM.
+        if let req = quoteAnchor, req.version != context.coordinator.appliedHighlightVersion {
+            context.coordinator.appliedHighlightVersion = req.version
+            context.coordinator.pendingHighlightQuote = req.quote
+            context.coordinator.applyHighlight()
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -150,6 +175,14 @@ struct ChatWebView: NSViewRepresentable {
         /// Last chat-outline scroll request applied, so an unchanged request
         /// doesn't re-scroll on every re-render.
         var appliedScrollVersion: Int = -1
+        /// The pending quote to highlight + scroll to (issue #281), stashed by
+        /// `updateNSView` and applied once rows render. A quote link can arrive
+        /// before the transcript's rows are appended (the page hasn't finished
+        /// loading), so the coordinator defers the `window.find` until `didFinish`.
+        var pendingHighlightQuote: String?
+        /// The last `ChatHighlightRequest.version` applied, so an unchanged
+        /// request doesn't re-highlight on every re-render.
+        var appliedHighlightVersion: Int = -1
         private var renderedCount = 0
         private var renderedShowsInternals: Bool?
         private var isLoaded = false
@@ -232,6 +265,25 @@ struct ChatWebView: NSViewRepresentable {
             renderedCount = toRender.count
             renderedLastEvent = toRender.last
             renderedEvents = toRender
+            // Apply a deferred quote-anchor highlight now that the transcript's
+            // rows are in the DOM (issue #281).
+            if pendingHighlightQuote != nil {
+                applyHighlight()
+            }
+        }
+
+        /// Highlight + scroll to the stashed quote passage via `window.find` +
+        /// `<mark class="sdwhl">` — the same mechanism the page/source reader
+        /// uses (`WikiReaderView.applyFind`). The transcript is one document, so
+        /// `window.find` lands on the first match (which is the message
+        /// `ChatQuoteResolver` identified). Guards on `isLoaded` so a request
+        /// that lands before rows render is deferred to `didFinish`; clears the
+        /// stash only when it actually runs.
+        func applyHighlight() {
+            guard isLoaded, let webView,
+                  let quote = pendingHighlightQuote, !quote.isEmpty else { return }
+            pendingHighlightQuote = nil
+            webView.evaluateJavaScript(Self.highlightAndScrollJS(quote: quote), completionHandler: nil)
         }
 
         /// Open external links in the default browser instead of navigating
@@ -448,6 +500,52 @@ struct ChatWebView: NSViewRepresentable {
                 .replacingOccurrences(of: ">", with: "&gt;")
         }
 
+        /// JavaScript that highlights the first occurrence of `quote` in the
+        /// transcript and scrolls it into view — mirrors the reader's
+        /// `WikiReaderView.applyFind` (clear prior `mark.sdwhl`, `window.find`
+        /// from the document top, wrap the selection, `scrollIntoView`). The
+        /// transcript is one document, so `window.find` lands on the first match
+        /// — the same message `ChatQuoteResolver.messageIndex` identifies.
+        static func highlightAndScrollJS(quote: String) -> String {
+            let q = jsEscape(quote)
+            return """
+            (function(q){
+              document.querySelectorAll("mark.sdwhl").forEach(function(m){
+                var p=m.parentNode; while(m.firstChild) p.insertBefore(m.firstChild,m);
+                p.removeChild(m); p.normalize();
+              });
+              var sel=window.getSelection();
+              sel.removeAllRanges();
+              var body=document.body;
+              if(body){
+                var r0=document.createRange();
+                r0.setStart(body,0); r0.collapse(true);
+                sel.addRange(r0);
+              }
+              window.find(q,false,false,false,false);
+              if(sel.rangeCount>0 && !sel.isCollapsed){
+                var r=sel.getRangeAt(0); var mark=document.createElement("mark");
+                mark.className="sdwhl";
+                try{ r.surroundContents(mark); }catch(e){
+                  mark.appendChild(document.createTextNode(q));
+                  r.insertNode(mark);
+                }
+                var mk=document.querySelector("mark.sdwhl");
+                if(mk){ mk.scrollIntoView({block:"center"}); }
+              }
+            })("\(q)");
+            """
+        }
+
+        /// Escape a string for safe embedding in a double-quoted JS string
+        /// literal. Mirrors `WikiReaderRep.jsString`.
+        private static func jsEscape(_ s: String) -> String {
+            s.replacingOccurrences(of: "\\", with: "\\\\")
+             .replacingOccurrences(of: "\"", with: "\\\"")
+             .replacingOccurrences(of: "\n", with: "\\n")
+             .replacingOccurrences(of: "\r", with: "\\r")
+        }
+
         private static func escapePreservingBreaks(_ s: String) -> String {
             escape(s).replacingOccurrences(of: "\n", with: "<br>")
         }
@@ -548,6 +646,7 @@ struct ChatWebView: NSViewRepresentable {
           h3 { font-size: 1.05em; } h4, h5, h6 { font-size: 1em; }
           strong { font-weight: 600; }
           a { color: -webkit-link; }
+          mark.sdwhl { background: rgba(255, 213, 79, 0.8); border-radius: 2px; }
           code {
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             font-size: 0.9em; background: var(--code-bg);

@@ -126,7 +126,10 @@ The wiki is projected read-only at `$WIKI_ROOT`. Browse it with
   to find one by meaning); read a transcript with `wikictl chat get --id <id>` or
   `--title "Title"`. Chats project as `chats/by-id/<ULID>.md` on the mount. The
   canonical form `[[chat:01J…|Title]]` is stable across renames. Chat links
-  cannot be embeds (`![[chat:…]]` is invalid).
+  cannot be embeds (`![[chat:…]]` is invalid). To cite a specific message, append
+  a quote anchor — `[[chat:Title#"distinctive passage"]]` (the `#"…"` wraps a
+  substring that appears in the transcript); it opens the chat, scrolls to that
+  message, and highlights the passage.
 - **External sources** (papers, books, URLs NOT ingested into this wiki) get
   standard academic footnote citations: `[^id]: Author (Year), "Title", Journal/
   Publisher. DOI or URL`. If only a URL is available, that's fine. External
