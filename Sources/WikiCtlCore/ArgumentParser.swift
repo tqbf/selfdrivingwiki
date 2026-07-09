@@ -116,6 +116,7 @@ public enum ArgumentParser {
                                                both orphaned blobs and activities
       chat list [--json]                     list chats (TSV, or JSON lines)
       chat get  (--id X | --title T)         print a chat transcript as markdown
+      chat search --query X [--limit N]      semantic + keyword search of chats
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -346,6 +347,21 @@ public enum ArgumentParser {
 
         case "get":
             return .chat(.get(try options.requireChatSelector()))
+
+        case "search":
+            guard let query = options.value("--query") else {
+                throw Failure.usage("chat search: --query is required")
+            }
+            let limit: Int
+            if let raw = options.value("--limit") {
+                guard let n = Int(raw), n > 0, n <= 100 else {
+                    throw Failure.usage("chat search: --limit must be 1–100")
+                }
+                limit = n
+            } else {
+                limit = 10
+            }
+            return .chat(.search(query: query, limit: limit))
 
         default:
             throw Failure.usage("chat: unknown subcommand \(sub.debugDescription)")

@@ -25,13 +25,14 @@ struct AgentToolsView: View {
     var body: some View {
         VStack(spacing: 0) {
             chatsHeader
+            chatSearchBar
             Divider()
             ScrollViewReader { proxy in
                 List(selection: Binding(
                     get: { store.activeTab?.selection },
                     set: { sel in if let sel { store.openTab(sel) } }
                 )) {
-                    ForEach(store.chats) { chat in
+                    ForEach(visibleChats) { chat in
                         RecentChatRow(
                             chat: chat,
                             isLive: isLive(chat)
@@ -46,6 +47,12 @@ struct AgentToolsView: View {
                                     store.deleteChat(id: chat.id)
                                 }
                             }
+                    }
+                }
+                .overlay {
+                    if visibleChats.isEmpty && !store.chatSearchQuery.isEmpty {
+                        Text("No matching conversations")
+                            .foregroundStyle(.secondary).font(.callout)
                     }
                 }
                 .listStyle(.inset)
@@ -111,6 +118,33 @@ struct AgentToolsView: View {
             .buttonStyle(.borderless)
             .fixedSize()
             .help("New Conversation")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    // MARK: - Chats search
+
+    /// The chats shown in the list: all chats (most-recent-first) when the
+    /// search bar is empty, else the hybrid search results.
+    private var visibleChats: [ChatSummary] {
+        store.chatSearchQuery.isEmpty ? store.chats : store.chatSearchResults
+    }
+
+    /// Compact search bar mirroring the Pages/Sources sidebars: magnifier +
+    /// plain text field + a clear button. Bound to `store.chatSearchQuery`,
+    /// which debounces a hybrid (FTS + semantic) search.
+    private var chatSearchBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary).font(.callout)
+            TextField("Search conversations…", text: $store.chatSearchQuery)
+                .textFieldStyle(.plain).font(.callout).disableAutocorrection(true)
+            if !store.chatSearchQuery.isEmpty {
+                Button { store.chatSearchQuery = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }.buttonStyle(.borderless)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)

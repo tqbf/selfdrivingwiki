@@ -28,7 +28,7 @@ struct SearchUpgradeView: View {
                 ProgressView(value: Double(progress.done),
                              total: Double(max(progress.total, 1)))
                     .frame(maxWidth: 240)
-                Text(progress.phase == .pages ? "Embedding pages…" : "Embedding sources…")
+                Text(phaseLabel(progress.phase))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -39,5 +39,14 @@ struct SearchUpgradeView: View {
         }
         .padding(28)
         .frame(minWidth: 340)
+    }
+
+    /// Human-readable label for the current embed phase.
+    private func phaseLabel(_ phase: SearchUpgradeState.Phase) -> String {
+        switch phase {
+        case .pages: "Embedding pages…"
+        case .sources: "Embedding sources…"
+        case .chats: "Embedding chats…"
+        }
     }
 }

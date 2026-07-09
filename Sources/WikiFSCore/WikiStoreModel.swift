@@ -10,7 +10,7 @@ public struct SearchUpgradeState: Identifiable {
     public let total: Int
     public var done: Int
     public var phase: Phase
-    public enum Phase { case pages, sources }
+    public enum Phase { case pages, sources, chats }
 
     public init(total: Int, done: Int, phase: Phase) {
         self.total = total; self.done = done; self.phase = phase
@@ -81,6 +81,15 @@ public final class WikiStoreModel {
     /// Results of the last sources search (empty when sourceSearchQuery is empty).
     public private(set) var sourceSearchResults: [SourceSummary] = []
     @ObservationIgnored private var sourceSearchTask: Task<Void, Never>?
+
+    /// Live search query from the Chats sidebar search bar. Debounced 300ms.
+    /// Mirrors `searchQuery`/`sourceSearchQuery` (hybrid RRF, FTS fallback).
+    public var chatSearchQuery: String = "" {
+        didSet { scheduleChatSearch() }
+    }
+    /// Results of the last chats search (empty when chatSearchQuery is empty).
+    public private(set) var chatSearchResults: [ChatSummary] = []
+    @ObservationIgnored private var chatSearchTask: Task<Void, Never>?
 
     /// Memoized `WikiRenderContext` (Phase A.1, D1). Lazily rebuilt; invalidated
     /// by bumping ``renderContextGeneration`` whenever pages or sources change.
@@ -416,6 +425,12 @@ public final class WikiStoreModel {
     /// `searchSimilar`, over sources.
     public func searchSimilarSources(query: String, limit: Int = 20) -> [SourceSummary] {
         (try? store.searchSimilarSources(query: query, limit: limit)) ?? []
+    }
+
+    /// Hybrid chat search wrapper — same hybrid store search as
+    /// `searchSimilar`, over chats. Used by the Chats sidebar search field.
+    public func searchSimilarChats(query: String, limit: Int = 20) -> [ChatSummary] {
+        (try? store.searchSimilarChats(query: query, limit: limit)) ?? []
     }
 
     /// Resolve a page title to its id (lowest-ULID on a duplicate-title
@@ -2243,16 +2258,19 @@ public final class WikiStoreModel {
 
         let pageWork   = store.missingPageEmbeddingWork()     // main-thread SQLite read
         let sourceWork = store.missingSourceEmbeddingWork()   // main-thread SQLite read
-        let total = pageWork.count + sourceWork.count
+        let chatWork   = store.missingChatEmbeddingWork()     // main-thread SQLite read
+        let total = pageWork.count + sourceWork.count + chatWork.count
         guard total > 0 else { return }                       // nothing missing → no sheet
 
         searchUpgrade = SearchUpgradeState(total: total, done: 0, phase: .pages)
-        DebugLog.store("searchUpgrade: begin — \(pageWork.count) page(s), \(sourceWork.count) source(s)")
+        DebugLog.store("searchUpgrade: begin — \(pageWork.count) page(s), \(sourceWork.count) source(s), \(chatWork.count) chat(s)")
 
         var done = 0
         done = await embedAndStore(pageWork, into: { try? store.storePageChunks(id: $0, chunks: $1) }, running: done)
         searchUpgrade?.phase = .sources
         done = await embedAndStore(sourceWork, into: { try? store.storeSourceChunks(id: $0, chunks: $1) }, running: done)
+        searchUpgrade?.phase = .chats
+        done = await embedAndStore(chatWork, into: { try? store.storeChatChunks(id: $0, chunks: $1) }, running: done)
 
         DebugLog.store("searchUpgrade: complete — \(done) of \(total)")
         searchUpgrade = nil                                   // dismisses the sheet
@@ -2336,6 +2354,29 @@ public final class WikiStoreModel {
             }
             guard !Task.isCancelled else { return }
             self.sourceSearchResults = results
+        }
+    }
+
+    private func scheduleChatSearch() {
+        chatSearchTask?.cancel()
+        guard !chatSearchQuery.isEmpty else {
+            chatSearchResults = []
+            return
+        }
+        chatSearchTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, let self else { return }
+            let query = self.chatSearchQuery
+            let results: [ChatSummary]
+            if let pool = self.readPool {
+                results = (try? await pool.asyncRead { reader in
+                    try reader.searchSimilarChats(query: query, limit: 20)
+                }) ?? []
+            } else {
+                results = (try? self.store.searchSimilarChats(query: query, limit: 20)) ?? []
+            }
+            guard !Task.isCancelled else { return }
+            self.chatSearchResults = results
         }
     }
 
