@@ -247,7 +247,7 @@ struct ConversationView: View {
     private func header(for chat: ChatSummary) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(chat.title)
-                .font(.title2)
+                .font(.largeTitle)
                 .bold()
                 .lineLimit(1)
                 .textSelection(.enabled)
