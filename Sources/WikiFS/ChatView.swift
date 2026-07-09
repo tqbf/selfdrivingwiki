@@ -10,8 +10,8 @@ enum QueryMode {
     var allowsEdits: Bool { self == .edit }
 }
 
-/// The unified conversation surface (D2, pillar 2). One view replaces the split
-/// between the live `QueryConversationView` and the read-only
+/// The unified chat surface (D2, pillar 2). One view replaces the split
+/// between the live `ChatView` and the read-only
 /// `ChatHistoryDetailView`. Whether you see streaming deltas or a persisted
 /// transcript depends on the **source-of-truth rule**: if this chat is the
 /// launcher's active live session (`activeChatID == chatID`), render
@@ -21,7 +21,7 @@ enum QueryMode {
 /// The `.ask` / `.edit` draft states also route here (with `chatID == nil`),
 /// showing the empty-composer state until the first send retargets the tab to
 /// `.chat(id)` (the draft-state morph, handled by `AgentOperationRunner`).
-struct ConversationView: View {
+struct ChatView: View {
     /// `.ask` / `.edit` for draft states; `.chat(id)`'s kind is resolved from
     /// the chat summary. Determines which launcher owns this surface.
     let mode: QueryMode
@@ -36,9 +36,9 @@ struct ConversationView: View {
 
     @State private var draftMessage = ""
     @State private var showsInternals = false
-    @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: ConversationMetrics.composerFont)
+    @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: ChatMetrics.composerFont)
     @State private var persistedMessages: [ChatMessage] = []
-    @AppStorage("conversation.zoom") private var conversationZoom = Double(ZoomScale.defaultScale)
+    @AppStorage("chat.zoom") private var chatZoom = Double(ZoomScale.defaultScale)
     @AppStorage("isChatOutlineExpanded") private var chatOutlineExpanded = false
     @State private var outlineScroll: ChatScrollRequest? = nil
 
@@ -56,16 +56,16 @@ struct ConversationView: View {
                 content
                 if showsDebugControls {
                     controls
-                        .padding(.top, ConversationMetrics.debugTopInset)
-                        .padding(.trailing, ConversationMetrics.contentInset)
+                        .padding(.top, ChatMetrics.debugTopInset)
+                        .padding(.trailing, ChatMetrics.contentInset)
                 }
             }
             .frame(minWidth: PageEditorMetrics.detailMinWidth)
             .background(Color(nsColor: .textBackgroundColor))
         }
-        .zoomShortcuts($conversationZoom)
-        .zoomScroll($conversationZoom)
-        .onChange(of: conversationZoom) { _, _ in
+        .zoomShortcuts($chatZoom)
+        .zoomScroll($chatZoom)
+        .onChange(of: chatZoom) { _, _ in
             composerHeight = ComposerTextView.oneLineHeight(for: composerFont)
         }
         .onChange(of: launcher.isRunning) { _, isRunning in
@@ -104,10 +104,10 @@ struct ConversationView: View {
         }
     }
 
-    // MARK: - Controls (debug cluster + new conversation)
+    // MARK: - Controls (debug cluster + new chat)
 
     private var controls: some View {
-        // Only the live chat gets the debug cluster + new conversation button.
+        // Only the live chat gets the debug cluster + new chat button.
         // A persisted non-live chat is read-only — no controls.
         HStack(spacing: 8) {
             if showsDebugControls {
@@ -155,17 +155,17 @@ struct ConversationView: View {
         if showsInternals && launcher.isRunning && launcher.runningKind == .query {
             AgentActivityView(launcher: launcher, showsResultEvents: false, showsInternals: true, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(ConversationMetrics.contentInset)
+                .padding(ChatMetrics.contentInset)
         } else if isLiveChat || chatID == nil {
-            // Live session or draft state: same path as QueryConversationView.
-            if hasVisibleConversation {
-                liveConversation
+            // Live session or draft state: same path as ChatView.
+            if hasVisibleChat {
+                liveChat
             } else {
                 emptyState
             }
         } else {
             // Persisted non-live chat: read-only header + transcript.
-            persistedConversation
+            persistedChat
         }
     }
 
@@ -189,10 +189,10 @@ struct ConversationView: View {
         }
     }
 
-    // MARK: - Live conversation (streaming)
+    // MARK: - Live chat (streaming)
 
     @ViewBuilder
-    private var liveConversation: some View {
+    private var liveChat: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let chat = chatSummary {
                 header(for: chat)
@@ -203,23 +203,23 @@ struct ConversationView: View {
                     if showsEditingEnabledBanner {
                         editingEnabledBanner
                             .padding(.top, bannerTopReservation)
-                            .padding(.bottom, ConversationMetrics.sectionSpacing)
+                            .padding(.bottom, ChatMetrics.sectionSpacing)
                     }
-                    QueryTranscriptView(
+                    ChatTranscriptView(
                         launcher: launcher,
                         onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
                         renderContext: { [weak store] in store?.renderContext() },
                         blobStore: store,
-                        zoom: conversationZoom,
+                        zoom: chatZoom,
                         scrollRequest: outlineScroll
                     )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.horizontal, PageEditorMetrics.contentInset)
-                        .padding(.top, showsEditingEnabledBanner || chatSummary != nil ? 0 : ConversationMetrics.conversationTopInset)
+                        .padding(.top, showsEditingEnabledBanner || chatSummary != nil ? 0 : ChatMetrics.chatTopInset)
                     liveComposer
                         .padding(.horizontal, PageEditorMetrics.contentInset)
-                        .padding(.top, ConversationMetrics.sectionSpacing)
-                        .padding(.bottom, ConversationMetrics.contentInset)
+                        .padding(.top, ChatMetrics.sectionSpacing)
+                        .padding(.bottom, ChatMetrics.contentInset)
                 }
             }
         }
@@ -227,7 +227,7 @@ struct ConversationView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: ConversationMetrics.emptyStateSpacing) {
+        VStack(spacing: ChatMetrics.emptyStateSpacing) {
             if showsEditingEnabledBanner {
                 editingEnabledBanner
                     .padding(.top, bannerTopReservation)
@@ -240,18 +240,18 @@ struct ConversationView: View {
             liveComposer
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, ConversationMetrics.emptyStateHorizontalInset)
-        .padding(.bottom, ConversationMetrics.emptyStateBottomBias)
+        .padding(.horizontal, ChatMetrics.emptyStateHorizontalInset)
+        .padding(.bottom, ChatMetrics.emptyStateBottomBias)
     }
 
     private var liveComposer: some View {
         composer(enabled: isComposerEnabled)
     }
 
-    // MARK: - Persisted conversation (read-only)
+    // MARK: - Persisted chat (read-only)
 
     @ViewBuilder
-    private var persistedConversation: some View {
+    private var persistedChat: some View {
         if let chat = chatSummary {
             VStack(alignment: .leading, spacing: 0) {
                 header(for: chat)
@@ -262,9 +262,9 @@ struct ConversationView: View {
             }
         } else {
             ContentUnavailableView {
-                Label("Conversation Missing", systemImage: "bubble.left.and.bubble.right")
+                Label("Chat Missing", systemImage: "bubble.left.and.bubble.right")
             } description: {
-                Text("This conversation is no longer available.")
+                Text("This chat is no longer available.")
             }
         }
     }
@@ -309,7 +309,7 @@ struct ConversationView: View {
                     Button("Show in List", systemImage: "sidebar.left") {
                         store.requestSidebarReveal(.chat(chatID))
                     }
-                    .help("Reveal this conversation in the sidebar")
+                    .help("Reveal this chat in the sidebar")
                 }
                 if fileProvider.path != nil, let chatID {
                     Button("Share", systemImage: "square.and.arrow.up") {
@@ -327,11 +327,11 @@ struct ConversationView: View {
                                 of: contentView, preferredEdge: .minY)
                         }
                     }
-                    .help("Share this conversation")
+                    .help("Share this chat")
                     Button("Reveal in Finder", systemImage: "folder") {
                         Task { await fileProvider.revealChatInFinder(id: chatID) }
                     }
-                    .help("Reveal this conversation file in Finder")
+                    .help("Reveal this chat file in Finder")
                 }
                 Button {
                     chatOutlineExpanded.toggle()
@@ -344,7 +344,7 @@ struct ConversationView: View {
         .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
         .padding(.horizontal, PageEditorMetrics.contentInset)
         .padding(.top, PageEditorMetrics.contentInset)
-        .padding(.bottom, ConversationMetrics.sectionSpacing)
+        .padding(.bottom, ChatMetrics.sectionSpacing)
     }
 
     @ViewBuilder
@@ -352,7 +352,7 @@ struct ConversationView: View {
         let visible = persistedMessages.map(\.event).transcriptVisible
         if visible.isEmpty {
             VStack(spacing: 7) {
-                Text("No messages were persisted for this conversation.")
+                Text("No messages were persisted for this chat.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -364,14 +364,14 @@ struct ConversationView: View {
                 onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
                 renderContext: { [weak store] in store?.renderContext() },
                 blobStore: store,
-                zoom: conversationZoom,
+                zoom: chatZoom,
                 scrollRequest: outlineScroll
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .padding(.horizontal, PageEditorMetrics.contentInset)
-            // D3: the persisted chat's composer continues the conversation
+            // D3: the persisted chat's composer continues the chat
             // (seeded-fallback). Enabled when the kind's launcher is idle; disabled
-            // with a slot-style caption when a different conversation is responding.
+            // with a slot-style caption when a different chat is responding.
             .safeAreaInset(edge: .bottom) {
                 persistedComposerFooter
             }
@@ -388,7 +388,7 @@ struct ConversationView: View {
             }
         }
         .padding(.horizontal, PageEditorMetrics.contentInset)
-        .padding(.bottom, ConversationMetrics.contentInset)
+        .padding(.bottom, ChatMetrics.contentInset)
         .frame(maxWidth: .infinity)
     }
 
@@ -428,18 +428,18 @@ struct ConversationView: View {
 
     private var bannerTopReservation: CGFloat {
         showsDebugControls
-            ? ConversationMetrics.debugTopInset + ConversationMetrics.controlsBandHeight
+            ? ChatMetrics.debugTopInset + ChatMetrics.controlsBandHeight
             : 0
     }
 
     // MARK: - Composer
 
-    /// The composer's AppKit font, scaled by the persisted conversation zoom so
+    /// The composer's AppKit font, scaled by the persisted chat zoom so
     /// ⌘+/⌘− resize the input alongside the transcript (parity with the page
     /// editor's `editor.zoom`).
     private var composerFont: NSFont {
-        let base = ConversationMetrics.composerFont
-        return base.withSize(base.pointSize * CGFloat(conversationZoom))
+        let base = ChatMetrics.composerFont
+        return base.withSize(base.pointSize * CGFloat(chatZoom))
     }
 
     private func composer(enabled: Bool) -> some View {
@@ -453,16 +453,16 @@ struct ConversationView: View {
                 measuredHeight: $composerHeight
             )
                 .frame(height: composerHeight)
-                .padding(.leading, ConversationMetrics.composerHorizontalPadding)
-                .padding(.vertical, ConversationMetrics.composerVerticalPadding)
+                .padding(.leading, ChatMetrics.composerHorizontalPadding)
+                .padding(.vertical, ChatMetrics.composerVerticalPadding)
                 .overlay(alignment: .topLeading) {
                     if draftMessage.isEmpty {
                         Text("Ask a question, or ask to update the wiki…")
                             .font(.body)
                             .foregroundStyle(.secondary)
                             .allowsHitTesting(false)
-                            .padding(.leading, ConversationMetrics.composerHorizontalPadding)
-                            .padding(.vertical, ConversationMetrics.composerVerticalPadding + ComposerTextView.Metrics.verticalInsetPerSide)
+                            .padding(.leading, ChatMetrics.composerHorizontalPadding)
+                            .padding(.vertical, ChatMetrics.composerVerticalPadding + ComposerTextView.Metrics.verticalInsetPerSide)
                     }
                 }
 
@@ -470,16 +470,16 @@ struct ConversationView: View {
                 Image(systemName: sendButtonIcon)
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(sendActive ? Color.white : Color.secondary)
-                    .frame(width: ConversationMetrics.sendButtonSize, height: ConversationMetrics.sendButtonSize)
+                    .frame(width: ChatMetrics.sendButtonSize, height: ChatMetrics.sendButtonSize)
                     .background(sendButtonBackground(active: sendActive), in: Circle())
             }
                 .buttonStyle(.borderless)
                 .disabled(!sendActive)
                 .keyboardShortcut(.return, modifiers: .command)
                 .help(sendButtonTitle)
-                .padding(.bottom, ConversationMetrics.sendButtonBottomInset)
+                .padding(.bottom, ChatMetrics.sendButtonBottomInset)
         }
-        .padding(.trailing, ConversationMetrics.composerButtonInset)
+        .padding(.trailing, ChatMetrics.composerButtonInset)
         .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
         .overlay {
             Capsule()
@@ -504,10 +504,10 @@ struct ConversationView: View {
             launcher.sendInteractiveMessage(message)
         } else if let chatID {
             // D3: a persisted (non-live) chat — start a fresh session that
-            // continues this conversation (seeded-fallback), streaming into the
+            // continues this chat (seeded-fallback), streaming into the
             // SAME chat row. activeChatID = chat.id flips this view to live.
             Task {
-                await AgentOperationRunner.continueConversation(
+                await AgentOperationRunner.continueChat(
                     chatID: chatID,
                     message: message,
                     mode: mode,
@@ -519,9 +519,9 @@ struct ConversationView: View {
                 )
             }
         } else {
-            // Draft state (.ask/.edit): start a NEW conversation.
+            // Draft state (.ask/.edit): start a NEW chat.
             Task {
-                await AgentOperationRunner.startQueryConversation(
+                await AgentOperationRunner.startChat(
                     firstMessage: message,
                     launcher: launcher,
                     store: store,
@@ -533,11 +533,11 @@ struct ConversationView: View {
         }
     }
 
-    /// Start a new conversation: clear the launcher's live state and retarget
+    /// Start a new chat: clear the launcher's live state and retarget
     /// the tab back to the draft state (.ask/.edit per mode). The old chat stays
     /// in history.
-    private func startNewConversation() {
-        launcher.startNewConversation()
+    private func startNewChat() {
+        launcher.startNewChat()
         // D2 retarget-back: morph the active tab from .chat(id) back to the draft
         // state so the user sees a fresh composer.
         if let activeID = store.activeTabID {
@@ -547,7 +547,7 @@ struct ConversationView: View {
 
     // MARK: - Derived state
 
-    private var hasVisibleConversation: Bool {
+    private var hasVisibleChat: Bool {
         if isLiveChat {
             return launcher.events.contains { event in
                 switch event {
@@ -579,8 +579,8 @@ struct ConversationView: View {
     }
 
     /// Composer is enabled for the live chat AND for a persisted (non-live) chat
-    /// whose kind's launcher is idle (D3: continue a persisted conversation). A
-    /// persisted chat whose launcher is mid-generation (a DIFFERENT conversation
+    /// whose kind's launcher is idle (D3: continue a persisted chat). A
+    /// persisted chat whose launcher is mid-generation (a DIFFERENT chat
     /// is responding) disables the composer — the takeover rules refuse a
     /// mid-generation interrupt, so the composer reflects that.
     private var isComposerEnabled: Bool {
@@ -595,22 +595,22 @@ struct ConversationView: View {
         }
         // D3: a persisted (non-live) chat is continuable when its kind's launcher
         // is idle (`!isGenerating && !isAwaitingGenerationSlot`). If that launcher
-        // is mid-generation (a different conversation), the composer stays
-        // disabled — `continueConversation`'s takeover guard would refuse anyway.
+        // is mid-generation (a different chat), the composer stays
+        // disabled — `continueChat`'s takeover guard would refuse anyway.
         return manager.activeWikiID != nil
             && !launcher.isGenerating
             && !launcher.isAwaitingGenerationSlot
     }
 
     /// The caption shown under a persisted chat's composer when it is disabled
-    /// because the kind's launcher is responding to a DIFFERENT conversation.
+    /// because the kind's launcher is responding to a DIFFERENT chat.
     /// Mirrors the slot-style hint used elsewhere. Empty (no caption) when the
     /// composer is enabled.
     private var persistedComposerCaption: String? {
         guard chatID != nil, !isLiveChat else { return nil }
         if launcher.isGenerating || launcher.isAwaitingGenerationSlot {
             let label = mode == .edit ? "Edit" : "Ask"
-            return "Another \(label) conversation is responding — wait or stop it."
+            return "Another \(label) chat is responding — wait or stop it."
         }
         return nil
     }
@@ -642,14 +642,14 @@ struct ConversationView: View {
     }
 }
 
-// Shared metrics for the conversation surface (mirrors the original
-// QueryConversationMetrics, now shared between draft and persisted states).
-enum ConversationMetrics {
+// Shared metrics for the chat surface (mirrors the original
+// QueryChatMetrics, now shared between draft and persisted states).
+enum ChatMetrics {
     static let contentInset: CGFloat = 28
     static let sectionSpacing: CGFloat = 16
     static let debugTopInset: CGFloat = 18
     static let controlsBandHeight: CGFloat = 28
-    static let conversationTopInset: CGFloat = 56
+    static let chatTopInset: CGFloat = 56
     static let emptyStateHorizontalInset: CGFloat = 72
     static let emptyStateSpacing: CGFloat = 28
     static let emptyStateBottomBias: CGFloat = 96
@@ -670,7 +670,7 @@ enum ConversationMetrics {
     }
 }
 
-/// Right-side outline for a conversation: lists the user's turns (questions) in
+/// Right-side outline for a chat: lists the user's turns (questions) in
 /// order. Clicking a turn scrolls the transcript web view to that message via a
 /// versioned `ChatScrollRequest`. Mirrors the page outline's shape (divider +
 /// "Outline" header + scrollable list).

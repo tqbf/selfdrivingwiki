@@ -3,10 +3,10 @@ import Testing
 @testable import WikiFS
 import WikiFSCore
 
-/// Tests for `AgentLauncher.startNewConversation()`'s clearing/guard behavior
+/// Tests for `AgentLauncher.startNewChat()`'s clearing/guard behavior
 /// (PR #198 semantics, `plans/persisted-chat-history.md`).
 @MainActor
-struct QueryNewConversationTests {
+struct QueryNewChatTests {
 
     private func makeLauncher() -> AgentLauncher {
         let launcher = AgentLauncher()
@@ -14,9 +14,9 @@ struct QueryNewConversationTests {
         return launcher
     }
 
-    // MARK: - startNewConversation() clears idle state
+    // MARK: - startNewChat() clears idle state
 
-    @Test func startNewConversationClearsStateWhenIdle() {
+    @Test func startNewChatClearsStateWhenIdle() {
         let launcher = makeLauncher()
         // Pre-seed visible-run artifacts via the relaxed test seams.
         launcher.events = [.userText("hello"), .assistantText("hi there")]
@@ -29,7 +29,7 @@ struct QueryNewConversationTests {
         launcher.extractionPID = 4242
         launcher.extractingSourceIDs = [PageID(rawValue: "sentinel-source")]
 
-        launcher.startNewConversation()
+        launcher.startNewChat()
 
         #expect(launcher.events.isEmpty)
         #expect(launcher.rawTranscript.isEmpty)
@@ -42,15 +42,15 @@ struct QueryNewConversationTests {
         #expect(launcher.extractingSourceIDs == [PageID(rawValue: "sentinel-source")])
     }
 
-    // MARK: - startNewConversation() guard: never kills a non-query run
+    // MARK: - startNewChat() guard: never kills a non-query run
 
-    @Test func startNewConversationIsNoOpForNonQueryRun() {
+    @Test func startNewChatIsNoOpForNonQueryRun() {
         let launcher = makeLauncher()
         launcher.events = [.userText("hello"), .assistantText("hi there")]
         launcher.isRunning = true
         launcher.runningKind = .ingest
 
-        launcher.startNewConversation()
+        launcher.startNewChat()
 
         // Guard fires: nothing is cleared, nothing is stopped.
         #expect(launcher.events.count == 2)

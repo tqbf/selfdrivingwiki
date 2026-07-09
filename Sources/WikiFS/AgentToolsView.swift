@@ -9,11 +9,11 @@ import WikiFSCore
 /// calls `store.openTab`). No per-row gesture, so no latency.
 struct AgentToolsView: View {
     @Bindable var store: WikiStoreModel
-    /// The Ask (read-only) conversation launcher — backs the live indicator on
-    /// `.ask` recent-conversation rows (D4).
+    /// The Ask (read-only) chat launcher — backs the live indicator on
+    /// `.ask` recent-chat rows (D4).
     @Bindable var askLauncher: AgentLauncher
-    /// The Edit conversation launcher — backs the live indicator on `.edit`
-    /// recent-conversation rows (D4).
+    /// The Edit chat launcher — backs the live indicator on `.edit`
+    /// recent-chat rows (D4).
     @Bindable var editLauncher: AgentLauncher
 
     /// The chat being renamed, if any. Non-nil presents the rename alert. The
@@ -39,11 +39,11 @@ struct AgentToolsView: View {
                         )
                             .tag(WikiSelection.chat(chat.id))
                             .contextMenu {
-                                Button("Rename Conversation…") {
+                                Button("Rename Chat…") {
                                     renameDraft = chat.title
                                     renamingChat = chat
                                 }
-                                Button("Delete Conversation", role: .destructive) {
+                                Button("Delete Chat", role: .destructive) {
                                     store.deleteChat(id: chat.id)
                                 }
                             }
@@ -51,7 +51,7 @@ struct AgentToolsView: View {
                 }
                 .overlay {
                     if visibleChats.isEmpty && !store.chatSearchQuery.isEmpty {
-                        Text("No matching conversations")
+                        Text("No matching chats")
                             .foregroundStyle(.secondary).font(.callout)
                     }
                 }
@@ -73,11 +73,11 @@ struct AgentToolsView: View {
         // field. Commit on the primary action, dismiss otherwise. The store
         // method (`store.renameChat`) is the first UI caller of the tested
         // `WikiStore.renameChat` path. (D4)
-        .alert("Rename Conversation", isPresented: Binding(
+        .alert("Rename Chat", isPresented: Binding(
             get: { renamingChat != nil },
             set: { if !$0 { renamingChat = nil } }
         )) {
-            TextField("Conversation title", text: $renameDraft)
+            TextField("Chat title", text: $renameDraft)
             Button("Rename") {
                 let trimmed = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                 if let chat = renamingChat, !trimmed.isEmpty {
@@ -89,7 +89,7 @@ struct AgentToolsView: View {
                 renamingChat = nil
             }
         } message: {
-            Text("Enter a new title for this conversation.")
+            Text("Enter a new title for this chat.")
         }
     }
 
@@ -100,7 +100,7 @@ struct AgentToolsView: View {
     /// macOS pattern: Photos, Mail, Finder sidebar section headers). The `+`
     /// opens the draft state for a mode (Ask default, Edit second) by
     /// retargeting/opening a tab to `.ask` / `.edit` — the same draft state
-    /// `ConversationView` renders with `chatID == nil`. This reuses the
+    /// `ChatView` renders with `chatID == nil`. This reuses the
     /// existing `store.openTab` path rather than duplicating tab logic. (D4)
     private var chatsHeader: some View {
         HStack {
@@ -117,7 +117,7 @@ struct AgentToolsView: View {
             }
             .buttonStyle(.borderless)
             .fixedSize()
-            .help("New Conversation")
+            .help("New Chat")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -138,7 +138,7 @@ struct AgentToolsView: View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary).font(.callout)
-            TextField("Search conversations…", text: $store.chatSearchQuery)
+            TextField("Search chats…", text: $store.chatSearchQuery)
                 .textFieldStyle(.plain).font(.callout).disableAutocorrection(true)
             if !store.chatSearchQuery.isEmpty {
                 Button { store.chatSearchQuery = "" } label: {
@@ -198,7 +198,7 @@ struct AgentToolsView: View {
     }
 }
 
-/// One row in the "Recent Conversations" section. When `isLive` is true a
+/// One row in the "Recent Chats" section. When `isLive` is true a
 /// small tinted `circle.fill` + "responding…" caption is shown so the
 /// one-per-kind live-session constraint is *visible* instead of surprising.
 /// (D4)
@@ -224,7 +224,7 @@ private struct RecentChatRow: View {
                             .foregroundStyle(.tint)
                     }
                     .lineLimit(1)
-                    .accessibilityLabel("Conversation is responding")
+                    .accessibilityLabel("Chat is responding")
                 } else {
                     Text(chat.updatedAt, format: .relative(presentation: .named))
                         .font(.caption)

@@ -132,7 +132,7 @@ struct BookmarkTargetPickerSheet: View {
         switch kind {
         case .pages: noun = "Page"; plural = "Pages"
         case .sources: noun = "Source"; plural = "Sources"
-        case .chats: noun = "Conversation"; plural = "Conversations"
+        case .chats: noun = "Chat"; plural = "Chats"
         }
         let count = ids.count
         let nounText = count == 1 ? noun : plural

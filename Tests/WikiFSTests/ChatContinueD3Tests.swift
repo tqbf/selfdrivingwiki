@@ -3,11 +3,11 @@ import Testing
 @testable import WikiFS
 @testable import WikiFSCore
 
-/// Tests for Phase D3 — continue a persisted conversation (seeded-fallback).
+/// Tests for Phase D3 — continue a persisted chat (seeded-fallback).
 ///
 /// Three gate points:
 ///   (a) `continuationPreamble` — byte cap enforced, user/assistant roles only,
-///       the "continuing an earlier conversation" preamble present, and the new
+///       the "continuing an earlier chat" preamble present, and the new
 ///       user message included in full at the end.
 ///   (b) `continueTakeoverDecision` — the takeover matrix: idle → take over;
 ///       between-turns (interactive session alive, not generating) → end-then-
@@ -15,7 +15,7 @@ import Testing
 ///   (c) continue appends to the SAME chat row — `seq` continues, title
 ///       preserved, `updatedAt` bumps.
 @MainActor
-struct ConversationContinueD3Tests {
+struct ChatContinueD3Tests {
 
     private func tempModel() throws -> (WikiStoreModel, SQLiteWikiStore) {
         let dir = FileManager.default.temporaryDirectory
@@ -65,8 +65,8 @@ struct ConversationContinueD3Tests {
         let preamble = AgentOperationRunner.continuationPreamble(
             from: messages, newMessage: "Next question?", maxBytes: 10_000)
 
-        // The "continuing an earlier conversation" preamble is present.
-        #expect(preamble.contains("continuing an earlier conversation"))
+        // The "continuing an earlier chat" preamble is present.
+        #expect(preamble.contains("continuing an earlier chat"))
         // The new user message is included in full at the end.
         #expect(preamble.contains("--- new message ---"))
         #expect(preamble.contains("Next question?"))
@@ -99,7 +99,7 @@ struct ConversationContinueD3Tests {
             from: [], newMessage: "Fresh start", maxBytes: 10_000)
 
         // No transcript rows → the header + footer + new message only.
-        #expect(preamble.contains("continuing an earlier conversation"))
+        #expect(preamble.contains("continuing an earlier chat"))
         #expect(preamble.hasSuffix("Fresh start"))
     }
 

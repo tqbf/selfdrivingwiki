@@ -5,15 +5,15 @@ import WikiFSCore
 /// A trailing inspector for the active agent run. It reuses the operations
 /// sheet's transcript renderer so inline page queries do not disappear into a
 /// silent lock state.
-struct AgentTranscriptSidebar: View {
+struct AgentActivitySidebar: View {
     @Bindable var launcher: AgentLauncher
     /// Forwards wiki-link clicks in the transcript to the detail column. Built
     /// where the store lives (the owning `ContentView` / `LintView`) and
     /// forwarded unchanged to the activity view.
     var onWikiLink: ((URL, Bool) -> Void)? = nil
     @State private var showsInternals = false
-    @State private var width: CGFloat = AgentTranscriptMetrics.defaultWidth
-    @State private var widthDragOrigin: CGFloat = AgentTranscriptMetrics.defaultWidth
+    @State private var width: CGFloat = AgentActivityMetrics.defaultWidth
+    @State private var widthDragOrigin: CGFloat = AgentActivityMetrics.defaultWidth
 
     /// Which section is currently shown. Like Xcode's navigator, the icon bar at
     /// the top of the sidebar is a mutually-exclusive selector — exactly one
@@ -86,10 +86,10 @@ struct AgentTranscriptSidebar: View {
         switch selectedSection {
         case .activity:
             activitySection
-                .padding(AgentTranscriptMetrics.padding)
+                .padding(AgentActivityMetrics.padding)
         case .extraction:
             pdfConversionBox
-                .padding(AgentTranscriptMetrics.padding)
+                .padding(AgentActivityMetrics.padding)
         }
     }
 
@@ -143,7 +143,7 @@ struct AgentTranscriptSidebar: View {
                 DragGesture()
                     .onChanged { value in
                         let proposed = widthDragOrigin - value.translation.width
-                        width = min(AgentTranscriptMetrics.maxWidth, max(AgentTranscriptMetrics.minWidth, proposed))
+                        width = min(AgentActivityMetrics.maxWidth, max(AgentActivityMetrics.minWidth, proposed))
                     }
                     .onEnded { _ in widthDragOrigin = width }
             )
@@ -232,7 +232,7 @@ struct AgentTranscriptSidebar: View {
     }
 }
 
-enum AgentTranscriptMetrics {
+enum AgentActivityMetrics {
     static let defaultWidth: CGFloat = 340
     static let minWidth: CGFloat = 260
     static let maxWidth: CGFloat = 720

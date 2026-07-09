@@ -333,7 +333,7 @@ struct AgentExtractionLockTests {
     // MARK: - isExtracting flag during extraction phase
 
     /// `launcher.isExtracting` must be set to `true` during the extraction phase
-    /// so `AgentTranscriptSidebar.showsConversion` renders the PDF Conversion box.
+    /// so `AgentActivitySidebar.showsConversion` renders the PDF Conversion box.
     /// The flag is managed by the caller (both the ingest path in
     /// `AgentOperationRunner.runMultiIngest` and the standalone path in
     /// `SourceDetailView.runExtraction`), not by the slot itself — but the

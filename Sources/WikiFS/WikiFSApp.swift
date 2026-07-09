@@ -40,6 +40,10 @@ struct WikiFSApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        // Migrate the renamed chat-zoom @AppStorage key before any ChatView reads
+        // it. Idempotent: copies `conversation.zoom` → `chat.zoom` only when the
+        // new key is unset and the old key is set; no-op for fresh installs.
+        AppStorageMigration.migrateZoomKey(in: .standard)
         // Install the app-only PDFKit title extractor into Core's injectable
         // seam. Core must not import PDFKit (it pulls AppKit into the File
         // Provider extension on macOS 26), so the real implementation lives in

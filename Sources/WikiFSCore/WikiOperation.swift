@@ -45,9 +45,9 @@ public enum WikiOperation: Equatable, Sendable {
   /// `stateFilePath` is the staged `WIKI_STATE.md` snapshot.
   case query(question: String, stateFilePath: String)
 
-  /// Keep a query conversation open. User turns arrive over stdin, and Claude may
+  /// Keep a query chat open. User turns arrive over stdin, and Claude may
   /// answer only, or update the wiki with `wikictl` when `allowWikiEdits` is true.
-  case queryConversation(stateFilePath: String, allowWikiEdits: Bool)
+  case queryChat(stateFilePath: String, allowWikiEdits: Bool)
 
   /// Health-check the wiki and report findings. `stateFilePath` is the staged
   /// `WIKI_STATE.md` snapshot.
@@ -63,7 +63,7 @@ public enum WikiOperation: Equatable, Sendable {
   public var kind: Kind {
     switch self {
     case .ingest: .ingest
-    case .query, .queryConversation: .query
+    case .query, .queryChat: .query
     case .lint, .lintPage: .lint
     }
   }
@@ -90,7 +90,7 @@ public enum WikiOperation: Equatable, Sendable {
   public var topLevelModelAlias: String {
     switch self {
     case .ingest(_, _, _, let plan): plan.topLevelModelAlias
-    case .query, .queryConversation, .lint, .lintPage: "opus"
+    case .query, .queryChat, .lint, .lintPage: "opus"
     }
   }
 
@@ -100,7 +100,7 @@ public enum WikiOperation: Equatable, Sendable {
   public var agentsJSON: String? {
     switch self {
     case .ingest(_, _, _, let plan): plan.agentsJSON()
-    case .query, .queryConversation, .lint, .lintPage: nil
+    case .query, .queryChat, .lint, .lintPage: nil
     }
   }
 }
@@ -138,8 +138,8 @@ extension WikiOperation {
     case .query(let question, let stateFilePath):
       return Self.queryPrompt(
         wikiRoot: wikiRoot, question: question, stateFilePath: stateFilePath)
-    case .queryConversation(let stateFilePath, let allowWikiEdits):
-      return Self.queryConversationPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath, allowWikiEdits: allowWikiEdits)
+    case .queryChat(let stateFilePath, let allowWikiEdits):
+      return Self.queryChatPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath, allowWikiEdits: allowWikiEdits)
     case .lint(let stateFilePath):
       return Self.lintPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath)
     case .lintPage(let pageTitle, let brokenLinks, let stateFilePath):
@@ -293,32 +293,12 @@ extension WikiOperation {
   /// includes. The seatbelt sandbox + `--allowed-tools` remain the authoritative
   /// write gate for the read-only agent (#284); the branch collapses once Ask
   /// mode is removed.
-  private static func queryConversationPrompt(
+  private static func queryChatPrompt(
     wikiRoot: String, stateFilePath: String, allowWikiEdits: Bool
   ) -> String {
-    if allowWikiEdits {
-      return queryConversationReadWritePrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath)
-    } else {
-      return """
-      \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
-
-      \(answerCitationRule)
-
-      \(GeneratedPrompts.chat)
-
-      \(Self.wikiRootLine(wikiRoot))
-      """
-    }
-  }
-
-  /// Read-write variant: includes full write instructions (current behavior).
-  private static func queryConversationReadWritePrompt(
-    wikiRoot: String, stateFilePath: String
-  ) -> String {
+    let writeRule = allowWikiEdits ? "\(IngestWriteRule.writes)\n\n" : ""
     return """
-    \(IngestWriteRule.writes)
-
-    \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
+    \(writeRule)\(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
 
     \(answerCitationRule)
 

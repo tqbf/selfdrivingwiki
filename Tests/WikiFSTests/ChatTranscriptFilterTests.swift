@@ -4,8 +4,8 @@ import Testing
 @testable import WikiFS
 
 /// Tests for `[AgentEvent].transcriptVisible`, the filter shared by the live
-/// Query page (`QueryTranscriptView`) and the read-only chat-history view
-/// (`ChatHistoryDetailView`) so a persisted conversation re-renders exactly
+/// Query page (`ChatTranscriptView`) and the read-only chat-history view
+/// (`ChatHistoryDetailView`) so a persisted chat re-renders exactly
 /// like it looked live.
 struct ChatTranscriptFilterTests {
 

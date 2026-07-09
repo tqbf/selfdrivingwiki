@@ -47,7 +47,7 @@ import SQLite3
             .userText("talk about thermodynamics"),
         ])
         // A distinct term appended in a SEPARATE flush must still be searchable —
-        // the sidecar rebuild concatenates the whole conversation each append.
+        // the sidecar rebuild concatenates the whole chat each append.
         _ = try store.appendChatMessages(chatID: chat.id, events: [
             .assistantText("Photosynthesis converts light into chemical energy."),
         ])

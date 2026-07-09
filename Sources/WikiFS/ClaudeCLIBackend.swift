@@ -148,7 +148,7 @@ actor ClaudeCLIBackend: AgentBackend {
         // Build the command (the backend owns OperationCommand assembly).
         let isInteractive: Bool
         let command: OperationCommand
-        if case .queryConversation = cli.operation {
+        if case .queryChat = cli.operation {
             isInteractive = true
             command = OperationCommand.buildInteractiveQuery(
                 operation: cli.operation,

@@ -126,7 +126,7 @@ struct AgentGenerationSlotTests {
     // MARK: - Query-page debug-cluster predicate
 
     /// `AgentLauncher.showsQueryDebugControls` is the pure predicate backing
-    /// `QueryConversationView.showsDebugControls`. The cluster is visible only
+    /// `ChatView.showsDebugControls`. The cluster is visible only
     /// while a QUERY run is in flight (AC.1). Assert it across the state matrix.
     @Test func debugClusterPredicateOnlyTrueForActiveQueryRun() {
         func p(_ isGenerating: Bool, _ kind: WikiOperation.Kind?) -> Bool {

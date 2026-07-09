@@ -1,6 +1,6 @@
 import Foundation
 
-/// Which agent surface a persisted conversation came from. Mirrors the two
+/// Which agent surface a persisted chat came from. Mirrors the two
 /// interactive query modes: Ask (read-only seatbelt) and Edit (may write the
 /// wiki). A closed set so `chats.kind` round-trips predictably.
 public enum ChatKind: String, Equatable, Sendable, CaseIterable {
@@ -8,7 +8,7 @@ public enum ChatKind: String, Equatable, Sendable, CaseIterable {
     case edit
 }
 
-/// One persisted agent conversation (issue #119). Chats are ULID-keyed the
+/// One persisted agent chat (issue #119). Chats are ULID-keyed the
 /// moment they are persisted — the stable resource identity every follow-up
 /// surface (`[[chat:…]]` links, `chats.jsonl`, the File Provider `chats/`
 /// tree) hangs off. The transcript itself lives in `chat_messages`
@@ -46,7 +46,7 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
             .components(separatedBy: .newlines)
             .first ?? ""
         let trimmed = firstLine.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return "New Conversation" }
+        guard !trimmed.isEmpty else { return "New Chat" }
         guard trimmed.count > maxLength else { return trimmed }
         return trimmed.prefix(maxLength - 1) + "…"
     }

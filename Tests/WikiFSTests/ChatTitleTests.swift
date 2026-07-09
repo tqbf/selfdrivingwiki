@@ -25,11 +25,11 @@ import Foundation
         #expect(title == String(repeating: "a", count: 59) + "…")
     }
 
-    @Test func whitespaceOnlyMessageFallsBackToNewConversation() {
-        #expect(ChatSummary.title(fromFirstMessage: "   \n\t  ") == "New Conversation")
+    @Test func whitespaceOnlyMessageFallsBackToNewChat() {
+        #expect(ChatSummary.title(fromFirstMessage: "   \n\t  ") == "New Chat")
     }
 
-    @Test func emptyMessageFallsBackToNewConversation() {
-        #expect(ChatSummary.title(fromFirstMessage: "") == "New Conversation")
+    @Test func emptyMessageFallsBackToNewChat() {
+        #expect(ChatSummary.title(fromFirstMessage: "") == "New Chat")
     }
 }

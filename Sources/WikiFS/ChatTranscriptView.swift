@@ -3,14 +3,14 @@ import WikiFSCore
 
 /// Output-first chat surface for the dedicated Query page. Internal stream-json
 /// bookkeeping stays in AgentActivityView behind "Show internals".
-struct QueryTranscriptView: View {
+struct ChatTranscriptView: View {
     @Bindable var launcher: AgentLauncher
     /// Forwards wiki-link clicks in the transcript to the detail column. Built
-    /// where the store lives (the parent `QueryConversationView`) and forwarded
+    /// where the store lives (the parent `ChatView`) and forwarded
     /// unchanged to the transcript web view.
     var onWikiLink: ((URL, Bool) -> Void)? = nil
     /// Provider of the current `WikiRenderContext` (Phase A.2) — bound to
-    /// `store.renderContext()` by `QueryConversationView`, so live chat rows
+    /// `store.renderContext()` by `ChatView`, so live chat rows
     /// render source references exactly as the reader does. Forwarded unchanged
     /// to the transcript web view.
     var renderContext: (() -> WikiRenderContext?)? = nil
@@ -18,7 +18,7 @@ struct QueryTranscriptView: View {
     /// images/media. Forwarded to the transcript web view.
     var blobStore: WikiStoreModel? = nil
     /// Page-zoom multiplier forwarded to the transcript web view. Bound to the
-    /// `conversation.zoom` AppStorage by the conversation surface.
+    /// `chat.zoom` AppStorage by the chat surface.
     var zoom: Double = Double(ZoomScale.defaultScale)
     /// Versioned scroll-to-turn request, forwarded to the transcript web view.
     var scrollRequest: ChatScrollRequest? = nil
@@ -49,7 +49,7 @@ struct QueryTranscriptView: View {
 
     private var placeholder: some View {
         VStack(spacing: 7) {
-            Text(launcher.isRunning ? "Waiting for the Agent..." : "Ask a question to start a conversation.")
+            Text(launcher.isRunning ? "Waiting for the Agent..." : "Ask a question to start a chat.")
                 .font(.headline)
                 .fontWeight(.medium)
                 .foregroundStyle(.primary)
@@ -58,17 +58,17 @@ struct QueryTranscriptView: View {
                 .foregroundStyle(.secondary)
         }
         .multilineTextAlignment(.center)
-        .padding(QueryTranscriptMetrics.emptyStatePadding)
+        .padding(ChatTranscriptMetrics.emptyStatePadding)
     }
 }
 
-private enum QueryTranscriptMetrics {
+private enum ChatTranscriptMetrics {
     static let emptyStatePadding: CGFloat = 24
 }
 
 extension [AgentEvent] {
     /// The transcript-visible subset shared by the live Query page and the
-    /// read-only chat-history view, so a persisted conversation re-renders
+    /// read-only chat-history view, so a persisted chat re-renders
     /// exactly like it looked live.
     var transcriptVisible: [AgentEvent] {
         filter { event in
