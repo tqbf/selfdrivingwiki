@@ -44,7 +44,7 @@ struct AgentToolsD4Tests {
     }
 
     @Test func liveIndicator_falseWhenChatIDDiffers_evenIfGenerating() {
-        // The other conversation is generating, not this one.
+        // The other chat is generating, not this one.
         let id = PageID(rawValue: "01J" + String(repeating: "A", count: 22))
         let other = "01J" + String(repeating: "B", count: 22)
         #expect(!AgentToolsView.isLiveRow(
@@ -108,7 +108,7 @@ struct AgentToolsD4Tests {
     @Test func chatsList_isMostRecentlyUpdatedFirst() throws {
         // The store query orders by updated_at DESC; the sidebar renders
         // store.chats as-is. Verify the model preserves that order so the most
-        // recently touched conversation is on top (no D4 reordering added).
+        // recently touched chat is on top (no D4 reordering added).
         let (model, store) = try tempModel()
         let first = try store.createChat(kind: .ask, title: "First")
         // Bump `first`'s updated_at by appending a message, so it becomes the

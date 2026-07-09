@@ -3,7 +3,7 @@ import SwiftUI
 
 /// NSTextView-backed chat composer, replacing the SwiftUI
 /// `TextField(..., axis: .vertical).lineLimit(1...6)` that previously backed
-/// the conversation views' composer.
+/// the chat views' composer.
 ///
 /// Why this exists: on macOS, `TextField` is NSTextField/field-editor backed.
 /// Every keystroke, cursor move, or selection change re-lays-out the *entire*

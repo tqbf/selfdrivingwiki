@@ -203,7 +203,7 @@ enum AgentOperationRunner {
             takeEditLock: false)
     }
 
-    static func startQueryConversation(
+    static func startChat(
         firstMessage: String,
         launcher: AgentLauncher,
         store: WikiStoreModel,
@@ -214,14 +214,14 @@ enum AgentOperationRunner {
         let trimmed = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard let wikiID = manager.activeWikiID else {
-            DebugLog.agent("startQueryConversation: no active wiki — bailing")
+            DebugLog.agent("startChat: no active wiki — bailing")
             return
         }
 
         // If the query agent wants edit permissions, it must take the edit lock.
         // Refuse to start if another agent (ingest) already holds it.
         if allowWikiEdits && store.isAgentRunning {
-            launcher.preflightError = "An ingestion is updating the wiki. Wait for it to finish before starting a conversation."
+            launcher.preflightError = "An ingestion is updating the wiki. Wait for it to finish before starting a chat."
             return
         }
 
@@ -230,16 +230,16 @@ enum AgentOperationRunner {
         // when it isn't mounted, passing an empty WIKI_ROOT. The prompt tells the
         // agent to read via `wikictl` only when the mount is unavailable.
         let root = fileProvider.path ?? ""
-        DebugLog.agent("startQueryConversation: wikiRoot=\(root.isEmpty ? "<mount unavailable>" : root)")
+        DebugLog.agent("startChat: wikiRoot=\(root.isEmpty ? "<mount unavailable>" : root)")
 
-        // Persist the conversation from the first message (issue #119). Best-effort:
+        // Persist the chat from the first message (issue #119). Best-effort:
         // a store failure yields chat == nil and the session runs unpersisted.
         let chat = store.startChat(kind: allowWikiEdits ? .edit : .ask, firstMessage: trimmed)
 
         // D2 draft-state morph: if a chat row was created, retarget the active
         // tab IN PLACE from the draft state (.ask/.edit) to .chat(id). The tab's
         // UUID survives → tab order, drag/drop, and per-tab history are preserved.
-        // The conversation "becomes" its tab — reopenable, restorable like any page.
+        // The chat "becomes" its tab — reopenable, restorable like any page.
         if let chat {
             store.retargetActiveTabToChat(chatID: chat.id)
         }
@@ -255,7 +255,7 @@ enum AgentOperationRunner {
             wikictlDirectory: HelpersLocation.wikictlDirectory,
             allowWikiEdits: allowWikiEdits,
             // D2: pass the chat row id so the launcher records it as
-            // activeChatID — ConversationView's source-of-truth switch. `nil`
+            // activeChatID — ChatView's source-of-truth switch. `nil`
             // when startChat failed (session runs unpersisted, no live tab).
             chatID: chat?.id.rawValue,
             // The model seeded the first user message at chat creation; tell the
@@ -280,7 +280,7 @@ enum AgentOperationRunner {
         // binary wasn't found) or a spawn failure — `startInteractiveQuery` sets
         // `preflightError` synchronously before returning. The chat row the model
         // just created (with its seeded first message) would otherwise linger in
-        // history as a dead conversation. Roll it back: drop the row and revert
+        // history as a dead chat. Roll it back: drop the row and revert
         // the tab to the draft composer. (A process that spawns OK then dies
         // immediately isn't caught here, but seeding guarantees that chat still
         // holds its first message — never titled-but-empty.)
@@ -289,13 +289,13 @@ enum AgentOperationRunner {
         }
     }
 
-    // MARK: - Continue a persisted conversation (D3, seeded-fallback)
+    // MARK: - Continue a persisted chat (D3, seeded-fallback)
 
     /// How a takeover of a kind's launcher should proceed, given its state when a
-    /// *different* conversation asks to continue. Pure so the matrix is unit-
+    /// *different* chat asks to continue. Pure so the matrix is unit-
     /// testable without driving a live launcher. The runner consults this BEFORE
     /// touching the launcher; `refused` means the composer should already be
-    /// disabled (it is the guard) and `continueConversation` bails.
+    /// disabled (it is the guard) and `continueChat` bails.
     ///
     /// - idle: nothing is running → take over directly.
     /// - betweenTurns: an interactive session is open but not generating → end it
@@ -313,7 +313,7 @@ enum AgentOperationRunner {
     /// Classify a launcher's state for the takeover decision. `refused` covers
     /// mid-generation (`isGenerating` or queued for the gate
     /// `isAwaitingGenerationSlot`) — the composer is already disabled in that
-    /// state, and `continueConversation` treats this as a hard bail.
+    /// state, and `continueChat` treats this as a hard bail.
     static func continueTakeoverDecision(
         isRunning: Bool,
         isInteractiveSession: Bool,
@@ -340,7 +340,7 @@ enum AgentOperationRunner {
     }
 
     /// Build the first prompt for a seeded-fallback continue: a "continuing an
-    /// earlier conversation" preamble carrying the last N user/assistant turns
+    /// earlier chat" preamble carrying the last N user/assistant turns
     /// (the `.text` projection — never `event_json`), byte-capped, followed by
     /// the new user message.
     ///
@@ -389,7 +389,7 @@ enum AgentOperationRunner {
         }()
 
         let header = """
-        You are continuing an earlier conversation about this wiki. \
+        You are continuing an earlier chat about this wiki. \
         Here is the transcript so far, condensed for context. \
         Pick up where it left off.
 
@@ -432,7 +432,7 @@ enum AgentOperationRunner {
         return header + body + footer
     }
 
-    /// Continue a persisted conversation via seeded-fallback (D3). Starts a fresh
+    /// Continue a persisted chat via seeded-fallback (D3). Starts a fresh
     /// interactive session whose first prompt embeds a condensed transcript, then
     /// streams into the SAME chat row (`seq` continues, title preserved,
     /// `updatedAt` bumps it to the top of Recent). Session identity / `--resume`
@@ -440,14 +440,14 @@ enum AgentOperationRunner {
     ///
     /// Takeover rules (one live session per kind remains the invariant):
     /// - **idle** → take over directly.
-    /// - **between-turns** (a different conversation's session is open but idle) →
+    /// - **between-turns** (a different chat's session is open but idle) →
     ///   `stopAgent()` first. That triggers `finish(-1)`, which runs the FINAL
     ///   `flushTranscript()` BEFORE clearing `transcriptSink` — so the other
-    ///   conversation's in-flight tail is persisted to its own chat row with
+    ///   chat's in-flight tail is persisted to its own chat row with
     ///   nothing lost. Only THEN do we take over.
     /// - **mid-generation** → refuse (the composer is already disabled; this is a
     ///   guard). Returns without spawning.
-    static func continueConversation(
+    static func continueChat(
         chatID: PageID,
         message: String,
         mode: QueryMode,
@@ -460,12 +460,12 @@ enum AgentOperationRunner {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard let wikiID = manager.activeWikiID else {
-            DebugLog.agent("continueConversation: no active wiki — bailing")
+            DebugLog.agent("continueChat: no active wiki — bailing")
             return
         }
 
         // Guard: refuse mid-generation. The composer is already disabled in that
-        // state (ConversationView.isComposerEnabled), but this is a hard guard so
+        // state (ChatView.isComposerEnabled), but this is a hard guard so
         // a race (enabled-check → send) can never interrupt a live turn.
         let decision = continueTakeoverDecision(
             isRunning: launcher.isRunning,
@@ -474,15 +474,15 @@ enum AgentOperationRunner {
             isAwaitingGenerationSlot: launcher.isAwaitingGenerationSlot)
         switch decision {
         case .refused:
-            DebugLog.agent("continueConversation: refused — launcher mid-generation")
+            DebugLog.agent("continueChat: refused — launcher mid-generation")
             return
         case .betweenTurns:
-            // End the OTHER conversation's session first. stopAgent() cancels any
+            // End the OTHER chat's session first. stopAgent() cancels any
             // pending send, asks the backend to cancel the session, then calls
             // finish(-1) SYNCHRONOUSLY on the main actor — which runs the final
             // flushTranscript() (persisting the other chat's tail) and clears its
             // transcriptSink + activeChatID before we take over. Nothing is lost.
-            DebugLog.agent("continueConversation: ending between-turns session before takeover")
+            DebugLog.agent("continueChat: ending between-turns session before takeover")
             launcher.stopAgent()
         case .idle:
             break
@@ -490,20 +490,20 @@ enum AgentOperationRunner {
 
         // Edit-lock sanity: refuse if an ingest holds the lock and we want edits.
         if allowWikiEdits && store.isAgentRunning {
-            launcher.preflightError = "An ingestion is updating the wiki. Wait for it to finish before starting a conversation."
+            launcher.preflightError = "An ingestion is updating the wiki. Wait for it to finish before starting a chat."
             return
         }
 
         await fileProvider.signalChange()
         let root = fileProvider.path ?? ""
-        DebugLog.agent("continueConversation: chatID=\(chatID.rawValue) wikiRoot=\(root.isEmpty ? "<mount unavailable>" : root)")
+        DebugLog.agent("continueChat: chatID=\(chatID.rawValue) wikiRoot=\(root.isEmpty ? "<mount unavailable>" : root)")
 
         // Build the condensed transcript + new message as the first prompt.
         let history = store.chatMessages(chatID: chatID)
         let firstMessage = continuationPreamble(from: history, newMessage: trimmed)
 
         // Start a fresh session writing to the SAME chat row. activeChatID = chat.id
-        // flips ConversationView to live for this tab (seq continues, title
+        // flips ChatView to live for this tab (seq continues, title
         // preserved, updatedAt bumps on the first persisted append). The sink is
         // keyed by chatID and appends to the same row.
         await launcher.startInteractiveQuery(

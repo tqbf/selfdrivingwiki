@@ -7,8 +7,8 @@ import WikiFSCore
 struct WikiDetailView: View {
     @Bindable var store: WikiStoreModel
     @Bindable var launcher: AgentLauncher       // ingest/lint launcher
-    @Bindable var askLauncher: AgentLauncher    // ask (read-only) conversation launcher
-    @Bindable var editLauncher: AgentLauncher   // edit conversation launcher
+    @Bindable var askLauncher: AgentLauncher    // ask (read-only) chat launcher
+    @Bindable var editLauncher: AgentLauncher   // edit chat launcher
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
     let extractionCoordinator: ExtractionCoordinator
@@ -70,7 +70,7 @@ struct WikiDetailView: View {
                         introRow(title: "Pages", description: "Create and edit markdown notes with deep wiki-linking.", systemImage: "doc.text")
                         introRow(title: "Sources", description: "Manage and ingest raw material from URLs, folders, or Zotero.", systemImage: "tray.full")
                         introRow(title: "Bookmarks", description: "Organize pages and sources into a custom folder tree for quick access.", systemImage: "bookmark")
-                        introRow(title: "Chats", description: "Ask questions and edit your wiki through conversation.", systemImage: "bubble.left.and.bubble.right")
+                        introRow(title: "Chats", description: "Ask questions and edit your wiki through chat.", systemImage: "bubble.left.and.bubble.right")
                     }
                     .frame(maxWidth: 400)
 
@@ -132,7 +132,7 @@ struct WikiDetailView: View {
         case .ask:
             // D2: draft state — empty composer until the first send retargets the
             // tab to .chat(id). chatID == nil signals the draft state.
-            ConversationView(
+            ChatView(
                 mode: .ask,
                 chatID: nil,
                 store: store,
@@ -143,7 +143,7 @@ struct WikiDetailView: View {
         case .edit:
             // D2: draft state — empty composer until the first send retargets the
             // tab to .chat(id). chatID == nil signals the draft state.
-            ConversationView(
+            ChatView(
                 mode: .edit,
                 chatID: nil,
                 store: store,
@@ -210,7 +210,7 @@ struct WikiDetailView: View {
             // chat is missing (deleted mid-view).
             let chatMode: QueryMode = store.chats.first { $0.id == id }?.kind == .edit ? .edit : .ask
             let chatLauncher = chatMode == .edit ? editLauncher : askLauncher
-            ConversationView(
+            ChatView(
                 mode: chatMode,
                 chatID: id,
                 store: store,

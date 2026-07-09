@@ -354,7 +354,7 @@ final class FileProviderSpike {
     func openChat(id: PageID, with appURL: URL? = nil) async {
         guard let url = await resolveChatByNameURL(id: id) else {
             DebugLog.agent("openChat: FAILED resolving URL for id=\(id.rawValue)")
-            status = "Couldn’t resolve conversation for open."
+            status = "Couldn’t resolve chat for open."
             return
         }
         DebugLog.agent("openChat: resolved url=\(url.path) app=\(appURL?.lastPathComponent ?? "default")")

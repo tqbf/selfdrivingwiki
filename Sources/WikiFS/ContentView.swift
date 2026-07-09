@@ -269,7 +269,7 @@ struct ContentView: View {
 
             if isTranscriptExpanded {
                 Divider()
-                AgentTranscriptSidebar(launcher: agentLauncher, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
+                AgentActivitySidebar(launcher: agentLauncher, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }

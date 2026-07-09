@@ -45,7 +45,7 @@ extension WikiStoreModel {
         case .bookmark(let id):
             return bookmarkNodes.first(where: { $0.id == id })?.label ?? "Bookmark"
         case .chat(let id):
-            return chats.first { $0.id == id }?.title ?? "Conversation"
+            return chats.first { $0.id == id }?.title ?? "Chat"
         }
     }
 

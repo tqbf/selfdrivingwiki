@@ -144,7 +144,7 @@ public struct OperationCommand: Equatable, Sendable {
         )
     }
 
-    /// Build a stdin-backed `claude -p` query conversation. Unlike one-shot
+    /// Build a stdin-backed `claude -p` query chat. Unlike one-shot
     /// operations, no prompt is passed as the positional `-p` value; user turns are
     /// sent later as stream-json over stdin while the session remains open.
     public static func buildInteractiveQuery(
@@ -174,7 +174,7 @@ public struct OperationCommand: Equatable, Sendable {
         // Write/Edit from the allow-list — its prompt forbids file creation and the
         // seatbelt blocks writes anyway, so a cooperative agent shouldn't even attempt
         // them (and won't trip the repeated-denial abort on them).
-        let allowWikiEdits = Self.queryConversationAllowsEdits(operation)
+        let allowWikiEdits = Self.queryChatAllowsEdits(operation)
 
         var arguments = command.tokenizedPrefixArgs()
         arguments.append(contentsOf: [
@@ -300,12 +300,12 @@ public struct OperationCommand: Equatable, Sendable {
         return tools.joined(separator: ",")
     }
 
-    /// Extract `allowWikiEdits` from a `.queryConversation` operation. Defensive default
-    /// `true` (read-write) if `buildInteractiveQuery` is ever handed a non-conversation
+    /// Extract `allowWikiEdits` from a `.queryChat` operation. Defensive default
+    /// `true` (read-write) if `buildInteractiveQuery` is ever handed a non-chat
     /// operation — fail-open for tool access, since the read-only seatbelt remains the
     /// authoritative write gate regardless.
-    static func queryConversationAllowsEdits(_ operation: WikiOperation) -> Bool {
-        if case .queryConversation(_, let allowWikiEdits) = operation { return allowWikiEdits }
+    static func queryChatAllowsEdits(_ operation: WikiOperation) -> Bool {
+        if case .queryChat(_, let allowWikiEdits) = operation { return allowWikiEdits }
         return true
     }
 

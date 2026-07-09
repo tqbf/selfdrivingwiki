@@ -729,7 +729,7 @@ public final class WikiStoreModel {
     /// Retarget an open tab IN PLACE to a new selection, preserving the tab's
     /// UUID — so tab order, drag/drop position, and per-tab history survive (D2).
     /// Used for the draft-state morph (.ask/.edit → .chat(id) on first send) and
-    /// the startNewConversation retarget-back (.chat(id) → .ask/.edit). If no tab
+    /// the startNewChat retarget-back (.chat(id) → .ask/.edit). If no tab
     /// with `id` exists, this is a no-op. If a DIFFERENT tab already shows `to`,
     /// that tab is focused instead (tab-reuse, same as `openTab`).
     public func retargetTab(id: UUID, to selection: WikiSelection) {
@@ -2571,7 +2571,7 @@ public final class WikiStoreModel {
     }
 
     /// Roll back a chat created by `startChat` when its session never started
-    /// (preflight/spawn failure in `startQueryConversation`). Deletes the row
+    /// (preflight/spawn failure in `startChat`). Deletes the row
     /// (and its seeded first message, via `ON DELETE CASCADE`) and reverts the
     /// tab that was retargeted to it back to the draft composer — so the user
     /// isn't left on a dead `.chat` selection. Best-effort: a store failure is

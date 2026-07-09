@@ -3,7 +3,7 @@ import Testing
 @testable import WikiFS
 @testable import WikiFSCore
 
-/// Tests for Phase D2 — the unified `ConversationView` surface (pillar 2).
+/// Tests for Phase D2 — the unified `ChatView` surface (pillar 2).
 ///
 /// Covers four gate points:
 ///   (a) source-of-truth rule: `activeChatID == chatID` → live events; else
@@ -12,9 +12,9 @@ import Testing
 ///   (b) `retargetTab` preserves the tab UUID while changing its selection.
 ///   (c) draft-state morph: the runner retargets the active tab from .ask/.edit
 ///       to .chat(id) on first send (via `retargetActiveTabToChat`).
-///   (d) `startNewConversation` clears `activeChatID`.
+///   (d) `startNewChat` clears `activeChatID`.
 @MainActor
-struct ConversationViewD2Tests {
+struct ChatViewD2Tests {
 
     private func tempModel() throws -> (WikiStoreModel, SQLiteWikiStore) {
         let dir = FileManager.default.temporaryDirectory
@@ -43,7 +43,7 @@ struct ConversationViewD2Tests {
         // Simulate the runner passing chatID — the launcher records it.
         // We can't call startInteractiveQuery without a real backend, but we can
         // verify the property is settable (it's `var`, not private(set)), which is
-        // the contract ConversationView relies on.
+        // the contract ChatView relies on.
         launcher.activeChatID = chatID
         #expect(launcher.activeChatID == chatID)
     }
@@ -65,14 +65,14 @@ struct ConversationViewD2Tests {
         #expect(!isLive)
     }
 
-    @Test func startNewConversation_clearsActiveChatID() {
+    @Test func startNewChat_clearsActiveChatID() {
         let launcher = makeLauncher()
         launcher.activeChatID = "some-chat-id"
         // Pre-seed idle state so the guard passes.
         launcher.events = [.userText("hello")]
         launcher.isRunning = false
 
-        launcher.startNewConversation()
+        launcher.startNewChat()
 
         #expect(launcher.activeChatID == nil)
         #expect(launcher.events.isEmpty)
@@ -176,8 +176,8 @@ struct ConversationViewD2Tests {
         #expect(model.tabs.count == 1)
         #expect(model.tabs[0].id == askTabID)
         #expect(model.tabs[0].selection == .chat(chatID))
-        // The tab title should update to the chat title (or "Conversation" fallback).
-        #expect(model.tabs[0].title == "Conversation")
+        // The tab title should update to the chat title (or "Chat" fallback).
+        #expect(model.tabs[0].title == "Chat")
     }
 
     @Test func draftMorph_editToChat_preservesTab() throws {
@@ -193,21 +193,21 @@ struct ConversationViewD2Tests {
         #expect(model.tabs[0].selection == .chat(chatID))
     }
 
-    // MARK: - (d) startNewConversation retarget-back
+    // MARK: - (d) startNewChat retarget-back
 
-    @Test func startNewConversation_clearsActiveChatIDAndEvents() {
+    @Test func startNewChat_clearsActiveChatIDAndEvents() {
         let launcher = makeLauncher()
         launcher.activeChatID = "live-chat-id"
         launcher.events = [.userText("hello"), .assistantText("world")]
         launcher.isRunning = false
 
-        launcher.startNewConversation()
+        launcher.startNewChat()
 
         #expect(launcher.activeChatID == nil)
         #expect(launcher.events.isEmpty)
     }
 
-    @Test func startNewConversation_retargetBackToDraft_preservesTab() throws {
+    @Test func startNewChat_retargetBackToDraft_preservesTab() throws {
         let (model, _) = try tempModel()
         // Start in .chat(id) state (post-morph).
         let chatID = PageID(rawValue: "01J" + String(repeating: "F", count: 22))
@@ -215,7 +215,7 @@ struct ConversationViewD2Tests {
         let chatTabID = model.tabs[0].id
         #expect(model.tabs[0].selection == .chat(chatID))
 
-        // Simulate "New Conversation": clear launcher state + retarget back to .ask.
+        // Simulate "New Chat": clear launcher state + retarget back to .ask.
         model.retargetTab(id: chatTabID, to: .ask)
 
         #expect(model.tabs.count == 1)
@@ -224,7 +224,7 @@ struct ConversationViewD2Tests {
         #expect(model.selection == .ask)
     }
 
-    // MARK: - Integration: persisted chat renders through ConversationView path
+    // MARK: - Integration: persisted chat renders through ChatView path
 
     @Test func persistedChat_hasMessages_readFromStore() throws {
         let (model, store) = try tempModel()

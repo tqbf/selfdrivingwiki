@@ -125,7 +125,7 @@ struct OperationCommandTests {
   @Test func queryAndLintStayOpusSingleAgent() {
     for operation: WikiOperation in [
       .query(question: "How does X work?", stateFilePath: Self.stateFile),
-      .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
+      .queryChat(stateFilePath: Self.stateFile, allowWikiEdits: false),
       .lint(stateFilePath: Self.stateFile),
     ] {
       let cmd = build(operation: operation)
@@ -137,7 +137,7 @@ struct OperationCommandTests {
 
   @Test func interactiveQueryUsesStreamingInputAndNoPositionalPrompt() {
     let cmd = OperationCommand.buildInteractiveQuery(
-      operation: .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
+      operation: .queryChat(stateFilePath: Self.stateFile, allowWikiEdits: false),
       wikiRoot: Self.resolvedRoot,
       wikiID: "01WIKIULID",
       systemPrompt: "You are the maintainer.",
@@ -173,7 +173,7 @@ struct OperationCommandTests {
   /// read-write variant includes them.
   @Test func readOnlyQueryOmitsWriteEditFromAllowlistReadWriteIncludesThem() {
     let ro = OperationCommand.buildInteractiveQuery(
-      operation: .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
+      operation: .queryChat(stateFilePath: Self.stateFile, allowWikiEdits: false),
       wikiRoot: Self.resolvedRoot, wikiID: "01WIKIULID", systemPrompt: "schema",
       scratchDirectory: "/tmp/scratch-xyz", wikictlDirectory: "/helpers",
       resolvedExecutable: "claude", baseEnvironment: ["PATH": "/usr/bin"])
@@ -191,7 +191,7 @@ struct OperationCommandTests {
     #expect(ro.arguments.contains("--disallowed-tools"))
 
     let rw = OperationCommand.buildInteractiveQuery(
-      operation: .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: true),
+      operation: .queryChat(stateFilePath: Self.stateFile, allowWikiEdits: true),
       wikiRoot: Self.resolvedRoot, wikiID: "01WIKIULID", systemPrompt: "schema",
       scratchDirectory: "/tmp/scratch-xyz", wikictlDirectory: "/helpers",
       resolvedExecutable: "claude", baseEnvironment: ["PATH": "/usr/bin"])
@@ -214,7 +214,7 @@ struct OperationCommandTests {
 
   @Test func interactiveQueryPromptAnswersByDefaultAndWritesOnlyOnRequest() {
     let cmd = OperationCommand.buildInteractiveQuery(
-      operation: .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: true),
+      operation: .queryChat(stateFilePath: Self.stateFile, allowWikiEdits: true),
       wikiRoot: Self.resolvedRoot,
       wikiID: "01WIKIULID",
       systemPrompt: "schema",
@@ -356,7 +356,7 @@ struct OperationCommandTests {
       Self.tinyIngest(),
       Self.curatedIngest(),
       .query(question: "How does X compare to Y?", stateFilePath: Self.stateFile),
-      .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
+      .queryChat(stateFilePath: Self.stateFile, allowWikiEdits: false),
       .lint(stateFilePath: Self.stateFile),
     ] {
       let cmd = OperationCommand.build(
@@ -410,7 +410,7 @@ struct OperationCommandTests {
       Self.tinyIngest(),
       Self.curatedIngest(),
       .query(question: "q", stateFilePath: Self.stateFile),
-      .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: true),
+      .queryChat(stateFilePath: Self.stateFile, allowWikiEdits: true),
       .lint(stateFilePath: Self.stateFile),
     ] {
       let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)
@@ -462,7 +462,7 @@ struct OperationCommandTests {
   @Test func queryAndLintPromptsDoNotCarryIngestFootnoteRule() {
     for operation: WikiOperation in [
       .query(question: "q", stateFilePath: Self.stateFile),
-      .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
+      .queryChat(stateFilePath: Self.stateFile, allowWikiEdits: false),
       .lint(stateFilePath: Self.stateFile),
     ] {
       let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)
@@ -476,7 +476,7 @@ struct OperationCommandTests {
     // wikilink plus the visible passage. Both Query surfaces carry that rule.
     for operation: WikiOperation in [
       .query(question: "q", stateFilePath: Self.stateFile),
-      .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
+      .queryChat(stateFilePath: Self.stateFile, allowWikiEdits: false),
     ] {
       let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)
       #expect(prompt.contains("CITE SOURCES IN YOUR ANSWER"))
@@ -490,10 +490,40 @@ struct OperationCommandTests {
     #expect(!lint.contains("FOOTNOTE EVERY CLAIM"))
   }
 
+  // MARK: - Prompts: chat.md is the single body for Ask + Edit (#284)
+
+  @Test func chatBothModesShareChatBodyReadOnlyOmitsWriteRule() {
+    // After #284 the standalone read-only prompt is gone; both the Ask
+    // (read-only) and Edit (read-write) chat variants source their body from
+    // chat.md. Only the operational write-rule block differs — the read-only
+    // arm omits it; the read-write arm includes it.
+    let readOnly = WikiOperation.queryChat(
+      stateFilePath: Self.stateFile, allowWikiEdits: false
+    ).prompt(wikiRoot: Self.resolvedRoot)
+    let readWrite = WikiOperation.queryChat(
+      stateFilePath: Self.stateFile, allowWikiEdits: true
+    ).prompt(wikiRoot: Self.resolvedRoot)
+
+    // Both carry the shared chat.md body.
+    for prompt in [readOnly, readWrite] {
+      #expect(prompt.contains("interactive chat for this wiki"))
+      #expect(prompt.contains("FIRST PROPOSE THE CHANGE"))
+      #expect(prompt.contains("CITE SOURCES IN YOUR ANSWER"))
+    }
+    // The read-write (Edit) arm carries the unmissable write rule + commands.
+    #expect(readWrite.contains("READ-ONLY BY DESIGN"))
+    #expect(readWrite.contains("wikictl page upsert --title T --body-file ./body.md"))
+    // The read-only (Ask) arm omits that operational write-rule block; the
+    // seatbelt + --allowed-tools remain the authoritative write gate.
+    #expect(!readOnly.contains("READ-ONLY BY DESIGN"))
+    #expect(!readOnly.contains("NEVER search for a \"mutation tool\""))
+    #expect(!readOnly.contains("wikictl page upsert --title T --body-file ./body.md"))
+  }
+
   @Test func queryAndLintPromptsNameStateAndForbidRediscovery() {
     for operation: WikiOperation in [
       .query(question: "q", stateFilePath: Self.stateFile),
-      .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
+      .queryChat(stateFilePath: Self.stateFile, allowWikiEdits: false),
       .lint(stateFilePath: Self.stateFile),
     ] {
       let prompt = operation.prompt(wikiRoot: Self.resolvedRoot)
@@ -605,7 +635,7 @@ struct OperationCommandTests {
       Self.tinyIngest(),
       Self.curatedIngest(),
       .query(question: "q", stateFilePath: Self.stateFile),
-      .queryConversation(stateFilePath: Self.stateFile, allowWikiEdits: false),
+      .queryChat(stateFilePath: Self.stateFile, allowWikiEdits: false),
       .lint(stateFilePath: Self.stateFile),
     ] {
       let prompt = operation.prompt(wikiRoot: "")

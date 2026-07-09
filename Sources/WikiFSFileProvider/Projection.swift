@@ -912,7 +912,7 @@ struct Projection {
                              version: version, metadataVersion: version,
                              created: chat.createdAt, modified: chat.updatedAt)
             }
-            let body = Data("# Stale reference\n\nThis bookmark points to a deleted conversation.".utf8)
+            let body = Data("# Stale reference\n\nThis bookmark points to a deleted chat.".utf8)
             return .file(id: id, parent: parent, name: "Stale Reference.md",
                          size: body.count, version: version, metadataVersion: version,
                          created: nil, modified: nil)
@@ -973,7 +973,7 @@ struct Projection {
         case .chatRef:
             guard let targetID = node.targetID,
                   let chat = (try? store.listAllChatsOrderedByID())?.first(where: { $0.id == targetID }) else {
-                return Data("# Stale reference\n\nThis bookmark points to a deleted conversation.".utf8)
+                return Data("# Stale reference\n\nThis bookmark points to a deleted chat.".utf8)
             }
             let messages = (try? store.chatMessages(chatID: chat.id)) ?? []
             return Data(ChatTranscriptRenderer.render(summary: chat, messages: messages).utf8)

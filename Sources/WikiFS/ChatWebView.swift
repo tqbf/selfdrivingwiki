@@ -408,7 +408,7 @@ struct ChatWebView: NSViewRepresentable {
                 return chatToolRowHTML(name: name, summary: summary, isError: false)
             case .toolResult(let isError, let summary):
                 // Only error results reach a chat-styled transcript (successes are
-                // filtered out upstream in `QueryTranscriptView.visibleEvents`).
+                // filtered out upstream in `ChatTranscriptView.visibleEvents`).
                 guard isError else { return "" }
                 return chatToolRowHTML(name: nil, summary: summary, isError: true)
             case .systemInit, .subagent, .messageStop, .raw, .assistantTextDelta:

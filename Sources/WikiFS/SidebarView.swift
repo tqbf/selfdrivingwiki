@@ -15,11 +15,11 @@ struct SidebarView: View {
     let fileProvider: FileProviderSpike
     /// Required to launch the LLM lint from the sidebar context menu.
     @Bindable var launcher: AgentLauncher
-    /// The Ask (read-only) conversation launcher — drives the live indicator on
-    /// `.ask` recent-conversation rows (D4).
+    /// The Ask (read-only) chat launcher — drives the live indicator on
+    /// `.ask` recent-chat rows (D4).
     @Bindable var askLauncher: AgentLauncher
-    /// The Edit conversation launcher — drives the live indicator on `.edit`
-    /// recent-conversation rows (D4).
+    /// The Edit chat launcher — drives the live indicator on `.edit`
+    /// recent-chat rows (D4).
     @Bindable var editLauncher: AgentLauncher
     /// Files whose agent run is in flight (agent phase) — shows the
     /// "Ingesting…" spinner on those rows.

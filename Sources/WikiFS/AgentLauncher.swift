@@ -150,7 +150,7 @@ final class AgentLauncher {
     /// Per-session token: `onExit` captures the token current at session start
     /// and only calls `finish` if it's STILL current. Prevents a stale `onExit`
     /// (a prior session terminating after a new one started — e.g. D3's
-    /// `continueConversation` takeover: `stopAgent` → `startInteractiveQuery`)
+    /// `continueChat` takeover: `stopAgent` → `startInteractiveQuery`)
     /// from tearing down the new session. `finish`'s `isRunning` guard alone
     /// can't tell the sessions apart.
     @ObservationIgnored private var currentRunToken: UUID?
@@ -173,7 +173,7 @@ final class AgentLauncher {
     /// turns. The per-turn lock release via `onTurnBoundary(false)` is the mechanism
     /// that makes this visible to the wiki store.
     @ObservationIgnored private var onTurnBoundaryHandler: (@MainActor (Bool) -> Void)?
-    /// Persistence callback for an interactive query conversation (issue #119).
+    /// Persistence callback for an interactive query chat (issue #119).
     /// Receives the not-yet-persisted TAIL of `events` at each turn boundary and
     /// once more at `finish()` — never the full array, so repeated flushes stay
     /// cheap. The sink's owner (`AgentOperationRunner`) is what actually writes to
@@ -209,10 +209,10 @@ final class AgentLauncher {
     private(set) var isInteractiveSession = false
     /// The chat row the current live interactive session is writing to (D2).
     /// Set by the runner when it installs the transcript sink — this is the chat
-    /// whose `.chat(id)` tab is live-streaming. `ConversationView` uses it as the
+    /// whose `.chat(id)` tab is live-streaming. `ChatView` uses it as the
     /// source-of-truth switch: when `activeChatID == chatID`, render
     /// `launcher.events` (in-memory, streaming); otherwise render the persisted
-    /// `store.chatMessages(chatID:)`. Cleared in `startNewConversation()` (retarget
+    /// `store.chatMessages(chatID:)`. Cleared in `startNewChat()` (retarget
     /// back to draft) and in `finish()` AFTER the final turn-boundary flush has
     /// committed — clearing it too early re-sources the view from the store before
     /// the tail lands, producing a transient truncated transcript (D2 flip-timing).
@@ -782,7 +782,7 @@ final class AgentLauncher {
         }
     }
 
-    /// Start a stdin-backed query conversation. The first user message is sent
+    /// Start a stdin-backed query chat. The first user message is sent
     /// immediately after the process launches (via `sendInteractiveMessage`, which
     /// acquires the generation gate for that first turn). Later turns use
     /// `sendInteractiveMessage` as well — each acquires the gate for its duration.
@@ -851,7 +851,7 @@ final class AgentLauncher {
             return
         }
 
-        let operation = WikiOperation.queryConversation(
+        let operation = WikiOperation.queryChat(
             stateFilePath: stateFilePath, allowWikiEdits: allowWikiEdits)
         // When "Allow wiki edits" is off, force a read-only seatbelt sandbox that
         // physically blocks writes to the wiki DB — regardless of global sandbox
@@ -879,7 +879,7 @@ final class AgentLauncher {
         runStartedAt = now
         lastActivityAt = now
         openLogFiles(in: scratch)
-        // SPAWN COMMIT: a query conversation never ingests, so the agent-phase flag
+        // SPAWN COMMIT: a query chat never ingests, so the agent-phase flag
         // is empty — clearing any stale value (mirrors `run`'s spawn-commit).
         self.ingestingSourceIDs = []
         onLock()
@@ -895,7 +895,7 @@ final class AgentLauncher {
         // (which clears any stale sink from a prior run).
         transcriptSink = onTranscript
         // D2: record the chat row this live session is writing to. This is the
-        // source-of-truth switch for ConversationView — when it matches a tab's
+        // source-of-truth switch for ChatView — when it matches a tab's
         // chatID, that tab renders `launcher.events` (streaming) instead of the
         // persisted store. Set here (after resetRunArtifacts cleared any prior
         // value) so the flip is live from the first streamed token.
@@ -935,7 +935,7 @@ final class AgentLauncher {
                     Task { @MainActor [weak self] in
                         // Only finish if THIS session is still current — a stale
                         // onExit (a prior session terminating after a new one
-                        // started, e.g. D3's continueConversation takeover:
+                        // started, e.g. D3's continueChat takeover:
                         // stopAgent → startInteractiveQuery) must not tear down
                         // the new session.
                         guard let self, self.currentRunToken == runToken else { return }
@@ -1137,7 +1137,7 @@ final class AgentLauncher {
     /// Guarded so it can never kill a non-query run (ingest/lint) streaming into
     /// this launcher, and it does NOT touch extractionLog/extractionPID — a
     /// concurrently running pdf2md extraction is untouched.
-    func startNewConversation() {
+    func startNewChat() {
         if isRunning && runningKind != .query { return }
         if isRunning {
             // stopAgent() is a safe no-op when idle (PR #198); here it terminates
@@ -1153,8 +1153,8 @@ final class AgentLauncher {
         transcriptSink = nil
         persistedEventCount = 0
         // D2: clear the live chat association. The retarget back to the draft
-        // state (.ask/.edit) is handled by the caller (QueryConversationView /
-        // ConversationView) via store.retargetTab, since the launcher does not
+        // state (.ask/.edit) is handled by the caller (ChatView /
+        // ChatView) via store.retargetTab, since the launcher does not
         // know which tab it lives in.
         activeChatID = nil
     }
