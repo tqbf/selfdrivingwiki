@@ -490,6 +490,36 @@ struct OperationCommandTests {
     #expect(!lint.contains("FOOTNOTE EVERY CLAIM"))
   }
 
+  // MARK: - Prompts: chat.md is the single body for Ask + Edit (#284)
+
+  @Test func chatBothModesShareChatBodyReadOnlyOmitsWriteRule() {
+    // After #284 the standalone read-only prompt is gone; both the Ask
+    // (read-only) and Edit (read-write) chat variants source their body from
+    // chat.md. Only the operational write-rule block differs — the read-only
+    // arm omits it; the read-write arm includes it.
+    let readOnly = WikiOperation.queryConversation(
+      stateFilePath: Self.stateFile, allowWikiEdits: false
+    ).prompt(wikiRoot: Self.resolvedRoot)
+    let readWrite = WikiOperation.queryConversation(
+      stateFilePath: Self.stateFile, allowWikiEdits: true
+    ).prompt(wikiRoot: Self.resolvedRoot)
+
+    // Both carry the shared chat.md body.
+    for prompt in [readOnly, readWrite] {
+      #expect(prompt.contains("interactive chat for this wiki"))
+      #expect(prompt.contains("FIRST PROPOSE THE CHANGE"))
+      #expect(prompt.contains("CITE SOURCES IN YOUR ANSWER"))
+    }
+    // The read-write (Edit) arm carries the unmissable write rule + commands.
+    #expect(readWrite.contains("READ-ONLY BY DESIGN"))
+    #expect(readWrite.contains("wikictl page upsert --title T --body-file ./body.md"))
+    // The read-only (Ask) arm omits that operational write-rule block; the
+    // seatbelt + --allowed-tools remain the authoritative write gate.
+    #expect(!readOnly.contains("READ-ONLY BY DESIGN"))
+    #expect(!readOnly.contains("NEVER search for a \"mutation tool\""))
+    #expect(!readOnly.contains("wikictl page upsert --title T --body-file ./body.md"))
+  }
+
   @Test func queryAndLintPromptsNameStateAndForbidRediscovery() {
     for operation: WikiOperation in [
       .query(question: "q", stateFilePath: Self.stateFile),

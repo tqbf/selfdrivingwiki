@@ -33,7 +33,6 @@ let entries: [(file: String, constant: String)] = [
     ("ingest-single-task.md",        "ingestSingleTask"),
     ("ingest-curator-task.md",       "ingestCuratorTask"),
     ("query-task.md",                "queryTask"),
-    ("query-conversation-readonly.md", "queryConversationReadonly"),
     ("chat.md",                       "chat"),
     ("lint-task.md",                 "lintTask"),
     ("lint-page-task.md",            "lintPageTask"),

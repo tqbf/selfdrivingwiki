@@ -287,32 +287,28 @@ extension WikiOperation {
     """
   }
 
-  /// Interactive Query stays alive across user turns.
+  /// Interactive chat stays alive across user turns. Both modes share the same
+  /// body — `chat.md`; the read-only (Ask) arm omits only the operational
+  /// write-rule block (`IngestWriteRule.writes`), which the read-write (Edit) arm
+  /// includes. The seatbelt sandbox + `--allowed-tools` remain the authoritative
+  /// write gate for the read-only agent (#284); the branch collapses once Ask
+  /// mode is removed.
   private static func queryConversationPrompt(
     wikiRoot: String, stateFilePath: String, allowWikiEdits: Bool
   ) -> String {
     if allowWikiEdits {
       return queryConversationReadWritePrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath)
     } else {
-      return queryConversationReadOnlyPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath)
+      return """
+      \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
+
+      \(answerCitationRule)
+
+      \(GeneratedPrompts.chat)
+
+      \(Self.wikiRootLine(wikiRoot))
+      """
     }
-  }
-
-  /// Read-only variant: no write instructions, explicit read-only constraint.
-  /// The seatbelt sandbox physically blocks writes, so this prompt never mentions
-  /// wikictl write commands — the agent learns read operations only.
-  private static func queryConversationReadOnlyPrompt(
-    wikiRoot: String, stateFilePath: String
-  ) -> String {
-    return """
-    \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
-
-    \(answerCitationRule)
-
-    \(GeneratedPrompts.queryConversationReadonly)
-
-    \(Self.wikiRootLine(wikiRoot))
-    """
   }
 
   /// Read-write variant: includes full write instructions (current behavior).

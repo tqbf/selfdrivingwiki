@@ -84,10 +84,6 @@ struct GeneratedPromptsParityTests {
         #expect(GeneratedPrompts.queryTask == md("query-task.md"))
     }
 
-    @Test func queryConversationReadonlyMatchesFile() {
-        #expect(GeneratedPrompts.queryConversationReadonly == md("query-conversation-readonly.md"))
-    }
-
     @Test func chatMatchesFile() {
         #expect(GeneratedPrompts.chat == md("chat.md"))
     }
