@@ -297,17 +297,12 @@ struct ConversationView: View {
                     .textSelection(.enabled)
             } icon: {
                 Image(systemName: chat.kind == .ask ? "bubble.left.and.bubble.right" : "square.and.pencil")
-                    .font(.largeTitle)
                     .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 6) {
-                Text("\(chat.messageCount) message\(chat.messageCount == 1 ? "" : "s")")
-                Text("·")
-                Text(chat.updatedAt, format: .dateTime)
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
+            Text(chat.updatedAt, style: .date)
+                .font(.callout)
+                .foregroundStyle(.secondary)
 
             HStack(spacing: 10) {
                 if let chatID {
