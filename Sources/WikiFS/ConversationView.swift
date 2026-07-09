@@ -193,7 +193,7 @@ struct ConversationView: View {
 
     @ViewBuilder
     private var liveConversation: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             if let chat = chatSummary {
                 header(for: chat)
                 Divider().opacity(PageEditorMetrics.dividerOpacity)
@@ -343,7 +343,6 @@ struct ConversationView: View {
                 } label: {
                     Image(systemName: "sidebar.right")
                 }
-                .buttonStyle(.borderless)
                 .help("Toggle Outline")
             }
         }
