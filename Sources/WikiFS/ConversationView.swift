@@ -287,30 +287,38 @@ struct ConversationView: View {
 
     @ViewBuilder
     private func header(for chat: ChatSummary) -> some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(chat.title)
-                    .font(.largeTitle)
-                    .bold()
-                    .lineLimit(1)
-                    .textSelection(.enabled)
-                HStack(spacing: 6) {
-                    Text("\(chat.messageCount) message\(chat.messageCount == 1 ? "" : "s")")
-                    Text("·")
-                    Text(chat.updatedAt, format: .dateTime)
+        VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
+            Text(chat.title)
+                .font(.largeTitle)
+                .bold()
+                .lineLimit(1)
+                .textSelection(.enabled)
+
+            HStack(spacing: 6) {
+                Text("\(chat.messageCount) message\(chat.messageCount == 1 ? "" : "s")")
+                Text("·")
+                Text(chat.updatedAt, format: .dateTime)
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+
+            HStack(spacing: 10) {
+                if let chatID {
+                    Button("Show in List", systemImage: "sidebar.left") {
+                        store.requestSidebarReveal(.chat(chatID))
+                    }
+                    .help("Reveal this conversation in the sidebar")
                 }
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                Button {
+                    chatOutlineExpanded.toggle()
+                } label: {
+                    Image(systemName: "sidebar.right")
+                }
+                .buttonStyle(.borderless)
+                .help("Toggle Outline")
             }
-            Spacer(minLength: 0)
-            Button {
-                chatOutlineExpanded.toggle()
-            } label: {
-                Image(systemName: "sidebar.right")
-            }
-            .buttonStyle(.borderless)
-            .help("Toggle Outline")
         }
+        .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
         .padding(.horizontal, PageEditorMetrics.contentInset)
         .padding(.top, PageEditorMetrics.contentInset)
         .padding(.bottom, ConversationMetrics.sectionSpacing)
