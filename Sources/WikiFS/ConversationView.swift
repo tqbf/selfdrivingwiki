@@ -2,6 +2,14 @@ import AppKit
 import SwiftUI
 import WikiFSCore
 
+/// Whether the session can write to the wiki. Ask = read-only; Edit = can write.
+/// This is a property of the mounted session, not a runtime toggle.
+enum QueryMode {
+    case ask, edit
+
+    var allowsEdits: Bool { self == .edit }
+}
+
 /// The unified conversation surface (D2, pillar 2). One view replaces the split
 /// between the live `QueryConversationView` and the read-only
 /// `ChatHistoryDetailView`. Whether you see streaming deltas or a persisted
@@ -43,7 +51,7 @@ struct ConversationView: View {
         VStack(spacing: 0) {
             ZStack(alignment: .topTrailing) {
                 content
-                if showsDebugControls || showsNewConversation {
+                if showsDebugControls {
                     controls
                         .padding(.top, ConversationMetrics.debugTopInset)
                         .padding(.trailing, ConversationMetrics.contentInset)
@@ -94,15 +102,6 @@ struct ConversationView: View {
         // Only the live chat gets the debug cluster + new conversation button.
         // A persisted non-live chat is read-only — no controls.
         HStack(spacing: 8) {
-            if showsNewConversation {
-                Button(action: { startNewConversation() }) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(Color.secondary)
-                }
-                .buttonStyle(.borderless)
-                .help("New conversation — clears this chat. It stays available in history.")
-            }
             if showsDebugControls {
                 if launcher.isGenerating {
                     ProgressView()
@@ -139,14 +138,6 @@ struct ConversationView: View {
     private var showsDebugControls: Bool {
         (launcher.isGenerating || launcher.isAwaitingGenerationSlot)
             && launcher.runningKind == .query
-    }
-
-    private var showsNewConversation: Bool {
-        QueryConversationView.showsNewConversationButton(
-            isRunning: launcher.isRunning,
-            isInteractiveSession: launcher.isInteractiveSession,
-            runningKind: launcher.runningKind,
-            hasVisibleConversation: hasVisibleConversation)
     }
 
     // MARK: - Content routing
@@ -203,7 +194,7 @@ struct ConversationView: View {
                     .padding(.top, bannerTopReservation)
             }
             Spacer(minLength: 0)
-            Text(mode == .edit ? "Edit \(activeWikiName)" : "Ask \(activeWikiName)")
+            Text("Ask \(activeWikiName)")
                 .font(.largeTitle)
                 .fontWeight(.regular)
                 .multilineTextAlignment(.center)
@@ -331,7 +322,14 @@ struct ConversationView: View {
     }
 
     private var showsEditingEnabledBanner: Bool {
-        QueryConversationView.showsEditingBanner(allowsEdits: mode.allowsEdits, isGenerating: launcher.isGenerating)
+        Self.showsEditingBanner(allowsEdits: mode.allowsEdits, isGenerating: launcher.isGenerating)
+    }
+
+    /// Pure predicate: true only when an Edit-mode session is actively generating.
+    /// Kept static so tests can verify the full (mode × isGenerating) matrix without
+    /// constructing a view. `mode.allowsEdits` is the sole input from the mode.
+    static func showsEditingBanner(allowsEdits: Bool, isGenerating: Bool) -> Bool {
+        allowsEdits && isGenerating
     }
 
     private var bannerTopReservation: CGFloat {
@@ -357,7 +355,7 @@ struct ConversationView: View {
                 .padding(.vertical, ConversationMetrics.composerVerticalPadding)
                 .overlay(alignment: .topLeading) {
                     if draftMessage.isEmpty {
-                        Text("Ask a question, or ask the Agent to update the wiki…")
+                        Text("Ask a question, or ask to update the wiki…")
                             .font(.body)
                             .foregroundStyle(.secondary)
                             .allowsHitTesting(false)

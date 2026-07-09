@@ -221,7 +221,7 @@ enum AgentOperationRunner {
         // If the query agent wants edit permissions, it must take the edit lock.
         // Refuse to start if another agent (ingest) already holds it.
         if allowWikiEdits && store.isAgentRunning {
-            launcher.preflightError = "An ingestion is updating the wiki. Wait for it to finish, or use the Ask tab for a read-only conversation."
+            launcher.preflightError = "An ingestion is updating the wiki. Wait for it to finish before starting a conversation."
             return
         }
 
@@ -490,7 +490,7 @@ enum AgentOperationRunner {
 
         // Edit-lock sanity: refuse if an ingest holds the lock and we want edits.
         if allowWikiEdits && store.isAgentRunning {
-            launcher.preflightError = "An ingestion is updating the wiki. Wait for it to finish, or use the Ask tab for a read-only conversation."
+            launcher.preflightError = "An ingestion is updating the wiki. Wait for it to finish before starting a conversation."
             return
         }
 
