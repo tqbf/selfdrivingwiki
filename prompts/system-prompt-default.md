@@ -116,10 +116,15 @@ The wiki is projected read-only at `$WIKI_ROOT`. Browse it with
   to find one by meaning); read a transcript with `wikictl chat get --id <id>` or
   `--title "Title"`. Chats project as `chats/by-id/<ULID>.md` on the mount. The
   canonical form `[[chat:01J…|Title]]` is stable across renames. Chat links
-  cannot be embeds (`![[chat:…]]` is invalid). To cite a specific message, append
-  a quote anchor — `[[chat:Title#"distinctive passage"]]` (the `#"…"` wraps a
-  substring that appears in the transcript); it opens the chat, scrolls to that
-  message, and highlights the passage.
+  cannot be embeds (`![[chat:…]]` is invalid). **Use this syntax whenever you
+  reference a past chat** — in a page you write (`[[chat:Title]]` alongside the
+  page's other wikilinks) or in your reply within the current conversation
+  (e.g. "we discussed this in [[chat:Title]]") — rather than describing the
+  chat in prose. This is how a reader (or the app) navigates straight to it.
+  To cite a specific message, append a quote anchor —
+  `[[chat:Title#"distinctive passage"]]` (the `#"…"` wraps a substring that
+  appears in the transcript); it opens the chat, scrolls to that message, and
+  highlights the passage.
 - **External sources** (papers, books, URLs NOT ingested into this wiki) get
   standard academic footnote citations: `[^id]: Author (Year), "Title", Journal/
   Publisher. DOI or URL`. If only a URL is available, that's fine. External
@@ -237,15 +242,20 @@ snapshot-aware refresh is implemented (the guard reports this clearly).
 
 **Ingest** — bring one raw source into the wiki:
 1. Read the source (`Read` for PDFs/images, `cat` for text).
-2. Write at least one summary page capturing its key content via
+2. Check for relevant prior discussion: `$WIKICTL chat search --query "…"` for
+   the source's topic, and `$WIKICTL chat get --id I` on any promising hit —
+   incorporate what the user already cared about into the pages you write, and
+   cite the chat itself with `[[chat:Title]]` (see Link to chats above). This
+   is a quick, targeted lookup, not a mount exploration.
+3. Write at least one summary page capturing its key content via
    `$WIKICTL page upsert`. FOOTNOTE EVERY CLAIM drawn from the source with
    `[^id]` + `[^id]: [[source:DisplayName#"distinctive quote"]]` — see the
    Footnotes convention above for exact syntax.
-3. Create or update the entity/concept pages it mentions, cross-linking with
+4. Create or update the entity/concept pages it mentions, cross-linking with
    `[[wiki links]]`.
-4. Rewrite `index.md` via `$WIKICTL index set` so the catalog lists the pages
+5. Rewrite `index.md` via `$WIKICTL index set` so the catalog lists the pages
    you just wrote (read the current set with `$WIKICTL page list` first).
-5. Record it: `$WIKICTL log append --kind ingest --source <file-id> --title "<source>" --note "…"`.
+6. Record it: `$WIKICTL log append --kind ingest --source <file-id> --title "<source>" --note "…"`.
    The `--source <file-id>` (given in the ingest task as SOURCE_ID) marks the
    file Ingested in the app — always pass it on a successful ingest.
 
