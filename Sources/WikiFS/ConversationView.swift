@@ -38,6 +38,9 @@ struct ConversationView: View {
     @State private var showsInternals = false
     @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: ConversationMetrics.composerFont)
     @State private var persistedMessages: [ChatMessage] = []
+    @AppStorage("conversation.zoom") private var conversationZoom = Double(ZoomScale.defaultScale)
+    @AppStorage("isChatOutlineExpanded") private var chatOutlineExpanded = false
+    @State private var outlineScroll: ChatScrollRequest? = nil
 
     /// True when this surface is rendering the active live session (D2
     /// source-of-truth rule). The view sources from `launcher.events`; when
@@ -59,6 +62,11 @@ struct ConversationView: View {
             }
             .frame(minWidth: PageEditorMetrics.detailMinWidth)
             .background(Color(nsColor: .textBackgroundColor))
+        }
+        .zoomShortcuts($conversationZoom)
+        .zoomScroll($conversationZoom)
+        .onChange(of: conversationZoom) { _, _ in
+            composerHeight = ComposerTextView.oneLineHeight(for: composerFont)
         }
         .onChange(of: launcher.isRunning) { _, isRunning in
             // Belt-and-suspenders: clear the internals toggle when a run ends so a
@@ -161,30 +169,61 @@ struct ConversationView: View {
         }
     }
 
+    // MARK: - Content + outline
+
+    /// Wraps `content` with the optional right-side chat outline. Placed BELOW
+    /// the header so the title pane spans full width and the outline sits beside
+    /// the transcript (matching the page detail's content+outline layout).
+    @ViewBuilder
+    private func withChatOutline<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        HStack(spacing: 0) {
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if chatOutlineExpanded {
+                ChatOutlineView(turns: chatTurns) { turnIndex in
+                    outlineScroll = ChatScrollRequest(
+                        version: (outlineScroll?.version ?? 0) + 1,
+                        turnIndex: turnIndex)
+                }
+            }
+        }
+    }
+
     // MARK: - Live conversation (streaming)
 
     @ViewBuilder
     private var liveConversation: some View {
         VStack(spacing: 0) {
-            if showsEditingEnabledBanner {
-                editingEnabledBanner
-                    .padding(.top, bannerTopReservation)
-                    .padding(.bottom, ConversationMetrics.sectionSpacing)
+            if let chat = chatSummary {
+                header(for: chat)
+                Divider().opacity(PageEditorMetrics.dividerOpacity)
             }
-            QueryTranscriptView(
-                launcher: launcher,
-                onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
-                renderContext: { [weak store] in store?.renderContext() },
-                blobStore: store
-            )
-                .frame(maxWidth: ConversationMetrics.chatColumnWidth, maxHeight: .infinity)
-                .padding(.top, showsEditingEnabledBanner ? 0 : ConversationMetrics.conversationTopInset)
-            liveComposer
-                .padding(.horizontal, ConversationMetrics.conversationHorizontalInset)
-                .padding(.top, ConversationMetrics.sectionSpacing)
-                .padding(.bottom, ConversationMetrics.contentInset)
+            withChatOutline {
+                VStack(spacing: 0) {
+                    if showsEditingEnabledBanner {
+                        editingEnabledBanner
+                            .padding(.top, bannerTopReservation)
+                            .padding(.bottom, ConversationMetrics.sectionSpacing)
+                    }
+                    QueryTranscriptView(
+                        launcher: launcher,
+                        onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
+                        renderContext: { [weak store] in store?.renderContext() },
+                        blobStore: store,
+                        zoom: conversationZoom,
+                        scrollRequest: outlineScroll
+                    )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.horizontal, PageEditorMetrics.contentInset)
+                        .padding(.top, showsEditingEnabledBanner || chatSummary != nil ? 0 : ConversationMetrics.conversationTopInset)
+                    liveComposer
+                        .padding(.horizontal, PageEditorMetrics.contentInset)
+                        .padding(.top, ConversationMetrics.sectionSpacing)
+                        .padding(.bottom, ConversationMetrics.contentInset)
+                }
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
 
     private var emptyState: some View {
@@ -217,7 +256,9 @@ struct ConversationView: View {
             VStack(alignment: .leading, spacing: 0) {
                 header(for: chat)
                 Divider().opacity(PageEditorMetrics.dividerOpacity)
-                persistedTranscript
+                withChatOutline {
+                    persistedTranscript
+                }
             }
         } else {
             ContentUnavailableView {
@@ -232,24 +273,53 @@ struct ConversationView: View {
         store.chats.first { $0.id == chatID }
     }
 
+    /// User turns (questions) in display order — the chat outline entries. Sourced
+    /// from the SAME transcript-visible events the web view renders, so outline
+    /// index `i` matches the i-th `.chat-user` row.
+    private var chatTurns: [String] {
+        let events = isLiveChat
+            ? launcher.events.transcriptVisible
+            : persistedMessages.map(\.event).transcriptVisible
+        return events.compactMap { event in
+            if case .userText(let text) = event { return text }
+            return nil
+        }
+    }
+
     @ViewBuilder
     private func header(for chat: ChatSummary) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
             Text(chat.title)
-                .font(.title2)
+                .font(.largeTitle)
                 .bold()
                 .lineLimit(1)
                 .textSelection(.enabled)
+
             HStack(spacing: 6) {
-                Text(chat.kind == .ask ? "Ask" : "Edit")
-                Text("·")
                 Text("\(chat.messageCount) message\(chat.messageCount == 1 ? "" : "s")")
                 Text("·")
                 Text(chat.updatedAt, format: .dateTime)
             }
             .font(.callout)
             .foregroundStyle(.secondary)
+
+            HStack(spacing: 10) {
+                if let chatID {
+                    Button("Show in List", systemImage: "sidebar.left") {
+                        store.requestSidebarReveal(.chat(chatID))
+                    }
+                    .help("Reveal this conversation in the sidebar")
+                }
+                Button {
+                    chatOutlineExpanded.toggle()
+                } label: {
+                    Image(systemName: "sidebar.right")
+                }
+                .buttonStyle(.borderless)
+                .help("Toggle Outline")
+            }
         }
+        .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
         .padding(.horizontal, PageEditorMetrics.contentInset)
         .padding(.top, PageEditorMetrics.contentInset)
         .padding(.bottom, ConversationMetrics.sectionSpacing)
@@ -271,10 +341,12 @@ struct ConversationView: View {
                 style: .chat,
                 onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
                 renderContext: { [weak store] in store?.renderContext() },
-                blobStore: store
+                blobStore: store,
+                zoom: conversationZoom,
+                scrollRequest: outlineScroll
             )
-            .frame(maxWidth: ConversationMetrics.chatColumnWidth, maxHeight: .infinity)
-            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .padding(.horizontal, PageEditorMetrics.contentInset)
             // D3: the persisted chat's composer continues the conversation
             // (seeded-fallback). Enabled when the kind's launcher is idle; disabled
             // with a slot-style caption when a different conversation is responding.
@@ -293,7 +365,7 @@ struct ConversationView: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .padding(.horizontal, ConversationMetrics.conversationHorizontalInset)
+        .padding(.horizontal, PageEditorMetrics.contentInset)
         .padding(.bottom, ConversationMetrics.contentInset)
         .frame(maxWidth: .infinity)
     }
@@ -312,7 +384,7 @@ struct ConversationView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .frame(maxWidth: ConversationMetrics.chatColumnWidth)
+        .frame(maxWidth: .infinity)
         .background(.orange.opacity(0.15))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay {
@@ -340,13 +412,21 @@ struct ConversationView: View {
 
     // MARK: - Composer
 
+    /// The composer's AppKit font, scaled by the persisted conversation zoom so
+    /// ⌘+/⌘− resize the input alongside the transcript (parity with the page
+    /// editor's `editor.zoom`).
+    private var composerFont: NSFont {
+        let base = ConversationMetrics.composerFont
+        return base.withSize(base.pointSize * CGFloat(conversationZoom))
+    }
+
     private func composer(enabled: Bool) -> some View {
         let sendActive = canSend && enabled
         return HStack(alignment: .bottom, spacing: 10) {
             ComposerTextView(
                 text: $draftMessage,
                 isEditable: enabled,
-                font: ConversationMetrics.composerFont,
+                font: composerFont,
                 onSubmit: sendMessage,
                 measuredHeight: $composerHeight
             )
@@ -384,7 +464,7 @@ struct ConversationView: View {
                 .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
         }
         .shadow(color: Color.black.opacity(0.06), radius: 18, x: 0, y: 8)
-        .frame(maxWidth: ConversationMetrics.chatColumnWidth)
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Send logic
@@ -547,9 +627,7 @@ enum ConversationMetrics {
     static let sectionSpacing: CGFloat = 16
     static let debugTopInset: CGFloat = 18
     static let controlsBandHeight: CGFloat = 28
-    static let conversationHorizontalInset: CGFloat = 48
     static let conversationTopInset: CGFloat = 56
-    static let chatColumnWidth: CGFloat = 900
     static let emptyStateHorizontalInset: CGFloat = 72
     static let emptyStateSpacing: CGFloat = 28
     static let emptyStateBottomBias: CGFloat = 96
@@ -567,5 +645,85 @@ enum ConversationMetrics {
     static var sendButtonBottomInset: CGFloat {
         (ComposerTextView.oneLineHeight(for: composerFont)
             + composerVerticalPadding * 2 - sendButtonSize) / 2
+    }
+}
+
+/// Right-side outline for a conversation: lists the user's turns (questions) in
+/// order. Clicking a turn scrolls the transcript web view to that message via a
+/// versioned `ChatScrollRequest`. Mirrors the page outline's shape (divider +
+/// "Outline" header + scrollable list).
+struct ChatOutlineView: View {
+    let turns: [String]
+    let onSelect: (Int) -> Void
+
+    @AppStorage("chatOutlineWidth") private var outlineWidth: Double = 240
+    @State private var dragStartWidth: Double? = nil
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Draggable divider on the outline's leading edge. A 1pt separator
+            // line with a wider invisible hit area so it's easy to grab.
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(width: 1)
+                .frame(maxHeight: .infinity)
+                .padding(.horizontal, 4)
+                .contentShape(Rectangle())
+                .onHover { isHovering in
+                    if isHovering {
+                        NSCursor.resizeLeftRight.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            if dragStartWidth == nil {
+                                dragStartWidth = outlineWidth
+                            }
+                            if let start = dragStartWidth {
+                                let newWidth = start - Double(value.translation.width)
+                                outlineWidth = max(60, min(600, newWidth))
+                            }
+                        }
+                        .onEnded { _ in
+                            dragStartWidth = nil
+                        }
+                )
+                .zIndex(1)
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Outline")
+                    .font(.headline)
+                    .padding()
+
+                Divider()
+
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(turns.enumerated()), id: \.offset) { index, turn in
+                            Button {
+                                onSelect(index)
+                            } label: {
+                                Text(turn.isEmpty ? "(empty)" : turn)
+                                    .font(.callout)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 4)
+                                    .padding(.horizontal, 8)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+            }
+            .frame(width: outlineWidth)
+            .background(Color(nsColor: .windowBackgroundColor))
+        }
     }
 }

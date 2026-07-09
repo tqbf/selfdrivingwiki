@@ -30,6 +30,30 @@ asks to save, update, add, rewrite, log, or otherwise persist something.
 - The sidebar separates app-level destinations into Tools (Query) and System
   (Activity, Instructions), with Pages and Files left as content lists.
 
+### Layout parity with PageDetailView (#275)
+
+The conversation surface (`ConversationView`) mirrors `PageDetailView`'s
+header + content + outline layout so the two detail surfaces read as siblings:
+
+- **Header** — `VStack`: title (`.largeTitle`) → metadata row (message count ·
+  date) → button row. The button row holds a "Show in List" button
+  (`sidebar.left` → `requestSidebarReveal(.chat(id))`, hidden in draft state)
+  and the outline toggle (`sidebar.right`). Both live and persisted chats use
+  the same `header(for:)` + divider.
+- **Content width** — transcript, composer, and editing banner fill the full
+  available width (`maxWidth: .infinity`) with `contentInset` (12pt) padding.
+  No `chatColumnWidth` cap (the old 900pt limit was removed).
+- **Outline** — `ChatOutlineView` mirrors `PageOutlineView`: draggable divider
+  with resize cursor, dynamic width via `@AppStorage("chatOutlineWidth")`
+  (default 240, range 60–600), `.windowBackgroundColor`. The outline sits flush
+  against the right window edge (`withChatOutline` stretches content to
+  `.infinity`). Lists user turns in order; clicking scrolls the transcript via
+  a versioned `ChatScrollRequest`.
+- **Chat bubble CSS** — agent responses fill the available width (no
+  `max-width` cap); only user messages are capped at `min(760px, 86%)` and
+  right-aligned. Transcript `body` padding is vertical-only (`10px 0`); the
+  SwiftUI layer handles horizontal insets.
+
 ## Agent Session
 
 Interactive Query uses Claude Code's print-mode streaming input:
