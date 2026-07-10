@@ -79,44 +79,37 @@ struct WikiDetailView: View {
                             .font(.headline)
                             .foregroundStyle(.secondary)
 
+                        // Three primary entry points, 1:1 with the intro rows
+                        // above (Pages / Sources / Chats). The four ingestion
+                        // actions collapse under a single "Add Source" menu.
                         FlowLayout(spacing: 12) {
-                            Button {
-                                addURLHandler?("")
-                            } label: {
-                                Label("Add from URL", systemImage: "link.badge.plus")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.large)
+                            Button("Add Page", systemImage: "doc.badge.plus", action: addPage)
+                                .buttonStyle(.bordered)
+                                .controlSize(.large)
 
-                            Button {
-                                if let url = WikiFilePanels.chooseFile(title: "Add File", prompt: "Add File") {
-                                    Task {
-                                        await store.addFiles([url])
+                            Menu {
+                                Button("Add from URL", systemImage: "link.badge.plus") {
+                                    addURLHandler?("")
+                                }
+                                Button("Add File", systemImage: "doc", action: addFile)
+                                Button("Add Folder", systemImage: "folder") {
+                                    showingImportMarkdown = true
+                                }
+                                if isZoteroConfigured {
+                                    Button("Add from Zotero", systemImage: "books.vertical") {
+                                        showingAddFromZotero = true
                                     }
                                 }
                             } label: {
-                                Label("Add File", systemImage: "doc.badge.plus")
+                                Label("Add Source", systemImage: "tray.and.arrow.down")
                             }
+                            .menuStyle(.button)
                             .buttonStyle(.bordered)
                             .controlSize(.large)
 
-                            Button {
-                                showingImportMarkdown = true
-                            } label: {
-                                Label("Add Folder", systemImage: "doc.badge.plus")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.large)
-
-                            if isZoteroConfigured {
-                                Button {
-                                    showingAddFromZotero = true
-                                } label: {
-                                    Label("Add from Zotero", systemImage: "books.vertical")
-                                }
+                            Button("Add Chat", systemImage: "plus.bubble", action: addChat)
                                 .buttonStyle(.bordered)
                                 .controlSize(.large)
-                            }
                         }
                     }
                     .padding(.top, 20)
@@ -234,6 +227,28 @@ struct WikiDetailView: View {
                 Text(description)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - Get Started actions
+
+    /// Create an untitled page and open it in a new tab (mirrors the Pages
+    /// sidebar `+` and the window toolbar's New Page).
+    private func addPage() {
+        store.newPageInNewTab()
+    }
+
+    /// Start a new chat in the Edit draft state (mirrors the Chats sidebar `+`).
+    private func addChat() {
+        store.openTab(.edit)
+    }
+
+    /// Pick a single file via the open panel and ingest it.
+    private func addFile() {
+        if let url = WikiFilePanels.chooseFile(title: "Add File", prompt: "Add File") {
+            Task {
+                await store.addFiles([url])
             }
         }
     }
