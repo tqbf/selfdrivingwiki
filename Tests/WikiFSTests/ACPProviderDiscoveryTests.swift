@@ -39,9 +39,11 @@ struct ACPProviderDiscoveryTests {
         #expect(ACPProviderDiscovery.discover(in: catalog, resolve: { _ in .missing(reason: "nope") }).isEmpty)
     }
 
-    @Test func defaultCatalogIsNonEmptyAndClaudeAbsent() {
-        // Claude is deliberately NOT in the ACP catalog (driven via ClaudeCLIBackend).
+    @Test func defaultCatalogIsNonEmptyAndClaudeAcpPresent() {
+        // The default chat provider (Claude via the ACP wrapper) IS in the catalog;
+        // the legacy `claude -p` CLI id is NOT (driven via ClaudeCLIBackend).
         #expect(!ACPProviderCatalog.agents.isEmpty)
+        #expect(ACPProviderCatalog.agents.contains(where: { $0.id == "claude-acp" }))
         #expect(ACPProviderCatalog.agents.allSatisfy { $0.id != "claude" })
         // Each catalog command's first element is its detect executable (convention).
         for agent in ACPProviderCatalog.agents {

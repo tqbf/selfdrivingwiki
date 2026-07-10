@@ -2,16 +2,22 @@ import Foundation
 import WikiFSCore
 
 /// Pure, side-effect-free backend selection + ACP profile wiring (slice 2 of
-/// `plans/acp-backend-and-permissions.md`). Extracted from the launcher so the
-/// selection logic is unit-testable WITHOUT driving the `@MainActor @Observable`
-/// launcher actor (`AgentLauncher` only owns "when + where to construct").
+/// `plans/acp-backend-and-permissions.md`; provider selection added in #324).
+/// Extracted from the launcher so the selection logic is unit-testable WITHOUT
+/// driving the `@MainActor @Observable` launcher actor (`AgentLauncher` only
+/// owns "when + where to construct").
 ///
-/// **Default-OFF contract:** `useACPBackend == false` MUST return
-/// `ClaudeCLIBackend` — today's behavior, unchanged for existing users. Only
-/// when the opt-in pref is ON does the launcher construct an `ACPBackend`, and
-/// even then it is `permissionPolicy: .yolo` by default (default mode = yolo —
-/// the safe default, since always-ask enforcement depends on the agent emitting
-/// `request_permission`, which not all agents do).
+/// Two selection entry points:
+/// - `makeBackend(useACPBackend:policy:)` — the slice-3 bool seam (retained so
+///   the existing `ACPWiringTests` keep passing). Default-OFF → Claude CLI.
+/// - `makeBackend(provider:policy:)` — the #324 provider seam: the launcher
+///   picks the provider from `AgentProvidersConfig` and constructs the matching
+///   backend. **Default = Claude (`claudeCLI`) → `ClaudeCLIBackend`**, so
+///   existing users see zero behavior change.
+///
+/// The permission policy is baked into the `ACPBackend` at construction
+/// (`ACPBackend.start` installs it on the delegate); it has NO effect on the CLI
+/// backend (no permission channel).
 enum AgentBackendFactory {
 
     /// Select + construct the backend for a session.
@@ -29,6 +35,65 @@ enum AgentBackendFactory {
             return ACPBackend(permissionPolicy: policy)
         }
         return ClaudeCLIBackend()
+    }
+
+    /// Select + construct the backend from a provider (#324). `provider.backend`
+    /// picks the backend kind; the permission policy applies only to `.acp`
+    /// providers (the CLI backend has no permission channel). **Default = Claude
+    /// (`claudeCLI`) → `ClaudeCLIBackend`**, so existing users see no change.
+    /// PURE so the selection→backend mapping is unit-tested directly
+    /// (`ACPProviderSelectionTests`).
+    static func makeBackend(provider: AgentProvider, policy: PermissionPolicy) -> AgentBackend {
+        switch provider.backend {
+        case .claudeCLI:
+            return ClaudeCLIBackend()
+        case .acp:
+            return ACPBackend(permissionPolicy: policy)
+        }
+    }
+
+    /// Build the `providerHints` for an ACP provider from its PATH-resolved
+    /// command + the Keychain-backed API key (#324). Mirrors the slice-3
+    /// `acpProviderHints(resolvedExecutable:prefixArguments:apiKey:)` contract:
+    /// `acpAgentPath` is the resolved executable, `acpAgentArgs` is the rest of
+    /// the argv (joined so `ACPBackend.resolveSpawnConfig` can tokenize it), and
+    /// `acpAgentApiKey` carries the secret. PURE.
+    ///
+    /// #329: `acpSelectedModelId` carries the user's per-provider model pick so
+    /// `ACPBackend.start` can call `session/set_model` after `newSession`. nil
+    /// /empty = "use the agent's default model" (no `setModel`) → unchanged.
+    ///
+    /// For a `.claudeCLI` provider, `cliSelectedModel` carries the picker's
+    /// chosen `--model` alias so `ClaudeCLIBackend.start` can override `--model`.
+    /// An ACP provider with an empty command yields an empty dict (→
+    /// `ACPBackend` throws `noAgentConfigured`).
+    static func providerHints(
+        provider: AgentProvider,
+        resolvedCommand: [String],
+        apiKey: String?,
+        selectedModelId: String? = nil
+    ) -> [String: String] {
+        // CLI provider: carry the picker's model selection only (the CLI backend
+        // reads CLIProfile for everything else). nil/empty → empty dict = the
+        // legacy "use the per-op alias / Settings override" path, unchanged.
+        if provider.backend == .claudeCLI {
+            guard let selectedModelId, !selectedModelId.isEmpty else { return [:] }
+            return ["cliSelectedModel": selectedModelId]
+        }
+        guard !resolvedCommand.isEmpty else { return [:] }
+        var hints: [String: String] = [:]
+        hints["acpAgentPath"] = resolvedCommand[0]
+        let args = resolvedCommand.dropFirst()
+        if !args.isEmpty {
+            hints["acpAgentArgs"] = args.joined(separator: " ")
+        }
+        if let apiKey, !apiKey.isEmpty {
+            hints["acpAgentApiKey"] = apiKey
+        }
+        if let selectedModelId, !selectedModelId.isEmpty {
+            hints["acpSelectedModelId"] = selectedModelId
+        }
+        return hints
     }
 
     /// Build the `providerHints` that carry the ACP agent spawn (executable path

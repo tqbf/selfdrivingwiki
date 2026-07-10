@@ -76,14 +76,20 @@ actor ACPBackend: AgentBackend {
         }
     }
 
-    /// One live ACP session: the client (actor), the ACP session id, and the
-    /// permission delegate (which holds the pending-permissions map + policy).
-    /// All fields are `Sendable`, so this record can be read off-actor by the
-    /// per-turn drain Task.
+    /// One live ACP session: the client (actor), the ACP session id, the
+    /// permission delegate (which holds the pending-permissions map + policy),
+    /// and the models the agent advertised at `session/new`. All fields are
+    /// `Sendable`, so this record can be read off-actor by the per-turn drain
+    /// Task and by the launcher's model-cache capture.
     private struct ACPSession: Sendable {
         let client: Client
         let sessionId: SessionId
         let permissionDelegate: ACPPermissionDelegate
+        /// The models the agent advertised (`session/new` →
+        /// `NewSessionResponse.models`). nil when the agent didn't advertise a
+        /// list (older agents). Captured at start so the launcher can cache them
+        /// per-provider for the model picker (#329).
+        let modelsInfo: ModelsInfo?
     }
 
     private var sessions: [String: ACPSession] = [:]
@@ -98,7 +104,7 @@ actor ACPBackend: AgentBackend {
     private let capabilities: ClientCapabilities
 
     init(
-        permissionPolicy: PermissionPolicy = .yolo,
+        permissionPolicy: PermissionPolicy = .bypass,
         capabilities: ClientCapabilities = ACPBackend.defaultCapabilities
     ) {
         self.permissionPolicy = permissionPolicy
@@ -114,14 +120,20 @@ actor ACPBackend: AgentBackend {
         terminal: true
     )
 
-    // MARK: - AgentBackend
+// MARK: - AgentBackend
+// TEMP DEBUG: ACPBackend.start/send/cancel carry verbose lifecycle logging
+// TEMP DEBUG: (launch, initialize, auth, model discovery, setModel, per-turn
+// TEMP DEBUG: prompt). Each DebugLog.agent line is tagged TEMP DEBUG for a
+// TEMP DEBUG: later `grep -n "TEMP DEBUG"` strip.
 
     func start(
         profile: BackendProfile,
         systemPrompt: String,
         onExit: @escaping @Sendable (Int) -> Void
     ) async throws -> SessionHandle {
+        DebugLog.agent("ACPBackend.start: enter providerHints=\(profile.providerHints)") // TEMP DEBUG (existed; re-tagged)
         guard let spawn = Self.resolveSpawnConfig(from: profile) else {
+            DebugLog.agent("ACPBackend.start: FAIL noAgentConfigured (no acpAgentPath/model in profile)") // TEMP DEBUG (existed; re-tagged)
             throw ACPBackendError.noAgentConfigured
         }
 
@@ -131,13 +143,14 @@ actor ACPBackend: AgentBackend {
         let permissionDelegate = ACPPermissionDelegate(policy: permissionPolicy)
         await client.setDelegate(permissionDelegate)
 
-        DebugLog.agent("ACPBackend.start: launching \(spawn.executablePath) \(spawn.arguments.joined(separator: " "))")
+        DebugLog.agent("ACPBackend.start: launching \(spawn.executablePath) \(spawn.arguments.joined(separator: " "))") // TEMP DEBUG (existed; re-tagged)
         try await client.launch(
             agentPath: spawn.executablePath,
             arguments: spawn.arguments,
             workingDirectory: spawn.workingDirectory
         )
 
+        DebugLog.agent("ACPBackend.start: process launched, sending initialize") // TEMP DEBUG (existed; re-tagged)
         // Slice 3: initialize, then authenticate if the agent advertises
         // authMethods. The DECISION is a pure helper (`ACPAuthResolver.resolve`)
         // so it's unit-tested directly; here we just execute it. A key is never
@@ -147,13 +160,14 @@ actor ACPBackend: AgentBackend {
             capabilities: capabilities,
             clientInfo: ClientInfo(name: "SelfDrivingWiki", title: "Self Driving Wiki", version: "1.0.0")
         )
+        DebugLog.agent("ACPBackend.start: initialize OK agent=\(initResponse.agentInfo?.name ?? "?") authMethods=\(initResponse.authMethods?.count ?? 0)") // TEMP DEBUG (existed; re-tagged)
 
         switch ACPAuthResolver.resolve(authMethods: initResponse.authMethods, apiKey: spawn.apiKey) {
         case .skip:
             // Agent needs no auth — proceed straight to newSession.
-            DebugLog.agent("ACPBackend.start: agent advertised no authMethods, skipping authenticate")
+            DebugLog.agent("ACPBackend.start: agent advertised no authMethods, skipping authenticate") // TEMP DEBUG (existed; re-tagged)
         case .authenticate(let methodId, let credentials):
-            DebugLog.agent("ACPBackend.start: authenticating method=\(methodId)")
+            DebugLog.agent("ACPBackend.start: authenticating method=\(methodId)") // TEMP DEBUG (existed; re-tagged)
             let authResponse = try await client.authenticate(
                 authMethodId: methodId,
                 credentials: credentials
@@ -162,20 +176,60 @@ actor ACPBackend: AgentBackend {
                 throw ACPBackendError.authenticationFailed(authResponse.error)
             }
         case .missingCredentials:
-            // The agent requires auth but no key is configured. Fail fast with a
-            // clear, actionable error rather than letting newSession fail opaquely.
-            throw ACPBackendError.missingAPIKey
+            // The agent advertised authMethods but no API key is configured. Do NOT
+            // hard-block: many agents (Hermes via ~/.hermes, Claude via OAuth)
+            // authenticate themselves with their own credentials and don't need a
+            // client-provided key. Skip client-side `authenticate` and proceed to
+            // newSession; if the agent truly requires client creds, the prompt will
+            // surface that error (clearer than blocking at start).
+            DebugLog.agent("ACPBackend.start: no API key configured — skipping client auth (agent may self-authenticate)") // TEMP DEBUG (existed; re-tagged)
         }
 
         let workingDir = profile.scratchDirectory?.path ?? spawn.workingDirectory ?? FileManager.default.currentDirectoryPath
+        DebugLog.agent("ACPBackend.start: newSession cwd=\(workingDir)") // TEMP DEBUG (existed; re-tagged)
         let session = try await client.newSession(workingDirectory: workingDir)
         let sessionId = session.sessionId
+        let modelsInfo = session.models
+        let discoveredCount = modelsInfo?.availableModels.count ?? 0
+        let currentModel = modelsInfo?.currentModelId ?? "(none)"
+        DebugLog.agent("ACPBackend.start: discovered \(discoveredCount) model(s), current=\(currentModel)") // TEMP DEBUG (existed; re-tagged)
+
+        // #329: if the user picked a model for this provider, apply it right
+        // after newSession — BEFORE the first prompt — so the agent uses a
+        // valid model instead of its (possibly broken) default. The selection
+        // is threaded in via providerHints by the launcher. The DECISION is a
+        // pure helper (`ACPModelSelectionResolver.resolve`) so it's unit-tested
+        // without a subprocess; here we just execute it. A bad/stale selection
+        // falls back to the agent default (no setModel) — never reproduces the
+        // 404 the picker exists to prevent.
+        if let selectedModelId = profile.providerHints["acpSelectedModelId"],
+           !selectedModelId.isEmpty {
+            let advertisedIds = modelsInfo?.availableModels.map(\.modelId) ?? []
+            let decision = ACPModelSelectionResolver.resolve(
+                selectedModelId: selectedModelId,
+                currentModelId: modelsInfo?.currentModelId,
+                advertisedModelIds: advertisedIds)
+            if case .apply(let id) = decision {
+                DebugLog.agent("ACPBackend.start: setModel \(id)") // TEMP DEBUG (existed; re-tagged)
+                do {
+                    _ = try await client.setModel(sessionId: sessionId, modelId: id)
+                } catch {
+                    // setModel failed — log and proceed to the prompt anyway; the
+                    // agent's default may still work, and a clearer error will
+                    // surface from the prompt if not. Non-fatal by design.
+                    DebugLog.agent("ACPBackend.start: setModel \(id) failed: \(error.localizedDescription)") // TEMP DEBUG (existed; re-tagged)
+                }
+            } else {
+                DebugLog.agent("ACPBackend.start: keeping agent default model (selected=\(selectedModelId) → \(decision))") // TEMP DEBUG (existed; re-tagged)
+            }
+        }
 
         let sessionID = UUID().uuidString
         sessions[sessionID] = ACPSession(
             client: client,
             sessionId: sessionId,
-            permissionDelegate: permissionDelegate
+            permissionDelegate: permissionDelegate,
+            modelsInfo: modelsInfo
         )
 
         // Wire onExit to the agent process termination. `Client.terminate()` is
@@ -184,15 +238,17 @@ actor ACPBackend: AgentBackend {
         // watchdog reconciles against this single completion channel.)
         permissionDelegate.bindOnExit(onExit)
 
-        DebugLog.agent("ACPBackend.start: session \(sessionId.value) (handle \(sessionID)) ready")
+        DebugLog.agent("ACPBackend.start: session \(sessionId.value) (handle \(sessionID)) ready") // TEMP DEBUG (existed; re-tagged)
         return SessionHandle(id: sessionID)
     }
 
     func send(_ turn: TurnInput, into handle: SessionHandle) async -> AsyncStream<AgentEvent> {
         guard let session = sessions[handle.id] else {
             // Session gone (cancelled/finished) — return an empty, finished stream.
+            DebugLog.agent("ACPBackend.send: no session for handle \(handle.id) — empty stream") // TEMP DEBUG (existed; re-tagged)
             return AsyncStream { $0.finish() }
         }
+        DebugLog.agent("ACPBackend.send: turn=\"\(turn.userText.prefix(80))\" handle=\(handle.id)") // TEMP DEBUG (existed; re-tagged)
 
         let client = session.client
         let sessionId = session.sessionId
@@ -221,6 +277,7 @@ actor ACPBackend: AgentBackend {
                         guard let params = notification.params else { continue }
                         // Decode params → SessionUpdateNotification, then translate.
                         let events = ACPBackend.translateNotification(params: params, sessionId: sessionId, translator: translator)
+                        DebugLog.agent("ACPBackend: session/update → \(events.count) AgentEvent(s)") // TEMP DEBUG (existed; re-tagged)
                         for event in events {
                             continuation.yield(event)
                         }
@@ -229,11 +286,12 @@ actor ACPBackend: AgentBackend {
                 defer { drainTask.cancel() }
 
                 do {
+                    DebugLog.agent("ACPBackend: sending session/prompt (\(turn.userText.count) chars)") // TEMP DEBUG (existed; re-tagged)
                     let response = try await client.sendPrompt(
                         sessionId: sessionId,
                         content: [.text(TextContent(text: turn.userText))]
                     )
-                    DebugLog.agent("ACPBackend: prompt completed stopReason=\(response.stopReason.rawValue)")
+                    DebugLog.agent("ACPBackend: prompt completed stopReason=\(response.stopReason.rawValue)") // TEMP DEBUG (existed; re-tagged)
                     // ACP has no explicit turn-end notification; the turn ends
                     // when the prompt REQUEST returns. Synthesize the turn-end
                     // events (always ending in `.messageStop`) to satisfy the
@@ -243,7 +301,7 @@ actor ACPBackend: AgentBackend {
                         continuation.yield(event)
                     }
                 } catch {
-                    DebugLog.agent("ACPBackend: prompt failed: \(error.localizedDescription)")
+                    DebugLog.agent("ACPBackend: prompt failed: \(error.localizedDescription)") // TEMP DEBUG (existed; re-tagged)
                     // Error is also a turn boundary — synthesize `.messageStop`
                     // so the consumer's for-await exits and the gate releases.
                     for event in Self.turnEndEvents(error: error) {
@@ -274,7 +332,11 @@ actor ACPBackend: AgentBackend {
     }
 
     func cancel(_ session: SessionHandle) async {
-        guard let record = sessions.removeValue(forKey: session.id) else { return }
+        guard let record = sessions.removeValue(forKey: session.id) else {
+            DebugLog.agent("ACPBackend.cancel: no session for handle \(session.id) — no-op") // TEMP DEBUG
+            return
+        }
+        DebugLog.agent("ACPBackend.cancel: cancelling session=\(record.sessionId.value) handle=\(session.id)") // TEMP DEBUG
         // Drain any in-flight always-ask continuations BEFORE tearing down, so a
         // pending `request_permission` never leaks its `CheckedContinuation`
         // (leaked continuations warn/trap at task end). The agent receives a
@@ -286,6 +348,26 @@ actor ACPBackend: AgentBackend {
         try? await record.client.cancelSession(sessionId: record.sessionId)
         await record.client.terminate()
         record.permissionDelegate.fireOnExit(status: 0)
+    }
+
+    // MARK: - Model discovery (#329)
+
+    /// The models the agent advertised for a session (`session/new` →
+    /// `ModelsInfo.availableModels`), captured at start. The launcher reads this
+    /// right after `backend.start` to cache them per-provider for the model
+    /// picker. Empty when the agent didn't advertise a list (older agents) or
+    /// the handle is gone (cancelled/finished).
+    func availableModels(for sessionHandle: SessionHandle) async -> [ModelInfo] {
+        guard let session = sessions[sessionHandle.id] else { return [] }
+        return session.modelsInfo?.availableModels ?? []
+    }
+
+    /// The agent's current model id for a session (`ModelsInfo.currentModelId`),
+    /// or nil when the agent didn't advertise one. Read by the launcher to log
+    /// the effective model alongside the discovered list.
+    func currentModelId(for sessionHandle: SessionHandle) async -> String? {
+        guard let session = sessions[sessionHandle.id] else { return nil }
+        return session.modelsInfo?.currentModelId
     }
 
     // MARK: - Permission resolution seam (PermissionResolving)
@@ -366,10 +448,20 @@ actor ACPBackend: AgentBackend {
     ) -> [AgentEvent] {
         do {
             let data = try JSONEncoder().encode(params)
+            // TEMP DEBUG: log raw session/update JSON so we can see exactly what
+            // the agent sent (text? tool call? empty?). Strip with grep TEMP DEBUG.
+            if let raw = String(data: data, encoding: .utf8) {
+                DebugLog.agent("ACPBackend: raw session/update json (prefix 800): \(raw.prefix(800))")
+            }
             let envelope = try JSONDecoder().decode(SessionUpdateNotification.self, from: data)
             // Scope to our session (the shared notification stream is global).
             guard envelope.sessionId.value == sessionId.value else { return [] }
-            return translator.translate(envelope.update)
+            let events = translator.translate(envelope.update)
+            // TEMP DEBUG: log the translated event types + snippet.
+            for event in events {
+                DebugLog.agent("ACPBackend: translated event: \(String(describing: event).prefix(300))")
+            }
+            return events
         } catch {
             return [.raw("ACP session/update decode error: \(error.localizedDescription)")]
         }

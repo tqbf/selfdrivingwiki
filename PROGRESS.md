@@ -2,6 +2,87 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-11 — Provider selector under the chat composer (#325)
+
+**Change:** added a compact **provider selector** under the chat composer
+(`ChatView`), modeled on paseo's `combined-model-selector` trigger and
+translated to native macOS. v1 is **provider-only** (no model drill-down —
+selfdrivingwiki doesn't yet collect per-agent models). Picking a provider
+sets the persisted default, so the next chat session uses it via the
+launcher's existing `resolveSelectedProvider` (no launcher spawn change).
+
+- **Model** (`AgentProvidersConfig.swift`): added `settingDefault(id:)` — a
+  PURE mutator that marks one provider default + demotes the rest (enforces
+  the single-default invariant via `normalized`), and `enabledProviders` — the
+  enabled-only view the selector binds (matches the launcher's
+  `selectedProvider()` fallback). The Settings view's inline `setDefault` now
+  delegates to the shared mutator (DRY).
+- **Launcher** (`AgentLauncher.swift`): added `resolveProvidersContainerDirectory`
+  (same container resolution as `resolveSelectedProvider`), a read accessor
+  `providersConfig()`, and a `setDefaultProvider(id:)` that sets + persists +
+  returns the new config. The composer selector reads + mutates through these.
+- **UI** (`Sources/WikiFS/ProviderSelector.swift`, new): a `Menu` trigger —
+  glyph + current label + a chevron (`menuIndicator(.hidden)`; we draw our own)
+  — opening the enabled providers, with a gear → `@Environment(\.openSettings)`.
+  Leading-aligned, `.caption`/secondary, sits below the text field as a
+  composer VStack sibling (`providerSelectorBar` in both `emptyState` and
+  `chatComposer`). Hidden when no wiki is active.
+- **Tests** (`Tests/WikiFSTests/ProviderSelectorTests.swift`, new): the
+  `settingDefault` invariant (demotes others, reversible, unknown-id-safe,
+  pure), `enabledProviders`, the persist→reload round-trip, and the launcher
+  wiring (`setDefaultProvider` → `resolveSelectedProvider` reads it; default =
+  Claude when unpicked). 88 ACP/provider tests + the fast tier (2049 tests)
+  green.
+- **Not verified:** the rendered selector needs a live-UI check (couldn't run
+  the GUI here) — compile + unit-test only.
+
+## 2026-07-11 — Agent providers model + Settings UI (#324)
+
+**Change:** replaced the slice-3 `useACPBackend` bool + single `ACPAgentConfig`
+with a **provider list** (`agent-providers.json`) the user configures in a new
+Settings → **Providers** tab. Modeled on paseo's `providers-section.tsx` +
+`provider-catalog-list.tsx` + `provider-diagnostic-sheet.tsx`, translated to
+native macOS SwiftUI.
+
+- **Model** (`Sources/WikiFSCore/AgentProvider.swift` +
+  `AgentProvidersConfig.swift`): `AgentProvider { id, label, backend, command,
+  env, enabled, isDefault }` where `enum AgentBackendKind { claudeCLI, acp }`.
+  `AgentProvidersConfig` persists to `agent-providers.json` (App Group
+  container). `loadOrSeed` seeds **Claude (default, enabled)** + ACP agents
+  discovered on PATH. Pure `seed(discovered:)` for tests. Single-default
+  invariant enforced by `normalized`.
+- **Catalog** (`ACPProviderCatalog.swift`): expanded from 2 → **12 confirmed
+  ACP agents** ported from paseo's `acp-provider-catalog.ts` — gemini, hermes,
+  copilot, kimi, cursor, kiro, goose, grok, codewhale, kilo, plus the npx
+  wrappers `claude-agent-acp` + `codex-acp`. Claude stays OUT (the `.claudeCLI`
+  default).
+- **Settings UI** (`Sources/WikiFS/AgentProvidersSettingsView.swift`): providers
+  list (icon/name + status badge + enable toggle + details), a radio-group
+  default selector, an **Add Provider** catalog sheet (searchable, hides
+  already-added), and a per-provider detail editor (command, `SecureField` API
+  key via Keychain, enable). Native `Form`/`.formStyle(.grouped)`. Used the
+  `swiftui-pro` + `macos-design` skills.
+- **Launcher wiring** (`AgentLauncher.swift`): new `resolveSelectedProvider`
+  seam; both `run()` + `startInteractiveQuery()` now pick the provider from
+  config and construct the backend via `AgentBackendFactory.makeBackend(
+  provider:policy:)`. `.acp` resolves the provider's PATH command + per-provider
+  Keychain key into `providerHints`. **Default = Claude → zero behavior
+  change.**
+- **Credential store** (`ACPCredentialStore.swift`): added per-provider Keychain
+  keying (`apiKey(forProvider:)` / `setAPIKey(_:forProvider:)`), namespaced by
+  account `acp-provider:<id>`. The legacy single-key API is preserved.
+- `AgentBackendFactory.makeBackend(useACPBackend:policy:)` + the slice-3
+  `acpProviderHints(...)` retained (existing tests + `ACPSmokeTests` unchanged).
+
+**Tests:** new `AgentProviderModelTests` (5 suites, 30+ tests) — seed/normalize/
+persist/round-trip, catalog expansion + Claude-absent + command[0]==detect,
+selection→backend mapping, per-provider Keychain isolation. All existing ACP
+suites green. Fast tier: **2041 tests in 170 suites pass.**
+
+**Couldn't verify:** live non-Claude E2E (no creds) — the model/selection/
+catalog are unit-tested; `ACPSmokeTests` covers the Claude path. Flagged for
+manual E2E when credentials are available.
+
 ## 2026-07-10 — Remove read-only Ask/Plan chat mode
 
 **Change:** the dual Ask (read-only) / Edit (write-capable) chat product

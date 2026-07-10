@@ -137,9 +137,33 @@ struct ACPEventTranslator: Sendable {
 /// **Caveat (design doc):** always-ask enforcement *depends on the agent
 /// emitting `request_permission` for writes*. Most do (Claude via the wrapper,
 /// Copilot, …), but not all — so yolo is the safe default.
-enum PermissionPolicy: Sendable {
-    case yolo
+enum PermissionPolicy: String, Sendable, CaseIterable {
+    /// Skip all permission prompts — writes apply automatically.
+    case bypass
+    /// Pause for user approval before each tool that needs permission.
     case alwaysAsk
+    /// Auto-approve edit/write tools; ask for everything else.
+    case acceptEdits
+    /// Deny all writes — read-only analysis mode.
+    case plan
+
+    var label: String {
+        switch self {
+        case .bypass: "Bypass"
+        case .alwaysAsk: "Always Ask"
+        case .acceptEdits: "Accept Edits"
+        case .plan: "Plan"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .bypass: "Skip all permission prompts (use with caution)"
+        case .alwaysAsk: "Pause for your approval before each write"
+        case .acceptEdits: "Auto-approve file edits; ask for other tools"
+        case .plan: "Read-only: deny all writes and edits"
+        }
+    }
 }
 
 /// A snapshot of a pending permission request (always-ask). The future chat UI
@@ -205,31 +229,64 @@ final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
 
     func handlePermissionRequest(request: RequestPermissionRequest) async throws -> RequestPermissionResponse {
         switch policy {
-        case .yolo:
+        case .bypass:
             // Auto-approve: resolve immediately with the request's allow option.
-            // Prefer an `allow_*` kind; fall back to the first option if none
-            // matches (defensive — a well-formed request always has an allow).
             if let allow = Self.allowOption(in: request.options) {
-                DebugLog.agent("ACPBackend: yolo auto-allow toolCallId=\(request.toolCall.toolCallId)")
+                DebugLog.agent("ACPBackend: bypass auto-allow toolCallId=\(request.toolCall.toolCallId)")
                 return RequestPermissionResponse(outcome: PermissionOutcome(optionId: allow.optionId))
             }
-            // No allow option offered — cancel (the agent treats this as denied).
+            return RequestPermissionResponse(outcome: PermissionOutcome(cancelled: true))
+
+        case .acceptEdits:
+            // Auto-approve tools that look like file edits/writes; defer others.
+            if Self.isEditTool(request.toolCall), let allow = Self.allowOption(in: request.options) {
+                DebugLog.agent("ACPBackend: acceptEdits auto-allow edit toolCallId=\(request.toolCall.toolCallId)")
+                return RequestPermissionResponse(outcome: PermissionOutcome(optionId: allow.optionId))
+            }
+            // Non-edit tool → defer to the user (same as alwaysAsk).
+            return await Self.deferPermission(request: request, lock: lock)
+
+        case .plan:
+            // Deny all writes — auto-cancel every permission request.
+            DebugLog.agent("ACPBackend: plan auto-deny toolCallId=\(request.toolCall.toolCallId)")
             return RequestPermissionResponse(outcome: PermissionOutcome(cancelled: true))
 
         case .alwaysAsk:
             // Defer: record pending and SUSPEND until resolve(optionId:). The
             // future UI calls ACPBackend.resolvePermission, which calls into
             // here. This is the pending-permission-blocking pattern from paseo.
-            return await withCheckedContinuation { (continuation: CheckedContinuation<RequestPermissionResponse, Never>) in
-                lock.withLock { state in
-                    state.pending[request.toolCall.toolCallId] = Pending(
-                        options: request.options,
-                        continuation: continuation
-                    )
-                }
-                DebugLog.agent("ACPBackend: alwaysAsk deferring toolCallId=\(request.toolCall.toolCallId) (\(request.options.count) options)")
-            }
+            return await Self.deferPermission(request: request, lock: lock)
         }
+    }
+
+    // MARK: - Shared helpers
+
+    /// Defer a permission request to the user (alwaysAsk / acceptEdits-non-edit).
+    /// Records the pending continuation and returns when the user resolves it.
+    private static func deferPermission(
+        request: RequestPermissionRequest,
+        lock: OSAllocatedUnfairLock<LockedState>
+    ) async -> RequestPermissionResponse {
+        await withCheckedContinuation { (continuation: CheckedContinuation<RequestPermissionResponse, Never>) in
+            lock.withLock { state in
+                state.pending[request.toolCall.toolCallId] = Pending(
+                    options: request.options,
+                    continuation: continuation
+                )
+            }
+            DebugLog.agent("ACPBackend: deferring toolCallId=\(request.toolCall.toolCallId) (\(request.options.count) options)")
+        }
+    }
+
+    /// Heuristic: does this tool call look like a file edit/write? Used by
+    /// `acceptEdits` to auto-approve edits while deferring other tools.
+    private static func isEditTool(_ toolCall: ToolCallUpdate) -> Bool {
+        let kind = toolCall.kind?.rawValue.lowercased() ?? ""
+        let title = toolCall.title?.lowercased() ?? ""
+        let combined = "\(kind) \(title)"
+        return combined.contains("edit") || combined.contains("write")
+            || combined.contains("create") || combined.contains("delete")
+            || combined.contains("move") || combined.contains("rename")
     }
 
     // MARK: - ClientDelegate: fs / terminal (not performed in this spike)

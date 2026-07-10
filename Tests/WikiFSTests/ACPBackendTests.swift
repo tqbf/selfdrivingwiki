@@ -150,7 +150,7 @@ import ACPModel
     /// Yolo resolves immediately with the request's allow option — no deferral,
     /// no UI involvement. Mirrors today's "writes apply with no review".
     @Test func yoloAutoAllowsImmediately() async throws {
-        let delegate = ACPPermissionDelegate(policy: .yolo)
+        let delegate = ACPPermissionDelegate(policy: .bypass)
         let request = RequestPermissionRequest(
             options: [
                 PermissionOption(kind: "allow_always", name: "Allow", optionId: "opt-allow"),
@@ -171,7 +171,7 @@ import ACPModel
 
     /// Yolo prefers `allow_always` over `allow_once` when both are offered.
     @Test func yoloPrefersAllowAlways() async throws {
-        let delegate = ACPPermissionDelegate(policy: .yolo)
+        let delegate = ACPPermissionDelegate(policy: .bypass)
         let request = RequestPermissionRequest(
             options: [
                 PermissionOption(kind: "allow_once", name: "Allow once", optionId: "once"),
@@ -187,7 +187,7 @@ import ACPModel
     /// Yolo with no allow option offered → cancelled (the agent treats it as
     /// denied). Defensive: a well-formed request always has an allow.
     @Test func yoloWithNoAllowOptionCancels() async throws {
-        let delegate = ACPPermissionDelegate(policy: .yolo)
+        let delegate = ACPPermissionDelegate(policy: .bypass)
         let request = RequestPermissionRequest(
             options: [PermissionOption(kind: "reject_once", name: "Reject", optionId: "r")],
             sessionId: SessionId("s1"),

@@ -75,7 +75,7 @@ struct ACPSmokeTests {
             isReadOnly: false,
             cli: nil
         )
-        let backend = ACPBackend(permissionPolicy: .yolo)
+        let backend = ACPBackend(permissionPolicy: .bypass)
 
         // start() launches the agent, handshakes `initialize`, and applies the
         // auth decision. Without a key, an agent that advertises `authMethods`

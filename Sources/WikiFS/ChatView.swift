@@ -38,7 +38,7 @@ struct ChatView: View {
     @AppStorage(AgentLauncher.useACPBackendKey) private var useACPBackend = false
     /// The chat's always-ask/yolo mode (shared with the launcher, read at spawn).
     /// v1 app-wide, default off (yolo). Applies to the next conversation.
-    @AppStorage(AgentLauncher.alwaysAskKey) private var alwaysAsk = false
+    @AppStorage(AgentLauncher.permissionModeKey) private var permissionModeRaw = PermissionPolicy.bypass.rawValue
 
     /// True when this surface is rendering the active live session (D2
     /// source-of-truth rule). The view sources from `launcher.events`; when
@@ -77,7 +77,10 @@ struct ChatView: View {
     /// case overlays "Waiting for the Agent…" via `transcriptIsRunning`; the
     /// idle/persisted cases show their own message here.
     private var transcriptEmptyMessage: String {
-        isLiveChat ? "Ask a question to start a chat." : "No messages were persisted for this chat."
+        if chatID == nil {
+            return "Ask a question, or ask the Agent to update the wiki…"
+        }
+        return isLiveChat ? "Ask a question to start a chat." : "No messages were persisted for this chat."
     }
 
     /// True only when THIS surface is the active live stream — so a persisted
@@ -222,11 +225,7 @@ struct ChatView: View {
             AgentActivityView(launcher: launcher, showsResultEvents: false, showsInternals: true, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(ChatMetrics.contentInset)
-        } else if chatID == nil {
-            // Draft state (.newChat): big "Ask X" + composer until the first
-            // send retargets the tab to .chat(id).
-            emptyState
-        } else if !isLiveChat && chatSummary == nil {
+        } else if chatID != nil && !isLiveChat && chatSummary == nil {
             // Persisted chat that no longer exists in the store.
             ContentUnavailableView {
                 Label("Chat Missing", systemImage: "bubble.left.and.bubble.right")
@@ -234,8 +233,10 @@ struct ChatView: View {
                 Text("This chat is no longer available.")
             }
         } else {
-            // Live or persisted chat: one transcript + one composer (the D2
-            // source-of-truth rule selects launcher.events vs persisted rows).
+            // Live, persisted, or draft (.newChat) chat: one transcript + one
+            // composer (the D2 source-of-truth rule selects launcher.events vs
+            // persisted rows). The draft state shows the empty-transcript
+            // placeholder + composer at the bottom (no centered "Ask X" page).
             chatSurface
         }
     }
@@ -312,31 +313,6 @@ struct ChatView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
 
-    private var emptyState: some View {
-        VStack(spacing: ChatMetrics.emptyStateSpacing) {
-            if showsEditingEnabledBanner {
-                editingEnabledBanner
-                    .padding(.top, bannerTopReservation)
-            }
-            Spacer(minLength: 0)
-            Text("Ask \(activeWikiName)")
-                .font(.largeTitle)
-                .fontWeight(.regular)
-                .multilineTextAlignment(.center)
-            VStack(spacing: 4) {
-                composer(enabled: isComposerEnabled)
-                if let caption = composerCaption {
-                    Text(caption)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, ChatMetrics.emptyStateHorizontalInset)
-        .padding(.bottom, ChatMetrics.emptyStateBottomBias)
-    }
-
     /// The composer, placed once as a VStack sibling below the transcript (the
     /// live placement). For a persisted (non-live) chat it also carries the
     /// "another chat is responding" caption when the kind's launcher is busy.
@@ -348,7 +324,37 @@ struct ChatView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
+            providerSelectorBar
         }
+    }
+
+    /// The leading-aligned provider selector under the text box (paseo-style
+    /// trigger bar). Shown on every composer surface (draft + live + persisted
+    /// continue). Hidden when no wiki is active (no provider context). The
+    /// selector itself reads + mutates the persisted default via the launcher.
+    @ViewBuilder
+    private var providerSelectorBar: some View {
+        if manager.activeWikiID != nil {
+            HStack(spacing: 8) {
+                ProviderSelector(launcher: launcher)
+                permissionModePicker
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    /// Paseo-style permission-modes dropdown. Sits next to the model selector
+    /// under the composer. ACP-only (the CLI backend has no permission channel).
+    private var permissionModePicker: some View {
+        Picker("", selection: $permissionModeRaw) {
+            ForEach(PermissionPolicy.allCases, id: \.rawValue) { mode in
+                Text(mode.label).tag(mode.rawValue)
+            }
+        }
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .frame(width: 110)
+        .help(PermissionPolicy(rawValue: permissionModeRaw)?.help ?? "")
     }
 
     // MARK: - Persisted chat summary
@@ -420,20 +426,6 @@ struct ChatView: View {
                     Image(systemName: "sidebar.right")
                 }
                 .help("Toggle Outline")
-                // Slice 2: the always-ask / yolo toggle. Only meaningful when the
-                // ACP backend is on (the CLI backend has no permission channel),
-                // so it's hidden otherwise. The policy is baked into the ACP
-                // backend at session start, so the toggle applies to the next
-                // conversation (captioned). Default off (yolo).
-                if useACPBackend {
-                    Spacer(minLength: 12)
-                    Toggle("Always ask", isOn: $alwaysAsk)
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                        .help(alwaysAsk
-                              ? "Always ask: the agent pauses for your approval before each write."
-                              : "Yolo: writes apply automatically. Toggle to review each write.")
-                }
             }
         }
         .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
@@ -519,7 +511,8 @@ struct ChatView: View {
                 isEditable: enabled,
                 font: composerFont,
                 onSubmit: sendMessage,
-                measuredHeight: $composerHeight
+                measuredHeight: $composerHeight,
+                autoFocus: chatID == nil
             )
                 .frame(height: composerHeight)
                 .padding(.leading, ChatMetrics.composerHorizontalPadding)
@@ -613,13 +606,6 @@ struct ChatView: View {
 
     // MARK: - Derived state
 
-    private var activeWikiName: String {
-        guard let id = manager.activeWikiID,
-              let descriptor = manager.wikis.first(where: { $0.id == id })
-        else { return "this wiki" }
-        return descriptor.displayName
-    }
-
     /// Composer is enabled for the live chat AND for a persisted (non-live) chat
     /// whose kind's launcher is idle (D3: continue a persisted chat). A
     /// persisted chat whose launcher is mid-generation (a DIFFERENT chat
@@ -701,9 +687,6 @@ enum ChatMetrics {
     static let debugTopInset: CGFloat = 18
     static let controlsBandHeight: CGFloat = 28
     static let chatTopInset: CGFloat = 56
-    static let emptyStateHorizontalInset: CGFloat = 72
-    static let emptyStateSpacing: CGFloat = 28
-    static let emptyStateBottomBias: CGFloat = 96
     static let composerHorizontalPadding: CGFloat = 22
     static let composerVerticalPadding: CGFloat = 16
     static let composerButtonInset: CGFloat = 8

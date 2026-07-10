@@ -16,13 +16,13 @@ import ACPModel
     /// Default-OFF: the factory returns the Claude CLI backend (today's
     /// behavior, unchanged for existing users).
     @Test func factorySelectsClaudeCLIWhenOff() {
-        let backend = AgentBackendFactory.makeBackend(useACPBackend: false, policy: .yolo)
+        let backend = AgentBackendFactory.makeBackend(useACPBackend: false, policy: .bypass)
         #expect(backend is ClaudeCLIBackend)
     }
 
     /// Opt-in ON: the factory returns the ACP backend.
     @Test func factorySelectsACPWhenOn() {
-        let backend = AgentBackendFactory.makeBackend(useACPBackend: true, policy: .yolo)
+        let backend = AgentBackendFactory.makeBackend(useACPBackend: true, policy: .bypass)
         #expect(backend is ACPBackend)
     }
 
@@ -30,8 +30,8 @@ import ACPModel
     /// the launcher downcasts to surface pending requests); the CLI backend does
     /// NOT (it has no permission channel).
     @Test func acpBackendExposesPermissionCapability() {
-        let acp = AgentBackendFactory.makeBackend(useACPBackend: true, policy: .yolo)
-        let cli = AgentBackendFactory.makeBackend(useACPBackend: false, policy: .yolo)
+        let acp = AgentBackendFactory.makeBackend(useACPBackend: true, policy: .bypass)
+        let cli = AgentBackendFactory.makeBackend(useACPBackend: false, policy: .bypass)
         #expect(acp is PermissionResolving)
         #expect(!(cli is PermissionResolving))
     }
@@ -41,7 +41,7 @@ import ACPModel
     /// construction doesn't crash and yields an ACP backend for both policies
     /// (the policy's effect on the delegate is covered by `ACPBackendTests`).
     @Test func factoryThreadsBothPolicies() {
-        let yolo = AgentBackendFactory.makeBackend(useACPBackend: true, policy: .yolo)
+        let yolo = AgentBackendFactory.makeBackend(useACPBackend: true, policy: .bypass)
         let alwaysAsk = AgentBackendFactory.makeBackend(useACPBackend: true, policy: .alwaysAsk)
         #expect(yolo is ACPBackend)
         #expect(alwaysAsk is ACPBackend)

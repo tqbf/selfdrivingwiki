@@ -157,19 +157,142 @@ final class AgentLauncher {
         UserDefaults.standard.bool(forKey: AgentLauncher.useACPBackendKey)
     }
 
-    /// The chat's always-ask/yolo mode (`@AppStorage("agentAlwaysAsk")`, default
-    /// `false` = yolo). v1: app-wide persisted, default-OFF (no `chats`-table
-    /// schema migration). A future slice can persist it per-chat. Read at spawn
-    /// time so it bakes into the `ACPBackend`'s `PermissionPolicy`. Has NO effect
-    /// when the ACP backend is OFF (the CLI backend has no permission channel).
-    @ObservationIgnored var resolveAlwaysAsk: () -> Bool = {
-        UserDefaults.standard.bool(forKey: AgentLauncher.alwaysAskKey)
+    /// The chat's permission mode (`@AppStorage("agentPermissionMode")`, default
+    /// `.bypass`). v1: app-wide persisted. Read at spawn time so it bakes into
+    /// the `ACPBackend`'s `PermissionPolicy`. Has NO effect when the backend is
+    /// the CLI (no permission channel).
+    @ObservationIgnored var resolvePermissionMode: () -> PermissionPolicy = {
+        let raw = UserDefaults.standard.string(forKey: AgentLauncher.permissionModeKey) ?? ""
+        return PermissionPolicy(rawValue: raw) ?? .bypass
     }
 
     /// The Keychain-backed store for the ACP agent's API key (slice 3). Injectable
     /// so tests can substitute an in-memory store. Only read when `useACPBackend`
     /// is ON; the key NEVER touches UserDefaults or a plaintext file.
     @ObservationIgnored var acpCredentialStore: any ACPCredentialStore = KeychainACPCredentialStore()
+
+    /// Provider selection (#324): resolves the configured providers from
+    /// `agent-providers.json` (App Group container) and returns the provider the
+    /// launcher should use this session. Replaces the slice-3 `useACPBackend`
+    /// bool + single `ACPAgentConfig` with a provider list. **Default = Claude**
+    /// (`loadOrSeed` seeds Claude as default + enabled), so existing users see
+    /// zero behavior change. Read fresh at spawn time so Settings changes apply
+    /// on the next session. Injectable for tests.
+    @ObservationIgnored var resolveSelectedProvider: () -> AgentProvider = {
+        let dir = (try? DatabaseLocation.appGroupContainerDirectory())
+            ?? FileManager.default.temporaryDirectory
+        return AgentProvidersConfig.loadOrSeed(from: dir).selectedProvider()
+    }
+
+    /// The resolved App Group container directory the provider config is loaded
+    /// from + saved to. Same resolution `resolveSelectedProvider` uses: the
+    /// injected `containerDirectory` if set, else `DatabaseLocation`'s App
+    /// Group container at call time, else the temp directory (tests). Kept as a
+    /// function (not a stored URL) so a Settings change to the container path
+    /// takes effect without a restart, mirroring `resolveSelectedProvider`.
+    @ObservationIgnored var resolveProvidersContainerDirectory: () -> URL = {
+        (try? DatabaseLocation.appGroupContainerDirectory())
+            ?? FileManager.default.temporaryDirectory
+    }
+
+    /// Read the persisted provider config (loads + seeds on first run). The
+    /// composer's provider selector binds to this for the providers list + the
+    /// current default. Refreshed on demand (not @Observable state) so a fresh
+    /// selection — from Settings OR the composer — is visible next read.
+    /// `@MainActor` to match the rest of the launcher's observable surface.
+    func providersConfig() -> AgentProvidersConfig {
+        AgentProvidersConfig.loadOrSeed(from: resolveProvidersContainerDirectory())
+    }
+
+    /// Set + persist the default provider, then return the new config so the
+    /// caller (the composer selector) can update its bound state in one step.
+    /// Enforces the single-default invariant via `settingDefault(id:)`. The
+    /// next `resolveSelectedProvider()` call reads this, so the next chat
+    /// session uses the chosen provider with no launcher change.
+    @discardableResult
+    func setDefaultProvider(id: String) -> AgentProvidersConfig {
+        let dir = resolveProvidersContainerDirectory()
+        let updated = providersConfig().settingDefault(id: id)
+        try? updated.save(to: dir)
+        return updated
+    }
+
+    // MARK: - Per-provider model cache + selection (#329)
+
+    /// Persist `models` (captured from the agent's `session/new`) as provider
+    /// `providerId`'s cached model list. Secrets-free. Called by
+    /// `startInteractiveQuery` / `run` right after `backend.start` succeeds so
+    /// the model picker has the agent's advertised list on the next read.
+    /// `@MainActor`; no return — the picker reads the cache next load.
+    func cacheDiscoveredModels(_ models: [CachedModelInfo], forProvider providerId: String) {
+        guard !models.isEmpty else { return }
+        let dir = resolveProvidersContainerDirectory()
+        let updated = providersConfig().settingCachedModels(models, forProvider: providerId)
+        DebugLog.store("cacheDiscoveredModels: provider=\(providerId) count=\(models.count) → save") // TEMP DEBUG
+        try? updated.save(to: dir)
+    }
+
+    /// Set + persist the user's model selection for `providerId`, then return
+    /// the new config so the composer picker can update its bound state. A
+    /// nil/empty `modelId` clears the selection ("use the agent's default").
+    @discardableResult
+    func setSelectedModel(_ modelId: String?, forProvider providerId: String) -> AgentProvidersConfig {
+        let dir = resolveProvidersContainerDirectory()
+        let updated = providersConfig().settingSelectedModel(modelId, forProvider: providerId)
+        DebugLog.store("setSelectedModel: provider=\(providerId) modelId=\(modelId ?? "nil") → save") // TEMP DEBUG
+        try? updated.save(to: dir)
+        return updated
+    }
+
+    /// Atomically set the default provider AND a per-provider model selection
+    /// in ONE load→mutate→save cycle (no race between two separate writes).
+    /// This is the composer's "pick a model" path: choosing a model implies
+    /// choosing its provider (paseo's two-step), and both must land together.
+    /// Returns the post-write config for the selector's bound state.
+    @discardableResult
+    func setSelectedModelAndDefault(
+        _ modelId: String?, provider: AgentProvider
+    ) -> AgentProvidersConfig {
+        let dir = resolveProvidersContainerDirectory()
+        DebugLog.store("setSelectedModelAndDefault: provider=\(provider.id) modelId=\(modelId ?? "nil") → save") // TEMP DEBUG
+        let updated = providersConfig()
+            .settingDefault(id: provider.id)
+            .settingSelectedModel(modelId, forProvider: provider.id)
+        try? updated.save(to: dir)
+        return updated
+    }
+
+    /// The user's persisted model selection for `providerId` (nil = "use the
+    /// agent's default"). Read at spawn time so `ACPBackend.start` can call
+    /// `session/set_model`. PURE-ish (one config load); `@MainActor`.
+    func selectedModelId(forProvider providerId: String) -> String? {
+        providersConfig().selectedModelId(forProvider: providerId)
+    }
+
+    /// After a successful `backend.start`, if it was an ACP backend, read the
+    /// models it advertised and cache them per-provider for the picker. Cheap
+    /// (one actor hop + one secrets-free file write) and non-blocking: runs as
+    /// a detached `@MainActor` Task so it never delays the first turn.
+    func captureAndCacheModels(provider: AgentProvider, session: SessionHandle) {
+        guard provider.backend == .acp, let acp = backend as? ACPBackend else {
+            DebugLog.agent("captureAndCacheModels: skip (provider=\(provider.id) backend=\(provider.backend) not ACP)") // TEMP DEBUG
+            return
+        }
+        DebugLog.agent("captureAndCacheModels: enter provider=\(provider.id) session=\(session.id)") // TEMP DEBUG
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let models = await acp.availableModels(for: session)
+            guard !models.isEmpty else {
+                DebugLog.agent("captureAndCacheModels: no models discovered for provider=\(provider.id)") // TEMP DEBUG
+                return
+            }
+            let cached = models.map {
+                CachedModelInfo(modelId: $0.modelId, name: $0.name, description: $0.description)
+            }
+            DebugLog.agent("captureAndCacheModels: captured \(cached.count) model(s) for provider=\(provider.id) ids=\(cached.map(\.modelId))") // TEMP DEBUG
+            self.cacheDiscoveredModels(cached, forProvider: provider.id)
+        }
+    }
 
     /// The currently-pending write-permission requests surfaced from the backend
     /// (always-ask mode). When non-empty AND this surface is the live chat, the
@@ -188,7 +311,7 @@ final class AgentLauncher {
 
     /// UserDefaults keys shared with the `@AppStorage` bindings in Settings + ChatView.
     static let useACPBackendKey = "useACPBackend"
-    static let alwaysAskKey = "agentAlwaysAsk"
+    static let permissionModeKey = "agentPermissionMode"
     /// The active session handle (nil when no session is live). Replaces the
     /// old `process: Process?` — the launcher never touches a `Process` directly.
     @ObservationIgnored private var sessionHandle: SessionHandle?
@@ -238,6 +361,11 @@ final class AgentLauncher {
     /// Reset by `resetRunArtifacts()`. Only set on the fresh-chat path; the
     /// continue path (D3) leaves it false (no seeding for an existing chat).
     private var firstMessagePrePersisted = false
+    /// True when `startInteractiveQuery` has already appended the first
+    /// `.userText` to `events` (so the user sees their message immediately,
+    /// before the ~4s backend startup). `sendInteractiveMessage` consumes +
+    /// clears this to avoid a double-append.
+    private var firstMessagePreDisplayed = false
     /// Backstop poller that reconciles the UI if the process `terminationHandler`
     /// is ever missed (see `startCompletionWatchdog`). Cancelled on teardown.
     private var watchdogTask: Task<Void, Never>?
@@ -715,36 +843,47 @@ final class AgentLauncher {
         let dir = containerDirectory ?? (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
         let agentConfig = AgentCommandConfig.load(from: dir)
 
-        // Slice 2: select the backend per the opt-in pref + the chat's permission
+        // Slice 2/3: select the backend per the opt-in pref + the chat's permission
         // policy (default OFF = ClaudeCLI; default yolo). Constructed HERE so both
         // `start` and the per-turn stream consumer capture the same backend. The
         // ACP agent spawn (path + args + key) is threaded into providerHints below.
-        let useACP = resolveUseACPBackend()
-        let policy: PermissionPolicy = resolveAlwaysAsk() ? .alwaysAsk : .yolo
-        self.backend = AgentBackendFactory.makeBackend(useACPBackend: useACP, policy: policy)
+        let policy: PermissionPolicy = resolvePermissionMode()
 
-        // Slice 3: when ACP is on, load the DEDICATED ACP agent config (separate
-        // from the generic AgentCommandConfig) + the Keychain-backed API key.
-        let acpConfig = useACP ? ACPAgentConfig.load(from: dir) : nil
-        let acpAPIKey = useACP ? acpCredentialStore.apiKey() : nil
+        // #324: provider selection replaces the slice-3 `useACPBackend` bool +
+        // single `ACPAgentConfig`. The launcher reads `agent-providers.json`,
+        // picks the default (or selected) provider, and drives the matching
+        // backend. **Default = Claude (`claudeCLI`) → `ClaudeCLIBackend`**, so
+        // existing users see zero behavior change. A `.acp` provider resolves
+        // its PATH command + Keychain key into providerHints.
+        let provider = resolveSelectedProvider()
+        let useACP = provider.backend == .acp
+        self.backend = AgentBackendFactory.makeBackend(provider: provider, policy: policy)
 
-        // Resolve the executable we'll actually spawn. When ACP is on, that's the
-        // ACP agent's executable (e.g. "npx") — PATH-resolved because the
-        // swift-acp SDK's launch() does NOT do PATH lookup (a bare "npx" would
-        // fail with "doesn't exist"). The CLI `claude` is resolved only on the
-        // non-ACP path (ACP ignores the CLI profile), so an ACP-only setup need
-        // not have `claude` installed.
-        let resolvedPath: String
-        if useACP, let acpConfig {
-            switch PathPreflight.resolveOnLoginShell(executable: acpConfig.resolvedExecutable()) {
+        // ACP: resolve the provider's spawn command (PATH-resolved because the
+        // swift-acp SDK's launch() does NOT do PATH lookup) + the Keychain-backed
+        // API key (keyed by provider id). CLI: the provider has no command —
+        // `claude` is resolved below from `AgentCommandConfig`.
+        var resolvedACPCommand: [String] = []
+        var acpAPIKey: String?
+        if useACP, let command = provider.command, let exe = command.first {
+            switch PathPreflight.resolveOnLoginShell(executable: AgentCommandConfig.expandTilde(exe)) {
             case .found(let path):
-                resolvedPath = path
+                resolvedACPCommand = [path] + Array(command.dropFirst())
             case .missing(let reason):
                 preflightError = reason
                 isRunning = false
                 releaseGenerationSlot()
                 return
             }
+            acpAPIKey = acpCredentialStore.apiKey(forProvider: provider.id)
+        }
+
+        // Resolve the executable we'll actually spawn. For `.acp` providers the
+        // spawn command is already resolved above; for `.claudeCLI` we resolve
+        // `claude` from `AgentCommandConfig` (the CLI backend ignores providerHints).
+        let resolvedPath: String
+        if useACP, let exe = resolvedACPCommand.first {
+            resolvedPath = exe
         } else {
             switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
             case .found(let path):
@@ -823,12 +962,11 @@ final class AgentLauncher {
                 Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
             })
         let profile = BackendProfile(
-            providerHints: useACP && acpConfig != nil
-                ? AgentBackendFactory.acpProviderHints(
-                    resolvedExecutable: resolvedPath,
-                    prefixArguments: acpConfig?.prefixArguments ?? "",
-                    apiKey: acpAPIKey)
-                : [:],
+            providerHints: AgentBackendFactory.providerHints(
+                provider: provider,
+                resolvedCommand: resolvedACPCommand,
+                apiKey: acpAPIKey,
+                selectedModelId: providersConfig().selectedModelId(forProvider: provider.id)),
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: cli)
@@ -850,6 +988,9 @@ final class AgentLauncher {
                 })
             sessionHandle = session
             currentRunToken = runToken
+            // #329: cache the agent's advertised models per-provider for the
+            // picker (ACP only; the CLI backend has no model discovery).
+            captureAndCacheModels(provider: provider, session: session)
             startCompletionWatchdog()
 
             // Consume the per-turn stream in a background Task (fire-and-forget:
@@ -951,6 +1092,7 @@ final class AgentLauncher {
 
         // Preflight (no gate held — early returns here don't need gate release).
         resetRunArtifacts()
+        DebugLog.agent("startInteractiveQuery: enter firstMsg=\"\(firstMessage.prefix(80))\" chatID=\(chatID ?? "nil") wikiID=\(wikiID)") // TEMP DEBUG
         // Consumed by the first `sendInteractiveMessage` to skip re-persisting
         // the user message the model already seeded at chat creation.
         self.firstMessagePrePersisted = firstMessagePrePersisted
@@ -959,38 +1101,56 @@ final class AgentLauncher {
         let dir = containerDirectory ?? (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
         let agentConfig = AgentCommandConfig.load(from: dir)
 
-        // Slice 2: select the backend per the opt-in pref + the chat's permission
-        // policy (default OFF = ClaudeCLI; default yolo). The ACP agent spawn is
-        // threaded into providerHints below.
-        let useACP = resolveUseACPBackend()
-        let policy: PermissionPolicy = resolveAlwaysAsk() ? .alwaysAsk : .yolo
-        self.backend = AgentBackendFactory.makeBackend(useACPBackend: useACP, policy: policy)
+        // Slice 2/3: select the backend per the chat's permission policy (default
+        // yolo). The ACP agent spawn is threaded into providerHints below.
+        let policy: PermissionPolicy = resolvePermissionMode()
+        DebugLog.agent("startInteractiveQuery: permissionPolicy=\(policy)") // TEMP DEBUG
 
-        // Slice 3: when ACP is on, load the DEDICATED ACP agent config + the
-        // Keychain-backed API key (separate from the generic AgentCommandConfig).
-        let acpConfig = useACP ? ACPAgentConfig.load(from: dir) : nil
-        let acpAPIKey = useACP ? acpCredentialStore.apiKey() : nil
+        // #324: provider selection replaces the slice-3 `useACPBackend` bool +
+        // single `ACPAgentConfig`. **Default = Claude** → zero behavior change.
+        let provider = resolveSelectedProvider()
+        let useACP = provider.backend == .acp
+        let resolvedSelectedModel = providersConfig().selectedModelId(forProvider: provider.id)
+        DebugLog.agent("startInteractiveQuery: provider=\(provider.id) backend=\(provider.backend) useACP=\(useACP) selectedModel=\(resolvedSelectedModel ?? "nil")") // TEMP DEBUG
+        self.backend = AgentBackendFactory.makeBackend(provider: provider, policy: policy)
 
-        // Resolve the executable we'll actually spawn. When ACP is on, that's the
-        // ACP agent's executable (e.g. "npx") — PATH-resolved because the
-        // swift-acp SDK's launch() does NOT do PATH lookup (a bare "npx" would
-        // fail with "doesn't exist"). The CLI `claude` is resolved only on the
-        // non-ACP path (ACP ignores the CLI profile), so an ACP-only setup need
-        // not have `claude` installed.
-        let resolvedPath: String
-        if useACP, let acpConfig {
-            switch PathPreflight.resolveOnLoginShell(executable: acpConfig.resolvedExecutable()) {
-            case .found(let path):
-                resolvedPath = path
-            case .missing(let reason):
-                preflightError = reason
-                return
+        // ACP: resolve the provider's spawn command (PATH-resolved) + the
+        // Keychain-backed API key (keyed by provider id). CLI: no command.
+        var resolvedACPCommand: [String] = []
+        var acpAPIKey: String?
+        if useACP, let command = provider.command, let exe = command.first {
+            // For "bun", prefer the binary bundled in Contents/Helpers so the app
+            // works without a system-wide bun install. Fall back to PATH resolution.
+            if exe == "bun",
+               let bundled = Bundle.main.url(forAuxiliaryExecutable: "bun")?.path {
+                DebugLog.agent("startInteractiveQuery: using bundled bun at \(bundled)") // TEMP DEBUG
+                resolvedACPCommand = [bundled] + Array(command.dropFirst())
+            } else {
+                switch PathPreflight.resolveOnLoginShell(executable: AgentCommandConfig.expandTilde(exe)) {
+                case .found(let path):
+                    resolvedACPCommand = [path] + Array(command.dropFirst())
+                case .missing(let reason):
+                    DebugLog.agent("startInteractiveQuery: ACP exe missing — \(reason)") // TEMP DEBUG
+                    preflightError = reason
+                    return
+                }
             }
+            acpAPIKey = acpCredentialStore.apiKey(forProvider: provider.id)
+            DebugLog.agent("startInteractiveQuery: ACP apiKey set=\(acpAPIKey != nil)") // TEMP DEBUG
+        }
+
+        // Resolve the executable we'll actually spawn. For `.acp` providers the
+        // spawn command is already resolved above; for `.claudeCLI` we resolve
+        // `claude` from `AgentCommandConfig`.
+        let resolvedPath: String
+        if useACP, let exe = resolvedACPCommand.first {
+            resolvedPath = exe
         } else {
             switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
             case .found(let path):
                 resolvedPath = path
             case .missing(let reason):
+                DebugLog.agent("startInteractiveQuery: CLI exe missing — \(reason)") // TEMP DEBUG
                 preflightError = reason
                 return
             }
@@ -1051,6 +1211,16 @@ final class AgentLauncher {
         // persisted store. Set here (after resetRunArtifacts cleared any prior
         // value) so the flip is live from the first streamed token.
         activeChatID = chatID
+        // Pre-display the user's message so it appears instantly — don't make
+        // the user wait ~4s for backend.start (spawn + initialize + newSession)
+        // before seeing their own text. `sendInteractiveMessage` will skip its
+        // own append when `firstMessagePreDisplayed` is set.
+        let preDisplay = (firstMessageDisplay ?? firstMessage)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !preDisplay.isEmpty {
+            events.append(.userText(preDisplay))
+            firstMessagePreDisplayed = true
+        }
         // NOTE: do NOT `setGenerating(true)` here. The first turn's transition is
         // owned by `sendInteractiveMessage(firstMessage)` below (after the gate is
         // acquired). If we set it here, `sendInteractiveMessage`'s gate-guard would
@@ -1072,18 +1242,18 @@ final class AgentLauncher {
                 Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
             })
         let profile = BackendProfile(
-            providerHints: useACP && acpConfig != nil
-                ? AgentBackendFactory.acpProviderHints(
-                    resolvedExecutable: resolvedPath,
-                    prefixArguments: acpConfig?.prefixArguments ?? "",
-                    apiKey: acpAPIKey)
-                : [:],
+            providerHints: AgentBackendFactory.providerHints(
+                provider: provider,
+                resolvedCommand: resolvedACPCommand,
+                apiKey: acpAPIKey,
+                selectedModelId: providersConfig().selectedModelId(forProvider: provider.id)),
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: cli)
+        DebugLog.agent("startInteractiveQuery: profile built providerHints keys=\(profile.providerHints.keys.sorted()) scratch=\(scratch.lastPathComponent)") // TEMP DEBUG
 
         do {
-            DebugLog.agent("startInteractiveQuery: spawning exe=\(resolvedPath)")
+            DebugLog.agent("startInteractiveQuery: backend.start provider=\(provider.id) backend=\(provider.backend) exe=\(resolvedPath) args=\(provider.command ?? []) useACP=\(useACP)") // TEMP DEBUG (existed; re-tagged)
             let runToken = UUID()
             let session = try await backend.start(
                 profile: profile,
@@ -1104,7 +1274,13 @@ final class AgentLauncher {
             // SPAWN COMMIT: process is alive. isRunning = true (process alive across turns).
             isInteractiveSession = true
             isRunning = true
-            DebugLog.agent("startInteractiveQuery: spawned")
+            DebugLog.agent("startInteractiveQuery: spawn-commit session=\(session.id) isInteractive=true") // TEMP DEBUG
+            // #329: cache the agent's advertised models per-provider for the
+            // picker (ACP only; the CLI backend has no model discovery). Done
+            // here (after spawn commit) so the session record is populated; it
+            // runs as a detached task and never blocks the first turn.
+            captureAndCacheModels(provider: provider, session: session)
+            DebugLog.agent("startInteractiveQuery: spawned") // TEMP DEBUG (existed; re-tagged)
             // Start the first turn — this acquires the generation gate for turn 1.
             sendInteractiveMessage(firstMessage, displayText: firstMessageDisplay)
             // Mirror `run()`: arm the completion watchdog so a process that exits
@@ -1113,6 +1289,7 @@ final class AgentLauncher {
             // when the OS reports the process gone, so a live idle session is safe.
             startCompletionWatchdog()
         } catch {
+            DebugLog.agent("startInteractiveQuery: backend.start FAILED provider=\(provider.id): \(error)") // TEMP DEBUG (existed; re-tagged)
             preflightError = "Failed to launch claude: \(error.localizedDescription)"
             closeLogFiles()
             try? FileManager.default.removeItem(at: scratch)
@@ -1122,6 +1299,8 @@ final class AgentLauncher {
             currentProcessID = nil
             lastActivityAt = Date()
             releaseEditLock()
+            // Clean up the pre-displayed user text (backend never started).
+            firstMessagePreDisplayed = false
             // Cancel any queued send task (shouldn't exist yet, but guard for safety).
             interactiveSendTask?.cancel()
             interactiveSendTask = nil
@@ -1144,7 +1323,11 @@ final class AgentLauncher {
             isGenerating: isGenerating,
             isAwaitingGenerationSlot: isAwaitingGenerationSlot,
             message: trimmed
-        ) else { return }
+        ) else {
+            DebugLog.agent("sendInteractiveMessage: GUARD bail (isRunning=\(isRunning) isInteractive=\(isInteractiveSession) isGenerating=\(isGenerating) isAwaitingSlot=\(isAwaitingGenerationSlot) empty=\(trimmed.isEmpty)") // TEMP DEBUG
+            return
+        }
+        DebugLog.agent("sendInteractiveMessage: queuing turn chars=\(trimmed.count) displayChars=\((displayText ?? trimmed).count)") // TEMP DEBUG
 
         // Signal that we're waiting for the gate. The UI shows a hint; canSend = false.
         isAwaitingGenerationSlot = true
@@ -1157,12 +1340,14 @@ final class AgentLauncher {
         interactiveSendTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let ok = await self.awaitGenerationSlot()
+            DebugLog.agent("sendInteractiveMessage: gate acquire ok=\(ok)") // TEMP DEBUG
             self.isAwaitingGenerationSlot = false
             guard ok, !Task.isCancelled, self.isInteractiveSession,
                   let session else {
                 // Acquired the gate then bailed (cancelled or session ended) — give
                 // it back so a queued peer isn't stranded.
                 if ok { self.releaseGenerationSlot() }
+                DebugLog.agent("sendInteractiveMessage: bail after gate (cancelled=\(Task.isCancelled) isInteractive=\(self.isInteractiveSession) session=\(session != nil)") // TEMP DEBUG
                 return
             }
             // Display the user's message (or the displayText override — D3's
@@ -1170,7 +1355,13 @@ final class AgentLauncher {
             // actual message in the transcript). The full `trimmed` message
             // (preamble) is sent to the backend below.
             let visible = (displayText ?? trimmed).trimmingCharacters(in: .whitespacesAndNewlines)
-            self.events.append(.userText(visible))
+            if self.firstMessagePreDisplayed {
+                // Already appended by `startInteractiveQuery` before backend.start
+                // — skip the double-append but keep the persisted-count logic below.
+                self.firstMessagePreDisplayed = false
+            } else {
+                self.events.append(.userText(visible))
+            }
             // The fresh-chat path seeds this first user message at chat-creation
             // time (WikiStoreModel.startChat). Mark it flushed so the next
             // flushTranscript() doesn't double-insert it — the row already exists
@@ -1180,6 +1371,7 @@ final class AgentLauncher {
                 self.firstMessagePrePersisted = false
             }
             self.setGenerating(true)    // fires onTurnBoundary(true) → edit lock (Edit only)
+            DebugLog.agent("sendInteractiveMessage: turn start (setGenerating=true) → onTurnBoundary(true)") // TEMP DEBUG
             self.lastActivityAt = Date()
             // Send the turn and consume the per-turn stream. The backend writes
             // the NDJSON line to stdin; the stream finishes at `.messageStop`
@@ -1191,9 +1383,11 @@ final class AgentLauncher {
                 if AgentEvent.endsGeneration(event) {
                     self.setGenerating(false)
                     self.flushTranscript()
+                    DebugLog.agent("sendInteractiveMessage: turn end (endsGeneration) → onTurnBoundary(false) + flushTranscript") // TEMP DEBUG
                     if Self.releasesGenerationSlotPerTurn(
                         isInteractiveSession: self.isInteractiveSession) {
                         self.releaseGenerationSlot()
+                        DebugLog.agent("sendInteractiveMessage: generation slot released (interactive)") // TEMP DEBUG
                     }
                 }
             }
@@ -1401,10 +1595,10 @@ final class AgentLauncher {
     /// `stdoutLineBuffer` drain moved to the backend's terminationHandler).
     private func finish(status: Int32) {
         guard isRunning else {
-            DebugLog.agent("finish: ignored (already torn down) status=\(status)")
+            DebugLog.agent("finish: ignored (already torn down) status=\(status)") // TEMP DEBUG (existed; re-tagged)
             return
         }
-        DebugLog.agent("finish: status=\(status) events=\(events.count)")
+        DebugLog.agent("finish: status=\(status) events=\(events.count) activeChatID=\(activeChatID ?? "nil")") // TEMP DEBUG (existed; re-tagged + chatID)
         watchdogTask?.cancel()
         watchdogTask = nil
         // Session over: flush any remaining tail (a killed/died session still
@@ -1469,6 +1663,7 @@ final class AgentLauncher {
     /// touch `isRunning` — process lifetime is managed explicitly. Called right
     /// before staging/preflight at the top of each launch path.
     private func resetRunArtifacts() {
+        DebugLog.agent("resetRunArtifacts: clearing per-run artifacts (prior activeChatID=\(activeChatID ?? "nil"))") // TEMP DEBUG
         watchdogTask?.cancel()
         watchdogTask = nil
         events = []
@@ -1493,6 +1688,7 @@ final class AgentLauncher {
         transcriptSink = nil
         persistedEventCount = 0
         firstMessagePrePersisted = false
+        firstMessagePreDisplayed = false
         // D2: a stale active chat association must never survive into a new run.
         // (startInteractiveQuery sets the fresh value right after this reset.)
         activeChatID = nil

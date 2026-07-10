@@ -36,6 +36,10 @@ struct ComposerTextView: NSViewRepresentable {
     /// whenever the measured content height changes. The caller applies
     /// `.frame(height: measuredHeight)`.
     @Binding var measuredHeight: CGFloat
+    /// When true, the text view becomes first responder (keyboard focus) once
+    /// it's added to a window. Used by ChatView's draft state so the user can
+    /// start typing immediately after clicking "Add chat".
+    var autoFocus: Bool = false
 
     nonisolated static let accessibilityLabel = "Message"
     private let placeholderText = "Ask a question, or ask the Agent to update the wiki…"
@@ -146,6 +150,15 @@ struct ComposerTextView: NSViewRepresentable {
         context.coordinator.observeFrameChanges(for: textView)
 
         scrollView.documentView = textView
+
+        if autoFocus {
+            DispatchQueue.main.async { [weak scrollView] in
+                guard let scrollView,
+                      let tv = scrollView.documentView as? NSTextView,
+                      tv.window?.firstResponder !== tv else { return }
+                tv.window?.makeFirstResponder(tv)
+            }
+        }
         return scrollView
     }
 

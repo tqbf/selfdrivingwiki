@@ -213,6 +213,8 @@ struct WikiFSApp: App {
                     .tabItem { Label("Extraction", systemImage: "doc.viewfinder") }
                 AgentCommandSettingsView(containerDirectory: containerDirectory)
                     .tabItem { Label("Agent", systemImage: "terminal") }
+                AgentProvidersSettingsView(containerDirectory: containerDirectory)
+                    .tabItem { Label("Providers", systemImage: "cpu") }
             }
             .frame(width: 460, height: 460)
         }

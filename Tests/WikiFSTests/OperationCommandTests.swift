@@ -135,6 +135,93 @@ struct OperationCommandTests {
     }
   }
 
+  // MARK: - selectedModel --model override (#329 picker threading)
+
+  /// The picker's per-provider selection overrides the per-op alias when set.
+  /// This is the "override --model with the selected model when one is set" path.
+  @Test func selectedModelOverridesOpusAlias() {
+    let cmd = OperationCommand.build(
+      operation: Self.tinyIngest(),
+      wikiRoot: Self.resolvedRoot,
+      wikiID: "01WIKIULID",
+      systemPrompt: "You are the maintainer.",
+      scratchDirectory: "/tmp/scratch-xyz",
+      wikictlDirectory: "/Apps/Self Driving Wiki.app/Contents/Helpers",
+      resolvedExecutable: "/opt/homebrew/bin/claude",
+      baseEnvironment: ["PATH": "/usr/bin:/bin"],
+      selectedModel: "sonnet")
+    let modelIndex = cmd.arguments.firstIndex(of: "--model")!
+    #expect(cmd.arguments[modelIndex + 1] == "sonnet")
+  }
+
+  /// selectedModel takes precedence over the legacy Settings modelOverride.
+  @Test func selectedModelPrecedenceOverModelOverride() {
+    let cmd = OperationCommand.build(
+      operation: Self.tinyIngest(),
+      wikiRoot: Self.resolvedRoot,
+      wikiID: "01WIKIULID",
+      systemPrompt: "You are the maintainer.",
+      scratchDirectory: "/tmp/scratch-xyz",
+      wikictlDirectory: "/Apps/Self Driving Wiki.app/Contents/Helpers",
+      resolvedExecutable: "/opt/homebrew/bin/claude",
+      command: AgentCommandConfig(modelOverride: "haiku"),
+      baseEnvironment: ["PATH": "/usr/bin:/bin"],
+      selectedModel: "sonnet")
+    let modelIndex = cmd.arguments.firstIndex(of: "--model")!
+    // selectedModel wins over the Settings modelOverride.
+    #expect(cmd.arguments[modelIndex + 1] == "sonnet")
+  }
+
+  /// No selectedModel → the legacy modelOverride still applies (unchanged).
+  @Test func noSelectedModelFallsBackToModelOverride() {
+    let cmd = OperationCommand.build(
+      operation: Self.tinyIngest(),
+      wikiRoot: Self.resolvedRoot,
+      wikiID: "01WIKIULID",
+      systemPrompt: "You are the maintainer.",
+      scratchDirectory: "/tmp/scratch-xyz",
+      wikictlDirectory: "/Apps/Self Driving Wiki.app/Contents/Helpers",
+      resolvedExecutable: "/opt/homebrew/bin/claude",
+      command: AgentCommandConfig(modelOverride: "haiku"),
+      baseEnvironment: ["PATH": "/usr/bin:/bin"],
+      selectedModel: nil)
+    let modelIndex = cmd.arguments.firstIndex(of: "--model")!
+    #expect(cmd.arguments[modelIndex + 1] == "haiku")
+  }
+
+  /// No selectedModel AND no modelOverride → the per-op alias (opus). Default =
+  /// unchanged (zero behavior change for existing users).
+  @Test func noSelectionNoOverrideUsesOpusAlias() {
+    let cmd = OperationCommand.build(
+      operation: Self.tinyIngest(),
+      wikiRoot: Self.resolvedRoot,
+      wikiID: "01WIKIULID",
+      systemPrompt: "You are the maintainer.",
+      scratchDirectory: "/tmp/scratch-xyz",
+      wikictlDirectory: "/Apps/Self Driving Wiki.app/Contents/Helpers",
+      resolvedExecutable: "/opt/homebrew/bin/claude",
+      baseEnvironment: ["PATH": "/usr/bin:/bin"],
+      selectedModel: nil)
+    let modelIndex = cmd.arguments.firstIndex(of: "--model")!
+    #expect(cmd.arguments[modelIndex + 1] == "opus")
+  }
+
+  /// The interactive (chat) path threads selectedModel too.
+  @Test func interactiveQuerySelectedModelOverridesAlias() {
+    let cmd = OperationCommand.buildInteractiveQuery(
+      operation: .queryChat(stateFilePath: Self.stateFile),
+      wikiRoot: Self.resolvedRoot,
+      wikiID: "01WIKIULID",
+      systemPrompt: "You are the maintainer.",
+      scratchDirectory: "/tmp/scratch-xyz",
+      wikictlDirectory: "/Apps/Self Driving Wiki.app/Contents/Helpers",
+      resolvedExecutable: "/opt/homebrew/bin/claude",
+      baseEnvironment: ["PATH": "/usr/bin:/bin"],
+      selectedModel: "haiku")
+    let modelIndex = cmd.arguments.firstIndex(of: "--model")!
+    #expect(cmd.arguments[modelIndex + 1] == "haiku")
+  }
+
   @Test func interactiveQueryUsesStreamingInputAndNoPositionalPrompt() {
     let cmd = OperationCommand.buildInteractiveQuery(
       operation: .queryChat(stateFilePath: Self.stateFile),
