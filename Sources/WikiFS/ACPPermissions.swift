@@ -164,6 +164,18 @@ enum PermissionPolicy: String, Sendable, CaseIterable {
         case .plan: "Read-only: deny all writes and edits"
         }
     }
+
+    /// SF Symbol for the mode's composer chip + dropdown row. A shield motif
+    /// echoing paseo's permission menu (bolt = skip/fast, checkmark = safe/ask,
+    /// exclamation = auto-apply edits, half-shield = read-only plan).
+    var glyph: String {
+        switch self {
+        case .bypass: "bolt.shield"
+        case .alwaysAsk: "checkmark.shield"
+        case .acceptEdits: "exclamationmark.shield"
+        case .plan: "shield.lefthalf.filled"
+        }
+    }
 }
 
 /// A snapshot of a pending permission request (always-ask). The future chat UI

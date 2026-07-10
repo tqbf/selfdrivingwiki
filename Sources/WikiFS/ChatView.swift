@@ -337,60 +337,10 @@ struct ChatView: View {
         HStack(spacing: 10) {
             if manager.activeWikiID != nil {
                 ProviderSelector(launcher: launcher)
-                permissionModePicker
+                PermissionModeSelector(rawValue: $permissionModeRaw)
             }
             Spacer(minLength: 0)
             sendButton(active: sendActive)
-        }
-    }
-
-    /// Paseo-style permission-modes chip. Sits next to the model selector inside
-    /// the composer box's bottom toolbar. Styled to match `ProviderSelector`'s
-    /// trigger (glyph + `.caption` label + chevron) so the two read as sibling
-    /// chips. Shown for every backend (the screenshot confirms it appears for
-    /// Claude too); a restyle mustn't change that behavior.
-    private var permissionModePicker: some View {
-        Menu {
-            Picker("", selection: $permissionModeRaw) {
-                ForEach(PermissionPolicy.allCases, id: \.rawValue) { mode in
-                    Text(mode.label).tag(mode.rawValue)
-                }
-            }
-            .pickerStyle(.inline)
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: permissionGlyph)
-                    .foregroundStyle(.secondary)
-                Text(currentPermissionPolicy.label)
-                    .foregroundStyle(.secondary)
-                Image(systemName: "chevron.up.chevron.down")
-                    .imageScale(.small)
-                    .foregroundStyle(.tertiary)
-            }
-            .font(.caption)
-            .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help(currentPermissionPolicy.help)
-    }
-
-    /// The currently-selected permission policy (falls back to bypass — the
-    /// persisted default — if the raw value is somehow unknown).
-    private var currentPermissionPolicy: PermissionPolicy {
-        PermissionPolicy(rawValue: permissionModeRaw) ?? .bypass
-    }
-
-    /// SF Symbol for the permission chip, one per policy. Mirrors paseo's shield
-    /// glyph for the bypass/"YOLO" mode and picks intent-matching symbols for
-    /// the others.
-    private var permissionGlyph: String {
-        switch currentPermissionPolicy {
-        case .bypass: return "exclamationmark.shield"
-        case .alwaysAsk: return "hand.raised"
-        case .acceptEdits: return "checkmark.shield"
-        case .plan: return "eye"
         }
     }
 
