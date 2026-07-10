@@ -174,7 +174,8 @@ import ACPModel
         // Claude (ACP wrapper) is deliberately NOT in the catalog — Claude is
         // driven directly via ClaudeCLIBackend (claude -p), not over ACP.
         #expect(!ids.contains("claude-agent-acp"))
-        #expect(ids.contains("codex-acp"))
+        // codex-acp (npx wrapper) removed — the catalog is node-free (direct binaries only).
+        #expect(!ids.contains("codex-acp"))
     }
 
     @Test func claudeIsAbsent() {

@@ -98,14 +98,5 @@ public enum ACPProviderCatalog {
             summary: "The open source coding agent over ACP.",
             detectExecutable: "kilo",
             command: ["kilo", "acp"]),
-        // npx-backed wrappers: `detectExecutable` is `npx` (the binary on PATH),
-        // while `command` runs the published ACP package. The launcher
-        // PATH-resolves `npx` and passes the rest as argv.
-        KnownACPAgent(
-            id: "codex-acp",
-            label: "Codex (ACP)",
-            summary: "OpenAI Codex over the ACP adapter (npx wrapper).",
-            detectExecutable: "npx",
-            command: ["npx", "--yes", "@zed-industries/codex-acp"]),
     ]
 }
