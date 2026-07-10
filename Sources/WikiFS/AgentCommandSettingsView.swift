@@ -11,6 +11,11 @@ struct AgentCommandSettingsView: View {
     @State private var prefixArguments: String
     @State private var modelOverride: String
     @State private var extraEnvironment: String
+    /// Opt-in: use the ACP (Agent Client Protocol) backend instead of the Claude
+    /// CLI. Default OFF — preserves today's behavior exactly. ON launches the
+    /// configured agent (executable + prefix args) as an ACP agent over JSON-RPC,
+    /// enabling the structural always-ask/yolo write-permission gate.
+    @AppStorage(AgentLauncher.useACPBackendKey) private var useACPBackend = false
 
     let containerDirectory: URL
 
@@ -32,6 +37,26 @@ struct AgentCommandSettingsView: View {
                     TextField("Model override", text: $modelOverride, prompt: Text("default (per-op alias)"))
                 } header: {
                     Text("Command")
+                } footer: {
+                    if useACPBackend {
+                        Text("ACP backend is ON — the executable and prefix arguments above launch the ACP agent (e.g. executable `npx`, prefix arguments `--yes @agentclientprotocol/claude-agent-acp`).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("The Claude CLI command. When the ACP backend is on, these same fields launch the ACP agent instead.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section {
+                    Toggle("Use ACP backend", isOn: $useACPBackend)
+                } header: {
+                    Text("Backend")
+                } footer: {
+                    Text("Off (default): the Claude CLI backend — writes apply with no review. On: launch the agent over ACP, which adds a structural always-ask / yolo permission gate for writes. Requires a configured ACP agent above. Live approval is only possible with an agent that emits request_permission.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section {

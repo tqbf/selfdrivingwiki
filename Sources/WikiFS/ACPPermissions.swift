@@ -145,7 +145,14 @@ enum PermissionPolicy: Sendable {
 /// A snapshot of a pending permission request (always-ask). The future chat UI
 /// surfaces these as Approve/Reject affordances; `options` are the agent's
 /// offered choices (typically an `allow_*` and a `reject_*`).
-struct PendingPermission: Sendable {
+///
+/// `Equatable` by `toolCallId`: a pending request is identified by its tool-call
+/// id (the ACP permission gate keys on it), and the offered options don't change
+/// while a request is pending. This identity-based equality is what the
+/// launcher's snapshot diff (`snapshot != pendingPermissions`) relies on to
+/// avoid redundant view updates. (`PermissionOption` is not `Equatable`, so
+/// `==` cannot be synthesized — implemented explicitly instead.)
+struct PendingPermission: Sendable, Equatable {
     let toolCallId: String
     let title: String?
     let options: [PermissionOption]
@@ -154,6 +161,10 @@ struct PendingPermission: Sendable {
         self.toolCallId = toolCallId
         self.title = title
         self.options = options
+    }
+
+    static func == (lhs: PendingPermission, rhs: PendingPermission) -> Bool {
+        lhs.toolCallId == rhs.toolCallId
     }
 }
 
@@ -285,6 +296,29 @@ final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
                 PendingPermission(toolCallId: toolCallId, title: nil, options: pending.options)
             }
         }
+    }
+
+    /// Drain (drain-on-cancel): resume EVERY pending always-ask continuation as
+    /// `PermissionOutcome(cancelled: true)` and clear the pending map. Called from
+    /// `ACPBackend.cancel` when a session is torn down / the agent exits, so no
+    /// `CheckedContinuation` leaks (a leaked continuation warns/traps at task end).
+    ///
+    /// Safe to call with nothing pending (no-op) and idempotent (the map is cleared
+    /// under the lock before any continuation is resumed, so a concurrent
+    /// `resolve(optionId:)` races only against an already-emptied map). Returns
+    /// the number of continuations resumed (for tests).
+    @discardableResult
+    func cancelAllPending() -> Int {
+        let drained = lock.withLock { state -> [(options: [PermissionOption], continuation: CheckedContinuation<RequestPermissionResponse, Never>)] in
+            let pending = state.pending
+            state.pending.removeAll()
+            return pending.map { (toolCallId, value) in (value.options, value.continuation) }
+        }
+        for item in drained {
+            _ = item.options  // toolCallId is implicit; nothing else needed
+            item.continuation.resume(returning: RequestPermissionResponse(outcome: PermissionOutcome(cancelled: true)))
+        }
+        return drained.count
     }
 
     // MARK: - onExit binding (wired in ACPBackend.start)
