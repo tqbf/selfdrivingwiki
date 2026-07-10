@@ -2,6 +2,25 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-10 — #238: Surface a busy alert instead of a silent no-op for bookmark writes
+
+**Problem:** Bookmark mutations (`createFolder`/`addPageRef`/`addSourceRef`/
+`addChatRef`/`renameBookmarkNode`/`deleteBookmarkNode`/`moveBookmarkNode` in
+`WikiStoreModel`) caught store errors and only logged them via `DebugLog` —
+there was no `isAgentRunning`-style guard on bookmarks (they're a separate
+`bookmark_nodes` table, not wiki content, so gating them like page/source edits
+would be wrong). An ingest is a separate `wikictl` process; its long write
+transactions can outlast the store's 5s `busy_timeout` and make a concurrent
+bookmark write in the app process fail with "database is locked" — which
+previously looked exactly like a silent no-op in the UI.
+
+**Fix:** All six bookmark mutation catch blocks now route through
+`WikiStoreModel.reportBookmarkFailure`, which sets the existing
+`storeError` alert (already rendered in `ContentView` via `StoreErrorSheet`,
+the same mechanism used for delete/rename failures). SQLite busy/locked errors
+get a friendly "The wiki is busy… try again in a moment" message instead of
+the raw SQLite error text.
+
 ## 2026-07-09 — #279: Signal the bookmarks container on store events
 
 **Problem:** `FileProviderSpike.signalChange(forWikiID:)` had a hardcoded list

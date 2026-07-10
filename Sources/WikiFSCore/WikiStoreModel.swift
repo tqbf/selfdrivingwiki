@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SQLite3
 import UniformTypeIdentifiers
 
 /// Progress of the blocking search-index upgrade (see
@@ -2460,6 +2461,27 @@ public final class WikiStoreModel {
 
     // MARK: - Bookmark node mutations
 
+    /// Surface a bookmark-mutation failure via the shared `storeError` alert
+    /// (issue #238) instead of a silent no-op — the store's `NSRecursiveLock`
+    /// plus its 5s `busy_timeout` means a concurrent ingest holding a long
+    /// write transaction can make a bookmark write fail with "database is
+    /// locked" rather than merely queue behind it, and that failure was
+    /// previously only logged via `DebugLog`, with no UI feedback at all.
+    private func reportBookmarkFailure(_ action: String, _ error: Error) {
+        DebugLog.store("WikiStoreModel.\(action) failed: \(error)")
+        let isBusy: Bool
+        if case .sqlite(let code, _)? = error as? WikiStoreError, code == SQLITE_BUSY || code == SQLITE_LOCKED {
+            isBusy = true
+        } else {
+            isBusy = false
+        }
+        storeError = StoreError(
+            title: "Couldn't Update Bookmarks",
+            message: isBusy
+                ? "The wiki is busy — an ingest or agent run may be writing to it. Try again in a moment."
+                : "Could not update bookmarks: \(error.localizedDescription)")
+    }
+
     /// Create a folder at root or inside another folder. Returns the new node id,
     /// or `nil` on failure.
     @discardableResult
@@ -2473,7 +2495,7 @@ public final class WikiStoreModel {
             reloadBookmarkNodes()
             return node.id
         } catch {
-            DebugLog.store("WikiStoreModel.createFolder failed: \(error)")
+            reportBookmarkFailure("createFolder", error)
             return nil
         }
     }
@@ -2491,7 +2513,7 @@ public final class WikiStoreModel {
             let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
             DebugLog.tabs("addPageRef: done in \(String(format: "%.1f", ms)) ms")
         } catch {
-            DebugLog.store("WikiStoreModel.addPageRef failed: \(error)")
+            reportBookmarkFailure("addPageRef", error)
         }
     }
 
@@ -2505,7 +2527,7 @@ public final class WikiStoreModel {
                 label: nil, targetID: sourceID)
             reloadBookmarkNodes()
         } catch {
-            DebugLog.store("WikiStoreModel.addSourceRef failed: \(error)")
+            reportBookmarkFailure("addSourceRef", error)
         }
     }
 
@@ -2519,7 +2541,7 @@ public final class WikiStoreModel {
                 label: nil, targetID: chatID)
             reloadBookmarkNodes()
         } catch {
-            DebugLog.store("WikiStoreModel.addChatRef failed: \(error)")
+            reportBookmarkFailure("addChatRef", error)
         }
     }
 
@@ -2529,7 +2551,7 @@ public final class WikiStoreModel {
             try store.updateBookmarkNode(id: id, label: label)
             reloadBookmarkNodes()
         } catch {
-            DebugLog.store("WikiStoreModel.renameBookmarkNode failed: \(error)")
+            reportBookmarkFailure("renameBookmarkNode", error)
         }
     }
 
@@ -2539,7 +2561,7 @@ public final class WikiStoreModel {
             try store.deleteBookmarkNode(id: id)
             reloadBookmarkNodes()
         } catch {
-            DebugLog.store("WikiStoreModel.deleteBookmarkNode failed: \(error)")
+            reportBookmarkFailure("deleteBookmarkNode", error)
         }
     }
 
@@ -2552,7 +2574,7 @@ public final class WikiStoreModel {
             reloadBookmarkNodes()
             return true
         } catch {
-            DebugLog.store("WikiStoreModel.moveBookmarkNode failed: \(error)")
+            reportBookmarkFailure("moveBookmarkNode", error)
             return false
         }
     }
