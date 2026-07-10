@@ -171,6 +171,19 @@ final class AgentLauncher {
     /// is ON; the key NEVER touches UserDefaults or a plaintext file.
     @ObservationIgnored var acpCredentialStore: any ACPCredentialStore = KeychainACPCredentialStore()
 
+    /// Provider selection (#324): resolves the configured providers from
+    /// `agent-providers.json` (App Group container) and returns the provider the
+    /// launcher should use this session. Replaces the slice-3 `useACPBackend`
+    /// bool + single `ACPAgentConfig` with a provider list. **Default = Claude**
+    /// (`loadOrSeed` seeds Claude as default + enabled), so existing users see
+    /// zero behavior change. Read fresh at spawn time so Settings changes apply
+    /// on the next session. Injectable for tests.
+    @ObservationIgnored var resolveSelectedProvider: () -> AgentProvider = {
+        let dir = (try? DatabaseLocation.appGroupContainerDirectory())
+            ?? FileManager.default.temporaryDirectory
+        return AgentProvidersConfig.loadOrSeed(from: dir).selectedProvider()
+    }
+
     /// The currently-pending write-permission requests surfaced from the backend
     /// (always-ask mode). When non-empty AND this surface is the live chat, the
     /// UI renders an inline Approve/Reject affordance (slice 2). Mirrors how
@@ -715,36 +728,47 @@ final class AgentLauncher {
         let dir = containerDirectory ?? (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
         let agentConfig = AgentCommandConfig.load(from: dir)
 
-        // Slice 2: select the backend per the opt-in pref + the chat's permission
+        // Slice 2/3: select the backend per the opt-in pref + the chat's permission
         // policy (default OFF = ClaudeCLI; default yolo). Constructed HERE so both
         // `start` and the per-turn stream consumer capture the same backend. The
         // ACP agent spawn (path + args + key) is threaded into providerHints below.
-        let useACP = resolveUseACPBackend()
         let policy: PermissionPolicy = resolveAlwaysAsk() ? .alwaysAsk : .yolo
-        self.backend = AgentBackendFactory.makeBackend(useACPBackend: useACP, policy: policy)
 
-        // Slice 3: when ACP is on, load the DEDICATED ACP agent config (separate
-        // from the generic AgentCommandConfig) + the Keychain-backed API key.
-        let acpConfig = useACP ? ACPAgentConfig.load(from: dir) : nil
-        let acpAPIKey = useACP ? acpCredentialStore.apiKey() : nil
+        // #324: provider selection replaces the slice-3 `useACPBackend` bool +
+        // single `ACPAgentConfig`. The launcher reads `agent-providers.json`,
+        // picks the default (or selected) provider, and drives the matching
+        // backend. **Default = Claude (`claudeCLI`) → `ClaudeCLIBackend`**, so
+        // existing users see zero behavior change. A `.acp` provider resolves
+        // its PATH command + Keychain key into providerHints.
+        let provider = resolveSelectedProvider()
+        let useACP = provider.backend == .acp
+        self.backend = AgentBackendFactory.makeBackend(provider: provider, policy: policy)
 
-        // Resolve the executable we'll actually spawn. When ACP is on, that's the
-        // ACP agent's executable (e.g. "npx") — PATH-resolved because the
-        // swift-acp SDK's launch() does NOT do PATH lookup (a bare "npx" would
-        // fail with "doesn't exist"). The CLI `claude` is resolved only on the
-        // non-ACP path (ACP ignores the CLI profile), so an ACP-only setup need
-        // not have `claude` installed.
-        let resolvedPath: String
-        if useACP, let acpConfig {
-            switch PathPreflight.resolveOnLoginShell(executable: acpConfig.resolvedExecutable()) {
+        // ACP: resolve the provider's spawn command (PATH-resolved because the
+        // swift-acp SDK's launch() does NOT do PATH lookup) + the Keychain-backed
+        // API key (keyed by provider id). CLI: the provider has no command —
+        // `claude` is resolved below from `AgentCommandConfig`.
+        var resolvedACPCommand: [String] = []
+        var acpAPIKey: String?
+        if useACP, let command = provider.command, let exe = command.first {
+            switch PathPreflight.resolveOnLoginShell(executable: AgentCommandConfig.expandTilde(exe)) {
             case .found(let path):
-                resolvedPath = path
+                resolvedACPCommand = [path] + Array(command.dropFirst())
             case .missing(let reason):
                 preflightError = reason
                 isRunning = false
                 releaseGenerationSlot()
                 return
             }
+            acpAPIKey = acpCredentialStore.apiKey(forProvider: provider.id)
+        }
+
+        // Resolve the executable we'll actually spawn. For `.acp` providers the
+        // spawn command is already resolved above; for `.claudeCLI` we resolve
+        // `claude` from `AgentCommandConfig` (the CLI backend ignores providerHints).
+        let resolvedPath: String
+        if useACP, let exe = resolvedACPCommand.first {
+            resolvedPath = exe
         } else {
             switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
             case .found(let path):
@@ -823,12 +847,10 @@ final class AgentLauncher {
                 Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
             })
         let profile = BackendProfile(
-            providerHints: useACP && acpConfig != nil
-                ? AgentBackendFactory.acpProviderHints(
-                    resolvedExecutable: resolvedPath,
-                    prefixArguments: acpConfig?.prefixArguments ?? "",
-                    apiKey: acpAPIKey)
-                : [:],
+            providerHints: AgentBackendFactory.providerHints(
+                provider: provider,
+                resolvedCommand: resolvedACPCommand,
+                apiKey: acpAPIKey),
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: cli)
@@ -959,33 +981,37 @@ final class AgentLauncher {
         let dir = containerDirectory ?? (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
         let agentConfig = AgentCommandConfig.load(from: dir)
 
-        // Slice 2: select the backend per the opt-in pref + the chat's permission
-        // policy (default OFF = ClaudeCLI; default yolo). The ACP agent spawn is
-        // threaded into providerHints below.
-        let useACP = resolveUseACPBackend()
+        // Slice 2/3: select the backend per the chat's permission policy (default
+        // yolo). The ACP agent spawn is threaded into providerHints below.
         let policy: PermissionPolicy = resolveAlwaysAsk() ? .alwaysAsk : .yolo
-        self.backend = AgentBackendFactory.makeBackend(useACPBackend: useACP, policy: policy)
 
-        // Slice 3: when ACP is on, load the DEDICATED ACP agent config + the
-        // Keychain-backed API key (separate from the generic AgentCommandConfig).
-        let acpConfig = useACP ? ACPAgentConfig.load(from: dir) : nil
-        let acpAPIKey = useACP ? acpCredentialStore.apiKey() : nil
+        // #324: provider selection replaces the slice-3 `useACPBackend` bool +
+        // single `ACPAgentConfig`. **Default = Claude** → zero behavior change.
+        let provider = resolveSelectedProvider()
+        let useACP = provider.backend == .acp
+        self.backend = AgentBackendFactory.makeBackend(provider: provider, policy: policy)
 
-        // Resolve the executable we'll actually spawn. When ACP is on, that's the
-        // ACP agent's executable (e.g. "npx") — PATH-resolved because the
-        // swift-acp SDK's launch() does NOT do PATH lookup (a bare "npx" would
-        // fail with "doesn't exist"). The CLI `claude` is resolved only on the
-        // non-ACP path (ACP ignores the CLI profile), so an ACP-only setup need
-        // not have `claude` installed.
-        let resolvedPath: String
-        if useACP, let acpConfig {
-            switch PathPreflight.resolveOnLoginShell(executable: acpConfig.resolvedExecutable()) {
+        // ACP: resolve the provider's spawn command (PATH-resolved) + the
+        // Keychain-backed API key (keyed by provider id). CLI: no command.
+        var resolvedACPCommand: [String] = []
+        var acpAPIKey: String?
+        if useACP, let command = provider.command, let exe = command.first {
+            switch PathPreflight.resolveOnLoginShell(executable: AgentCommandConfig.expandTilde(exe)) {
             case .found(let path):
-                resolvedPath = path
+                resolvedACPCommand = [path] + Array(command.dropFirst())
             case .missing(let reason):
                 preflightError = reason
                 return
             }
+            acpAPIKey = acpCredentialStore.apiKey(forProvider: provider.id)
+        }
+
+        // Resolve the executable we'll actually spawn. For `.acp` providers the
+        // spawn command is already resolved above; for `.claudeCLI` we resolve
+        // `claude` from `AgentCommandConfig`.
+        let resolvedPath: String
+        if useACP, let exe = resolvedACPCommand.first {
+            resolvedPath = exe
         } else {
             switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
             case .found(let path):
@@ -1072,12 +1098,10 @@ final class AgentLauncher {
                 Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
             })
         let profile = BackendProfile(
-            providerHints: useACP && acpConfig != nil
-                ? AgentBackendFactory.acpProviderHints(
-                    resolvedExecutable: resolvedPath,
-                    prefixArguments: acpConfig?.prefixArguments ?? "",
-                    apiKey: acpAPIKey)
-                : [:],
+            providerHints: AgentBackendFactory.providerHints(
+                provider: provider,
+                resolvedCommand: resolvedACPCommand,
+                apiKey: acpAPIKey),
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: cli)

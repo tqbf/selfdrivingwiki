@@ -14,6 +14,23 @@ public protocol ACPCredentialStore: Sendable {
     func apiKey() -> String?
     /// Pass `nil` (or an empty string) to delete the stored value.
     func setAPIKey(_ value: String?) throws
+
+    /// Per-provider API key, keyed by provider id (#324). Default implementation
+    /// falls back to the single-key store so existing conformers are unchanged;
+    /// the Keychain-backed store namespaces by account suffix.
+    func apiKey(forProvider id: String) -> String?
+    /// Per-provider write. Pass `nil`/empty to delete.
+    func setAPIKey(_ value: String?, forProvider id: String) throws
+}
+
+extension ACPCredentialStore {
+    /// Default: a per-provider lookup degrades to the shared single key, so any
+    /// existing conformer keeps working (the launcher only reads a per-provider
+    /// key for `.acp` providers, and the single-key store is the legacy seam).
+    public func apiKey(forProvider id: String) -> String? { apiKey() }
+    public func setAPIKey(_ value: String?, forProvider id: String) throws {
+        try setAPIKey(value)
+    }
 }
 
 /// Errors from the Keychain-backed store, with the raw `OSStatus` for debugging.
@@ -27,9 +44,11 @@ public struct ACPKeychainError: Error, Equatable {
     }
 }
 
-/// The production `ACPCredentialStore`: one generic-password Keychain item under
-/// a shared `service` + account. `WikiFS.entitlements` has no App Sandbox, so
-/// this needs no keychain-access-group entitlement — same un-sandboxed access
+/// The production `ACPCredentialStore`: generic-password Keychain items under
+/// a shared `service` + account. The legacy single-key API uses a fixed account;
+/// the per-provider API (#324) namespaces by provider id so each ACP provider
+/// keeps its own secret. `WikiFS.entitlements` has no App Sandbox, so this needs
+/// no keychain-access-group entitlement — same un-sandboxed access
 /// `KeychainExtractionCredentialStore` already relies on.
 public struct KeychainACPCredentialStore: ACPCredentialStore {
     private static let service = "org.sockpuppet.WikiFS.acp"
@@ -38,10 +57,35 @@ public struct KeychainACPCredentialStore: ACPCredentialStore {
     public init() {}
 
     public func apiKey() -> String? {
+        Self.read(account: Self.account)
+    }
+
+    public func setAPIKey(_ value: String?) throws {
+        try Self.write(account: Self.account, value: value)
+    }
+
+    // MARK: - Per-provider (#324)
+
+    public func apiKey(forProvider id: String) -> String? {
+        Self.read(account: Self.providerAccount(id))
+    }
+
+    public func setAPIKey(_ value: String?, forProvider id: String) throws {
+        try Self.write(account: Self.providerAccount(id), value: value)
+    }
+
+    /// Namespace a per-provider account so each provider's key is isolated.
+    private static func providerAccount(_ id: String) -> String {
+        "acp-provider:\(id)"
+    }
+
+    // MARK: - Shared Keychain helpers
+
+    private static func read(account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
-            kSecAttrAccount as String: Self.account,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
@@ -51,17 +95,17 @@ public struct KeychainACPCredentialStore: ACPCredentialStore {
         return String(data: data, encoding: .utf8)
     }
 
-    public func setAPIKey(_ value: String?) throws {
+    private static func write(account: String, value: String?) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
-            kSecAttrAccount as String: Self.account,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
         ]
 
         guard let value, !value.isEmpty else {
             let status = SecItemDelete(query as CFDictionary)
             guard status == errSecSuccess || status == errSecItemNotFound else {
-                throw ACPKeychainError(operation: "delete(\(Self.account))", status: status)
+                throw ACPKeychainError(operation: "delete(\(account))", status: status)
             }
             return
         }
@@ -76,37 +120,58 @@ public struct KeychainACPCredentialStore: ACPCredentialStore {
             addQuery[kSecValueData as String] = data
             let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
             guard addStatus == errSecSuccess else {
-                throw ACPKeychainError(operation: "add(\(Self.account))", status: addStatus)
+                throw ACPKeychainError(operation: "add(\(account))", status: addStatus)
             }
         } else if updateStatus != errSecSuccess {
-            throw ACPKeychainError(operation: "update(\(Self.account))", status: updateStatus)
+            throw ACPKeychainError(operation: "update(\(account))", status: updateStatus)
         }
     }
 }
 
 /// In-memory test double — mirrors `InMemoryExtractionCredentialStore`'s
-/// `@unchecked Sendable` shape. NOT for production use.
+/// `@unchecked Sendable` shape. NOT for production use. Per-provider keys are
+/// isolated in a map; the legacy single-key API reads/writes the `"claude"` slot
+/// so it stays consistent with the production store's fixed account.
 public final class InMemoryACPCredentialStore: ACPCredentialStore, @unchecked Sendable {
-    private var value: String?
+    private static let legacyKey = "__legacy__"
+    private var values: [String: String] = [:]
     private let lock = NSLock()
 
     public init() {}
 
     public init(seed: String?) {
-        self.value = seed
+        if let seed, !seed.isEmpty {
+            values[Self.legacyKey] = seed
+        }
     }
 
     public func apiKey() -> String? {
         lock.lock(); defer { lock.unlock() }
-        return value
+        return values[Self.legacyKey]
     }
 
     public func setAPIKey(_ value: String?) throws {
         lock.lock(); defer { lock.unlock() }
         if let value, !value.isEmpty {
-            self.value = value
+            values[Self.legacyKey] = value
         } else {
-            self.value = nil
+            values.removeValue(forKey: Self.legacyKey)
+        }
+    }
+
+    // MARK: - Per-provider (#324)
+
+    public func apiKey(forProvider id: String) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return values[id]
+    }
+
+    public func setAPIKey(_ value: String?, forProvider id: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        if let value, !value.isEmpty {
+            values[id] = value
+        } else {
+            values.removeValue(forKey: id)
         }
     }
 }
