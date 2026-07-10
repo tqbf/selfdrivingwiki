@@ -262,29 +262,10 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
 
     // MARK: - Seed (pure)
 
-    /// Seed the initial config from discovered ACP agents. PURE: no filesystem,
-    /// no discovery side effects — callers pass the discovered set in. Used both
-    /// by `loadOrSeed` (with a real discovery) and by unit tests (with a stub).
-    ///
-    /// `claude-acp` (Claude via the ACP wrapper) is ALWAYS first + default +
-    /// enabled. The legacy `claude` CLI provider is included but DISABLED (the
-    /// `-p` system is superseded by ACP). Each discovered agent becomes an
-    /// enabled-but-not-default ACP provider.
+    /// Seed the initial config. Only `claude-acp` (Claude via the ACP wrapper)
+    /// is included — the sole supported provider.
     public static func seed(discovered: [DiscoveredACPAgent]) -> AgentProvidersConfig {
-        var providers: [AgentProvider] = [.claudeAcpDefault]
-        // Include the legacy CLI provider, disabled.
-        var legacy = AgentProvider.claudeDefault
-        legacy.enabled = false
-        legacy.isDefault = false
-        providers.append(legacy)
-        // De-dup discovered agents by id (discovery can't return dupes today, but
-        // be defensive against a future catalog edit). Skip claude-acp/claude
-        // (already seeded above).
-        var seen = Set(["claude-acp", "claude"])
-        for d in discovered where seen.insert(d.agent.id).inserted {
-            providers.append(.acp(from: d.agent))
-        }
-        return AgentProvidersConfig(providers: providers)
+        AgentProvidersConfig(providers: [.claudeAcpDefault])
     }
 
     // MARK: - Persistence

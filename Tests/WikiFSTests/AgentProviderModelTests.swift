@@ -17,74 +17,28 @@ import ACPModel
 
     @Test func seedAlwaysLeadsWithClaudeAcpDefault() {
         let config = AgentProvidersConfig.seed(discovered: [])
-        // claude-acp (the ACP wrapper) leads + is default + enabled.
+        // Only claude-acp is seeded — the sole supported provider.
+        #expect(config.providers.count == 1)
         #expect(config.providers.first?.id == "claude-acp")
         #expect(config.providers.first?.backend == .acp)
         #expect(config.providers.first?.isDefault == true)
         #expect(config.providers.first?.enabled == true)
-        // The legacy `claude -p` CLI provider is seeded alongside, but disabled.
-        let legacy = config.providers.first(where: { $0.id == "claude" })
-        #expect(legacy?.backend == .claudeCLI)
-        #expect(legacy?.enabled == false)
-        #expect(legacy?.isDefault == false)
     }
 
     @Test func seedInjectsClaudeHardcodedModels() {
-        // Both Claude providers (the ACP wrapper `claude-acp` and the legacy
-        // `claude` CLI) use the hardcoded alias set (opus/sonnet/haiku) — neither
-        // has ACP model discovery, so they're seeded so the picker has rows.
         let config = AgentProvidersConfig.seed(discovered: [])
         #expect(config.cachedModels(forProvider: "claude-acp").map(\.modelId) == ["opus", "sonnet", "haiku"])
-        #expect(config.cachedModels(forProvider: "claude").map(\.modelId) == ["opus", "sonnet", "haiku"])
-        // Discovered ACP agents have no cached models yet (discovered on first chat).
-        let discovered = [
-            DiscoveredACPAgent(agent: KnownACPAgent(id: "hermes", label: "Hermes", summary: "", detectExecutable: "hermes", command: ["hermes", "acp"]), resolvedPath: "/x"),
-        ]
-        let seeded = AgentProvidersConfig.seed(discovered: discovered)
-        #expect(seeded.cachedModels(forProvider: "hermes") == [])
-        #expect(seeded.cachedModels(forProvider: "claude-acp").map(\.modelId) == ["opus", "sonnet", "haiku"])
-        #expect(seeded.cachedModels(forProvider: "claude").map(\.modelId) == ["opus", "sonnet", "haiku"])
     }
 
-    @Test func seedAppendsDiscoveredACPAgentsNotDefault() {
+    @Test func seedIgnoresDiscoveredAgents() {
+        // The seed only includes claude-acp — discovered agents are ignored.
         let discovered = [
             DiscoveredACPAgent(agent: KnownACPAgent(id: "gemini", label: "Gemini CLI", summary: "", detectExecutable: "gemini", command: ["gemini", "--acp"]), resolvedPath: "/usr/local/bin/gemini"),
             DiscoveredACPAgent(agent: KnownACPAgent(id: "hermes", label: "Hermes", summary: "", detectExecutable: "hermes", command: ["hermes", "acp"]), resolvedPath: "/usr/local/bin/hermes"),
         ]
         let config = AgentProvidersConfig.seed(discovered: discovered)
-        // claude-acp (default) + claude (legacy, disabled) + gemini + hermes.
-        #expect(config.providers.count == 4)
-        let acp = config.providers.filter { $0.backend == .acp }
-        #expect(acp.map(\.id).sorted() == ["claude-acp", "gemini", "hermes"])
-        // claude-acp is the default; discovered ACP providers are enabled but NOT default.
-        #expect(acp.first(where: { $0.id == "claude-acp" })?.isDefault == true)
-        let discoveredProviders = acp.filter { ["gemini", "hermes"].contains($0.id) }
-        #expect(discoveredProviders.allSatisfy { !$0.isDefault })
-        #expect(discoveredProviders.allSatisfy { $0.enabled })
-        // Their command carries over from the catalog agent.
-        #expect(acp.first(where: { $0.id == "gemini" })?.command == ["gemini", "--acp"])
-    }
-
-    @Test func seedDedupsDiscoveredById() {
-        let agent = KnownACPAgent(id: "gemini", label: "Gemini CLI", summary: "", detectExecutable: "gemini", command: ["gemini", "--acp"])
-        let discovered = [
-            DiscoveredACPAgent(agent: agent, resolvedPath: "/a/gemini"),
-            DiscoveredACPAgent(agent: agent, resolvedPath: "/b/gemini"),
-        ]
-        let config = AgentProvidersConfig.seed(discovered: discovered)
-        #expect(config.providers.filter { $0.id == "gemini" }.count == 1)
-    }
-
-    @Test func seedNeverDuplicatesClaude() {
-        // A discovered agent named "claude" must not collide with the built-in.
-        let discovered = [
-            DiscoveredACPAgent(agent: KnownACPAgent(id: "claude", label: "Fake Claude", summary: "", detectExecutable: "claude", command: ["claude"]), resolvedPath: "/x"),
-        ]
-        let config = AgentProvidersConfig.seed(discovered: discovered)
-        #expect(config.providers.filter { $0.id == "claude" }.count == 1)
-        // claude-acp leads the seed; the legacy `claude` built-in is present once (not a dup).
+        #expect(config.providers.count == 1)
         #expect(config.providers.first?.id == "claude-acp")
-        #expect(config.providers.first?.backend == .acp)
     }
 
     // MARK: - Normalization (single-default invariant)
@@ -183,7 +137,7 @@ import ACPModel
         #expect(FileManager.default.fileExists(atPath: url.path))
     }
 
-    @Test func loadOrSeedUsesDiscovered() {
+    @Test func loadOrSeedSeedsOnlyClaudeAcp() {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("agent-providers-disc-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -193,7 +147,9 @@ import ACPModel
             DiscoveredACPAgent(agent: KnownACPAgent(id: "gemini", label: "Gemini CLI", summary: "", detectExecutable: "gemini", command: ["gemini", "--acp"]), resolvedPath: "/x"),
         ]
         let config = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { discovered })
-        #expect(config.providers.contains(where: { $0.id == "gemini" }))
+        // Only claude-acp is seeded — discovered agents are ignored.
+        #expect(config.providers.count == 1)
+        #expect(config.providers.first?.id == "claude-acp")
     }
 }
 
