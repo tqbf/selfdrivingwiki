@@ -1140,7 +1140,7 @@ final class AgentLauncher {
             cli: cli)
 
         do {
-            DebugLog.agent("startInteractiveQuery: spawning exe=\(resolvedPath)")
+            DebugLog.agent("startInteractiveQuery: backend.start provider=\(provider.id) backend=\(provider.backend) exe=\(resolvedPath) args=\(provider.command ?? []) useACP=\(useACP)")
             let runToken = UUID()
             let session = try await backend.start(
                 profile: profile,
@@ -1170,6 +1170,7 @@ final class AgentLauncher {
             // when the OS reports the process gone, so a live idle session is safe.
             startCompletionWatchdog()
         } catch {
+            DebugLog.agent("startInteractiveQuery: backend.start FAILED provider=\(provider.id): \(error)")
             preflightError = "Failed to launch claude: \(error.localizedDescription)"
             closeLogFiles()
             try? FileManager.default.removeItem(at: scratch)

@@ -121,7 +121,9 @@ actor ACPBackend: AgentBackend {
         systemPrompt: String,
         onExit: @escaping @Sendable (Int) -> Void
     ) async throws -> SessionHandle {
+        DebugLog.agent("ACPBackend.start: enter providerHints=\(profile.providerHints)")
         guard let spawn = Self.resolveSpawnConfig(from: profile) else {
+            DebugLog.agent("ACPBackend.start: FAIL noAgentConfigured (no acpAgentPath/model in profile)")
             throw ACPBackendError.noAgentConfigured
         }
 
@@ -138,6 +140,7 @@ actor ACPBackend: AgentBackend {
             workingDirectory: spawn.workingDirectory
         )
 
+        DebugLog.agent("ACPBackend.start: process launched, sending initialize")
         // Slice 3: initialize, then authenticate if the agent advertises
         // authMethods. The DECISION is a pure helper (`ACPAuthResolver.resolve`)
         // so it's unit-tested directly; here we just execute it. A key is never
@@ -147,6 +150,7 @@ actor ACPBackend: AgentBackend {
             capabilities: capabilities,
             clientInfo: ClientInfo(name: "SelfDrivingWiki", title: "Self Driving Wiki", version: "1.0.0")
         )
+        DebugLog.agent("ACPBackend.start: initialize OK agent=\(initResponse.agentInfo?.name ?? "?") authMethods=\(initResponse.authMethods?.count ?? 0)")
 
         switch ACPAuthResolver.resolve(authMethods: initResponse.authMethods, apiKey: spawn.apiKey) {
         case .skip:
@@ -164,10 +168,12 @@ actor ACPBackend: AgentBackend {
         case .missingCredentials:
             // The agent requires auth but no key is configured. Fail fast with a
             // clear, actionable error rather than letting newSession fail opaquely.
+            DebugLog.agent("ACPBackend.start: FAIL missingAPIKey — agent requires auth, none configured")
             throw ACPBackendError.missingAPIKey
         }
 
         let workingDir = profile.scratchDirectory?.path ?? spawn.workingDirectory ?? FileManager.default.currentDirectoryPath
+        DebugLog.agent("ACPBackend.start: newSession cwd=\(workingDir)")
         let session = try await client.newSession(workingDirectory: workingDir)
         let sessionId = session.sessionId
 
@@ -191,8 +197,10 @@ actor ACPBackend: AgentBackend {
     func send(_ turn: TurnInput, into handle: SessionHandle) async -> AsyncStream<AgentEvent> {
         guard let session = sessions[handle.id] else {
             // Session gone (cancelled/finished) — return an empty, finished stream.
+            DebugLog.agent("ACPBackend.send: no session for handle \(handle.id) — empty stream")
             return AsyncStream { $0.finish() }
         }
+        DebugLog.agent("ACPBackend.send: turn=\"\(turn.userText.prefix(80))\" handle=\(handle.id)")
 
         let client = session.client
         let sessionId = session.sessionId
@@ -221,6 +229,7 @@ actor ACPBackend: AgentBackend {
                         guard let params = notification.params else { continue }
                         // Decode params → SessionUpdateNotification, then translate.
                         let events = ACPBackend.translateNotification(params: params, sessionId: sessionId, translator: translator)
+                        DebugLog.agent("ACPBackend: session/update → \(events.count) AgentEvent(s)")
                         for event in events {
                             continuation.yield(event)
                         }
@@ -229,6 +238,7 @@ actor ACPBackend: AgentBackend {
                 defer { drainTask.cancel() }
 
                 do {
+                    DebugLog.agent("ACPBackend: sending session/prompt (\(turn.userText.count) chars)")
                     let response = try await client.sendPrompt(
                         sessionId: sessionId,
                         content: [.text(TextContent(text: turn.userText))]
