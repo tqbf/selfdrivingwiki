@@ -52,16 +52,26 @@ struct ACPProviderDiscoveryTests {
     // MARK: - Live (this machine's PATH)
 
     @Test(.tags(.integration))
-    func liveDiscoveryFindsInstalledAgents() {
-        // Gemini + Hermes are confirmed installed on this machine. Discovery must
-        // find them (and must NOT crash on the missing ones). This validates the
-        // real login-shell PATH resolver end-to-end.
-        let found = ACPProviderDiscovery.discover()
-        let foundIDs = Set(found.map(\.agent.id))
-        #expect(foundIDs.contains("gemini"))
-        #expect(foundIDs.contains("hermes"))
-        // Resolved paths are absolute.
-        for d in found {
+    func liveDiscoveryMatchesFilesystem() {
+        // Machine-agnostic: for each catalog agent, discovery must report it
+        // installed iff its binary is actually on the login-shell PATH. No
+        // hard-coded agent names — so this passes on a CI runner that has none
+        // installed (all missing → none reported) and still validates the real
+        // login-shell resolver end-to-end on a machine that has some.
+        let discovered = ACPProviderDiscovery.discover()
+        let discoveredIDs = Set(discovered.map(\.agent.id))
+        for agent in ACPProviderCatalog.agents {
+            switch PathPreflight.resolveOnLoginShell(executable: agent.detectExecutable) {
+            case .found:
+                #expect(discoveredIDs.contains(agent.id),
+                        "discovery missed installed agent \(agent.id)")
+            case .missing:
+                #expect(!discoveredIDs.contains(agent.id),
+                        "discovery reported a non-installed agent \(agent.id)")
+            }
+        }
+        // Resolved paths are absolute for whatever was found.
+        for d in discovered {
             #expect(d.resolvedPath.hasPrefix("/"))
         }
     }
