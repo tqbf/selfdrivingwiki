@@ -47,19 +47,32 @@ import WikiFSCore
 actor ACPBackend: AgentBackend {
 
     /// How the configured ACP agent subprocess is spawned. Pluggable (NOT locked
-    /// to the Zed adapter) — the user points at any ACP agent via the existing
-    /// agent-command config. For the spike, resolved from `BackendProfile`
-    /// (`providerHints`/`model`) so the path stays a backend-internal concern,
-    /// matching how `ClaudeCLIBackend` reads its `CLIProfile`.
+    /// to the Zed adapter) — the user points at any ACP agent via the dedicated
+    /// `ACPAgentConfig`. Resolved from `BackendProfile` (`providerHints`/`model`)
+    /// so the path + the auth key stay backend-internal concerns, matching how
+    /// `ClaudeCLIBackend` reads its `CLIProfile`.
+    ///
+    /// Slice 3: now also carries the configured API key (for agents that require
+    /// auth), threaded in via `providerHints["acpAgentApiKey"]`.
     struct AgentSpawnConfig: Sendable {
         let executablePath: String
         let arguments: [String]
         let workingDirectory: String?
+        /// The Keychain-backed API key for agents that require auth. nil when no
+        /// key is configured (→ a `missingCredentials` preflight error IF the
+        /// agent advertises `authMethods`).
+        let apiKey: String?
 
-        init(executablePath: String, arguments: [String] = [], workingDirectory: String? = nil) {
+        init(
+            executablePath: String,
+            arguments: [String] = [],
+            workingDirectory: String? = nil,
+            apiKey: String? = nil
+        ) {
             self.executablePath = executablePath
             self.arguments = arguments
             self.workingDirectory = workingDirectory
+            self.apiKey = apiKey
         }
     }
 
@@ -125,11 +138,34 @@ actor ACPBackend: AgentBackend {
             workingDirectory: spawn.workingDirectory
         )
 
-        _ = try await client.initialize(
+        // Slice 3: initialize, then authenticate if the agent advertises
+        // authMethods. The DECISION is a pure helper (`ACPAuthResolver.resolve`)
+        // so it's unit-tested directly; here we just execute it. A key is never
+        // logged.
+        let initResponse = try await client.initialize(
             protocolVersion: 1,
             capabilities: capabilities,
             clientInfo: ClientInfo(name: "SelfDrivingWiki", title: "Self Driving Wiki", version: "1.0.0")
         )
+
+        switch ACPAuthResolver.resolve(authMethods: initResponse.authMethods, apiKey: spawn.apiKey) {
+        case .skip:
+            // Agent needs no auth — proceed straight to newSession.
+            DebugLog.agent("ACPBackend.start: agent advertised no authMethods, skipping authenticate")
+        case .authenticate(let methodId, let credentials):
+            DebugLog.agent("ACPBackend.start: authenticating method=\(methodId)")
+            let authResponse = try await client.authenticate(
+                authMethodId: methodId,
+                credentials: credentials
+            )
+            guard authResponse.success else {
+                throw ACPBackendError.authenticationFailed(authResponse.error)
+            }
+        case .missingCredentials:
+            // The agent requires auth but no key is configured. Fail fast with a
+            // clear, actionable error rather than letting newSession fail opaquely.
+            throw ACPBackendError.missingAPIKey
+        }
 
         let workingDir = profile.scratchDirectory?.path ?? spawn.workingDirectory ?? FileManager.default.currentDirectoryPath
         let session = try await client.newSession(workingDirectory: workingDir)
@@ -283,21 +319,25 @@ actor ACPBackend: AgentBackend {
 
     /// Resolve the agent spawn config from the profile. The executable path comes
     /// from `providerHints["acpAgentPath"]` (or falls back to `profile.model`),
-    /// and extra args from `providerHints["acpAgentArgs"]`. The args string is
-    /// tokenized with the SAME shell-aware whitespace tokenizer the rest of the
-    /// app uses for `AgentCommandConfig.prefixArguments` (`--yes
-    /// @agentclientprotocol/claude-agent-acp` → two tokens, quote-aware), so the
-    /// existing Agent command config DOUBLES as the ACP agent spawn — the user
-    /// sets executable `npx` args `--yes @agentclientprotocol/claude-agent-acp`.
-    /// NOT hardcoded to the Zed adapter — the user points at any ACP agent.
-    /// Returns nil if no path is configured (→ `noAgentConfigured`).
+    /// extra args from `providerHints["acpAgentArgs"]`, and the auth API key from
+    /// `providerHints["acpAgentApiKey"]`. The args string is tokenized with the
+    /// SAME shell-aware whitespace tokenizer the rest of the app uses for
+    /// `AgentCommandConfig.prefixArguments`.
+    ///
+    /// Slice 3: these hints are now sourced from the dedicated `ACPAgentConfig`
+    /// (NOT the generic `AgentCommandConfig`) by `AgentBackendFactory`, and the
+    /// key is the Keychain-backed secret. NOT hardcoded to the Zed adapter — the
+    /// user points at any ACP agent. Returns nil if no path is configured
+    /// (→ `noAgentConfigured`).
     private static func resolveSpawnConfig(from profile: BackendProfile) -> AgentSpawnConfig? {
         let path = profile.providerHints["acpAgentPath"] ?? profile.model
         guard let path, !path.isEmpty else { return nil }
         let args = AgentCommandConfig.tokenize(profile.providerHints["acpAgentArgs"] ?? "")
             .filter { !$0.isEmpty }
         let cwd = profile.scratchDirectory?.path
-        return AgentSpawnConfig(executablePath: path, arguments: args, workingDirectory: cwd)
+        let apiKey = profile.providerHints["acpAgentApiKey"]
+        return AgentSpawnConfig(
+            executablePath: path, arguments: args, workingDirectory: cwd, apiKey: apiKey)
     }
 
     /// The events synthesized at `session/prompt` completion (the ACP turn
@@ -340,6 +380,10 @@ actor ACPBackend: AgentBackend {
 
 enum ACPBackendError: Error, LocalizedError {
     case noAgentConfigured
+    /// The agent advertised `authMethods` but no API key is configured in Settings.
+    case missingAPIKey
+    /// `Client.authenticate` returned `success: false` (bad/expired key, etc.).
+    case authenticationFailed(String?)
 
     var errorDescription: String? {
         switch self {
@@ -349,6 +393,14 @@ enum ACPBackendError: Error, LocalizedError {
             ["acpAgentPath"] (or `model`) to an ACP agent executable, \
             e.g. /path/to/claude-agent-acp.
             """
+        case .missingAPIKey:
+            return """
+            The ACP agent requires authentication but no API key is configured. \
+            Add one in Settings → Agent → ACP Agent.
+            """
+        case .authenticationFailed(let detail):
+            let suffix = detail.map { " (\($0))" } ?? ""
+            return "ACP agent authentication failed.\(suffix)"
         }
     }
 }

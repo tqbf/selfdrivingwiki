@@ -32,22 +32,34 @@ enum AgentBackendFactory {
     }
 
     /// Build the `providerHints` that carry the ACP agent spawn (executable path
-    /// + args) into the backend's `BackendProfile`. The existing `AgentCommandConfig`
-    /// (Settings → Agent) DOUBLES as the ACP agent spawn: its resolved executable
-    /// becomes `acpAgentPath` and its prefix-arguments string becomes
-    /// `acpAgentArgs`. `ACPBackend.resolveSpawnConfig` tokenizes the args string
-    /// with the same shell-aware tokenizer the app uses for `prefixArguments`.
+    /// + args + auth key) into the backend's `BackendProfile`.
     ///
-    /// PURE so it is unit-tested directly (`ACPWiringTests`). Empty inputs yield
-    /// an empty dict (→ `ACPBackend` throws `noAgentConfigured`, surfaced to the
-    /// user — the opt-in feature requires a configured ACP agent).
-    static func acpProviderHints(resolvedExecutable: String, prefixArguments: String) -> [String: String] {
+    /// Slice 3: sourced from the DEDICATED `ACPAgentConfig` (Settings → Agent →
+    /// ACP Agent) — NOT the generic `AgentCommandConfig`. The resolved executable
+    /// becomes `acpAgentPath`, the prefix-arguments string becomes
+    /// `acpAgentArgs`, and the Keychain-backed API key becomes
+    /// `acpAgentApiKey`. `ACPBackend.resolveSpawnConfig` tokenizes the args
+    /// string with the same shell-aware tokenizer the app uses for
+    /// `prefixArguments`.
+    ///
+    /// PURE so it is unit-tested directly (`ACPConfigTests` / `ACPWiringTests`).
+    /// Empty executable yields an empty dict (→ `ACPBackend` throws
+    /// `noAgentConfigured`, surfaced to the user — the opt-in feature requires a
+    /// configured ACP agent).
+    static func acpProviderHints(
+        resolvedExecutable: String,
+        prefixArguments: String,
+        apiKey: String?
+    ) -> [String: String] {
         var hints: [String: String] = [:]
         if !resolvedExecutable.isEmpty {
             hints["acpAgentPath"] = resolvedExecutable
         }
         if !prefixArguments.isEmpty {
             hints["acpAgentArgs"] = prefixArguments
+        }
+        if let apiKey, !apiKey.isEmpty {
+            hints["acpAgentApiKey"] = apiKey
         }
         return hints
     }
