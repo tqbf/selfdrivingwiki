@@ -324,37 +324,74 @@ struct ChatView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
-            providerSelectorBar
         }
     }
 
-    /// The leading-aligned provider selector under the text box (paseo-style
-    /// trigger bar). Shown on every composer surface (draft + live + persisted
-    /// continue). Hidden when no wiki is active (no provider context). The
-    /// selector itself reads + mutates the persisted default via the launcher.
+    /// The paseo-style toolbar row that sits INSIDE the composer box, along its
+    /// bottom edge: the provider/model chip + the permission-mode chip on the
+    /// leading side, then the send button on the trailing side. The selector
+    /// chips are hidden when no wiki is active (no provider context); the send
+    /// button is always present.
     @ViewBuilder
-    private var providerSelectorBar: some View {
-        if manager.activeWikiID != nil {
-            HStack(spacing: 8) {
+    private func composerToolbar(sendActive: Bool) -> some View {
+        HStack(spacing: 10) {
+            if manager.activeWikiID != nil {
                 ProviderSelector(launcher: launcher)
                 permissionModePicker
-                Spacer(minLength: 0)
             }
+            Spacer(minLength: 0)
+            sendButton(active: sendActive)
         }
     }
 
-    /// Paseo-style permission-modes dropdown. Sits next to the model selector
-    /// under the composer. ACP-only (the CLI backend has no permission channel).
+    /// Paseo-style permission-modes chip. Sits next to the model selector inside
+    /// the composer box's bottom toolbar. Styled to match `ProviderSelector`'s
+    /// trigger (glyph + `.caption` label + chevron) so the two read as sibling
+    /// chips. Shown for every backend (the screenshot confirms it appears for
+    /// Claude too); a restyle mustn't change that behavior.
     private var permissionModePicker: some View {
-        Picker("", selection: $permissionModeRaw) {
-            ForEach(PermissionPolicy.allCases, id: \.rawValue) { mode in
-                Text(mode.label).tag(mode.rawValue)
+        Menu {
+            Picker("", selection: $permissionModeRaw) {
+                ForEach(PermissionPolicy.allCases, id: \.rawValue) { mode in
+                    Text(mode.label).tag(mode.rawValue)
+                }
             }
+            .pickerStyle(.inline)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: permissionGlyph)
+                    .foregroundStyle(.secondary)
+                Text(currentPermissionPolicy.label)
+                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.up.chevron.down")
+                    .imageScale(.small)
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.caption)
+            .contentShape(Rectangle())
         }
-        .pickerStyle(.menu)
-        .controlSize(.small)
-        .frame(width: 110)
-        .help(PermissionPolicy(rawValue: permissionModeRaw)?.help ?? "")
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(currentPermissionPolicy.help)
+    }
+
+    /// The currently-selected permission policy (falls back to bypass — the
+    /// persisted default — if the raw value is somehow unknown).
+    private var currentPermissionPolicy: PermissionPolicy {
+        PermissionPolicy(rawValue: permissionModeRaw) ?? .bypass
+    }
+
+    /// SF Symbol for the permission chip, one per policy. Mirrors paseo's shield
+    /// glyph for the bypass/"YOLO" mode and picks intent-matching symbols for
+    /// the others.
+    private var permissionGlyph: String {
+        switch currentPermissionPolicy {
+        case .bypass: return "exclamationmark.shield"
+        case .alwaysAsk: return "hand.raised"
+        case .acceptEdits: return "checkmark.shield"
+        case .plan: return "eye"
+        }
     }
 
     // MARK: - Persisted chat summary
@@ -505,7 +542,10 @@ struct ChatView: View {
 
     private func composer(enabled: Bool) -> some View {
         let sendActive = canSend && enabled
-        return HStack(alignment: .bottom, spacing: 10) {
+        // Paseo-style: ONE rounded box wrapping the text (top) and a toolbar row
+        // (bottom) — model chip · permission chip · send button. Replaces the old
+        // capsule-with-inline-send + separate selector bar below.
+        return VStack(alignment: .leading, spacing: ChatMetrics.composerRowSpacing) {
             ComposerTextView(
                 text: $draftMessage,
                 isEditable: enabled,
@@ -515,40 +555,51 @@ struct ChatView: View {
                 autoFocus: chatID == nil
             )
                 .frame(height: composerHeight)
-                .padding(.leading, ChatMetrics.composerHorizontalPadding)
-                .padding(.vertical, ChatMetrics.composerVerticalPadding)
+                .frame(maxWidth: .infinity)
                 .overlay(alignment: .topLeading) {
                     if draftMessage.isEmpty {
                         Text("Ask a question, or ask to update the wiki…")
                             .font(.body)
                             .foregroundStyle(.secondary)
                             .allowsHitTesting(false)
-                            .padding(.leading, ChatMetrics.composerHorizontalPadding)
-                            .padding(.vertical, ChatMetrics.composerVerticalPadding + ComposerTextView.Metrics.verticalInsetPerSide)
+                            // Zero leading padding: `lineFragmentPadding=0` +
+                            // `textContainerInset.width=0` mean typed text starts
+                            // at the text view's left edge, so the overlay must too.
+                            .padding(.vertical, ComposerTextView.Metrics.verticalInsetPerSide)
                     }
                 }
 
-            Button(action: sendMessage) {
-                Image(systemName: sendButtonIcon)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(sendActive ? Color.white : Color.secondary)
-                    .frame(width: ChatMetrics.sendButtonSize, height: ChatMetrics.sendButtonSize)
-                    .background(sendButtonBackground(active: sendActive), in: Circle())
-            }
-                .buttonStyle(.borderless)
-                .disabled(!sendActive)
-                .keyboardShortcut(.return, modifiers: .command)
-                .help(sendButtonTitle)
-                .padding(.bottom, ChatMetrics.sendButtonBottomInset)
+            composerToolbar(sendActive: sendActive)
         }
-        .padding(.trailing, ChatMetrics.composerButtonInset)
-        .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
+        .padding(.horizontal, ChatMetrics.composerHorizontalPadding)
+        .padding(.top, ChatMetrics.composerTopPadding)
+        .padding(.bottom, ChatMetrics.composerBottomPadding)
+        .background(
+            Color(nsColor: .controlBackgroundColor),
+            in: RoundedRectangle(cornerRadius: ChatMetrics.composerCornerRadius, style: .continuous))
         .overlay {
-            Capsule()
+            RoundedRectangle(cornerRadius: ChatMetrics.composerCornerRadius, style: .continuous)
                 .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
         }
         .shadow(color: Color.black.opacity(0.06), radius: 18, x: 0, y: 8)
         .frame(maxWidth: .infinity)
+    }
+
+    /// The trailing send button in the composer's bottom toolbar. Sized to sit
+    /// inside the toolbar row (paseo places its action cluster there) rather than
+    /// the old inline-in-the-capsule placement.
+    private func sendButton(active: Bool) -> some View {
+        Button(action: sendMessage) {
+            Image(systemName: sendButtonIcon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(active ? Color.white : Color.secondary)
+                .frame(width: ChatMetrics.sendButtonSize, height: ChatMetrics.sendButtonSize)
+                .background(sendButtonBackground(active: active), in: Circle())
+        }
+        .buttonStyle(.borderless)
+        .disabled(!active)
+        .keyboardShortcut(.return, modifiers: .command)
+        .help(sendButtonTitle)
     }
 
     // MARK: - Send logic
@@ -687,21 +738,24 @@ enum ChatMetrics {
     static let debugTopInset: CGFloat = 18
     static let controlsBandHeight: CGFloat = 28
     static let chatTopInset: CGFloat = 56
-    static let composerHorizontalPadding: CGFloat = 22
-    static let composerVerticalPadding: CGFloat = 16
-    static let composerButtonInset: CGFloat = 8
-    static let sendButtonSize: CGFloat = 42
+    /// Horizontal inset of the composer box's contents (paseo-style). Also the
+    /// effective left margin for the text, since `ComposerTextView` uses zero
+    /// line-fragment padding.
+    static let composerHorizontalPadding: CGFloat = 16
+    /// Top inset above the text inside the composer box.
+    static let composerTopPadding: CGFloat = 12
+    /// Bottom inset below the toolbar row inside the composer box.
+    static let composerBottomPadding: CGFloat = 10
+    /// Vertical gap between the text and the toolbar row inside the box.
+    static let composerRowSpacing: CGFloat = 8
+    /// Corner radius of the unified composer box (paseo uses a soft rounded
+    /// rectangle, not a full pill).
+    static let composerCornerRadius: CGFloat = 16
+    static let sendButtonSize: CGFloat = 30
     /// Font for `ComposerTextView` — matches the previous `TextField`'s
     /// `.font(.body)`, expressed as an `NSFont` since the composer is
     /// AppKit-backed.
     static var composerFont: NSFont { .preferredFont(forTextStyle: .body) }
-    /// Bottom inset that vertically centers the send button in a ONE-line
-    /// capsule. Derived, not hardcoded, so a font or padding change can't
-    /// silently un-center the button.
-    static var sendButtonBottomInset: CGFloat {
-        (ComposerTextView.oneLineHeight(for: composerFont)
-            + composerVerticalPadding * 2 - sendButtonSize) / 2
-    }
 }
 
 /// Right-side outline for a chat: lists the user's turns (questions) in
