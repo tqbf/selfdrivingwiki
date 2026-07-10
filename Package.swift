@@ -27,6 +27,14 @@ let package = Package(
         // bundles its own tokenizer + pooling. Needs >= 2.31.3 (MLXEmbedders was
         // added after the 0.x line). See plans/mlx-minilm-design.md.
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", from: "2.31.3"),
+        // swift-acp — native Swift SDK for the Agent Client Protocol (ACP). Used by
+        // ACPBackend (plans/acp-backend-and-permissions.md): the app is the ACP
+        // *client*; it launches any ACP agent subprocess over JSON-RPC/stdio and
+        // mediates writes via session/request_permission (the always-ask/yolo lever).
+        // NOTE: the README says `from: "1.0.0"` but the only published tag is
+        // v0.1.0 (24 commits, community/early). Pin 0.1.0 and validate under Swift
+        // 6.0 / macOS 15 — see plans/acp-spike-findings.md.
+        .package(url: "https://github.com/wiedymi/swift-acp", from: "0.1.0"),
     ],
     targets: [
         // Statically-linked sqlite-vec (semantic vector search). The amalgamation
@@ -84,6 +92,8 @@ let package = Package(
                 "WikiFSCore",
                 "WikiFSMLX",
                 .product(name: "Markdown", package: "swift-markdown"),
+                // ACP client runtime (ACPBackend — plans/acp-backend-and-permissions.md).
+                .product(name: "ACP", package: "swift-acp"),
             ],
             path: "Sources/WikiFS",
             // WKWebView for the reader path (Sources/WikiFS/WikiReaderView.swift)
@@ -146,7 +156,9 @@ let package = Package(
         ),
         .testTarget(
             name: "WikiFSTests",
-            dependencies: ["WikiFSCore", "WikiCtlCore", "WikiFS", "WikiFSMLX", "WikiFSFileProvider"],
+            dependencies: ["WikiFSCore", "WikiCtlCore", "WikiFS", "WikiFSMLX", "WikiFSFileProvider",
+                           // ACP model types for ACPBackendTests (no live subprocess — pure translator tests).
+                           .product(name: "ACPModel", package: "swift-acp")],
             path: "Tests/WikiFSTests",
             // Matches WikiFSCore so the gated podcast test files compile in/out too.
             swiftSettings: podcastSwiftSettings
