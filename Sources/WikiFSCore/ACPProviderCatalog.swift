@@ -102,12 +102,6 @@ public enum ACPProviderCatalog {
         // while `command` runs the published ACP package. The launcher
         // PATH-resolves `npx` and passes the rest as argv.
         KnownACPAgent(
-            id: "claude-agent-acp",
-            label: "Claude (ACP)",
-            summary: "Claude over the ACP adapter (npx wrapper).",
-            detectExecutable: "npx",
-            command: ["npx", "--yes", "@agentclientprotocol/claude-agent-acp"]),
-        KnownACPAgent(
             id: "codex-acp",
             label: "Codex (ACP)",
             summary: "OpenAI Codex over the ACP adapter (npx wrapper).",

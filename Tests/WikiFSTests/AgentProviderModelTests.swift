@@ -171,7 +171,9 @@ import ACPModel
         #expect(ids.contains("kimi"))
         #expect(ids.contains("cursor"))
         #expect(ids.contains("kiro"))
-        #expect(ids.contains("claude-agent-acp"))
+        // Claude (ACP wrapper) is deliberately NOT in the catalog — Claude is
+        // driven directly via ClaudeCLIBackend (claude -p), not over ACP.
+        #expect(!ids.contains("claude-agent-acp"))
         #expect(ids.contains("codex-acp"))
     }
 
