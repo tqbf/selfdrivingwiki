@@ -23,6 +23,20 @@ import ACPModel
         #expect(config.providers.first?.enabled == true)
     }
 
+    @Test func seedInjectsClaudeHardcodedModels() {
+        // Claude has no ACP model discovery, so its model list is the hardcoded
+        // alias set (opus/sonnet/haiku) — seeded so the picker has rows.
+        let config = AgentProvidersConfig.seed(discovered: [])
+        #expect(config.cachedModels(forProvider: "claude").map(\.modelId) == ["opus", "sonnet", "haiku"])
+        // Discovered ACP agents have no cached models yet (discovered on first chat).
+        let discovered = [
+            DiscoveredACPAgent(agent: KnownACPAgent(id: "hermes", label: "Hermes", summary: "", detectExecutable: "hermes", command: ["hermes", "acp"]), resolvedPath: "/x"),
+        ]
+        let seeded = AgentProvidersConfig.seed(discovered: discovered)
+        #expect(seeded.cachedModels(forProvider: "hermes") == [])
+        #expect(seeded.cachedModels(forProvider: "claude").map(\.modelId) == ["opus", "sonnet", "haiku"])
+    }
+
     @Test func seedAppendsDiscoveredACPAgentsNotDefault() {
         let discovered = [
             DiscoveredACPAgent(agent: KnownACPAgent(id: "gemini", label: "Gemini CLI", summary: "", detectExecutable: "gemini", command: ["gemini", "--acp"]), resolvedPath: "/usr/local/bin/gemini"),

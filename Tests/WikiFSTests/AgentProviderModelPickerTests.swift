@@ -122,8 +122,9 @@ import WikiFSCore
         let loaded = try JSONDecoder().decode(AgentProvidersConfig.self, from: Data(contentsOf: url))
         #expect(loaded.cachedModels(forProvider: "hermes").map(\.modelId) == ["glm-4.7", "glm-4-7"])
         #expect(loaded.selectedModelId(forProvider: "hermes") == "glm-4.7")
-        // Claude has no cached models (no discovery).
-        #expect(loaded.cachedModels(forProvider: "claude") == [])
+        // Claude has the hardcoded alias list (no ACP discovery, but the picker
+        // needs selectable rows — opus/sonnet/haiku).
+        #expect(loaded.cachedModels(forProvider: "claude").map(\.modelId) == ["opus", "sonnet", "haiku"])
         // No selection for Claude → nil (agent default).
         #expect(loaded.selectedModelId(forProvider: "claude") == nil)
     }
@@ -131,7 +132,9 @@ import WikiFSCore
     @Test func preModelCacheFileDecodesWithEmptyCaches() throws {
         // A pre-#329 agent-providers.json (no providerModels / selectedModelIds
         // keys) must decode without a migration → empty caches (legacy behavior:
-        // "no model selected → agent default").
+        // "no model selected → agent default"). The Claude provider's hardcoded
+        // model list IS injected on decode (so existing users get selectable
+        // Claude rows), but no per-provider selections are added.
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("provider-legacy-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -148,7 +151,9 @@ import WikiFSCore
         try legacyJSON.data(using: .utf8)!.write(to: url)
 
         let loaded = try JSONDecoder().decode(AgentProvidersConfig.self, from: Data(contentsOf: url))
-        #expect(loaded.providerModels.isEmpty)
+        // No ACP providers with caches → only Claude's injected list is present.
+        #expect(loaded.cachedModels(forProvider: "claude").map(\.modelId) == ["opus", "sonnet", "haiku"])
+        // Selections remain empty (legacy: no model selected → agent default).
         #expect(loaded.selectedModelIds.isEmpty)
         #expect(loaded.selectedModelId(forProvider: "claude") == nil)
     }
@@ -226,14 +231,30 @@ import WikiFSCore
         #expect(hints["acpSelectedModelId"] == nil)
     }
 
-    @Test func providerHintsOmitsSelectedModelIdForCLI() {
+    @Test func providerHintsCarriesCLISelectedModel() {
+        // CLI provider: the picker's model selection is threaded as
+        // `cliSelectedModel` so ClaudeCLIBackend.start can override `--model`.
         let provider = AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI)
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: [],
             apiKey: nil,
             selectedModelId: "sonnet")
-        // CLI provider yields empty hints (selected model is ACP-only).
+        #expect(hints["cliSelectedModel"] == "sonnet")
+        // No ACP keys leak into a CLI provider's hints.
+        #expect(hints["acpSelectedModelId"] == nil)
+        #expect(hints["acpAgentPath"] == nil)
+    }
+
+    @Test func providerHintsOmitsCLISelectedModelWhenNil() {
+        // CLI provider with no selection → empty hints (legacy: use the per-op
+        // alias / Settings override). Default = unchanged.
+        let provider = AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI)
+        let hints = AgentBackendFactory.providerHints(
+            provider: provider,
+            resolvedCommand: [],
+            apiKey: nil,
+            selectedModelId: nil)
         #expect(hints.isEmpty)
     }
 

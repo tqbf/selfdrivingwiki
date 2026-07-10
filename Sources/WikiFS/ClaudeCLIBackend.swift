@@ -150,6 +150,11 @@ actor ClaudeCLIBackend: AgentBackend {
         }
 
         // Build the command (the backend owns OperationCommand assembly).
+        // #329: the chat-composer picker's per-provider model selection is
+        // threaded in as `providerHints["cliSelectedModel"]` by the launcher;
+        // nil/empty = "no preference" → the builder's legacy precedence applies
+        // (Settings modelOverride → per-op alias). Default = unchanged.
+        let cliSelectedModel = profile.providerHints["cliSelectedModel"]
         let isInteractive: Bool
         let command: OperationCommand
         if case .queryChat = cli.operation {
@@ -163,7 +168,8 @@ actor ClaudeCLIBackend: AgentBackend {
                 wikictlDirectory: cli.wikictlDirectory,
                 resolvedExecutable: cli.resolvedExecutable,
                 command: cli.command,
-                sandbox: cli.sandbox
+                sandbox: cli.sandbox,
+                selectedModel: cliSelectedModel
             )
         } else {
             isInteractive = false
@@ -176,7 +182,8 @@ actor ClaudeCLIBackend: AgentBackend {
                 wikictlDirectory: cli.wikictlDirectory,
                 resolvedExecutable: cli.resolvedExecutable,
                 command: cli.command,
-                sandbox: cli.sandbox
+                sandbox: cli.sandbox,
+                selectedModel: cliSelectedModel
             )
         }
 

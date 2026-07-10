@@ -961,7 +961,7 @@ final class AgentLauncher {
                 provider: provider,
                 resolvedCommand: resolvedACPCommand,
                 apiKey: acpAPIKey,
-                selectedModelId: useACP ? providersConfig().selectedModelId(forProvider: provider.id) : nil),
+                selectedModelId: providersConfig().selectedModelId(forProvider: provider.id)),
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: cli)
@@ -1105,7 +1105,7 @@ final class AgentLauncher {
         // single `ACPAgentConfig`. **Default = Claude** → zero behavior change.
         let provider = resolveSelectedProvider()
         let useACP = provider.backend == .acp
-        let resolvedSelectedModel = useACP ? providersConfig().selectedModelId(forProvider: provider.id) : nil
+        let resolvedSelectedModel = providersConfig().selectedModelId(forProvider: provider.id)
         DebugLog.agent("startInteractiveQuery: provider=\(provider.id) backend=\(provider.backend) useACP=\(useACP) selectedModel=\(resolvedSelectedModel ?? "nil")") // TEMP DEBUG
         self.backend = AgentBackendFactory.makeBackend(provider: provider, policy: policy)
 
@@ -1223,7 +1223,7 @@ final class AgentLauncher {
                 provider: provider,
                 resolvedCommand: resolvedACPCommand,
                 apiKey: acpAPIKey,
-                selectedModelId: useACP ? providersConfig().selectedModelId(forProvider: provider.id) : nil),
+                selectedModelId: providersConfig().selectedModelId(forProvider: provider.id)),
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: cli)

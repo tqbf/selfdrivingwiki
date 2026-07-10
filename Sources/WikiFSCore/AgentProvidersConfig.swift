@@ -46,13 +46,39 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
     /// call) — the app's default state, so existing users see no change.
     public var selectedModelIds: [String: String]
 
+    /// The hardcoded model list for the Claude CLI provider. `ClaudeCLIBackend`
+    /// has no ACP model discovery (it drives `claude -p` directly), so the
+    /// selector has no captured list to show. These are the `--model` aliases
+    /// `WikiOperation` already threads (`opus`/`sonnet`/`haiku`) — seeded into
+    /// `providerModels["claude"]` so the provider always has selectable rows.
+    /// Selecting one threads it through `--model` (see
+    /// `providerHints["cliSelectedModel"]`).
+    ///
+    /// `opus` is first so it reads as the default tier (it is what
+    /// `topLevelModelAlias` resolves to when no selection is set). PURE constant.
+    public static let claudeCachedModels: [CachedModelInfo] = [
+        CachedModelInfo(modelId: "opus", name: "Opus"),
+        CachedModelInfo(modelId: "sonnet", name: "Sonnet"),
+        CachedModelInfo(modelId: "haiku", name: "Haiku"),
+    ]
+
     public init(
         providers: [AgentProvider] = [AgentProvider.claudeDefault],
         providerModels: [String: [CachedModelInfo]] = [:],
         selectedModelIds: [String: String] = [:]
     ) {
         self.providers = AgentProvidersConfig.normalized(providers)
-        self.providerModels = providerModels
+        // Guarantee the Claude provider always has its hardcoded model list,
+        // even for a hand-built config with no providerModels — so the selector
+        // never shows an empty Claude submenu. Only inject when the claude
+        // provider is present AND has no cached models (a captured/real list
+        // would win if one ever existed).
+        var models = providerModels
+        if providers.contains(where: { $0.id == "claude" }),
+           models["claude"]?.isEmpty ?? true {
+            models["claude"] = Self.claudeCachedModels
+        }
+        self.providerModels = models
         self.selectedModelIds = selectedModelIds
     }
 
@@ -71,7 +97,16 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         // New optional fields default to empty so a pre-#329 `agent-providers.json`
         // (no model caches) decodes without a migration — "no model selected →
         // agent default" is exactly the legacy behavior.
-        self.providerModels = try c.decodeIfPresent([String: [CachedModelInfo]].self, forKey: .providerModels) ?? [:]
+        let decodedModels = try c.decodeIfPresent([String: [CachedModelInfo]].self, forKey: .providerModels) ?? [:]
+        // Ensure the Claude provider's hardcoded model list is present on load
+        // too (so existing users with an older agent-providers.json also see
+        // selectable Claude rows). Only inject when absent/empty.
+        var models = decodedModels
+        if self.providers.contains(where: { $0.id == "claude" }),
+           models["claude"]?.isEmpty ?? true {
+            models["claude"] = Self.claudeCachedModels
+        }
+        self.providerModels = models
         self.selectedModelIds = try c.decodeIfPresent([String: String].self, forKey: .selectedModelIds) ?? [:]
     }
 

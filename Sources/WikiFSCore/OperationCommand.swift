@@ -60,6 +60,29 @@ public struct OperationCommand: Equatable, Sendable {
         return "\(arg.prefix(limit))…(\(arg.count) chars)"
     }
 
+    /// Resolve the `--model` value for a CLI run. Precedence:
+    ///   1. `selectedModel` — the chat-composer picker's per-provider choice
+    ///      (threaded from `providerHints["cliSelectedModel"]`). This is the
+    ///      "override it with the selected model when one is set" path.
+    ///   2. `command.modelOverride` — the legacy Settings → Agent → "Model
+    ///      override" field (e.g. `"haiku"`).
+    ///   3. `operation.topLevelModelAlias` — the per-op default (always `opus`).
+    /// A nil/empty `selectedModel` means "no picker preference" → unchanged
+    /// behavior (the legacy chain runs). PURE.
+    private static func resolveModel(
+        selectedModel: String?,
+        command: AgentCommandConfig,
+        operation: WikiOperation
+    ) -> String {
+        if let selectedModel, !selectedModel.isEmpty {
+            return selectedModel
+        }
+        if !command.modelOverride.isEmpty {
+            return command.modelOverride
+        }
+        return operation.topLevelModelAlias
+    }
+
     /// Build the invocation for `operation` against one wiki.
     ///
     /// - Parameters:
@@ -85,6 +108,11 @@ public struct OperationCommand: Equatable, Sendable {
     ///     clobbers `WIKI_ROOT`/`WIKI_DB`/`PATH`.
     ///   - baseEnvironment: the parent environment to inherit (default the current
     ///     process's). Injected so tests can pin a known PATH.
+    ///   - selectedModel: the model the chat-composer picker chose for this
+    ///     provider (`--model` alias, e.g. `"sonnet"`). nil/empty = "no
+    ///     preference" → fall back to `command.modelOverride`, then the
+    ///     operation's default alias. The launcher threads the per-provider
+    ///     selection here via `providerHints["cliSelectedModel"]`.
     public static func build(
         operation: WikiOperation,
         wikiRoot: String,
@@ -95,7 +123,8 @@ public struct OperationCommand: Equatable, Sendable {
         resolvedExecutable: String = "claude",
         command: AgentCommandConfig = .default,
         sandbox: SandboxProfile.SandboxInvocation? = nil,
-        baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
+        baseEnvironment: [String: String] = ProcessInfo.processInfo.environment,
+        selectedModel: String? = nil
     ) -> OperationCommand {
         // User env first, then app-owned keys (authoritative).
         var environment = baseEnvironment
@@ -106,8 +135,7 @@ public struct OperationCommand: Equatable, Sendable {
         environment["WIKI_DB"] = wikiID
         resolveWikictl(into: &environment, wikictlDirectory: wikictlDirectory, baseEnvironment: baseEnvironment)
 
-        let model = command.modelOverride.isEmpty
-            ? operation.topLevelModelAlias : command.modelOverride
+        let model = Self.resolveModel(selectedModel: selectedModel, command: command, operation: operation)
 
         var arguments = command.tokenizedPrefixArgs()
         arguments.append(contentsOf: [
@@ -147,6 +175,11 @@ public struct OperationCommand: Equatable, Sendable {
     /// Build a stdin-backed `claude -p` query chat. Unlike one-shot
     /// operations, no prompt is passed as the positional `-p` value; user turns are
     /// sent later as stream-json over stdin while the session remains open.
+    /// - Parameter selectedModel: the model the chat-composer picker chose for
+    ///   this provider (`--model` alias, e.g. `"sonnet"`). nil/empty = "no
+    ///   preference" → fall back to `command.modelOverride`, then the
+    ///   operation's default alias. Threaded in by `ClaudeCLIBackend.start` from
+    ///   `profile.providerHints["cliSelectedModel"]`.
     public static func buildInteractiveQuery(
         operation: WikiOperation,
         wikiRoot: String,
@@ -157,7 +190,8 @@ public struct OperationCommand: Equatable, Sendable {
         resolvedExecutable: String = "claude",
         command: AgentCommandConfig = .default,
         sandbox: SandboxProfile.SandboxInvocation? = nil,
-        baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
+        baseEnvironment: [String: String] = ProcessInfo.processInfo.environment,
+        selectedModel: String? = nil
     ) -> OperationCommand {
         var environment = baseEnvironment
         for (key, value) in command.parsedExtraEnv() {
@@ -167,8 +201,7 @@ public struct OperationCommand: Equatable, Sendable {
         environment["WIKI_DB"] = wikiID
         resolveWikictl(into: &environment, wikictlDirectory: wikictlDirectory, baseEnvironment: baseEnvironment)
 
-        let model = command.modelOverride.isEmpty
-            ? operation.topLevelModelAlias : command.modelOverride
+        let model = Self.resolveModel(selectedModel: selectedModel, command: command, operation: operation)
 
         // Chats are always write-capable now (the read-only Ask mode was
         // removed), so the chat command always includes Write/Edit in the

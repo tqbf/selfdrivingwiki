@@ -63,17 +63,24 @@ enum AgentBackendFactory {
     /// `ACPBackend.start` can call `session/set_model` after `newSession`. nil
     /// /empty = "use the agent's default model" (no `setModel`) → unchanged.
     ///
-    /// A `.claudeCLI` provider yields an empty dict (the CLI backend ignores
-    /// providerHints — it reads `CLIProfile`). An ACP provider with an empty
-    /// command yields an empty dict too (→ `ACPBackend` throws
-    /// `noAgentConfigured`).
+    /// For a `.claudeCLI` provider, `cliSelectedModel` carries the picker's
+    /// chosen `--model` alias so `ClaudeCLIBackend.start` can override `--model`.
+    /// An ACP provider with an empty command yields an empty dict (→
+    /// `ACPBackend` throws `noAgentConfigured`).
     static func providerHints(
         provider: AgentProvider,
         resolvedCommand: [String],
         apiKey: String?,
         selectedModelId: String? = nil
     ) -> [String: String] {
-        guard provider.backend == .acp, !resolvedCommand.isEmpty else { return [:] }
+        // CLI provider: carry the picker's model selection only (the CLI backend
+        // reads CLIProfile for everything else). nil/empty → empty dict = the
+        // legacy "use the per-op alias / Settings override" path, unchanged.
+        if provider.backend == .claudeCLI {
+            guard let selectedModelId, !selectedModelId.isEmpty else { return [:] }
+            return ["cliSelectedModel": selectedModelId]
+        }
+        guard !resolvedCommand.isEmpty else { return [:] }
         var hints: [String: String] = [:]
         hints["acpAgentPath"] = resolvedCommand[0]
         let args = resolvedCommand.dropFirst()
