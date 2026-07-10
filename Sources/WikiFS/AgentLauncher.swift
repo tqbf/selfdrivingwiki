@@ -878,14 +878,21 @@ final class AgentLauncher {
         var resolvedACPCommand: [String] = []
         var acpAPIKey: String?
         if useACP, let command = provider.command, let exe = command.first {
-            switch PathPreflight.resolveOnLoginShell(executable: AgentCommandConfig.expandTilde(exe)) {
-            case .found(let path):
-                resolvedACPCommand = [path] + Array(command.dropFirst())
-            case .missing(let reason):
-                preflightError = reason
-                isRunning = false
-                releaseGenerationSlot()
-                return
+            // For "bun", prefer the binary bundled in Contents/Helpers so the app
+            // works without a system-wide bun install. Fall back to PATH resolution.
+            if exe == "bun",
+               let bundled = Bundle.main.url(forAuxiliaryExecutable: "bun")?.path {
+                resolvedACPCommand = [bundled] + Array(command.dropFirst())
+            } else {
+                switch PathPreflight.resolveOnLoginShell(executable: AgentCommandConfig.expandTilde(exe)) {
+                case .found(let path):
+                    resolvedACPCommand = [path] + Array(command.dropFirst())
+                case .missing(let reason):
+                    preflightError = reason
+                    isRunning = false
+                    releaseGenerationSlot()
+                    return
+                }
             }
             acpAPIKey = acpCredentialStore.apiKey(forProvider: provider.id)
         }
