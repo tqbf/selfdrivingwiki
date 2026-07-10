@@ -15,18 +15,26 @@ import ACPModel
 
     // MARK: - Seed
 
-    @Test func seedAlwaysLeadsWithClaudeDefault() {
+    @Test func seedAlwaysLeadsWithClaudeAcpDefault() {
         let config = AgentProvidersConfig.seed(discovered: [])
-        #expect(config.providers.first?.id == "claude")
-        #expect(config.providers.first?.backend == .claudeCLI)
+        // claude-acp (the ACP wrapper) leads + is default + enabled.
+        #expect(config.providers.first?.id == "claude-acp")
+        #expect(config.providers.first?.backend == .acp)
         #expect(config.providers.first?.isDefault == true)
         #expect(config.providers.first?.enabled == true)
+        // The legacy `claude -p` CLI provider is seeded alongside, but disabled.
+        let legacy = config.providers.first(where: { $0.id == "claude" })
+        #expect(legacy?.backend == .claudeCLI)
+        #expect(legacy?.enabled == false)
+        #expect(legacy?.isDefault == false)
     }
 
     @Test func seedInjectsClaudeHardcodedModels() {
-        // Claude has no ACP model discovery, so its model list is the hardcoded
-        // alias set (opus/sonnet/haiku) — seeded so the picker has rows.
+        // Both Claude providers (the ACP wrapper `claude-acp` and the legacy
+        // `claude` CLI) use the hardcoded alias set (opus/sonnet/haiku) — neither
+        // has ACP model discovery, so they're seeded so the picker has rows.
         let config = AgentProvidersConfig.seed(discovered: [])
+        #expect(config.cachedModels(forProvider: "claude-acp").map(\.modelId) == ["opus", "sonnet", "haiku"])
         #expect(config.cachedModels(forProvider: "claude").map(\.modelId) == ["opus", "sonnet", "haiku"])
         // Discovered ACP agents have no cached models yet (discovered on first chat).
         let discovered = [
@@ -34,6 +42,7 @@ import ACPModel
         ]
         let seeded = AgentProvidersConfig.seed(discovered: discovered)
         #expect(seeded.cachedModels(forProvider: "hermes") == [])
+        #expect(seeded.cachedModels(forProvider: "claude-acp").map(\.modelId) == ["opus", "sonnet", "haiku"])
         #expect(seeded.cachedModels(forProvider: "claude").map(\.modelId) == ["opus", "sonnet", "haiku"])
     }
 
@@ -43,12 +52,15 @@ import ACPModel
             DiscoveredACPAgent(agent: KnownACPAgent(id: "hermes", label: "Hermes", summary: "", detectExecutable: "hermes", command: ["hermes", "acp"]), resolvedPath: "/usr/local/bin/hermes"),
         ]
         let config = AgentProvidersConfig.seed(discovered: discovered)
-        #expect(config.providers.count == 3) // Claude + gemini + hermes
+        // claude-acp (default) + claude (legacy, disabled) + gemini + hermes.
+        #expect(config.providers.count == 4)
         let acp = config.providers.filter { $0.backend == .acp }
-        #expect(acp.map(\.id).sorted() == ["gemini", "hermes"])
-        // Discovered ACP providers are enabled but NOT default.
-        #expect(acp.allSatisfy { !$0.isDefault })
-        #expect(acp.allSatisfy { $0.enabled })
+        #expect(acp.map(\.id).sorted() == ["claude-acp", "gemini", "hermes"])
+        // claude-acp is the default; discovered ACP providers are enabled but NOT default.
+        #expect(acp.first(where: { $0.id == "claude-acp" })?.isDefault == true)
+        let discoveredProviders = acp.filter { ["gemini", "hermes"].contains($0.id) }
+        #expect(discoveredProviders.allSatisfy { !$0.isDefault })
+        #expect(discoveredProviders.allSatisfy { $0.enabled })
         // Their command carries over from the catalog agent.
         #expect(acp.first(where: { $0.id == "gemini" })?.command == ["gemini", "--acp"])
     }
@@ -70,7 +82,9 @@ import ACPModel
         ]
         let config = AgentProvidersConfig.seed(discovered: discovered)
         #expect(config.providers.filter { $0.id == "claude" }.count == 1)
-        #expect(config.providers.first?.backend == .claudeCLI) // the built-in, not a dup
+        // claude-acp leads the seed; the legacy `claude` built-in is present once (not a dup).
+        #expect(config.providers.first?.id == "claude-acp")
+        #expect(config.providers.first?.backend == .acp)
     }
 
     // MARK: - Normalization (single-default invariant)
@@ -81,49 +95,52 @@ import ACPModel
             AgentProvider(id: "b", label: "B", backend: .acp, command: ["b"], isDefault: true),
         ]
         let config = AgentProvidersConfig(providers: raw)
-        // Claude is prepended (its `claudeDefault` has isDefault == true) and is
-        // the FIRST default encountered → exactly one default, and it's Claude.
+        // claude-acp is prepended (its `claudeAcpDefault` has isDefault == true)
+        // and is the FIRST default encountered → exactly one default, claude-acp.
         let defaults = config.providers.filter(\.isDefault)
         #expect(defaults.count == 1)
-        #expect(config.defaultProvider.id == "claude")
+        #expect(config.defaultProvider.id == "claude-acp")
         // The user-provided defaults were demoted.
         #expect(config.providers.first(where: { $0.id == "a" })?.isDefault == false)
         #expect(config.providers.first(where: { $0.id == "b" })?.isDefault == false)
     }
 
-    @Test func normalizedMakesClaudeDefaultWhenNone() {
+    @Test func normalizedMakesClaudeAcpDefaultWhenNone() {
         let raw = [
             AgentProvider(id: "a", label: "A", backend: .acp, command: ["a"], isDefault: false),
         ]
         let config = AgentProvidersConfig(providers: raw)
-        #expect(config.defaultProvider.id == "claude")
+        #expect(config.defaultProvider.id == "claude-acp")
     }
 
     // MARK: - Selection
 
     @Test func selectedProviderPicksDefaultWhenEnabled() {
+        // normalized() injects claude-acp as the enabled default; selectedProvider()
+        // returns it.
         let config = AgentProvidersConfig(providers: [
             AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, enabled: true, isDefault: true),
             AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"], enabled: true, isDefault: false),
         ])
-        #expect(config.selectedProvider().id == "claude")
+        #expect(config.selectedProvider().id == "claude-acp")
     }
 
     @Test func selectedProviderFallsBackToFirstEnabled() {
-        // Default (Claude) disabled → falls back to the first enabled provider.
+        // Default (claude-acp) disabled → falls back to the first enabled provider.
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, enabled: false, isDefault: true),
+            AgentProvider(id: "claude-acp", label: "Claude", backend: .acp, command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: false, isDefault: true),
             AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"], enabled: true, isDefault: false),
         ])
         #expect(config.selectedProvider().id == "gemini")
     }
 
-    @Test func selectedProviderFallsBackToClaudeWhenAllDisabled() {
+    @Test func selectedProviderFallsBackToClaudeAcpWhenAllDisabled() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, enabled: false, isDefault: true),
+            AgentProvider(id: "claude-acp", label: "Claude", backend: .acp, command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: false, isDefault: true),
             AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"], enabled: false, isDefault: false),
         ])
-        #expect(config.selectedProvider().id == "claude")
+        // All disabled → falls back to the claudeAcpDefault static.
+        #expect(config.selectedProvider().id == "claude-acp")
     }
 
     // MARK: - Persistence round-trip
@@ -134,8 +151,13 @@ import ACPModel
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
+        // Include claude-acp explicitly so the raw providers list matches the
+        // normalized list (normalized() would otherwise prepend it). This keeps
+        // the model-cache injection symmetric between init(providers:) and
+        // init(from:) → the round-trip is exactly equal.
         let original = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, enabled: true, isDefault: true),
+            AgentProvider(id: "claude-acp", label: "Claude", backend: .acp, command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: true, isDefault: true),
+            AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, enabled: true, isDefault: false),
             AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"], env: ["FOO": "bar"], enabled: true, isDefault: false),
         ])
         try original.save(to: tmp)
@@ -155,7 +177,7 @@ import ACPModel
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let config = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { [] })
-        #expect(config.providers.first?.id == "claude")
+        #expect(config.providers.first?.id == "claude-acp")
         // The seed is persisted so the next load is stable.
         let url = tmp.appendingPathComponent(AgentProvidersConfig.fileName, isDirectory: false)
         #expect(FileManager.default.fileExists(atPath: url.path))
@@ -185,10 +207,11 @@ import ACPModel
         #expect(ids.contains("kimi"))
         #expect(ids.contains("cursor"))
         #expect(ids.contains("kiro"))
-        // Claude (ACP wrapper) is deliberately NOT in the catalog — Claude is
-        // driven directly via ClaudeCLIBackend (claude -p), not over ACP.
-        #expect(!ids.contains("claude-agent-acp"))
-        // codex-acp (npx wrapper) removed — the catalog is node-free (direct binaries only).
+        // Claude via the official ACP wrapper IS in the catalog (the default chat
+        // provider); the legacy `claude -p` CLI id is NOT (driven via ClaudeCLIBackend).
+        #expect(ids.contains("claude-acp"))
+        #expect(!ids.contains("claude"))
+        // codex-acp (npx wrapper) removed — the catalog is npx-free.
         #expect(!ids.contains("codex-acp"))
     }
 
@@ -215,7 +238,7 @@ import ACPModel
 
     @Test func claudeCLIProviderYieldsClaudeBackend() {
         let provider = AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI)
-        let backend = AgentBackendFactory.makeBackend(provider: provider, policy: .yolo)
+        let backend = AgentBackendFactory.makeBackend(provider: provider, policy: .bypass)
         #expect(backend is ClaudeCLIBackend)
         // CLI backend has no permission channel.
         #expect(!(backend is PermissionResolving))
@@ -223,7 +246,7 @@ import ACPModel
 
     @Test func acpProviderYieldsACPBackend() {
         let provider = AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"])
-        let backend = AgentBackendFactory.makeBackend(provider: provider, policy: .yolo)
+        let backend = AgentBackendFactory.makeBackend(provider: provider, policy: .bypass)
         #expect(backend is ACPBackend)
         #expect(backend is PermissionResolving)
     }

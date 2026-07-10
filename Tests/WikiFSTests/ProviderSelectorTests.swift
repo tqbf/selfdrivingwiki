@@ -53,7 +53,7 @@ import ACPModel
     }
 
     /// Setting an UNKNOWN id as default does not collapse to zero defaults —
-    /// normalization keeps exactly one (Claude), so the selector never strands
+    /// normalization keeps exactly one (claude-acp), so the selector never strands
     /// the launcher with no provider.
     @Test func settingDefaultUnknownIdKeepsInvariant() {
         let config = AgentProvidersConfig(providers: [
@@ -64,7 +64,7 @@ import ACPModel
 
         let defaults = updated.providers.filter(\.isDefault)
         #expect(defaults.count == 1)
-        #expect(updated.defaultProvider.id == "claude")
+        #expect(updated.defaultProvider.id == "claude-acp")
     }
 
     /// The mutator is PURE: the original config is untouched (returns a new
@@ -78,8 +78,8 @@ import ACPModel
 
         _ = config.settingDefault(id: "gemini")
 
-        // Original unchanged: Claude is still default.
-        #expect(config.defaultProvider.id == "claude")
+        // Original unchanged: claude-acp is still default.
+        #expect(config.defaultProvider.id == "claude-acp")
         #expect(config.provider(id: "gemini")?.isDefault == false)
     }
 
@@ -96,7 +96,7 @@ import ACPModel
         ])
 
         let ids = config.enabledProviders.map(\.id)
-        #expect(ids == ["claude", "hermes"])
+        #expect(ids == ["claude-acp", "claude", "hermes"])
         #expect(!ids.contains("gemini"))
     }
 
@@ -118,7 +118,7 @@ import ACPModel
                 agent: KnownACPAgent(id: "gemini", label: "Gemini CLI", summary: "", detectExecutable: "gemini", command: ["gemini", "--acp"]),
                 resolvedPath: "/usr/local/bin/gemini")]
         })
-        #expect(config.defaultProvider.id == "claude")
+        #expect(config.defaultProvider.id == "claude-acp")
 
         config = config.settingDefault(id: "gemini")
         try config.save(to: tmp)
@@ -158,7 +158,7 @@ import ACPModel
                 resolvedPath: "/usr/local/bin/gemini"),
         ])
         try seed.save(to: tmp)
-        #expect(launcher.resolveSelectedProvider().id == "claude")
+        #expect(launcher.resolveSelectedProvider().id == "claude-acp")
 
         // The composer selector's action: set + persist.
         let updated = launcher.setDefaultProvider(id: "gemini")
@@ -174,7 +174,7 @@ import ACPModel
     /// guarantee): a freshly-seeded launcher resolves to Claude without the
     /// selector ever having run.
     @MainActor
-    @Test func launcherDefaultsToClaudeWhenUnpicked() throws {
+    @Test func launcherDefaultsToClaudeAcpWhenUnpicked() throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("provider-launcher-default-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -188,7 +188,7 @@ import ACPModel
 
         // providersConfig() seeds + persists on first read; no pick made.
         let config = launcher.providersConfig()
-        #expect(config.defaultProvider.id == "claude")
-        #expect(launcher.resolveSelectedProvider().id == "claude")
+        #expect(config.defaultProvider.id == "claude-acp")
+        #expect(launcher.resolveSelectedProvider().id == "claude-acp")
     }
 }

@@ -105,6 +105,16 @@ if [ -x "${PODCAST_HELPER_BIN}" ]; then
 else
   echo "  (${PODCAST_HELPER_NAME} not found at ${PODCAST_HELPER_BIN} — Apple Podcasts transcript ingest will be unavailable)"
 fi
+# Bun runtime — bundled so ACP providers (claude-acp via bunx) work without a
+# system-wide install. Resolved from BUN_INSTALL or PATH; skipped (not fatal)
+# if absent (the provider falls back to PATH resolution at spawn time).
+BUN_SRC="${BUN_INSTALL:-$HOME/.bun}/bin/bun"
+if [ -x "${BUN_SRC}" ]; then
+  cp "${BUN_SRC}" "${HELPERS_DIR}/bun"
+  echo "  ✓ bundled bun ($(file -b "${BUN_SRC}" | cut -d, -f1))"
+else
+  echo "  (bun not found at ${BUN_SRC} — ACP providers will need bun on PATH)"
+fi
 # wikictl is a plain CLI with no Info.plist, so it can't read the App Group id
 # the way the .app/.appex do. Drop a sidecar that WikiIdentifiers reads. It must
 # NOT live in Contents/Helpers (a code location — codesign rejects unsigned
@@ -352,6 +362,11 @@ PLIST
   if [ -f "${HELPERS_DIR}/${PODCAST_HELPER_NAME}" ]; then
     codesign --force --timestamp=none --sign "${IDENTITY}" \
       "${HELPERS_DIR}/${PODCAST_HELPER_NAME}"
+  fi
+  # Bun runtime (nested Mach-O) — sign before the outer app so the seal holds.
+  if [ -f "${HELPERS_DIR}/bun" ]; then
+    codesign --force --timestamp=none --sign "${IDENTITY}" \
+      "${HELPERS_DIR}/bun"
   fi
   echo "→ codesign appex (${IDENTITY})"
   codesign --force --timestamp=none --sign "${IDENTITY}" \

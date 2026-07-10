@@ -157,13 +157,13 @@ final class AgentLauncher {
         UserDefaults.standard.bool(forKey: AgentLauncher.useACPBackendKey)
     }
 
-    /// The chat's always-ask/yolo mode (`@AppStorage("agentAlwaysAsk")`, default
-    /// `false` = yolo). v1: app-wide persisted, default-OFF (no `chats`-table
-    /// schema migration). A future slice can persist it per-chat. Read at spawn
-    /// time so it bakes into the `ACPBackend`'s `PermissionPolicy`. Has NO effect
-    /// when the ACP backend is OFF (the CLI backend has no permission channel).
-    @ObservationIgnored var resolveAlwaysAsk: () -> Bool = {
-        UserDefaults.standard.bool(forKey: AgentLauncher.alwaysAskKey)
+    /// The chat's permission mode (`@AppStorage("agentPermissionMode")`, default
+    /// `.bypass`). v1: app-wide persisted. Read at spawn time so it bakes into
+    /// the `ACPBackend`'s `PermissionPolicy`. Has NO effect when the backend is
+    /// the CLI (no permission channel).
+    @ObservationIgnored var resolvePermissionMode: () -> PermissionPolicy = {
+        let raw = UserDefaults.standard.string(forKey: AgentLauncher.permissionModeKey) ?? ""
+        return PermissionPolicy(rawValue: raw) ?? .bypass
     }
 
     /// The Keychain-backed store for the ACP agent's API key (slice 3). Injectable
@@ -311,7 +311,7 @@ final class AgentLauncher {
 
     /// UserDefaults keys shared with the `@AppStorage` bindings in Settings + ChatView.
     static let useACPBackendKey = "useACPBackend"
-    static let alwaysAskKey = "agentAlwaysAsk"
+    static let permissionModeKey = "agentPermissionMode"
     /// The active session handle (nil when no session is live). Replaces the
     /// old `process: Process?` — the launcher never touches a `Process` directly.
     @ObservationIgnored private var sessionHandle: SessionHandle?
@@ -361,6 +361,11 @@ final class AgentLauncher {
     /// Reset by `resetRunArtifacts()`. Only set on the fresh-chat path; the
     /// continue path (D3) leaves it false (no seeding for an existing chat).
     private var firstMessagePrePersisted = false
+    /// True when `startInteractiveQuery` has already appended the first
+    /// `.userText` to `events` (so the user sees their message immediately,
+    /// before the ~4s backend startup). `sendInteractiveMessage` consumes +
+    /// clears this to avoid a double-append.
+    private var firstMessagePreDisplayed = false
     /// Backstop poller that reconciles the UI if the process `terminationHandler`
     /// is ever missed (see `startCompletionWatchdog`). Cancelled on teardown.
     private var watchdogTask: Task<Void, Never>?
@@ -842,7 +847,7 @@ final class AgentLauncher {
         // policy (default OFF = ClaudeCLI; default yolo). Constructed HERE so both
         // `start` and the per-turn stream consumer capture the same backend. The
         // ACP agent spawn (path + args + key) is threaded into providerHints below.
-        let policy: PermissionPolicy = resolveAlwaysAsk() ? .alwaysAsk : .yolo
+        let policy: PermissionPolicy = resolvePermissionMode()
 
         // #324: provider selection replaces the slice-3 `useACPBackend` bool +
         // single `ACPAgentConfig`. The launcher reads `agent-providers.json`,
@@ -1098,7 +1103,7 @@ final class AgentLauncher {
 
         // Slice 2/3: select the backend per the chat's permission policy (default
         // yolo). The ACP agent spawn is threaded into providerHints below.
-        let policy: PermissionPolicy = resolveAlwaysAsk() ? .alwaysAsk : .yolo
+        let policy: PermissionPolicy = resolvePermissionMode()
         DebugLog.agent("startInteractiveQuery: permissionPolicy=\(policy)") // TEMP DEBUG
 
         // #324: provider selection replaces the slice-3 `useACPBackend` bool +
@@ -1114,13 +1119,21 @@ final class AgentLauncher {
         var resolvedACPCommand: [String] = []
         var acpAPIKey: String?
         if useACP, let command = provider.command, let exe = command.first {
-            switch PathPreflight.resolveOnLoginShell(executable: AgentCommandConfig.expandTilde(exe)) {
-            case .found(let path):
-                resolvedACPCommand = [path] + Array(command.dropFirst())
-            case .missing(let reason):
-                DebugLog.agent("startInteractiveQuery: ACP exe missing — \(reason)") // TEMP DEBUG
-                preflightError = reason
-                return
+            // For "bun", prefer the binary bundled in Contents/Helpers so the app
+            // works without a system-wide bun install. Fall back to PATH resolution.
+            if exe == "bun",
+               let bundled = Bundle.main.url(forAuxiliaryExecutable: "bun")?.path {
+                DebugLog.agent("startInteractiveQuery: using bundled bun at \(bundled)") // TEMP DEBUG
+                resolvedACPCommand = [bundled] + Array(command.dropFirst())
+            } else {
+                switch PathPreflight.resolveOnLoginShell(executable: AgentCommandConfig.expandTilde(exe)) {
+                case .found(let path):
+                    resolvedACPCommand = [path] + Array(command.dropFirst())
+                case .missing(let reason):
+                    DebugLog.agent("startInteractiveQuery: ACP exe missing — \(reason)") // TEMP DEBUG
+                    preflightError = reason
+                    return
+                }
             }
             acpAPIKey = acpCredentialStore.apiKey(forProvider: provider.id)
             DebugLog.agent("startInteractiveQuery: ACP apiKey set=\(acpAPIKey != nil)") // TEMP DEBUG
@@ -1198,6 +1211,16 @@ final class AgentLauncher {
         // persisted store. Set here (after resetRunArtifacts cleared any prior
         // value) so the flip is live from the first streamed token.
         activeChatID = chatID
+        // Pre-display the user's message so it appears instantly — don't make
+        // the user wait ~4s for backend.start (spawn + initialize + newSession)
+        // before seeing their own text. `sendInteractiveMessage` will skip its
+        // own append when `firstMessagePreDisplayed` is set.
+        let preDisplay = (firstMessageDisplay ?? firstMessage)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !preDisplay.isEmpty {
+            events.append(.userText(preDisplay))
+            firstMessagePreDisplayed = true
+        }
         // NOTE: do NOT `setGenerating(true)` here. The first turn's transition is
         // owned by `sendInteractiveMessage(firstMessage)` below (after the gate is
         // acquired). If we set it here, `sendInteractiveMessage`'s gate-guard would
@@ -1276,6 +1299,8 @@ final class AgentLauncher {
             currentProcessID = nil
             lastActivityAt = Date()
             releaseEditLock()
+            // Clean up the pre-displayed user text (backend never started).
+            firstMessagePreDisplayed = false
             // Cancel any queued send task (shouldn't exist yet, but guard for safety).
             interactiveSendTask?.cancel()
             interactiveSendTask = nil
@@ -1330,7 +1355,13 @@ final class AgentLauncher {
             // actual message in the transcript). The full `trimmed` message
             // (preamble) is sent to the backend below.
             let visible = (displayText ?? trimmed).trimmingCharacters(in: .whitespacesAndNewlines)
-            self.events.append(.userText(visible))
+            if self.firstMessagePreDisplayed {
+                // Already appended by `startInteractiveQuery` before backend.start
+                // — skip the double-append but keep the persisted-count logic below.
+                self.firstMessagePreDisplayed = false
+            } else {
+                self.events.append(.userText(visible))
+            }
             // The fresh-chat path seeds this first user message at chat-creation
             // time (WikiStoreModel.startChat). Mark it flushed so the next
             // flushTranscript() doesn't double-insert it — the row already exists
@@ -1657,6 +1688,7 @@ final class AgentLauncher {
         transcriptSink = nil
         persistedEventCount = 0
         firstMessagePrePersisted = false
+        firstMessagePreDisplayed = false
         // D2: a stale active chat association must never survive into a new run.
         // (startInteractiveQuery sets the fresh value right after this reset.)
         activeChatID = nil

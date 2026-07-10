@@ -63,20 +63,24 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
     ]
 
     public init(
-        providers: [AgentProvider] = [AgentProvider.claudeDefault],
+        providers: [AgentProvider] = [AgentProvider.claudeAcpDefault],
         providerModels: [String: [CachedModelInfo]] = [:],
         selectedModelIds: [String: String] = [:]
     ) {
         self.providers = AgentProvidersConfig.normalized(providers)
-        // Guarantee the Claude provider always has its hardcoded model list,
+        // Guarantee Claude providers always have their hardcoded model list,
         // even for a hand-built config with no providerModels — so the selector
-        // never shows an empty Claude submenu. Only inject when the claude
-        // provider is present AND has no cached models (a captured/real list
-        // would win if one ever existed).
+        // never shows an empty Claude submenu. Only inject when the provider is
+        // present AND has no cached models (a captured/real list would win).
+        // Check `self.providers` (normalized) so a config built without
+        // claude-acp still gets its models after normalization injects it —
+        // matching `init(from decoder:)` which also checks normalized providers.
         var models = providerModels
-        if providers.contains(where: { $0.id == "claude" }),
-           models["claude"]?.isEmpty ?? true {
-            models["claude"] = Self.claudeCachedModels
+        for pid in ["claude-acp", "claude"] {
+            if self.providers.contains(where: { $0.id == pid }),
+               models[pid]?.isEmpty ?? true {
+                models[pid] = Self.claudeCachedModels
+            }
         }
         self.providerModels = models
         self.selectedModelIds = selectedModelIds
@@ -93,7 +97,7 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.providers = AgentProvidersConfig.normalized(
-            try c.decodeIfPresent([AgentProvider].self, forKey: .providers) ?? [.claudeDefault])
+            try c.decodeIfPresent([AgentProvider].self, forKey: .providers) ?? [.claudeAcpDefault])
         // New optional fields default to empty so a pre-#329 `agent-providers.json`
         // (no model caches) decodes without a migration — "no model selected →
         // agent default" is exactly the legacy behavior.
@@ -102,9 +106,11 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         // too (so existing users with an older agent-providers.json also see
         // selectable Claude rows). Only inject when absent/empty.
         var models = decodedModels
-        if self.providers.contains(where: { $0.id == "claude" }),
-           models["claude"]?.isEmpty ?? true {
-            models["claude"] = Self.claudeCachedModels
+        for pid in ["claude-acp", "claude"] {
+            if self.providers.contains(where: { $0.id == pid }),
+               models[pid]?.isEmpty ?? true {
+                models[pid] = Self.claudeCachedModels
+            }
         }
         self.providerModels = models
         self.selectedModelIds = try c.decodeIfPresent([String: String].self, forKey: .selectedModelIds) ?? [:]
@@ -119,14 +125,16 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
     /// Enforce the single-default invariant + always-present Claude. PURE so it
     /// is unit-tested directly.
     ///
-    /// If no provider is default, the Claude provider (or the first provider)
-    /// becomes default. If multiple are default, the FIRST one keeps it and the
-    /// rest are demoted. If Claude is absent it is prepended as the default.
+    /// If no provider is default, the `claude-acp` provider (or the first
+    /// provider) becomes default. If multiple are default, the FIRST one keeps
+    /// it and the rest are demoted. If `claude-acp` is absent it is prepended
+    /// as the default (the app always has a working Claude path).
     static func normalized(_ providers: [AgentProvider]) -> [AgentProvider] {
         var list = providers
-        // Ensure Claude is present + default-eligible.
-        if !list.contains(where: { $0.id == "claude" }) {
-            list.insert(.claudeDefault, at: 0)
+        // Ensure claude-acp is present + default-eligible (the app's canonical
+        // Claude path).
+        if !list.contains(where: { $0.id == "claude-acp" }) {
+            list.insert(.claudeAcpDefault, at: 0)
         }
         // Single-default: keep the first `isDefault == true`, demote the rest.
         var sawDefault = false
@@ -137,8 +145,8 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
             }
             return p
         }
-        // If none was default, the Claude provider becomes default.
-        if !sawDefault, let idx = list.firstIndex(where: { $0.id == "claude" }) {
+        // If none was default, the claude-acp provider becomes default.
+        if !sawDefault, let idx = list.firstIndex(where: { $0.id == "claude-acp" }) {
             list[idx].isDefault = true
         }
         return list
@@ -150,7 +158,7 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
     /// one). Falls back to Claude if no provider is marked default (defensive —
     /// `normalized` guarantees one, but a hand-edited file could violate it).
     public var defaultProvider: AgentProvider {
-        providers.first(where: { $0.isDefault }) ?? .claudeDefault
+        providers.first(where: { $0.isDefault }) ?? .claudeAcpDefault
     }
 
     /// The provider to actually launch: the default if enabled, else the first
@@ -159,7 +167,7 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
     public func selectedProvider() -> AgentProvider {
         let def = defaultProvider
         if def.enabled { return def }
-        return providers.first(where: { $0.enabled }) ?? .claudeDefault
+        return providers.first(where: { $0.enabled }) ?? .claudeAcpDefault
     }
 
     /// Look up a provider by id.
@@ -258,14 +266,21 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
     /// no discovery side effects — callers pass the discovered set in. Used both
     /// by `loadOrSeed` (with a real discovery) and by unit tests (with a stub).
     ///
-    /// Claude is ALWAYS first + default + enabled. Each discovered agent becomes
-    /// an enabled-but-not-default ACP provider (the user must explicitly make it
-    /// default to switch the active backend — preserving "default = Claude").
+    /// `claude-acp` (Claude via the ACP wrapper) is ALWAYS first + default +
+    /// enabled. The legacy `claude` CLI provider is included but DISABLED (the
+    /// `-p` system is superseded by ACP). Each discovered agent becomes an
+    /// enabled-but-not-default ACP provider.
     public static func seed(discovered: [DiscoveredACPAgent]) -> AgentProvidersConfig {
-        var providers: [AgentProvider] = [.claudeDefault]
+        var providers: [AgentProvider] = [.claudeAcpDefault]
+        // Include the legacy CLI provider, disabled.
+        var legacy = AgentProvider.claudeDefault
+        legacy.enabled = false
+        legacy.isDefault = false
+        providers.append(legacy)
         // De-dup discovered agents by id (discovery can't return dupes today, but
-        // be defensive against a future catalog edit).
-        var seen = Set(["claude"])
+        // be defensive against a future catalog edit). Skip claude-acp/claude
+        // (already seeded above).
+        var seen = Set(["claude-acp", "claude"])
         for d in discovered where seen.insert(d.agent.id).inserted {
             providers.append(.acp(from: d.agent))
         }

@@ -122,10 +122,12 @@ import WikiFSCore
         let loaded = try JSONDecoder().decode(AgentProvidersConfig.self, from: Data(contentsOf: url))
         #expect(loaded.cachedModels(forProvider: "hermes").map(\.modelId) == ["glm-4.7", "glm-4-7"])
         #expect(loaded.selectedModelId(forProvider: "hermes") == "glm-4.7")
-        // Claude has the hardcoded alias list (no ACP discovery, but the picker
-        // needs selectable rows — opus/sonnet/haiku).
+        // Both Claude providers (claude-acp + legacy claude) have the hardcoded
+        // alias list (opus/sonnet/haiku) — the picker needs selectable rows.
+        #expect(loaded.cachedModels(forProvider: "claude-acp").map(\.modelId) == ["opus", "sonnet", "haiku"])
         #expect(loaded.cachedModels(forProvider: "claude").map(\.modelId) == ["opus", "sonnet", "haiku"])
-        // No selection for Claude → nil (agent default).
+        // No selection for either Claude provider → nil (agent default).
+        #expect(loaded.selectedModelId(forProvider: "claude-acp") == nil)
         #expect(loaded.selectedModelId(forProvider: "claude") == nil)
     }
 
@@ -151,7 +153,9 @@ import WikiFSCore
         try legacyJSON.data(using: .utf8)!.write(to: url)
 
         let loaded = try JSONDecoder().decode(AgentProvidersConfig.self, from: Data(contentsOf: url))
-        // No ACP providers with caches → only Claude's injected list is present.
+        // Both injected Claude providers get the hardcoded list (claude-acp was
+        // injected by normalized(), claude was in the legacy file).
+        #expect(loaded.cachedModels(forProvider: "claude-acp").map(\.modelId) == ["opus", "sonnet", "haiku"])
         #expect(loaded.cachedModels(forProvider: "claude").map(\.modelId) == ["opus", "sonnet", "haiku"])
         // Selections remain empty (legacy: no model selected → agent default).
         #expect(loaded.selectedModelIds.isEmpty)

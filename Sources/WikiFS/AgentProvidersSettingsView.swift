@@ -397,7 +397,7 @@ private struct ProviderDetailSheet: View {
                     Section {
                         TextField("Command", text: $commandText, prompt: Text("e.g. gemini --acp"))
                             .fontDesign(.monospaced)
-                            .disabled(provider.id == "claude")
+                            .disabled(provider.id == "claude" || provider.id == "claude-acp")
                     } header: {
                         Text("Command")
                     } footer: {

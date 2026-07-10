@@ -87,6 +87,20 @@ public struct AgentProvider: Codable, Equatable, Sendable, Identifiable {
         isDefault: true
     )
 
+    /// Claude via the ACP wrapper (`bunx @agentclientprotocol/claude-agent-acp`).
+    /// This is the DEFAULT chat provider — it replaces the legacy `claude -p`
+    /// CLI path with the official ACP protocol. The CLI provider is retained
+    /// but disabled in the seed.
+    public static let claudeAcpDefault = AgentProvider(
+        id: "claude-acp",
+        label: "Claude",
+        backend: .acp,
+        command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"],
+        env: [:],
+        enabled: true,
+        isDefault: true
+    )
+
     /// Build an ACP provider from a discovered catalog agent. Mirrors paseo's
     /// `buildAcpProviderConfigPatch`: the catalog entry's `command` becomes the
     /// provider's spawn argv, and its `id`/`label` carry over. NOT default (the

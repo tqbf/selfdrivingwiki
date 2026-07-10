@@ -9,10 +9,10 @@ import Foundation
 /// spawn argv. It backs BOTH discovery (`ACPProviderDiscovery`) and the Add
 /// Provider catalog in Settings.
 ///
-/// **Claude is intentionally NOT here:** the app already drives `claude` directly
-/// via `ClaudeCLIBackend` (`claude -p`), the way paseo uses the Claude Agent SDK.
-/// ACP is for agents without a native selfdrivingwiki integration (Gemini, Hermes,
-/// …). `claude-agent-acp` is therefore not in the catalog.
+/// **Claude via ACP:** the `claude-acp` entry runs `@agentclientprotocol/claude-agent-acp`
+/// via `bunx` — the official ACP wrapper around Claude Code. This is the default
+/// chat path; the legacy `claude -p` CLI provider is retained but disabled.
+/// Other entries (Gemini, Hermes, …) are agents without a native integration.
 ///
 /// Extensible: append entries as agents' ACP invocations are confirmed. Commands
 /// verified against paseo's `acp-provider-catalog.ts`. Convention: `command[0]`
@@ -38,6 +38,12 @@ public enum ACPProviderCatalog {
     /// Each entry's `command[0]` is its `detectExecutable`. Add entries here as
     /// their ACP invocation is verified.
     public static let agents: [KnownACPAgent] = [
+        KnownACPAgent(
+            id: "claude-acp",
+            label: "Claude",
+            summary: "Claude Code via the official ACP wrapper (bunx @agentclientprotocol/claude-agent-acp).",
+            detectExecutable: "bun",
+            command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"]),
         KnownACPAgent(
             id: "gemini",
             label: "Gemini CLI",
