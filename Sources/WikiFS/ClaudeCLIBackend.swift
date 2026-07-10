@@ -134,7 +134,10 @@ actor ClaudeCLIBackend: AgentBackend {
 
     private var sessions: [String: CLISession] = [:]
 
-    // MARK: - AgentBackend
+// MARK: - AgentBackend
+// TEMP DEBUG: the ClaudeCLIBackend.start/send/cancel lines below carry verbose
+// TEMP DEBUG: lifecycle logging (spawn args, per-event routing, turn end). Strip
+// TEMP DEBUG: via `grep -n "TEMP DEBUG"`.
 
     func start(
         profile: BackendProfile,
@@ -142,6 +145,7 @@ actor ClaudeCLIBackend: AgentBackend {
         onExit: @escaping @Sendable (Int) -> Void
     ) async throws -> SessionHandle {
         guard let cli = profile.cli else {
+            DebugLog.agent("ClaudeCLIBackend.start: FAIL noCLIProfile") // TEMP DEBUG
             throw ClaudeCLIError.noCLIProfile
         }
 
@@ -176,7 +180,8 @@ actor ClaudeCLIBackend: AgentBackend {
             )
         }
 
-        DebugLog.agent("ClaudeCLIBackend.start: command \(command.debugSummary)")
+        DebugLog.agent("ClaudeCLIBackend.start: command \(command.debugSummary)") // TEMP DEBUG (existed; re-tagged)
+        DebugLog.agent("ClaudeCLIBackend.start: isInteractive=\(isInteractive) exe=\(command.executable) argCount=\(command.arguments.count) authSet=\(!(command.environment["ANTHROPIC_API_KEY"]?.isEmpty ?? true)) cwd=\(profile.scratchDirectory?.lastPathComponent ?? "(none)")") // TEMP DEBUG
 
         // Create the per-turn stream BEFORE spawning so no events are lost
         // between spawn and the first `send`.
@@ -217,6 +222,7 @@ actor ClaudeCLIBackend: AgentBackend {
             cli.onStdoutChunk?(chunk)
             let events = lineBuffer.drainAndParse(chunk)
             for event in events {
+                DebugLog.agent("ClaudeCLIBackend: parsed → \(event)") // TEMP DEBUG
                 // Yield to the current turn's continuation. If the turn was
                 // already finished (e.g. process exit raced), yield is a
                 // no-op on a finished continuation.
@@ -225,6 +231,7 @@ actor ClaudeCLIBackend: AgentBackend {
                 // for-await exits. The process stays alive (interactive) or
                 // will exit (one-shot → terminationHandler).
                 if AgentEvent.endsGeneration(event) {
+                    DebugLog.agent("ClaudeCLIBackend: endsGeneration → finish turn stream") // TEMP DEBUG
                     box.continuation?.finish()
                     box.continuation = nil
                 }
@@ -247,7 +254,7 @@ actor ClaudeCLIBackend: AgentBackend {
             stderrPipe.fileHandleForReading.readabilityHandler = nil
 
             let status = proc.terminationStatus
-            DebugLog.agent("ClaudeCLIBackend: terminationHandler fired pid=\(proc.processIdentifier) status=\(status)")
+            DebugLog.agent("ClaudeCLIBackend: terminationHandler fired pid=\(proc.processIdentifier) status=\(status)") // TEMP DEBUG (existed; re-tagged)
 
             // Drain any trailing partial line and yield it before finishing.
             if let trailing = lineBuffer.drainTrailing() {
@@ -263,11 +270,12 @@ actor ClaudeCLIBackend: AgentBackend {
         }
 
         do {
-            DebugLog.agent("ClaudeCLIBackend: spawning kind=\(cli.operation.kind.rawValue) wikiID=\(cli.wikiID) exe=\(command.executable)")
+            DebugLog.agent("ClaudeCLIBackend: spawning kind=\(cli.operation.kind.rawValue) wikiID=\(cli.wikiID) exe=\(command.executable)") // TEMP DEBUG (existed; re-tagged)
             try process.run()
-            DebugLog.agent("ClaudeCLIBackend: spawned pid=\(process.processIdentifier) kind=\(cli.operation.kind.rawValue)")
+            DebugLog.agent("ClaudeCLIBackend: spawned pid=\(process.processIdentifier) kind=\(cli.operation.kind.rawValue)") // TEMP DEBUG (existed; re-tagged)
         } catch {
             // Clean up the stream so the consumer doesn't hang.
+            DebugLog.agent("ClaudeCLIBackend: spawn FAILED: \(error.localizedDescription)") // TEMP DEBUG
             continuation.finish()
             throw error
         }
@@ -307,8 +315,10 @@ actor ClaudeCLIBackend: AgentBackend {
     func send(_ turn: TurnInput, into handle: SessionHandle) async -> AsyncStream<AgentEvent> {
         guard let session = sessions[handle.id] else {
             // Session gone (cancelled/finished) — return an empty stream.
+            DebugLog.agent("ClaudeCLIBackend.send: no session for handle \(handle.id) — empty stream") // TEMP DEBUG
             return AsyncStream { $0.finish() }
         }
+        DebugLog.agent("ClaudeCLIBackend.send: turn chars=\(turn.userText.count) handle=\(handle.id) interactive=\(session.isInteractive)") // TEMP DEBUG
 
         // Resolve THIS turn's stream BEFORE writing stdin, so no response event
         // is lost in the gap between the stdin write and the continuation being
@@ -347,10 +357,12 @@ actor ClaudeCLIBackend: AgentBackend {
                 if let line, let data = (line + "\n").data(using: .utf8) {
                     do {
                         try session.stdinHandle?.write(contentsOf: data)
+                        DebugLog.agent("ClaudeCLIBackend.send: wrote \(data.count) bytes to stdin (turn end will synthesize .messageStop)") // TEMP DEBUG
                     } catch {
                         // Write failed — surface as a raw event and finish. Also
                         // finish the turn's continuation so its stream doesn't
                         // dangle (terminationHandler would finish it, but be explicit).
+                        DebugLog.agent("ClaudeCLIBackend.send: stdin write FAILED: \(error.localizedDescription)") // TEMP DEBUG
                         session.continuationBox.continuation?.finish()
                         session.continuationBox.continuation = nil
                         let (errStream, cont) = AsyncStream.makeStream(of: AgentEvent.self)
@@ -372,7 +384,11 @@ actor ClaudeCLIBackend: AgentBackend {
     }
 
     func cancel(_ session: SessionHandle) async {
-        guard let session = sessions.removeValue(forKey: session.id) else { return }
+        guard let session = sessions.removeValue(forKey: session.id) else {
+            DebugLog.agent("ClaudeCLIBackend.cancel: no session for handle \(session.id) — no-op") // TEMP DEBUG
+            return
+        }
+        DebugLog.agent("ClaudeCLIBackend.cancel: terminating session pid=\(session.process.processIdentifier)") // TEMP DEBUG
         // Close stdin and terminate the process. The terminationHandler will
         // fire onExit via the one-shot OnExitGate (safe even though the
         // session is already removed from the actor's map).

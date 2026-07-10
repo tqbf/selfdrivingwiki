@@ -258,6 +258,7 @@ struct ProviderSelector: View {
     /// Done atomically (one load→mutate→save) to avoid a race between two
     /// separate writes.
     private func selectModel(_ modelId: String?, for provider: AgentProvider) {
+        DebugLog.agent("ProviderSelector.selectModel: provider=\(provider.id) modelId=\(modelId ?? "nil") (nil=Default/agent-default)") // TEMP DEBUG
         config = launcher.setSelectedModelAndDefault(modelId, provider: provider)
     }
 

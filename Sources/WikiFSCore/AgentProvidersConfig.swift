@@ -192,6 +192,7 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         } else {
             cache[providerId] = models
         }
+        DebugLog.store("AgentProvidersConfig.settingCachedModels: provider=\(providerId) count=\(models.isEmpty ? 0 : models.count)") // TEMP DEBUG
         return AgentProvidersConfig(
             providers: providers,
             providerModels: cache,
@@ -209,6 +210,7 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         } else {
             selections.removeValue(forKey: providerId)
         }
+        DebugLog.store("AgentProvidersConfig.settingSelectedModel: provider=\(providerId) modelId=\(modelId ?? "nil")") // TEMP DEBUG
         return AgentProvidersConfig(
             providers: providers,
             providerModels: providerModels,
@@ -252,12 +254,14 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
            !config.providers.isEmpty {
             // Preserve the decoded model caches + selections (re-wrapping with
             // only `providers` would wipe them). Re-normalize providers only.
+            DebugLog.store("AgentProvidersConfig.loadOrSeed: LOAD providers=\(config.providers.count) hasModelCaches=\(!config.providerModels.isEmpty) hasSelections=\(!config.selectedModelIds.isEmpty)") // TEMP DEBUG
             return AgentProvidersConfig(
                 providers: config.providers,
                 providerModels: config.providerModels,
                 selectedModelIds: config.selectedModelIds)
         }
         // Missing / corrupt / empty → seed + persist.
+        DebugLog.store("AgentProvidersConfig.loadOrSeed: SEED (file missing/corrupt/empty)") // TEMP DEBUG
         let seeded = seed(discovered: discover())
         try? seeded.save(to: directory)
         return seeded
@@ -267,6 +271,7 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
     /// pretty-printed + sorted keys. Never writes API keys (those are in the
     /// Keychain).
     public func save(to directory: URL) throws {
+        DebugLog.store("AgentProvidersConfig.save: providers=\(providers.count) default=\(defaultProvider.id) modelCaches=\(providerModels.count) selections=\(selectedModelIds.count)") // TEMP DEBUG
         let url = directory.appendingPathComponent(Self.fileName, isDirectory: false)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
