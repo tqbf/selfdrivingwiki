@@ -2647,6 +2647,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             displayName = nil
         }
 
+        DebugLog.store("addSource ENTER filename=\(filename) bytes=\(data.count) thread=\(Thread.current)")
         return try mutate(event: { source in localEvent(.source, id: source.id.rawValue, change: .created) }) {
         guard data.count <= Self.ingestByteCap else {
             throw WikiStoreError.unexpected(
@@ -4817,7 +4818,14 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let depth = transactionDepth
         let savepoint = "wiki_txn_\(depth)"
         if depth == 0 {
-            try exec("BEGIN IMMEDIATE;")
+            let start = DispatchTime.now()
+            do {
+                try exec("BEGIN IMMEDIATE;")
+            } catch {
+                let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+                DebugLog.store("withTransaction BEGIN IMMEDIATE failed after \(elapsedMs)ms — \(error)")
+                throw error
+            }
         } else {
             try exec("SAVEPOINT \(savepoint);")
         }
@@ -4918,6 +4926,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         defer { sqlite3_free(errmsg) }
         guard rc == SQLITE_OK else {
             let msg = errmsg.map { String(cString: $0) } ?? SQLiteStatement.message(db)
+            if rc == SQLITE_BUSY || rc == SQLITE_LOCKED {
+                DebugLog.store("exec BUSY/LOCKED rc=\(rc) sql=\(sql) thread=\(Thread.current) msg=\(msg)")
+            }
             throw WikiStoreError.sqlite(code: rc, message: msg)
         }
     }

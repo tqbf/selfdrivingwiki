@@ -350,6 +350,7 @@ struct Projection {
             if cachedStore == nil {
                 let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID)
                 if let url, FileManager.default.fileExists(atPath: url.path) {
+                    DebugLog.fileprovider("ReadScope opening cached read-only connection wikiID=\(wikiID) thread=\(Thread.current)")
                     cachedStore = try? SQLiteWikiStore(readOnlyURL: url)
                 }
             }
@@ -378,6 +379,7 @@ struct Projection {
         if let scope = readStoreHolder { return scope.store }
         let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID)
         guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
+        DebugLog.fileprovider("openReadStore opening short-lived read-only connection wikiID=\(wikiID) thread=\(Thread.current)")
         return try? SQLiteWikiStore(readOnlyURL: url)
     }
 
