@@ -40,6 +40,16 @@ enum AgentOperationRunner {
         guard !sourceIDs.isEmpty else { return }
         DebugLog.ingest("runMultiIngest: begin count=\(sourceIDs.count)")
 
+        // Announce the ingest is active BEFORE extraction so the Edit preflight
+        // (store.isIngestInProgress) blocks during the extraction window too
+        // (issue #235). The defer clears it on any exit where the agent process
+        // did NOT spawn (early returns, extraction cancel, spawn failure). When
+        // the process does spawn, the ingest run's onUnlock clears it on exit.
+        store.beginIngest()
+        defer {
+            if !launcher.isRunning { store.endIngest() }
+        }
+
         // NOTE: `ingestingSourceIDs` (the agent-phase flag) is NOT set here. It is
         // assigned at spawn commit inside `AgentLauncher.run` (around `onLock`),
         // so a pure extraction or a queued ingest never mislabels rows as
@@ -219,9 +229,13 @@ enum AgentOperationRunner {
         }
 
         // If the query agent wants edit permissions, it must take the edit lock.
-        // Refuse to start if another agent (ingest) already holds it.
-        if allowWikiEdits && store.isAgentRunning {
-            launcher.preflightError = "An ingestion is updating the wiki. Wait for it to finish before starting a chat."
+        // Refuse to start if an ingest is in progress (extraction OR agent phase)
+        // or if another agent already holds the lock (issue #235).
+        if Self.shouldBlockEditStart(
+            allowWikiEdits: allowWikiEdits,
+            isAgentRunning: store.isAgentRunning,
+            isIngestInProgress: store.isIngestInProgress) {
+            launcher.preflightError = "An ingestion is in progress. Wait for it to finish before starting a chat."
             return
         }
 
@@ -287,6 +301,26 @@ enum AgentOperationRunner {
         if let chat, launcher.preflightError != nil {
             store.rollbackChatCreation(id: chat.id, toDraft: allowWikiEdits ? .edit : .ask)
         }
+    }
+
+    // MARK: - Pure predicates (issue #235)
+
+    /// Whether an Edit-mode session should be blocked from starting because an
+    /// ingest is in progress or another agent holds the edit lock. Pure so the
+    /// (allowWikiEdits × isAgentRunning × isIngestInProgress) matrix is unit-
+    /// testable without driving a live launcher or store. Used by both
+    /// `startChat` and `continueChat`.
+    ///
+    /// `isIngestInProgress` covers the extraction window (pdf2md) that
+    /// `isAgentRunning` misses (it only fires at spawn commit). Ask mode
+    /// (allowWikiEdits == false) is never blocked — it is read-only and
+    /// lock-exempt.
+    static func shouldBlockEditStart(
+        allowWikiEdits: Bool,
+        isAgentRunning: Bool,
+        isIngestInProgress: Bool
+    ) -> Bool {
+        allowWikiEdits && (isAgentRunning || isIngestInProgress)
     }
 
     // MARK: - Continue a persisted chat (D3, seeded-fallback)
@@ -488,9 +522,13 @@ enum AgentOperationRunner {
             break
         }
 
-        // Edit-lock sanity: refuse if an ingest holds the lock and we want edits.
-        if allowWikiEdits && store.isAgentRunning {
-            launcher.preflightError = "An ingestion is updating the wiki. Wait for it to finish before starting a chat."
+        // Edit-lock sanity: refuse if an ingest is in progress (extraction OR
+        // agent phase) or holds the lock and we want edits (issue #235).
+        if Self.shouldBlockEditStart(
+            allowWikiEdits: allowWikiEdits,
+            isAgentRunning: store.isAgentRunning,
+            isIngestInProgress: store.isIngestInProgress) {
+            launcher.preflightError = "An ingestion is in progress. Wait for it to finish before starting a chat."
             return
         }
 
@@ -602,7 +640,11 @@ enum AgentOperationRunner {
             wikictlDirectory: HelpersLocation.wikictlDirectory,
             ingestingSourceIDs: ingestingSourceIDs,
             onLock: { if takeEditLock { store.beginAgentRun() } },
-            onUnlock: { if takeEditLock { store.endAgentRun() } }
+            onUnlock: {
+                if takeEditLock { store.endAgentRun() }
+                // Ingest runs also clear the ingest-in-progress flag (issue #235).
+                if !ingestingSourceIDs.isEmpty { store.endIngest() }
+            }
         )
     }
 

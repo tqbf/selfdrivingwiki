@@ -310,7 +310,14 @@ struct ChatView: View {
                 .font(.largeTitle)
                 .fontWeight(.regular)
                 .multilineTextAlignment(.center)
-            composer(enabled: isComposerEnabled)
+            VStack(spacing: 4) {
+                composer(enabled: isComposerEnabled)
+                if let caption = composerCaption {
+                    Text(caption)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, ChatMetrics.emptyStateHorizontalInset)
@@ -323,7 +330,7 @@ struct ChatView: View {
     private var chatComposer: some View {
         VStack(spacing: 4) {
             composer(enabled: isComposerEnabled)
-            if let caption = persistedComposerCaption {
+            if let caption = composerCaption {
                 Text(caption)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -440,6 +447,27 @@ struct ChatView: View {
     /// constructing a view. `mode.allowsEdits` is the sole input from the mode.
     static func showsEditingBanner(allowsEdits: Bool, isGenerating: Bool) -> Bool {
         allowsEdits && isGenerating
+    }
+
+    /// Pure predicate for the composer caption (issue #235). Returns the visible
+    /// caption text shown under the composer, or nil when nothing is queued/busy.
+    /// Kept static so tests can verify the full state matrix without a view tree.
+    static func composerCaptionText(
+        isAwaitingGenerationSlot: Bool,
+        hasChatID: Bool,
+        isLiveChat: Bool,
+        isGenerating: Bool,
+        allowsEdits: Bool
+    ) -> String? {
+        if isAwaitingGenerationSlot {
+            return "Waiting for the other session to finish before sending…"
+        }
+        guard hasChatID, !isLiveChat else { return nil }
+        if isGenerating {
+            let label = allowsEdits ? "Edit" : "Ask"
+            return "Another \(label) chat is responding — wait or stop it."
+        }
+        return nil
     }
 
     private var bannerTopReservation: CGFloat {
@@ -594,17 +622,17 @@ struct ChatView: View {
             && !launcher.isAwaitingGenerationSlot
     }
 
-    /// The caption shown under a persisted chat's composer when it is disabled
-    /// because the kind's launcher is responding to a DIFFERENT chat.
-    /// Mirrors the slot-style hint used elsewhere. Empty (no caption) when the
-    /// composer is enabled.
-    private var persistedComposerCaption: String? {
-        guard chatID != nil, !isLiveChat else { return nil }
-        if launcher.isGenerating || launcher.isAwaitingGenerationSlot {
-            let label = mode == .edit ? "Edit" : "Ask"
-            return "Another \(label) chat is responding — wait or stop it."
-        }
-        return nil
+    /// Visible caption shown under the composer when the session is waiting or
+    /// busy. Covers both the generation-gate queue (any session) and the
+    /// persisted-chat "another chat is responding" case. Empty (no caption)
+    /// when the composer is enabled and nothing is queued (issue #235).
+    private var composerCaption: String? {
+        Self.composerCaptionText(
+            isAwaitingGenerationSlot: launcher.isAwaitingGenerationSlot,
+            hasChatID: chatID != nil,
+            isLiveChat: isLiveChat,
+            isGenerating: launcher.isGenerating,
+            allowsEdits: mode.allowsEdits)
     }
 
     private var canType: Bool {
