@@ -30,7 +30,7 @@ import SQLite3
     @Test func searchFindsChatByMessageBodyWithNeutralTitle() throws {
         let store = try tempStore()
         // Title says nothing about entanglement; the assistant message does.
-        let chat = try store.createChat(kind: .ask, title: "Misc Notes")
+        let chat = try store.createChat(kind: .edit, title: "Misc Notes")
         _ = try store.appendChatMessages(chatID: chat.id, events: [
             .userText("explain something"),
             .assistantText("Quantum entanglement links particles across distance."),
@@ -57,7 +57,7 @@ import SQLite3
     @Test func searchRespectsLimit() throws {
         let store = try tempStore()
         for i in 0..<5 {
-            let chat = try store.createChat(kind: .ask, title: "Chat \(i)")
+            let chat = try store.createChat(kind: .edit, title: "Chat \(i)")
             _ = try store.appendChatMessages(chatID: chat.id, events: [
                 .assistantText("Report \(i) discusses the budget forecast."),
             ])
@@ -68,7 +68,7 @@ import SQLite3
 
     @Test func searchEmptyWhenNoMatch() throws {
         let store = try tempStore()
-        let chat = try store.createChat(kind: .ask, title: "Greetings")
+        let chat = try store.createChat(kind: .edit, title: "Greetings")
         _ = try store.appendChatMessages(chatID: chat.id, events: [
             .assistantText("Hello there, how can I help?"),
         ])
@@ -77,7 +77,7 @@ import SQLite3
 
     @Test func searchReflectsRename() throws {
         let store = try tempStore()
-        let chat = try store.createChat(kind: .ask, title: "Old Title")
+        let chat = try store.createChat(kind: .edit, title: "Old Title")
         _ = try store.appendChatMessages(chatID: chat.id, events: [
             .assistantText("A body with no distinctive keywords."),
         ])
@@ -92,7 +92,7 @@ import SQLite3
 
     @Test func sidecarNotPopulatedUntilFirstAppend() throws {
         let store = try tempStore()
-        let chat = try store.createChat(kind: .ask, title: "Placeholder")
+        let chat = try store.createChat(kind: .edit, title: "Placeholder")
         // A chat with no messages has an empty body → nothing to match.
         #expect(try store.searchSimilarChats(query: "Placeholder", limit: 10).isEmpty)
         _ = try store.appendChatMessages(chatID: chat.id, events: [
@@ -105,7 +105,7 @@ import SQLite3
 
     @Test func missingChatEmbeddingWorkListsChatsWithoutChunks() throws {
         let store = try tempStore()
-        let chat = try store.createChat(kind: .ask, title: "Discussed")
+        let chat = try store.createChat(kind: .edit, title: "Discussed")
         _ = try store.appendChatMessages(chatID: chat.id, events: [
             .userText("user turn about ideas"),
             .assistantText("assistant turn with prose"),
@@ -121,7 +121,7 @@ import SQLite3
 
     @Test func storeChatChunksMarksChatAsEmbedded() throws {
         let store = try tempStore()
-        let chat = try store.createChat(kind: .ask, title: "To Embed")
+        let chat = try store.createChat(kind: .edit, title: "To Embed")
         _ = try store.appendChatMessages(chatID: chat.id, events: [.userText("hi")])
         // Bulk-embed via the upgrade path (replace-all semantics).
         try store.storeChatChunks(id: chat.id, chunks: [Data(repeating: 0, count: 16)])
@@ -135,7 +135,7 @@ import SQLite3
     /// so it is independent of the bundled embedding model.
     @Test func appendChatMessagesDoesNotWipeExistingChunks() throws {
         let store = try tempStore()
-        let chat = try store.createChat(kind: .ask, title: "Incremental")
+        let chat = try store.createChat(kind: .edit, title: "Incremental")
         _ = try store.appendChatMessages(chatID: chat.id, events: [.userText("first turn")])
         try store.storeChatChunks(id: chat.id, chunks: [Data(repeating: 1, count: 16)])
         // Embedded now.
@@ -148,7 +148,7 @@ import SQLite3
 
     @Test func deleteChatRemovesItsChunks() throws {
         let store = try tempStore()
-        let chat = try store.createChat(kind: .ask, title: "Doomed")
+        let chat = try store.createChat(kind: .edit, title: "Doomed")
         _ = try store.appendChatMessages(chatID: chat.id, events: [.userText("bye")])
         try store.storeChatChunks(id: chat.id, chunks: [Data(repeating: 2, count: 16)])
         try store.deleteChat(id: chat.id)
@@ -162,7 +162,7 @@ import SQLite3
 
     @Test func chatSearchCommandOutputsTSV() throws {
         let store = try tempStore()
-        let chat = try store.createChat(kind: .ask, title: "Mars Colony")
+        let chat = try store.createChat(kind: .edit, title: "Mars Colony")
         _ = try store.appendChatMessages(chatID: chat.id, events: [
             .assistantText("We discussed terraforming the Martian surface."),
         ])
@@ -171,7 +171,7 @@ import SQLite3
         let cols = result.output.split(separator: "\t", omittingEmptySubsequences: false)
         #expect(String(cols[0]) == chat.id.rawValue)
         #expect(String(cols[1]) == "Mars Colony")
-        #expect(String(cols[2]) == "ask")
+        #expect(String(cols[2]) == "edit")
         #expect(String(cols[3]) == "1")
     }
 

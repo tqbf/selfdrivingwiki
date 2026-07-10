@@ -170,10 +170,12 @@ public struct OperationCommand: Equatable, Sendable {
         let model = command.modelOverride.isEmpty
             ? operation.topLevelModelAlias : command.modelOverride
 
-        // The read-only interactive query variant (allowWikiEdits == false) omits
-        // Write/Edit from the allow-list — its prompt forbids file creation and the
-        // seatbelt blocks writes anyway, so a cooperative agent shouldn't even attempt
-        // them (and won't trip the repeated-denial abort on them).
+        // Chats are always write-capable now (the read-only Ask mode was
+        // removed), so the chat command always includes Write/Edit in the
+        // allow-list. `queryChatAllowsEdits` still reads `allowWikiEdits` from
+        // the operation (retained for signature stability, always true from the
+        // chat path) and defaults `true` for any non-chat op — fail-open for
+        // tool access, since the seatbelt remains the authoritative write gate.
         let allowWikiEdits = Self.queryChatAllowsEdits(operation)
 
         var arguments = command.tokenizedPrefixArgs()
@@ -269,12 +271,10 @@ public struct OperationCommand: Equatable, Sendable {
         "Read", "Grep", "Glob", "Task", "TodoWrite",
     ]
 
-    /// File-creation/modification tools. Included ONLY for read-write spawns (Ingest /
-    /// Lint / edit-enabled interactive Query). OMITTED for the read-only interactive
-    /// query variant (`allowWikiEdits == false`), whose prompt forbids Write/Edit and
-    /// whose seatbelt profile blocks writes at the kernel anyway — this is the semantic
-    /// match at the Claude Code layer so a cooperative read-only agent doesn't even
-    /// attempt them (and can't trip the repeated-denial abort on them).
+    /// File-creation/modification tools. Included for all read-write spawns
+    /// (Ingest / Lint / chat). Chats are always write-capable now, so the chat
+    /// path always includes these; the seatbelt profile blocks writes at the
+    /// kernel for any spawn whose sandbox fences them.
     static let fileWritingTools: [String] = ["Write", "Edit"]
 
     /// The exec/network surface explicitly DENIED even if a permissive user
@@ -292,18 +292,21 @@ public struct OperationCommand: Equatable, Sendable {
         "WebFetch", "WebSearch",
     ]
 
-    /// Build the comma-separated `--allowed-tools` value. `includeFileWrites` is `false`
-    /// for the read-only interactive query variant.
+    /// Build the comma-separated `--allowed-tools` value. `includeFileWrites`
+    /// is `true` for all chat spawns (chats are always write-capable) and for
+    /// Ingest/Lint.
     static func allowedToolsValue(includeFileWrites: Bool) -> String {
         var tools = baseAllowedTools
         if includeFileWrites { tools.append(contentsOf: fileWritingTools) }
         return tools.joined(separator: ",")
     }
 
-    /// Extract `allowWikiEdits` from a `.queryChat` operation. Defensive default
-    /// `true` (read-write) if `buildInteractiveQuery` is ever handed a non-chat
-    /// operation — fail-open for tool access, since the read-only seatbelt remains the
-    /// authoritative write gate regardless.
+    /// Extract `allowWikiEdits` from a `.queryChat` operation. Chats are always
+    /// write-capable now (the chat path always constructs the operation with
+    /// `allowWikiEdits: true`), so this is effectively always `true` for chats.
+    /// Defensive default `true` (read-write) if `buildInteractiveQuery` is ever
+    /// handed a non-chat operation — fail-open for tool access, since the
+    /// seatbelt remains the authoritative write gate regardless.
     static func queryChatAllowsEdits(_ operation: WikiOperation) -> Bool {
         if case .queryChat(_, let allowWikiEdits) = operation { return allowWikiEdits }
         return true

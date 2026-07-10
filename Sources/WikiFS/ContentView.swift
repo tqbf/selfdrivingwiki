@@ -10,8 +10,7 @@ struct ContentView: View {
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
     @Bindable var agentLauncher: AgentLauncher
-    let askLauncher: AgentLauncher
-    let editLauncher: AgentLauncher
+    let chatLauncher: AgentLauncher
     let extractionCoordinator: ExtractionCoordinator
     @State private var isTranscriptExpanded = false
     /// Driven by `.dropDestination`'s `isTargeted` callback to fade in a subtle
@@ -152,8 +151,7 @@ struct ContentView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(store: store, manager: manager, fileProvider: fileProvider,
                         launcher: agentLauncher,
-                        askLauncher: askLauncher,
-                        editLauncher: editLauncher,
+                        chatLauncher: chatLauncher,
                         ingestingSourceIDs: agentLauncher.ingestingSourceIDs,
                         extractingSourceIDs: agentLauncher.extractingSourceIDs,
                         showingAddFromZotero: $showingAddFromZotero,
@@ -337,8 +335,7 @@ struct ContentView: View {
         WikiDetailView(
             store: store,
             launcher: agentLauncher,
-            askLauncher: askLauncher,
-            editLauncher: editLauncher,
+            chatLauncher: chatLauncher,
             manager: manager,
             fileProvider: fileProvider,
             extractionCoordinator: extractionCoordinator,

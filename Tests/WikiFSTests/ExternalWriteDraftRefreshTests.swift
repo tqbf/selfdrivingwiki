@@ -68,8 +68,8 @@ struct ExternalWriteDraftRefreshTests {
         model.newPage(title: "Home")
         guard case .page(let id) = model.selection else { Issue.record("expected page selection"); return }
 
-        // Navigate away from the page (to the .ask surface).
-        model.select(.ask)
+        // Navigate away from the page (to the .newChat surface).
+        model.select(.newChat)
         #expect(model.draftBody == "")
 
         // External write to the page.
@@ -77,7 +77,7 @@ struct ExternalWriteDraftRefreshTests {
 
         model.reloadFromStore()
 
-        // draftBody is still empty (we're on .ask, not the page).
+        // draftBody is still empty (we're on .newChat, not the page).
         #expect(model.draftBody == "")
     }
 }

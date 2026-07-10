@@ -1,10 +1,11 @@
 import Foundation
 
-/// Which agent surface a persisted chat came from. Mirrors the two
-/// interactive query modes: Ask (read-only seatbelt) and Edit (may write the
-/// wiki). A closed set so `chats.kind` round-trips predictably.
+/// Which agent surface a persisted chat came from. There is now ONE chat kind
+/// — `.edit`, a write-capable chat (the agent may write the wiki). The former
+/// read-only Ask mode has been removed; the `chats.kind` column is retained
+/// (vestigial until a future always-ask/yolo distinction) and every row is
+/// `.edit`. A closed set so `chats.kind` round-trips predictably.
 public enum ChatKind: String, Equatable, Sendable, CaseIterable {
-    case ask
     case edit
 }
 
@@ -12,7 +13,8 @@ public enum ChatKind: String, Equatable, Sendable, CaseIterable {
 /// moment they are persisted — the stable resource identity every follow-up
 /// surface (`[[chat:…]]` links, `chats.jsonl`, the File Provider `chats/`
 /// tree) hangs off. The transcript itself lives in `chat_messages`
-/// (`ChatMessage`), fetched on demand like source content.
+/// (`ChatMessage`), fetched on demand like source content. All chats are
+/// write-capable (`.edit`); the read-only Ask mode has been removed.
 public struct ChatSummary: Identifiable, Hashable, Sendable {
     public var id: PageID
     public var kind: ChatKind

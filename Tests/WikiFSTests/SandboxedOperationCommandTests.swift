@@ -104,7 +104,7 @@ struct SandboxedOperationCommandTests {
 
   @Test func interactiveQueryWrapsIdentically() {
     let cmd = OperationCommand.buildInteractiveQuery(
-      operation: .queryChat(stateFilePath: Self.stateFile, allowWikiEdits: false),
+      operation: .queryChat(stateFilePath: Self.stateFile),
       wikiRoot: Self.resolvedRoot,
       wikiID: "01WIKIULID",
       systemPrompt: "schema",

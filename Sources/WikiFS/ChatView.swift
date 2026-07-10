@@ -2,14 +2,6 @@ import AppKit
 import SwiftUI
 import WikiFSCore
 
-/// Whether the session can write to the wiki. Ask = read-only; Edit = can write.
-/// This is a property of the mounted session, not a runtime toggle.
-enum QueryMode {
-    case ask, edit
-
-    var allowsEdits: Bool { self == .edit }
-}
-
 /// The unified chat surface (D2, pillar 2). One view replaces the split
 /// between the live `ChatView` and the read-only
 /// `ChatHistoryDetailView`. Whether you see streaming deltas or a persisted
@@ -18,14 +10,12 @@ enum QueryMode {
 /// `launcher.events` (in-memory, streaming). Otherwise render the persisted
 /// `store.chatMessages(chatID:)`.
 ///
-/// The `.ask` / `.edit` draft states also route here (with `chatID == nil`),
+/// The `.newChat` draft state also routes here (with `chatID == nil`),
 /// showing the empty-composer state until the first send retargets the tab to
 /// `.chat(id)` (the draft-state morph, handled by `AgentOperationRunner`).
+/// Chats are always write-capable (the read-only Ask mode was removed).
 struct ChatView: View {
-    /// `.ask` / `.edit` for draft states; `.chat(id)`'s kind is resolved from
-    /// the chat summary. Determines which launcher owns this surface.
-    let mode: QueryMode
-    /// The persisted chat id, or `nil` for the draft state (.ask/.edit). When
+    /// The persisted chat id, or `nil` for the draft state (.newChat). When
     /// non-nil AND equal to `launcher.activeChatID`, the view renders live.
     let chatID: PageID?
 
@@ -217,7 +207,7 @@ struct ChatView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(ChatMetrics.contentInset)
         } else if chatID == nil {
-            // Draft state (.ask/.edit): big "Ask X" + composer until the first
+            // Draft state (.newChat): big "Ask X" + composer until the first
             // send retargets the tab to .chat(id).
             emptyState
         } else if !isLiveChat && chatSummary == nil {
@@ -364,7 +354,7 @@ struct ChatView: View {
                     .lineLimit(1)
                     .textSelection(.enabled)
             } icon: {
-                Image(systemName: chat.kind == .ask ? "bubble.left.and.bubble.right" : "square.and.pencil")
+                Image(systemName: "bubble.left.and.bubble.right")
                     .foregroundStyle(.secondary)
             }
 
@@ -439,14 +429,14 @@ struct ChatView: View {
     }
 
     private var showsEditingEnabledBanner: Bool {
-        Self.showsEditingBanner(allowsEdits: mode.allowsEdits, isGenerating: launcher.isGenerating)
+        Self.showsEditingBanner(isGenerating: launcher.isGenerating)
     }
 
-    /// Pure predicate: true only when an Edit-mode session is actively generating.
-    /// Kept static so tests can verify the full (mode × isGenerating) matrix without
-    /// constructing a view. `mode.allowsEdits` is the sole input from the mode.
-    static func showsEditingBanner(allowsEdits: Bool, isGenerating: Bool) -> Bool {
-        allowsEdits && isGenerating
+    /// Pure predicate: true only when a write-capable chat session is actively
+    /// generating. Kept static so tests can verify the matrix without
+    /// constructing a view. Chats are always write-capable.
+    static func showsEditingBanner(isGenerating: Bool) -> Bool {
+        isGenerating
     }
 
     /// Pure predicate for the composer caption (issue #235). Returns the visible
@@ -456,16 +446,14 @@ struct ChatView: View {
         isAwaitingGenerationSlot: Bool,
         hasChatID: Bool,
         isLiveChat: Bool,
-        isGenerating: Bool,
-        allowsEdits: Bool
+        isGenerating: Bool
     ) -> String? {
         if isAwaitingGenerationSlot {
             return "Waiting for the other session to finish before sending…"
         }
         guard hasChatID, !isLiveChat else { return nil }
         if isGenerating {
-            let label = allowsEdits ? "Edit" : "Ask"
-            return "Another \(label) chat is responding — wait or stop it."
+            return "Another chat is responding — wait or stop it."
         }
         return nil
     }
@@ -554,38 +542,35 @@ struct ChatView: View {
                 await AgentOperationRunner.continueChat(
                     chatID: chatID,
                     message: message,
-                    mode: mode,
                     store: store,
                     launcher: launcher,
                     manager: manager,
-                    fileProvider: fileProvider,
-                    allowWikiEdits: mode.allowsEdits
+                    fileProvider: fileProvider
                 )
             }
         } else {
-            // Draft state (.ask/.edit): start a NEW chat.
+            // Draft state (.newChat): start a NEW chat.
             Task {
                 await AgentOperationRunner.startChat(
                     firstMessage: message,
                     launcher: launcher,
                     store: store,
                     manager: manager,
-                    fileProvider: fileProvider,
-                    allowWikiEdits: mode.allowsEdits
+                    fileProvider: fileProvider
                 )
             }
         }
     }
 
     /// Start a new chat: clear the launcher's live state and retarget
-    /// the tab back to the draft state (.ask/.edit per mode). The old chat stays
+    /// the tab back to the draft state (.newChat). The old chat stays
     /// in history.
     private func startNewChat() {
         launcher.startNewChat()
         // D2 retarget-back: morph the active tab from .chat(id) back to the draft
         // state so the user sees a fresh composer.
         if let activeID = store.activeTabID {
-            store.retargetTab(id: activeID, to: mode == .edit ? .edit : .ask)
+            store.retargetTab(id: activeID, to: .newChat)
         }
     }
 
@@ -604,7 +589,7 @@ struct ChatView: View {
     /// is responding) disables the composer — the takeover rules refuse a
     /// mid-generation interrupt, so the composer reflects that.
     private var isComposerEnabled: Bool {
-        // Draft state (.ask/.edit with chatID == nil): always enabled (when a
+        // Draft state (.newChat with chatID == nil): always enabled (when a
         // wiki is open and nothing is generating).
         guard chatID != nil else {
             return manager.activeWikiID != nil && (launcher.isInteractiveSession || !launcher.isRunning)
@@ -631,8 +616,7 @@ struct ChatView: View {
             isAwaitingGenerationSlot: launcher.isAwaitingGenerationSlot,
             hasChatID: chatID != nil,
             isLiveChat: isLiveChat,
-            isGenerating: launcher.isGenerating,
-            allowsEdits: mode.allowsEdits)
+            isGenerating: launcher.isGenerating)
     }
 
     private var canType: Bool {

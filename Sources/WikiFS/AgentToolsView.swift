@@ -9,12 +9,9 @@ import WikiFSCore
 /// calls `store.openTab`). No per-row gesture, so no latency.
 struct AgentToolsView: View {
     @Bindable var store: WikiStoreModel
-    /// The Ask (read-only) chat launcher — backs the live indicator on
-    /// `.ask` recent-chat rows (D4).
-    @Bindable var askLauncher: AgentLauncher
-    /// The Edit chat launcher — backs the live indicator on `.edit`
-    /// recent-chat rows (D4).
-    @Bindable var editLauncher: AgentLauncher
+    /// The chat launcher — backs the live indicator on recent-chat rows (D4).
+    /// Chats are always write-capable (the read-only Ask mode was removed).
+    @Bindable var chatLauncher: AgentLauncher
 
     /// The chat being renamed, if any. Non-nil presents the rename alert. The
     /// draft text is tracked separately so the rename can be committed on
@@ -98,10 +95,10 @@ struct AgentToolsView: View {
     /// Section header: title on the leading edge, a `+` button on the trailing
     /// edge — mirrors `BookmarksContainerView`'s `bookmarksHeader` (native
     /// macOS pattern: Photos, Mail, Finder sidebar section headers). The `+`
-    /// opens the draft state for a mode (Ask default, Edit second) by
-    /// retargeting/opening a tab to `.ask` / `.edit` — the same draft state
-    /// `ChatView` renders with `chatID == nil`. This reuses the
-    /// existing `store.openTab` path rather than duplicating tab logic. (D4)
+    /// opens the draft state for a new chat by retargeting/opening a tab to
+    /// `.newChat` — the same draft state `ChatView` renders with `chatID ==
+    /// nil`. This reuses the existing `store.openTab` path rather than
+    /// duplicating tab logic. (D4)
     private var chatsHeader: some View {
         HStack {
             Text("Chats")
@@ -109,7 +106,7 @@ struct AgentToolsView: View {
                 .foregroundStyle(.primary)
             Spacer()
             Button {
-                store.openTab(.edit)
+                store.openTab(.newChat)
             } label: {
                 Image(systemName: "plus")
                     .font(.body)
@@ -152,13 +149,13 @@ struct AgentToolsView: View {
 
     // MARK: - Live indicator
 
-    /// Resolve the matching launcher for a chat's kind. `.ask` → `askLauncher`,
-    /// `.edit` → `editLauncher`. (D4)
+    /// The single chat launcher. Chats are always write-capable now (the
+    /// read-only Ask mode was removed), so there is one launcher. (D4)
     private func launcher(for kind: ChatKind) -> AgentLauncher {
-        kind == .edit ? editLauncher : askLauncher
+        chatLauncher
     }
 
-    /// A row is live when it is the active session of the matching launcher
+    /// A row is live when it is the active session of the chat launcher
     /// AND that launcher is mid-generation. Delegates to the pure static
     /// predicate so the rule is unit-testable without driving launcher state.
     /// (D4)
@@ -233,7 +230,7 @@ private struct RecentChatRow: View {
                 }
             }
         } icon: {
-            Image(systemName: chat.kind == .ask ? "bubble.left.and.bubble.right" : "square.and.pencil")
+            Image(systemName: "bubble.left.and.bubble.right")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .frame(width: 18)

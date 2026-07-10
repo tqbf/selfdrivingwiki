@@ -20,8 +20,7 @@ public enum ChatTranscriptRenderer {
     /// the second, so two renders within one second produce the same output).
     public static func render(summary: ChatSummary, messages: [ChatMessage]) -> String {
         var out = "# \(summary.title)\n\n"
-        let kindLabel = summary.kind == .ask ? "Ask" : "Edit"
-        out += "> **Kind:** \(kindLabel)  ·  **Messages:** \(summary.messageCount)\n"
+        out += "> **Messages:** \(summary.messageCount)\n"
         out += "> **Created:** \(formatDate(summary.createdAt))  ·  **Updated:** \(formatDate(summary.updatedAt))\n\n"
         out += "---\n\n"
 

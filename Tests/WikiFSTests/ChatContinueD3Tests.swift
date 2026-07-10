@@ -204,7 +204,7 @@ struct ChatContinueD3Tests {
     @Test func continueAppendsToSameChatRow_seqContinues_titlePreserved() throws {
         let (model, store) = try tempModel()
         // Create a chat with two persisted messages (a prior turn).
-        let chat = try store.createChat(kind: .ask, title: "Original Title")
+        let chat = try store.createChat(kind: .edit, title: "Original Title")
         try store.appendChatMessages(chatID: chat.id, events: [
             .userText("first question"),
             .assistantText("first answer"),
@@ -243,8 +243,8 @@ struct ChatContinueD3Tests {
 
     @Test func continueBumpsUpdatedAtToTopOfRecent() throws {
         let (model, store) = try tempModel()
-        let chat = try store.createChat(kind: .ask, title: "Older Chat")
-        let other = try store.createChat(kind: .ask, title: "Newer Chat")
+        let chat = try store.createChat(kind: .edit, title: "Older Chat")
+        let other = try store.createChat(kind: .edit, title: "Newer Chat")
         try store.appendChatMessages(chatID: chat.id, events: [.userText("a"), .assistantText("b")])
         try store.appendChatMessages(chatID: other.id, events: [.userText("c"), .assistantText("d")])
         model.reloadChats()

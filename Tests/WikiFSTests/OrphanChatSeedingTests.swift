@@ -51,7 +51,7 @@ struct OrphanChatSeedingTests {
     @Test func startChatUpdatesChatsListWithOneMessage() throws {
         let (model, _) = try tempModel()
 
-        let chat = try #require(model.startChat(kind: .ask, firstMessage: "Hello"))
+        let chat = try #require(model.startChat(kind: .edit, firstMessage: "Hello"))
 
         // reloadChats() ran inside startChat, so the model's list reflects the
         // seeded message (count 1, not 0).
@@ -64,7 +64,7 @@ struct OrphanChatSeedingTests {
     @Test func appendAfterSeedContinuesFromSeq1WithoutDuplicatingUserMessage() throws {
         let (model, store) = try tempModel()
 
-        let chat = try #require(model.startChat(kind: .ask, firstMessage: "first"))
+        let chat = try #require(model.startChat(kind: .edit, firstMessage: "first"))
 
         // Simulate the launcher's first transcript flush AFTER it has marked the
         // seeded user message as already-persisted (firstMessagePrePersisted →
@@ -114,7 +114,7 @@ struct OrphanChatSeedingTests {
         #expect(model.chats.contains { $0.id == chat.id })
 
         // The session never started (preflight/spawn failure) → roll back.
-        model.rollbackChatCreation(id: chat.id, toDraft: .edit)
+        model.rollbackChatCreation(id: chat.id, toDraft: .newChat)
 
         // Row + cascaded message both gone; the model's chat list no longer
         // contains the orphan.
@@ -126,7 +126,7 @@ struct OrphanChatSeedingTests {
     @Test func rollbackRevertsRetargetedTabToDraftComposer() throws {
         let (model, _) = try tempModel()
 
-        model.openTab(.edit)
+        model.openTab(.newChat)
         let activeID = try #require(model.activeTabID)
 
         let chat = try #require(model.startChat(kind: .edit, firstMessage: "doomed"))
@@ -135,11 +135,11 @@ struct OrphanChatSeedingTests {
         let retargeted = try #require(model.tabs.first { $0.id == activeID })
         #expect(retargeted.selection == .chat(chat.id))
 
-        model.rollbackChatCreation(id: chat.id, toDraft: .edit)
+        model.rollbackChatCreation(id: chat.id, toDraft: .newChat)
 
         // The tab is reverted to the draft composer, not left on a dead .chat.
         let reverted = try #require(model.tabs.first { $0.id == activeID })
-        #expect(reverted.selection == .edit)
+        #expect(reverted.selection == .newChat)
     }
 
     @Test func rollbackIsHarmlessWhenChatAlreadyAbsent() throws {
@@ -147,7 +147,7 @@ struct OrphanChatSeedingTests {
         // No chat created — rolling back a never-created id must not throw and
         // must leave the store untouched.
         let phantom = PageID(rawValue: "01PHANTOMCHAT0000000000Z")
-        model.rollbackChatCreation(id: phantom, toDraft: .ask)
+        model.rollbackChatCreation(id: phantom, toDraft: .newChat)
         #expect(try store.listChats().isEmpty)
         #expect(model.chats.isEmpty)
     }

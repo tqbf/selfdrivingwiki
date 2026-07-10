@@ -170,7 +170,7 @@ struct EnumeratorDeletionTests {
 
     @Test func deletingChatReportsDidDeleteItems() throws {
         let s = try seed()
-        let chat = try s.store.createChat(kind: .ask, title: "A Chat")
+        let chat = try s.store.createChat(kind: .edit, title: "A Chat")
         let enumerator = WikiFSEnumerator(container: Projection.Identity.chatsByID,
                                           projection: s.projection)
 
