@@ -139,4 +139,109 @@ struct EnumeratorDeletionTests {
         #expect(changeObs.updated.isEmpty)
         #expect(changeObs.finishedWithError == nil)
     }
+
+    // MARK: - Resource-kind coverage (#277 review point 2)
+
+    @Test func deletingBookmarkRefReportsDidDeleteItems() throws {
+        let s = try seed()
+        // A page to point the bookmark ref at; the ref is a root-level leaf under
+        // the top-level bookmarks container.
+        let page = try s.store.createPage(title: "Target Page")
+        let ref = try s.store.createBookmarkNode(
+            parentID: nil, position: 0, kind: .pageRef, label: nil, targetID: page.id)
+        let enumerator = WikiFSEnumerator(container: Projection.Identity.bookmarks,
+                                          projection: s.projection)
+
+        let enumObs = MockEnumerationObserver()
+        enumerator.enumerateItems(for: enumObs, startingAt: NSFileProviderPage(NSFileProviderPage.initialPageSortedByName as Data))
+        #expect(enumObs.enumerated.count == 1)
+
+        let anchor = NSFileProviderSyncAnchor(Data(s.projection.changeToken().utf8))
+        let deletedID = Projection.Identity.bookmarkPageRef(ref.id)
+        try s.store.deleteBookmarkNode(id: ref.id)
+
+        let changeObs = MockChangeObserver()
+        enumerator.enumerateChanges(for: changeObs, from: anchor)
+
+        #expect(changeObs.deleted == [deletedID])
+        #expect(changeObs.updated.isEmpty)
+        #expect(changeObs.finishedWithError == nil)
+    }
+
+    @Test func deletingChatReportsDidDeleteItems() throws {
+        let s = try seed()
+        let chat = try s.store.createChat(kind: .ask, title: "A Chat")
+        let enumerator = WikiFSEnumerator(container: Projection.Identity.chatsByID,
+                                          projection: s.projection)
+
+        let enumObs = MockEnumerationObserver()
+        enumerator.enumerateItems(for: enumObs, startingAt: NSFileProviderPage(NSFileProviderPage.initialPageSortedByName as Data))
+        #expect(enumObs.enumerated.count == 1)
+
+        let anchor = NSFileProviderSyncAnchor(Data(s.projection.changeToken().utf8))
+        let deletedID = Projection.Identity.chatByID(chat.id.rawValue)
+        try s.store.deleteChat(id: chat.id)
+
+        let changeObs = MockChangeObserver()
+        enumerator.enumerateChanges(for: changeObs, from: anchor)
+
+        #expect(changeObs.deleted == [deletedID])
+        #expect(changeObs.updated.isEmpty)
+        #expect(changeObs.finishedWithError == nil)
+    }
+
+    // MARK: - Nested container deletion (#277 review point 3)
+
+    @Test func deletingNestedFolderReportsDidDeleteItems() throws {
+        let s = try seed()
+        let page = try s.store.createPage(title: "Child Target")
+        // A root folder containing one page-ref child.
+        let folder = try s.store.createBookmarkNode(
+            parentID: nil, position: 0, kind: .folder, label: "Folder", targetID: nil)
+        _ = try s.store.createBookmarkNode(
+            parentID: folder.id, position: 0, kind: .pageRef, label: nil, targetID: page.id)
+        let enumerator = WikiFSEnumerator(container: Projection.Identity.bookmarks,
+                                          projection: s.projection)
+
+        // The root bookmarks container exposes only root nodes → just the folder.
+        let enumObs = MockEnumerationObserver()
+        enumerator.enumerateItems(for: enumObs, startingAt: NSFileProviderPage(NSFileProviderPage.initialPageSortedByName as Data))
+        #expect(enumObs.enumerated.count == 1)
+
+        let anchor = NSFileProviderSyncAnchor(Data(s.projection.changeToken().utf8))
+        let deletedID = Projection.Identity.bookmarkFolder(folder.id)
+        try s.store.deleteBookmarkNode(id: folder.id)
+
+        let changeObs = MockChangeObserver()
+        enumerator.enumerateChanges(for: changeObs, from: anchor)
+
+        #expect(changeObs.deleted == [deletedID])
+        #expect(changeObs.finishedWithError == nil)
+    }
+
+    // MARK: - Restart baseline loss (#277 review point 1)
+
+    @Test func missingBaselineAfterRestartExpiresAnchor() throws {
+        // Simulates the post-restart state: the File Provider holds a still-valid
+        // sync anchor and calls `enumerateChanges` WITHOUT a prior `enumerateItems`
+        // in this process, so the in-memory known-item baseline is absent (#277).
+        // Each test's projection uses a unique wikiID, so the baseline is nil here
+        // exactly as it would be in a freshly-relaunched extension process.
+        let s = try seed()
+        let enumerator = WikiFSEnumerator(container: Projection.Identity.sourcesByID,
+                                          projection: s.projection)
+
+        // No `enumerateItems` — the baseline is never seeded (mirrors a restart).
+        let anchor = NSFileProviderSyncAnchor(Data(s.projection.changeToken().utf8))
+        try s.store.deleteSource(id: s.sources[0].id)
+
+        let changeObs = MockChangeObserver()
+        enumerator.enumerateChanges(for: changeObs, from: anchor)
+
+        // With no baseline to diff against, the enumerator must NOT silently drop
+        // the deletion; it expires the anchor so the framework re-enumerates.
+        #expect(changeObs.deleted.isEmpty)
+        let err = try #require(changeObs.finishedWithError)
+        #expect((err as NSError).code == NSFileProviderError.syncAnchorExpired.rawValue)
+    }
 }
