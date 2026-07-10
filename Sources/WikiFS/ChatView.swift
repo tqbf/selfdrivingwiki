@@ -337,61 +337,18 @@ struct ChatView: View {
         HStack(spacing: 10) {
             if manager.activeWikiID != nil {
                 ProviderSelector(launcher: launcher)
-                permissionModePicker
+                PermissionModeSelector(rawValue: $permissionModeRaw)
             }
             Spacer(minLength: 0)
-            sendButton(active: sendActive)
-        }
-    }
-
-    /// Paseo-style permission-modes chip. Sits next to the model selector inside
-    /// the composer box's bottom toolbar. Styled to match `ProviderSelector`'s
-    /// trigger (glyph + `.caption` label + chevron) so the two read as sibling
-    /// chips. Shown for every backend (the screenshot confirms it appears for
-    /// Claude too); a restyle mustn't change that behavior.
-    private var permissionModePicker: some View {
-        Menu {
-            Picker("", selection: $permissionModeRaw) {
-                ForEach(PermissionPolicy.allCases, id: \.rawValue) { mode in
-                    Text(mode.label).tag(mode.rawValue)
-                }
+            // Paseo: the send button appears only once there's something to
+            // send — an empty composer shows no action glyph at all.
+            if hasDraftText {
+                sendButton(active: sendActive)
             }
-            .pickerStyle(.inline)
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: permissionGlyph)
-                    .foregroundStyle(.secondary)
-                Text(currentPermissionPolicy.label)
-                    .foregroundStyle(.secondary)
-                Image(systemName: "chevron.up.chevron.down")
-                    .imageScale(.small)
-                    .foregroundStyle(.tertiary)
-            }
-            .font(.caption)
-            .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help(currentPermissionPolicy.help)
-    }
-
-    /// The currently-selected permission policy (falls back to bypass — the
-    /// persisted default — if the raw value is somehow unknown).
-    private var currentPermissionPolicy: PermissionPolicy {
-        PermissionPolicy(rawValue: permissionModeRaw) ?? .bypass
-    }
-
-    /// SF Symbol for the permission chip, one per policy. Mirrors paseo's shield
-    /// glyph for the bypass/"YOLO" mode and picks intent-matching symbols for
-    /// the others.
-    private var permissionGlyph: String {
-        switch currentPermissionPolicy {
-        case .bypass: return "exclamationmark.shield"
-        case .alwaysAsk: return "hand.raised"
-        case .acceptEdits: return "checkmark.shield"
-        case .plan: return "eye"
-        }
+        // Reserve the button's height so the box doesn't grow on the first
+        // keystroke when the button appears.
+        .frame(minHeight: ChatMetrics.sendButtonSize)
     }
 
     // MARK: - Persisted chat summary
@@ -585,14 +542,14 @@ struct ChatView: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// The trailing send button in the composer's bottom toolbar. Sized to sit
-    /// inside the toolbar row (paseo places its action cluster there) rather than
-    /// the old inline-in-the-capsule placement.
+    /// The trailing send button in the composer's bottom toolbar — a green
+    /// circle with a white up-arrow (paseo). Only shown when the composer has
+    /// text (see `composerToolbar`).
     private func sendButton(active: Bool) -> some View {
         Button(action: sendMessage) {
-            Image(systemName: sendButtonIcon)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(active ? Color.white : Color.secondary)
+            Image(systemName: "arrow.up")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.white)
                 .frame(width: ChatMetrics.sendButtonSize, height: ChatMetrics.sendButtonSize)
                 .background(sendButtonBackground(active: active), in: Circle())
         }
@@ -604,8 +561,17 @@ struct ChatView: View {
 
     // MARK: - Send logic
 
+    /// True once the composer holds non-whitespace text — drives the send
+    /// button's visibility (paseo shows no glyph until you type).
+    private var hasDraftText: Bool {
+        !draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Green when the message can be sent, a muted grey while it can't (e.g. a
+    /// response is still generating). The button is only visible with text, so
+    /// green is the usual state.
     private func sendButtonBackground(active: Bool) -> Color {
-        active ? .accentColor : Color(nsColor: .quaternaryLabelColor).opacity(0.25)
+        active ? Color.green : Color(nsColor: .quaternaryLabelColor).opacity(0.4)
     }
 
     private func sendMessage() {
@@ -713,10 +679,6 @@ struct ChatView: View {
             return "Wait for the response before sending the next message"
         }
         return launcher.isInteractiveSession ? "Send" : "Start Query"
-    }
-
-    private var sendButtonIcon: String {
-        launcher.isInteractiveSession ? "arrow.up.circle.fill" : "play.circle.fill"
     }
 }
 

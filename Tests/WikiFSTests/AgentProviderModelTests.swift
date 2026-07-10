@@ -151,6 +151,58 @@ import ACPModel
         #expect(config.providers.count == 1)
         #expect(config.providers.first?.id == "claude-acp")
     }
+
+    // MARK: - Favorites (display-only per-row star)
+
+    @Test func togglingFavoriteAddsThenRemoves() {
+        let config = AgentProvidersConfig(providers: [.claudeAcpDefault])
+        #expect(!config.isFavoriteModel("opus", forProvider: "claude-acp"))
+
+        let favorited = config.togglingFavoriteModel("opus", forProvider: "claude-acp")
+        #expect(favorited.isFavoriteModel("opus", forProvider: "claude-acp"))
+        #expect(favorited.favoriteModels(forProvider: "claude-acp") == ["opus"])
+
+        // Toggling again clears it (and drops the now-empty provider key).
+        let cleared = favorited.togglingFavoriteModel("opus", forProvider: "claude-acp")
+        #expect(!cleared.isFavoriteModel("opus", forProvider: "claude-acp"))
+        #expect(cleared.favoriteModelIds["claude-acp"] == nil)
+    }
+
+    @Test func favoritesArePerProviderAndOrdered() {
+        let config = AgentProvidersConfig(providers: [.claudeAcpDefault])
+            .togglingFavoriteModel("opus", forProvider: "claude-acp")
+            .togglingFavoriteModel("haiku", forProvider: "claude-acp")
+            .togglingFavoriteModel("gpt", forProvider: "other")
+        // Insertion order is preserved; providers are isolated.
+        #expect(config.favoriteModels(forProvider: "claude-acp") == ["opus", "haiku"])
+        #expect(config.favoriteModels(forProvider: "other") == ["gpt"])
+        #expect(!config.isFavoriteModel("opus", forProvider: "other"))
+    }
+
+    @Test func favoritesSurviveSelectionAndDefaultRewraps() {
+        // Favorites must be threaded through the other setting* mutators, not
+        // wiped when the selection or default provider changes.
+        let config = AgentProvidersConfig(providers: [.claudeAcpDefault])
+            .togglingFavoriteModel("opus", forProvider: "claude-acp")
+            .settingSelectedModel("sonnet", forProvider: "claude-acp")
+            .settingDefault(id: "claude-acp")
+        #expect(config.isFavoriteModel("opus", forProvider: "claude-acp"))
+        #expect(config.selectedModelId(forProvider: "claude-acp") == "sonnet")
+    }
+
+    @Test func favoritesRoundTripThroughDisk() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-providers-fav-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let original = AgentProvidersConfig(providers: [.claudeAcpDefault])
+            .togglingFavoriteModel("opus", forProvider: "claude-acp")
+        try original.save(to: tmp)
+
+        let loaded = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { [] })
+        #expect(loaded.isFavoriteModel("opus", forProvider: "claude-acp"))
+    }
 }
 
 @Suite struct AgentProviderCatalogTests {

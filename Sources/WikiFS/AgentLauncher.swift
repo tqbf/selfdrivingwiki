@@ -269,6 +269,18 @@ final class AgentLauncher {
         providersConfig().selectedModelId(forProvider: providerId)
     }
 
+    /// Toggle + persist a model's favorite state for `providerId`, then return
+    /// the new config so the composer picker can update its bound state. A
+    /// display-only preference (favorites sort to the top of the picker); no
+    /// effect on which model actually launches.
+    @discardableResult
+    func toggleFavoriteModel(_ modelId: String, forProvider providerId: String) -> AgentProvidersConfig {
+        let dir = resolveProvidersContainerDirectory()
+        let updated = providersConfig().togglingFavoriteModel(modelId, forProvider: providerId)
+        try? updated.save(to: dir)
+        return updated
+    }
+
     /// After a successful `backend.start`, if it was an ACP backend, read the
     /// models it advertised and cache them per-provider for the picker. Cheap
     /// (one actor hop + one secrets-free file write) and non-blocking: runs as

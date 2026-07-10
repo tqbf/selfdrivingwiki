@@ -47,6 +47,9 @@ struct ProviderSelector: View {
     /// The search query typed in the popover (empty = show all rows).
     @State private var searchText = ""
 
+    /// The row currently under the pointer (for the hover highlight).
+    @State private var hoveredRowID: String?
+
     @Environment(\.openSettings) private var openSettings
 
     init(launcher: AgentLauncher) {
@@ -69,30 +72,19 @@ struct ProviderSelector: View {
     }
 
     var body: some View {
-        // Compact trigger bar hugging the composer's left edge. The whole label
-        // is the popover's hit target; the gear is a separate Settings affordance.
-        HStack(spacing: 4) {
-            Button {
-                isPresented.toggle()
-            } label: {
-                trigger
-            }
-            .buttonStyle(.borderless)
-            .popover(isPresented: $isPresented, arrowEdge: .top) {
-                popoverContent
-            }
-            .help(defaultHelpText)
-
-            Button {
-                openSettings()
-            } label: {
-                Image(systemName: "gearshape")
-                    .imageScale(.small)
-                    .foregroundStyle(.tertiary)
-            }
-            .buttonStyle(.borderless)
-            .help("Open Provider settings")
+        // Compact trigger chip hugging the composer's left edge. The whole label
+        // is the popover's hit target; Settings is reachable from the gear in the
+        // popover header (no separate gear on the chip, which duplicated it).
+        Button {
+            isPresented.toggle()
+        } label: {
+            trigger
         }
+        .buttonStyle(.borderless)
+        .popover(isPresented: $isPresented, arrowEdge: .top) {
+            popoverContent
+        }
+        .help(defaultHelpText)
         .onAppear { refresh() }
         // Keep in sync if a session flips (the composer is rebuilt when a chat
         // becomes live). Cheap: it's a single file read.
@@ -111,7 +103,7 @@ struct ProviderSelector: View {
             Divider()
             flatModelList
         }
-        .frame(minWidth: 280, idealWidth: 300, minHeight: 240, idealHeight: 360)
+        .frame(width: 300)
     }
 
     /// The header: a search field (leading) + a gear button (trailing). Search
@@ -146,22 +138,29 @@ struct ProviderSelector: View {
     /// search query. A checkmark marks the current selection. Selecting a row
     /// persists the provider + model and closes the popover.
     private var flatModelList: some View {
-        List(selection: Binding(
-            get: { selectedRowID },
-            set: { newValue in selectRow(newValue) }
-        )) {
-            ForEach(filteredRows) { row in
-                rowView(row)
-                    .tag(row.id)
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(filteredRows) { row in
+                    rowView(row)
+                }
             }
+            .padding(.vertical, 4)
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
+        .frame(height: listHeight)
     }
 
-    /// One row: glyph + "Provider · Model" + a checkmark when selected. Paseo
-    /// renders the provider glyph as a leading slot; we use an SF Symbol per
-    /// backend (terminal for Claude, cpu for ACP) since we have no brand assets.
+    /// Hug the rows up to a cap: few models → a short popover with no wasted
+    /// space; many → the list scrolls at the cap instead of growing tall.
+    private var listHeight: CGFloat {
+        let rowHeight: CGFloat = 40
+        let count = max(filteredRows.count, 1)
+        return min(CGFloat(count) * rowHeight + 8, 320)
+    }
+
+    /// One row (paseo model-menu style): glyph + a bold model name over a
+    /// dimmer "Provider · description" subtitle + a checkmark when selected. The
+    /// leading glyph is an SF Symbol per backend (terminal for Claude, cpu for
+    /// ACP) since we have no brand assets.
     private func rowView(_ row: SelectorRow) -> some View {
         HStack(spacing: 8) {
             Image(systemName: glyph(for: row.provider))
@@ -169,12 +168,11 @@ struct ProviderSelector: View {
                 .foregroundStyle(row.provider.backend == .claudeCLI ? Color.purple : Color.blue)
             VStack(alignment: .leading, spacing: 1) {
                 Text(row.title)
-                    .font(.system(size: 12, weight: .medium))
-                if let subtitle = row.subtitle {
-                    Text(subtitle)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                }
+                    .font(.system(size: 13, weight: .semibold))
+                Text(row.subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
             Spacer(minLength: 0)
             if row.id == selectedRowID {
@@ -182,11 +180,41 @@ struct ProviderSelector: View {
                     .imageScale(.small)
                     .foregroundStyle(.tint)
             }
+            // Favorite star — only real model rows are favoritable (not the
+            // synthetic "Default" row). Its own Button so tapping the star
+            // toggles the favorite without also selecting the row.
+            if row.modelId != nil {
+                Button {
+                    toggleFavorite(row)
+                } label: {
+                    Image(systemName: row.isFavorite ? "star.fill" : "star")
+                        .imageScale(.small)
+                        .foregroundStyle(row.isFavorite ? Color.yellow : Color.secondary.opacity(0.6))
+                }
+                .buttonStyle(.borderless)
+                .help(row.isFavorite ? "Remove from favorites" : "Add to favorites")
+            }
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
         .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(hoveredRowID == row.id ? Color.primary.opacity(0.08) : .clear)
+                .padding(.horizontal, 4)
+        )
+        .onHover { inside in
+            if inside { hoveredRowID = row.id } else if hoveredRowID == row.id { hoveredRowID = nil }
+        }
         .onTapGesture { selectRow(row.id) }
-        .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets(top: 3, leading: 10, bottom: 3, trailing: 10))
+    }
+
+    /// Toggle + persist a model row's favorite state, refreshing local config so
+    /// the star flips and the row re-sorts to (or from) the favorites group. Does
+    /// NOT change the selection or close the popover.
+    private func toggleFavorite(_ row: SelectorRow) {
+        guard let modelId = row.modelId else { return }
+        config = launcher.toggleFavoriteModel(modelId, forProvider: row.provider.id)
     }
 
     // MARK: - Row model (flat, searchable)
@@ -198,18 +226,31 @@ struct ProviderSelector: View {
         let provider: AgentProvider
         let modelId: String?
         let modelLabel: String
+        /// The agent-advertised one-line description (paseo shows this as the
+        /// row's dimmer second line). nil for the synthetic "Default" row.
+        let modelDescription: String?
+        /// Whether the user has starred this model (paseo per-row favorite).
+        /// Always false for the synthetic "Default" row (not favoritable).
+        let isFavorite: Bool
         let id: String
 
-        /// "Provider · Model" (the title) — e.g. "Hermes · GLM-4.7", "Claude · Opus".
+        /// Primary (bold) line — the model name, paseo-style (e.g. "Opus 4.8",
+        /// "GLM-4.7", "Default").
         var title: String {
-            "\(provider.label) · \(modelLabel)"
+            modelLabel
         }
 
-        /// A secondary subtitle. For the "Default" row we show the hint that no
-        /// model is pinned (agent default). For model rows, nil (the title
-        /// already carries the model name).
-        var subtitle: String? {
-            modelId == nil ? "Agent default" : nil
+        /// Secondary (dimmer) line — the provider plus the agent-advertised
+        /// description. For the "Default" row it notes no model is pinned; for a
+        /// model row it appends the description when the agent supplied one.
+        var subtitle: String {
+            if modelId == nil {
+                return "\(provider.label) · Agent default"
+            }
+            if let modelDescription, !modelDescription.isEmpty {
+                return "\(provider.label) · \(modelDescription)"
+            }
+            return provider.label
         }
     }
 
@@ -228,6 +269,8 @@ struct ProviderSelector: View {
                     provider: provider,
                     modelId: nil,
                     modelLabel: "Default",
+                    modelDescription: nil,
+                    isFavorite: false,
                     id: "\(provider.id):default")
             ]
             for model in models {
@@ -235,21 +278,26 @@ struct ProviderSelector: View {
                     provider: provider,
                     modelId: model.modelId,
                     modelLabel: model.displayLabel,
+                    modelDescription: model.description,
+                    isFavorite: config.isFavoriteModel(model.modelId, forProvider: provider.id),
                     id: "\(provider.id):\(model.modelId)"))
             }
             return rows
         }
     }
 
-    /// The rows after applying the search filter. Matches against the provider
-    /// label + the model label (case-insensitive). Empty query = all rows.
+    /// The rows after applying the search filter, with favorites pinned to the
+    /// top (paseo). Matches against the provider label + the model label
+    /// (case-insensitive). Empty query = all rows. The favorites-first partition
+    /// is stable, so ordering within each group is preserved.
     private var filteredRows: [SelectorRow] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return flatRows }
-        return flatRows.filter { row in
+        let matched = query.isEmpty ? flatRows : flatRows.filter { row in
             row.provider.label.lowercased().contains(query)
                 || row.modelLabel.lowercased().contains(query)
         }
+        // Favorites float to the top; everything else keeps its order.
+        return matched.filter(\.isFavorite) + matched.filter { !$0.isFavorite }
     }
 
     /// The id of the row that matches the current selection (provider + model),
