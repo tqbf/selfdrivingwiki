@@ -166,10 +166,13 @@ actor ACPBackend: AgentBackend {
                 throw ACPBackendError.authenticationFailed(authResponse.error)
             }
         case .missingCredentials:
-            // The agent requires auth but no key is configured. Fail fast with a
-            // clear, actionable error rather than letting newSession fail opaquely.
-            DebugLog.agent("ACPBackend.start: FAIL missingAPIKey — agent requires auth, none configured")
-            throw ACPBackendError.missingAPIKey
+            // The agent advertised authMethods but no API key is configured. Do NOT
+            // hard-block: many agents (Hermes via ~/.hermes, Claude via OAuth)
+            // authenticate themselves with their own credentials and don't need a
+            // client-provided key. Skip client-side `authenticate` and proceed to
+            // newSession; if the agent truly requires client creds, the prompt will
+            // surface that error (clearer than blocking at start).
+            DebugLog.agent("ACPBackend.start: no API key configured — skipping client auth (agent may self-authenticate)")
         }
 
         let workingDir = profile.scratchDirectory?.path ?? spawn.workingDirectory ?? FileManager.default.currentDirectoryPath
