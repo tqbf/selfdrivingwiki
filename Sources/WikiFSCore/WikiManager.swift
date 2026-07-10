@@ -184,11 +184,13 @@ public final class WikiManager {
     @discardableResult
     public func createWiki(displayName: String) async -> WikiDescriptor {
         let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let descriptor = WikiDescriptor.make(displayName: trimmed.isEmpty ? "Untitled Wiki" : trimmed)
+        var descriptor = WikiDescriptor.make(displayName: trimmed.isEmpty ? "Untitled Wiki" : trimmed)
         // Opening a fresh SQLiteWikiStore runs the full bootstrap ladder (pages +
         // system_prompt seed). A new wiki should have a Home page so its mount is
-        // non-empty, mirroring the app's launch behavior.
-        createDatabaseIfNeeded(for: descriptor, seedHome: true)
+        // non-empty, mirroring the app's launch behavior. The seeded page becomes
+        // the wiki's home page so the home button works without a manual "Set as
+        // Home Page" step (#315).
+        descriptor.homePageID = createDatabaseIfNeeded(for: descriptor, seedHome: true)
 
         var registry = WikiRegistry.load(from: containerDirectory)
         registry.add(descriptor)
@@ -329,7 +331,14 @@ public final class WikiManager {
             // bus from the app layer. See `plans/event-bus.md`.
             store.eventBus = WikiEventBus(wikiID: id)
             model = WikiStoreModel(store: store)
-            if model.summaries.isEmpty { model.newPage(title: "Home") }
+            if model.summaries.isEmpty {
+                let homeID = model.newPage(title: "Home")
+                // Mirror `createWiki`'s linkage (#315): a freshly-seeded Home page
+                // becomes the wiki's home page when none is set yet.
+                if let homeID, descriptorExists(id), wikis.first(where: { $0.id == id })?.homePageID == nil {
+                    setHomePage(id: id, pageID: homeID)
+                }
+            }
             // Off-main snapshot reads (debounced search) go through a read-only
             // pool over the same file. Only for real file-backed DBs — a second
             // connection to `:memory:` would see a different, empty database.
@@ -368,16 +377,20 @@ public final class WikiManager {
 
     /// Create the wiki's DB file if absent by opening it once (which runs the
     /// bootstrap ladder), optionally seeding a Home page.
-    private func createDatabaseIfNeeded(for descriptor: WikiDescriptor, seedHome: Bool = false) {
+    /// Returns the seeded Home page's ID (when `seedHome` seeds one), so the
+    /// caller can wire it into `WikiDescriptor.homePageID`.
+    @discardableResult
+    private func createDatabaseIfNeeded(for descriptor: WikiDescriptor, seedHome: Bool = false) -> PageID? {
         let url = databaseURL(forWikiID: descriptor.id)
         do {
             let store = try makeStore(url)
             if seedHome, let model = makeModelIfEmpty(store) {
-                model.newPage(title: "Home")
+                return model.newPage(title: "Home")
             }
         } catch {
             DebugLog.store("WikiManager: createDatabase failed for \(descriptor.id): \(error)")
         }
+        return nil
     }
 
     /// Wrap a freshly-opened store in a model only when it has no pages, so the

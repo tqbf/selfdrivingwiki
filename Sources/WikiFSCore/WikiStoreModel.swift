@@ -1338,7 +1338,8 @@ public final class WikiStoreModel {
 
     // MARK: - Mutations
 
-    public func newPage(title: String = "Untitled") {
+    @discardableResult
+    public func newPage(title: String = "Untitled") -> PageID? {
         flushPendingSaves()
         do {
             let page = try store.createPage(title: title)
@@ -1350,8 +1351,10 @@ public final class WikiStoreModel {
             let newSelection = WikiSelection.page(page.id)
             recordHistoryTransition(from: loadedSelection, to: newSelection)
             openTab(newSelection, title: title)
+            return page.id
         } catch {
             DebugLog.store("WikiStoreModel.newPage failed: \(error)")
+            return nil
         }
     }
 
