@@ -325,7 +325,7 @@ struct StoreEmissionTests {
 
     @Test func createChatEmitsChatCreated() async throws {
         let (store, _, rec) = try makeHarness()
-        let chat = try store.createChat(kind: .ask, title: "Test Chat")
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .chat)
         #expect(events.last?.change == .created)
@@ -334,7 +334,7 @@ struct StoreEmissionTests {
 
     @Test func appendChatMessagesEmitsChatUpdated() async throws {
         let (store, _, rec) = try makeHarness()
-        let chat = try store.createChat(kind: .ask, title: "Test Chat")
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
         try await drain(rec)
         _ = try store.appendChatMessages(chatID: chat.id, events: [AgentEvent.userText("test")])
         let events = try await awaitEvents(rec)
@@ -345,7 +345,7 @@ struct StoreEmissionTests {
 
     @Test func renameChatEmitsChatUpdated() async throws {
         let (store, _, rec) = try makeHarness()
-        let chat = try store.createChat(kind: .ask, title: "Test Chat")
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
         try await drain(rec)
         try store.renameChat(id: chat.id, to: "Renamed")
         let events = try await awaitEvents(rec)
@@ -356,7 +356,7 @@ struct StoreEmissionTests {
 
     @Test func deleteChatEmitsChatDeleted() async throws {
         let (store, _, rec) = try makeHarness()
-        let chat = try store.createChat(kind: .ask, title: "Test Chat")
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
         try await drain(rec)
         try store.deleteChat(id: chat.id)
         let events = try await awaitEvents(rec)

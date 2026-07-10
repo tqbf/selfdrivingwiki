@@ -127,6 +127,11 @@ public enum SandboxProfile {
     ///   denies as `generate(...)` so the deny holds for the read-only query path too.
     ///   See `generate(...)` / `pdf2mdDenyRules()` for details. Nil (default) emits
     ///   nothing.
+    ///
+    /// NOTE: `generateReadOnly` and `readOnlyInvocation` are retained in-tree
+    /// deliberately but are CURRENTLY UNWIRED. The read-only Ask chat mode was
+    /// removed — chats are always write-capable and use the write sandbox
+    /// (`generate`/`invocation`). Kept for reference; not marked deprecated.
     public static func generateReadOnly(
         scratchDir: String,
         pdf2mdScriptPath: String? = nil

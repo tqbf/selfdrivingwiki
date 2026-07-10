@@ -17,11 +17,10 @@ struct WikiFSApp: App {
     private let containerDirectory: URL
     @State private var manager: WikiManager
     @State private var fileProvider = FileProviderSpike()
-    /// All three launchers share one `GenerationGate` so ingest, ask-turn, and
-    /// edit-turn generations serialize globally — only one active generation at a time.
+    /// Both launchers share one `GenerationGate` so ingest and chat-turn
+    /// generations serialize globally — only one active generation at a time.
     @State private var agentLauncher: AgentLauncher
-    @State private var askLauncher: AgentLauncher
-    @State private var editLauncher: AgentLauncher
+    @State private var chatLauncher: AgentLauncher
     /// App-wide extraction backend resolver (local pdf2md / Claude / Docling
     /// Serve). Threaded like `agentLauncher` — one instance, owned by the app.
     @State private var extractionCoordinator: ExtractionCoordinator
@@ -85,19 +84,18 @@ struct WikiFSApp: App {
         _manager = State(initialValue: m)
         let coordinator = ExtractionCoordinator(containerDirectory: directory)
         _extractionCoordinator = State(initialValue: coordinator)
-        // All three launchers share one GenerationGate so ingest, ask-turn, and
-        // edit-turn generations contend on the same FIFO queue — only one active
+        // Both launchers share one GenerationGate so ingest and chat-turn
+        // generations contend on the same FIFO queue — only one active
         // generation at a time. Interactive sessions' processes coexist freely;
         // only one GENERATES at a time (per-turn gate).
         let generationGate = GenerationGate()
         _agentLauncher = State(initialValue: AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator))
-        _askLauncher   = State(initialValue: AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator))
-        _editLauncher  = State(initialValue: AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator))
+        _chatLauncher   = State(initialValue: AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator))
     }
 
     var body: some Scene {
         WindowGroup {
-            RootView(manager: manager, fileProvider: fileProvider, agentLauncher: agentLauncher, askLauncher: askLauncher, editLauncher: editLauncher, extractionCoordinator: extractionCoordinator)
+            RootView(manager: manager, fileProvider: fileProvider, agentLauncher: agentLauncher, chatLauncher: chatLauncher, extractionCoordinator: extractionCoordinator)
                 .alert(
                     "Install Self Driving Wiki in Applications",
                     isPresented: $showingLaunchLocationWarning,

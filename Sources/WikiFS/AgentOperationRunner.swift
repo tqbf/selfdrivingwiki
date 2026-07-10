@@ -218,8 +218,7 @@ enum AgentOperationRunner {
         launcher: AgentLauncher,
         store: WikiStoreModel,
         manager: WikiManager,
-        fileProvider: FileProviderSpike,
-        allowWikiEdits: Bool = false
+        fileProvider: FileProviderSpike
     ) async {
         let trimmed = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -228,11 +227,10 @@ enum AgentOperationRunner {
             return
         }
 
-        // If the query agent wants edit permissions, it must take the edit lock.
-        // Refuse to start if an ingest is in progress (extraction OR agent phase)
-        // or if another agent already holds the lock (issue #235).
+        // Chats are write-capable, so they must take the edit lock. Refuse to
+        // start if an ingest is in progress (extraction OR agent phase) or if
+        // another agent already holds the lock (issue #235).
         if Self.shouldBlockEditStart(
-            allowWikiEdits: allowWikiEdits,
             isAgentRunning: store.isAgentRunning,
             isIngestInProgress: store.isIngestInProgress) {
             launcher.preflightError = "An ingestion is in progress. Wait for it to finish before starting a chat."
@@ -248,18 +246,17 @@ enum AgentOperationRunner {
 
         // Persist the chat from the first message (issue #119). Best-effort:
         // a store failure yields chat == nil and the session runs unpersisted.
-        let chat = store.startChat(kind: allowWikiEdits ? .edit : .ask, firstMessage: trimmed)
+        let chat = store.startChat(kind: .edit, firstMessage: trimmed)
 
         // D2 draft-state morph: if a chat row was created, retarget the active
-        // tab IN PLACE from the draft state (.ask/.edit) to .chat(id). The tab's
+        // tab IN PLACE from the draft state (.newChat) to .chat(id). The tab's
         // UUID survives → tab order, drag/drop, and per-tab history are preserved.
         // The chat "becomes" its tab — reopenable, restorable like any page.
         if let chat {
             store.retargetActiveTabToChat(chatID: chat.id)
         }
 
-        // Edit mode takes the edit lock; Ask mode is forced read-only by the seatbelt
-        // sandbox and never acquires the lock at all.
+        // Chats always take the edit lock.
         await launcher.startInteractiveQuery(
             firstMessage: trimmed,
             stateMarkdown: store.currentStateSnapshot().renderStateFile(),
@@ -267,7 +264,6 @@ enum AgentOperationRunner {
             wikiRoot: root,
             systemPrompt: store.currentSystemPromptBody(),
             wikictlDirectory: HelpersLocation.wikictlDirectory,
-            allowWikiEdits: allowWikiEdits,
             // D2: pass the chat row id so the launcher records it as
             // activeChatID — ChatView's source-of-truth switch. `nil`
             // when startChat failed (session runs unpersisted, no live tab).
@@ -275,13 +271,12 @@ enum AgentOperationRunner {
             // The model seeded the first user message at chat creation; tell the
             // launcher so it skips double-inserting it on the first flush.
             firstMessagePrePersisted: chat != nil,
-            onLock: { if allowWikiEdits { store.beginAgentRun() } },
-            onUnlock: { if allowWikiEdits { store.endAgentRun() } },
+            onLock: { store.beginAgentRun() },
+            onUnlock: { store.endAgentRun() },
             // Per-turn edit lock: release between turns (re-acquire on the next
             // send). Lives in the launcher — not the view — so it fires even when
-            // the Query view is unmounted (the bug fix). Gated on `allowWikiEdits`
-            // so a read-only session never touches the lock.
-            onTurnBoundary: { if allowWikiEdits { store.setAgentRunning($0) } },
+            // the Query view is unmounted (the bug fix).
+            onTurnBoundary: { store.setAgentRunning($0) },
             // Weak store: if the user switches wikis mid-session the model may be
             // torn down — persistence degrades to a no-op rather than writing into
             // the wrong wiki (issue #119).
@@ -299,28 +294,25 @@ enum AgentOperationRunner {
         // immediately isn't caught here, but seeding guarantees that chat still
         // holds its first message — never titled-but-empty.)
         if let chat, launcher.preflightError != nil {
-            store.rollbackChatCreation(id: chat.id, toDraft: allowWikiEdits ? .edit : .ask)
+            store.rollbackChatCreation(id: chat.id, toDraft: .newChat)
         }
     }
 
     // MARK: - Pure predicates (issue #235)
 
-    /// Whether an Edit-mode session should be blocked from starting because an
-    /// ingest is in progress or another agent holds the edit lock. Pure so the
-    /// (allowWikiEdits × isAgentRunning × isIngestInProgress) matrix is unit-
+    /// Whether a write-capable chat session should be blocked from starting
+    /// because an ingest is in progress or another agent holds the edit lock.
+    /// Pure so the (isAgentRunning × isIngestInProgress) matrix is unit-
     /// testable without driving a live launcher or store. Used by both
     /// `startChat` and `continueChat`.
     ///
     /// `isIngestInProgress` covers the extraction window (pdf2md) that
-    /// `isAgentRunning` misses (it only fires at spawn commit). Ask mode
-    /// (allowWikiEdits == false) is never blocked — it is read-only and
-    /// lock-exempt.
+    /// `isAgentRunning` misses (it only fires at spawn commit).
     static func shouldBlockEditStart(
-        allowWikiEdits: Bool,
         isAgentRunning: Bool,
         isIngestInProgress: Bool
     ) -> Bool {
-        allowWikiEdits && (isAgentRunning || isIngestInProgress)
+        isAgentRunning || isIngestInProgress
     }
 
     // MARK: - Continue a persisted chat (D3, seeded-fallback)
@@ -484,12 +476,10 @@ enum AgentOperationRunner {
     static func continueChat(
         chatID: PageID,
         message: String,
-        mode: QueryMode,
         store: WikiStoreModel,
         launcher: AgentLauncher,
         manager: WikiManager,
-        fileProvider: FileProviderSpike,
-        allowWikiEdits: Bool
+        fileProvider: FileProviderSpike
     ) async {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -523,9 +513,9 @@ enum AgentOperationRunner {
         }
 
         // Edit-lock sanity: refuse if an ingest is in progress (extraction OR
-        // agent phase) or holds the lock and we want edits (issue #235).
+        // agent phase) or holds the lock (issue #235). Chats are always
+        // write-capable, so they always need the edit lock.
         if Self.shouldBlockEditStart(
-            allowWikiEdits: allowWikiEdits,
             isAgentRunning: store.isAgentRunning,
             isIngestInProgress: store.isIngestInProgress) {
             launcher.preflightError = "An ingestion is in progress. Wait for it to finish before starting a chat."
@@ -552,11 +542,10 @@ enum AgentOperationRunner {
             wikiRoot: root,
             systemPrompt: store.currentSystemPromptBody(),
             wikictlDirectory: HelpersLocation.wikictlDirectory,
-            allowWikiEdits: allowWikiEdits,
             chatID: chatID.rawValue,
-            onLock: { if allowWikiEdits { store.beginAgentRun() } },
-            onUnlock: { if allowWikiEdits { store.endAgentRun() } },
-            onTurnBoundary: { if allowWikiEdits { store.setAgentRunning($0) } },
+            onLock: { store.beginAgentRun() },
+            onUnlock: { store.endAgentRun() },
+            onTurnBoundary: { store.setAgentRunning($0) },
             onTranscript: { [weak store] events in
                 store?.appendChatEvents(chatID: chatID, events: events)
             })

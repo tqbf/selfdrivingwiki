@@ -394,17 +394,17 @@ struct ProjectionTreeTests {
         let chats: [ChatSummary]
     }
 
-    /// Seed a wiki with two `.ask` chats — the first with a two-message
+    /// Seed a wiki with two chats — the first with a two-message
     /// transcript, the second empty — so tree-shape and content tests have
     /// realistic rows.
     private func seedChats() throws -> Chatted {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-chat-\(UUID().uuidString).sqlite")
         let store = try SQLiteWikiStore(databaseURL: url)
-        let first = try store.createChat(kind: .ask, title: "Test Chat")
+        let first = try store.createChat(kind: .edit, title: "Test Chat")
         _ = try store.appendChatMessages(
             chatID: first.id, events: [.userText("Hello"), .assistantText("Hi there")])
-        _ = try store.createChat(kind: .ask, title: "Second Chat")
+        _ = try store.createChat(kind: .edit, title: "Second Chat")
         let chats = try store.listAllChatsOrderedByID()   // ULID (creation) order
         let projection = Projection(wikiID: "proj-chat-\(UUID().uuidString)", databaseURL: url)
         return Chatted(projection: projection, store: store, chats: chats)

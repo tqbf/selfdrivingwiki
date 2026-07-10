@@ -46,8 +46,11 @@ public enum WikiOperation: Equatable, Sendable {
   case query(question: String, stateFilePath: String)
 
   /// Keep a query chat open. User turns arrive over stdin, and Claude may
-  /// answer only, or update the wiki with `wikictl` when `allowWikiEdits` is true.
-  case queryChat(stateFilePath: String, allowWikiEdits: Bool)
+  /// answer or update the wiki with `wikictl`. Chats are always write-capable
+  /// now (the read-only Ask mode was removed); `allowWikiEdits` is retained
+  /// on the case for signature stability but is always `true` from the chat
+  /// path. The one-shot `.query` op remains read-only by construction.
+  case queryChat(stateFilePath: String, allowWikiEdits: Bool = true)
 
   /// Health-check the wiki and report findings. `stateFilePath` is the staged
   /// `WIKI_STATE.md` snapshot.
@@ -287,14 +290,12 @@ extension WikiOperation {
     """
   }
 
-  /// Interactive chat stays alive across user turns. Both modes share the same
-  /// body — `chat.md`; the read-only (Ask) arm omits only the operational
-  /// write-rule block (`IngestWriteRule.writes`), which the read-write (Edit) arm
-  /// includes. The seatbelt sandbox + `--allowed-tools` remain the authoritative
-  /// write gate for the read-only agent (#284); the branch collapses once Ask
-  /// mode is removed.
+  /// Interactive chat stays alive across user turns. Chats are always
+  /// write-capable now (the read-only Ask mode was removed), so the write-rule
+  /// block (`IngestWriteRule.writes`) is always included. The seatbelt sandbox
+  /// + `--allowed-tools` remain the authoritative write gate.
   private static func queryChatPrompt(
-    wikiRoot: String, stateFilePath: String, allowWikiEdits: Bool
+    wikiRoot: String, stateFilePath: String, allowWikiEdits: Bool = true
   ) -> String {
     let writeRule = allowWikiEdits ? "\(IngestWriteRule.writes)\n\n" : ""
     return """

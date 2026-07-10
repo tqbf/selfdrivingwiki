@@ -346,10 +346,8 @@ struct AddressBarView: View {
             return "[[system-prompt]]"
         case .changeLog:
             return "[[log]]"
-        case .ask:
-            return "[[ask]]"
-        case .edit:
-            return "[[edit]]"
+        case .newChat:
+            return "[[chat]]"
         case .lint:
             return "[[lint]]"
         case .bookmark:

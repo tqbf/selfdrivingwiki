@@ -126,8 +126,8 @@ struct FreshSchemaParityTests {
         let ladder = try fingerprint(at: ladderURL)
 
         // Both must report head version 22.
-        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "28")
-        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "28")
+        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "29")
+        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "29")
 
         if fast != ladder {
             Issue.record("fresh fast-path schema drifted from the stepwise ladder:\n--- fast ---\n\(fast)\n--- ladder ---\n\(ladder)")
@@ -208,7 +208,7 @@ struct FreshSchemaParityTests {
         // 3. Reopen → runs the v20→v21 backfill.
         sqlite3_close(db)
         let migrated = try SQLiteWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "28")
+        #expect(migrated.pragmaValue("user_version") == "29")
 
         // 4. The legacy extraction row was backfilled: blob_hash + activity_id + source_version_id set.
         #expect(migrated.scalarText(
@@ -270,7 +270,7 @@ struct FreshSchemaParityTests {
         sqlite3_close(db)
 
         let migrated = try SQLiteWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "28")
+        #expect(migrated.pragmaValue("user_version") == "29")
         let db2 = try open(url)
         defer { sqlite3_close(db2) }
         let roleCol = columns(db2, "sources").first { $0.name == "role" }
@@ -345,7 +345,7 @@ struct FreshSchemaParityTests {
 
         // Reopen → v22 migration rebuilds source_links.
         let migrated = try SQLiteWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "28")
+        #expect(migrated.pragmaValue("user_version") == "29")
         let db2 = try open(url)
         defer { sqlite3_close(db2) }
 
@@ -404,7 +404,7 @@ struct FreshSchemaParityTests {
 
         let reopenStart = Date()
         let migrated = try SQLiteWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "28")
+        #expect(migrated.pragmaValue("user_version") == "29")
         let db2 = try open(url)
         defer { sqlite3_close(db2) }
 

@@ -6,9 +6,8 @@ import WikiFSCore
 /// selected document/source surface.
 struct WikiDetailView: View {
     @Bindable var store: WikiStoreModel
-    @Bindable var launcher: AgentLauncher       // ingest/lint launcher
-    @Bindable var askLauncher: AgentLauncher    // ask (read-only) chat launcher
-    @Bindable var editLauncher: AgentLauncher   // edit chat launcher
+    @Bindable var launcher: AgentLauncher       // ingest/lint + chat launcher
+    @Bindable var chatLauncher: AgentLauncher   // chat launcher (write-capable)
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
     let extractionCoordinator: ExtractionCoordinator
@@ -122,25 +121,13 @@ struct WikiDetailView: View {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color.accentColor.opacity(isSidebarDropTargeted ? 0.08 : 0))
             }
-        case .ask:
+        case .newChat:
             // D2: draft state — empty composer until the first send retargets the
             // tab to .chat(id). chatID == nil signals the draft state.
             ChatView(
-                mode: .ask,
                 chatID: nil,
                 store: store,
-                launcher: askLauncher,
-                manager: manager,
-                fileProvider: fileProvider
-            )
-        case .edit:
-            // D2: draft state — empty composer until the first send retargets the
-            // tab to .chat(id). chatID == nil signals the draft state.
-            ChatView(
-                mode: .edit,
-                chatID: nil,
-                store: store,
-                launcher: editLauncher,
+                launcher: chatLauncher,
                 manager: manager,
                 fileProvider: fileProvider
             )
@@ -175,7 +162,7 @@ struct WikiDetailView: View {
                     // ingestingSourceIDs.contains` overload.
                     isThisFileExtracting: launcher.extractingSourceIDs.contains(file.id),
                     // True when the edit lock is held but NO ingest is in flight —
-                    // the query agent is in Edit mode and owns the lock.
+                    // a chat agent owns the lock.
                     isEditLockedExternally: store.isAgentRunning && launcher.ingestingSourceIDs.isEmpty,
                     runIngest: runIngest,
                     launcher: launcher,
@@ -197,14 +184,9 @@ struct WikiDetailView: View {
                 Text("Bookmark folders are managed in the sidebar.")
             }
         case .chat(let id):
-            // D2: unified surface. Resolve the mode from the chat's kind so the
-            // correct launcher (ask vs edit) is bound — a persisted .ask chat's
-            // composer belongs to askLauncher, etc. Falls back to .ask if the
-            // chat is missing (deleted mid-view).
-            let chatMode: QueryMode = store.chats.first { $0.id == id }?.kind == .edit ? .edit : .ask
-            let chatLauncher = chatMode == .edit ? editLauncher : askLauncher
+            // D2: unified surface. Chats are always write-capable, so the single
+            // chat launcher is bound directly.
             ChatView(
-                mode: chatMode,
                 chatID: id,
                 store: store,
                 launcher: chatLauncher,
@@ -239,9 +221,9 @@ struct WikiDetailView: View {
         store.newPageInNewTab()
     }
 
-    /// Start a new chat in the Edit draft state (mirrors the Chats sidebar `+`).
+    /// Start a new chat in the draft state (mirrors the Chats sidebar `+`).
     private func addChat() {
-        store.openTab(.edit)
+        store.openTab(.newChat)
     }
 
     /// Pick a single file via the open panel and ingest it.

@@ -62,7 +62,7 @@ struct AgentToolsD4Tests {
 
     @Test func renameChat_updatesRowTitle() throws {
         let (model, store) = try tempModel()
-        let chat = try store.createChat(kind: .ask, title: "Original Title")
+        let chat = try store.createChat(kind: .edit, title: "Original Title")
         model.reloadChats()
 
         // The context menu's Rename action commits through this exact call.
@@ -92,7 +92,7 @@ struct AgentToolsD4Tests {
     @Test func renameChat_preservesOtherChats() throws {
         // Behavior-preservation: renaming one chat must not disturb siblings.
         let (model, store) = try tempModel()
-        let a = try store.createChat(kind: .ask, title: "A")
+        let a = try store.createChat(kind: .edit, title: "A")
         let b = try store.createChat(kind: .edit, title: "B")
         model.reloadChats()
 
@@ -110,7 +110,7 @@ struct AgentToolsD4Tests {
         // store.chats as-is. Verify the model preserves that order so the most
         // recently touched chat is on top (no D4 reordering added).
         let (model, store) = try tempModel()
-        let first = try store.createChat(kind: .ask, title: "First")
+        let first = try store.createChat(kind: .edit, title: "First")
         // Bump `first`'s updated_at by appending a message, so it becomes the
         // most-recently-updated *after* `second` is created.
         _ = try store.appendChatMessages(chatID: first.id, events: [.userText("bump")])

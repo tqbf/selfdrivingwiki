@@ -67,7 +67,7 @@ struct SQLiteWikiStoreTests {
         // user_version guard: a fresh DB runs all migration steps → version 16.
         // Reopening must not re-run DDL (no-op bootstrap).
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "28")
+        #expect(userVersion == "29")
         let reopened = try SQLiteWikiStore(databaseURL: url)
         // If bootstrap weren't guarded, the CREATE TABLE would throw here.
         #expect((try? reopened.listPages(sortBy: .lastUpdated)) != nil)
@@ -325,7 +325,7 @@ struct SQLiteWikiStoreTests {
         defer { sqlite3_close(db) }
 
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "28")
+        #expect(userVersion == "29")
 
         let tables = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))
@@ -369,7 +369,7 @@ struct SQLiteWikiStoreTests {
 
     @Test func freshDBReachesUserVersion18() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
-        #expect(store.pragmaValue("user_version") == "28")
+        #expect(store.pragmaValue("user_version") == "29")
     }
 
     @Test func v11SourceLinksHasDeleteCascade() throws {
@@ -625,7 +625,7 @@ struct SQLiteWikiStoreTests {
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
         defer { sqlite3_close(db) }
 
-        #expect(scalarText(db, "PRAGMA user_version;") == "28")
+        #expect(scalarText(db, "PRAGMA user_version;") == "29")
         let tables = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"))
         for expected in ["blobs", "agents", "activities", "source_versions", "refs"] {
@@ -686,7 +686,7 @@ struct SQLiteWikiStoreTests {
 
         // Reopen → migrates 19→20.
         let store = try SQLiteWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "28")
+        #expect(store.pragmaValue("user_version") == "29")
 
         var db: OpaquePointer?
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
@@ -704,6 +704,62 @@ struct SQLiteWikiStoreTests {
 
         // Byte-for-byte content preserved through the ref-resolved read path.
         #expect(try store.sourceContent(id: PageID(rawValue: "01SRC")) == payload)
+    }
+
+    /// v28→v29 (remove-readonly-chat-mode): a v28 DB with legacy `kind='ask'`
+    /// chat rows migrates to v29 — every `ask` row is rewritten to `edit`, and
+    /// `user_version` advances to 29. A fresh DB (no chat rows) is a no-op.
+    @Test func migrateV28ToV29RewritesAskChatsToEdit() throws {
+        let url = tempDatabaseURL()
+
+        // Build a v28-shaped DB by hand: the chats table (created at v25) with
+        // one `ask` row and one `edit` row. Stamp user_version=28.
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        defer { sqlite3_close(raw) }
+        let v28SQL = """
+        CREATE TABLE chats (
+            id         TEXT PRIMARY KEY,
+            kind       TEXT NOT NULL,
+            title      TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
+        CREATE TABLE chat_messages (
+            id         TEXT PRIMARY KEY,
+            chat_id    TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+            seq        INTEGER NOT NULL,
+            role       TEXT NOT NULL,
+            event_json TEXT NOT NULL,
+            text       TEXT NOT NULL DEFAULT '',
+            created_at REAL NOT NULL
+        );
+        INSERT INTO chats (id, kind, title, created_at, updated_at)
+        VALUES ('01CHATASK', 'ask', 'Ask Chat', 1000, 1000);
+        INSERT INTO chats (id, kind, title, created_at, updated_at)
+        VALUES ('01CHATEDIT', 'edit', 'Edit Chat', 1000, 1000);
+        PRAGMA user_version=28;
+        """
+        #expect(sqlite3_exec(raw, v28SQL, nil, nil, nil) == SQLITE_OK)
+
+        // Reopen → migrates 28→29.
+        let store = try SQLiteWikiStore(databaseURL: url)
+        #expect(store.pragmaValue("user_version") == "29")
+
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+
+        // Every row is now 'edit'.
+        #expect(scalarText(db, "SELECT COUNT(*) FROM chats WHERE kind='ask';") == "0")
+        #expect(scalarText(db, "SELECT COUNT(*) FROM chats WHERE kind='edit';") == "2")
+        // The ask row was rewritten (not deleted).
+        #expect(scalarText(db, "SELECT kind FROM chats WHERE id='01CHATASK';") == "edit")
+
+        // The store decodes both as .edit (the single-case ChatKind).
+        let chats = try store.listChats()
+        #expect(chats.allSatisfy { $0.kind == .edit })
+        #expect(chats.count == 2)
     }
 
     /// AC.3 — sourceContent resolves through the ref → version → blob.

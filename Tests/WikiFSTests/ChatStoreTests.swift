@@ -35,10 +35,10 @@ import SQLite3
     @Test func createAndListRoundTrip() throws {
         let store = try tempStore()
         let before = Date()
-        let chat = try store.createChat(kind: .ask, title: "What does this page say?")
+        let chat = try store.createChat(kind: .edit, title: "What does this page say?")
         let after = Date()
 
-        #expect(chat.kind == .ask)
+        #expect(chat.kind == .edit)
         #expect(chat.title == "What does this page say?")
         #expect(chat.messageCount == 0)
         #expect(chat.createdAt == chat.updatedAt)
@@ -47,7 +47,7 @@ import SQLite3
         let all = try store.listChats()
         #expect(all.count == 1)
         #expect(all[0].id == chat.id)
-        #expect(all[0].kind == .ask)
+        #expect(all[0].kind == .edit)
         #expect(all[0].title == chat.title)
         #expect(all[0].messageCount == 0)
         #expect(datesApproximatelyEqual(all[0].createdAt, chat.createdAt))
@@ -74,8 +74,8 @@ import SQLite3
 
     @Test func appendBumpsUpdatedAtSoOlderChatSortsFirstAfterAppend() throws {
         let store = try tempStore()
-        let older = try store.createChat(kind: .ask, title: "Older")
-        let newer = try store.createChat(kind: .ask, title: "Newer")
+        let older = try store.createChat(kind: .edit, title: "Older")
+        let newer = try store.createChat(kind: .edit, title: "Newer")
 
         // Freshly listed: newer chat (created later) sorts first.
         let beforeAppend = try store.listChats()
@@ -93,7 +93,7 @@ import SQLite3
 
     @Test func eventJSONRoundTripsForEveryPersistableCase() throws {
         let store = try tempStore()
-        let chat = try store.createChat(kind: .ask, title: "Conversation")
+        let chat = try store.createChat(kind: .edit, title: "Conversation")
         let events: [AgentEvent] = [
             .userText("What does this page say?"),
             .systemInit(model: "claude-opus-4"),
@@ -124,7 +124,7 @@ import SQLite3
 
     @Test func appendEmptyEventsIsANoOpAndDoesNotBumpUpdatedAt() throws {
         let store = try tempStore()
-        let chat = try store.createChat(kind: .ask, title: "Conversation")
+        let chat = try store.createChat(kind: .edit, title: "Conversation")
         let originalUpdatedAt = chat.updatedAt
 
         let inserted = try store.appendChatMessages(chatID: chat.id, events: [])
@@ -139,7 +139,7 @@ import SQLite3
 
     @Test func renameUpdatesTitle() throws {
         let store = try tempStore()
-        let chat = try store.createChat(kind: .ask, title: "Original")
+        let chat = try store.createChat(kind: .edit, title: "Original")
         try store.renameChat(id: chat.id, to: "Renamed")
         let reloaded = try store.listChats().first { $0.id == chat.id }
         #expect(reloaded?.title == "Renamed")
@@ -157,7 +157,7 @@ import SQLite3
 
     @Test func deleteChatCascadesToMessages() throws {
         let store = try tempStore()
-        let chat = try store.createChat(kind: .ask, title: "Conversation")
+        let chat = try store.createChat(kind: .edit, title: "Conversation")
         _ = try store.appendChatMessages(chatID: chat.id, events: [.userText("hello")])
 
         try store.deleteChat(id: chat.id)
@@ -189,7 +189,7 @@ import SQLite3
         // `sqlite3_close` checkpoints + quiesces the WAL when it's the last open
         // connection, so the raw write runs against a clean file.
         let store = try SQLiteWikiStore(databaseURL: url)
-        let chat = try store.createChat(kind: .ask, title: "Conversation")
+        let chat = try store.createChat(kind: .edit, title: "Conversation")
         let inserted = try store.appendChatMessages(chatID: chat.id, events: [
             .userText("before"), .assistantText("after"),
         ])

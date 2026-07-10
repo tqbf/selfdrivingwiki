@@ -18,7 +18,7 @@ struct ChatQuoteAnchorModelTests {
     private func makeModel() throws -> (WikiStoreModel, PageID) {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
-        let chat = try store.createChat(kind: .ask, title: "Debugging the FP bug")
+        let chat = try store.createChat(kind: .edit, title: "Debugging the FP bug")
         model.reloadFromStore()
         return (model, chat.id)
     }

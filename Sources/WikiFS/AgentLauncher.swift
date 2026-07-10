@@ -257,20 +257,6 @@ final class AgentLauncher {
         isInteractiveSession
     }
 
-    /// Pure selection of the interactive-query sandbox. When "Allow wiki edits" is
-    /// OFF, the read-only seatbelt sandbox wins REGARDLESS of `editSandbox` — a
-    /// global sandbox config can never override the forced read-only boundary. When
-    /// ON, `editSandbox` is used (which may itself be `nil`, i.e. fail-open
-    /// un-sandboxed). Extracted as a pure static so the read-only-wins invariant is
-    /// unit-testable without driving spawn state.
-    static func selectQuerySandbox(
-        allowWikiEdits: Bool,
-        editSandbox: SandboxProfile.SandboxInvocation?,
-        readOnlySandbox: SandboxProfile.SandboxInvocation
-    ) -> SandboxProfile.SandboxInvocation? {
-        allowWikiEdits ? editSandbox : readOnlySandbox
-    }
-
     // MARK: - Three independent mechanisms (relationship)
 
     /// The launcher coordinates three INDEPENDENT mechanisms. They never touch each
@@ -791,8 +777,6 @@ final class AgentLauncher {
     /// The process stays alive between turns without holding the gate, allowing
     /// another launcher's process to coexist. The gate is held only per-turn.
     ///
-    /// - Parameter allowWikiEdits: when `false` (default), the agent runs under a
-    ///   READ-ONLY seatbelt sandbox that physically blocks all writes to the wiki DB.
     /// - Parameter onTranscript: persistence sink (issue #119). Receives the
     ///   not-yet-persisted tail of `events` at each turn boundary and once more at
     ///   `finish()`. `nil` (the default) when the caller has no chat to persist
@@ -805,7 +789,6 @@ final class AgentLauncher {
         wikiRoot: String,
         systemPrompt: String,
         wikictlDirectory: String,
-        allowWikiEdits: Bool = false,
         chatID: String? = nil,
         firstMessagePrePersisted: Bool = false,
         onLock: @escaping @MainActor () -> Void,
@@ -852,24 +835,15 @@ final class AgentLauncher {
         }
 
         let operation = WikiOperation.queryChat(
-            stateFilePath: stateFilePath, allowWikiEdits: allowWikiEdits)
-        // When "Allow wiki edits" is off, force a read-only seatbelt sandbox that
-        // physically blocks writes to the wiki DB — regardless of global sandbox
-        // settings (the read-only sandbox ALWAYS wins over the edit sandbox, so a
-        // global config can never punch through the forced read-only boundary).
-        // When on, use the existing opt-in sandbox behavior (which may itself be
-        // `nil`, i.e. fail-open un-sandboxed). Resolved separately then handed to the
-        // pure selector so the invariant is unit-testable.
+            stateFilePath: stateFilePath)
+        // Chats are always write-capable now — use the write (opt-in) sandbox
+        // behavior (which may itself be `nil`, i.e. fail-open un-sandboxed),
+        // resolved the same way as Ingest/Lint. The read-only seatbelt
+        // (SandboxProfile.readOnlyInvocation) is retained in-tree but no longer
+        // wired to the chat path.
         let pdf2mdScriptPath = resolvePdf2mdScriptPath()
-        let editSandbox = resolveSandboxInvocation(
+        let sandbox = resolveSandboxInvocation(
             wikiID: wikiID, scratch: scratch, dir: dir, pdf2mdScriptPath: pdf2mdScriptPath)
-        let homePath = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
-        let readOnlySandbox = SandboxProfile.readOnlyInvocation(
-            homePath: homePath, scratchDir: scratch.path, pdf2mdScriptPath: pdf2mdScriptPath)
-        let sandbox = Self.selectQuerySandbox(
-            allowWikiEdits: allowWikiEdits,
-            editSandbox: editSandbox,
-            readOnlySandbox: readOnlySandbox)
         if sandbox != nil { createSandboxTmpDir(in: scratch) }
 
         // RESERVE per-run metadata. isRunning will be set at spawn commit below
@@ -922,7 +896,7 @@ final class AgentLauncher {
             })
         let profile = BackendProfile(
             scratchDirectory: scratch,
-            isReadOnly: !allowWikiEdits,
+            isReadOnly: false,
             cli: cli)
 
         do {
@@ -1153,8 +1127,8 @@ final class AgentLauncher {
         transcriptSink = nil
         persistedEventCount = 0
         // D2: clear the live chat association. The retarget back to the draft
-        // state (.ask/.edit) is handled by the caller (ChatView /
-        // ChatView) via store.retargetTab, since the launcher does not
+        // state (.newChat draft → .chat(id)) is handled by the caller (ChatView)
+        // via store.retargetTab, since the launcher does not
         // know which tab it lives in.
         activeChatID = nil
     }
@@ -1399,13 +1373,14 @@ final class AgentLauncher {
     ///   deny target. When nil, no exec/read deny is emitted (the agent has nothing
     ///   bundled to run; generic `uv`/`python3` is still reachable — issue #116 item 2).
     ///
-    /// This does NOT affect the Ask session, which is always forced into the stricter
-    /// read-only sandbox by `selectQuerySandbox` regardless of this result.
-    ///
     /// This function ONLY resolves the invocation; it does NOT create any directories.
     /// Each spawn site that receives a non-nil result MUST call `createSandboxTmpDir(in:)`
     /// before launching the child so that `TMPDIR` (set by `OperationCommand.applySandbox`)
     /// points at a directory that actually exists.
+    ///
+    /// (The chat path uses this write invocation directly — chats are always
+    /// write-capable. The former read-only Ask sandbox is retained in-tree but
+    /// unwired.)
     private func resolveSandboxInvocation(
         wikiID: String,
         scratch: URL,

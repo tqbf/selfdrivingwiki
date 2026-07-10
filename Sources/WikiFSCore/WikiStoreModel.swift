@@ -709,7 +709,7 @@ public final class WikiStoreModel {
     /// Open the tab for `selection`: if one is already open, focus it (reuse,
     /// never duplicate); otherwise create a new tab and focus it. This holds for
     /// every selection type — pages and files reuse just like the singletons
-    /// (.ask, .edit, .systemPrompt, .changeLog) — so clicking a page or a
+    /// (.newChat, .systemPrompt, .changeLog) — so clicking a page or a
     /// `[[wiki-link]]` that's already open returns to its tab instead of spawning
     /// a copy.
     public func openTab(_ selection: WikiSelection, title: String? = nil) {
@@ -746,8 +746,8 @@ public final class WikiStoreModel {
 
     /// Retarget an open tab IN PLACE to a new selection, preserving the tab's
     /// UUID — so tab order, drag/drop position, and per-tab history survive (D2).
-    /// Used for the draft-state morph (.ask/.edit → .chat(id) on first send) and
-    /// the startNewChat retarget-back (.chat(id) → .ask/.edit). If no tab
+    /// Used for the draft-state morph (.newChat → .chat(id) on first send) and
+    /// the startNewChat retarget-back (.chat(id) → .newChat). If no tab
     /// with `id` exists, this is a no-op. If a DIFFERENT tab already shows `to`,
     /// that tab is focused instead (tab-reuse, same as `openTab`).
     public func retargetTab(id: UUID, to selection: WikiSelection) {
@@ -775,7 +775,7 @@ public final class WikiStoreModel {
     }
 
     /// Convenience: retarget the ACTIVE tab to `.chat(chatID)`. Used by the
-    /// draft-state morph on first send (the active tab is .ask/.edit → .chat).
+    /// draft-state morph on first send (the active tab is .newChat → .chat).
     /// No-op if there is no active tab.
     public func retargetActiveTabToChat(chatID: PageID) {
         guard let activeID = activeTabID else { return }
@@ -917,7 +917,7 @@ public final class WikiStoreModel {
         mermaidSaveWarning = nil
         var restoredFromPendingDraft = false
         switch newValue {
-        case .ask, .edit, .lint, .bookmark, .chat:
+        case .newChat, .lint, .bookmark, .chat:
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
@@ -2578,7 +2578,7 @@ public final class WikiStoreModel {
             sourceIDs.contains(id)
         case .chat(let id):
             chatIDs.contains(id)
-        case .ask, .edit, .systemPrompt, .changeLog, .lint, .bookmark:
+        case .newChat, .systemPrompt, .changeLog, .lint, .bookmark:
             true
         }
     }

@@ -234,7 +234,7 @@ struct SystemPromptTests {
         #expect(sqlite3_prepare_v2(check, "PRAGMA user_version;", -1, &stmt, nil) == SQLITE_OK)
         defer { sqlite3_finalize(stmt) }
         #expect(sqlite3_step(stmt) == SQLITE_ROW)
-        #expect(sqlite3_column_int(stmt, 0) == 28)
+        #expect(sqlite3_column_int(stmt, 0) == 29)
         _ = store
     }
 }

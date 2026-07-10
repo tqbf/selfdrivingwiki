@@ -14,7 +14,7 @@ import WikiFSCore
     private let updated = Date(timeIntervalSince1970: 1_700_000_100)
 
     private func summary(
-        title: String = "Test Chat", kind: ChatKind = .ask, messageCount: Int = 1
+        title: String = "Test Chat", kind: ChatKind = .edit, messageCount: Int = 1
     ) -> ChatSummary {
         ChatSummary(
             id: PageID(rawValue: "01H8H000000000000000000AAA"),
@@ -38,8 +38,9 @@ import WikiFSCore
 
     @Test func rendersMetadataBlockquote() {
         let rendered = ChatTranscriptRenderer.render(summary: summary(), messages: [])
-        // Kind, message count, and created/updated dates appear in a `>` blockquote.
-        #expect(rendered.contains("> **Kind:** Ask") == true)
+        // Message count and created/updated dates appear in a `>` blockquote.
+        // (The Kind line was removed when the read-only Ask mode was deleted —
+        // all chats are the same kind now.)
         #expect(rendered.contains("**Messages:** 1") == true)
         #expect(rendered.contains("**Created:**") == true)
         #expect(rendered.contains("**Updated:**") == true)

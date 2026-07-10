@@ -516,7 +516,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // sort/filter in #241). The fresh-path table def already includes both
         // columns; a brand-new DB has no rows to backfill. Shared with the
         // v26→27 migration step.
-        try exec("PRAGMA user_version=28;")
+        //
+        // v29 (remove-readonly-chat-mode): data-only — rewrite any legacy
+        // `kind = 'ask'` chat rows to `'edit'`. The fresh path has no chat rows,
+        // so the UPDATE is a no-op; the ladder runs it in the v28→29 step.
+        try exec("PRAGMA user_version=29;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -1282,6 +1286,18 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try exec("PRAGMA user_version=28;")
             version = 28
         }
+
+        // Step 28 → 29 (remove-readonly-chat-mode): data-only sweep — the
+        // read-only Ask chat mode is deleted; every chat is now write-capable
+        // (`.edit`). Rewrite any legacy `kind = 'ask'` rows to `'edit'` so the
+        // single-case `ChatKind` enum decodes them. No schema change —
+        // `user_version=29` is only a run-once guard (the v23 precedent). A
+        // fresh DB has no chat rows, so the UPDATE is a no-op there.
+        if version < 29 {
+            try migrateV28ToV29()
+            try exec("PRAGMA user_version=29;")
+            version = 29
+        }
     }
 
     /// The v19→20 migration step. Creates the objects tables, then — for every
@@ -1718,6 +1734,21 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             }
             update.reset()
         }
+    }
+
+    /// The v28→29 step (remove-readonly-chat-mode): a one-time, data-only sweep
+    /// that rewrites every legacy `kind = 'ask'` chat row to `'edit'`. The
+    /// read-only Ask chat mode is deleted — all chats are now write-capable — so
+    /// the single-case `ChatKind` enum must decode every row. No schema change;
+    /// `user_version=29` is only a run-once guard (the v22→23 precedent).
+    /// Idempotent (a row already `'edit'` is untouched). Guarded so a minimal
+    /// fixture (or a rewound-for-testing DB) lacking a `chats` table skips
+    /// harmlessly — matching the established "check before UPDATE" rewind guard.
+    private func migrateV28ToV29() throws {
+        let hasChats = try queryScalarText(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='chats';") != "0"
+        guard hasChats else { return }
+        try exec("UPDATE chats SET kind = 'edit' WHERE kind = 'ask';")
     }
 
     /// One-time backfill for the v18→19 step: hash every existing source's
@@ -4654,7 +4685,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         while try stmt.step() {
             out.append(ChatSummary(
                 id: PageID(rawValue: stmt.text(at: 0)),
-                kind: ChatKind(rawValue: stmt.text(at: 1)) ?? .ask,
+                kind: ChatKind(rawValue: stmt.text(at: 1)) ?? .edit,
                 title: stmt.text(at: 2),
                 createdAt: Date(timeIntervalSince1970: stmt.double(at: 3)),
                 updatedAt: Date(timeIntervalSince1970: stmt.double(at: 4)),
@@ -4745,7 +4776,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         while try stmt.step() {
             out.append(ChatSummary(
                 id: PageID(rawValue: stmt.text(at: 0)),
-                kind: ChatKind(rawValue: stmt.text(at: 1)) ?? .ask,
+                kind: ChatKind(rawValue: stmt.text(at: 1)) ?? .edit,
                 title: stmt.text(at: 2),
                 createdAt: Date(timeIntervalSince1970: stmt.double(at: 3)),
                 updatedAt: Date(timeIntervalSince1970: stmt.double(at: 4)),
@@ -5587,7 +5618,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     private static func chatSummary(from stmt: SQLiteStatement) -> ChatSummary {
         ChatSummary(
             id: PageID(rawValue: stmt.text(at: 0)),
-            kind: ChatKind(rawValue: stmt.text(at: 1)) ?? .ask,
+            kind: ChatKind(rawValue: stmt.text(at: 1)) ?? .edit,
             title: stmt.text(at: 2),
             createdAt: Date(timeIntervalSince1970: stmt.double(at: 3)),
             updatedAt: Date(timeIntervalSince1970: stmt.double(at: 4)),

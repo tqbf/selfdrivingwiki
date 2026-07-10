@@ -3,13 +3,14 @@ import Testing
 @testable import WikiFS
 import WikiFSCore
 
-/// Tests for issue #235: preventing silent hangs when starting Edit/Ask during
+/// Tests for issue #235: preventing silent hangs when starting a chat during
 /// an ingest's extraction phase.
 ///
 /// Three concerns:
-/// 1. The `shouldBlockEditStart` predicate — Edit preflight must block during
+/// 1. The `shouldBlockEditStart` predicate — chat preflight must block during
 ///    extraction (via `isIngestInProgress`), not just during the agent run
-///    (via `isAgentRunning`). Ask mode is never blocked.
+///    (via `isAgentRunning`). Chats are always write-capable, so they are
+///    always subject to the edit-lock preflight (the read-only Ask mode is gone).
 /// 2. The `isIngestInProgress` lifecycle on `WikiStoreModel`.
 /// 3. The `composerCaptionText` predicate — the waiting state must surface as
 ///    visible text (not just a tooltip).
@@ -18,37 +19,29 @@ struct Issue235IngestExtractionLockTests {
 
     // MARK: - shouldBlockEditStart predicate
 
-    @Test func editBlockedWhenIngestInProgress() {
+    @Test func chatBlockedWhenIngestInProgress() {
         // Extraction phase: isAgentRunning is false but isIngestInProgress is true.
-        // Edit must be blocked (the core #235 fix).
+        // Chat must be blocked (the core #235 fix).
         #expect(AgentOperationRunner.shouldBlockEditStart(
-            allowWikiEdits: true, isAgentRunning: false, isIngestInProgress: true))
+            isAgentRunning: false, isIngestInProgress: true))
     }
 
-    @Test func editBlockedWhenAgentRunning() {
-        // Agent phase: isAgentRunning is true. Edit is blocked (existing behavior).
+    @Test func chatBlockedWhenAgentRunning() {
+        // Agent phase: isAgentRunning is true. Chat is blocked (existing behavior).
         #expect(AgentOperationRunner.shouldBlockEditStart(
-            allowWikiEdits: true, isAgentRunning: true, isIngestInProgress: false))
+            isAgentRunning: true, isIngestInProgress: false))
     }
 
-    @Test func editAllowedWhenIdle() {
-        // Neither flag set — no ingest, no agent. Edit is free to start.
-        #expect(!AgentOperationRunner.shouldBlockEditStart(
-            allowWikiEdits: true, isAgentRunning: false, isIngestInProgress: false))
+    @Test func chatBlockedWhenBothInProgress() {
+        // Both flags set — still blocked.
+        #expect(AgentOperationRunner.shouldBlockEditStart(
+            isAgentRunning: true, isIngestInProgress: true))
     }
 
-    @Test func askNeverBlocked() {
-        // Ask mode is read-only and lock-exempt — never blocked, regardless of
-        // ingest or agent state (the plan's principle: extraction must not lock
-        // queries/edits; Ask is the read-only case).
+    @Test func chatAllowedWhenIdle() {
+        // Neither flag set — no ingest, no agent. Chat is free to start.
         #expect(!AgentOperationRunner.shouldBlockEditStart(
-            allowWikiEdits: false, isAgentRunning: true, isIngestInProgress: true))
-        #expect(!AgentOperationRunner.shouldBlockEditStart(
-            allowWikiEdits: false, isAgentRunning: false, isIngestInProgress: true))
-        #expect(!AgentOperationRunner.shouldBlockEditStart(
-            allowWikiEdits: false, isAgentRunning: true, isIngestInProgress: false))
-        #expect(!AgentOperationRunner.shouldBlockEditStart(
-            allowWikiEdits: false, isAgentRunning: false, isIngestInProgress: false))
+            isAgentRunning: false, isIngestInProgress: false))
     }
 
     // MARK: - isIngestInProgress lifecycle
@@ -86,7 +79,7 @@ struct Issue235IngestExtractionLockTests {
         // text (was previously only a hidden .help() tooltip).
         let caption = ChatView.composerCaptionText(
             isAwaitingGenerationSlot: true,
-            hasChatID: true, isLiveChat: true, isGenerating: false, allowsEdits: true)
+            hasChatID: true, isLiveChat: true, isGenerating: false)
         #expect(caption == "Waiting for the other session to finish before sending…")
     }
 
@@ -94,29 +87,24 @@ struct Issue235IngestExtractionLockTests {
         // Even in draft state (chatID == nil), the waiting caption shows.
         let caption = ChatView.composerCaptionText(
             isAwaitingGenerationSlot: true,
-            hasChatID: false, isLiveChat: false, isGenerating: false, allowsEdits: false)
+            hasChatID: false, isLiveChat: false, isGenerating: false)
         #expect(caption == "Waiting for the other session to finish before sending…")
     }
 
     @Test func captionNilWhenIdle() {
         let caption = ChatView.composerCaptionText(
             isAwaitingGenerationSlot: false,
-            hasChatID: true, isLiveChat: true, isGenerating: false, allowsEdits: true)
+            hasChatID: true, isLiveChat: true, isGenerating: false)
         #expect(caption == nil)
     }
 
     @Test func captionForPersistedChatBusy() {
         // A persisted (non-live) chat whose launcher is generating a different
         // chat shows the "Another chat is responding" caption.
-        let editCaption = ChatView.composerCaptionText(
+        let caption = ChatView.composerCaptionText(
             isAwaitingGenerationSlot: false,
-            hasChatID: true, isLiveChat: false, isGenerating: true, allowsEdits: true)
-        #expect(editCaption == "Another Edit chat is responding — wait or stop it.")
-
-        let askCaption = ChatView.composerCaptionText(
-            isAwaitingGenerationSlot: false,
-            hasChatID: true, isLiveChat: false, isGenerating: true, allowsEdits: false)
-        #expect(askCaption == "Another Ask chat is responding — wait or stop it.")
+            hasChatID: true, isLiveChat: false, isGenerating: true)
+        #expect(caption == "Another chat is responding — wait or stop it.")
     }
 
     @Test func awaitingSlotOverridesPersistedBusy() {
@@ -124,7 +112,7 @@ struct Issue235IngestExtractionLockTests {
         // wait message takes priority (it's the more actionable state).
         let caption = ChatView.composerCaptionText(
             isAwaitingGenerationSlot: true,
-            hasChatID: true, isLiveChat: false, isGenerating: true, allowsEdits: true)
+            hasChatID: true, isLiveChat: false, isGenerating: true)
         #expect(caption == "Waiting for the other session to finish before sending…")
     }
 }
