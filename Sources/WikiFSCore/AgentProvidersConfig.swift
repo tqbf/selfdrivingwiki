@@ -46,6 +46,13 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
     /// call) — the app's default state, so existing users see no change.
     public var selectedModelIds: [String: String]
 
+    /// The user's favorited models per provider (paseo's per-row star). Keyed by
+    /// `AgentProvider.id` → the favorited model ids. Favorites sort to the top of
+    /// the composer's model picker — purely a display preference, with NO effect
+    /// on routing/selection. Missing key = no favorites for that provider.
+    /// Secrets-free; forward-compatible (a pre-favorites file decodes to empty).
+    public var favoriteModelIds: [String: [String]]
+
     /// The hardcoded model list for the Claude CLI provider. `ClaudeCLIBackend`
     /// has no ACP model discovery (it drives `claude -p` directly), so the
     /// selector has no captured list to show. These are the `--model` aliases
@@ -65,7 +72,8 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
     public init(
         providers: [AgentProvider] = [AgentProvider.claudeAcpDefault],
         providerModels: [String: [CachedModelInfo]] = [:],
-        selectedModelIds: [String: String] = [:]
+        selectedModelIds: [String: String] = [:],
+        favoriteModelIds: [String: [String]] = [:]
     ) {
         self.providers = AgentProvidersConfig.normalized(providers)
         // Guarantee Claude providers always have their hardcoded model list,
@@ -84,6 +92,7 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         }
         self.providerModels = models
         self.selectedModelIds = selectedModelIds
+        self.favoriteModelIds = favoriteModelIds
     }
 
     // MARK: - Coding (forward-compatible: old files without model caches decode)
@@ -92,6 +101,7 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         case providers
         case providerModels
         case selectedModelIds
+        case favoriteModelIds
     }
 
     public init(from decoder: Decoder) throws {
@@ -114,6 +124,7 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         }
         self.providerModels = models
         self.selectedModelIds = try c.decodeIfPresent([String: String].self, forKey: .selectedModelIds) ?? [:]
+        self.favoriteModelIds = try c.decodeIfPresent([String: [String]].self, forKey: .favoriteModelIds) ?? [:]
     }
 
     /// JSON filename in the App Group container. Distinct from
@@ -195,7 +206,8 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         return AgentProvidersConfig(
             providers: updated,
             providerModels: providerModels,
-            selectedModelIds: selectedModelIds)
+            selectedModelIds: selectedModelIds,
+            favoriteModelIds: favoriteModelIds)
     }
 
     /// The list of providers the selector surfaces: enabled ones only (the
@@ -239,7 +251,8 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         return AgentProvidersConfig(
             providers: providers,
             providerModels: cache,
-            selectedModelIds: selectedModelIds)
+            selectedModelIds: selectedModelIds,
+            favoriteModelIds: favoriteModelIds)
     }
 
     /// A PURE mutator: returns a NEW config with the user's model selection for
@@ -257,7 +270,44 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         return AgentProvidersConfig(
             providers: providers,
             providerModels: providerModels,
-            selectedModelIds: selections)
+            selectedModelIds: selections,
+            favoriteModelIds: favoriteModelIds)
+    }
+
+    // MARK: - Favorites (#favorites — display-only, paseo per-row star)
+
+    /// Whether `modelId` is favorited for `providerId`. PURE.
+    public func isFavoriteModel(_ modelId: String, forProvider providerId: String) -> Bool {
+        favoriteModelIds[providerId]?.contains(modelId) ?? false
+    }
+
+    /// The favorited model ids for `providerId`, in favorite order. PURE.
+    public func favoriteModels(forProvider providerId: String) -> [String] {
+        favoriteModelIds[providerId] ?? []
+    }
+
+    /// A PURE mutator: returns a NEW config with `modelId`'s favorite state
+    /// toggled for `providerId`. Newly-favorited ids append (preserving order);
+    /// removing the last favorite drops the provider key. Persisted by the
+    /// launcher; the picker re-sorts favorites to the top on the next read.
+    public func togglingFavoriteModel(_ modelId: String, forProvider providerId: String) -> AgentProvidersConfig {
+        var favorites = favoriteModelIds
+        var list = favorites[providerId] ?? []
+        if let idx = list.firstIndex(of: modelId) {
+            list.remove(at: idx)
+        } else {
+            list.append(modelId)
+        }
+        if list.isEmpty {
+            favorites.removeValue(forKey: providerId)
+        } else {
+            favorites[providerId] = list
+        }
+        return AgentProvidersConfig(
+            providers: providers,
+            providerModels: providerModels,
+            selectedModelIds: selectedModelIds,
+            favoriteModelIds: favorites)
     }
 
     // MARK: - Seed (pure)
@@ -289,7 +339,8 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
             return AgentProvidersConfig(
                 providers: config.providers,
                 providerModels: config.providerModels,
-                selectedModelIds: config.selectedModelIds)
+                selectedModelIds: config.selectedModelIds,
+                favoriteModelIds: config.favoriteModelIds)
         }
         // Missing / corrupt / empty → seed + persist.
         DebugLog.store("AgentProvidersConfig.loadOrSeed: SEED (file missing/corrupt/empty)") // TEMP DEBUG

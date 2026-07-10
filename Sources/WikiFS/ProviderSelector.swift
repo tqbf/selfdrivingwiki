@@ -180,6 +180,20 @@ struct ProviderSelector: View {
                     .imageScale(.small)
                     .foregroundStyle(.tint)
             }
+            // Favorite star — only real model rows are favoritable (not the
+            // synthetic "Default" row). Its own Button so tapping the star
+            // toggles the favorite without also selecting the row.
+            if row.modelId != nil {
+                Button {
+                    toggleFavorite(row)
+                } label: {
+                    Image(systemName: row.isFavorite ? "star.fill" : "star")
+                        .imageScale(.small)
+                        .foregroundStyle(row.isFavorite ? Color.yellow : Color.secondary.opacity(0.6))
+                }
+                .buttonStyle(.borderless)
+                .help(row.isFavorite ? "Remove from favorites" : "Add to favorites")
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -195,6 +209,14 @@ struct ProviderSelector: View {
         .onTapGesture { selectRow(row.id) }
     }
 
+    /// Toggle + persist a model row's favorite state, refreshing local config so
+    /// the star flips and the row re-sorts to (or from) the favorites group. Does
+    /// NOT change the selection or close the popover.
+    private func toggleFavorite(_ row: SelectorRow) {
+        guard let modelId = row.modelId else { return }
+        config = launcher.toggleFavoriteModel(modelId, forProvider: row.provider.id)
+    }
+
     // MARK: - Row model (flat, searchable)
 
     /// One selectable (provider, model) pair in the flat list. `modelId == nil`
@@ -207,6 +229,9 @@ struct ProviderSelector: View {
         /// The agent-advertised one-line description (paseo shows this as the
         /// row's dimmer second line). nil for the synthetic "Default" row.
         let modelDescription: String?
+        /// Whether the user has starred this model (paseo per-row favorite).
+        /// Always false for the synthetic "Default" row (not favoritable).
+        let isFavorite: Bool
         let id: String
 
         /// Primary (bold) line — the model name, paseo-style (e.g. "Opus 4.8",
@@ -245,6 +270,7 @@ struct ProviderSelector: View {
                     modelId: nil,
                     modelLabel: "Default",
                     modelDescription: nil,
+                    isFavorite: false,
                     id: "\(provider.id):default")
             ]
             for model in models {
@@ -253,21 +279,25 @@ struct ProviderSelector: View {
                     modelId: model.modelId,
                     modelLabel: model.displayLabel,
                     modelDescription: model.description,
+                    isFavorite: config.isFavoriteModel(model.modelId, forProvider: provider.id),
                     id: "\(provider.id):\(model.modelId)"))
             }
             return rows
         }
     }
 
-    /// The rows after applying the search filter. Matches against the provider
-    /// label + the model label (case-insensitive). Empty query = all rows.
+    /// The rows after applying the search filter, with favorites pinned to the
+    /// top (paseo). Matches against the provider label + the model label
+    /// (case-insensitive). Empty query = all rows. The favorites-first partition
+    /// is stable, so ordering within each group is preserved.
     private var filteredRows: [SelectorRow] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return flatRows }
-        return flatRows.filter { row in
+        let matched = query.isEmpty ? flatRows : flatRows.filter { row in
             row.provider.label.lowercased().contains(query)
                 || row.modelLabel.lowercased().contains(query)
         }
+        // Favorites float to the top; everything else keeps its order.
+        return matched.filter(\.isFavorite) + matched.filter { !$0.isFavorite }
     }
 
     /// The id of the row that matches the current selection (provider + model),
