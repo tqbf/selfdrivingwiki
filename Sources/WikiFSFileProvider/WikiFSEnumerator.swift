@@ -42,8 +42,11 @@ final class WikiFSEnumerator: NSObject, NSFileProviderEnumerator {
     /// knows about, so a row removed from SQLite has no way to leave the
     /// projection (issue #111). The set is seeded by `enumerateItems` and
     /// refreshed on every `enumerateChanges`. It survives enumerator recreation
-    /// within one extension process; a process restart falls back to a full
-    /// re-enumeration (the anchor expires), which re-seeds the set.
+    /// within one extension process, but NOT an extension process restart (it is
+    /// in-memory only). On restart the File Provider may call `enumerateChanges`
+    /// directly with its persisted anchor; `enumerateChanges` detects the missing
+    /// baseline and expires the anchor so the framework re-enumerates and re-seeds
+    /// the set (#277).
     private final class KnownItemSet: @unchecked Sendable {
         private let lock = NSLock()
         private var sets: [String: Set<NSFileProviderItemIdentifier>] = [:]
@@ -111,6 +114,23 @@ final class WikiFSEnumerator: NSObject, NSFileProviderEnumerator {
         // higher itemVersions (contentVersion derives from the bumped per-page
         // version), so the File Provider invalidates materialized copies and re-fetches.
         let items = currentItems()
+        let currentIDs = Set(items.map(\.itemIdentifier))
+
+        // Baseline-missing guard (#277): the known-item set is process-static —
+        // it does NOT survive an extension process restart. The sync anchor, by
+        // contrast, is persisted by the File Provider framework across restarts,
+        // so on relaunch the framework can call `enumerateChanges(from: validAnchor)`
+        // WITHOUT a prior `enumerateItems`. Diffing against an empty set would
+        // silently drop every deletion that landed while the process was down —
+        // reintroducing #111 after any routine extension relaunch. Instead, when
+        // the baseline is absent we expire the anchor: the framework discards its
+        // cache and does a clean full `enumerateItems`, which re-seeds the
+        // baseline. The cost is one full re-enumeration per container after a restart.
+        guard let known = Self.knownItems.get(cacheKey) else {
+            observer.finishEnumeratingWithError(Self.expiredError)
+            return
+        }
+
         observer.didUpdate(items)
 
         // Report deletions: identifiers the File Provider knew about that are no longer
@@ -118,12 +138,9 @@ final class WikiFSEnumerator: NSObject, NSFileProviderEnumerator {
         // the File Provider has no signal to evict removed rows, so they linger forever
         // (#111). We diff the last-reported set (seeded by `enumerateItems` /
         // the prior `enumerateChanges`) against the current one.
-        let currentIDs = Set(items.map(\.itemIdentifier))
-        if let known = Self.knownItems.get(cacheKey) {
-            let deleted = known.subtracting(currentIDs)
-            if !deleted.isEmpty {
-                observer.didDeleteItems(withIdentifiers: Array(deleted))
-            }
+        let deleted = known.subtracting(currentIDs)
+        if !deleted.isEmpty {
+            observer.didDeleteItems(withIdentifiers: Array(deleted))
         }
         Self.knownItems.set(cacheKey, currentIDs)
 
