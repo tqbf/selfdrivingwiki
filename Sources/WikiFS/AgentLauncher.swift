@@ -1018,10 +1018,14 @@ final class AgentLauncher {
             let backend = self.backend
             let generationGateReleasesPerTurn = Self.releasesGenerationSlotPerTurn(
                 isInteractiveSession: isInteractiveSession)
+            // For ACP, the prompt is sent via `send()` (not baked into the CLI
+            // argv like the CLI backend). For CLI, the prompt is already in the
+            // `-p` flag so an empty string is correct (just drains stdout).
+            let promptText = useACP ? operation.prompt(wikiRoot: wikiRoot) : ""
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let stream = await backend.send(
-                    TurnInput(userText: ""), into: session)
+                    TurnInput(userText: promptText), into: session)
                 for await event in stream {
                     self.mergeOrAppend(event)
                     if AgentEvent.endsGeneration(event) {
