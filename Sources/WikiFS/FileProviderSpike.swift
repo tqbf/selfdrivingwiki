@@ -484,6 +484,10 @@ final class FileProviderSpike {
             NSFileProviderItemIdentifier(WikiFSContainerID.chats),
             NSFileProviderItemIdentifier(WikiFSContainerID.chatsByID),
             NSFileProviderItemIdentifier(WikiFSContainerID.chatsByName),
+            // Bookmarks are a NestedResourceProjection (arbitrary-depth folders),
+            // so only the top-level `bookmarks/` container needs signaling —
+            // nested folder enumerators refresh via the parent's re-enumeration (#279).
+            NSFileProviderItemIdentifier(WikiFSContainerID.bookmarks),
             .workingSet,
         ]
         for container in containers {
