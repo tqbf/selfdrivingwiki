@@ -150,9 +150,7 @@ struct AgentProvidersSettingsView: View {
     }
 
     private func setDefault(id: String) {
-        for i in config.providers.indices {
-            config.providers[i].isDefault = (config.providers[i].id == id)
-        }
+        config = config.settingDefault(id: id)
         persist()
     }
 

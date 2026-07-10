@@ -184,6 +184,39 @@ final class AgentLauncher {
         return AgentProvidersConfig.loadOrSeed(from: dir).selectedProvider()
     }
 
+    /// The resolved App Group container directory the provider config is loaded
+    /// from + saved to. Same resolution `resolveSelectedProvider` uses: the
+    /// injected `containerDirectory` if set, else `DatabaseLocation`'s App
+    /// Group container at call time, else the temp directory (tests). Kept as a
+    /// function (not a stored URL) so a Settings change to the container path
+    /// takes effect without a restart, mirroring `resolveSelectedProvider`.
+    @ObservationIgnored var resolveProvidersContainerDirectory: () -> URL = {
+        (try? DatabaseLocation.appGroupContainerDirectory())
+            ?? FileManager.default.temporaryDirectory
+    }
+
+    /// Read the persisted provider config (loads + seeds on first run). The
+    /// composer's provider selector binds to this for the providers list + the
+    /// current default. Refreshed on demand (not @Observable state) so a fresh
+    /// selection — from Settings OR the composer — is visible next read.
+    /// `@MainActor` to match the rest of the launcher's observable surface.
+    func providersConfig() -> AgentProvidersConfig {
+        AgentProvidersConfig.loadOrSeed(from: resolveProvidersContainerDirectory())
+    }
+
+    /// Set + persist the default provider, then return the new config so the
+    /// caller (the composer selector) can update its bound state in one step.
+    /// Enforces the single-default invariant via `settingDefault(id:)`. The
+    /// next `resolveSelectedProvider()` call reads this, so the next chat
+    /// session uses the chosen provider with no launcher change.
+    @discardableResult
+    func setDefaultProvider(id: String) -> AgentProvidersConfig {
+        let dir = resolveProvidersContainerDirectory()
+        let updated = providersConfig().settingDefault(id: id)
+        try? updated.save(to: dir)
+        return updated
+    }
+
     /// The currently-pending write-permission requests surfaced from the backend
     /// (always-ask mode). When non-empty AND this surface is the live chat, the
     /// UI renders an inline Approve/Reject affordance (slice 2). Mirrors how

@@ -330,6 +330,7 @@ struct ChatView: View {
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
+                providerSelectorBar
             }
             Spacer(minLength: 0)
         }
@@ -347,6 +348,21 @@ struct ChatView: View {
                 Text(caption)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+            }
+            providerSelectorBar
+        }
+    }
+
+    /// The leading-aligned provider selector under the text box (paseo-style
+    /// trigger bar). Shown on every composer surface (draft + live + persisted
+    /// continue). Hidden when no wiki is active (no provider context). The
+    /// selector itself reads + mutates the persisted default via the launcher.
+    @ViewBuilder
+    private var providerSelectorBar: some View {
+        if manager.activeWikiID != nil {
+            HStack {
+                ProviderSelector(launcher: launcher)
+                Spacer(minLength: 0)
             }
         }
     }

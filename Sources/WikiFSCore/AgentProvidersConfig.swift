@@ -83,6 +83,32 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         providers.first(where: { $0.id == id })
     }
 
+    /// Mark the provider with `id` as the default, demoting every other provider
+    /// (the single-default invariant — exactly one default after this returns).
+    /// PURE + returns a NEW config: callers (the Settings UI, the composer's
+    /// provider selector) persist the result via `save(to:)`. No-op (returns a
+    /// structurally-equivalent config) if `id` is unknown — preserving the
+    /// invariant means never leaving zero defaults.
+    ///
+    /// The new config is `normalized`, so even a hand-crafted input keeps
+    /// exactly one default. Mirrors the inline `setDefault` the Settings view
+    /// used to own, now on the model so the composer selector shares it.
+    public func settingDefault(id: String) -> AgentProvidersConfig {
+        var updated = providers
+        for i in updated.indices {
+            updated[i].isDefault = (updated[i].id == id)
+        }
+        return AgentProvidersConfig(providers: updated)
+    }
+
+    /// The list of providers the selector surfaces: enabled ones only (the
+    /// launcher never selects a disabled provider, and the Settings UI hides
+    /// them from its default picker). Kept on the model so the composer
+    /// selector and Settings agree on what's pickable.
+    public var enabledProviders: [AgentProvider] {
+        providers.filter(\.enabled)
+    }
+
     // MARK: - Seed (pure)
 
     /// Seed the initial config from discovered ACP agents. PURE: no filesystem,
