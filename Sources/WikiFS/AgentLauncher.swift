@@ -728,15 +728,33 @@ final class AgentLauncher {
         let acpConfig = useACP ? ACPAgentConfig.load(from: dir) : nil
         let acpAPIKey = useACP ? acpCredentialStore.apiKey() : nil
 
+        // Resolve the executable we'll actually spawn. When ACP is on, that's the
+        // ACP agent's executable (e.g. "npx") — PATH-resolved because the
+        // swift-acp SDK's launch() does NOT do PATH lookup (a bare "npx" would
+        // fail with "doesn't exist"). The CLI `claude` is resolved only on the
+        // non-ACP path (ACP ignores the CLI profile), so an ACP-only setup need
+        // not have `claude` installed.
         let resolvedPath: String
-        switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
-        case .found(let path):
-            resolvedPath = path
-        case .missing(let reason):
-            preflightError = reason
-            isRunning = false
-            releaseGenerationSlot()
-            return
+        if useACP, let acpConfig {
+            switch PathPreflight.resolveOnLoginShell(executable: acpConfig.resolvedExecutable()) {
+            case .found(let path):
+                resolvedPath = path
+            case .missing(let reason):
+                preflightError = reason
+                isRunning = false
+                releaseGenerationSlot()
+                return
+            }
+        } else {
+            switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
+            case .found(let path):
+                resolvedPath = path
+            case .missing(let reason):
+                preflightError = reason
+                isRunning = false
+                releaseGenerationSlot()
+                return
+            }
         }
         preflightError = nil
 
@@ -953,13 +971,29 @@ final class AgentLauncher {
         let acpConfig = useACP ? ACPAgentConfig.load(from: dir) : nil
         let acpAPIKey = useACP ? acpCredentialStore.apiKey() : nil
 
+        // Resolve the executable we'll actually spawn. When ACP is on, that's the
+        // ACP agent's executable (e.g. "npx") — PATH-resolved because the
+        // swift-acp SDK's launch() does NOT do PATH lookup (a bare "npx" would
+        // fail with "doesn't exist"). The CLI `claude` is resolved only on the
+        // non-ACP path (ACP ignores the CLI profile), so an ACP-only setup need
+        // not have `claude` installed.
         let resolvedPath: String
-        switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
-        case .found(let path):
-            resolvedPath = path
-        case .missing(let reason):
-            preflightError = reason
-            return
+        if useACP, let acpConfig {
+            switch PathPreflight.resolveOnLoginShell(executable: acpConfig.resolvedExecutable()) {
+            case .found(let path):
+                resolvedPath = path
+            case .missing(let reason):
+                preflightError = reason
+                return
+            }
+        } else {
+            switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
+            case .found(let path):
+                resolvedPath = path
+            case .missing(let reason):
+                preflightError = reason
+                return
+            }
         }
         preflightError = nil
 
