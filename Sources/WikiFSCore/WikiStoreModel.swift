@@ -203,6 +203,15 @@ public final class WikiStoreModel {
     /// writes (last-writer-wins race). Set via `beginAgentRun` / `endAgentRun`.
     public private(set) var isAgentRunning = false
 
+    /// True while an ingest is in progress — covers BOTH the pdf2md extraction
+    /// phase AND the agent run. Unlike `isAgentRunning` (which only fires at
+    /// spawn commit via `beginAgentRun`), this is set at the top of
+    /// `runMultiIngest` BEFORE extraction begins, so the Edit preflight blocks
+    /// during the extraction window too (issue #235). The ingest's own `run()`
+    /// preflight checks `isAgentRunning`, NOT this flag, so there is no
+    /// self-deadlock. Cleared on early exit or process termination.
+    public private(set) var isIngestInProgress = false
+
     private let store: WikiStore
     /// Read-only snapshot connections for OFF-MAIN reads (debounced search).
     /// Injected by `WikiManager.openActive` for file-backed wikis; `nil` for
@@ -1308,6 +1317,23 @@ public final class WikiStoreModel {
     /// full reload when the session actually ends).
     public func setAgentRunning(_ running: Bool) {
         mutateAgentRunning(running, reload: false)
+    }
+
+    // MARK: - Ingest progress flag (issue #235)
+
+    /// Mark an ingest as in progress. Called at the top of `runMultiIngest`
+    /// BEFORE extraction begins, so the Edit preflight (`isIngestInProgress`)
+    /// blocks during the extraction window too — `isAgentRunning` alone misses
+    /// it because `beginAgentRun()` only fires at spawn commit.
+    public func beginIngest() {
+        isIngestInProgress = true
+    }
+
+    /// Clear the ingest-in-progress flag. Called on every early exit from
+    /// `runMultiIngest` (extraction cancel, no valid sources, spawn failure) and
+    /// from the ingest run's `onUnlock` when the agent process terminates.
+    public func endIngest() {
+        isIngestInProgress = false
     }
 
     // MARK: - Mutations
