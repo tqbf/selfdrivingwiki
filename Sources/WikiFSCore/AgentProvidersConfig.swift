@@ -16,14 +16,63 @@ import Foundation
 /// `ACPCredentialStore`, keyed by provider `id` — it is NEVER in this JSON file.
 /// This mirrors the existing `ACPAgentConfig` (plain prefs) +
 /// `KeychainACPCredentialStore` (secret) split.
+///
+/// **Per-provider model discovery (#329):** two extra secrets-free caches live
+/// here so the chat-composer model picker can list each provider's models and
+/// remember the user's choice:
+/// - `providerModels` — `[providerId: [CachedModelInfo]]`, captured from the
+///   agent's own `session/new` response on first chat and mirrored back to the
+///   picker. Only public model-routing metadata (id/name/description) — never
+///   credentials.
+/// - `selectedModelIds` — `[providerId: modelId]`, the user's per-provider
+///   model pick. Empty (the default) = "use the agent's default model" → today's
+///   behavior is unchanged for existing users.
 public struct AgentProvidersConfig: Codable, Equatable, Sendable {
 
     /// The configured providers. At least one is always present (the Claude
     /// default). Order is the display order in Settings.
     public var providers: [AgentProvider]
 
-    public init(providers: [AgentProvider] = [AgentProvider.claudeDefault]) {
+    /// Discovered models per provider, captured from the agent's `session/new`
+    /// response (`ModelsInfo.availableModels`). Keyed by `AgentProvider.id`.
+    /// The chat-composer model picker reads this to populate each provider's
+    /// model list (paseo `combined-model-selector` drill-down). Secrets-free.
+    /// Missing key = "models discovered on first chat" (the v1 hint).
+    public var providerModels: [String: [CachedModelInfo]]
+
+    /// The user's chosen model id per provider, persisted so the next session
+    /// re-applies it via `session/set_model`. Keyed by `AgentProvider.id`.
+    /// A missing/empty value = "use the agent's default model" (no `setModel`
+    /// call) — the app's default state, so existing users see no change.
+    public var selectedModelIds: [String: String]
+
+    public init(
+        providers: [AgentProvider] = [AgentProvider.claudeDefault],
+        providerModels: [String: [CachedModelInfo]] = [:],
+        selectedModelIds: [String: String] = [:]
+    ) {
         self.providers = AgentProvidersConfig.normalized(providers)
+        self.providerModels = providerModels
+        self.selectedModelIds = selectedModelIds
+    }
+
+    // MARK: - Coding (forward-compatible: old files without model caches decode)
+
+    enum CodingKeys: String, CodingKey {
+        case providers
+        case providerModels
+        case selectedModelIds
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.providers = AgentProvidersConfig.normalized(
+            try c.decodeIfPresent([AgentProvider].self, forKey: .providers) ?? [.claudeDefault])
+        // New optional fields default to empty so a pre-#329 `agent-providers.json`
+        // (no model caches) decodes without a migration — "no model selected →
+        // agent default" is exactly the legacy behavior.
+        self.providerModels = try c.decodeIfPresent([String: [CachedModelInfo]].self, forKey: .providerModels) ?? [:]
+        self.selectedModelIds = try c.decodeIfPresent([String: String].self, forKey: .selectedModelIds) ?? [:]
     }
 
     /// JSON filename in the App Group container. Distinct from
@@ -98,7 +147,12 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         for i in updated.indices {
             updated[i].isDefault = (updated[i].id == id)
         }
-        return AgentProvidersConfig(providers: updated)
+        // Carry over the per-provider model caches + selections (don't wipe them
+        // when only the default provider changes).
+        return AgentProvidersConfig(
+            providers: updated,
+            providerModels: providerModels,
+            selectedModelIds: selectedModelIds)
     }
 
     /// The list of providers the selector surfaces: enabled ones only (the
@@ -107,6 +161,58 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
     /// selector and Settings agree on what's pickable.
     public var enabledProviders: [AgentProvider] {
         providers.filter(\.enabled)
+    }
+
+    // MARK: - Per-provider model cache + selection (#329)
+
+    /// The cached models for `providerId` (captured from the agent's
+    /// `session/new`). Empty when none are cached yet → the picker shows its
+    /// "models discovered on first chat" hint (v1 capture-from-session; on-demand
+    /// probing is a later enhancement). PURE.
+    public func cachedModels(forProvider providerId: String) -> [CachedModelInfo] {
+        providerModels[providerId] ?? []
+    }
+
+    /// The user's selected model id for `providerId`, or `nil` when none is set
+    /// ("use the agent's default model"). PURE. Read by `ACPBackend.start` to
+    /// decide whether to send `session/set_model`.
+    public func selectedModelId(forProvider providerId: String) -> String? {
+        guard let id = selectedModelIds[providerId], !id.isEmpty else { return nil }
+        return id
+    }
+
+    /// A PURE mutator: returns a NEW config with `providerId`'s cached models
+    /// replaced by `models`. Called by the launcher after `backend.start`
+    /// captures the agent's advertised `ModelsInfo`. The picker reads the result
+    /// next load. Never writes secrets (only `CachedModelInfo`).
+    public func settingCachedModels(_ models: [CachedModelInfo], forProvider providerId: String) -> AgentProvidersConfig {
+        var cache = providerModels
+        if models.isEmpty {
+            cache.removeValue(forKey: providerId)
+        } else {
+            cache[providerId] = models
+        }
+        return AgentProvidersConfig(
+            providers: providers,
+            providerModels: cache,
+            selectedModelIds: selectedModelIds)
+    }
+
+    /// A PURE mutator: returns a NEW config with the user's model selection for
+    /// `providerId` set (or cleared when `modelId` is nil/empty). Called by the
+    /// chat-composer model picker; persisted by the launcher. A nil/empty
+    /// selection = "use the agent's default" → today's behavior is unchanged.
+    public func settingSelectedModel(_ modelId: String?, forProvider providerId: String) -> AgentProvidersConfig {
+        var selections = selectedModelIds
+        if let modelId, !modelId.isEmpty {
+            selections[providerId] = modelId
+        } else {
+            selections.removeValue(forKey: providerId)
+        }
+        return AgentProvidersConfig(
+            providers: providers,
+            providerModels: providerModels,
+            selectedModelIds: selections)
     }
 
     // MARK: - Seed (pure)
@@ -144,7 +250,12 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         if let data = try? Data(contentsOf: url),
            let config = try? JSONDecoder().decode(AgentProvidersConfig.self, from: data),
            !config.providers.isEmpty {
-            return AgentProvidersConfig(providers: config.providers)
+            // Preserve the decoded model caches + selections (re-wrapping with
+            // only `providers` would wipe them). Re-normalize providers only.
+            return AgentProvidersConfig(
+                providers: config.providers,
+                providerModels: config.providerModels,
+                selectedModelIds: config.selectedModelIds)
         }
         // Missing / corrupt / empty → seed + persist.
         let seeded = seed(discovered: discover())

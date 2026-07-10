@@ -76,14 +76,20 @@ actor ACPBackend: AgentBackend {
         }
     }
 
-    /// One live ACP session: the client (actor), the ACP session id, and the
-    /// permission delegate (which holds the pending-permissions map + policy).
-    /// All fields are `Sendable`, so this record can be read off-actor by the
-    /// per-turn drain Task.
+    /// One live ACP session: the client (actor), the ACP session id, the
+    /// permission delegate (which holds the pending-permissions map + policy),
+    /// and the models the agent advertised at `session/new`. All fields are
+    /// `Sendable`, so this record can be read off-actor by the per-turn drain
+    /// Task and by the launcher's model-cache capture.
     private struct ACPSession: Sendable {
         let client: Client
         let sessionId: SessionId
         let permissionDelegate: ACPPermissionDelegate
+        /// The models the agent advertised (`session/new` →
+        /// `NewSessionResponse.models`). nil when the agent didn't advertise a
+        /// list (older agents). Captured at start so the launcher can cache them
+        /// per-provider for the model picker (#329).
+        let modelsInfo: ModelsInfo?
     }
 
     private var sessions: [String: ACPSession] = [:]
@@ -179,12 +185,47 @@ actor ACPBackend: AgentBackend {
         DebugLog.agent("ACPBackend.start: newSession cwd=\(workingDir)")
         let session = try await client.newSession(workingDirectory: workingDir)
         let sessionId = session.sessionId
+        let modelsInfo = session.models
+        let discoveredCount = modelsInfo?.availableModels.count ?? 0
+        let currentModel = modelsInfo?.currentModelId ?? "(none)"
+        DebugLog.agent("ACPBackend.start: discovered \(discoveredCount) model(s), current=\(currentModel)")
+
+        // #329: if the user picked a model for this provider, apply it right
+        // after newSession — BEFORE the first prompt — so the agent uses a
+        // valid model instead of its (possibly broken) default. The selection
+        // is threaded in via providerHints by the launcher. The DECISION is a
+        // pure helper (`ACPModelSelectionResolver.resolve`) so it's unit-tested
+        // without a subprocess; here we just execute it. A bad/stale selection
+        // falls back to the agent default (no setModel) — never reproduces the
+        // 404 the picker exists to prevent.
+        if let selectedModelId = profile.providerHints["acpSelectedModelId"],
+           !selectedModelId.isEmpty {
+            let advertisedIds = modelsInfo?.availableModels.map(\.modelId) ?? []
+            let decision = ACPModelSelectionResolver.resolve(
+                selectedModelId: selectedModelId,
+                currentModelId: modelsInfo?.currentModelId,
+                advertisedModelIds: advertisedIds)
+            if case .apply(let id) = decision {
+                DebugLog.agent("ACPBackend.start: setModel \(id)")
+                do {
+                    _ = try await client.setModel(sessionId: sessionId, modelId: id)
+                } catch {
+                    // setModel failed — log and proceed to the prompt anyway; the
+                    // agent's default may still work, and a clearer error will
+                    // surface from the prompt if not. Non-fatal by design.
+                    DebugLog.agent("ACPBackend.start: setModel \(id) failed: \(error.localizedDescription)")
+                }
+            } else {
+                DebugLog.agent("ACPBackend.start: keeping agent default model (selected=\(selectedModelId) → \(decision))")
+            }
+        }
 
         let sessionID = UUID().uuidString
         sessions[sessionID] = ACPSession(
             client: client,
             sessionId: sessionId,
-            permissionDelegate: permissionDelegate
+            permissionDelegate: permissionDelegate,
+            modelsInfo: modelsInfo
         )
 
         // Wire onExit to the agent process termination. `Client.terminate()` is
@@ -299,6 +340,26 @@ actor ACPBackend: AgentBackend {
         try? await record.client.cancelSession(sessionId: record.sessionId)
         await record.client.terminate()
         record.permissionDelegate.fireOnExit(status: 0)
+    }
+
+    // MARK: - Model discovery (#329)
+
+    /// The models the agent advertised for a session (`session/new` →
+    /// `ModelsInfo.availableModels`), captured at start. The launcher reads this
+    /// right after `backend.start` to cache them per-provider for the model
+    /// picker. Empty when the agent didn't advertise a list (older agents) or
+    /// the handle is gone (cancelled/finished).
+    func availableModels(for sessionHandle: SessionHandle) async -> [ModelInfo] {
+        guard let session = sessions[sessionHandle.id] else { return [] }
+        return session.modelsInfo?.availableModels ?? []
+    }
+
+    /// The agent's current model id for a session (`ModelsInfo.currentModelId`),
+    /// or nil when the agent didn't advertise one. Read by the launcher to log
+    /// the effective model alongside the discovered list.
+    func currentModelId(for sessionHandle: SessionHandle) async -> String? {
+        guard let session = sessions[sessionHandle.id] else { return nil }
+        return session.modelsInfo?.currentModelId
     }
 
     // MARK: - Permission resolution seam (PermissionResolving)

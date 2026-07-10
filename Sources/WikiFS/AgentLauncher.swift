@@ -217,6 +217,72 @@ final class AgentLauncher {
         return updated
     }
 
+    // MARK: - Per-provider model cache + selection (#329)
+
+    /// Persist `models` (captured from the agent's `session/new`) as provider
+    /// `providerId`'s cached model list. Secrets-free. Called by
+    /// `startInteractiveQuery` / `run` right after `backend.start` succeeds so
+    /// the model picker has the agent's advertised list on the next read.
+    /// `@MainActor`; no return — the picker reads the cache next load.
+    func cacheDiscoveredModels(_ models: [CachedModelInfo], forProvider providerId: String) {
+        guard !models.isEmpty else { return }
+        let dir = resolveProvidersContainerDirectory()
+        let updated = providersConfig().settingCachedModels(models, forProvider: providerId)
+        try? updated.save(to: dir)
+    }
+
+    /// Set + persist the user's model selection for `providerId`, then return
+    /// the new config so the composer picker can update its bound state. A
+    /// nil/empty `modelId` clears the selection ("use the agent's default").
+    @discardableResult
+    func setSelectedModel(_ modelId: String?, forProvider providerId: String) -> AgentProvidersConfig {
+        let dir = resolveProvidersContainerDirectory()
+        let updated = providersConfig().settingSelectedModel(modelId, forProvider: providerId)
+        try? updated.save(to: dir)
+        return updated
+    }
+
+    /// Atomically set the default provider AND a per-provider model selection
+    /// in ONE load→mutate→save cycle (no race between two separate writes).
+    /// This is the composer's "pick a model" path: choosing a model implies
+    /// choosing its provider (paseo's two-step), and both must land together.
+    /// Returns the post-write config for the selector's bound state.
+    @discardableResult
+    func setSelectedModelAndDefault(
+        _ modelId: String?, provider: AgentProvider
+    ) -> AgentProvidersConfig {
+        let dir = resolveProvidersContainerDirectory()
+        let updated = providersConfig()
+            .settingDefault(id: provider.id)
+            .settingSelectedModel(modelId, forProvider: provider.id)
+        try? updated.save(to: dir)
+        return updated
+    }
+
+    /// The user's persisted model selection for `providerId` (nil = "use the
+    /// agent's default"). Read at spawn time so `ACPBackend.start` can call
+    /// `session/set_model`. PURE-ish (one config load); `@MainActor`.
+    func selectedModelId(forProvider providerId: String) -> String? {
+        providersConfig().selectedModelId(forProvider: providerId)
+    }
+
+    /// After a successful `backend.start`, if it was an ACP backend, read the
+    /// models it advertised and cache them per-provider for the picker. Cheap
+    /// (one actor hop + one secrets-free file write) and non-blocking: runs as
+    /// a detached `@MainActor` Task so it never delays the first turn.
+    func captureAndCacheModels(provider: AgentProvider, session: SessionHandle) {
+        guard provider.backend == .acp, let acp = backend as? ACPBackend else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let models = await acp.availableModels(for: session)
+            guard !models.isEmpty else { return }
+            let cached = models.map {
+                CachedModelInfo(modelId: $0.modelId, name: $0.name, description: $0.description)
+            }
+            self.cacheDiscoveredModels(cached, forProvider: provider.id)
+        }
+    }
+
     /// The currently-pending write-permission requests surfaced from the backend
     /// (always-ask mode). When non-empty AND this surface is the live chat, the
     /// UI renders an inline Approve/Reject affordance (slice 2). Mirrors how
@@ -883,7 +949,8 @@ final class AgentLauncher {
             providerHints: AgentBackendFactory.providerHints(
                 provider: provider,
                 resolvedCommand: resolvedACPCommand,
-                apiKey: acpAPIKey),
+                apiKey: acpAPIKey,
+                selectedModelId: useACP ? providersConfig().selectedModelId(forProvider: provider.id) : nil),
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: cli)
@@ -905,6 +972,9 @@ final class AgentLauncher {
                 })
             sessionHandle = session
             currentRunToken = runToken
+            // #329: cache the agent's advertised models per-provider for the
+            // picker (ACP only; the CLI backend has no model discovery).
+            captureAndCacheModels(provider: provider, session: session)
             startCompletionWatchdog()
 
             // Consume the per-turn stream in a background Task (fire-and-forget:
@@ -1134,7 +1204,8 @@ final class AgentLauncher {
             providerHints: AgentBackendFactory.providerHints(
                 provider: provider,
                 resolvedCommand: resolvedACPCommand,
-                apiKey: acpAPIKey),
+                apiKey: acpAPIKey,
+                selectedModelId: useACP ? providersConfig().selectedModelId(forProvider: provider.id) : nil),
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: cli)
@@ -1161,6 +1232,11 @@ final class AgentLauncher {
             // SPAWN COMMIT: process is alive. isRunning = true (process alive across turns).
             isInteractiveSession = true
             isRunning = true
+            // #329: cache the agent's advertised models per-provider for the
+            // picker (ACP only; the CLI backend has no model discovery). Done
+            // here (after spawn commit) so the session record is populated; it
+            // runs as a detached task and never blocks the first turn.
+            captureAndCacheModels(provider: provider, session: session)
             DebugLog.agent("startInteractiveQuery: spawned")
             // Start the first turn — this acquires the generation gate for turn 1.
             sendInteractiveMessage(firstMessage, displayText: firstMessageDisplay)

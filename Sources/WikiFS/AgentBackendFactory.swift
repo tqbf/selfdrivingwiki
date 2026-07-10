@@ -59,6 +59,10 @@ enum AgentBackendFactory {
     /// the argv (joined so `ACPBackend.resolveSpawnConfig` can tokenize it), and
     /// `acpAgentApiKey` carries the secret. PURE.
     ///
+    /// #329: `acpSelectedModelId` carries the user's per-provider model pick so
+    /// `ACPBackend.start` can call `session/set_model` after `newSession`. nil
+    /// /empty = "use the agent's default model" (no `setModel`) → unchanged.
+    ///
     /// A `.claudeCLI` provider yields an empty dict (the CLI backend ignores
     /// providerHints — it reads `CLIProfile`). An ACP provider with an empty
     /// command yields an empty dict too (→ `ACPBackend` throws
@@ -66,7 +70,8 @@ enum AgentBackendFactory {
     static func providerHints(
         provider: AgentProvider,
         resolvedCommand: [String],
-        apiKey: String?
+        apiKey: String?,
+        selectedModelId: String? = nil
     ) -> [String: String] {
         guard provider.backend == .acp, !resolvedCommand.isEmpty else { return [:] }
         var hints: [String: String] = [:]
@@ -77,6 +82,9 @@ enum AgentBackendFactory {
         }
         if let apiKey, !apiKey.isEmpty {
             hints["acpAgentApiKey"] = apiKey
+        }
+        if let selectedModelId, !selectedModelId.isEmpty {
+            hints["acpSelectedModelId"] = selectedModelId
         }
         return hints
     }
