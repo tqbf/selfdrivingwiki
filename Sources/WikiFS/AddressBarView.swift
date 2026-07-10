@@ -58,12 +58,39 @@ struct AddressBarView: View {
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
 
     var body: some View {
-        // Back / Forward + the omnibox are one `.navigation` group, flush-left in
-        // the detail region. The nav buttons are fixed-width; the field is given an
-        // explicit width (`fieldWidth`) so it stretches from just after them to the
-        // trailing wiki switcher, shrinking as the window narrows / the wiki name
-        // grows and expanding once the switcher overflows (see `OmniboxLayout`).
-        HStack(spacing: 6) {
+        // Back / Forward (+ Home) + the omnibox are one `.navigation` group,
+        // flush-left in the detail region. The nav cluster sits tightly grouped on
+        // its own (Safari-style), separated from the omnibox pill by a wider gap so
+        // it doesn't read as fused to it. The nav buttons are fixed-width; the field
+        // is given an explicit width (`fieldWidth`) so it stretches from just after
+        // the gap to the trailing wiki switcher, shrinking as the window narrows /
+        // the wiki name grows and expanding once the switcher overflows (see
+        // `OmniboxLayout`). The gap's width is baked into `OmniboxLayout.Metrics`
+        // (`openLeadingChrome`/`closedLeadingChrome`) — changing the spacing here
+        // without updating those constants would reopen the flush-right bug fixed
+        // in issue #114, just at a different threshold.
+        HStack(spacing: AddressBarMetrics.navToOmniboxGap) {
+            navButtonGroup
+            omniboxGroup
+        }
+        // Cmd-L flips `isFocused`; turn that into a focus request for the field.
+        .onChange(of: isFocused) { _, focused in
+            if focused { focusToken &+= 1 }
+        }
+        // Empty state (no content loaded): focus the field so the user can type
+        // a search immediately — at launch and whenever the last tab closes.
+        .onAppear { focusIfEmpty() }
+        .onChange(of: hasContentLoaded) { _, loaded in
+            if !loaded { focusIfEmpty() }
+        }
+    }
+
+    /// Back / Forward (+ Home when the active wiki has one configured), grouped
+    /// tightly on their own so the cluster reads as a single control distinct from
+    /// the omnibox pill — the wider gap to `omniboxGroup` (`AddressBarMetrics.
+    /// navToOmniboxGap`, set on the parent `HStack`) does the actual separating.
+    private var navButtonGroup: some View {
+        HStack(spacing: AddressBarMetrics.navButtonSpacing) {
             navButton("chevron.left", help: "Go back", enabled: store.canNavigateBack) {
                 store.navigateBack()
             }
@@ -79,18 +106,28 @@ struct AddressBarView: View {
                     _ = store.selectPage(byID: homePageID)
                 }
             }
+        }
+    }
 
+    /// The omnibox field plus, once the field has hit its readability cap
+    /// (`OmniboxLayout.Metrics.maxWidth`), an invisible trailing spacer that
+    /// absorbs the rest of the space the field would otherwise have grown into.
+    /// Without this, the field stalls at `maxWidth` on wide windows while the
+    /// trailing wiki switcher and transcript toggle — separate, later toolbar
+    /// items — stay put, opening a gap between them and the true trailing edge
+    /// (issue #114). The spacer is zero-width below the cap, matching the old
+    /// behavior exactly.
+    private var omniboxGroup: some View {
+        HStack(spacing: 0) {
             omniboxField
-        }
-        // Cmd-L flips `isFocused`; turn that into a focus request for the field.
-        .onChange(of: isFocused) { _, focused in
-            if focused { focusToken &+= 1 }
-        }
-        // Empty state (no content loaded): focus the field so the user can type
-        // a search immediately — at launch and whenever the last tab closes.
-        .onAppear { focusIfEmpty() }
-        .onChange(of: hasContentLoaded) { _, loaded in
-            if !loaded { focusIfEmpty() }
+            if overflowSpacerWidth > 0 {
+                // `Color.clear` is still hit-testable by default — without this it
+                // would swallow clicks/drags over what reads as empty toolbar space
+                // (including the window-drag region past the cap), even though
+                // nothing is drawn there.
+                Color.clear.frame(width: overflowSpacerWidth)
+                    .allowsHitTesting(false)
+            }
         }
     }
 
@@ -152,7 +189,7 @@ struct AddressBarView: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 15, weight: .medium))
-                .frame(width: 22, height: 28)
+                .frame(width: AddressBarMetrics.navButtonWidth, height: 28)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
@@ -220,6 +257,20 @@ struct AddressBarView: View {
         return OmniboxLayout.fieldWidth(
             detailWidth: detailWidth,
             sidebarVisible: sidebarVisible,
+            homeButtonShown: homePageID != nil,
+            switcherExtra: switcherExtra)
+    }
+
+    /// Extra width appended after the field in `omniboxGroup` once `fieldWidth`
+    /// has hit its cap — keeps the trailing switcher/toggle flush against the
+    /// window edge instead of stalling short of it. Zero everywhere below the cap.
+    private var overflowSpacerWidth: CGFloat {
+        let switcherExtra = headlineTextWidth(wikiName)
+            - headlineTextWidth(AddressBarMetrics.baselineSwitcherName)
+        return OmniboxLayout.overflowSpacerWidth(
+            detailWidth: detailWidth,
+            sidebarVisible: sidebarVisible,
+            homeButtonShown: homePageID != nil,
             switcherExtra: switcherExtra)
     }
 
@@ -438,6 +489,20 @@ struct AddressResultsList: View {
 // MARK: - Metrics
 
 enum AddressBarMetrics {
+    /// Fixed width of each Back/Forward/Home nav button. Shared with
+    /// `OmniboxLayout.Metrics.homeButtonExtra`'s derivation — when the Home
+    /// button shows, the field's leading edge shifts right by exactly this plus
+    /// one `navButtonSpacing`.
+    static let navButtonWidth: CGFloat = 22
+    /// Spacing between Back/Forward/Home within `navButtonGroup` — tight, so the
+    /// cluster reads as one control.
+    static let navButtonSpacing: CGFloat = 4
+    /// Gap between `navButtonGroup` and the omnibox pill — wider than
+    /// `navButtonSpacing` so the nav cluster reads as visually distinct from the
+    /// omnibox rather than fused to it. This width is baked into
+    /// `OmniboxLayout.Metrics.openLeadingChrome`/`closedLeadingChrome`; changing it
+    /// here requires updating those constants by the same delta.
+    static let navToOmniboxGap: CGFloat = 14
     /// The wiki-switcher name the trailing reservation is tuned against. A name
     /// wider than this reserves the extra width (the omnibox yields it); a narrower
     /// one lets the omnibox reclaim it. Only the width *difference* is used, so the
