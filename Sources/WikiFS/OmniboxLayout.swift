@@ -25,31 +25,54 @@ enum OmniboxLayout {
         /// The field never grows beyond this, so it isn't an unreadable line on a
         /// very wide monitor.
         var maxWidth: CGFloat
-        /// Fixed chrome to the field's left (Back/Forward/magnifier + gaps) when the
-        /// sidebar is *shown*. The traffic-light + sidebar-toggle zone then sits over
-        /// the sidebar, outside the measured detail region, so only the nav buttons
-        /// remain between the detail region's edge and the field.
+        /// Fixed chrome to the field's left (Back/Forward, the tight gap between
+        /// them, and the wider gap to the omnibox pill — `AddressBarMetrics.
+        /// navButtonSpacing`/`navToOmniboxGap`) when the sidebar is *shown*. The
+        /// traffic-light + sidebar-toggle zone then sits over the sidebar, outside
+        /// the measured detail region, so only the nav cluster + gap remain between
+        /// the detail region's edge and the field.
         var openLeadingChrome: CGFloat
         /// Fixed chrome to the field's left when the sidebar is *hidden*. The detail
         /// region now spans the whole window, so it includes the traffic lights +
-        /// sidebar toggle ahead of the nav buttons — a larger offset.
+        /// sidebar toggle ahead of the nav cluster — a larger offset.
         var closedLeadingChrome: CGFloat
+        /// Extra leading chrome added when the omnibox's Home button is shown (a
+        /// wiki with a configured home page, issue #280, adds a fourth nav
+        /// button). Equal to the button's own width (`AddressBarMetrics.
+        /// navButtonWidth`, 22) plus the one extra internal nav-cluster gap it
+        /// introduces (`AddressBarMetrics.navButtonSpacing`, 4). Previously
+        /// omitted entirely: the field's leading edge (and therefore its
+        /// trailing edge too, since width is computed from it) silently sat 26pt
+        /// further right than this math assumed for any wiki with a home page
+        /// configured — a WINDOW-WIDTH-INDEPENDENT encroachment into the
+        /// trailing switcher/toggle's reserved space, since it's a fixed offset
+        /// baked into every window size alike. That wiki's Toggle Transcript
+        /// button would sit in the `»` overflow permanently, not just past some
+        /// width threshold.
+        var homeButtonExtra: CGFloat
 
         static let `default` = Metrics(
             trailingWithSwitcher: 180,
             trailingOverflow: 60,
             minWidth: 120,
             maxWidth: 1200,
-            openLeadingChrome: 64,
-            closedLeadingChrome: 208)
+            openLeadingChrome: 70,
+            closedLeadingChrome: 214,
+            homeButtonExtra: 26)
     }
 
     /// Fixed chrome to the field's left, measured from the detail region's leading
     /// edge. It differs by sidebar state only because the traffic-light + toggle
     /// zone sits over the detail region when the sidebar is hidden and over the
-    /// sidebar when it's shown (see the `Metrics` fields).
-    static func leadingChrome(sidebarVisible: Bool, metrics: Metrics = .default) -> CGFloat {
-        sidebarVisible ? metrics.openLeadingChrome : metrics.closedLeadingChrome
+    /// sidebar when it's shown (see the `Metrics` fields). `homeButtonShown` adds
+    /// `homeButtonExtra` for the wiki's optional fourth nav button (issue #280) —
+    /// omitting this when the button is shown was the root cause of the Toggle
+    /// Transcript button permanently sitting in the toolbar's `»` overflow for
+    /// any wiki with a configured home page, at any window width.
+    static func leadingChrome(sidebarVisible: Bool, homeButtonShown: Bool = false,
+                             metrics: Metrics = .default) -> CGFloat {
+        let base = sidebarVisible ? metrics.openLeadingChrome : metrics.closedLeadingChrome
+        return homeButtonShown ? base + metrics.homeButtonExtra : base
     }
 
     /// The omnibox field's width, driven by the reliably-measurable detail-region
@@ -59,10 +82,11 @@ enum OmniboxLayout {
     /// core only ever uses their difference (the span right of the field's start).
     /// This keeps the stretch/shrink/overflow-expand behavior identical while
     /// sourcing it from a measurement the toolbar can't strand.
-    static func fieldWidth(detailWidth: CGFloat, sidebarVisible: Bool,
+    static func fieldWidth(detailWidth: CGFloat, sidebarVisible: Bool, homeButtonShown: Bool = false,
                            switcherExtra: CGFloat, metrics: Metrics = .default) -> CGFloat {
         fieldWidth(windowWidth: detailWidth,
-                   fieldLeadingX: leadingChrome(sidebarVisible: sidebarVisible, metrics: metrics),
+                   fieldLeadingX: leadingChrome(sidebarVisible: sidebarVisible,
+                                               homeButtonShown: homeButtonShown, metrics: metrics),
                    switcherExtra: switcherExtra, metrics: metrics)
     }
 
@@ -83,6 +107,20 @@ enum OmniboxLayout {
                              switcherExtra: switcherExtra, metrics: metrics) >= metrics.minWidth
     }
 
+    /// The field width before the `maxWidth` clamp — what the field would need to
+    /// be to stay exactly flush against the trailing switcher/overflow button.
+    /// Shared by `fieldWidth` (which clamps it for readability) and
+    /// `overflowSpacerWidth` (which reports how much of it got clamped away), so
+    /// the two always agree on where the true trailing edge is.
+    private static func rawFieldWidth(windowWidth: CGFloat, fieldLeadingX: CGFloat,
+                                      switcherExtra: CGFloat, metrics: Metrics) -> CGFloat {
+        let kept = widthKeepingSwitcher(windowWidth: windowWidth, fieldLeadingX: fieldLeadingX,
+                                        switcherExtra: switcherExtra, metrics: metrics)
+        return kept >= metrics.minWidth
+            ? kept
+            : windowWidth - metrics.trailingOverflow - fieldLeadingX
+    }
+
     /// The omnibox field's width. It stretches from its measured leading edge to
     /// just short of the trailing items, shrinks as the window narrows or the wiki
     /// name lengthens, and — once the switcher can no longer fit and drops into the
@@ -98,11 +136,34 @@ enum OmniboxLayout {
     static func fieldWidth(windowWidth: CGFloat, fieldLeadingX: CGFloat,
                            switcherExtra: CGFloat, metrics: Metrics = .default) -> CGFloat {
         guard windowWidth > 0 else { return metrics.minWidth }
-        let kept = widthKeepingSwitcher(windowWidth: windowWidth, fieldLeadingX: fieldLeadingX,
-                                        switcherExtra: switcherExtra, metrics: metrics)
-        let raw = kept >= metrics.minWidth
-            ? kept
-            : windowWidth - metrics.trailingOverflow - fieldLeadingX
+        let raw = rawFieldWidth(windowWidth: windowWidth, fieldLeadingX: fieldLeadingX,
+                                switcherExtra: switcherExtra, metrics: metrics)
         return min(max(raw, metrics.minWidth), metrics.maxWidth)
+    }
+
+    /// Extra invisible width to place immediately after the (possibly capped)
+    /// field, inside the same toolbar item, so the trailing wiki switcher and
+    /// transcript toggle stay pinned to the window's true trailing edge even once
+    /// `fieldWidth` has hit `maxWidth` and stopped growing (issue #114). Below the
+    /// cap this is always zero — `fieldWidth` alone already sums exactly to the
+    /// trailing edge, same as before this existed.
+    static func overflowSpacerWidth(windowWidth: CGFloat, fieldLeadingX: CGFloat,
+                                    switcherExtra: CGFloat, metrics: Metrics = .default) -> CGFloat {
+        guard windowWidth > 0 else { return 0 }
+        let raw = rawFieldWidth(windowWidth: windowWidth, fieldLeadingX: fieldLeadingX,
+                                switcherExtra: switcherExtra, metrics: metrics)
+        return max(0, raw - metrics.maxWidth)
+    }
+
+    /// `overflowSpacerWidth`, sourced from the same measurable `(detailWidth,
+    /// sidebarVisible)` pair `fieldWidth(detailWidth:sidebarVisible:switcherExtra:)`
+    /// uses, for the same reason: the field's own leading edge gets stranded when
+    /// the toolbar pushes it into overflow.
+    static func overflowSpacerWidth(detailWidth: CGFloat, sidebarVisible: Bool, homeButtonShown: Bool = false,
+                                    switcherExtra: CGFloat, metrics: Metrics = .default) -> CGFloat {
+        overflowSpacerWidth(windowWidth: detailWidth,
+                            fieldLeadingX: leadingChrome(sidebarVisible: sidebarVisible,
+                                                        homeButtonShown: homeButtonShown, metrics: metrics),
+                            switcherExtra: switcherExtra, metrics: metrics)
     }
 }

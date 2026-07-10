@@ -88,6 +88,53 @@ import Testing
         #expect(w == m.maxWidth)
     }
 
+    // MARK: Overflow spacer (issue #114)
+    //
+    // Once `fieldWidth` hits `maxWidth` it stops absorbing extra window width, so
+    // `fieldLeadingX + fieldWidth + trailingWithSwitcher` no longer sums to
+    // `windowWidth` — the invariant that otherwise keeps the trailing switcher +
+    // transcript toggle flush against the true edge. `overflowSpacerWidth` reports
+    // exactly the shortfall so the toolbar item can absorb it itself.
+
+    @Test func overflowSpacerIsZeroBelowTheCap() {
+        // 1200 window: field (820) is well under maxWidth, nothing to absorb.
+        let s = OmniboxLayout.overflowSpacerWidth(windowWidth: 1200, fieldLeadingX: 200, switcherExtra: 0)
+        #expect(s == 0)
+    }
+
+    @Test func overflowSpacerIsZeroExactlyAtTheCap() {
+        // kept == maxWidth exactly: 200 + 1200 + 180 = 1580.
+        let s = OmniboxLayout.overflowSpacerWidth(windowWidth: 1580, fieldLeadingX: 200, switcherExtra: 0)
+        #expect(s == 0)
+    }
+
+    @Test func overflowSpacerAbsorbsExactlyWhatTheCapClampedAway() {
+        // 2000 window: field clamps to maxWidth (1200); the spacer must make up
+        // the rest so fieldLeadingX + fieldWidth + spacer + trailing == windowWidth.
+        let w = OmniboxLayout.fieldWidth(windowWidth: 2000, fieldLeadingX: 200, switcherExtra: 0)
+        let s = OmniboxLayout.overflowSpacerWidth(windowWidth: 2000, fieldLeadingX: 200, switcherExtra: 0)
+        #expect(200 + w + s + m.trailingWithSwitcher == 2000)
+        #expect(s == 420)
+    }
+
+    @Test func overflowSpacerGrowsOneForOneWithWindowWidthPastTheCap() {
+        let base = OmniboxLayout.overflowSpacerWidth(windowWidth: 2000, fieldLeadingX: 200, switcherExtra: 0)
+        let wider = OmniboxLayout.overflowSpacerWidth(windowWidth: 2100, fieldLeadingX: 200, switcherExtra: 0)
+        #expect(wider == base + 100)
+    }
+
+    @Test func overflowSpacerMatchesTheIssueThreshold() {
+        // Sidebar open: issue #114's gap starts once detailWidth exceeds
+        // maxWidth + trailingWithSwitcher + openLeadingChrome (derived from default
+        // metrics rather than hardcoded, so this doesn't fight future retuning).
+        // Below/at it the spacer is zero; just past it the gap starts opening.
+        let threshold = m.maxWidth + m.trailingWithSwitcher + m.openLeadingChrome
+        let atThreshold = OmniboxLayout.overflowSpacerWidth(detailWidth: threshold, sidebarVisible: true, switcherExtra: 0)
+        let pastThreshold = OmniboxLayout.overflowSpacerWidth(detailWidth: threshold + 1, sidebarVisible: true, switcherExtra: 0)
+        #expect(atThreshold == 0)
+        #expect(pastThreshold == 1)
+    }
+
     @Test func returnsFloorBeforeGeometryIsKnown() {
         // windowWidth 0 → not yet measured → floor, never a negative width.
         #expect(OmniboxLayout.fieldWidth(windowWidth: 0, fieldLeadingX: 0, switcherExtra: 0) == m.minWidth)
@@ -108,6 +155,48 @@ import Testing
         #expect(OmniboxLayout.leadingChrome(sidebarVisible: true) == m.openLeadingChrome)
         #expect(OmniboxLayout.leadingChrome(sidebarVisible: false) == m.closedLeadingChrome)
         #expect(m.openLeadingChrome < m.closedLeadingChrome)
+    }
+
+    // MARK: Home button leading chrome
+    //
+    // A wiki with a configured home page (issue #280) adds a fourth nav button,
+    // shifting the field's real leading edge right by `homeButtonExtra`. Omitting
+    // this previously under-reserved the field's own width by that fixed amount —
+    // independent of window width — permanently encroaching into the trailing
+    // switcher/toggle's space for any such wiki (that wiki's Toggle Transcript
+    // button sat in the `»` overflow no matter how wide the window was resized).
+
+    @Test func homeButtonAddsExtraLeadingChromeInBothSidebarStates() {
+        #expect(OmniboxLayout.leadingChrome(sidebarVisible: true, homeButtonShown: true)
+                == m.openLeadingChrome + m.homeButtonExtra)
+        #expect(OmniboxLayout.leadingChrome(sidebarVisible: false, homeButtonShown: true)
+                == m.closedLeadingChrome + m.homeButtonExtra)
+    }
+
+    @Test func homeButtonShrinksTheFieldByExactlyItsOwnWidth() {
+        // Isolates the home-button effect: same detailWidth/sidebar state, only
+        // `homeButtonShown` differs, so the field must shrink by exactly
+        // `homeButtonExtra` — the button's own width plus its one nav-cluster gap.
+        let withoutHome = OmniboxLayout.fieldWidth(detailWidth: 1000, sidebarVisible: true, switcherExtra: 0)
+        let withHome = OmniboxLayout.fieldWidth(detailWidth: 1000, sidebarVisible: true,
+                                                homeButtonShown: true, switcherExtra: 0)
+        #expect(withoutHome - withHome == m.homeButtonExtra)
+    }
+
+    @Test func homeButtonEncroachmentIsIndependentOfWindowWidth() {
+        // The reported bug: unlike an overflow threshold (which clears once the
+        // window is wide enough), a missing home-button reservation is a FIXED
+        // offset — it never resolves no matter how wide the window gets. Confirm
+        // the fixed invariant holds (trailing edge stays correctly reserved) at
+        // both a narrow-ish and a very wide detailWidth, with the home button shown.
+        for detailWidth: CGFloat in [700, 2200] {
+            let field = OmniboxLayout.fieldWidth(detailWidth: detailWidth, sidebarVisible: true,
+                                                 homeButtonShown: true, switcherExtra: 73.5)
+            let spacer = OmniboxLayout.overflowSpacerWidth(detailWidth: detailWidth, sidebarVisible: true,
+                                                           homeButtonShown: true, switcherExtra: 73.5)
+            let leading = OmniboxLayout.leadingChrome(sidebarVisible: true, homeButtonShown: true)
+            #expect(leading + field + spacer + m.trailingWithSwitcher + 73.5 == detailWidth)
+        }
     }
 
     @Test func detailWidthDriverDelegatesToTheCore() {
@@ -133,9 +222,9 @@ import Testing
         // its floor to reclaim the freed trailing space (same behavior as the core,
         // reached via the detail-width overload).
         let w = OmniboxLayout.fieldWidth(detailWidth: 360, sidebarVisible: true, switcherExtra: 0)
-        // 360 - 64 chrome - 180 keepsSwitcher = 116 < 120 floor → overflow path:
-        // 360 - 64 - 60 overflow = 236.
-        #expect(w == 236)
+        // 360 - 70 chrome - 180 keepsSwitcher = 110 < 120 floor → overflow path:
+        // 360 - 70 - 60 overflow = 230.
+        #expect(w == 230)
         #expect(w > m.minWidth)
     }
 
