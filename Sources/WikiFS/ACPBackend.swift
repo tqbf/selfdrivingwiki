@@ -199,20 +199,20 @@ actor ACPBackend: AgentBackend {
                     )
                     DebugLog.agent("ACPBackend: prompt completed stopReason=\(response.stopReason.rawValue)")
                     // ACP has no explicit turn-end notification; the turn ends
-                    // when the prompt REQUEST returns. Synthesize `.messageStop`
-                    // to satisfy the port's turn-boundary contract (every stop
-                    // reason is a turn boundary). If the translator already
-                    // emitted text/tool events, they precede this; if the agent
-                    // produced nothing, `.messageStop` alone still releases the
-                    // launcher's generation gate.
-                    _ = response.stopReason  // all stopReasons end the turn
-                    continuation.yield(.messageStop)
+                    // when the prompt REQUEST returns. Synthesize the turn-end
+                    // events (always ending in `.messageStop`) to satisfy the
+                    // port's turn-boundary contract. The pure helper is
+                    // unit-tested directly — see `ACPBackendTests`.
+                    for event in Self.turnEndEvents(error: nil) {
+                        continuation.yield(event)
+                    }
                 } catch {
                     DebugLog.agent("ACPBackend: prompt failed: \(error.localizedDescription)")
-                    continuation.yield(.raw("ACP agent error: \(error.localizedDescription)"))
                     // Error is also a turn boundary — synthesize `.messageStop`
                     // so the consumer's for-await exits and the gate releases.
-                    continuation.yield(.messageStop)
+                    for event in Self.turnEndEvents(error: error) {
+                        continuation.yield(event)
+                    }
                 }
                 continuation.finish()
             }
@@ -239,6 +239,11 @@ actor ACPBackend: AgentBackend {
 
     func cancel(_ session: SessionHandle) async {
         guard let record = sessions.removeValue(forKey: session.id) else { return }
+        // Drain any in-flight always-ask continuations BEFORE tearing down, so a
+        // pending `request_permission` never leaks its `CheckedContinuation`
+        // (leaked continuations warn/trap at task end). The agent receives a
+        // `cancelled` outcome for each, which it treats as denied.
+        record.permissionDelegate.cancelAllPending()
         // Cancel any in-flight prompt, then terminate the agent subprocess.
         // `terminate()` resumes pending requests with an error and finishes the
         // notification stream. The permission delegate's onExit binding fires.
@@ -247,7 +252,7 @@ actor ACPBackend: AgentBackend {
         record.permissionDelegate.fireOnExit(status: 0)
     }
 
-    // MARK: - Permission resolution seam (for the future UI)
+    // MARK: - Permission resolution seam (PermissionResolving)
 
     /// Resolve a pending permission request (always-ask). The future chat UI
     /// calls this with the user's chosen option id. For the spike this seam is
@@ -265,23 +270,48 @@ actor ACPBackend: AgentBackend {
         return await session.permissionDelegate.pendingSnapshot()
     }
 
+    /// Drain all pending always-ask requests for a session (resume each as
+    /// cancelled). The launcher calls this on teardown/cancel so no
+    /// `CheckedContinuation` leaks. Returns the count drained (for tests).
+    @discardableResult
+    func cancelAllPending(sessionHandle: SessionHandle) async -> Int {
+        guard let session = sessions[sessionHandle.id] else { return 0 }
+        return session.permissionDelegate.cancelAllPending()
+    }
+
     // MARK: - Internal
 
-    /// Resolve the agent spawn config from the profile. For the spike, the
-    /// executable path comes from `providerHints["acpAgentPath"]` (or falls
-    /// back to `profile.model`), and extra args from
-    /// `providerHints["acpAgentArgs"]` (comma-separated). NOT hardcoded to the
-    /// Zed adapter — the user points at any ACP agent. Returns nil if no path
-    /// is configured (→ `noAgentConfigured`).
+    /// Resolve the agent spawn config from the profile. The executable path comes
+    /// from `providerHints["acpAgentPath"]` (or falls back to `profile.model`),
+    /// and extra args from `providerHints["acpAgentArgs"]`. The args string is
+    /// tokenized with the SAME shell-aware whitespace tokenizer the rest of the
+    /// app uses for `AgentCommandConfig.prefixArguments` (`--yes
+    /// @agentclientprotocol/claude-agent-acp` → two tokens, quote-aware), so the
+    /// existing Agent command config DOUBLES as the ACP agent spawn — the user
+    /// sets executable `npx` args `--yes @agentclientprotocol/claude-agent-acp`.
+    /// NOT hardcoded to the Zed adapter — the user points at any ACP agent.
+    /// Returns nil if no path is configured (→ `noAgentConfigured`).
     private static func resolveSpawnConfig(from profile: BackendProfile) -> AgentSpawnConfig? {
         let path = profile.providerHints["acpAgentPath"] ?? profile.model
         guard let path, !path.isEmpty else { return nil }
-        let args = (profile.providerHints["acpAgentArgs"] ?? "")
-            .split(separator: ",")
-            .map { String($0).trimmingCharacters(in: .whitespaces) }
+        let args = AgentCommandConfig.tokenize(profile.providerHints["acpAgentArgs"] ?? "")
             .filter { !$0.isEmpty }
         let cwd = profile.scratchDirectory?.path
         return AgentSpawnConfig(executablePath: path, arguments: args, workingDirectory: cwd)
+    }
+
+    /// The events synthesized at `session/prompt` completion (the ACP turn
+    /// boundary). ACP has NO turn-end *notification*; the turn ends when the
+    /// prompt REQUEST returns. On success → just `.messageStop` (the port's
+    /// turn-boundary contract). On error → a `.raw` line carrying the message
+    /// THEN `.messageStop` so the consumer's for-await still exits and the
+    /// launcher's generation gate releases. PURE + unit-tested directly
+    /// (`ACPBackendTests.turnEndSynthesis*`) — the spike left this untested.
+    static func turnEndEvents(error: Error?) -> [AgentEvent] {
+        if let error {
+            return [.raw("ACP agent error: \(error.localizedDescription)"), .messageStop]
+        }
+        return [.messageStop]
     }
 
     /// Decode a `session/update` notification's `params` (`AnyCodable`) into a

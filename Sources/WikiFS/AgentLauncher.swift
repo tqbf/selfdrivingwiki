@@ -140,10 +140,50 @@ final class AgentLauncher {
     /// unchanged.
     var containerDirectory: URL? = nil
 
-    /// The agent backend. Default `ClaudeCLIBackend` (today's Claude-CLI
-    /// stream-json code, moved behind the `AgentBackend` port). Injectable so
-    /// tests can substitute a stub backend.
+    /// The agent backend. Constructed PER-SESSION at spawn time from the
+    /// persisted `useACPBackend` pref + the chat's permission policy (slice 2 of
+    /// `plans/acp-backend-and-permissions.md`), via `AgentBackendFactory`.
+    /// Default `ClaudeCLIBackend` (today's Claude-CLI stream-json code, default
+    /// OFF) so existing behavior is unchanged until the opt-in pref is ON.
+    /// Injectable so tests can substitute a stub backend.
     @ObservationIgnored var backend: AgentBackend = ClaudeCLIBackend()
+
+    /// Opt-in seam: whether the ACP backend is enabled (`@AppStorage("useACPBackend")`,
+    /// default `false`). Read fresh at spawn time (same as `AgentCommandConfig`),
+    /// so Settings changes apply on the next session without a restart. Injectable
+    /// for tests; the app reads `UserDefaults` (the same store `@AppStorage`
+    /// writes, so a Settings toggle is immediately visible).
+    @ObservationIgnored var resolveUseACPBackend: () -> Bool = {
+        UserDefaults.standard.bool(forKey: AgentLauncher.useACPBackendKey)
+    }
+
+    /// The chat's always-ask/yolo mode (`@AppStorage("agentAlwaysAsk")`, default
+    /// `false` = yolo). v1: app-wide persisted, default-OFF (no `chats`-table
+    /// schema migration). A future slice can persist it per-chat. Read at spawn
+    /// time so it bakes into the `ACPBackend`'s `PermissionPolicy`. Has NO effect
+    /// when the ACP backend is OFF (the CLI backend has no permission channel).
+    @ObservationIgnored var resolveAlwaysAsk: () -> Bool = {
+        UserDefaults.standard.bool(forKey: AgentLauncher.alwaysAskKey)
+    }
+
+    /// The currently-pending write-permission requests surfaced from the backend
+    /// (always-ask mode). When non-empty AND this surface is the live chat, the
+    /// UI renders an inline Approve/Reject affordance (slice 2). Mirrors how
+    /// streamed `AgentEvent`s flow: `ACPBackend` → launcher refresh → `@Observable`
+    /// state → `ChatView`. Refreshed by `pendingPollTask` while a turn generates.
+    /// Empty for the CLI backend (no permission channel) and while idle.
+    var pendingPermissions: [PendingPermission] = []
+
+    /// Backstop poller that refreshes `pendingPermissions` from the backend while
+    /// a turn is generating (always-ask blocks the turn until resolved, so no
+    /// `AgentEvent`s flow while a request is pending — the poller is the only
+    /// channel that surfaces it). Armed in `setGenerating(true)`, disarmed in
+    /// `setGenerating(false)` / `finish()` / `resetRunArtifacts()`.
+    @ObservationIgnored private var pendingPollTask: Task<Void, Never>?
+
+    /// UserDefaults keys shared with the `@AppStorage` bindings in Settings + ChatView.
+    static let useACPBackendKey = "useACPBackend"
+    static let alwaysAskKey = "agentAlwaysAsk"
     /// The active session handle (nil when no session is live). Replaces the
     /// old `process: Process?` — the launcher never touches a `Process` directly.
     @ObservationIgnored private var sessionHandle: SessionHandle?
@@ -238,10 +278,21 @@ final class AgentLauncher {
     /// invariant: the lock toggles exactly once per real transition, never on a
     /// no-op reassignment. Routing through a method (not a `didSet`) avoids
     /// Observation-macro interaction pitfalls.
+    ///
+    /// Slice 2: this is also where the pending-permission poller arms/disarms.
+    /// always-ask blocks the turn (no `AgentEvent`s flow while a request is
+    /// pending), so the poller is the only channel that surfaces pending requests
+    /// to `pendingPermissions` for the UI. Armed on a real `true`; disarmed + a
+    /// final refresh (to clear stale pending) on a real `false`.
     private func setGenerating(_ value: Bool) {
         guard isGenerating != value else { return }
         isGenerating = value
         onTurnBoundaryHandler?(value)
+        if value {
+            startPendingPermissionPoller()
+        } else {
+            stopPendingPermissionPoller()
+        }
     }
 
     /// Per-turn generation-gate release policy. Interactive sessions release the
@@ -255,6 +306,62 @@ final class AgentLauncher {
     /// launcher state.
     static func releasesGenerationSlotPerTurn(isInteractiveSession: Bool) -> Bool {
         isInteractiveSession
+    }
+
+    // MARK: - Pending-permission surfacing (slice 2: always-ask)
+
+    /// Arm the backstop poller that refreshes `pendingPermissions` from the
+    /// backend while a turn generates. The poller hops to the main actor, reads
+    /// the backend's pending snapshot (downcast to `PermissionResolving` — a
+    /// no-op for the CLI backend, which doesn't conform), and updates the
+    /// observable array only on a real change (avoiding redundant view diffs).
+    /// Polls faster (150ms) while a request is pending so Approve/Reject feels
+    /// responsive, slower (300ms) otherwise. Cancelled on teardown.
+    private func startPendingPermissionPoller() {
+        pendingPollTask?.cancel()
+        pendingPollTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshPendingPermissions()
+                let interval = (self?.pendingPermissions.isEmpty ?? true)
+                    ? UInt64(300_000_000)   // 300ms idle
+                    : UInt64(150_000_000)   // 150ms while a request is pending
+                try? await Task.sleep(nanoseconds: interval)
+            }
+        }
+    }
+
+    /// Cancel the poller and clear any surfaced pending requests (the turn ended
+    /// or the session tore down). A final refresh runs to drain any last pending
+    /// that arrived in the gap; if none remain the array clears.
+    private func stopPendingPermissionPoller() {
+        pendingPollTask?.cancel()
+        pendingPollTask = nil
+    }
+
+    /// Pull the current pending-permission snapshot from the backend into
+    /// `pendingPermissions` (main actor). No-op for the CLI backend (no
+    /// `PermissionResolving` conformance) and when no session is live.
+    func refreshPendingPermissions() async {
+        guard let handle = sessionHandle,
+              let permBackend = backend as? PermissionResolving else {
+            if !pendingPermissions.isEmpty { pendingPermissions = [] }
+            return
+        }
+        let snapshot = await permBackend.pendingPermissions(sessionHandle: handle)
+        if snapshot != pendingPermissions { pendingPermissions = snapshot }
+    }
+
+    /// Resolve a pending permission request by its option id — the Approve/Reject
+    /// UI calls this with the chosen option's id. Resumes the backend's blocked
+    /// continuation, unblocking the agent. Idempotent-ish: a no-op if the option
+    /// isn't offered by any pending request.
+    func resolvePendingPermission(optionId: String) async {
+        guard let handle = sessionHandle,
+              let permBackend = backend as? PermissionResolving else { return }
+        let resolved = await permBackend.resolvePermission(sessionHandle: handle, optionId: optionId)
+        if resolved {
+            await refreshPendingPermissions()
+        }
     }
 
     // MARK: - Three independent mechanisms (relationship)
@@ -603,6 +710,14 @@ final class AgentLauncher {
         let dir = containerDirectory ?? (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
         let agentConfig = AgentCommandConfig.load(from: dir)
 
+        // Slice 2: select the backend per the opt-in pref + the chat's permission
+        // policy (default OFF = ClaudeCLI; default yolo). Constructed HERE so both
+        // `start` and the per-turn stream consumer capture the same backend. The
+        // ACP agent spawn (path + args) is threaded into providerHints below.
+        let useACP = resolveUseACPBackend()
+        let policy: PermissionPolicy = resolveAlwaysAsk() ? .alwaysAsk : .yolo
+        self.backend = AgentBackendFactory.makeBackend(useACPBackend: useACP, policy: policy)
+
         let resolvedPath: String
         switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
         case .found(let path):
@@ -680,6 +795,11 @@ final class AgentLauncher {
                 Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
             })
         let profile = BackendProfile(
+            providerHints: useACP
+                ? AgentBackendFactory.acpProviderHints(
+                    resolvedExecutable: resolvedPath,
+                    prefixArguments: agentConfig.prefixArguments)
+                : [:],
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: cli)
@@ -810,6 +930,13 @@ final class AgentLauncher {
         let dir = containerDirectory ?? (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
         let agentConfig = AgentCommandConfig.load(from: dir)
 
+        // Slice 2: select the backend per the opt-in pref + the chat's permission
+        // policy (default OFF = ClaudeCLI; default yolo). The ACP agent spawn is
+        // threaded into providerHints below.
+        let useACP = resolveUseACPBackend()
+        let policy: PermissionPolicy = resolveAlwaysAsk() ? .alwaysAsk : .yolo
+        self.backend = AgentBackendFactory.makeBackend(useACPBackend: useACP, policy: policy)
+
         let resolvedPath: String
         switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
         case .found(let path):
@@ -895,6 +1022,11 @@ final class AgentLauncher {
                 Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
             })
         let profile = BackendProfile(
+            providerHints: useACP
+                ? AgentBackendFactory.acpProviderHints(
+                    resolvedExecutable: resolvedPath,
+                    prefixArguments: agentConfig.prefixArguments)
+                : [:],
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: cli)
@@ -1257,6 +1389,11 @@ final class AgentLauncher {
         onTurnBoundaryHandler = nil
         setGenerating(false)
         lastActivityAt = Date()
+        // Slice 2: stop the pending-permission poller and clear surfaced pending
+        // (the session is ending). The backend's `cancel` already drained any
+        // in-flight always-ask continuations.
+        stopPendingPermissionPoller()
+        pendingPermissions = []
         // Release the edit lock (`store.isAgentRunning`) from here — NOT from the
         // `onExit` callback — so EVERY completion path releases it.
         releaseEditLock()
@@ -1308,6 +1445,9 @@ final class AgentLauncher {
         // D2: a stale active chat association must never survive into a new run.
         // (startInteractiveQuery sets the fresh value right after this reset.)
         activeChatID = nil
+        // Slice 2: clear any surfaced pending permissions + poller from a prior run.
+        stopPendingPermissionPoller()
+        pendingPermissions = []
     }
 
     // MARK: - Backend log files

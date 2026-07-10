@@ -32,6 +32,13 @@ struct ChatView: View {
     @AppStorage("isChatOutlineExpanded") private var chatOutlineExpanded = false
     @State private var outlineScroll: ChatScrollRequest? = nil
     @State private var quoteAnchor: ChatHighlightRequest? = nil
+    /// Whether the ACP backend is enabled (shared with Settings + the launcher).
+    /// Drives the visibility of the always-ask/yolo toggle: the CLI backend has
+    /// no permission channel, so the toggle is meaningless when this is off.
+    @AppStorage(AgentLauncher.useACPBackendKey) private var useACPBackend = false
+    /// The chat's always-ask/yolo mode (shared with the launcher, read at spawn).
+    /// v1 app-wide, default off (yolo). Applies to the next conversation.
+    @AppStorage(AgentLauncher.alwaysAskKey) private var alwaysAsk = false
 
     /// True when this surface is rendering the active live session (D2
     /// source-of-truth rule). The view sources from `launcher.events`; when
@@ -198,6 +205,15 @@ struct ChatView: View {
             && launcher.runningKind == .query
     }
 
+    /// The pending permission to surface as an inline Approve/Reject affordance,
+    /// or nil when nothing is awaiting approval. Only the LIVE chat renders it
+    /// (a persisted chat can't resolve a request); the first pending request is
+    /// shown — ACP agents gate one write at a time, so there is at most one.
+    private var livePendingPermission: PendingPermission? {
+        guard isLiveChat, let first = launcher.pendingPermissions.first else { return nil }
+        return first
+    }
+
     // MARK: - Content routing
 
     @ViewBuilder
@@ -279,6 +295,13 @@ struct ChatView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.horizontal, PageEditorMetrics.contentInset)
                         .padding(.top, showsEditingEnabledBanner || chatSummary != nil ? 0 : ChatMetrics.chatTopInset)
+                    if let pending = livePendingPermission {
+                        PermissionApprovalView(permission: pending) { optionId in
+                            Task { await launcher.resolvePendingPermission(optionId: optionId) }
+                        }
+                        .padding(.horizontal, PageEditorMetrics.contentInset)
+                        .padding(.bottom, ChatMetrics.sectionSpacing / 2)
+                    }
                     chatComposer
                         .padding(.horizontal, PageEditorMetrics.contentInset)
                         .padding(.top, ChatMetrics.sectionSpacing)
@@ -397,6 +420,20 @@ struct ChatView: View {
                     Image(systemName: "sidebar.right")
                 }
                 .help("Toggle Outline")
+                // Slice 2: the always-ask / yolo toggle. Only meaningful when the
+                // ACP backend is on (the CLI backend has no permission channel),
+                // so it's hidden otherwise. The policy is baked into the ACP
+                // backend at session start, so the toggle applies to the next
+                // conversation (captioned). Default off (yolo).
+                if useACPBackend {
+                    Spacer(minLength: 12)
+                    Toggle("Always ask", isOn: $alwaysAsk)
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .help(alwaysAsk
+                              ? "Always ask: the agent pauses for your approval before each write."
+                              : "Yolo: writes apply automatically. Toggle to review each write.")
+                }
             }
         }
         .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
