@@ -1021,7 +1021,14 @@ final class AgentLauncher {
             // For ACP, the prompt is sent via `send()` (not baked into the CLI
             // argv like the CLI backend). For CLI, the prompt is already in the
             // `-p` flag so an empty string is correct (just drains stdout).
-            let promptText = useACP ? operation.prompt(wikiRoot: wikiRoot) : ""
+            // For ACP, the sub-agent plan (source-reader digester agents) doesn't
+            // work — ACP has no custom agent types and background agents can't
+            // complete within a single turn. Append an instruction to do
+            // everything directly.
+            var promptText = useACP ? operation.prompt(wikiRoot: wikiRoot) : ""
+            if useACP {
+                promptText += "\n\nIMPORTANT: Do NOT dispatch sub-agents, background tasks, or async agents. Do NOT use sleep or ScheduleWakeup. Read all sources, process them, and write all wiki pages directly in THIS session — everything must complete before you stop."
+            }
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let stream = await backend.send(
