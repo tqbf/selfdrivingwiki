@@ -17,15 +17,37 @@ struct AgentCommandSettingsView: View {
     /// enabling the structural always-ask/yolo write-permission gate.
     @AppStorage(AgentLauncher.useACPBackendKey) private var useACPBackend = false
 
-    let containerDirectory: URL
+    /// Slice 3: dedicated ACP agent config (separate from the Claude-CLI config
+    /// above). Shown only when `useACPBackend` is on. The API key is backed by
+    /// Keychain (via `ACPCredentialStore`), not UserDefaults — so it has its own
+    /// `@State` draft + `onChange` persist, mirroring ZoteroSettingsView's key.
+    @State private var acpExecutable: String
+    @State private var acpPrefixArguments: String
+    @State private var acpModelOverride: String
+    @State private var acpExtraEnvironment: String
+    @State private var acpAPIKey: String
 
-    init(containerDirectory: URL) {
+    let containerDirectory: URL
+    /// Injectable for previews/tests; defaults to the Keychain-backed store.
+    private let credentialStore: any ACPCredentialStore
+
+    init(
+        containerDirectory: URL,
+        credentialStore: any ACPCredentialStore = KeychainACPCredentialStore()
+    ) {
         self.containerDirectory = containerDirectory
+        self.credentialStore = credentialStore
         let config = AgentCommandConfig.load(from: containerDirectory)
         _executable = State(initialValue: config.executable)
         _prefixArguments = State(initialValue: config.prefixArguments)
         _modelOverride = State(initialValue: config.modelOverride)
         _extraEnvironment = State(initialValue: config.extraEnvironment)
+        let acp = ACPAgentConfig.load(from: containerDirectory)
+        _acpExecutable = State(initialValue: acp.executable)
+        _acpPrefixArguments = State(initialValue: acp.prefixArguments)
+        _acpModelOverride = State(initialValue: acp.modelOverride)
+        _acpExtraEnvironment = State(initialValue: acp.extraEnvironment)
+        _acpAPIKey = State(initialValue: credentialStore.apiKey() ?? "")
     }
 
     var body: some View {
@@ -38,15 +60,9 @@ struct AgentCommandSettingsView: View {
                 } header: {
                     Text("Command")
                 } footer: {
-                    if useACPBackend {
-                        Text("ACP backend is ON — the executable and prefix arguments above launch the ACP agent (e.g. executable `npx`, prefix arguments `--yes @agentclientprotocol/claude-agent-acp`).")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("The Claude CLI command. When the ACP backend is on, these same fields launch the ACP agent instead.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text("The Claude CLI command (used when the ACP backend is off).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section {
@@ -54,9 +70,33 @@ struct AgentCommandSettingsView: View {
                 } header: {
                     Text("Backend")
                 } footer: {
-                    Text("Off (default): the Claude CLI backend — writes apply with no review. On: launch the agent over ACP, which adds a structural always-ask / yolo permission gate for writes. Requires a configured ACP agent above. Live approval is only possible with an agent that emits request_permission.")
+                    Text("Off (default): the Claude CLI backend — writes apply with no review. On: launch the agent over ACP, which adds a structural always-ask / yolo permission gate for writes. Requires a configured ACP agent below. Live approval is only possible with an agent that emits request_permission.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                if useACPBackend {
+                    Section {
+                        TextField("Executable", text: $acpExecutable, prompt: Text("npx"))
+                        TextField("Arguments", text: $acpPrefixArguments)
+                        TextField("Model override", text: $acpModelOverride, prompt: Text("default (agent-chosen)"))
+                    } header: {
+                        Text("ACP Agent")
+                    } footer: {
+                        Text("The ACP agent to launch over JSON-RPC/stdio (e.g. executable `npx`, arguments `--yes @agentclientprotocol/claude-agent-acp`). Configured separately from the Claude CLI command above.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Section {
+                        SecureField("API Key", text: $acpAPIKey, prompt: Text("optional (some agents need none)"))
+                    } header: {
+                        Text("ACP Authentication")
+                    } footer: {
+                        Text("Stored in the macOS Keychain — never written to disk as plain text. Leave blank if the agent advertises no auth methods.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Section {
@@ -86,6 +126,10 @@ struct AgentCommandSettingsView: View {
         .onChange(of: prefixArguments) { _, _ in saveCommand() }
         .onChange(of: modelOverride) { _, _ in saveCommand() }
         .onChange(of: extraEnvironment) { _, _ in saveCommand() }
+        .onChange(of: acpExecutable) { _, _ in saveACPCommand() }
+        .onChange(of: acpPrefixArguments) { _, _ in saveACPCommand() }
+        .onChange(of: acpModelOverride) { _, _ in saveACPCommand() }
+        .onChange(of: acpAPIKey) { _, _ in saveACPKey() }
     }
 
     // MARK: - Actions
@@ -97,6 +141,21 @@ struct AgentCommandSettingsView: View {
             modelOverride: modelOverride,
             extraEnvironment: extraEnvironment)
         try? config.save(to: containerDirectory)
+    }
+
+    /// Persist the ACP agent config (plain prefs only — the key is separate).
+    private func saveACPCommand() {
+        let config = ACPAgentConfig(
+            executable: acpExecutable,
+            prefixArguments: acpPrefixArguments,
+            modelOverride: acpModelOverride,
+            extraEnvironment: "")
+        try? config.save(to: containerDirectory)
+    }
+
+    /// Persist the API key through the Keychain-backed store (never plain disk).
+    private func saveACPKey() {
+        try? credentialStore.setAPIKey(acpAPIKey.isEmpty ? nil : acpAPIKey)
     }
 
     private func resetToDefault() {

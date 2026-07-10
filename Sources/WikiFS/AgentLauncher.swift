@@ -166,6 +166,11 @@ final class AgentLauncher {
         UserDefaults.standard.bool(forKey: AgentLauncher.alwaysAskKey)
     }
 
+    /// The Keychain-backed store for the ACP agent's API key (slice 3). Injectable
+    /// so tests can substitute an in-memory store. Only read when `useACPBackend`
+    /// is ON; the key NEVER touches UserDefaults or a plaintext file.
+    @ObservationIgnored var acpCredentialStore: any ACPCredentialStore = KeychainACPCredentialStore()
+
     /// The currently-pending write-permission requests surfaced from the backend
     /// (always-ask mode). When non-empty AND this surface is the live chat, the
     /// UI renders an inline Approve/Reject affordance (slice 2). Mirrors how
@@ -713,10 +718,15 @@ final class AgentLauncher {
         // Slice 2: select the backend per the opt-in pref + the chat's permission
         // policy (default OFF = ClaudeCLI; default yolo). Constructed HERE so both
         // `start` and the per-turn stream consumer capture the same backend. The
-        // ACP agent spawn (path + args) is threaded into providerHints below.
+        // ACP agent spawn (path + args + key) is threaded into providerHints below.
         let useACP = resolveUseACPBackend()
         let policy: PermissionPolicy = resolveAlwaysAsk() ? .alwaysAsk : .yolo
         self.backend = AgentBackendFactory.makeBackend(useACPBackend: useACP, policy: policy)
+
+        // Slice 3: when ACP is on, load the DEDICATED ACP agent config (separate
+        // from the generic AgentCommandConfig) + the Keychain-backed API key.
+        let acpConfig = useACP ? ACPAgentConfig.load(from: dir) : nil
+        let acpAPIKey = useACP ? acpCredentialStore.apiKey() : nil
 
         let resolvedPath: String
         switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
@@ -795,10 +805,11 @@ final class AgentLauncher {
                 Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
             })
         let profile = BackendProfile(
-            providerHints: useACP
+            providerHints: useACP && acpConfig != nil
                 ? AgentBackendFactory.acpProviderHints(
                     resolvedExecutable: resolvedPath,
-                    prefixArguments: agentConfig.prefixArguments)
+                    prefixArguments: acpConfig?.prefixArguments ?? "",
+                    apiKey: acpAPIKey)
                 : [:],
             scratchDirectory: scratch,
             isReadOnly: false,
@@ -937,6 +948,11 @@ final class AgentLauncher {
         let policy: PermissionPolicy = resolveAlwaysAsk() ? .alwaysAsk : .yolo
         self.backend = AgentBackendFactory.makeBackend(useACPBackend: useACP, policy: policy)
 
+        // Slice 3: when ACP is on, load the DEDICATED ACP agent config + the
+        // Keychain-backed API key (separate from the generic AgentCommandConfig).
+        let acpConfig = useACP ? ACPAgentConfig.load(from: dir) : nil
+        let acpAPIKey = useACP ? acpCredentialStore.apiKey() : nil
+
         let resolvedPath: String
         switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
         case .found(let path):
@@ -1022,10 +1038,11 @@ final class AgentLauncher {
                 Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
             })
         let profile = BackendProfile(
-            providerHints: useACP
+            providerHints: useACP && acpConfig != nil
                 ? AgentBackendFactory.acpProviderHints(
                     resolvedExecutable: resolvedPath,
-                    prefixArguments: agentConfig.prefixArguments)
+                    prefixArguments: acpConfig?.prefixArguments ?? "",
+                    apiKey: acpAPIKey)
                 : [:],
             scratchDirectory: scratch,
             isReadOnly: false,

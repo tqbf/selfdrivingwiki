@@ -47,15 +47,16 @@ import ACPModel
         #expect(alwaysAsk is ACPBackend)
     }
 
-    // MARK: - ACP provider hints (AgentCommandConfig → profile)
+    // MARK: - ACP provider hints (ACPAgentConfig → profile)
 
     /// The resolved executable path becomes `acpAgentPath`; prefix args become
-    /// `acpAgentArgs`. This is how the Agent command config DOUBLES as the ACP
-    /// agent spawn.
+    /// `acpAgentArgs`. Slice 3: sourced from the DEDICATED ACP config (the key
+    /// goes through the Keychain store, tested separately).
     @Test func acpProviderHintsFromConfig() {
         let hints = AgentBackendFactory.acpProviderHints(
             resolvedExecutable: "/usr/local/bin/npx",
-            prefixArguments: "--yes @agentclientprotocol/claude-agent-acp")
+            prefixArguments: "--yes @agentclientprotocol/claude-agent-acp",
+            apiKey: nil)
         #expect(hints["acpAgentPath"] == "/usr/local/bin/npx")
         #expect(hints["acpAgentArgs"] == "--yes @agentclientprotocol/claude-agent-acp")
     }
@@ -64,14 +65,14 @@ import ACPModel
     /// `noAgentConfigured`). The opt-in feature requires a configured agent.
     @Test func acpProviderHintsEmptyWhenUnconfigured() {
         let hints = AgentBackendFactory.acpProviderHints(
-            resolvedExecutable: "", prefixArguments: "")
+            resolvedExecutable: "", prefixArguments: "", apiKey: nil)
         #expect(hints.isEmpty)
     }
 
     /// Only the path set (no prefix args) → just `acpAgentPath`.
     @Test func acpProviderHintsPathOnly() {
         let hints = AgentBackendFactory.acpProviderHints(
-            resolvedExecutable: "/bin/agent", prefixArguments: "")
+            resolvedExecutable: "/bin/agent", prefixArguments: "", apiKey: nil)
         #expect(hints.count == 1)
         #expect(hints["acpAgentPath"] == "/bin/agent")
     }
@@ -84,7 +85,7 @@ import ACPModel
     @Test func acpProviderHintsPreservesRawArgsForTokenization() {
         let raw = "--yes @agentclientprotocol/claude-agent-acp"
         let hints = AgentBackendFactory.acpProviderHints(
-            resolvedExecutable: "npx", prefixArguments: raw)
+            resolvedExecutable: "npx", prefixArguments: raw, apiKey: nil)
         #expect(hints["acpAgentArgs"] == raw)
     }
 
