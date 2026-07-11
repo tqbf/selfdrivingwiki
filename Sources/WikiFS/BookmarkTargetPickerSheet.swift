@@ -38,8 +38,23 @@ struct BookmarkTargetPickerSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var searchText: String = ""
-    @State private var selectedFolderID: String? = nil
+    /// Pre-selected to the bookmarks root so "Add" is enabled immediately,
+    /// even in a wiki with no folders yet (#243).
+    @State private var selectedFolderID: String? = BookmarkTargetPickerSheet.rootFolderID
     @State private var newFolderName: String = ""
+
+    /// Sentinel id representing the bookmarks root (`parentID == nil`).
+    /// The picker treats this as a selectable destination alongside real
+    /// folders, so the user can bookmark to the top level without first
+    /// creating a folder (#243).
+    private static let rootFolderID = "__bookmarks_root__"
+
+    /// Converts the internal selection id to the `parentID` value expected
+    /// by `onConfirm` — the root sentinel maps to `nil`, everything else
+    /// passes through unchanged. Exposed for testing (#243).
+    static func parentID(forSelection selection: String?) -> String? {
+        selection == rootFolderID ? nil : selection
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,6 +71,11 @@ struct BookmarkTargetPickerSheet: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    rootRow
+                    if !filteredFolders.isEmpty {
+                        Divider()
+                            .padding(.vertical, 2)
+                    }
                     ForEach(filteredFolders) { folder in
                         row(for: folder)
                     }
@@ -88,8 +108,9 @@ struct BookmarkTargetPickerSheet: View {
                 }
                 .keyboardShortcut(.cancelAction)
                 Button("Add") {
-                    DebugLog.tabs("BookmarkTargetPickerSheet: Add — parentID=\(selectedFolderID ?? "nil"), \(ids.count) items")
-                    onConfirm(selectedFolderID)
+                    let parentID = Self.parentID(forSelection: selectedFolderID)
+                    DebugLog.tabs("BookmarkTargetPickerSheet: Add — parentID=\(parentID ?? "nil"), \(ids.count) items")
+                    onConfirm(parentID)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -161,6 +182,34 @@ struct BookmarkTargetPickerSheet: View {
         .padding(8)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    // MARK: - Root row (top-level destination)
+
+    /// A pinned row representing the bookmarks root (`parentID == nil`),
+    /// so the user can bookmark to the top level without first creating a
+    /// folder. Selectable like any folder row (#243).
+    @ViewBuilder
+    private var rootRow: some View {
+        let isSelected = selectedFolderID == Self.rootFolderID
+        HStack(spacing: 8) {
+            Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                .font(.callout)
+            Image(systemName: "bookmarks")
+                .foregroundStyle(.secondary)
+                .font(.callout)
+            Text("Bookmarks")
+                .font(.callout)
+                .lineLimit(1)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedFolderID = (isSelected ? nil : Self.rootFolderID)
+        }
     }
 
     // MARK: - Folder row (single-select)
