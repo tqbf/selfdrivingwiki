@@ -21,3 +21,4 @@ Resources/mlx.metallib
 .vscode/
 
 .xcodebuildmcp/
+tmp/
