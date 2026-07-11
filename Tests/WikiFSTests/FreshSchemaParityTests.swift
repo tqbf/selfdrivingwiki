@@ -126,8 +126,8 @@ struct FreshSchemaParityTests {
         let ladder = try fingerprint(at: ladderURL)
 
         // Both must report head version 22.
-        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "29")
-        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "29")
+        #expect(try SQLiteWikiStore(databaseURL: fastURL).pragmaValue("user_version") == "30")
+        #expect(try SQLiteWikiStore(databaseURL: ladderURL).pragmaValue("user_version") == "30")
 
         if fast != ladder {
             Issue.record("fresh fast-path schema drifted from the stepwise ladder:\n--- fast ---\n\(fast)\n--- ladder ---\n\(ladder)")
@@ -147,7 +147,9 @@ struct FreshSchemaParityTests {
                          "log", "wiki_index", "page_chunks", "source_chunks",
                          "source_search", "pages_fts", "sources_fts", "embedding_meta",
                          "bookmark_nodes", "chats", "chat_messages", "chat_chunks",
-                         "chat_search", "chats_fts"] {
+                         "chat_search", "chats_fts",
+                         "blobs", "agents", "activities", "source_versions", "refs",
+                         "page_versions"] {
             #expect(tables.contains(expected), "missing table: \(expected)")
         }
         // The historical single-row embedding tables must NOT exist on a fresh db
@@ -208,7 +210,7 @@ struct FreshSchemaParityTests {
         // 3. Reopen → runs the v20→v21 backfill.
         sqlite3_close(db)
         let migrated = try SQLiteWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "29")
+        #expect(migrated.pragmaValue("user_version") == "30")
 
         // 4. The legacy extraction row was backfilled: blob_hash + activity_id + source_version_id set.
         #expect(migrated.scalarText(
@@ -270,7 +272,7 @@ struct FreshSchemaParityTests {
         sqlite3_close(db)
 
         let migrated = try SQLiteWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "29")
+        #expect(migrated.pragmaValue("user_version") == "30")
         let db2 = try open(url)
         defer { sqlite3_close(db2) }
         let roleCol = columns(db2, "sources").first { $0.name == "role" }
@@ -345,7 +347,7 @@ struct FreshSchemaParityTests {
 
         // Reopen → v22 migration rebuilds source_links.
         let migrated = try SQLiteWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "29")
+        #expect(migrated.pragmaValue("user_version") == "30")
         let db2 = try open(url)
         defer { sqlite3_close(db2) }
 
@@ -404,7 +406,7 @@ struct FreshSchemaParityTests {
 
         let reopenStart = Date()
         let migrated = try SQLiteWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "29")
+        #expect(migrated.pragmaValue("user_version") == "30")
         let db2 = try open(url)
         defer { sqlite3_close(db2) }
 

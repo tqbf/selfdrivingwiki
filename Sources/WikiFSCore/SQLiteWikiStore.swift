@@ -520,7 +520,13 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // v29 (remove-readonly-chat-mode): data-only — rewrite any legacy
         // `kind = 'ask'` chat rows to `'edit'`. The fresh path has no chat rows,
         // so the UPDATE is a no-op; the ladder runs it in the v28→29 step.
-        try exec("PRAGMA user_version=29;")
+        //
+        // v30 (W0 — page versioning, PR #312): `page_versions` table + the
+        // `refs` CHECK constraint (already in `createObjectsTablesV20` above).
+        // The fresh path has no pages to seed; the ladder seeds root versions
+        // per existing page in the v29→30 step.
+        try createPageVersionsV30()
+        try exec("PRAGMA user_version=30;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -587,14 +593,36 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         """)
         try exec("""
         CREATE TABLE IF NOT EXISTS refs (
-            kind       TEXT NOT NULL,
-            owner_id   TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+            kind       TEXT NOT NULL CHECK (kind IN ('source-content','source-derived','page-content')),
+            owner_id   TEXT NOT NULL,
             version_id TEXT NOT NULL,
             generation INTEGER NOT NULL DEFAULT 1,
             updated_at REAL NOT NULL,
             PRIMARY KEY (kind, owner_id)
         );
         """)
+    }
+
+    /// Create the `page_versions` table (v30, W0 — PR #312). Mirrors the
+    /// `source_versions` pattern: append-only, ULID-ordered chain, blob-backed
+    /// body, PROV activity linkage. Called by both the fresh-schema fast path
+    /// and the v29→30 migration step so the two stay schema-identical
+    /// (`freshFastPathMatchesStepwiseLadder`). `IF NOT EXISTS`: idempotent so a
+    /// DB rewound for testing already has it.
+    private func createPageVersionsV30() throws {
+        try exec("""
+        CREATE TABLE IF NOT EXISTS page_versions (
+            id               TEXT PRIMARY KEY,
+            page_id          TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+            parent_id        TEXT,
+            merge_parent_id  TEXT,
+            blob_hash        TEXT NOT NULL REFERENCES blobs(hash),
+            title            TEXT NOT NULL,
+            activity_id      TEXT REFERENCES activities(id),
+            saved_at         REAL NOT NULL
+        );
+        """)
+        try exec("CREATE INDEX IF NOT EXISTS page_versions_page ON page_versions(page_id, id);")
     }
 
     /// Create the two persisted-chat-history tables (issue #119 phase 1):
@@ -1298,6 +1326,20 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try exec("PRAGMA user_version=29;")
             version = 29
         }
+
+        // Step 29 → 30 (W0 — page versioning, PR #312): adds the `page_versions`
+        // table (append-only, blob-backed page body chain), rebuilds `refs` to
+        // drop the `owner_id REFERENCES sources(id)` FK (replaced by a CHECK on
+        // `kind` so `page-content` refs can use a page id as `owner_id`), and
+        // seeds one root version per existing page (blob of current body_markdown).
+        // No ref rows are written for the root versions — the default-active
+        // rule (no ref → head is MAX(id)) means main tracks latest, exactly like
+        // sources did at v20.
+        if version < 30 {
+            try migrateV29ToV30()
+            try exec("PRAGMA user_version=30;")
+            version = 30
+        }
     }
 
     /// The v19→20 migration step. Creates the objects tables, then — for every
@@ -1749,6 +1791,129 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='chats';") != "0"
         guard hasChats else { return }
         try exec("UPDATE chats SET kind = 'edit' WHERE kind = 'ask';")
+    }
+
+    /// The v29→30 migration step (W0 — page versioning, PR #312):
+    ///
+    /// 1. Creates the `page_versions` table (append-only, blob-backed page body
+    ///    chain, mirroring `source_versions`).
+    /// 2. Rebuilds the `refs` table to drop the `owner_id REFERENCES sources(id)`
+    ///    FK and replace it with a CHECK on `kind` (so `page-content` refs can
+    ///    use a page id as `owner_id`). The graph-model plan (§4.3) explicitly
+    ///    flagged this as the trigger condition for a third ref kind.
+    /// 3. Seeds one root version per existing page (blob of current
+    ///    `body_markdown`, legacy-import activity, parent_id NULL). No ref rows
+    ///    are written — the default-active rule (no ref → head is MAX(id))
+    ///    means main tracks latest, exactly like sources did at v20.
+    private func migrateV29ToV30() throws {
+        try withTransaction {
+            // 1. Create page_versions (idempotent — IF NOT EXISTS).
+            try createPageVersionsV30()
+
+            // 2. Rebuild refs: drop the owner_id FK, add the CHECK on kind.
+            //    Standard SQLite table-rebuild pattern (can't ALTER TABLE DROP
+            //    CONSTRAINT). The graph-model plan §4.3 noted the FK would need
+            //    to go when a third ref kind landed.
+            //
+            //    Guard: if refs already has the CHECK (a DB rewound to v29 for
+            //    testing after already being at v30), the rebuild is a no-op
+            //    (copy → drop → rename is identity).
+            let refsHasCheck = try queryScalarText(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='refs';").contains("CHECK")
+            if !refsHasCheck {
+                try exec("""
+                CREATE TABLE _refs_new (
+                    kind       TEXT NOT NULL CHECK (kind IN ('source-content','source-derived','page-content')),
+                    owner_id   TEXT NOT NULL,
+                    version_id TEXT NOT NULL,
+                    generation INTEGER NOT NULL DEFAULT 1,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (kind, owner_id)
+                );
+                """)
+                try exec("INSERT INTO _refs_new (kind, owner_id, version_id, generation, updated_at) SELECT kind, owner_id, version_id, generation, updated_at FROM refs;")
+                try exec("DROP TABLE refs;")
+                try exec("ALTER TABLE _refs_new RENAME TO refs;")
+            }
+
+            // 3. Seed root versions for existing pages. Idempotent: if
+            //    page_versions already has rows (a rewound DB), skip.
+            let pageCount = try queryScalarText(
+                "SELECT COUNT(*) FROM page_versions;") ?? "0"
+            guard pageCount == "0" else { return }
+
+            let hasPages = try queryScalarText(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pages';") != "0"
+            guard hasPages else { return }
+
+            // Reuse the legacy-import agent (same as the v20 source seeding).
+            // Create one if it doesn't exist (a v29 DB always has agents from
+            // v20, but guard anyway).
+            let legacyAgentID: String
+            let hasLegacyAgent = try queryScalarText(
+                "SELECT COUNT(*) FROM agents WHERE name = 'legacy-import';") != "0"
+            if hasLegacyAgent {
+                legacyAgentID = try queryScalarText(
+                    "SELECT id FROM agents WHERE name = 'legacy-import' LIMIT 1;")
+            } else {
+                legacyAgentID = ULID.generate()
+                let seedAgent = try statement(
+                    "INSERT INTO agents (id, kind, name) VALUES (?1, 'software', 'legacy-import');")
+                seedAgent.reset()
+                try seedAgent.bind(legacyAgentID, at: 1)
+                _ = try seedAgent.step()
+            }
+
+            let now = Date().timeIntervalSince1970
+            let select = try statement("""
+            SELECT id, title, body_markdown, created_at FROM pages;
+            """)
+            let insBlob = try statement(
+                "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+            let insActivity = try statement("""
+            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+            VALUES (?1, 'import', ?2, ?3, ?3);
+            """)
+            let insVersion = try statement("""
+            INSERT INTO page_versions (id, page_id, parent_id, blob_hash, title, activity_id, saved_at)
+            VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6);
+            """)
+
+            while try select.step() {
+                let pageID = select.text(at: 0)
+                let title = select.text(at: 1)
+                let bodyData = Data(select.blob(at: 2))
+                let createdAt = select.double(at: 3)
+
+                // SHA-256 of the body → blob hash.
+                let hash = SHA256.hash(data: bodyData)
+                    .map { String(format: "%02x", $0) }.joined()
+
+                insBlob.reset()
+                try insBlob.bind(hash, at: 1)
+                try insBlob.bind(Int64(bodyData.count), at: 2)
+                try insBlob.bind(bodyData, at: 3)
+                _ = try insBlob.step()
+
+                let activityID = ULID.generate()
+                insActivity.reset()
+                try insActivity.bind(activityID, at: 1)
+                try insActivity.bind(legacyAgentID, at: 2)
+                try insActivity.bind(createdAt, at: 3)
+                _ = try insActivity.step()
+
+                let versionID = ULID.generate()
+                insVersion.reset()
+                try insVersion.bind(versionID, at: 1)
+                try insVersion.bind(pageID, at: 2)
+                try insVersion.bind(hash, at: 3)
+                try insVersion.bind(title, at: 4)
+                try insVersion.bind(activityID, at: 5)
+                try insVersion.bind(createdAt, at: 6)
+                _ = try insVersion.step()
+            }
+            select.reset()
+        }
     }
 
     /// One-time backfill for the v18→19 step: hash every existing source's
