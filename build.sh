@@ -106,14 +106,17 @@ else
   echo "  (${PODCAST_HELPER_NAME} not found at ${PODCAST_HELPER_BIN} — Apple Podcasts transcript ingest will be unavailable)"
 fi
 # Bun runtime — bundled so ACP providers (claude-acp via bunx) work without a
-# system-wide install. Resolved from BUN_INSTALL or PATH; skipped (not fatal)
-# if absent (the provider falls back to PATH resolution at spawn time).
+# system-wide install. Resolved from BUN_INSTALL or ~/.bun. REQUIRED: if absent
+# the build fails rather than shipping a broken app that errors at spawn time.
 BUN_SRC="${BUN_INSTALL:-$HOME/.bun}/bin/bun"
 if [ -x "${BUN_SRC}" ]; then
   cp "${BUN_SRC}" "${HELPERS_DIR}/bun"
   echo "  ✓ bundled bun ($(file -b "${BUN_SRC}" | cut -d, -f1))"
 else
-  echo "  (bun not found at ${BUN_SRC} — ACP providers will need bun on PATH)"
+  echo "  ✗ FATAL: bun not found at ${BUN_SRC}" >&2
+  echo "    Install it:  curl -fsSL https://bun.sh/install | bash" >&2
+  echo "    Or set BUN_INSTALL to point at your bun binary's directory." >&2
+  exit 1
 fi
 # wikictl is a plain CLI with no Info.plist, so it can't read the App Group id
 # the way the .app/.appex do. Drop a sidecar that WikiIdentifiers reads. It must

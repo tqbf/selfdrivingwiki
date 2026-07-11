@@ -94,3 +94,75 @@ agent-dependent, and yolo is the safe default.
   reference) — more work, but no external dependency risk.
 - Live end-to-end testing needs a working ACP agent + credentials; the spike can
   only fully validate behavior where one is installed.
+
+## Multi-phase ingestion (planner → executors → finalizer)
+
+Large-source ACP ingestion cannot use Claude's in-process sub-agents (the Sonnet
+`source-reader` digester) — ACP has no custom agent types and background agents
+can't complete within a single turn. Instead, the ingestion is split into
+sequential single-turn ACP sessions:
+
+### Architecture
+
+```
+run() [gate acquired, onLock fired]
+  └─ if useACP && .opusCurator:
+       runACPIngestPlannerExecutors()
+         ├─ Phase 1: Planner (Opus)
+         │    read sources → write plan.json
+         ├─ Phase 2: Executors (Sonnet, N×)
+         │    each: read plan.json + source section → wikictl page upsert
+         ├─ Phase 3: Finalizer (Opus)
+         │    wikictl page list → wikictl index set → wikictl log append
+         └─ finish(0)
+  └─ else:
+       existing single-session path (singleOpus prompt / CLI)
+```
+
+### Lifecycle invariants
+
+- **Generation gate:** acquired once by `run()`, held across ALL phases, released
+  by `finish()` at the end. NOT released per-turn (one-shot runs hold the gate
+  through `finish()`).
+- **`onLock`:** fired once by `run()` before dispatch. NOT re-fired per phase.
+- **`finish()`:** called exactly once by the orchestrator (success: `finish(0)`;
+  failure: `finish(-1)`). The per-phase `onExit` closures do NOT call `finish()`.
+- **`sessionHandle`/`currentRunToken`:** updated per phase so `stopAgent()` and
+  the watchdog track the live phase.
+- **Stop during a phase:** `stopAgent()` cancels the live session + calls
+  `finish(-1)`. Remaining phases skip (checked via `isRunning` guard). Partial
+  pages already written stay (intentional — partial progress > rollback).
+- **Partial executor failure:** if an executor's `backend.start` throws or the
+  stream errors, the orchestrator logs and continues to the next executor. The
+  finalizer runs best-effort.
+- **Planner failure / invalid plan.json:** falls back to single-session ACP
+  ingest (the original one-shot prompt with the "no sub-agents" instruction).
+
+### Plan schema (`ACPIngestPlan`)
+
+```json
+{
+  "pages": [
+    {
+      "title": "Page Title",
+      "sourceFile": "source-1.md",
+      "sourceRanges": "lines 1-80",
+      "outline": "1-3 sentence description"
+    }
+  ],
+  "sourceIDs": ["01J5ABC", "01J5DEF"]
+}
+```
+
+The planner writes this to `plan.json` in the scratch directory. Executors are
+grouped by `sourceFile` (one executor per source file). Tolerant extraction
+(`ACPIngestPlan.extract(from:)`) strips ```` ```json ```` fences and substrings
+from first `{` to last `}` to handle Claude wrapping JSON in prose.
+
+### Model selection
+
+Executors should use Sonnet (cheaper). The alias "sonnet" does NOT match
+`ACPModelSelectionResolver` (exact-id matching). Instead, after the planner
+session starts, `ACPBackend.availableModels(for:)` is read and the first model
+whose id/name contains "sonnet" is selected via `findSonnetModelId()`. Falls
+back to the provider's default model if no match.
