@@ -143,6 +143,9 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
     case .chat(let action):
         let r = try ChatCommand.run(action, in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
+    case .workspace(let action):
+        let r = try WorkspaceCommand.run(action, in: store)
+        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     }
 }
 

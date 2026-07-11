@@ -69,6 +69,8 @@ public enum ArgumentParser {
         case admin(AdminCommand.Action)
         /// Chat commands: list, read chat transcripts from SQLite.
         case chat(ChatCommand.Action)
+        /// Workspace commands (W1, PR #312): create, status, abandon, merge.
+        case workspace(WorkspaceCommand.Action)
     }
 
     public enum Failure: Error, Equatable, CustomStringConvertible {
@@ -124,6 +126,10 @@ public enum ArgumentParser {
       chat list [--json]                     list chats (TSV, or JSON lines)
       chat get  (--id X | --title T)         print a chat transcript as markdown
       chat search --query X [--limit N]      semantic + keyword search of chats
+      workspace create [--name N]              create a workspace (prints ID)
+      workspace status --id W                  show workspace status + pages
+      workspace abandon --id W                abandon a workspace (GC refs)
+      workspace merge --id W                   fast-forward merge into main
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -164,6 +170,8 @@ public enum ArgumentParser {
             command = try parseAdminCommand(Array(args.dropFirst()))
         case "chat":
             command = try parseChatCommand(Array(args.dropFirst()))
+        case "workspace":
+            command = try parseWorkspaceCommand(Array(args.dropFirst()))
         default:
             throw Failure.usage("unknown command \((args.first ?? "").debugDescription)")
         }
@@ -394,6 +402,38 @@ public enum ArgumentParser {
             throw Failure.usage("index set: --body-file is required (path or -)")
         }
         return .indexSet(bodyFile: bodyFile)
+    }
+
+    private static func parseWorkspaceCommand(_ args: [String]) throws -> Command {
+        guard let sub = args.first else { throw Failure.usage("workspace: missing subcommand") }
+        let options = try Options(Array(args.dropFirst()))
+
+        switch sub {
+        case "create":
+            let name = options.value("--name")
+            return .workspace(.create(name: name))
+
+        case "status":
+            guard let id = options.value("--id") else {
+                throw Failure.usage("workspace status: --id is required")
+            }
+            return .workspace(.status(id: id))
+
+        case "abandon":
+            guard let id = options.value("--id") else {
+                throw Failure.usage("workspace abandon: --id is required")
+            }
+            return .workspace(.abandon(id: id))
+
+        case "merge":
+            guard let id = options.value("--id") else {
+                throw Failure.usage("workspace merge: --id is required")
+            }
+            return .workspace(.merge(id: id))
+
+        default:
+            throw Failure.usage("workspace: unknown subcommand \(sub.debugDescription)")
+        }
     }
 
     /// A tiny `--key value` / `--flag` option bag. Tolerates options in any order;
