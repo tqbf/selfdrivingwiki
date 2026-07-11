@@ -720,7 +720,8 @@ public final class WikiStoreModel {
     /// a copy.
     public func openTab(_ selection: WikiSelection, title: String? = nil) {
         clickStartedAt = DispatchTime.now()
-        if let existing = tabs.first(where: { $0.selection == selection }) {
+        // Don't reuse draft-state tabs (.newChat) — multiple drafts are valid (#348).
+        if selection != .newChat, let existing = tabs.first(where: { $0.selection == selection }) {
             DebugLog.store("[tabs] openTab: focus existing tab for \(selection) (id=\(existing.id))")
             setActiveTab(existing.id)
             return
@@ -744,7 +745,8 @@ public final class WikiStoreModel {
             openTab(selection, title: title)
             return
         }
-        guard !tabs.contains(where: { $0.selection == selection }) else { return }
+        // Don't dedup draft-state tabs (.newChat) — multiple drafts are valid (#348).
+        if selection != .newChat, tabs.contains(where: { $0.selection == selection }) { return }
         let tab = EditorTab(selection: selection, title: title ?? tabTitle(for: selection))
         tabs.append(tab)
         DebugLog.store("[tabs] openTabInBackground: new background tab for \(selection) (id=\(tab.id)), \(tabs.count) tabs total")
@@ -764,7 +766,9 @@ public final class WikiStoreModel {
         // If another tab already displays this selection, reuse it (focus, don't
         // duplicate) — mirrors openTab's dedup. This handles e.g. re-clicking a
         // chat that's already open in another tab.
-        if let existing = tabs.first(where: { $0.selection == selection }), existing.id != id {
+        // Exception: .newChat is a draft state, not a unique resource — don't
+        // reuse an existing draft tab when retargeting to .newChat (#348).
+        if selection != .newChat, let existing = tabs.first(where: { $0.selection == selection }), existing.id != id {
             selectTab(id: existing.id)
             return
         }
