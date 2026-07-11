@@ -163,3 +163,57 @@ public struct PageConflictError: Error, Equatable {
         self.actualVersionID = actualVersionID
     }
 }
+
+// MARK: - Workspaces (W1, PR #312)
+
+/// The lifecycle state of a workspace. Transitions: `open` → `merging` →
+/// `merged` (success) or `conflicted` (merge parked). `abandoned` is terminal
+/// (the workspace is GC'd — its `workspace_refs` are deleted).
+public enum WorkspaceStatus: String, Sendable, Equatable {
+    case open
+    case merging
+    case merged
+    case conflicted
+    case abandoned
+}
+
+/// A summary of one workspace (W1, PR #312).
+public struct WorkspaceSummary: Equatable, Sendable {
+    public let id: String
+    public let name: String?
+    public let status: WorkspaceStatus
+    public let activityID: String?
+    public let createdAt: Date
+    public let updatedAt: Date
+
+    public init(id: String, name: String?, status: WorkspaceStatus,
+                activityID: String?, createdAt: Date, updatedAt: Date) {
+        self.id = id
+        self.name = name
+        self.status = status
+        self.activityID = activityID
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+/// A single page overlay row in `workspace_refs` (W1, PR #312). The
+/// `baseVersionID` is the main head observed at the workspace's first write
+/// to this page (the three-way-merge base); nil means the page was created
+/// in this workspace (doesn't exist on main yet).
+public struct WorkspaceRef: Equatable, Sendable {
+    public let workspaceID: String
+    public let ownerID: PageID
+    public let baseVersionID: String?
+    public let versionID: String
+    public let updatedAt: Date
+
+    public init(workspaceID: String, ownerID: PageID, baseVersionID: String?,
+                versionID: String, updatedAt: Date) {
+        self.workspaceID = workspaceID
+        self.ownerID = ownerID
+        self.baseVersionID = baseVersionID
+        self.versionID = versionID
+        self.updatedAt = updatedAt
+    }
+}

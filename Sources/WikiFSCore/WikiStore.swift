@@ -358,6 +358,42 @@ public protocol WikiStore: Sendable {
     /// version's blob. Emits a `.page .updated` change event.
     func revertPage(pageID: PageID, to versionID: String) throws
 
+    // MARK: - Workspaces (W1, PR #312)
+
+    /// Create a durable, named workspace for a speculative ingestion branch.
+    /// Returns the new workspace's id. The workspace starts in `open` status.
+    func createWorkspace(name: String?, activityID: String?) throws -> String
+
+    /// Read the workspace's current status + metadata.
+    func workspaceSummary(id: String) throws -> WorkspaceSummary?
+
+    /// List all page-overlay refs in a workspace (the write set).
+    func workspaceRefs(workspaceID: String) throws -> [WorkspaceRef]
+
+    /// Write a page version into the workspace's overlay: append a
+    /// `page_versions` row + UPSERT the `workspace_refs` row (recording
+    /// `base_version_id` = main head at first touch). Does NOT touch the
+    /// `pages` mirror or main `refs` — main is untouched until merge.
+    /// Returns the new version's id.
+    func workspaceWritePage(
+        workspaceID: String, pageID: PageID, title: String, body: String
+    ) throws -> String
+
+    /// Resolve the workspace's current version id for a page (overlay read).
+    /// Returns nil if the workspace hasn't touched this page.
+    func workspacePageVersion(workspaceID: String, pageID: PageID) throws -> String?
+
+    /// Attempt a fast-forward-only merge. For each workspace_ref: if main head
+    /// == base_version_id (or base is nil = page created in workspace), fast-
+    /// forward (repoint main ref + update mirror + links/FTS). Any divergence
+    /// → park the workspace as `conflicted` (durable, retryable). On success,
+    /// set status to `merged`.
+    func workspaceMerge(workspaceID: String) throws
+
+    /// Abandon a workspace: set status to `abandoned` + delete its
+    /// `workspace_refs`. Orphaned versions/blobs fall to lazy GC.
+    func abandonWorkspace(id: String) throws
+
     // MARK: - System prompt (singleton document, v3)
 
     /// Read the user-editable singleton system-prompt document (projected at the
