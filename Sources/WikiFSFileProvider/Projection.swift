@@ -556,12 +556,26 @@ struct Projection {
             guard let ulid = Identity.pageULID(from: id),
                   let store = projection.openReadStore(),
                   let page = try? store.getPage(id: PageID(rawValue: ulid)) else { return nil }
+            // For by-title pages, size must match the rewritten bytes that
+            // contents(for:) will serve — a mismatch truncates cat (#216).
+            if id.rawValue.hasPrefix(Identity.byTitlePrefix),
+               let pages = try? store.listAllPagesOrderedByID() {
+                let map = projection.titleToFilenameMap(pages: pages)
+                let data = projection.byTitleContent(for: page, map: map)
+                return Self.pageFileNode(for: id, page: page, contentData: data)
+            }
             return Self.pageFileNode(for: id, page: page)
         },
         contentForLeaf: { projection, id in
             guard let ulid = Identity.pageULID(from: id),
                   let store = projection.openReadStore(),
                   let page = try? store.getPage(id: PageID(rawValue: ulid)) else { return nil }
+            // By-title view: rewrite [[wikilinks]] to relative Markdown links.
+            if id.rawValue.hasPrefix(Identity.byTitlePrefix),
+               let pages = try? store.listAllPagesOrderedByID() {
+                let map = projection.titleToFilenameMap(pages: pages)
+                return projection.byTitleContent(for: page, map: map)
+            }
             return Data(PageMarkdownFormat.fileContent(for: page).utf8)
         }
     )
@@ -1114,15 +1128,19 @@ struct Projection {
     }
 
     /// Build a file node for a page row, under whichever view `id` belongs to.
+    /// Pass `contentData` when the caller has already computed the rewritten
+    /// bytes (by-title view) so the reported `documentSize` matches what
+    /// `contents(for:)` will serve — a mismatch truncates `cat`.
     static func pageFileNode(for id: NSFileProviderItemIdentifier,
-                             page: WikiPage) -> ProjectedNode {
+                             page: WikiPage,
+                             contentData: Data? = nil) -> ProjectedNode {
         let raw = id.rawValue
         let isByTitle = raw.hasPrefix(Identity.byTitlePrefix)
         let name = isByTitle
             ? FilenameEscaping.byTitleFilename(title: page.title, pageID: page.id.rawValue)
             : FilenameEscaping.byIDFilename(pageID: page.id.rawValue)
         let parent = isByTitle ? Identity.pagesByTitle : Identity.pagesByID
-        let fileData = Data(PageMarkdownFormat.fileContent(for: page).utf8)
+        let fileData = contentData ?? Data(PageMarkdownFormat.fileContent(for: page).utf8)
         return .file(
             id: id, parent: parent, name: name, size: fileData.count,
             version: Data(String(page.version).utf8),
@@ -1130,6 +1148,27 @@ struct Projection {
                 "\(page.title)|\(page.updatedAt.timeIntervalSince1970)|\(page.version)".utf8),
             created: page.createdAt, modified: page.updatedAt
         )
+    }
+
+    /// Build a title → by-title-filename map for all pages. Used by the by-title
+    /// link rewriter so `[[wikilinks]]` resolve to sibling filenames.
+    private func titleToFilenameMap(pages: [WikiPage]) -> [String: String] {
+        var map: [String: String] = [:]
+        for page in pages {
+            map[page.title] = FilenameEscaping.byTitleFilename(
+                title: page.title, pageID: page.id.rawValue)
+        }
+        return map
+    }
+
+    /// Produce the rewritten by-title content for `page`: replaces `[[wikilinks]]`
+    /// with relative Markdown links pointing to sibling by-title files. The
+    /// returned `Data` is the single source of truth for both `documentSize`
+    /// (reported in `pageFileNode`) and the bytes served by `contents(for:)`.
+    private func byTitleContent(for page: WikiPage, map: [String: String]) -> Data {
+        let raw = PageMarkdownFormat.fileContent(for: page)
+        let rewritten = RelativeLinkRewriter.rewrite(raw) { map[$0] }
+        return Data(rewritten.utf8)
     }
 
     // MARK: - Enumeration
@@ -1231,14 +1270,18 @@ struct Projection {
     }
 
     /// All page rows projected as file nodes under the given view, ordered by id
-    /// (ULID == creation order).
+    /// (ULID == creation order). For the by-title view, builds a title map once
+    /// and computes rewritten content per page so `documentSize` matches the
+    /// rewritten bytes that `contents(for:)` will serve.
     private func pageNodes(byTitle: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
               let pages = try? store.listAllPagesOrderedByID() else { return [] }
+        let titleMap = byTitle ? titleToFilenameMap(pages: pages) : nil
         return pages.map { page in
             let id = byTitle ? Identity.pageByTitle(page.id.rawValue)
                              : Identity.pageByID(page.id.rawValue)
-            return Self.pageFileNode(for: id, page: page)
+            let contentData = titleMap.map { byTitleContent(for: page, map: $0) }
+            return Self.pageFileNode(for: id, page: page, contentData: contentData)
         }
     }
 
