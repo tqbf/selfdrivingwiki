@@ -37,7 +37,7 @@ struct PageDetailView: View {
                 EditableTitle(
                     title: store.draftTitle,
                     placeholder: "Untitled",
-                    isDisabled: store.isAgentRunning,
+                    isDisabled: false,
                     onCommit: renameCurrentPage
                 )
 
@@ -55,8 +55,7 @@ struct PageDetailView: View {
                             commitEdit()
                         }
                         .keyboardShortcut("s", modifiers: .command)
-                        .disabled(store.isAgentRunning
-                                  || store.draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(store.draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                         Button("Cancel", systemImage: "xmark.circle") {
                             cancelEdit()
@@ -70,12 +69,9 @@ struct PageDetailView: View {
                         }
                         .help("Toggle Outline")
                     } else {
-                        Button(store.isAgentRunning ? "Agent updating wiki…" : "Edit",
+                        Button("Edit",
                                systemImage: "pencil") { isEditing = true }
-                            .disabled(store.isAgentRunning)
-                            .help(store.isAgentRunning
-                                  ? "Editing is paused while the agent is updating the wiki"
-                                  : "Edit this page manually")
+                            .help("Edit this page manually")
                         if case .page(let id) = store.selection {
                             let pageTitle = store.summaries.first(where: { $0.id == id })?.title ?? ""
                             Button("Lint", systemImage: "checkmark.seal") {
@@ -86,7 +82,6 @@ struct PageDetailView: View {
                                         manager: manager, fileProvider: fileProvider)
                                 }
                             }
-                            .disabled(store.isAgentRunning)
                             .help("Fix [[wiki-link]] syntax and run LLM lint on this page")
                         }
                         if case .page(let pageID) = store.selection {
@@ -162,9 +157,6 @@ struct PageDetailView: View {
                 store.setTabEditing(tabID: id, isEditing: newValue)
             }
             if !newValue { caretCharIndex = nil }
-        }
-        .onChange(of: store.isAgentRunning) { _, isRunning in
-            if isRunning { isEditing = false }
         }
         .background { findShortcutButton }
         .overlay(alignment: .top) { findBarOverlay }

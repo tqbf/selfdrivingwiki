@@ -277,11 +277,6 @@ struct ChatView: View {
             }
             withChatOutline {
                 VStack(spacing: 0) {
-                    if showsEditingEnabledBanner {
-                        editingEnabledBanner
-                            .padding(.top, bannerTopReservation)
-                            .padding(.bottom, ChatMetrics.sectionSpacing)
-                    }
                     ChatTranscriptView(
                         events: displayMessages,
                         emptyStateMessage: transcriptEmptyMessage,
@@ -295,7 +290,7 @@ struct ChatView: View {
                     )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.horizontal, PageEditorMetrics.contentInset)
-                        .padding(.top, showsEditingEnabledBanner || chatSummary != nil ? 0 : ChatMetrics.chatTopInset)
+                        .padding(.top, chatSummary != nil ? 0 : ChatMetrics.chatTopInset)
                     if let pending = livePendingPermission {
                         PermissionApprovalView(permission: pending) { optionId in
                             Task { await launcher.resolvePendingPermission(optionId: optionId) }
@@ -428,43 +423,11 @@ struct ChatView: View {
         .padding(.bottom, ChatMetrics.sectionSpacing)
     }
 
-    // MARK: - Editing banner
+    // MARK: - Composer caption predicates
 
-    @ViewBuilder
-    private var editingEnabledBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "pencil.and.list.clipboard")
-                .font(.system(size: 13, weight: .semibold))
-            Text("Editing enabled — ingestion is paused while the agent is responding.")
-                .font(.subheadline)
-                .fontWeight(.medium)
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity)
-        .background(.orange.opacity(0.15))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(.orange.opacity(0.3), lineWidth: 1)
-        }
-    }
-
-    private var showsEditingEnabledBanner: Bool {
-        Self.showsEditingBanner(isGenerating: launcher.isGenerating)
-    }
-
-    /// Pure predicate: true only when a write-capable chat session is actively
-    /// generating. Kept static so tests can verify the matrix without
-    /// constructing a view. Chats are always write-capable.
-    static func showsEditingBanner(isGenerating: Bool) -> Bool {
-        isGenerating
-    }
-
-    /// Pure predicate for the composer caption (issue #235). Returns the visible
-    /// caption text shown under the composer, or nil when nothing is queued/busy.
-    /// Kept static so tests can verify the full state matrix without a view tree.
+    /// Pure predicate for the composer caption. Returns the visible caption text
+    /// shown under the composer, or nil when nothing is queued/busy. Kept static
+    /// so tests can verify the full state matrix without a view tree.
     static func composerCaptionText(
         isAwaitingGenerationSlot: Bool,
         hasChatID: Bool,
@@ -474,17 +437,14 @@ struct ChatView: View {
         if isAwaitingGenerationSlot {
             return "Waiting for the other session to finish before sending…"
         }
-        guard hasChatID, !isLiveChat else { return nil }
         if isGenerating {
-            return "Another chat is responding — wait or stop it."
+            // Live chat: agent is responding. Persisted chat: a different chat
+            // is generating and the launcher is busy.
+            return isLiveChat
+                ? "Agent is responding…"
+                : "Another chat is responding — wait or stop it."
         }
         return nil
-    }
-
-    private var bannerTopReservation: CGFloat {
-        showsDebugControls
-            ? ChatMetrics.debugTopInset + ChatMetrics.controlsBandHeight
-            : 0
     }
 
     // MARK: - Composer

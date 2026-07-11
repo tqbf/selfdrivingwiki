@@ -31,19 +31,15 @@ struct SystemPromptDetailView: View {
                             toggleEditing()
                         }
                         .keyboardShortcut("s", modifiers: .command)
-                        .disabled(store.isAgentRunning)
 
                         Button("Cancel", systemImage: "xmark.circle") {
                             isEditing = false
                         }
                         .keyboardShortcut(.escape, modifiers: [])
                     } else {
-                        Button(store.isAgentRunning ? "Agent updating wiki…" : "Edit",
+                        Button("Edit",
                                systemImage: "pencil") { isEditing = true }
-                            .disabled(store.isAgentRunning)
-                            .help(store.isAgentRunning
-                                  ? "Editing is paused while the agent is updating the wiki"
-                                  : "Edit the system prompt source")
+                            .help("Edit the system prompt source")
                     }
                 }
             }
@@ -59,16 +55,9 @@ struct SystemPromptDetailView: View {
                 reader
             }
         }
-        // Read-only while the agent runs (decision #6); autosave paused in the model.
-        .disabled(store.isAgentRunning)
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
         .onChange(of: store.selection) {
             isEditing = false
-        }
-        .onChange(of: store.isAgentRunning) { _, isRunning in
-            if isRunning {
-                isEditing = false
-            }
         }
     }
 

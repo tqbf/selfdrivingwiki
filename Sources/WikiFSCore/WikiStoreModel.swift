@@ -197,19 +197,20 @@ public final class WikiStoreModel {
         didSet { if draftSystemPrompt != oldValue { isSystemPromptDirty = true } }
     }
 
-    /// True while a `claude -p` operation is running against THIS wiki (Phase C /
-    /// decision #6). The editor binds this to go read-only with a banner, and
-    /// autosave is paused — so in-app edits can't clobber the agent's `wikictl`
-    /// writes (last-writer-wins race). Set via `beginAgentRun` / `endAgentRun`.
-    public private(set) var isAgentRunning = false
+    /// Number of concurrent agent runs (interactive sessions or one-shot
+    /// `claude -p` operations) currently writing to THIS wiki. When the LAST
+    /// run ends, the model reloads from the store so the sidebar reflects the
+    /// agent's writes. No longer a mutex — CAS (page versions, W0) prevents
+    /// data races so concurrent edits are fine; `save()` catches
+    /// `PageConflictError` and surfaces a "Page Was Updated" dialog.
+    public private(set) var agentRunCount = 0
 
     /// True while an ingest is in progress — covers BOTH the pdf2md extraction
-    /// phase AND the agent run. Unlike `isAgentRunning` (which only fires at
-    /// spawn commit via `beginAgentRun`), this is set at the top of
-    /// `runMultiIngest` BEFORE extraction begins, so the Edit preflight blocks
-    /// during the extraction window too (issue #235). The ingest's own `run()`
-    /// preflight checks `isAgentRunning`, NOT this flag, so there is no
-    /// self-deadlock. Cleared on early exit or process termination.
+    /// phase AND the agent run. Set at the top of `runMultiIngest` BEFORE
+    /// extraction begins, so the Edit preflight blocks during the extraction
+    /// window too (issue #235). The ingest's own `run()` preflight does NOT
+    /// check this flag, so there is no self-deadlock. Cleared on early exit or
+    /// process termination.
     public private(set) var isIngestInProgress = false
 
     private let store: WikiStore
@@ -1014,9 +1015,9 @@ public final class WikiStoreModel {
     public func titleChanged() { isDraftDirty = true }
 
     private func scheduleAutosave() {
-        // Paused while an agent runs (decision #6): an in-app autosave must never
-        // clobber the agent's concurrent `wikictl` writes.
-        guard !isAgentRunning else { return }
+        // No edit-lock pause — CAS (page versions, W0) prevents data races. If
+        // another writer committed a new version, `save()` throws
+        // `PageConflictError` and surfaces a "Page Was Updated" dialog.
         autosaveTask?.cancel()
         autosaveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(500))
@@ -1231,8 +1232,7 @@ public final class WikiStoreModel {
     /// Called on each keystroke in the system-prompt editor; debounced like the
     /// page editor (separate task so the two tracks don't cancel each other).
     public func systemPromptChanged() {
-        // Paused while an agent runs (decision #6), same as the page autosave.
-        guard !isAgentRunning else { return }
+        // No edit-lock pause — CAS prevents data races (same as page autosave).
         isSystemPromptDirty = true
         systemPromptAutosaveTask?.cancel()
         systemPromptAutosaveTask = Task { [weak self] in
@@ -1304,56 +1304,35 @@ public final class WikiStoreModel {
 
     // MARK: - Agent run lock (Phase C, decision #6)
 
-    /// The SINGLE mutation point for `isAgentRunning`. Every public entry point
-    /// below routes through here so the lock invariant lives in exactly one place:
-    /// pending drafts are flushed on ACQUIRE (so an in-flight edit isn't lost to a
-    /// concurrent agent write), and the `reload` flag governs the from-source
-    /// rebuild on RELEASE. The full session teardown (`endAgentRun`) reloads so the
-    /// sidebar reflects the agent's writes; the per-turn release
-    /// (`setAgentRunning(false)`) does not, because the session is still alive and
-    /// `endAgentRun()` will do the full reload when it actually ends.
-    private func mutateAgentRunning(_ running: Bool, reload: Bool) {
-        if running {
-            flushPendingSaves()
-        }
-        isAgentRunning = running
-        if reload {
+    // MARK: - Agent run lifecycle (ref-counted, no edit lock)
+
+    /// Increment the agent-run counter. Called at spawn commit (spawn success).
+    /// Flushes pending drafts first so an in-flight edit lands in the store
+    /// before the agent starts its own writes.
+    public func agentRunStarted() {
+        flushPendingSaves()
+        agentRunCount += 1
+    }
+
+    /// Decrement the agent-run counter. Called from the process's
+    /// `terminationHandler`. When the last run ends, rebuilds the lists from
+    /// the store so the sidebar reflects everything the agent wrote, and
+    /// reloads the open document's draft from the (possibly agent-rewritten)
+    /// source.
+    public func agentRunEnded() {
+        guard agentRunCount > 0 else { return }
+        agentRunCount -= 1
+        if agentRunCount == 0 {
             reloadFromStore()
             loadDrafts(for: loadedSelection)
         }
-    }
-
-    /// Enter the edit-locked state for the duration of a `claude -p` run: flush any
-    /// pending edits FIRST (so nothing in-flight is lost), then mark the model
-    /// running so the editor goes read-only and autosave is paused. Pausing
-    /// autosave is what prevents the in-app save from clobbering the agent's
-    /// `wikictl` writes. The live change-bridge `reloadFromStore()` is unaffected —
-    /// the sidebar still fills in as the agent's writes land.
-    public func beginAgentRun() {
-        mutateAgentRunning(true, reload: false)
-    }
-
-    /// Exit the edit-locked state (from the spawn's `terminationHandler`, so a
-    /// killed agent still re-enables editing). Rebuilds the lists from the store so
-    /// the sidebar reflects everything the agent wrote, and reloads the open
-    /// document's draft from the (possibly agent-rewritten) source.
-    public func endAgentRun() {
-        mutateAgentRunning(false, reload: true)
-    }
-
-    /// Lightweight toggle for per-turn query edit-lock: flush on acquire, no
-    /// reload on release (the session is still alive; `endAgentRun()` handles the
-    /// full reload when the session actually ends).
-    public func setAgentRunning(_ running: Bool) {
-        mutateAgentRunning(running, reload: false)
     }
 
     // MARK: - Ingest progress flag (issue #235)
 
     /// Mark an ingest as in progress. Called at the top of `runMultiIngest`
     /// BEFORE extraction begins, so the Edit preflight (`isIngestInProgress`)
-    /// blocks during the extraction window too — `isAgentRunning` alone misses
-    /// it because `beginAgentRun()` only fires at spawn commit.
+    /// blocks during the extraction window too.
     public func beginIngest() {
         isIngestInProgress = true
     }

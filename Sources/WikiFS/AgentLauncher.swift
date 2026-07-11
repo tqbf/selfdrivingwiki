@@ -16,8 +16,8 @@ import ACPModel
 /// `@MainActor @Observable`: the view binds `events`, `isRunning`, `exitStatus`,
 /// `preflightError`, and `logFileURL`. State is mutated on the main actor from the
 /// pipe `readabilityHandler`s — we NEVER block on `waitUntilExit`; completion
-/// arrives via `terminationHandler`, which is also where the per-wiki edit lock
-/// releases.
+/// arrives via `terminationHandler`, which is also where the per-wiki
+/// agent-run lifecycle ref-count is decremented.
 @MainActor
 @Observable
 final class AgentLauncher {
@@ -351,25 +351,12 @@ final class AgentLauncher {
     /// from tearing down the new session. `finish`'s `isRunning` guard alone
     /// can't tell the sessions apart.
     @ObservationIgnored private var currentRunToken: UUID?
-    /// The edit-lock release closure for the current run (nil when no lock is held).
-    /// Stored so `finish()` — and thus the completion watchdog — can release the
-    /// lock even when the process's `terminationHandler` never fires. Without this,
-    /// a process that dies unreconciled strands `store.isAgentRunning` (and the
-    /// "Agent is updating the wiki" banner) forever.
+    /// The agent-run-lifecycle release closure for the current run (nil when no run is active).
+    /// Stored so `finish()` — and thus the completion watchdog — can decrement
+    /// the run counter even when the process's `terminationHandler` never fires.
+    /// Without this, a process that dies unreconciled strands the sidebar
+    /// without its final reload.
     @ObservationIgnored private var onUnlockHandler: (@MainActor @Sendable () -> Void)?
-    /// Per-turn edit-lock callback for interactive query sessions. Fires on every
-    /// REAL `isGenerating` transition (acquire on `true`, release on `false`). The
-    /// runner installs it so the per-turn lock releases BETWEEN turns even when the
-    /// Query view is not on screen — the old view-side `.onChange(of: isGenerating)`
-    /// never fired while the view was unmounted, so the lock stuck until session end.
-    /// `nil` for one-shot runs (those lock for the whole run via `onLock`/`onUnlock`
-    /// only). Cleared in `finish()` and `resetRunArtifacts()`.
-    ///
-    /// Per-turn semantics (Step 6): for an Edit-mode interactive session, the
-    /// generation gate release (per turn) now genuinely lets ingest run between
-    /// turns. The per-turn lock release via `onTurnBoundary(false)` is the mechanism
-    /// that makes this visible to the wiki store.
-    @ObservationIgnored private var onTurnBoundaryHandler: (@MainActor (Bool) -> Void)?
     /// Persistence callback for an interactive query chat (issue #119).
     /// Receives the not-yet-persisted TAIL of `events` at each turn boundary and
     /// once more at `finish()` — never the full array, so repeated flushes stay
@@ -452,7 +439,6 @@ final class AgentLauncher {
     private func setGenerating(_ value: Bool) {
         guard isGenerating != value else { return }
         isGenerating = value
-        onTurnBoundaryHandler?(value)
         if value {
             startPendingPermissionPoller()
         } else {
@@ -550,18 +536,13 @@ final class AgentLauncher {
     ///    alive." It is NOT coupled to gate ownership — an interactive session's
     ///    `isRunning` stays true across idle turns when the gate is free.
     ///
-    /// 2. **Edit lock** (`store.isAgentRunning`), driven by TWO mechanisms:
-    ///      - **Session level** (`onLock`/`onUnlock` around the spawn): for
-    ///        one-shot runs (ingest/lint/query) and the lifetime of an interactive
-    ///        query session, the lock is `true` while a `claude` process is running.
-    ///      - **Per-turn** (`onTurnBoundary`, interactive query ONLY): for an
-    ///        edit-enabled interactive query, the lock additionally RELEASES between
-    ///        turns (`messageStop`/`result`) and RE-ACQUIRES on the next send — so
-    ///        the user can ingest while the query agent is idle mid-session. Because
-    ///        the generation gate now releases between turns too, ingest can actually
-    ///        run during that window (the gate is free when editing is unlocked).
-    ///        This is owned by `setGenerating` (single source of truth for the
-    ///        transition), not by any View. Neither extraction path touches the lock.
+    /// 2. **Agent-run lifecycle** (`store.agentRunCount`, ref-counted via
+    ///    `onLock`/`onUnlock` around the spawn): tracks how many `claude`
+    ///    processes are writing to this wiki. When the last run ends, the model
+    ///    reloads from the store so the sidebar reflects the agent's writes.
+    ///    No edit lock — CAS (page versions, W0) prevents data races, so
+    ///    concurrent agent runs and in-app edits are fine. `save()` catches
+    ///    `PageConflictError` and surfaces a "Page Was Updated" dialog.
     ///
     /// 3. **Extraction slot** (`extractionWaiters` / `awaitExtractionSlot` /
     ///    `releaseExtractionSlot`, held ↔ `isExtractionSlotBusy`): serializes ONLY
@@ -655,7 +636,7 @@ final class AgentLauncher {
     }
 
     /// True while a pdf2md conversion holds the extraction lock. Independent of
-    /// `isRunning` (generation gate) and `store.isAgentRunning` (edit lock).
+    /// `isRunning` (generation gate) and `store.agentRunCount` (agent-run lifecycle).
     private(set) var isExtractionSlotBusy = false
 
     /// The number of extraction requests currently queued for the slot (test seam).
@@ -667,7 +648,7 @@ final class AgentLauncher {
     /// nothing and must simply return (no release). Cancellation-safe: a cancelled
     /// waiter self-removes from the queue and is never handed the slot. Does NOT
     /// set `isRunning`, `isExtracting`, or fire `onLock` — fully independent of the
-    /// generation gate and edit lock.
+    /// generation gate and agent-run lifecycle.
     func awaitExtractionSlot() async -> Bool {
         // Fast path: slot free and nobody queued — acquire atomically. No
         // suspension point, so no other main-actor task can interleave.
@@ -866,8 +847,9 @@ final class AgentLauncher {
 
         // PREFLIGHT + STAGING run AFTER the gate is acquired, so any early-return
         // below must `isRunning = false` + `releaseGenerationSlot()` to hand the gate
-        // to the next waiter (or free it). The edit lock (`onLock`) fires only on a
-        // successful spawn, so a preflight/staging failure does NOT lock editing.
+        // to the next waiter (or free it). The agent-run lifecycle (`onLock`)
+        // fires only on a successful spawn, so a preflight/staging failure
+        // does not increment the run counter.
         resetRunArtifacts()
 
         // Load agent command config fresh at spawn time so Settings changes apply
@@ -970,10 +952,8 @@ final class AgentLauncher {
         runStartedAt = now
         lastActivityAt = now
         openLogFiles(in: scratch)
-        // A one-shot run is "generating" for its whole duration. One-shot runs
-        // never install `onTurnBoundaryHandler` (it stays nil here), so this is a
-        // pure UI flag — the edit lock for one-shot runs is owned by
-        // `onLock`/`onUnlock` around the spawn, not the per-turn callback.
+        // A one-shot run is "generating" for its whole duration. The edit lock
+        // for one-shot runs is owned by `onLock`/`onUnlock` around the spawn.
         setGenerating(true)
         // SPAWN COMMIT: the agent phase now begins. Assign the agent-phase flag
         // (`ingestingSourceIDs`) here — NOT while queued for the gate — so the
@@ -1104,7 +1084,7 @@ final class AgentLauncher {
             // the "Ingesting…" row label or the cross-file Ingest greyout. finish()
             // is not called on this path, so we clear explicitly here.
             self.ingestingSourceIDs = []
-            releaseEditLock()
+            releaseRunLifecycle()
             // Release the generation gate so a queued peer isn't stranded.
             // Also clear isRunning (set above at gate acquire; spawn failed).
             isRunning = false
@@ -1146,8 +1126,9 @@ final class AgentLauncher {
     ) async {
         // Safety net: if any code path exits without calling finish() (e.g. an
         // unexpected throw from a future adding await between phases), ensure the
-        // generation gate + edit lock are released. finish() is idempotent (guards
-        // isRunning), so this is a no-op when finish() was already called.
+        // generation gate + agent-run lifecycle are released. finish() is
+        // idempotent (guards isRunning), so this is a no-op when finish() was
+        // already called.
         defer {
             if isRunning { finish(status: -1) }
         }
@@ -1545,7 +1526,6 @@ final class AgentLauncher {
         historySeed: [AgentEvent] = [],
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
-        onTurnBoundary: @escaping @MainActor (Bool) -> Void,
         onTranscript: (@MainActor ([AgentEvent]) -> Void)? = nil
     ) async {
         // No gate acquisition here — the interactive session does NOT hold the gate
@@ -1667,12 +1647,6 @@ final class AgentLauncher {
         self.ingestingSourceIDs = []
         onLock()
         onUnlockHandler = onUnlock
-        // Install the per-turn callback now so it's ready when the first turn's
-        // transition fires. It fires on every real transition for the session's
-        // lifetime; `finish()` / `resetRunArtifacts()` clear it. This is what lets
-        // the lock release between turns EVEN WHEN the Query view is not on screen
-        // (the old view `.onChange` never fired while unmounted).
-        onTurnBoundaryHandler = onTurnBoundary
         // Install the transcript sink alongside the per-turn callback (issue #119):
         // both are per-session callbacks assigned once resetRunArtifacts() has run
         // (which clears any stale sink from a prior run).
@@ -1771,7 +1745,7 @@ final class AgentLauncher {
             runningKind = nil
             currentProcessID = nil
             lastActivityAt = Date()
-            releaseEditLock()
+            releaseRunLifecycle()
             // Clean up the pre-displayed user text (backend never started).
             firstMessagePreDisplayed = false
             // Cancel any queued send task (shouldn't exist yet, but guard for safety).
@@ -1843,8 +1817,8 @@ final class AgentLauncher {
                 self.persistedEventCount = self.events.count
                 self.firstMessagePrePersisted = false
             }
-            self.setGenerating(true)    // fires onTurnBoundary(true) → edit lock (Edit only)
-            DebugLog.agent("sendInteractiveMessage: turn start (setGenerating=true) → onTurnBoundary(true)") // TEMP DEBUG
+            self.setGenerating(true)    // UI flag: ChatView banner + send guard
+            DebugLog.agent("sendInteractiveMessage: turn start (setGenerating=true)") // TEMP DEBUG
             self.lastActivityAt = Date()
             // Send the turn and consume the per-turn stream. The backend writes
             // the NDJSON line to stdin; the stream finishes at `.messageStop`
@@ -1857,7 +1831,7 @@ final class AgentLauncher {
                 if AgentEvent.endsGeneration(event) {
                     self.setGenerating(false)
                     self.flushTranscript()
-                    DebugLog.agent("sendInteractiveMessage: turn end (endsGeneration) → onTurnBoundary(false) + flushTranscript") // TEMP DEBUG
+                    DebugLog.agent("sendInteractiveMessage: turn end (endsGeneration) → flushTranscript") // TEMP DEBUG
                     if Self.releasesGenerationSlotPerTurn(
                         isInteractiveSession: self.isInteractiveSession) {
                         self.releaseGenerationSlot()
@@ -2103,10 +2077,6 @@ final class AgentLauncher {
         interactiveSendTask?.cancel()
         interactiveSendTask = nil
         isAwaitingGenerationSlot = false
-        // Clear the per-turn callback before the final state transition: the
-        // session is ending, so the lock's final release is the session-level
-        // `onUnlock` (via `releaseEditLock`), not a per-turn boundary.
-        onTurnBoundaryHandler = nil
         setGenerating(false)
         lastActivityAt = Date()
         // Slice 2: stop the pending-permission poller and clear surfaced pending
@@ -2114,9 +2084,10 @@ final class AgentLauncher {
         // in-flight always-ask continuations.
         stopPendingPermissionPoller()
         pendingPermissions = []
-        // Release the edit lock (`store.isAgentRunning`) from here — NOT from the
-        // `onExit` callback — so EVERY completion path releases it.
-        releaseEditLock()
+        // Release the agent-run lifecycle (decrement `store.agentRunCount`)
+        // from here — NOT from the `onExit` callback — so EVERY completion
+        // path decrements it.
+        releaseRunLifecycle()
         // Release the generation gate if still held. For one-shot runs this is the
         // primary release path (they hold the gate through finish). For interactive
         // sessions this covers the edge case where the process died MID-TURN (the
@@ -2125,10 +2096,10 @@ final class AgentLauncher {
         releaseGenerationSlot()
     }
 
-    /// Release the run's edit lock exactly once. Idempotent: clearing the stored
+    /// Release the agent-run lifecycle closure exactly once. Idempotent: clearing the stored
     /// handler makes repeated calls (from `finish()`, a spawn-failure teardown, or
     /// the watchdog) a no-op.
-    private func releaseEditLock() {
+    private func releaseRunLifecycle() {
         onUnlockHandler?()
         onUnlockHandler = nil
     }
@@ -2148,9 +2119,6 @@ final class AgentLauncher {
         stderr = ""
         exitStatus = nil
         isInteractiveSession = false
-        // Clear the per-turn callback first so this reset transition doesn't fire
-        // a stale handler; a reset is the start of a new run, not a turn boundary.
-        onTurnBoundaryHandler = nil
         setGenerating(false)
         runningKind = nil
         logFileURL = nil

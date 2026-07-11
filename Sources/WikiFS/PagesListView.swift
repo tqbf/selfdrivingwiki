@@ -357,7 +357,7 @@ extension PagesListViewController {
         let lint = menuItem(
             title: isBatch ? "Lint \(count) Pages" : "Lint Page",
             systemImage: "checkmark.seal", action: #selector(lintAction(_:)), payload: payload)
-        lint.isEnabled = !(store?.isAgentRunning ?? false)
+        // No edit-lock disable — CAS prevents data races; lint queues via the gate.
         menu.addItem(lint)
 
         menu.addItem(.separator())
