@@ -52,6 +52,42 @@ struct ChatPersistenceTests {
         #expect(tail == Array(sampleEvents[2...]))
     }
 
+    // MARK: - History seeding (continue chat shows full transcript)
+
+    // When `startInteractiveQuery` receives a `historySeed`, it pre-populates
+    // `events` and sets `persistedEventCount` so the seeded (already-stored)
+    // rows are never re-persisted by `flushTranscript`. The pure invariant is:
+    // `unflushedTail(events: persistedCount:)` must return ONLY the new tail.
+
+    @Test func historySeedSetup_makesUnflushedTailEmptyBeforeNewEvents() {
+        // A continued chat seeds 3 prior events; persistedEventCount is set to 3.
+        // Before any new events arrive, flushTranscript would produce nothing.
+        let seeded: [AgentEvent] = [
+            .userText("old question"),
+            .assistantText("old answer"),
+            .toolUse(name: "Bash", inputSummary: "ls"),
+        ]
+        let tail = AgentLauncher.unflushedTail(events: seeded, persistedCount: seeded.count)
+        #expect(tail.isEmpty)
+    }
+
+    @Test func historySeedSetup_flushOnlyPersistsNewTail() {
+        // Seed 3 prior events, then append 2 new events (the continue turn).
+        // flushTranscript must produce only the 2 new events, not the 3 seeded.
+        let seeded: [AgentEvent] = [
+            .userText("old question"),
+            .assistantText("old answer"),
+            .systemInit(model: "claude"),
+        ]
+        var events = seeded
+        events.append(.userText("continue question"))
+        events.append(.assistantText("continue answer"))
+        let tail = AgentLauncher.unflushedTail(events: events, persistedCount: seeded.count)
+        #expect(tail.count == 2)
+        #expect(tail[0] == .userText("continue question"))
+        #expect(tail[1] == .assistantText("continue answer"))
+    }
+
     // MARK: - End-to-end sink installation via startInteractiveQuery
 
     // No existing seam lets tests feed stdout lines into `AgentLauncher` without
