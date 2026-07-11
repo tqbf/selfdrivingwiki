@@ -161,9 +161,8 @@ struct WikiDetailView: View {
                     // driven rather than the old `isExtracting &&
                     // ingestingSourceIDs.contains` overload.
                     isThisFileExtracting: launcher.extractingSourceIDs.contains(file.id),
-                    // True when the edit lock is held but NO ingest is in flight —
-                    // a chat agent owns the lock.
-                    isEditLockedExternally: store.isAgentRunning && launcher.ingestingSourceIDs.isEmpty,
+                    // No edit lock — CAS prevents data races. Only extraction locks editing.
+                    isEditLockedExternally: false,
                     runIngest: runIngest,
                     launcher: launcher,
                     extractionCoordinator: extractionCoordinator,

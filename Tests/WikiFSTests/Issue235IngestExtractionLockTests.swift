@@ -6,11 +6,11 @@ import WikiFSCore
 /// Tests for issue #235: preventing silent hangs when starting a chat during
 /// an ingest's extraction phase.
 ///
-/// Three concerns:
+/// Two concerns:
 /// 1. The `shouldBlockEditStart` predicate — chat preflight must block during
-///    extraction (via `isIngestInProgress`), not just during the agent run
-///    (via `isAgentRunning`). Chats are always write-capable, so they are
-///    always subject to the edit-lock preflight (the read-only Ask mode is gone).
+///    extraction (via `isIngestInProgress`). The old `isAgentRunning` edit-lock
+///    guard was removed — CAS (page versions, W0) prevents data races, so
+///    concurrent agent runs are fine.
 /// 2. The `isIngestInProgress` lifecycle on `WikiStoreModel`.
 /// 3. The `composerCaptionText` predicate — the waiting state must surface as
 ///    visible text (not just a tooltip).
@@ -20,28 +20,15 @@ struct Issue235IngestExtractionLockTests {
     // MARK: - shouldBlockEditStart predicate
 
     @Test func chatBlockedWhenIngestInProgress() {
-        // Extraction phase: isAgentRunning is false but isIngestInProgress is true.
-        // Chat must be blocked (the core #235 fix).
+        // Extraction phase: isIngestInProgress is true. Chat must be blocked.
         #expect(AgentOperationRunner.shouldBlockEditStart(
-            isAgentRunning: false, isIngestInProgress: true))
-    }
-
-    @Test func chatBlockedWhenAgentRunning() {
-        // Agent phase: isAgentRunning is true. Chat is blocked (existing behavior).
-        #expect(AgentOperationRunner.shouldBlockEditStart(
-            isAgentRunning: true, isIngestInProgress: false))
-    }
-
-    @Test func chatBlockedWhenBothInProgress() {
-        // Both flags set — still blocked.
-        #expect(AgentOperationRunner.shouldBlockEditStart(
-            isAgentRunning: true, isIngestInProgress: true))
+            isIngestInProgress: true))
     }
 
     @Test func chatAllowedWhenIdle() {
-        // Neither flag set — no ingest, no agent. Chat is free to start.
+        // No ingest in progress — chat is free to start.
         #expect(!AgentOperationRunner.shouldBlockEditStart(
-            isAgentRunning: false, isIngestInProgress: false))
+            isIngestInProgress: false))
     }
 
     // MARK: - isIngestInProgress lifecycle
@@ -65,11 +52,11 @@ struct Issue235IngestExtractionLockTests {
         store.endIngest()
         #expect(!store.isIngestInProgress)
 
-        // Independent of isAgentRunning (extraction vs. spawn-commit gap).
-        #expect(!store.isAgentRunning)
+        // Independent of agentRunCount (extraction vs. spawn-commit gap).
+        #expect(store.agentRunCount == 0)
         store.beginIngest()
         #expect(store.isIngestInProgress)
-        #expect(!store.isAgentRunning)  // agent lock not yet taken
+        #expect(store.agentRunCount == 0)  // agent run not yet started
     }
 
     // MARK: - composerCaptionText predicate

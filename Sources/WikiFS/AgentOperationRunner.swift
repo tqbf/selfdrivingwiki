@@ -209,8 +209,8 @@ enum AgentOperationRunner {
             launcher: launcher,
             store: store,
             manager: manager,
-            fileProvider: fileProvider,
-            takeEditLock: false)
+            fileProvider: fileProvider
+        )
     }
 
     static func startChat(
@@ -231,13 +231,13 @@ enum AgentOperationRunner {
             return
         }
 
-        // Chats are write-capable, so they must take the edit lock. Refuse to
-        // start if an ingest is in progress (extraction OR agent phase) or if
-        // another agent already holds the lock (issue #235).
+        // Chats are write-capable, so they must flush pending drafts on agent
+        // start. Refuse to start only if an ingest is in progress (extraction OR
+        // agent phase issue #235). The old `isAgentRunning` edit-lock guard was
+        // removed — CAS (page versions, W0) prevents data races.
         if Self.shouldBlockEditStart(
-            isAgentRunning: store.isAgentRunning,
             isIngestInProgress: store.isIngestInProgress) {
-            DebugLog.agent("startChat: edit-blocked (isAgentRunning=\(store.isAgentRunning) isIngestInProgress=\(store.isIngestInProgress))") // TEMP DEBUG
+            DebugLog.agent("startChat: edit-blocked (isIngestInProgress=\(store.isIngestInProgress))") // TEMP DEBUG
             launcher.preflightError = "An ingestion is in progress. Wait for it to finish before starting a chat."
             return
         }
@@ -261,7 +261,9 @@ enum AgentOperationRunner {
             store.retargetActiveTabToChat(chatID: chat.id)
         }
 
-        // Chats always take the edit lock.
+        // Start the interactive session. The agent-run lifecycle is ref-counted
+        // (agentRunStarted/agentRunEnded) for sidebar reload on last-run-end;
+        // no edit lock — CAS (page versions, W0) prevents data races.
         DebugLog.agent("startChat: calling launcher.startInteractiveQuery wikiID=\(wikiID) chatID=\(chat?.id.rawValue ?? "nil")") // TEMP DEBUG
         await launcher.startInteractiveQuery(
             firstMessage: trimmed,
@@ -277,12 +279,8 @@ enum AgentOperationRunner {
             // The model seeded the first user message at chat creation; tell the
             // launcher so it skips double-inserting it on the first flush.
             firstMessagePrePersisted: chat != nil,
-            onLock: { store.beginAgentRun() },
-            onUnlock: { store.endAgentRun() },
-            // Per-turn edit lock: release between turns (re-acquire on the next
-            // send). Lives in the launcher — not the view — so it fires even when
-            // the Query view is unmounted (the bug fix).
-            onTurnBoundary: { store.setAgentRunning($0) },
+            onLock: { store.agentRunStarted() },
+            onUnlock: { store.agentRunEnded() },
             // Weak store: if the user switches wikis mid-session the model may be
             // torn down — persistence degrades to a no-op rather than writing into
             // the wrong wiki (issue #119).
@@ -309,18 +307,15 @@ enum AgentOperationRunner {
     // MARK: - Pure predicates (issue #235)
 
     /// Whether a write-capable chat session should be blocked from starting
-    /// because an ingest is in progress or another agent holds the edit lock.
-    /// Pure so the (isAgentRunning × isIngestInProgress) matrix is unit-
-    /// testable without driving a live launcher or store. Used by both
-    /// `startChat` and `continueChat`.
-    ///
-    /// `isIngestInProgress` covers the extraction window (pdf2md) that
-    /// `isAgentRunning` misses (it only fires at spawn commit).
+    /// because an ingest is in progress. The edit lock (`isAgentRunning`) was
+    /// removed — CAS (page versions, W0) prevents data races, so concurrent
+    /// agent runs are fine. Only extraction (pdf2md) still blocks, because it
+    /// is resource-intensive and can't handle concurrent writes. Pure so the
+    /// predicate is unit-testable without driving a live launcher or store.
     static func shouldBlockEditStart(
-        isAgentRunning: Bool,
         isIngestInProgress: Bool
     ) -> Bool {
-        isAgentRunning || isIngestInProgress
+        isIngestInProgress
     }
 
     // MARK: - Continue a persisted chat (D3, seeded-fallback)
@@ -525,13 +520,12 @@ enum AgentOperationRunner {
             DebugLog.agent("continueChat: idle — taking over directly") // TEMP DEBUG
         }
 
-        // Edit-lock sanity: refuse if an ingest is in progress (extraction OR
-        // agent phase) or holds the lock (issue #235). Chats are always
-        // write-capable, so they always need the edit lock.
+        // Refuse if an ingest is in progress (issue #235). The old
+        // `isAgentRunning` guard was removed — CAS (page versions, W0)
+        // prevents data races, so concurrent agent runs are fine.
         if Self.shouldBlockEditStart(
-            isAgentRunning: store.isAgentRunning,
             isIngestInProgress: store.isIngestInProgress) {
-            DebugLog.agent("continueChat: edit-blocked (isAgentRunning=\(store.isAgentRunning) isIngestInProgress=\(store.isIngestInProgress))") // TEMP DEBUG
+            DebugLog.agent("continueChat: edit-blocked (isIngestInProgress=\(store.isIngestInProgress))") // TEMP DEBUG
             launcher.preflightError = "An ingestion is in progress. Wait for it to finish before starting a chat."
             return
         }
@@ -560,9 +554,8 @@ enum AgentOperationRunner {
             wikictlDirectory: HelpersLocation.wikictlDirectory,
             chatID: chatID.rawValue,
             historySeed: history.map(\.event),
-            onLock: { store.beginAgentRun() },
-            onUnlock: { store.endAgentRun() },
-            onTurnBoundary: { store.setAgentRunning($0) },
+            onLock: { store.agentRunStarted() },
+            onUnlock: { store.agentRunEnded() },
             onTranscript: { [weak store] events in
                 store?.appendChatEvents(chatID: chatID, events: events)
             })
@@ -615,16 +608,9 @@ enum AgentOperationRunner {
         store: WikiStoreModel,
         manager: WikiManager,
         fileProvider: FileProviderSpike,
-        ingestingSourceIDs: Set<PageID> = [],
-        takeEditLock: Bool = true
+        ingestingSourceIDs: Set<PageID> = []
     ) async {
         guard let wikiID = manager.activeWikiID else { return }
-
-        // Refuse to start if we need the edit lock and another agent holds it.
-        if takeEditLock && store.isAgentRunning {
-            launcher.preflightError = "The query agent is currently editing the wiki. Wait for it to finish before ingesting."
-            return
-        }
 
         switch request {
         case .ingest:
@@ -645,9 +631,9 @@ enum AgentOperationRunner {
             systemPrompt: store.currentSystemPromptBody(),
             wikictlDirectory: HelpersLocation.wikictlDirectory,
             ingestingSourceIDs: ingestingSourceIDs,
-            onLock: { if takeEditLock { store.beginAgentRun() } },
+            onLock: { store.agentRunStarted() },
             onUnlock: {
-                if takeEditLock { store.endAgentRun() }
+                store.agentRunEnded()
                 // Ingest runs also clear the ingest-in-progress flag (issue #235).
                 if !ingestingSourceIDs.isEmpty { store.endIngest() }
             }

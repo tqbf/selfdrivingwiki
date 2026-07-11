@@ -233,9 +233,6 @@ struct SourceDetailView: View {
             }
         }
         .onChange(of: store.selection) { flushEditIfDirty(); isEditing = false }
-        .onChange(of: store.isAgentRunning) {
-            if $1 { flushEditIfDirty(); isEditing = false }
-        }
         .background { findShortcutButton }
         .overlay(alignment: .top) { findBarOverlay }
         .onChange(of: file.id) { findModel.dismiss() }
@@ -293,7 +290,7 @@ struct SourceDetailView: View {
                     title: displayName,
                     placeholder: "Untitled",
                     lineLimit: 2,
-                    isDisabled: store.isAgentRunning || isEditLockedExternally,
+                    isDisabled: isEditLockedExternally,
                     onCommit: { store.renameSource(id: file.id, to: $0) }
                 )
             } icon: {
@@ -355,8 +352,7 @@ struct SourceDetailView: View {
                             commitEdit()
                         }
                         .keyboardShortcut("s", modifiers: .command)
-                        .disabled(store.isAgentRunning
-                                  || editBuffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        .disabled(editBuffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                                   || (headVersion?.content == editBuffer))
 
                         Button("Cancel", systemImage: "xmark.circle") {
@@ -411,7 +407,7 @@ struct SourceDetailView: View {
                             Button("Refresh", systemImage: "arrow.clockwise") {
                                 Task { await runRefresh() }
                             }
-                            .disabled(isRefreshing || store.isAgentRunning)
+                            .disabled(isRefreshing)
                             .help("Re-fetch this source and append a new version")
                         }
                     }

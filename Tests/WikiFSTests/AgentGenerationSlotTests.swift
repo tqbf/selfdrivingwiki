@@ -258,22 +258,21 @@ struct AgentGenerationSlotTests {
         #expect(!AgentLauncher.releasesGenerationSlotPerTurn(isInteractiveSession: false))
     }
 
-    // MARK: - Edit-lock phase: extraction does not lock, agent generation does
+    // MARK: - Agent-run lifecycle: extraction does not increment, spawn commit does
 
-    /// `store.isAgentRunning` is the edit lock. It is `true` only while a claude
-    /// process is running (driven by `onLock`/`onUnlock`). Extraction
-    /// (`isExtracting`) does NOT lock editing. This mirrors the
-    /// `SourceDetailView`/`PageDetailView` banner binding
-    /// (`store.isAgentRunning`), so the query page shows the orange banner during
-    /// an agent run but NOT during extraction (AC.2 vs AC.3).
+    /// `store.agentRunCount` tracks how many claude processes are writing to
+    /// this wiki. It is incremented at spawn commit (via `onLock`/`onUnlock`)
+    /// and decremented at process termination. Extraction (`isExtracting`)
+    /// does NOT increment it. When the count is > 0 the model knows an agent
+    /// is active; when it drops to 0, the model reloads from store.
     ///
-    /// Step 6 rework: In the new model, `awaitGenerationSlot()` does NOT set
-    /// `isRunning` — process lifetime is decoupled from gate ownership. `isRunning`
-    /// is set only at actual spawn commit (inside `run()` / `startInteractiveQuery()`).
-    /// The edit lock (`store.isAgentRunning`) is still wired at spawn commit via
-    /// `onLock`, so the intent of this test is preserved: extraction does NOT lock
-    /// editing, and an agent's spawn commit DOES lock editing (via `onLock`).
-    @Test func extractionPhaseDoesNotLockEditing() async throws {
+    /// Step 6 rework: `awaitGenerationSlot()` does NOT set `isRunning` —
+    /// process lifetime is decoupled from gate ownership. `isRunning` is set
+    /// only at actual spawn commit (inside `run()` / `startInteractiveQuery()`).
+    /// The agent-run counter is still wired at spawn commit via `onLock`, so
+    /// the intent of this test is preserved: extraction does NOT increment
+    /// the counter, and an agent's spawn commit DOES (via `onLock`).
+    @Test func extractionPhaseDoesNotIncrementAgentRunCount() async throws {
         let launcher = makeLauncher()
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-gen-\(UUID().uuidString)", isDirectory: true)
@@ -281,10 +280,10 @@ struct AgentGenerationSlotTests {
         let store = WikiStoreModel(
             store: try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite")))
 
-        // Extraction phase: isExtracting true, no claude running. Editing is free.
+        // Extraction phase: isExtracting true, no claude running. Counter is 0.
         launcher.isExtracting = true
         #expect(!launcher.isRunning)
-        #expect(!store.isAgentRunning)
+        #expect(store.agentRunCount == 0)
 
         // Generation slot acquired: does NOT set isRunning (Step 6 decoupling).
         // isRunning is set only when the actual process launches (spawn commit).
@@ -293,14 +292,14 @@ struct AgentGenerationSlotTests {
         #expect(!launcher.isRunning)  // gate alone does not mean "process alive"
 
         // Spawn commit simulation: the runner calls onLock when the process launches.
-        // This is what locks editing — not the gate acquire.
-        store.beginAgentRun()
-        #expect(store.isAgentRunning)  // edit lock IS active during agent run
+        // This is what increments the counter — not the gate acquire.
+        store.agentRunStarted()
+        #expect(store.agentRunCount == 1)  // agent run IS active during agent run
 
-        // Agent finishes: slot released, edit lock released. Editing free again.
+        // Agent finishes: slot released, counter decremented. Counter back to 0.
         launcher.releaseGenerationSlot()
-        store.endAgentRun()
+        store.agentRunEnded()
         #expect(!launcher.isRunning)
-        #expect(!store.isAgentRunning)
+        #expect(store.agentRunCount == 0)
     }
 }
