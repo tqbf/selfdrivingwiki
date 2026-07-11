@@ -95,7 +95,7 @@ struct StoreEmissionExhaustivenessTests {
         // emit via fastForwardPage/fastForwardCreatePage (which update the
         // pages mirror + main refs, triggering the existing page change path).
         "createWorkspace", "workspaceWritePage", "abandonWorkspace", "workspaceMerge",
-        "workspaceRefresh",
+        "workspaceRefresh", "workspaceResolveConflict", "workspaceRetryMerge",
     ]
 
     /// Every EMIT member must route through `mutate()` (AC.2). A newly added

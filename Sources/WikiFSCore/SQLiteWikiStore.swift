@@ -3476,6 +3476,135 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    // MARK: - Conflict resolution (W3, PR #312)
+
+    public func workspaceConflicts(workspaceID: String) throws -> [WorkspaceConflict] {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement("""
+        SELECT workspace_id, page_id, base_version_id, main_version_id, ws_version_id, created_at
+        FROM workspace_conflicts WHERE workspace_id = ?1;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(workspaceID, at: 1)
+        var out: [WorkspaceConflict] = []
+        while try stmt.step() {
+            let baseIsNull = sqlite3_column_type(stmt.handle, 2) == SQLITE_NULL
+            let mainIsNull = sqlite3_column_type(stmt.handle, 3) == SQLITE_NULL
+            out.append(WorkspaceConflict(
+                workspaceID: stmt.text(at: 0),
+                pageID: PageID(rawValue: stmt.text(at: 1)),
+                baseVersionID: baseIsNull ? nil : stmt.text(at: 2),
+                mainVersionID: mainIsNull ? nil : stmt.text(at: 3),
+                wsVersionID: stmt.text(at: 4),
+                createdAt: Date(timeIntervalSince1970: stmt.double(at: 5))))
+        }
+        return out
+    }
+
+    public func workspaceResolveConflict(
+        workspaceID: String, pageID: PageID, body: String
+    ) throws {
+        try mutate(event: { _ in nil }) {
+        let bodyData = Data(body.utf8)
+        let hash = SHA256.hash(data: bodyData)
+            .map { String(format: "%02x", $0) }.joined()
+        let now = Date()
+        let nowTS = now.timeIntervalSince1970
+
+        try withTransaction {
+            // 1. Blob.
+            let insBlob = try statement(
+                "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+            insBlob.reset()
+            try insBlob.bind(hash, at: 1)
+            try insBlob.bind(Int64(bodyData.count), at: 2)
+            try insBlob.bind(bodyData, at: 3)
+            _ = try insBlob.step()
+
+            // 2. Activity.
+            let agentID = try legacyImportAgentID()
+            let activityID = ULID.generate()
+            let insActivity = try statement("""
+            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+            VALUES (?1, 'resolve', ?2, ?3, ?3);
+            """)
+            insActivity.reset()
+            try insActivity.bind(activityID, at: 1)
+            try insActivity.bind(agentID, at: 2)
+            try insActivity.bind(nowTS, at: 3)
+            _ = try insActivity.step()
+
+            // 3. New workspace version (parent = workspace's current head).
+            let wsHead = try workspacePageVersionLocked(
+                workspaceID: workspaceID, pageID: pageID)
+            let titleStmt = try statement(
+                "SELECT title FROM page_versions WHERE id = ?1;")
+            titleStmt.reset()
+            if let wsHead { try titleStmt.bind(wsHead, at: 1) }
+            _ = try titleStmt.step()
+            let title = titleStmt.text(at: 0)
+            titleStmt.reset()
+
+            let versionID = ULID.generate()
+            let insVersion = try statement("""
+            INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
+            VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7);
+            """)
+            insVersion.reset()
+            try insVersion.bind(versionID, at: 1)
+            try insVersion.bind(pageID.rawValue, at: 2)
+            if let wsHead { try insVersion.bind(wsHead, at: 3) }
+            try insVersion.bind(hash, at: 4)
+            try insVersion.bind(title, at: 5)
+            try insVersion.bind(activityID, at: 6)
+            try insVersion.bind(nowTS, at: 7)
+            _ = try insVersion.step()
+
+            // 4. Update workspace_ref to point at the resolved version.
+            //    Update base_version_id to current main head so the retry
+            //    merge sees no divergence.
+            let mainHead = try pageHeadVersionIDLocked(pageID: pageID)
+            let upRef = try statement("""
+            UPDATE workspace_refs
+            SET version_id = ?2, base_version_id = ?3, updated_at = ?4
+            WHERE workspace_id = ?1 AND kind = 'page-content' AND owner_id = ?5;
+            """)
+            upRef.reset()
+            try upRef.bind(workspaceID, at: 1)
+            try upRef.bind(versionID, at: 2)
+            if let mainHead { try upRef.bind(mainHead, at: 3) }
+            try upRef.bind(nowTS, at: 4)
+            try upRef.bind(pageID.rawValue, at: 5)
+            _ = try upRef.step()
+
+            // 5. Delete the conflict row for this page.
+            let delConflict = try statement(
+                "DELETE FROM workspace_conflicts WHERE workspace_id = ?1 AND page_id = ?2;")
+            delConflict.reset()
+            try delConflict.bind(workspaceID, at: 1)
+            try delConflict.bind(pageID.rawValue, at: 2)
+            _ = try delConflict.step()
+        }
+        }
+    }
+
+    public func workspaceRetryMerge(workspaceID: String) throws {
+        try mutate(event: { _ in nil }) {
+        // Set status back to 'open' so workspaceMerge can run.
+        let reopen = try statement(
+            "UPDATE workspaces SET status = 'open', updated_at = ?2 WHERE id = ?1 AND status = 'conflicted';")
+        reopen.reset()
+        try reopen.bind(workspaceID, at: 1)
+        try reopen.bind(Date().timeIntervalSince1970, at: 2)
+        _ = try reopen.step()
+        guard sqlite3_changes(db) > 0 else {
+            throw WikiStoreError.unexpected("workspace \(workspaceID) is not conflicted")
+        }
+        }
+        // Now attempt the merge again.
+        try workspaceMerge(workspaceID: workspaceID)
+    }
+
     public func deletePage(id: PageID) throws {
         try mutate(event: { _ in localEvent(.page, id: id.rawValue, change: .deleted) }) {
         // FK safety: `page_links`, `attachments`, and `source_links` all have

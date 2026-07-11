@@ -22,6 +22,9 @@ public enum WorkspaceCommand {
         case abandon(id: String)
         case merge(id: String)
         case refresh(id: String)
+        case conflicts(id: String)
+        case resolve(id: String, pageID: PageID, bodyFile: String)
+        case retry(id: String)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -46,6 +49,12 @@ public enum WorkspaceCommand {
             return try merge(id: id, in: store)
         case .refresh(let id):
             return try refresh(id: id, in: store)
+        case .conflicts(let id):
+            return try conflicts(id: id, in: store)
+        case .resolve(let id, let pageID, let bodyFile):
+            return try resolve(id: id, pageID: pageID, bodyFile: bodyFile, in: store)
+        case .retry(let id):
+            return try retry(id: id, in: store)
         }
     }
 
@@ -98,5 +107,46 @@ public enum WorkspaceCommand {
         let ws = try store.workspaceSummary(id: id)
         let status = ws?.status.rawValue ?? "unknown"
         return Result(output: "refresh: \(id) → \(status)", didCommit: true)
+    }
+
+    // MARK: - conflicts
+
+    private static func conflicts(id: String, in store: WikiStore) throws -> Result {
+        let conflicts = try store.workspaceConflicts(workspaceID: id)
+        if conflicts.isEmpty {
+            return Result(output: "(no conflicts)", didCommit: false)
+        }
+        let lines = conflicts.map { c in
+            let page = c.pageID.rawValue
+            let base = c.baseVersionID ?? "—" 
+            let main = c.mainVersionID ?? "—"
+            let ws = c.wsVersionID
+            return "\(page)\tbase=\(base.prefix(12))\tmain=\(main.prefix(12))\tws=\(ws.prefix(12))"
+        }
+        return Result(output: lines.joined(separator: "\n"), didCommit: false)
+    }
+
+    // MARK: - resolve
+
+    private static func resolve(
+        id: String, pageID: PageID, bodyFile: String, in store: WikiStore
+    ) throws -> Result {
+        let body: String
+        if bodyFile == "-" {
+            body = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
+        } else {
+            body = try String(contentsOfFile: bodyFile, encoding: .utf8)
+        }
+        try store.workspaceResolveConflict(workspaceID: id, pageID: pageID, body: body)
+        return Result(output: "resolved \(pageID.rawValue) in \(id)", didCommit: true)
+    }
+
+    // MARK: - retry
+
+    private static func retry(id: String, in store: WikiStore) throws -> Result {
+        try store.workspaceRetryMerge(workspaceID: id)
+        let ws = try store.workspaceSummary(id: id)
+        let status = ws?.status.rawValue ?? "unknown"
+        return Result(output: "retry: \(id) → \(status)", didCommit: true)
     }
 }

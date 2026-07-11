@@ -217,3 +217,25 @@ public struct WorkspaceRef: Equatable, Sendable {
         self.updatedAt = updatedAt
     }
 }
+
+/// A per-page conflict detail persisted when a workspace is parked as
+/// `conflicted` (W3, PR #312). Carries the three version ids needed for
+/// review (base/ours=main/theirs=workspace) and resolution.
+public struct WorkspaceConflict: Equatable, Sendable {
+    public let workspaceID: String
+    public let pageID: PageID
+    public let baseVersionID: String?
+    public let mainVersionID: String?
+    public let wsVersionID: String
+    public let createdAt: Date
+
+    public init(workspaceID: String, pageID: PageID, baseVersionID: String?,
+                mainVersionID: String?, wsVersionID: String, createdAt: Date) {
+        self.workspaceID = workspaceID
+        self.pageID = pageID
+        self.baseVersionID = baseVersionID
+        self.mainVersionID = mainVersionID
+        self.wsVersionID = wsVersionID
+        self.createdAt = createdAt
+    }
+}
