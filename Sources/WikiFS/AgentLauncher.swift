@@ -1081,6 +1081,7 @@ final class AgentLauncher {
                 let stream = await backend.send(
                     TurnInput(userText: promptText), into: session)
                 for await event in stream {
+                    self.lastActivityAt = Date()
                     self.mergeOrAppend(event)
                     if AgentEvent.endsGeneration(event) {
                         self.setGenerating(false)
@@ -1342,6 +1343,7 @@ final class AgentLauncher {
             let backend = self.backend
             let stream = await backend.send(TurnInput(userText: prompt), into: session)
             for await event in stream {
+                lastActivityAt = Date()
                 mergeOrAppend(event)
                 if AgentEvent.endsGeneration(event) {
                     setGenerating(false)
@@ -1841,6 +1843,7 @@ final class AgentLauncher {
             let stream = await backend.send(
                 TurnInput(userText: trimmed), into: session)
             for await event in stream {
+                self.lastActivityAt = Date()
                 self.mergeOrAppend(event)
                 if AgentEvent.endsGeneration(event) {
                     self.setGenerating(false)
