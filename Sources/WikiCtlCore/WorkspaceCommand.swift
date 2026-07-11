@@ -25,6 +25,7 @@ public enum WorkspaceCommand {
         case conflicts(id: String)
         case resolve(id: String, pageID: PageID, bodyFile: String)
         case retry(id: String)
+        case reap(ttl: TimeInterval)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -55,6 +56,8 @@ public enum WorkspaceCommand {
             return try resolve(id: id, pageID: pageID, bodyFile: bodyFile, in: store)
         case .retry(let id):
             return try retry(id: id, in: store)
+        case .reap(let ttl):
+            return try reap(ttl: ttl, in: store)
         }
     }
 
@@ -148,5 +151,12 @@ public enum WorkspaceCommand {
         let ws = try store.workspaceSummary(id: id)
         let status = ws?.status.rawValue ?? "unknown"
         return Result(output: "retry: \(id) → \(status)", didCommit: true)
+    }
+
+    // MARK: - reap
+
+    private static func reap(ttl: TimeInterval, in store: WikiStore) throws -> Result {
+        let count = try store.reapStaleWorkspaces(ttl: ttl)
+        return Result(output: "reaped \(count) stale workspace(s)", didCommit: count > 0)
     }
 }

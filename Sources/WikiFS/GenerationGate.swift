@@ -39,11 +39,19 @@ final class GenerationGate {
 
     // MARK: - State
 
-    /// True while one caller holds the slot (globally — across all launchers
-    /// that share this gate).
-    private var held = false
+    /// Maximum number of concurrent generations. Default 1 (backward-
+    /// compatible). When N > 1, up to N generations run simultaneously — a
+    /// resource-management concern, not a correctness concern (workspaces
+    /// handle correctness). W4 (PR #312).
+    private let maxConcurrent: Int
+    /// Number of callers currently holding a slot.
+    private var activeCount = 0
     /// FIFO queue of callers awaiting the slot.
     private var waiters: [GenerationWaiter] = []
+
+    init(maxConcurrent: Int = 1) {
+        self.maxConcurrent = max(1, maxConcurrent)
+    }
 
     // MARK: - Interface
 
@@ -59,11 +67,11 @@ final class GenerationGate {
     /// wait was cancelled before the slot was handed over — the caller owns
     /// nothing and must simply return (no `release()` call needed).
     func acquire() async -> Bool {
-        // Fast path: slot free and nobody queued — acquire atomically. There is
-        // no suspension point, so no other main-actor task can interleave
-        // between the check and the set.
-        if !held && waiters.isEmpty {
-            held = true
+        // Fast path: below the concurrency cap and nobody is queued — acquire
+        // atomically. There is no suspension point, so no other main-actor task
+        // can interleave between the check and the set.
+        if activeCount < maxConcurrent && waiters.isEmpty {
+            activeCount += 1
             return true
         }
         let waiter = GenerationWaiter()
@@ -97,15 +105,15 @@ final class GenerationGate {
     }
 
     /// Release the generation slot, handing it to the next live waiter (FIFO) or
-    /// freeing it.
+    /// freeing a capacity slot.
     ///
-    /// Atomic transfer: `held` stays `true` on a handoff — there is no window
-    /// where another task could grab the slot via the fast path and cause a
-    /// double-generation. Only when no live waiters remain does `held` become `false`.
+    /// Atomic transfer: on a handoff the waiter is resumed and the active
+    /// count stays the same (one caller leaves, one arrives). Only when no
+    /// live waiters remain does `activeCount` decrement. This is the N-throttle
+    /// generalization of the original atomic-transfer guarantee (W4, PR #312).
     func release() {
-        // Pop the next non-cancelled waiter and hand off the slot. `held` stays
-        // `true` on a handoff so the transfer is atomic — there is no window
-        // where another task could grab the slot via the fast path.
+        // Pop the next non-cancelled waiter and hand off the slot. On a
+        // handoff, activeCount stays the same — one caller leaves, one arrives.
         while let head = waiters.first {
             waiters.removeFirst()
             if head.didCancel {
@@ -117,7 +125,7 @@ final class GenerationGate {
             head.continuation?.resume()
             return
         }
-        // No live waiters: free the slot.
-        held = false
+        // No live waiters: decrement activeCount (free a capacity slot).
+        activeCount -= 1
     }
 }
