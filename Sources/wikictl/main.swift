@@ -90,6 +90,12 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
     case .search(let query, let limit):
         let r = try PageCommand.run(.search(query: query, limit: limit), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
+    case .pageHistory(let selector):
+        let r = try PageCommand.run(.history(selector), in: store)
+        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
+    case .pageRevert(let selector, let versionID):
+        let r = try PageCommand.run(.revert(selector, versionID: versionID), in: store)
+        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .source(let action):
         return try SourceCommand.run(action, in: store,
                                    cwd: FileManager.default.currentDirectoryPath)

@@ -223,6 +223,11 @@ public final class WikiStoreModel {
     private var systemPromptAutosaveTask: Task<Void, Never>?
     /// The page whose text currently lives in the draft buffers.
     private var loadedPage: PageID?
+    /// The page-content version id captured when the page was loaded into the
+    /// editor. Used as the CAS expectation when saving (W0, PR #312): if another
+    /// writer committed a new version after the editor loaded, the save throws
+    /// `PageConflictError` instead of silently clobbering.
+    private var loadedPageHeadVersionID: String?
     /// What the drafts currently hold, so a flush saves the RIGHT document even
     /// after `selection` has advanced (§3.5 read-state-at-save-time).
     private var loadedSelection: WikiSelection?
@@ -921,17 +926,21 @@ public final class WikiStoreModel {
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
+            loadedPageHeadVersionID = nil
         case .page(let id):
             guard let page = try? store.getPage(id: id) else {
                 draftTitle = ""
                 draftBody = ""
                 loadedPage = nil
+                loadedPageHeadVersionID = nil
                 loadedSelection = nil
                 return
             }
             draftTitle = page.title
             draftBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
             loadedPage = id
+            // Capture the current head version id for CAS on save (W0, PR #312).
+            loadedPageHeadVersionID = try? store.pageHeadVersionID(pageID: id)
             // Restore stashed draft when returning to an editing tab.
             if let tabID = activeTabID,
                let i = tabs.firstIndex(where: { $0.id == tabID }),
@@ -944,18 +953,22 @@ public final class WikiStoreModel {
         case .systemPrompt:
             draftSystemPrompt = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
             loadedPage = nil
+            loadedPageHeadVersionID = nil
         case .changeLog:
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
+            loadedPageHeadVersionID = nil
         case .source:
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
+            loadedPageHeadVersionID = nil
         case nil:
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
+            loadedPageHeadVersionID = nil
         }
         isDraftDirty = restoredFromPendingDraft
         isSystemPromptDirty = false
@@ -1028,8 +1041,17 @@ public final class WikiStoreModel {
             // limitation: a *rename* does NOT re-walk the whole graph, so links
             // that targeted the old title go stale until the linking page is next
             // saved (they self-heal then).
-            try PageUpsert.upsert(in: store, id: id, title: draftTitle, body: draftBody)
+            //
+            // W0 (PR #312): the CAS expectation (`loadedPageHeadVersionID`) makes
+            // conflicts visible — if another writer committed a new version after
+            // the editor loaded, this throws `PageConflictError` instead of
+            // silently clobbering.
+            try PageUpsert.upsert(in: store, id: id, title: draftTitle, body: draftBody,
+                                  expectedHeadVersionID: loadedPageHeadVersionID)
             isDraftDirty = false
+            // After a successful versioned save, refresh the head version id so
+            // the next save CAS-expects the version we just wrote.
+            loadedPageHeadVersionID = try? store.pageHeadVersionID(pageID: id)
             reloadSummaries()
             // Non-blocking mermaid lint: the in-app save still succeeds (the
             // editor is the human escape from wikictl's hard block), but a broken
@@ -1038,6 +1060,13 @@ public final class WikiStoreModel {
             // Non-blocking markdown lint: same pattern — save succeeds with the
             // original text, cosmetic issues are flagged as informational.
             updateMarkdownWarning(for: draftBody)
+        } catch let error as PageConflictError {
+            // W0 (PR #312): a concurrent writer committed a new version. Surface
+            // it so the user knows to re-load and merge their changes.
+            DebugLog.store("WikiStoreModel.save: PageConflictError — pageID=\(error.pageID.rawValue) expected=\(error.expectedVersionID) actual=\(error.actualVersionID ?? "nil")")
+            storeError = StoreError(
+                title: "Page Was Updated",
+                message: "Another writer updated this page since you started editing. Re-load the page and merge your changes.")
         } catch {
             // Phase 1: log to console; a save-error surface lands later.
             DebugLog.store("WikiStoreModel.save failed: \(error)")

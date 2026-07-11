@@ -49,7 +49,8 @@ public enum PageUpsert {
         in store: WikiStore,
         id: PageID?,
         title: String,
-        body: String
+        body: String,
+        expectedHeadVersionID: String? = nil
     ) throws -> Outcome {
         // Sanitize BEFORE the title→id resolve, not just in the store's
         // create/update (which sanitizes again as a backstop): resolving the
@@ -66,7 +67,8 @@ public enum PageUpsert {
             in: body, resolvePage: store.resolveTitleToID,
             resolveSource: store.resolveSourceByName,
             resolveChat: store.resolveChatByTitle)) ?? body
-        let outcome = try writePage(in: store, id: id, title: title, body: canonicalBody)
+        let outcome = try writePage(in: store, id: id, title: title, body: canonicalBody,
+                                     expectedHeadVersionID: expectedHeadVersionID)
         // Parse the CANONICAL body so link rows match the stored bytes exactly.
         try store.replaceLinks(from: outcome.id, parsedLinks: WikiLinkParser.parse(canonicalBody))
         // Compute + store chunk embeddings for the page body. Non-fatal: a
@@ -87,14 +89,30 @@ public enum PageUpsert {
         in store: WikiStore,
         id: PageID?,
         title: String,
-        body: String
+        body: String,
+        expectedHeadVersionID: String?
     ) throws -> Outcome {
         if let id {
-            try store.updatePage(id: id, title: title, body: body)
+            // When CAS is active, route through appendPageVersion (versioned
+            // save with conflict detection). Otherwise blind write (the
+            // backward-compatible path — wikictl, legacy callers).
+            if let expected = expectedHeadVersionID {
+                _ = try store.appendPageVersion(
+                    pageID: id, title: title, body: body,
+                    expectedHeadVersionID: expected)
+            } else {
+                try store.updatePage(id: id, title: title, body: body)
+            }
             return Outcome(id: id, didCreate: false)
         }
         if let existing = try store.resolveTitleToID(title) {
-            try store.updatePage(id: existing, title: title, body: body)
+            if let expected = expectedHeadVersionID {
+                _ = try store.appendPageVersion(
+                    pageID: existing, title: title, body: body,
+                    expectedHeadVersionID: expected)
+            } else {
+                try store.updatePage(id: existing, title: title, body: body)
+            }
             return Outcome(id: existing, didCreate: false)
         }
         let page = try store.createPage(title: title)
