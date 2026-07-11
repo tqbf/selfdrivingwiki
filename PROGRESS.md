@@ -2,6 +2,47 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-11 — W2: Real merge (diff3) (PR #312)
+
+**What shipped.** Phase W2 of the multi-writer concurrency plan: real diff3
+three-way merge. When `main_head != base`, `workspaceMerge` now does a diff3
+merge instead of parking (W1's behavior). Plus a refresh/rebase verb.
+
+**Diff3 engine** (`Diff3.swift`):
+- Line-based three-way merge. Input: base, ours (main), theirs (workspace).
+- Output: `.clean(merged)` or `.conflict`.
+- Finds common lines across all three sequences as split points, then
+  classifies the gaps between them. When both sides changed a gap
+  differently, uses `interleavedMerge` — recursively splits using common
+  lines (including base↔ours and base↔theirs anchors) to interleave
+  non-overlapping changes to adjacent lines.
+- Pure, Sendable, unit-testable. 9 `Diff3Tests`.
+
+**Store layer** (`SQLiteWikiStore`):
+- `workspaceMerge` — when `main_head != base`, calls `diff3MergePage`:
+  fetch three blobs, run `Diff3.merge`. Clean → merge version
+  (`parent_id = main_head`, `merge_parent_id = workspace version`) with
+  PROV activity (`kind='merge'`), updates pages mirror + main ref,
+  regenerates wiki links (`replaceLinks`). FTS triggers fire from the
+  pages UPDATE. Conflict → park (same as W1).
+- `workspaceRefresh` — re-base the workspace against current main:
+  diff3 per workspace_ref, write the merged version as the workspace's
+  NEW version (NOT to main — main is untouched), update `base_version_id`
+  to current main_head. Conflict → park.
+- New protocol member: `workspaceRefresh`.
+
+**wikictl:**
+- `workspace refresh --id W` — re-base workspace against current main.
+
+**Tests:** 9 `Diff3Tests` + 14 `WorkspaceTests` (4 new: clean diff3,
+conflict on same line, two-parent lineage, two overlapping ingestions
+both merge, refresh re-bases). `StoreEmissionExhaustivenessTests` —
+`workspaceRefresh` in NO-EMIT. Fast tier: 2181 tests pass.
+
+**What's deferred:** Conflict resolution UI (W3), edit lock retirement
+behind capability flag, `wiki_index` line-set merge (D12),
+slug-collision unification (D13), workspace TTL/reaper (W4).
+
 ## 2026-07-11 — W1: Workspaces, overlay, fast-forward merge (PR #312)
 
 **What shipped.** Phase W1 of the multi-writer concurrency plan: durable

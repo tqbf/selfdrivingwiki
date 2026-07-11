@@ -351,4 +351,37 @@ struct WorkspaceTests {
         let summary2 = try store.workspaceSummary(id: ws2)
         #expect(summary2?.status == .merged)
     }
+
+    // MARK: - refresh (W2)
+
+    @Test func refreshReBasesWorkspaceAgainstMain() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Refresh Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Refresh Page", body: "line1\nline2\nline3",
+            expectedHeadVersionID: nil)
+
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page.id, title: "Refresh Page",
+            body: "line1\nws-line2\nline3")
+
+        // Main moves in a different region (line1 → main-line1).
+        let mainHead = try store.pageHeadVersionID(pageID: page.id)
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Refresh Page",
+            body: "main-line1\nline2\nline3",
+            expectedHeadVersionID: mainHead)
+
+        // Refresh — should diff3 merge, update base to new main head.
+        try store.workspaceRefresh(workspaceID: wsID)
+
+        let summary = try store.workspaceSummary(id: wsID)
+        #expect(summary?.status == .open)  // still open after refresh
+
+        // The workspace_ref's base should now be the new main head.
+        let refs = try store.workspaceRefs(workspaceID: wsID)
+        let newMainHead = try store.pageHeadVersionID(pageID: page.id)
+        #expect(refs.first?.baseVersionID == newMainHead)
+    }
 }

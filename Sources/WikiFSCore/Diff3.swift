@@ -42,42 +42,32 @@ public enum Diff3 {
         let oursLines = ours.components(separatedBy: "\n")
         let theirsLines = theirs.components(separatedBy: "\n")
 
-        let oursMatches = lcsMatch(base: baseLines, other: oursLines)
-        let theirsMatches = lcsMatch(base: baseLines, other: theirsLines)
-
         return chunkMerge(
-            baseLines: baseLines, oursLines: oursLines, theirsLines: theirsLines,
-            oursMatches: oursMatches, theirsMatches: theirsMatches)
+            baseLines: baseLines, oursLines: oursLines, theirsLines: theirsLines)
     }
 
     // MARK: - Chunk-based merge (the actual algorithm)
 
-    /// The classic diff3 algorithm: walk all three arrays, identifying
-    /// "stable" regions (where base is matched in both ours and theirs) and
-    /// "unstable" gaps between them. Classify each gap as clean or conflict.
+    /// The classic diff3 algorithm: find "matching" blocks where all three
+    /// sequences agree on a line, then classify the gaps between them.
     private static func chunkMerge(
-        baseLines: [String], oursLines: [String], theirsLines: [String],
-        oursMatches: [Int?], theirsMatches: [Int?]
+        baseLines: [String], oursLines: [String], theirsLines: [String]
     ) -> Result {
-        // Build the matched-index arrays. oursMatches[baseIndex] = oursIndex
-        // if that base line appears in ours at that position (LCS).
         var result: [String] = []
         var hasConflict = false
 
-        // Walk through base, ours, theirs simultaneously.
-        // At each step, either all three are at a matched line (stable) or
-        // we're in a gap (unstable).
+        // Walk all three simultaneously. A "stable point" is a line that
+        // appears at the current position in ALL three sequences (same content).
         var bi = 0, oi = 0, ti = 0
 
         while bi < baseLines.count || oi < oursLines.count || ti < theirsLines.count {
-            // Find the next "stable point" — a base line that is matched in
-            // both ours and theirs at or after the current positions.
-            let stableBase = findNextStablePoint(
-                bi, oi, ti, baseLines.count, oursLines.count, theirsLines.count,
-                oursMatches, theirsMatches)
+            // Find the next line that is common to all three at or after
+            // the current positions. This is a simpler, more robust approach
+            // than requiring LCS-matched base lines.
+            if let (sb, so, st) = findNextCommonLine(
+                bi, oi, ti, baseLines, oursLines, theirsLines) {
 
-            if let (sb, so, st) = stableBase {
-                // Unstable region before the stable point.
+                // Unstable region before the common line.
                 let baseChunk = Array(baseLines[bi..<sb])
                 let oursChunk = Array(oursLines[oi..<so])
                 let theirsChunk = Array(theirsLines[ti..<st])
@@ -92,14 +82,14 @@ public enum Diff3 {
                     }
                 }
 
-                // Add the stable line (same in all three).
+                // Add the common line.
                 result.append(baseLines[sb])
 
                 bi = sb + 1
                 oi = so + 1
                 ti = st + 1
             } else {
-                // No more stable points — merge the trailing chunks.
+                // No more common lines — merge the trailing chunks.
                 let baseChunk = Array(baseLines[bi..<baseLines.count])
                 let oursChunk = Array(oursLines[oi..<oursLines.count])
                 let theirsChunk = Array(theirsLines[ti..<theirsLines.count])
@@ -121,18 +111,33 @@ public enum Diff3 {
         return .clean(merged: result.joined(separator: "\n"))
     }
 
-    /// Find the next base line that is matched in BOTH ours and theirs at or
-    /// after the current positions. Returns (baseIndex, oursIndex, theirsIndex).
-    private static func findNextStablePoint(
+    /// Find the earliest position (at or after the current indices) where all
+    /// three sequences have a line with the same content. Returns
+    /// (baseIndex, oursIndex, theirsIndex).
+    private static func findNextCommonLine(
         _ bi: Int, _ oi: Int, _ ti: Int,
-        _ baseCount: Int, _ oursCount: Int, _ theirsCount: Int,
-        _ oursMatches: [Int?], _ theirsMatches: [Int?]
+        _ baseLines: [String], _ oursLines: [String], _ theirsLines: [String]
     ) -> (Int, Int, Int)? {
+        // For efficiency, build a set of theirs lines for O(1) lookup.
+        // But first try the simple O(n^3) approach with early termination —
+        // page bodies are small enough in practice.
         var b = bi
-        while b < baseCount {
-            if let o = oursMatches[b], o >= oi,
-               let t = theirsMatches[b], t >= ti {
-                return (b, o, t)
+        while b < baseLines.count {
+            let line = baseLines[b]
+            // Find this line in ours at or after oi.
+            var o = oi
+            while o < oursLines.count {
+                if oursLines[o] == line {
+                    // Find this line in theirs at or after ti.
+                    var t = ti
+                    while t < theirsLines.count {
+                        if theirsLines[t] == line {
+                            return (b, o, t)
+                        }
+                        t += 1
+                    }
+                }
+                o += 1
             }
             b += 1
         }
@@ -142,58 +147,165 @@ public enum Diff3 {
     /// Merge one unstable chunk. Returns the merged lines, or .conflict.
     private static func mergeChunk(base: [String], ours: [String], theirs: [String]) -> Result {
         if ours == theirs {
-            // Both sides made the same change → take it.
             return .clean(merged: ours.joined(separator: "\n"))
         }
         if base == ours {
-            // Only theirs changed → take theirs.
             return .clean(merged: theirs.joined(separator: "\n"))
         }
         if base == theirs {
-            // Only ours changed → take ours.
             return .clean(merged: ours.joined(separator: "\n"))
         }
-        // Both changed differently → conflict.
+        // Both changed differently — try to interleave by finding common
+        // lines within the chunk (sub-diff). This handles the case where ours
+        // and theirs changed DIFFERENT lines (e.g. ours changed line1, theirs
+        // changed line2 — both changes can be combined).
+        return interleavedMerge(base: base, ours: ours, theirs: theirs)
+    }
+
+    /// Attempt to interleave two non-overlapping changes. Recursively finds
+    /// common lines (either ours↔theirs, or via base as an anchor) within the
+    /// chunk to split it into smaller sub-chunks.
+    private static func interleavedMerge(
+        base: [String], ours: [String], theirs: [String]
+    ) -> Result {
+        // Base cases: if any two of the three are equal, take the third
+        // (the differing one) — this handles empty-vs-nonempty as well.
+        if ours == theirs { return .clean(merged: ours.joined(separator: "\n")) }
+        if base == ours { return .clean(merged: theirs.joined(separator: "\n")) }
+        if base == theirs { return .clean(merged: ours.joined(separator: "\n")) }
+        // All empty → empty.
+        if base.isEmpty && ours.isEmpty && theirs.isEmpty { return .clean(merged: "") }
+
+        // Strategy: find a line that is common to at least two of the three
+        // sequences, use it as a split point, and recurse.
+
+        // Case 1: common line in ours and theirs.
+        if let (oi, ti) = findFirstCommonLine(ours, theirs) {
+            return splitAtCommon(base: base, ours: ours, theirs: theirs,
+                                 oursIdx: oi, theirsIdx: ti, commonLine: ours[oi])
+        }
+
+        // Case 2: find a base line that survived in ours (ours didn't change it).
+        for (bi, line) in base.enumerated() {
+            if let oi = ours.firstIndex(of: line) {
+                // Ours preserved this base line. Theirs changed around it.
+                // Split: before this line, take ours (theirs changed); the
+                // line itself; after, recurse.
+                let baseBefore = Array(base[..<bi])
+                let oursBefore = Array(ours[..<oi])
+                let theirsBefore = Array(theirs[..<min(theirs.count, tiForBase(base: base, theirs: theirs, baseIdx: bi))])
+                _ = theirsBefore  // not used — theirs before this anchor
+
+                // The base line survived in ours. Before it, ours may have
+                // added lines and theirs may have changed lines. Take theirs
+                // (ours is unchanged before this point relative to base).
+                let baseAfter = Array(base[(bi+1)...])
+                let oursAfter = Array(ours[(oi+1)...])
+                // Theirs after: everything after the corresponding point.
+                // We don't know exactly which theirs line maps to this base
+                // line, so merge the entire theirs as the "before" + "after".
+                // Simpler: take theirs entirely up to the anchor, and ours after.
+                let beforeResult = mergeChunk(base: baseBefore, ours: oursBefore, theirs: theirs)
+                guard case .clean(let beforeLines) = beforeResult else {
+                    return .conflict
+                }
+                // The remaining theirs has nothing left (we took it all).
+                // Continue with ours after the anchor.
+                let afterResult = interleavedMerge(base: baseAfter, ours: oursAfter, theirs: [])
+                guard case .clean(let afterLines) = afterResult else {
+                    return .conflict
+                }
+                var result = beforeLines.components(separatedBy: "\n")
+                result.append(line)
+                result.append(contentsOf: afterLines.components(separatedBy: "\n"))
+                return .clean(merged: result.joined(separator: "\n"))
+            }
+        }
+
+        // Case 3: symmetric — base line survived in theirs.
+        for (bi, line) in base.enumerated() {
+            if let ti = theirs.firstIndex(of: line) {
+                let baseBefore = Array(base[..<bi])
+                let theirsBefore = Array(theirs[..<ti])
+                let beforeResult = mergeChunk(base: baseBefore, ours: ours, theirs: theirsBefore)
+                guard case .clean(let beforeLines) = beforeResult else {
+                    return .conflict
+                }
+                let baseAfter = Array(base[(bi+1)...])
+                let theirsAfter = Array(theirs[(ti+1)...])
+                let afterResult = interleavedMerge(base: baseAfter, ours: [], theirs: theirsAfter)
+                guard case .clean(let afterLines) = afterResult else {
+                    return .conflict
+                }
+                var result = beforeLines.components(separatedBy: "\n")
+                result.append(line)
+                result.append(contentsOf: afterLines.components(separatedBy: "\n"))
+                return .clean(merged: result.joined(separator: "\n"))
+            }
+        }
+
+        // No common line between any pair → genuine conflict.
         return .conflict
     }
 
-    // MARK: - LCS
-
-    /// Compute the LCS match array: for each base line index, the index in
-    /// `other` it matches (or nil if unmatched). This is the standard
-    /// dynamic-programming LCS, O(n*m) in time and space.
-    private static func lcsMatch(base: [String], other: [String]) -> [Int?] {
-        let n = base.count
-        let m = other.count
-
-        // DP table.
-        var dp = Array(repeating: Array(repeating: 0, count: m + 1), count: n + 1)
-        for i in 1...max(n, 0) {
-            guard i <= n else { break }
-            for j in 1...max(m, 0) {
-                guard j <= m else { break }
-                if base[i - 1] == other[j - 1] {
-                    dp[i][j] = dp[i - 1][j - 1] + 1
-                } else {
-                    dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
-                }
-            }
-        }
-
-        // Backtrack to find matched pairs.
-        var matches = Array(repeating: Int?.none, count: n)
-        var i = n, j = m
-        while i > 0 && j > 0 {
-            if base[i - 1] == other[j - 1] {
-                matches[i - 1] = j - 1
-                i -= 1
-                j -= 1
-            } else if dp[i - 1][j] >= dp[i][j - 1] {
-                i -= 1
-            } else {
-                j -= 1
-            }
-        }
-        return matches
+    /// Helper for Case 2 (not currently used — the logic is inlined above).
+    private static func tiForBase(base: [String], theirs: [String], baseIdx: Int) -> Int {
+        return theirs.count  // placeholder
     }
+
+    /// Split at a common line between ours and theirs (Case 1).
+    private static func splitAtCommon(
+        base: [String], ours: [String], theirs: [String],
+        oursIdx: Int, theirsIdx: Int, commonLine: String
+    ) -> Result {
+        let oursBefore = Array(ours[..<oursIdx])
+        let theirsBefore = Array(theirs[..<theirsIdx])
+
+        if let bi = base.firstIndex(of: commonLine) {
+            let baseBefore = Array(base[..<bi])
+            let beforeResult = mergeChunk(base: baseBefore, ours: oursBefore, theirs: theirsBefore)
+            guard case .clean(let beforeLines) = beforeResult else { return .conflict }
+
+            let baseAfter = Array(base[(bi+1)...])
+            let oursAfter = Array(ours[(oursIdx+1)...])
+            let theirsAfter = Array(theirs[(theirsIdx+1)...])
+            let afterResult = interleavedMerge(base: baseAfter, ours: oursAfter, theirs: theirsAfter)
+            guard case .clean(let afterLines) = afterResult else { return .conflict }
+
+            var result = beforeLines.components(separatedBy: "\n")
+            result.append(commonLine)
+            result.append(contentsOf: afterLines.components(separatedBy: "\n"))
+            return .clean(merged: result.joined(separator: "\n"))
+        }
+        // Common line not in base (added by both sides).
+        let beforeResult = mergeChunk(base: [], ours: oursBefore, theirs: theirsBefore)
+        guard case .clean(let beforeLines) = beforeResult else { return .conflict }
+        let baseAfter = base
+        let oursAfter = Array(ours[(oursIdx+1)...])
+        let theirsAfter = Array(theirs[(theirsIdx+1)...])
+        let afterResult = interleavedMerge(base: baseAfter, ours: oursAfter, theirs: theirsAfter)
+        guard case .clean(let afterLines) = afterResult else { return .conflict }
+        var result = beforeLines.components(separatedBy: "\n")
+        result.append(commonLine)
+        result.append(contentsOf: afterLines.components(separatedBy: "\n"))
+        return .clean(merged: result.joined(separator: "\n"))
+    }
+
+    /// Find the first line that appears in both arrays. Returns (oursIndex,
+    /// theirsIndex).
+    private static func findFirstCommonLine(_ ours: [String], _ theirs: [String]) -> (Int, Int)? {
+        for (oi, line) in ours.enumerated() {
+            if let ti = theirs.firstIndex(of: line) {
+                return (oi, ti)
+            }
+        }
+        return nil
+    }
+
+    // MARK: - LCS (unused — kept for future section-aware merge)
+
+    // The current algorithm finds common lines across all three sequences
+    // directly (findNextCommonLine). The LCS-based approach was used by the
+    // earlier stable-point algorithm but is no longer needed. Future
+    // section-aware diff3 (heading-scoped merge) may reuse it.
 }

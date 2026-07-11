@@ -394,6 +394,11 @@ public protocol WikiStore: Sendable {
     /// `workspace_refs`. Orphaned versions/blobs fall to lazy GC.
     func abandonWorkspace(id: String) throws
 
+    /// Refresh (re-base) a workspace against current main: for each
+    /// workspace_ref, run diff3 against the new main head. If clean, update
+    /// `base_version_id` to current main_head. If conflict, park.
+    func workspaceRefresh(workspaceID: String) throws
+
     // MARK: - System prompt (singleton document, v3)
 
     /// Read the user-editable singleton system-prompt document (projected at the
