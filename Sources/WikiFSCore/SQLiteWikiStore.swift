@@ -2973,7 +2973,16 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                         try fastForwardPage(
                             pageID: pageID, versionID: wsVersion)
                     } else {
-                        conflicts.append((pageIDStr, base, wsVersion, mainHead))
+                        // Divergence — attempt diff3 merge (W2).
+                        let mergeResult = try diff3MergePage(
+                            pageID: pageID, baseVersionID: base!,
+                            mainVersionID: mainHead!, wsVersionID: wsVersion)
+                        switch mergeResult {
+                        case .merged:
+                            break  // merge version created, mirror updated
+                        case .conflict:
+                            conflicts.append((pageIDStr, base, wsVersion, mainHead))
+                        }
                     }
                 }
 
@@ -3080,6 +3089,148 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try fastForwardPage(pageID: pageID, versionID: versionID)
     }
 
+    /// The result of a diff3 merge attempt for a single page.
+    private enum Diff3MergeResult {
+        case merged
+        case conflict
+    }
+
+    /// Attempt a three-way diff3 merge for a divergent page (W2). Fetches
+    /// the three blobs (base, ours=main, theirs=workspace), runs `Diff3.merge`.
+    /// If clean, creates a merge version (`parent_id = mainVersionID`,
+    /// `merge_parent_id = wsVersionID`) with a merge PROV activity, updates the
+    /// pages mirror + main ref, and regenerates links/embeddings.
+    /// If conflict, returns `.conflict` (caller parks the workspace).
+    /// Assumes lock + transaction held.
+    private func diff3MergePage(
+        pageID: PageID, baseVersionID: String,
+        mainVersionID: String, wsVersionID: String
+    ) throws -> Diff3MergeResult {
+        // Fetch the three blobs.
+        let baseText = try fetchVersionBody(versionID: baseVersionID)
+        let oursText = try fetchVersionBody(versionID: mainVersionID)
+        let theirsText = try fetchVersionBody(versionID: wsVersionID)
+
+        // Run diff3.
+        let result = Diff3.merge(base: baseText, ours: oursText, theirs: theirsText)
+        guard case .clean(let mergedText) = result else {
+            return .conflict
+        }
+
+        // Create the merge version.
+        let mergedData = Data(mergedText.utf8)
+        let hash = SHA256.hash(data: mergedData)
+            .map { String(format: "%02x", $0) }.joined()
+        let now = Date()
+        let nowTS = now.timeIntervalSince1970
+
+        // Blob.
+        let insBlob = try statement(
+            "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+        insBlob.reset()
+        try insBlob.bind(hash, at: 1)
+        try insBlob.bind(Int64(mergedData.count), at: 2)
+        try insBlob.bind(mergedData, at: 3)
+        _ = try insBlob.step()
+
+        // Merge PROV activity.
+        let agentID = try legacyImportAgentID()
+        let activityID = ULID.generate()
+        let insActivity = try statement("""
+        INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+        VALUES (?1, 'merge', ?2, ?3, ?3);
+        """)
+        insActivity.reset()
+        try insActivity.bind(activityID, at: 1)
+        try insActivity.bind(agentID, at: 2)
+        try insActivity.bind(nowTS, at: 3)
+        _ = try insActivity.step()
+
+        // Fetch the title from theirs (the workspace's version) — the merge
+        // preserves the workspace's title choice (the agent is the active writer).
+        let titleStmt = try statement(
+            "SELECT title FROM page_versions WHERE id = ?1;")
+        titleStmt.reset()
+        try titleStmt.bind(wsVersionID, at: 1)
+        guard try titleStmt.step() else {
+            throw WikiStoreError.unexpected("diff3Merge: workspace version \(wsVersionID) not found")
+        }
+        let title = titleStmt.text(at: 0)
+        titleStmt.reset()
+
+        // Merge version (two parents).
+        let versionID = ULID.generate()
+        let insVersion = try statement("""
+        INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);
+        """)
+        insVersion.reset()
+        try insVersion.bind(versionID, at: 1)
+        try insVersion.bind(pageID.rawValue, at: 2)
+        try insVersion.bind(mainVersionID, at: 3)      // parent = main head
+        try insVersion.bind(wsVersionID, at: 4)         // merge_parent = workspace version
+        try insVersion.bind(hash, at: 5)
+        try insVersion.bind(title, at: 6)
+        try insVersion.bind(activityID, at: 7)
+        try insVersion.bind(nowTS, at: 8)
+        _ = try insVersion.step()
+
+        // Update the pages mirror.
+        let sanitizedTitle = WikiNameRules.sanitized(title)
+        let slug = try uniqueSlug(from: sanitizedTitle, id: pageID)
+        let upPage = try statement("""
+        UPDATE pages
+        SET title = ?2, slug = ?3, body_markdown = ?4,
+            updated_at = ?5, version = version + 1
+        WHERE id = ?1;
+        """)
+        upPage.reset()
+        try upPage.bind(pageID.rawValue, at: 1)
+        try upPage.bind(sanitizedTitle, at: 2)
+        try upPage.bind(slug, at: 3)
+        try upPage.bind(mergedText, at: 4)
+        try upPage.bind(nowTS, at: 5)
+        _ = try upPage.step()
+
+        // Repoint the main page-content ref.
+        let upRef = try statement("""
+        INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+        VALUES ('page-content', ?1, ?2, 1, ?3)
+        ON CONFLICT(kind, owner_id) DO UPDATE SET
+            version_id = excluded.version_id,
+            generation = generation + 1,
+            updated_at = excluded.updated_at;
+        """)
+        upRef.reset()
+        try upRef.bind(pageID.rawValue, at: 1)
+        try upRef.bind(versionID, at: 2)
+        try upRef.bind(nowTS, at: 3)
+        _ = try upRef.step()
+
+        // Derived-data regeneration: re-parse wiki links from the merged body
+        // (non-fatal — the FTS triggers fire automatically from the pages UPDATE).
+        try? replaceLinks(from: pageID,
+                          parsedLinks: WikiLinkParser.parse(mergedText))
+
+        return .merged
+    }
+
+    /// Fetch the body text of a page version from its blob. Assumes lock held.
+    private func fetchVersionBody(versionID: String) throws -> String {
+        let stmt = try statement("""
+        SELECT b.content FROM page_versions pv
+        JOIN blobs b ON b.hash = pv.blob_hash
+        WHERE pv.id = ?1;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(versionID, at: 1)
+        guard try stmt.step() else {
+            throw WikiStoreError.unexpected("version \(versionID) not found")
+        }
+        let data = stmt.blob(at: 0)
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
     public func abandonWorkspace(id: String) throws {
         try mutate(event: { _ in nil }) {
         try withTransaction {
@@ -3102,6 +3253,146 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 throw WikiStoreError.notFound(PageID(rawValue: id))
             }
         }
+        }
+    }
+
+    /// Refresh (re-base) a workspace against the current main: for each
+    /// workspace_ref, run diff3 with the new main head. If clean, update
+    /// `base_version_id` to current main_head and store the merged version as
+    /// the workspace's new version. If conflict on any page, park.
+    /// The workspace must be `open` (not merging/merged/conflicted/abandoned).
+    public func workspaceRefresh(workspaceID: String) throws {
+        var conflicts: [(pageID: String, base: String?, wsVersion: String, mainVersion: String?)] = []
+        do {
+            try mutate(event: { _ in nil }) {
+            try withTransaction {
+                // Guard: must be open.
+                let statusStmt = try statement(
+                    "SELECT status FROM workspaces WHERE id = ?1;")
+                statusStmt.reset()
+                try statusStmt.bind(workspaceID, at: 1)
+                guard try statusStmt.step(), statusStmt.text(at: 0) == "open" else {
+                    throw WikiStoreError.unexpected("workspace \(workspaceID) is not open")
+                }
+                statusStmt.reset()
+
+                let refs = try statement("""
+                SELECT owner_id, base_version_id, version_id
+                FROM workspace_refs WHERE workspace_id = ?1;
+                """)
+                defer { refs.reset() }
+                try refs.bind(workspaceID, at: 1)
+
+                while try refs.step() {
+                    let pageIDStr = refs.text(at: 0)
+                    let baseIsNull = sqlite3_column_type(refs.handle, 1) == SQLITE_NULL
+                    let base = baseIsNull ? nil : refs.text(at: 1)
+                    let wsVersion = refs.text(at: 2)
+                    let pageID = PageID(rawValue: pageIDStr)
+
+                    let mainHead = try pageHeadVersionIDLocked(pageID: pageID)
+
+                    if base == nil || mainHead == base {
+                        // No divergence — base is already current.
+                        continue
+                    }
+
+                    // Attempt diff3: base vs main (ours) vs workspace (theirs).
+                    // The merged result becomes the workspace's NEW version,
+                    // and base_version_id is updated to the current main head.
+                    // Main is NOT modified during refresh.
+                    let baseText = try fetchVersionBody(versionID: base!)
+                    let oursText = try fetchVersionBody(versionID: mainHead!)
+                    let theirsText = try fetchVersionBody(versionID: wsVersion)
+
+                    let result = Diff3.merge(base: baseText, ours: oursText, theirs: theirsText)
+                    guard case .clean(let mergedText) = result else {
+                        conflicts.append((pageIDStr, base, wsVersion, mainHead))
+                        continue
+                    }
+
+                    // Write the merged version as a new workspace version.
+                    let mergedData = Data(mergedText.utf8)
+                    let hash = SHA256.hash(data: mergedData)
+                        .map { String(format: "%02x", $0) }.joined()
+                    let nowTS = Date().timeIntervalSince1970
+
+                    let insBlob = try statement(
+                        "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+                    insBlob.reset()
+                    try insBlob.bind(hash, at: 1)
+                    try insBlob.bind(Int64(mergedData.count), at: 2)
+                    try insBlob.bind(mergedData, at: 3)
+                    _ = try insBlob.step()
+
+                    let agentID = try legacyImportAgentID()
+                    let activityID = ULID.generate()
+                    let insActivity = try statement("""
+                    INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+                    VALUES (?1, 'refresh', ?2, ?3, ?3);
+                    """)
+                    insActivity.reset()
+                    try insActivity.bind(activityID, at: 1)
+                    try insActivity.bind(agentID, at: 2)
+                    try insActivity.bind(nowTS, at: 3)
+                    _ = try insActivity.step()
+
+                    // Fetch the title from the workspace version.
+                    let titleStmt = try statement("SELECT title FROM page_versions WHERE id = ?1;")
+                    titleStmt.reset()
+                    try titleStmt.bind(wsVersion, at: 1)
+                    guard try titleStmt.step() else { continue }
+                    let title = titleStmt.text(at: 0)
+                    titleStmt.reset()
+
+                    let newVersionID = ULID.generate()
+                    let insVersion = try statement("""
+                    INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);
+                    """)
+                    insVersion.reset()
+                    try insVersion.bind(newVersionID, at: 1)
+                    try insVersion.bind(pageID.rawValue, at: 2)
+                    try insVersion.bind(mainHead, at: 3)      // parent = main head (re-based)
+                    try insVersion.bind(wsVersion, at: 4)      // merge_parent = old workspace version
+                    try insVersion.bind(hash, at: 5)
+                    try insVersion.bind(title, at: 6)
+                    try insVersion.bind(activityID, at: 7)
+                    try insVersion.bind(nowTS, at: 8)
+                    _ = try insVersion.step()
+
+                    // Update the workspace_ref: new version + new base.
+                    let upRef = try statement("""
+                    UPDATE workspace_refs
+                    SET base_version_id = ?2, version_id = ?3, updated_at = ?4
+                    WHERE workspace_id = ?1 AND kind = 'page-content' AND owner_id = ?5;
+                    """)
+                    upRef.reset()
+                    try upRef.bind(workspaceID, at: 1)
+                    try upRef.bind(mainHead, at: 2)       // new base = current main head
+                    try upRef.bind(newVersionID, at: 3)
+                    try upRef.bind(nowTS, at: 4)
+                    try upRef.bind(pageIDStr, at: 5)
+                    _ = try upRef.step()
+                }
+                if !conflicts.isEmpty {
+                    throw WikiStoreError.unexpected("refresh: \(conflicts.count) conflict(s)")
+                }
+            }
+            }
+        } catch {
+            if !conflicts.isEmpty {
+                try mutate(event: { _ in nil }) {
+                    let park = try statement(
+                        "UPDATE workspaces SET status = 'conflicted', updated_at = ?2 WHERE id = ?1;")
+                    park.reset()
+                    try park.bind(workspaceID, at: 1)
+                    try park.bind(Date().timeIntervalSince1970, at: 2)
+                    _ = try park.step()
+                }
+                return
+            }
+            throw error
         }
     }
 

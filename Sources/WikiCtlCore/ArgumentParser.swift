@@ -130,6 +130,7 @@ public enum ArgumentParser {
       workspace status --id W                  show workspace status + pages
       workspace abandon --id W                abandon a workspace (GC refs)
       workspace merge --id W                   fast-forward merge into main
+      workspace refresh --id W                 re-base workspace against current main
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -430,6 +431,12 @@ public enum ArgumentParser {
                 throw Failure.usage("workspace merge: --id is required")
             }
             return .workspace(.merge(id: id))
+
+        case "refresh":
+            guard let id = options.value("--id") else {
+                throw Failure.usage("workspace refresh: --id is required")
+            }
+            return .workspace(.refresh(id: id))
 
         default:
             throw Failure.usage("workspace: unknown subcommand \(sub.debugDescription)")

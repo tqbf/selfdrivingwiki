@@ -21,6 +21,7 @@ public enum WorkspaceCommand {
         case status(id: String)
         case abandon(id: String)
         case merge(id: String)
+        case refresh(id: String)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -43,6 +44,8 @@ public enum WorkspaceCommand {
             return try abandon(id: id, in: store)
         case .merge(let id):
             return try merge(id: id, in: store)
+        case .refresh(let id):
+            return try refresh(id: id, in: store)
         }
     }
 
@@ -86,5 +89,14 @@ public enum WorkspaceCommand {
         let ws = try store.workspaceSummary(id: id)
         let status = ws?.status.rawValue ?? "unknown"
         return Result(output: "merge: \(id) → \(status)", didCommit: true)
+    }
+
+    // MARK: - refresh
+
+    private static func refresh(id: String, in store: WikiStore) throws -> Result {
+        try store.workspaceRefresh(workspaceID: id)
+        let ws = try store.workspaceSummary(id: id)
+        let status = ws?.status.rawValue ?? "unknown"
+        return Result(output: "refresh: \(id) → \(status)", didCommit: true)
     }
 }

@@ -223,4 +223,165 @@ struct WorkspaceTests {
         let summary = try store.workspaceSummary(id: wsID)
         #expect(summary?.status == .merged)
     }
+
+    // MARK: - diff3 merge (W2)
+
+    @Test func diff3MergeCleansWhenChangesAreInDifferentRegions() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Diff3 Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Diff3 Page", body: "line1\nline2\nline3",
+            expectedHeadVersionID: nil)
+
+        // Workspace writes: change line1 → ws-line1.
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page.id, title: "Diff3 Page",
+            body: "ws-line1\nline2\nline3")
+
+        // Main moves: change line3 → main-line3.
+        let mainHead = try store.pageHeadVersionID(pageID: page.id)
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Diff3 Page",
+            body: "line1\nline2\nmain-line3",
+            expectedHeadVersionID: mainHead)
+
+        // Merge — should diff3 cleanly (different regions).
+        try store.workspaceMerge(workspaceID: wsID)
+
+        let merged = try store.getPage(id: page.id)
+        #expect(merged.bodyMarkdown.contains("ws-line1"))
+        #expect(merged.bodyMarkdown.contains("main-line3"))
+        #expect(merged.bodyMarkdown.contains("line2"))
+
+        let summary = try store.workspaceSummary(id: wsID)
+        #expect(summary?.status == .merged)
+    }
+
+    @Test func diff3MergeParksWhenSameLineChangedDifferently() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Conflict Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Conflict Page", body: "line1\nline2\nline3",
+            expectedHeadVersionID: nil)
+
+        // Workspace writes: line2 → ws-line2.
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page.id, title: "Conflict Page",
+            body: "line1\nws-line2\nline3")
+
+        // Main moves: line2 → main-line2.
+        let mainHead = try store.pageHeadVersionID(pageID: page.id)
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Conflict Page",
+            body: "line1\nmain-line2\nline3",
+            expectedHeadVersionID: mainHead)
+
+        // Merge — should conflict (same line, different change).
+        try store.workspaceMerge(workspaceID: wsID)
+
+        let summary = try store.workspaceSummary(id: wsID)
+        #expect(summary?.status == .conflicted)
+
+        // Main body unchanged (not corrupted).
+        let mainPage = try store.getPage(id: page.id)
+        #expect(mainPage.bodyMarkdown.contains("main-line2"))
+    }
+
+    @Test func diff3MergeCreatesTwoParentVersion() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Lineage Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Lineage Page", body: "line1\nline2",
+            expectedHeadVersionID: nil)
+
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page.id, title: "Lineage Page",
+            body: "line1\nline2\nws-added")
+
+        // Main moves (different region).
+        let mainHead = try store.pageHeadVersionID(pageID: page.id)
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Lineage Page",
+            body: "main-added\nline1\nline2",
+            expectedHeadVersionID: mainHead)
+
+        try store.workspaceMerge(workspaceID: wsID)
+
+        // The merge version should have two parents.
+        let history = try store.pageVersionHistory(pageID: page.id)
+        let mergeVersion = history.last!
+        #expect(mergeVersion.parentID != nil)
+        #expect(mergeVersion.mergeParentID != nil)
+        #expect(mergeVersion.mergeParentID != mergeVersion.parentID)
+    }
+
+    @Test func twoOverlappingIngestionsBothMerge() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Shared Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Shared Page", body: "line1\nline2\nline3",
+            expectedHeadVersionID: nil)
+
+        // Ingestion 1: touches line1.
+        let ws1 = try store.createWorkspace(name: "ingest1", activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: ws1, pageID: page.id, title: "Shared Page",
+            body: "ingest1-line1\nline2\nline3")
+
+        // Merge ingestion 1 (fast-forward — main hasn't moved).
+        try store.workspaceMerge(workspaceID: ws1)
+
+        // Ingestion 2: touches line3 (different region from ingest1).
+        let ws2 = try store.createWorkspace(name: "ingest2", activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: ws2, pageID: page.id, title: "Shared Page",
+            body: "ingest1-line1\nline2\ningest2-line3")
+
+        // Merge ingestion 2 (main moved since base → diff3).
+        try store.workspaceMerge(workspaceID: ws2)
+
+        let merged = try store.getPage(id: page.id)
+        #expect(merged.bodyMarkdown.contains("ingest1-line1"))
+        #expect(merged.bodyMarkdown.contains("ingest2-line3"))
+        #expect(merged.bodyMarkdown.contains("line2"))
+
+        let summary2 = try store.workspaceSummary(id: ws2)
+        #expect(summary2?.status == .merged)
+    }
+
+    // MARK: - refresh (W2)
+
+    @Test func refreshReBasesWorkspaceAgainstMain() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Refresh Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Refresh Page", body: "line1\nline2\nline3",
+            expectedHeadVersionID: nil)
+
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page.id, title: "Refresh Page",
+            body: "line1\nws-line2\nline3")
+
+        // Main moves in a different region (line1 → main-line1).
+        let mainHead = try store.pageHeadVersionID(pageID: page.id)
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Refresh Page",
+            body: "main-line1\nline2\nline3",
+            expectedHeadVersionID: mainHead)
+
+        // Refresh — should diff3 merge, update base to new main head.
+        try store.workspaceRefresh(workspaceID: wsID)
+
+        let summary = try store.workspaceSummary(id: wsID)
+        #expect(summary?.status == .open)  // still open after refresh
+
+        // The workspace_ref's base should now be the new main head.
+        let refs = try store.workspaceRefs(workspaceID: wsID)
+        let newMainHead = try store.pageHeadVersionID(pageID: page.id)
+        #expect(refs.first?.baseVersionID == newMainHead)
+    }
 }
