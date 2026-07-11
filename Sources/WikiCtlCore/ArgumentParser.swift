@@ -48,6 +48,10 @@ public enum ArgumentParser {
         /// results (most relevant first). Falls back to LIKE title match when
         /// embeddings aren't available.
         case search(query: String, limit: Int)
+        /// Page version history (W0, PR #312).
+        case pageHistory(PageCommand.Selector)
+        /// Revert a page to a specific version (W0, PR #312).
+        case pageRevert(PageCommand.Selector, versionID: String)
         /// Source commands: list, read, export sources from SQLite.
         case source(SourceCommand.Action)
         /// Edit processed markdown for a source. When `isFile` is true,
@@ -88,6 +92,9 @@ public enum ArgumentParser {
       page upsert --title X [--id Y] --body-file <path|->
                                              create-or-update a page from a body
       page delete --id Y                     delete a page
+      page history (--title X | --id Y)       show version history (W0)
+      page revert (--title X | --id Y) --version V
+                                              revert a page to version V (W0)
       log append --kind ingest|query|lint --title X [--note N] [--source <file-id>]
                                              append one dated row to log.md;
                                              --source stamps that file "Processed"
@@ -190,6 +197,15 @@ public enum ArgumentParser {
                 throw Failure.usage("page delete: --id is required")
             }
             return .delete(id: PageID(rawValue: id))
+
+        case "history":
+            return .pageHistory(try options.requireSelector())
+
+        case "revert":
+            guard let versionID = options.value("--version") else {
+                throw Failure.usage("page revert: --version is required")
+            }
+            return .pageRevert(try options.requireSelector(), versionID: versionID)
 
         default:
             throw Failure.usage("page: unknown subcommand \(sub.debugDescription)")

@@ -38,6 +38,12 @@ public enum PageCommand {
         /// Semantic search: find pages by meaning (cosine similarity via
         /// sqlite-vec), falling back to LIKE title match.
         case search(query: String, limit: Int)
+        /// Show the page's version history (W0, PR #312). One line per version:
+        /// `seq  versionID  saved_at  title  blob_hash  parent_id`.
+        case history(Selector)
+        /// Revert a page to a specific version (W0, PR #312). Repoints the
+        /// page-content ref to `versionID` and updates the body mirror.
+        case revert(Selector, versionID: String)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -75,6 +81,10 @@ public enum PageCommand {
             return try delete(id: id, in: store)
         case .search(let query, let limit):
             return try search(query: query, limit: limit, in: store)
+        case .history(let selector):
+            return try history(selector, in: store)
+        case .revert(let selector, let versionID):
+            return try revert(selector, versionID: versionID, in: store)
         }
     }
 
@@ -211,6 +221,32 @@ public enum PageCommand {
             return "\(summary.id.rawValue)\t\(title)"
         }.joined(separator: "\n")
         return Result(output: output, didCommit: false)
+    }
+
+    // MARK: - history (W0, PR #312)
+
+    private static func history(_ selector: Selector, in store: WikiStore) throws -> Result {
+        let id = try resolve(selector, in: store)
+        let versions = try store.pageVersionHistory(pageID: id)
+        if versions.isEmpty {
+            return Result(output: "(no version history)", didCommit: false)
+        }
+        let lines = versions.enumerated().map { (i, v) in
+            let parent = v.parentID ?? "—"
+            let date = ISO8601DateFormatter().string(from: v.savedAt)
+            return "\(i)\t\(v.id)\t\(date)\t\(v.title)\t\(v.blobHash.prefix(12))\t\(parent.prefix(12))"
+        }
+        return Result(output: lines.joined(separator: "\n"), didCommit: false)
+    }
+
+    // MARK: - revert (W0, PR #312)
+
+    private static func revert(
+        _ selector: Selector, versionID: String, in store: WikiStore
+    ) throws -> Result {
+        let id = try resolve(selector, in: store)
+        try store.revertPage(pageID: id, to: versionID)
+        return Result(output: "reverted \(id.rawValue) to \(versionID)", didCommit: true)
     }
 
     // MARK: - Selector resolution
