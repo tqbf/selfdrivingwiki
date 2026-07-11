@@ -85,10 +85,10 @@ struct WikiFSApp: App {
         let coordinator = ExtractionCoordinator(containerDirectory: directory)
         _extractionCoordinator = State(initialValue: coordinator)
         // Both launchers share one GenerationGate so ingest and chat-turn
-        // generations contend on the same FIFO queue — only one active
-        // generation at a time. Interactive sessions' processes coexist freely;
-        // only one GENERATES at a time (per-turn gate).
-        let generationGate = GenerationGate()
+        // generations contend on the same FIFO queue. With CAS + workspaces
+        // (W0–W4), concurrent writes are safe — allow multiple concurrent
+        // generations so a chat doesn't block behind a long-running ingest.
+        let generationGate = GenerationGate(maxConcurrent: 4)
         _agentLauncher = State(initialValue: AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator))
         _chatLauncher   = State(initialValue: AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator))
 
