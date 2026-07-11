@@ -559,6 +559,7 @@ enum AgentOperationRunner {
             systemPrompt: store.currentSystemPromptBody(),
             wikictlDirectory: HelpersLocation.wikictlDirectory,
             chatID: chatID.rawValue,
+            historySeed: history.map(\.event),
             onLock: { store.beginAgentRun() },
             onUnlock: { store.endAgentRun() },
             onTurnBoundary: { store.setAgentRunning($0) },

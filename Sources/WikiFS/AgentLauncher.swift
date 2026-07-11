@@ -1542,6 +1542,7 @@ final class AgentLauncher {
         wikictlDirectory: String,
         chatID: String? = nil,
         firstMessagePrePersisted: Bool = false,
+        historySeed: [AgentEvent] = [],
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
         onTurnBoundary: @escaping @MainActor (Bool) -> Void,
@@ -1553,7 +1554,15 @@ final class AgentLauncher {
 
         // Preflight (no gate held — early returns here don't need gate release).
         resetRunArtifacts()
-        DebugLog.agent("startInteractiveQuery: enter firstMsg=\"\(firstMessage.prefix(80))\" chatID=\(chatID ?? "nil") wikiID=\(wikiID)") // TEMP DEBUG
+        // Seed `events` with the persisted chat history so a continued chat
+        // shows its full transcript during the live session (the view sources
+        // from `launcher.events` when `isLiveChat`). `persistedEventCount` is
+        // set so `flushTranscript` never re-persisted the already-stored rows.
+        if !historySeed.isEmpty {
+            events = historySeed
+            persistedEventCount = historySeed.count
+        }
+        DebugLog.agent("startInteractiveQuery: enter firstMsg=\"\(firstMessage.prefix(80))\" chatID=\(chatID ?? "nil") wikiID=\(wikiID) historySeed=\(historySeed.count)") // TEMP DEBUG
         // Consumed by the first `sendInteractiveMessage` to skip re-persisting
         // the user message the model already seeded at chat creation.
         self.firstMessagePrePersisted = firstMessagePrePersisted
