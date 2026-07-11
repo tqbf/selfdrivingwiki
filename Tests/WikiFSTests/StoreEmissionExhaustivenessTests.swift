@@ -68,6 +68,7 @@ struct StoreEmissionExhaustivenessTests {
 
     private let emit: Set<String> = [
         "createPage", "updatePage", "deletePage", "replaceLinks",
+        "appendPageVersion", "revertPage",
         "addSource", "addSnapshotImage", "addBytelessSource", "deleteSource",
         "appendContentVersion", "rollbackSourceContent", "renameSource",
         "setSourceDisplayName", "markSourceIngested", "updateSystemPrompt", "appendLog", "updateWikiIndex",

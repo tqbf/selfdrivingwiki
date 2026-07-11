@@ -2440,6 +2440,231 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    // MARK: - Page versions (W0, PR #312)
+
+    /// Append a new page version with CAS conflict detection. When
+    /// `expectedHeadVersionID` is non-nil, throws `PageConflictError` if the
+    /// current head doesn't match. When nil, blind write (backward-compatible).
+    /// The `pages.body_markdown` mirror is updated so FTS triggers still fire
+    /// and reads stay unchanged.
+    public func appendPageVersion(
+        pageID: PageID, title: String, body: String,
+        expectedHeadVersionID: String?
+    ) throws -> String {
+        try mutate(event: { _ in localEvent(.page, id: pageID.rawValue, change: .updated) }) {
+        let title = WikiNameRules.sanitized(title)
+        let slug = try uniqueSlug(from: title, id: pageID)
+        let bodyData = Data(body.utf8)
+        let hash = SHA256.hash(data: bodyData)
+            .map { String(format: "%02x", $0) }.joined()
+        let now = Date()
+        let nowTS = now.timeIntervalSince1970
+
+        return try withTransaction {
+            // 1. CAS check: resolve current head (ref → version_id, or MAX(id)).
+            let head = try pageHeadVersionIDLocked(pageID: pageID)
+            if let expected = expectedHeadVersionID, expected != head {
+                throw PageConflictError(
+                    pageID: pageID, expectedVersionID: expected, actualVersionID: head)
+            }
+
+            // 2. Blob (identical body = one row, ever).
+            let insBlob = try statement(
+                "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+            insBlob.reset()
+            try insBlob.bind(hash, at: 1)
+            try insBlob.bind(Int64(bodyData.count), at: 2)
+            try insBlob.bind(bodyData, at: 3)
+            _ = try insBlob.step()
+
+            // 3. Legacy-import agent + activity (mirrors the source pattern).
+            let agentID = try legacyImportAgentID()
+            let activityID = ULID.generate()
+            let insActivity = try statement("""
+            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+            VALUES (?1, 'edit', ?2, ?3, ?3);
+            """)
+            insActivity.reset()
+            try insActivity.bind(activityID, at: 1)
+            try insActivity.bind(agentID, at: 2)
+            try insActivity.bind(nowTS, at: 3)
+            _ = try insActivity.step()
+
+            // 4. New version (parent = current head).
+            let versionID = ULID.generate()
+            let insVersion = try statement("""
+            INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
+            VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7);
+            """)
+            insVersion.reset()
+            try insVersion.bind(versionID, at: 1)
+            try insVersion.bind(pageID.rawValue, at: 2)
+            if let parent = head { try insVersion.bind(parent, at: 3) }
+            try insVersion.bind(hash, at: 4)
+            try insVersion.bind(title, at: 5)
+            try insVersion.bind(activityID, at: 6)
+            try insVersion.bind(nowTS, at: 7)
+            _ = try insVersion.step()
+
+            // 5. Update the denormalized pages mirror (keeps FTS triggers
+            //    working; reads stay on `pages` directly).
+            let upPage = try statement("""
+            UPDATE pages
+            SET title = ?2, slug = ?3, body_markdown = ?4,
+                updated_at = ?5, version = version + 1
+            WHERE id = ?1;
+            """)
+            upPage.reset()
+            try upPage.bind(pageID.rawValue, at: 1)
+            try upPage.bind(title, at: 2)
+            try upPage.bind(slug, at: 3)
+            try upPage.bind(body, at: 4)
+            try upPage.bind(nowTS, at: 5)
+            _ = try upPage.step()
+            guard sqlite3_changes(db) > 0 else { throw WikiStoreError.notFound(pageID) }
+
+            // 6. Write the page-content ref (explicit, so revert works; the
+            //    default-active rule still covers migrated root versions).
+            let upRef = try statement("""
+            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+            VALUES ('page-content', ?1, ?2, 1, ?3)
+            ON CONFLICT(kind, owner_id) DO UPDATE SET
+                version_id = excluded.version_id,
+                generation = generation + 1,
+                updated_at = excluded.updated_at;
+            """)
+            upRef.reset()
+            try upRef.bind(pageID.rawValue, at: 1)
+            try upRef.bind(versionID, at: 2)
+            try upRef.bind(nowTS, at: 3)
+            _ = try upRef.step()
+
+            return versionID
+        }
+        }
+    }
+
+    /// Resolve the active page-content version id: ref → version_id, or
+    /// MAX(id) from page_versions if no ref row exists (default-active rule).
+    /// Returns nil if the page has no versions. Assumes the lock is held
+    /// (internal helper called from within `withTransaction`/`mutate`).
+    private func pageHeadVersionIDLocked(pageID: PageID) throws -> String? {
+        // Try the explicit ref first.
+        let refStmt = try statement("""
+        SELECT version_id FROM refs WHERE kind = 'page-content' AND owner_id = ?1;
+        """)
+        refStmt.reset()
+        try refStmt.bind(pageID.rawValue, at: 1)
+        if try refStmt.step() {
+            return refStmt.text(at: 0)
+        }
+        refStmt.reset()
+        // No ref → default-active = MAX(id) for this page.
+        let maxStmt = try statement("""
+        SELECT id FROM page_versions
+        WHERE page_id = ?1
+        ORDER BY id DESC LIMIT 1;
+        """)
+        maxStmt.reset()
+        try maxStmt.bind(pageID.rawValue, at: 1)
+        if try maxStmt.step() {
+            return maxStmt.text(at: 0)
+        }
+        return nil
+    }
+
+    public func pageHeadVersionID(pageID: PageID) throws -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return try pageHeadVersionIDLocked(pageID: pageID)
+    }
+
+    public func pageVersionHistory(pageID: PageID) throws -> [PageVersionSummary] {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement("""
+        SELECT id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at
+        FROM page_versions
+        WHERE page_id = ?1
+        ORDER BY id ASC;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(pageID.rawValue, at: 1)
+        var out: [PageVersionSummary] = []
+        while try stmt.step() {
+            let parentIsNull = sqlite3_column_type(stmt.handle, 2) == SQLITE_NULL
+            let mergeIsNull = sqlite3_column_type(stmt.handle, 3) == SQLITE_NULL
+            let activityIsNull = sqlite3_column_type(stmt.handle, 6) == SQLITE_NULL
+            out.append(PageVersionSummary(
+                id: stmt.text(at: 0),
+                pageID: PageID(rawValue: stmt.text(at: 1)),
+                parentID: parentIsNull ? nil : stmt.text(at: 2),
+                mergeParentID: mergeIsNull ? nil : stmt.text(at: 3),
+                blobHash: stmt.text(at: 4),
+                title: stmt.text(at: 5),
+                activityID: activityIsNull ? nil : stmt.text(at: 6),
+                savedAt: Date(timeIntervalSince1970: stmt.double(at: 7))
+            ))
+        }
+        return out
+    }
+
+    public func revertPage(pageID: PageID, to versionID: String) throws {
+        try mutate(event: { _ in localEvent(.page, id: pageID.rawValue, change: .updated) }) {
+        try withTransaction {
+            // Fetch the target version's blob + title.
+            let target = try statement("""
+            SELECT pv.blob_hash, pv.title, b.content
+            FROM page_versions pv
+            JOIN blobs b ON b.hash = pv.blob_hash
+            WHERE pv.id = ?1 AND pv.page_id = ?2;
+            """)
+            target.reset()
+            try target.bind(versionID, at: 1)
+            try target.bind(pageID.rawValue, at: 2)
+            guard try target.step() else {
+                throw WikiStoreError.unexpected("version \(versionID) not found for page \(pageID.rawValue)")
+            }
+            let blobHash = target.text(at: 0)
+            let title = target.text(at: 1)
+            let bodyData = target.blob(at: 2)
+            let body = String(data: bodyData, encoding: .utf8) ?? ""
+            target.reset()
+
+            // Update the denormalized pages mirror.
+            let slug = try uniqueSlug(from: WikiNameRules.sanitized(title), id: pageID)
+            let now = Date().timeIntervalSince1970
+            let upPage = try statement("""
+            UPDATE pages
+            SET title = ?2, slug = ?3, body_markdown = ?4,
+                updated_at = ?5, version = version + 1
+            WHERE id = ?1;
+            """)
+            upPage.reset()
+            try upPage.bind(pageID.rawValue, at: 1)
+            try upPage.bind(WikiNameRules.sanitized(title), at: 2)
+            try upPage.bind(slug, at: 3)
+            try upPage.bind(body, at: 4)
+            try upPage.bind(now, at: 5)
+            _ = try upPage.step()
+            guard sqlite3_changes(db) > 0 else { throw WikiStoreError.notFound(pageID) }
+
+            // Repoint the page-content ref to the target version.
+            let upRef = try statement("""
+            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+            VALUES ('page-content', ?1, ?2, 1, ?3)
+            ON CONFLICT(kind, owner_id) DO UPDATE SET
+                version_id = excluded.version_id,
+                generation = generation + 1,
+                updated_at = excluded.updated_at;
+            """)
+            upRef.reset()
+            try upRef.bind(pageID.rawValue, at: 1)
+            try upRef.bind(versionID, at: 2)
+            try upRef.bind(now, at: 3)
+            _ = try upRef.step()
+        }
+        }
+    }
+
     public func deletePage(id: PageID) throws {
         try mutate(event: { _ in localEvent(.page, id: id.rawValue, change: .deleted) }) {
         // FK safety: `page_links`, `attachments`, and `source_links` all have

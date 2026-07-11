@@ -116,4 +116,50 @@ public enum RefKind: String, Sendable {
     case sourceContent = "source-content"
     /// Active extraction alternative (`source_markdown_versions.id`).
     case sourceDerived = "source-derived"
+    /// Active page-content version (`page_versions.id`). W0 (PR #312).
+    case pageContent = "page-content"
+}
+
+/// A summary of one page version in the append-only chain (W0, PR #312).
+/// Mirrors `SourceVersion` but for page bodies.
+public struct PageVersionSummary: Equatable, Sendable {
+    public let id: String
+    public let pageID: PageID
+    /// The previous version's id; nil for the root version.
+    public let parentID: String?
+    /// Non-nil when this version is a merge commit (W2+; nil in W0).
+    public let mergeParentID: String?
+    public let blobHash: String
+    public let title: String
+    public let activityID: String?
+    public let savedAt: Date
+
+    public init(id: String, pageID: PageID, parentID: String?,
+                mergeParentID: String?, blobHash: String, title: String,
+                activityID: String?, savedAt: Date) {
+        self.id = id
+        self.pageID = pageID
+        self.parentID = parentID
+        self.mergeParentID = mergeParentID
+        self.blobHash = blobHash
+        self.title = title
+        self.activityID = activityID
+        self.savedAt = savedAt
+    }
+}
+
+/// Thrown by `appendPageVersion` when a CAS check fails: another writer
+/// committed a new version after the caller loaded the page, so the caller's
+/// `expectedHeadVersionID` is stale. Carries the actual current head so the
+/// caller can re-load and retry (W0, PR #312).
+public struct PageConflictError: Error, Equatable {
+    public let pageID: PageID
+    public let expectedVersionID: String
+    public let actualVersionID: String?
+
+    public init(pageID: PageID, expectedVersionID: String, actualVersionID: String?) {
+        self.pageID = pageID
+        self.expectedVersionID = expectedVersionID
+        self.actualVersionID = actualVersionID
+    }
 }

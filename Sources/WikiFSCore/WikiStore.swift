@@ -332,6 +332,32 @@ public protocol WikiStore: Sendable {
     /// `wikictl source set-active`, and revert.
     func setActiveMarkdown(sourceID: PageID, to versionID: PageID) throws
 
+    // MARK: - Page versions (W0, PR #312)
+
+    /// Append a new page version with CAS (compare-and-swap) conflict
+    /// detection. If `expectedHeadVersionID` is non-nil, the save is rejected
+    /// with `PageConflictError` when the current head doesn't match (another
+    /// writer committed since the editor loaded). When nil, the save is a
+    /// blind write (backward-compatible with pre-versioning callers). Returns
+    /// the new version's id.
+    func appendPageVersion(
+        pageID: PageID, title: String, body: String,
+        expectedHeadVersionID: String?
+    ) throws -> String
+
+    /// Resolve the active page-content version id (ref → version_id, or
+    /// MAX(id) if no ref row exists — the default-active rule). Returns nil if
+    /// the page has no versions (shouldn't happen post-migration).
+    func pageHeadVersionID(pageID: PageID) throws -> String?
+
+    /// The full version chain for a page, ordered by ULID (chain order).
+    func pageVersionHistory(pageID: PageID) throws -> [PageVersionSummary]
+
+    /// Revert a page to a specific version: repoint the `page-content` ref to
+    /// `versionID` and update the denormalized `pages.body_markdown` from the
+    /// version's blob. Emits a `.page .updated` change event.
+    func revertPage(pageID: PageID, to versionID: String) throws
+
     // MARK: - System prompt (singleton document, v3)
 
     /// Read the user-editable singleton system-prompt document (projected at the
