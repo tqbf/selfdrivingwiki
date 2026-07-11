@@ -533,6 +533,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // DB has no workspaces to seed.
         try createWorkspacesV31()
         try exec("PRAGMA user_version=31;")
+
+        // v32 (W3 — conflict resolution, PR #312): `workspace_conflicts`
+        // table for persisting per-page conflict details when a workspace is
+        // parked as `conflicted`. Purely additive.
+        try createWorkspaceConflictsV32()
+        try exec("PRAGMA user_version=32;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -659,6 +665,24 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             version_id     TEXT NOT NULL,
             updated_at     REAL NOT NULL,
             PRIMARY KEY (workspace_id, kind, owner_id)
+        );
+        """)
+    }
+
+    /// Create the `workspace_conflicts` table (v32, W3 — PR #312). Stores
+    /// per-page conflict details when a workspace is parked as `conflicted`,
+    /// so they can be queried and resolved. Called by both the fresh-schema
+    /// fast path and the v31→32 migration step. `IF NOT EXISTS`: idempotent.
+    private func createWorkspaceConflictsV32() throws {
+        try exec("""
+        CREATE TABLE IF NOT EXISTS workspace_conflicts (
+            workspace_id    TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            page_id         TEXT NOT NULL,
+            base_version_id TEXT,
+            main_version_id TEXT,
+            ws_version_id   TEXT NOT NULL,
+            created_at      REAL NOT NULL,
+            PRIMARY KEY (workspace_id, page_id)
         );
         """)
     }
@@ -1386,6 +1410,15 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try createWorkspacesV31()
             try exec("PRAGMA user_version=31;")
             version = 31
+        }
+
+        // Step 31 → 32 (W3 — conflict resolution, PR #312): creates the
+        // `workspace_conflicts` table for persisting per-page conflict details
+        // when a workspace is parked as `conflicted`. Purely additive.
+        if version < 32 {
+            try createWorkspaceConflictsV32()
+            try exec("PRAGMA user_version=32;")
+            version = 32
         }
     }
 
@@ -3010,14 +3043,38 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 }.joined(separator: "; ")
                 DebugLog.store("workspaceMerge: \(conflicts.count) conflict(s) — \(descriptions)")
                 // Park in a separate transaction (the merge transaction
-                // rolled back, so the workspace is still 'open').
+                // rolled back, so the workspace is still 'open'). Persist
+                // the conflict details so they can be queried and resolved.
                 try mutate(event: { _ in nil }) {
-                    let park = try statement(
-                        "UPDATE workspaces SET status = 'conflicted', updated_at = ?2 WHERE id = ?1;")
-                    park.reset()
-                    try park.bind(workspaceID, at: 1)
-                    try park.bind(Date().timeIntervalSince1970, at: 2)
-                    _ = try park.step()
+                let nowTS = Date().timeIntervalSince1970
+                let park = try statement(
+                    "UPDATE workspaces SET status = 'conflicted', updated_at = ?2 WHERE id = ?1;")
+                park.reset()
+                try park.bind(workspaceID, at: 1)
+                try park.bind(nowTS, at: 2)
+                _ = try park.step()
+
+                // Clear any stale conflict rows, then persist the new ones.
+                let delConflicts = try statement(
+                    "DELETE FROM workspace_conflicts WHERE workspace_id = ?1;")
+                delConflicts.reset()
+                try delConflicts.bind(workspaceID, at: 1)
+                _ = try delConflicts.step()
+
+                let insConflict = try statement("""
+                INSERT INTO workspace_conflicts (workspace_id, page_id, base_version_id, main_version_id, ws_version_id, created_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6);
+                """)
+                for c in conflicts {
+                    insConflict.reset()
+                    try insConflict.bind(workspaceID, at: 1)
+                    try insConflict.bind(c.pageID, at: 2)
+                    if let b = c.base { try insConflict.bind(b, at: 3) }
+                    if let m = c.mainVersion { try insConflict.bind(m, at: 4) }
+                    try insConflict.bind(c.wsVersion, at: 5)
+                    try insConflict.bind(nowTS, at: 6)
+                    _ = try insConflict.step()
+                }
                 }
                 return
             }
@@ -3383,12 +3440,35 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         } catch {
             if !conflicts.isEmpty {
                 try mutate(event: { _ in nil }) {
-                    let park = try statement(
-                        "UPDATE workspaces SET status = 'conflicted', updated_at = ?2 WHERE id = ?1;")
-                    park.reset()
-                    try park.bind(workspaceID, at: 1)
-                    try park.bind(Date().timeIntervalSince1970, at: 2)
-                    _ = try park.step()
+                let nowTS = Date().timeIntervalSince1970
+                let park = try statement(
+                    "UPDATE workspaces SET status = 'conflicted', updated_at = ?2 WHERE id = ?1;")
+                park.reset()
+                try park.bind(workspaceID, at: 1)
+                try park.bind(nowTS, at: 2)
+                _ = try park.step()
+
+                // Persist conflict details.
+                let delConflicts = try statement(
+                    "DELETE FROM workspace_conflicts WHERE workspace_id = ?1;")
+                delConflicts.reset()
+                try delConflicts.bind(workspaceID, at: 1)
+                _ = try delConflicts.step()
+
+                let insConflict = try statement("""
+                INSERT INTO workspace_conflicts (workspace_id, page_id, base_version_id, main_version_id, ws_version_id, created_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6);
+                """)
+                for c in conflicts {
+                    insConflict.reset()
+                    try insConflict.bind(workspaceID, at: 1)
+                    try insConflict.bind(c.pageID, at: 2)
+                    if let b = c.base { try insConflict.bind(b, at: 3) }
+                    if let m = c.mainVersion { try insConflict.bind(m, at: 4) }
+                    try insConflict.bind(c.wsVersion, at: 5)
+                    try insConflict.bind(nowTS, at: 6)
+                    _ = try insConflict.step()
+                }
                 }
                 return
             }
