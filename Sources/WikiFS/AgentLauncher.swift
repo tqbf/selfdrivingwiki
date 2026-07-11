@@ -398,6 +398,9 @@ final class AgentLauncher {
     /// Backstop poller that reconciles the UI if the process `terminationHandler`
     /// is ever missed (see `startCompletionWatchdog`). Cancelled on teardown.
     private var watchdogTask: Task<Void, Never>?
+    /// True once the launcher watchdog has escalated (stopAgent + kill sequence).
+    /// Prevents double-escalation. Reset in `resetRunArtifacts()`.
+    private var watchdogHasEscalated = false
     /// True while the last row in `events` is an in-progress `.assistantText` row
     /// being grown by streamed `.assistantTextDelta` chunks (issue #121). Reset by
     /// any other event (a tool call, a turn boundary, …) so unrelated `.assistantText`
@@ -1421,15 +1424,36 @@ final class AgentLauncher {
         }?.modelId
     }
 
-    /// Heartbeat logger + stale-idle detector. Replaces the old liveness-poller
+    /// Stall threshold for the launcher-level watchdog. More generous than the
+    /// ACPBackend's per-turn 120s `TurnLivenessPolicy` — this is the backstop
+    /// that fires when the backend watchdog's recovery fails (cancelSession
+    /// didn't unblock sendPrompt) and the process is truly wedged.
+    nonisolated static let watchdogStallThreshold: TimeInterval = 180
+
+    /// Pure stall-detection decision for the launcher watchdog. Extracted so
+    /// the threshold logic is unit-testable without driving launcher state.
+    /// - Returns: true if the watchdog should escalate (stopAgent + kill).
+    nonisolated static func shouldEscalateWatchdog(
+        isRunning: Bool,
+        idleSeconds: TimeInterval,
+        stallThreshold: TimeInterval,
+        alreadyEscalated: Bool
+    ) -> Bool {
+        isRunning && !alreadyEscalated && idleSeconds >= stallThreshold
+    }
+
+    /// Heartbeat logger + stall escalation. Replaces the old liveness-poller
     /// (which polled `process?.isRunning` — impossible now that `Process` lives
     /// behind the `AgentBackend` port). The backend's `onExit` callback is the
     /// sole completion signal: it fires exactly once from `terminationHandler`
-    /// and drives `finish()`. This watchdog logs a heartbeat for post-hoc
-    /// analysis and warns if the session has been idle for a long time, but it
-    /// no longer reconciles a missed `terminationHandler` (the `onExit` gate is
-    /// one-shot and reliable — `Process.terminationHandler` always fires on
-    /// process exit, including crash/kill).
+    /// and drives `finish()`.
+    ///
+    /// **Phase 3 escalation (plans/acp-stall-recovery.md §3):** if the session
+    /// has been idle for `watchdogStallThreshold` (180s) and hasn't already
+    /// escalated, this watchdog calls `stopAgent()` (cancel + finish) and
+    /// spawns a separate kill-escalation task: wait 10s → `SIGTERM` the process
+    /// group → wait 5s → `SIGKILL`. The `terminationHandler` fires after the
+    /// kill → `onExit` → `finish()`.
     private func startCompletionWatchdog() {
         watchdogTask?.cancel()
         watchdogTask = Task { @MainActor [weak self] in
@@ -1441,8 +1465,56 @@ final class AgentLauncher {
                 DebugLog.agent(
                     "heartbeat pid=\(pid) isRunning=\(self.isRunning) "
                     + "events=\(self.events.count) idleSec=\(String(format: "%.1f", idle))")
+
+                // Stall escalation: if idle exceeds threshold, stop + kill.
+                if Self.shouldEscalateWatchdog(
+                    isRunning: self.isRunning,
+                    idleSeconds: idle,
+                    stallThreshold: Self.watchdogStallThreshold,
+                    alreadyEscalated: self.watchdogHasEscalated
+                ) {
+                    self.watchdogHasEscalated = true
+                    DebugLog.agent("watchdog: STALL detected (idle \(Int(idle))s pid=\(pid)) — escalating: stopAgent() + kill sequence")
+                    self.stopAgent()
+                    self.startKillEscalation(pid: pid)
+                }
             }
         }
+    }
+
+    /// After `stopAgent()`, if the process doesn't die within the escalation
+    /// timeouts, escalate to `SIGTERM` → `SIGKILL`. Runs as a separate Task
+    /// because `stopAgent()` sets `isRunning = false` (which exits the heartbeat
+    /// loop above). Checks `kill(pid, 0)` directly — not `isRunning` — to detect
+    /// whether the process is actually dead. Sends to the process GROUP
+    /// (`kill(-pid, ...)`) so agent-spawned children are also killed.
+    private func startKillEscalation(pid: Int32) {
+        guard pid > 0 else { return }
+        Task { @MainActor [weak self] in
+            // Phase 1: wait for cancel to take effect.
+            try? await Task.sleep(for: .seconds(10))
+            if Self.isProcessAlive(pid) {
+                DebugLog.agent("watchdog: cancel didn't kill pid=\(pid), sending SIGTERM to process group")
+                kill(-pid, SIGTERM)
+
+                // Phase 2: wait for SIGTERM.
+                try? await Task.sleep(for: .seconds(5))
+                if Self.isProcessAlive(pid) {
+                    DebugLog.agent("watchdog: SIGTERM didn't kill pid=\(pid), sending SIGKILL to process group")
+                    kill(-pid, SIGKILL)
+                }
+            }
+            // After SIGKILL (or if already dead), the terminationHandler fires
+            // → onExit → finish(). No manual finish() needed here.
+            DebugLog.agent("watchdog: kill escalation complete for pid=\(pid)")
+        }
+    }
+
+    /// Check if a process is alive via `kill(pid, 0)`. Returns true if the
+    /// process exists (including if we don't have permission to signal it).
+    private static func isProcessAlive(_ pid: Int32) -> Bool {
+        if kill(pid, 0) == 0 { return true }
+        return errno == EPERM
     }
 
     /// Start a stdin-backed query chat. The first user message is sent
@@ -1991,6 +2063,7 @@ final class AgentLauncher {
         DebugLog.agent("finish: status=\(status) events=\(events.count) activeChatID=\(activeChatID ?? "nil")") // TEMP DEBUG (existed; re-tagged + chatID)
         watchdogTask?.cancel()
         watchdogTask = nil
+        watchdogHasEscalated = false
         // Session over: flush any remaining tail (a killed/died session still
         // persists its last events) THEN detach the sink — no further writes.
         flushTranscript()
@@ -2056,6 +2129,7 @@ final class AgentLauncher {
         DebugLog.agent("resetRunArtifacts: clearing per-run artifacts (prior activeChatID=\(activeChatID ?? "nil"))") // TEMP DEBUG
         watchdogTask?.cancel()
         watchdogTask = nil
+        watchdogHasEscalated = false
         events = []
         isStreamingAssistantRow = false
         rawTranscript = ""

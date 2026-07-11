@@ -583,19 +583,10 @@ actor ACPBackend: AgentBackend {
     ) -> [AgentEvent] {
         do {
             let data = try JSONEncoder().encode(params)
-            // TEMP DEBUG: log raw session/update JSON so we can see exactly what
-            // the agent sent (text? tool call? empty?). Strip with grep TEMP DEBUG.
-            if let raw = String(data: data, encoding: .utf8) {
-                DebugLog.agent("ACPBackend: raw session/update json (prefix 800): \(raw.prefix(800))")
-            }
             let envelope = try JSONDecoder().decode(SessionUpdateNotification.self, from: data)
             // Scope to our session (the shared notification stream is global).
             guard envelope.sessionId.value == sessionId.value else { return [] }
             let events = translator.translate(envelope.update)
-            // TEMP DEBUG: log the translated event types + snippet.
-            for event in events {
-                DebugLog.agent("ACPBackend: translated event: \(String(describing: event).prefix(300))")
-            }
             return events
         } catch {
             return [.raw("ACP session/update decode error: \(error.localizedDescription)")]
