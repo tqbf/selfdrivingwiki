@@ -2711,6 +2711,400 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    // MARK: - Workspaces (W1, PR #312)
+
+    public func createWorkspace(name: String?, activityID: String?) throws -> String {
+        try mutate(event: { _ in nil }) {  // workspaces are invisible to the FP token
+        let id = ULID.generate()
+        let now = Date().timeIntervalSince1970
+        let stmt = try statement("""
+        INSERT INTO workspaces (id, name, status, activity_id, created_at, updated_at)
+        VALUES (?1, ?2, 'open', ?3, ?4, ?4);
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(id, at: 1)
+        if let name { try stmt.bind(name, at: 2) }
+        if let activityID { try stmt.bind(activityID, at: 3) }
+        try stmt.bind(now, at: 4)
+        _ = try stmt.step()
+        return id
+        }
+    }
+
+    public func workspaceSummary(id: String) throws -> WorkspaceSummary? {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement("""
+        SELECT id, name, status, activity_id, created_at, updated_at
+        FROM workspaces WHERE id = ?1;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(id, at: 1)
+        guard try stmt.step() else { return nil }
+        let nameIsNull = sqlite3_column_type(stmt.handle, 1) == SQLITE_NULL
+        let activityIsNull = sqlite3_column_type(stmt.handle, 3) == SQLITE_NULL
+        return WorkspaceSummary(
+            id: stmt.text(at: 0),
+            name: nameIsNull ? nil : stmt.text(at: 1),
+            status: WorkspaceStatus(rawValue: stmt.text(at: 2)) ?? .open,
+            activityID: activityIsNull ? nil : stmt.text(at: 3),
+            createdAt: Date(timeIntervalSince1970: stmt.double(at: 4)),
+            updatedAt: Date(timeIntervalSince1970: stmt.double(at: 5)))
+    }
+
+    public func workspaceRefs(workspaceID: String) throws -> [WorkspaceRef] {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement("""
+        SELECT workspace_id, owner_id, base_version_id, version_id, updated_at
+        FROM workspace_refs WHERE workspace_id = ?1;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(workspaceID, at: 1)
+        var out: [WorkspaceRef] = []
+        while try stmt.step() {
+            let baseIsNull = sqlite3_column_type(stmt.handle, 2) == SQLITE_NULL
+            out.append(WorkspaceRef(
+                workspaceID: stmt.text(at: 0),
+                ownerID: PageID(rawValue: stmt.text(at: 1)),
+                baseVersionID: baseIsNull ? nil : stmt.text(at: 2),
+                versionID: stmt.text(at: 3),
+                updatedAt: Date(timeIntervalSince1970: stmt.double(at: 4))))
+        }
+        return out
+    }
+
+    public func workspaceWritePage(
+        workspaceID: String, pageID: PageID, title: String, body: String
+    ) throws -> String {
+        try mutate(event: { _ in nil }) {  // workspace writes are invisible to the FP token
+        let title = WikiNameRules.sanitized(title)
+        let bodyData = Data(body.utf8)
+        let hash = SHA256.hash(data: bodyData)
+            .map { String(format: "%02x", $0) }.joined()
+        let now = Date()
+        let nowTS = now.timeIntervalSince1970
+
+        return try withTransaction {
+            // 0. If the page doesn't exist on main yet (created in workspace),
+            //    create a placeholder `pages` row so the page_versions FK
+            //    holds. The body is empty — it's filled at merge time.
+            let pageExists = try statement("SELECT 1 FROM pages WHERE id = ?1;")
+            defer { pageExists.reset() }
+            try pageExists.bind(pageID.rawValue, at: 1)
+            if !(try pageExists.step()) {
+                let slug = try uniqueSlug(from: title, id: pageID)
+                let insPage = try statement("""
+                INSERT INTO pages (id, title, slug, body_markdown, created_at, updated_at, version)
+                VALUES (?1, ?2, ?3, '', ?4, ?4, 1);
+                """)
+                insPage.reset()
+                try insPage.bind(pageID.rawValue, at: 1)
+                try insPage.bind(title, at: 2)
+                try insPage.bind(slug, at: 3)
+                try insPage.bind(nowTS, at: 4)
+                _ = try insPage.step()
+            }
+
+            // 1. Blob.
+            let insBlob = try statement(
+                "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+            insBlob.reset()
+            try insBlob.bind(hash, at: 1)
+            try insBlob.bind(Int64(bodyData.count), at: 2)
+            try insBlob.bind(bodyData, at: 3)
+            _ = try insBlob.step()
+
+            // 2. Activity + agent.
+            let agentID = try legacyImportAgentID()
+            let activityID = ULID.generate()
+            let insActivity = try statement("""
+            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+            VALUES (?1, 'edit', ?2, ?3, ?3);
+            """)
+            insActivity.reset()
+            try insActivity.bind(activityID, at: 1)
+            try insActivity.bind(agentID, at: 2)
+            try insActivity.bind(nowTS, at: 3)
+            _ = try insActivity.step()
+
+            // 3. Append page_version (parent = workspace's current head for
+            //    this page, or main head if first touch).
+            let wsHead = try workspacePageVersionLocked(
+                workspaceID: workspaceID, pageID: pageID)
+            let mainHead = try pageHeadVersionIDLocked(pageID: pageID)
+
+            let versionID = ULID.generate()
+            let insVersion = try statement("""
+            INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
+            VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7);
+            """)
+            insVersion.reset()
+            try insVersion.bind(versionID, at: 1)
+            try insVersion.bind(pageID.rawValue, at: 2)
+            // Parent = workspace head if it exists, else main head (this is the
+            // first workspace write — chain from main).
+            if let parent = wsHead ?? mainHead {
+                try insVersion.bind(parent, at: 3)
+            }
+            try insVersion.bind(hash, at: 4)
+            try insVersion.bind(title, at: 5)
+            try insVersion.bind(activityID, at: 6)
+            try insVersion.bind(nowTS, at: 7)
+            _ = try insVersion.step()
+
+            // 4. UPSERT workspace_refs. On first touch, record base_version_id
+            //    = main head (the three-way-merge base). On subsequent touches,
+            //    keep the original base.
+            let baseToRecord: String?
+            if wsHead != nil {
+                // Already have a workspace_ref → keep the existing base.
+                baseToRecord = nil  // ON CONFLICT won't touch base_version_id
+            } else {
+                // First touch → record current main head as the base.
+                baseToRecord = mainHead
+            }
+
+            let upRef = try statement("""
+            INSERT INTO workspace_refs (workspace_id, kind, owner_id, base_version_id, version_id, updated_at)
+            VALUES (?1, 'page-content', ?2, ?3, ?4, ?5)
+            ON CONFLICT(workspace_id, kind, owner_id) DO UPDATE SET
+                version_id = excluded.version_id,
+                updated_at = excluded.updated_at;
+            """)
+            upRef.reset()
+            try upRef.bind(workspaceID, at: 1)
+            try upRef.bind(pageID.rawValue, at: 2)
+            if let base = baseToRecord { try upRef.bind(base, at: 3) }
+            try upRef.bind(versionID, at: 4)
+            try upRef.bind(nowTS, at: 5)
+            _ = try upRef.step()
+
+            // 5. Update the workspace's updated_at.
+            let touchWs = try statement(
+                "UPDATE workspaces SET updated_at = ?2 WHERE id = ?1;")
+            touchWs.reset()
+            try touchWs.bind(workspaceID, at: 1)
+            try touchWs.bind(nowTS, at: 2)
+            _ = try touchWs.step()
+
+            return versionID
+        }
+        }
+    }
+
+    /// Internal: resolve the workspace's current version for a page.
+    /// Assumes the lock is held.
+    private func workspacePageVersionLocked(
+        workspaceID: String, pageID: PageID
+    ) throws -> String? {
+        let stmt = try statement("""
+        SELECT version_id FROM workspace_refs
+        WHERE workspace_id = ?1 AND kind = 'page-content' AND owner_id = ?2;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(workspaceID, at: 1)
+        try stmt.bind(pageID.rawValue, at: 2)
+        if try stmt.step() {
+            return stmt.text(at: 0)
+        }
+        return nil
+    }
+
+    public func workspacePageVersion(workspaceID: String, pageID: PageID) throws -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return try workspacePageVersionLocked(workspaceID: workspaceID, pageID: pageID)
+    }
+
+    public func workspaceMerge(workspaceID: String) throws {
+        // Phase 1: attempt the merge inside a transaction. If any page
+        // conflicts, roll back the partial fast-forwards AND park the
+        // workspace as 'conflicted' in a separate transaction.
+        var conflicts: [(pageID: String, base: String?, wsVersion: String, mainVersion: String?)] = []
+        do {
+            try mutate(event: { _ in nil }) {
+            try withTransaction {
+                // 1. Mark workspace as 'merging'.
+                let markMerging = try statement(
+                    "UPDATE workspaces SET status = 'merging', updated_at = ?2 WHERE id = ?1 AND status = 'open';")
+                markMerging.reset()
+                try markMerging.bind(workspaceID, at: 1)
+                try markMerging.bind(Date().timeIntervalSince1970, at: 2)
+                _ = try markMerging.step()
+                guard sqlite3_changes(db) > 0 else {
+                    throw WikiStoreError.unexpected("workspace \(workspaceID) is not open (already merging/merged/conflicted/abandoned)")
+                }
+
+                // 2. For each workspace_ref, attempt fast-forward.
+                let refs = try statement("""
+                SELECT owner_id, base_version_id, version_id
+                FROM workspace_refs WHERE workspace_id = ?1;
+                """)
+                defer { refs.reset() }
+                try refs.bind(workspaceID, at: 1)
+
+                while try refs.step() {
+                    let pageIDStr = refs.text(at: 0)
+                    let baseIsNull = sqlite3_column_type(refs.handle, 1) == SQLITE_NULL
+                    let base = baseIsNull ? nil : refs.text(at: 1)
+                    let wsVersion = refs.text(at: 2)
+                    let pageID = PageID(rawValue: pageIDStr)
+
+                    // Resolve main head.
+                    let mainHead = try pageHeadVersionIDLocked(pageID: pageID)
+
+                    if base == nil {
+                        // Page created in workspace (no base). A placeholder
+                        // `pages` row was created by workspaceWritePage, so the
+                        // page exists on main with an empty body. Check if a main
+                        // ref exists — if not, the page was created in-workspace
+                        // and we fast-forward. If a ref exists, someone else
+                        // created the same page → conflict.
+                        let mainRefExists = try statement("""
+                        SELECT 1 FROM refs WHERE kind = 'page-content' AND owner_id = ?1;
+                        """)
+                        defer { mainRefExists.reset() }
+                        try mainRefExists.bind(pageIDStr, at: 1)
+                        if try mainRefExists.step() {
+                            conflicts.append((pageIDStr, base, wsVersion, mainHead))
+                            continue
+                        }
+                        try fastForwardPage(
+                            pageID: pageID, versionID: wsVersion)
+                    } else if mainHead == base {
+                        try fastForwardPage(
+                            pageID: pageID, versionID: wsVersion)
+                    } else {
+                        conflicts.append((pageIDStr, base, wsVersion, mainHead))
+                    }
+                }
+
+                // 3. If any conflicts, abort the transaction (rolls back all
+                //    partial fast-forwards). The 'conflicted' status is set
+                //    in a follow-up transaction below.
+                if !conflicts.isEmpty {
+                    throw WikiStoreError.unexpected("workspace \(workspaceID) merge: \(conflicts.count) conflict(s)")
+                }
+
+                // 4. All fast-forwarded → mark 'merged'.
+                let markMerged = try statement(
+                    "UPDATE workspaces SET status = 'merged', updated_at = ?2 WHERE id = ?1;")
+                markMerged.reset()
+                try markMerged.bind(workspaceID, at: 1)
+                try markMerged.bind(Date().timeIntervalSince1970, at: 2)
+                _ = try markMerged.step()
+            }
+            }
+        } catch {
+            // Only park if there were actual conflicts (not a different error).
+            if !conflicts.isEmpty {
+                let descriptions = conflicts.map { c in
+                    "\(c.pageID): base=\(c.base ?? "nil") ws=\(c.wsVersion) main=\(c.mainVersion ?? "nil")"
+                }.joined(separator: "; ")
+                DebugLog.store("workspaceMerge: \(conflicts.count) conflict(s) — \(descriptions)")
+                // Park in a separate transaction (the merge transaction
+                // rolled back, so the workspace is still 'open').
+                try mutate(event: { _ in nil }) {
+                    let park = try statement(
+                        "UPDATE workspaces SET status = 'conflicted', updated_at = ?2 WHERE id = ?1;")
+                    park.reset()
+                    try park.bind(workspaceID, at: 1)
+                    try park.bind(Date().timeIntervalSince1970, at: 2)
+                    _ = try park.step()
+                }
+                return
+            }
+            throw error
+        }
+    }
+
+    /// Fast-forward an existing page: repoint the main `page-content` ref to
+    /// the workspace's version + update the `pages` mirror from the version's
+    /// blob. Assumes the lock + a transaction are held.
+    private func fastForwardPage(pageID: PageID, versionID: String) throws {
+        // Fetch the version's blob + title.
+        let target = try statement("""
+        SELECT pv.blob_hash, pv.title, b.content
+        FROM page_versions pv
+        JOIN blobs b ON b.hash = pv.blob_hash
+        WHERE pv.id = ?1 AND pv.page_id = ?2;
+        """)
+        defer { target.reset() }
+        try target.bind(versionID, at: 1)
+        try target.bind(pageID.rawValue, at: 2)
+        guard try target.step() else {
+            throw WikiStoreError.unexpected("workspaceMerge: version \(versionID) not found for page \(pageID.rawValue)")
+        }
+        let title = target.text(at: 1)
+        let bodyData = target.blob(at: 2)
+        let body = String(data: bodyData, encoding: .utf8) ?? ""
+
+        // Update the pages mirror.
+        let slug = try uniqueSlug(from: WikiNameRules.sanitized(title), id: pageID)
+        let now = Date().timeIntervalSince1970
+        let upPage = try statement("""
+        UPDATE pages
+        SET title = ?2, slug = ?3, body_markdown = ?4,
+            updated_at = ?5, version = version + 1
+        WHERE id = ?1;
+        """)
+        upPage.reset()
+        try upPage.bind(pageID.rawValue, at: 1)
+        try upPage.bind(WikiNameRules.sanitized(title), at: 2)
+        try upPage.bind(slug, at: 3)
+        try upPage.bind(body, at: 4)
+        try upPage.bind(now, at: 5)
+        _ = try upPage.step()
+
+        // Repoint the main page-content ref.
+        let upRef = try statement("""
+        INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+        VALUES ('page-content', ?1, ?2, 1, ?3)
+        ON CONFLICT(kind, owner_id) DO UPDATE SET
+            version_id = excluded.version_id,
+            generation = generation + 1,
+            updated_at = excluded.updated_at;
+        """)
+        upRef.reset()
+        try upRef.bind(pageID.rawValue, at: 1)
+        try upRef.bind(versionID, at: 2)
+        try upRef.bind(now, at: 3)
+        _ = try upRef.step()
+    }
+
+    /// Fast-forward a page created in the workspace (no base). Since
+    /// `workspaceWritePage` creates a placeholder `pages` row, this is the
+    /// same as `fastForwardPage` — just update the mirror + repoint the ref.
+    /// Assumes lock + transaction held.
+    private func fastForwardCreatePage(
+        pageID: PageID, versionID: String, workspaceID: String
+    ) throws {
+        try fastForwardPage(pageID: pageID, versionID: versionID)
+    }
+
+    public func abandonWorkspace(id: String) throws {
+        try mutate(event: { _ in nil }) {
+        try withTransaction {
+            // Delete workspace_refs (FK ON DELETE CASCADE would handle this,
+            // but we're doing an UPDATE not DELETE, so do it explicitly).
+            let delRefs = try statement(
+                "DELETE FROM workspace_refs WHERE workspace_id = ?1;")
+            delRefs.reset()
+            try delRefs.bind(id, at: 1)
+            _ = try delRefs.step()
+
+            let now = Date().timeIntervalSince1970
+            let stmt = try statement(
+                "UPDATE workspaces SET status = 'abandoned', updated_at = ?2 WHERE id = ?1;")
+            stmt.reset()
+            try stmt.bind(id, at: 1)
+            try stmt.bind(now, at: 2)
+            _ = try stmt.step()
+            guard sqlite3_changes(db) > 0 else {
+                throw WikiStoreError.notFound(PageID(rawValue: id))
+            }
+        }
+        }
+    }
+
     public func deletePage(id: PageID) throws {
         try mutate(event: { _ in localEvent(.page, id: id.rawValue, change: .deleted) }) {
         // FK safety: `page_links`, `attachments`, and `source_links` all have

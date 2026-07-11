@@ -1,0 +1,226 @@
+import Foundation
+import Testing
+@testable import WikiFSCore
+
+/// Tests for W1 — workspaces, overlay, fast-forward merge (PR #312).
+///
+/// Covers: workspace creation, workspace writes (don't touch main), overlay
+/// reads, fast-forward merge (base == main head), conflict park (main moved),
+/// abandon, and page-created-in-workspace merge.
+@MainActor
+struct WorkspaceTests {
+
+    private func tempStore() throws -> SQLiteWikiStore {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("w1-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+    }
+
+    // MARK: - Workspace CRUD
+
+    @Test func createWorkspaceReturnsID() throws {
+        let store = try tempStore()
+        let id = try store.createWorkspace(name: "test", activityID: nil)
+        #expect(!id.isEmpty)
+        let summary = try store.workspaceSummary(id: id)
+        #expect(summary != nil)
+        #expect(summary?.status == .open)
+        #expect(summary?.name == "test")
+    }
+
+    @Test func workspaceSummaryReturnsNilForMissing() throws {
+        let store = try tempStore()
+        let summary = try store.workspaceSummary(id: "nonexistent")
+        #expect(summary == nil)
+    }
+
+    // MARK: - Workspace writes don't touch main
+
+    @Test func workspaceWriteDoesNotTouchMain() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Main Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Main Page", body: "main body",
+            expectedHeadVersionID: nil)
+
+        // Write into a workspace.
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page.id, title: "Main Page", body: "workspace body")
+
+        // Main's body should be unchanged.
+        let mainPage = try store.getPage(id: page.id)
+        #expect(mainPage.bodyMarkdown == "main body")
+
+        // The workspace's version should be different from main's head.
+        let wsVersion = try store.workspacePageVersion(workspaceID: wsID, pageID: page.id)
+        let mainHead = try store.pageHeadVersionID(pageID: page.id)
+        #expect(wsVersion != nil)
+        #expect(wsVersion != mainHead)
+    }
+
+    // MARK: - Overlay reads
+
+    @Test func overlayReadReturnsWorkspaceVersion() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Overlay Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Overlay Page", body: "v1",
+            expectedHeadVersionID: nil)
+
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page.id, title: "Overlay Page", body: "workspace version")
+
+        // The workspace sees its own version.
+        let wsVersion = try store.workspacePageVersion(workspaceID: wsID, pageID: page.id)
+        #expect(wsVersion != nil)
+
+        // Main is untouched.
+        let mainPage = try store.getPage(id: page.id)
+        #expect(mainPage.bodyMarkdown == "v1")
+    }
+
+    // MARK: - Fast-forward merge
+
+    @Test func fastForwardMergeSucceedsWhenMainUnchanged() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "FF Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "FF Page", body: "v1",
+            expectedHeadVersionID: nil)
+
+        // Write into workspace.
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page.id, title: "FF Page", body: "workspace v2")
+
+        // Merge (main hasn't moved → fast-forward).
+        try store.workspaceMerge(workspaceID: wsID)
+
+        // Main now has the workspace's body.
+        let mainPage = try store.getPage(id: page.id)
+        #expect(mainPage.bodyMarkdown == "workspace v2")
+
+        // Workspace is merged.
+        let summary = try store.workspaceSummary(id: wsID)
+        #expect(summary?.status == .merged)
+    }
+
+    // MARK: - Conflict park
+
+    @Test func conflictParksWhenMainMoved() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Conflict Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Conflict Page", body: "v1",
+            expectedHeadVersionID: nil)
+
+        // Write into workspace (captures base = main head at this point).
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page.id, title: "Conflict Page", body: "workspace body")
+
+        // Main moves (another writer commits).
+        let mainHead = try store.pageHeadVersionID(pageID: page.id)
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Conflict Page", body: "main moved",
+            expectedHeadVersionID: mainHead)
+
+        // Merge should park as conflicted (no throw — parks and returns).
+        try store.workspaceMerge(workspaceID: wsID)
+
+        let summary = try store.workspaceSummary(id: wsID)
+        #expect(summary?.status == .conflicted)
+
+        // Main is NOT corrupted — still has the concurrent writer's body.
+        let mainPage = try store.getPage(id: page.id)
+        #expect(mainPage.bodyMarkdown == "main moved")
+    }
+
+    // MARK: - Abandon
+
+    @Test func abandonClearsRefsAndSetsStatus() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Abandon Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Abandon Page", body: "v1",
+            expectedHeadVersionID: nil)
+
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page.id, title: "Abandon Page", body: "ws body")
+
+        // Abandon.
+        try store.abandonWorkspace(id: wsID)
+
+        // Status is abandoned.
+        let summary = try store.workspaceSummary(id: wsID)
+        #expect(summary?.status == .abandoned)
+
+        // Workspace refs are deleted.
+        let refs = try store.workspaceRefs(workspaceID: wsID)
+        #expect(refs.isEmpty)
+    }
+
+    // MARK: - Page created in workspace
+
+    @Test func pageCreatedInWorkspaceMergesByCreating() throws {
+        let store = try tempStore()
+
+        // Create a workspace and write a page that doesn't exist on main.
+        // We need a pageID — the workspace write will create a page_versions
+        // row for it, but no `pages` row exists yet.
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        let newPageID = PageID(rawValue: ULID.generate())
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: newPageID, title: "Brand New Page", body: "new content")
+
+        // The page exists on main as a placeholder (empty body).
+        let pageBefore = try store.getPage(id: newPageID)
+        #expect(pageBefore.bodyMarkdown.isEmpty)
+
+        // Merge — should update the mirror to the workspace's version body.
+        try store.workspaceMerge(workspaceID: wsID)
+
+        // Now the page exists on main.
+        let pageAfter = try store.getPage(id: newPageID)
+        #expect(pageAfter.title == "Brand New Page")
+        #expect(pageAfter.bodyMarkdown == "new content")
+
+        let summary = try store.workspaceSummary(id: wsID)
+        #expect(summary?.status == .merged)
+    }
+
+    // MARK: - Multiple pages in one workspace
+
+    @Test func mergeFastForwardsMultiplePages() throws {
+        let store = try tempStore()
+        let page1 = try store.createPage(title: "Page One")
+        let page2 = try store.createPage(title: "Page Two")
+        _ = try store.appendPageVersion(
+            pageID: page1.id, title: "Page One", body: "v1",
+            expectedHeadVersionID: nil)
+        _ = try store.appendPageVersion(
+            pageID: page2.id, title: "Page Two", body: "v1",
+            expectedHeadVersionID: nil)
+
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page1.id, title: "Page One", body: "ws v2")
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page2.id, title: "Page Two", body: "ws v2")
+
+        // Merge — both should fast-forward.
+        try store.workspaceMerge(workspaceID: wsID)
+
+        let p1 = try store.getPage(id: page1.id)
+        let p2 = try store.getPage(id: page2.id)
+        #expect(p1.bodyMarkdown == "ws v2")
+        #expect(p2.bodyMarkdown == "ws v2")
+
+        let summary = try store.workspaceSummary(id: wsID)
+        #expect(summary?.status == .merged)
+    }
+}

@@ -90,6 +90,11 @@ struct StoreEmissionExhaustivenessTests {
         // Activity GC (#257): same rationale — vacuuming orphaned activities
         // changes no projected ResourceKind.
         "vacuumActivities",
+        // Workspaces (W1, PR #312): workspace writes are invisible to the FP
+        // token — main is untouched until merge. The merge's per-page effects
+        // emit via fastForwardPage/fastForwardCreatePage (which update the
+        // pages mirror + main refs, triggering the existing page change path).
+        "createWorkspace", "workspaceWritePage", "abandonWorkspace", "workspaceMerge",
     ]
 
     /// Every EMIT member must route through `mutate()` (AC.2). A newly added
