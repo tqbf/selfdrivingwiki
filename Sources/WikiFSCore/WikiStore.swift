@@ -399,6 +399,20 @@ public protocol WikiStore: Sendable {
     /// `base_version_id` to current main_head. If conflict, park.
     func workspaceRefresh(workspaceID: String) throws
 
+    /// List persisted conflict details for a parked workspace (W3).
+    func workspaceConflicts(workspaceID: String) throws -> [WorkspaceConflict]
+
+    /// Resolve a conflict: write the resolved body as a new workspace
+    /// version for the page + delete the conflict row (W3). After resolving
+    /// all conflicts, call `workspaceRetryMerge`.
+    func workspaceResolveConflict(
+        workspaceID: String, pageID: PageID, body: String
+    ) throws
+
+    /// Set a conflicted workspace back to `open` and attempt merge again
+    /// (W3). Resolves remaining conflicts (or parks again).
+    func workspaceRetryMerge(workspaceID: String) throws
+
     // MARK: - System prompt (singleton document, v3)
 
     /// Read the user-editable singleton system-prompt document (projected at the

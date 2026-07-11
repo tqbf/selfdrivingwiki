@@ -131,6 +131,10 @@ public enum ArgumentParser {
       workspace abandon --id W                abandon a workspace (GC refs)
       workspace merge --id W                   fast-forward merge into main
       workspace refresh --id W                 re-base workspace against current main
+      workspace conflicts --id W               list per-page conflict details
+      workspace resolve --id W --page P --body-file <path|->
+                                               resolve a conflict with the given body
+      workspace retry --id W                   re-open + re-merge after resolving conflicts
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -437,6 +441,26 @@ public enum ArgumentParser {
                 throw Failure.usage("workspace refresh: --id is required")
             }
             return .workspace(.refresh(id: id))
+
+        case "conflicts":
+            guard let id = options.value("--id") else {
+                throw Failure.usage("workspace conflicts: --id is required")
+            }
+            return .workspace(.conflicts(id: id))
+
+        case "resolve":
+            guard let id = options.value("--id"),
+                  let pageID = options.value("--page").map({ PageID(rawValue: $0) }),
+                  let bodyFile = options.value("--body-file") else {
+                throw Failure.usage("workspace resolve: --id, --page, and --body-file are required")
+            }
+            return .workspace(.resolve(id: id, pageID: pageID, bodyFile: bodyFile))
+
+        case "retry":
+            guard let id = options.value("--id") else {
+                throw Failure.usage("workspace retry: --id is required")
+            }
+            return .workspace(.retry(id: id))
 
         default:
             throw Failure.usage("workspace: unknown subcommand \(sub.debugDescription)")

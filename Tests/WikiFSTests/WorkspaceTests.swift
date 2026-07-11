@@ -384,4 +384,116 @@ struct WorkspaceTests {
         let newMainHead = try store.pageHeadVersionID(pageID: page.id)
         #expect(refs.first?.baseVersionID == newMainHead)
     }
+
+    // MARK: - Conflict resolution (W3)
+
+    @Test func conflictsArePersistedAndQueryable() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Conflict Persist Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Conflict Persist Page", body: "line1\nline2",
+            expectedHeadVersionID: nil)
+
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page.id, title: "Conflict Persist Page",
+            body: "line1\nws-line2")
+
+        // Main moves (same line, different change).
+        let mainHead = try store.pageHeadVersionID(pageID: page.id)
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Conflict Persist Page",
+            body: "line1\nmain-line2",
+            expectedHeadVersionID: mainHead)
+
+        // Merge → parks as conflicted.
+        try store.workspaceMerge(workspaceID: wsID)
+
+        // Conflicts should be persisted and queryable.
+        let conflicts = try store.workspaceConflicts(workspaceID: wsID)
+        #expect(conflicts.count == 1)
+        #expect(conflicts.first?.pageID == page.id)
+        #expect(conflicts.first?.baseVersionID != nil)
+        #expect(conflicts.first?.mainVersionID != nil)
+        #expect(conflicts.first?.wsVersionID != nil)
+    }
+
+    @Test func resolveConflictThenRetryMergeSucceeds() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Resolve Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Resolve Page", body: "line1\nline2",
+            expectedHeadVersionID: nil)
+
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page.id, title: "Resolve Page",
+            body: "line1\nws-line2")
+
+        // Main moves (same line, different change → conflict).
+        let mainHead = try store.pageHeadVersionID(pageID: page.id)
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Resolve Page",
+            body: "line1\nmain-line2",
+            expectedHeadVersionID: mainHead)
+
+        // Merge → parks.
+        try store.workspaceMerge(workspaceID: wsID)
+        #expect(try store.workspaceSummary(id: wsID)?.status == .conflicted)
+
+        // Resolve the conflict with a hand-merged body.
+        try store.workspaceResolveConflict(
+            workspaceID: wsID, pageID: page.id,
+            body: "line1\nmain-line2\nws-line2")
+
+        // Conflict row should be deleted.
+        let conflicts = try store.workspaceConflicts(workspaceID: wsID)
+        #expect(conflicts.isEmpty)
+
+        // Retry merge → should succeed (base == main head now).
+        try store.workspaceRetryMerge(workspaceID: wsID)
+        #expect(try store.workspaceSummary(id: wsID)?.status == .merged)
+
+        // Main has the resolved body.
+        let merged = try store.getPage(id: page.id)
+        #expect(merged.bodyMarkdown.contains("main-line2"))
+        #expect(merged.bodyMarkdown.contains("ws-line2"))
+    }
+
+    @Test func secondWorkspaceMergesWhileFirstIsParked() throws {
+        let store = try tempStore()
+        let page1 = try store.createPage(title: "Page One")
+        let page2 = try store.createPage(title: "Page Two")
+        _ = try store.appendPageVersion(
+            pageID: page1.id, title: "Page One", body: "line1\nline2",
+            expectedHeadVersionID: nil)
+        _ = try store.appendPageVersion(
+            pageID: page2.id, title: "Page Two", body: "lineA\nlineB",
+            expectedHeadVersionID: nil)
+
+        // Workspace 1: conflicts on page1.
+        let ws1 = try store.createWorkspace(name: "conflicting", activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: ws1, pageID: page1.id, title: "Page One", body: "line1\nws1-line2")
+
+        let mainHead1 = try store.pageHeadVersionID(pageID: page1.id)
+        _ = try store.appendPageVersion(
+            pageID: page1.id, title: "Page One", body: "line1\nmain-line2",
+            expectedHeadVersionID: mainHead1)
+
+        try store.workspaceMerge(workspaceID: ws1)
+        #expect(try store.workspaceSummary(id: ws1)?.status == .conflicted)
+
+        // Workspace 2: touches a DIFFERENT page (page2, no conflict).
+        let ws2 = try store.createWorkspace(name: "clean", activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: ws2, pageID: page2.id, title: "Page Two", body: "lineA\nws2-lineB")
+
+        // Merge ws2 — should succeed even though ws1 is parked.
+        try store.workspaceMerge(workspaceID: ws2)
+        #expect(try store.workspaceSummary(id: ws2)?.status == .merged)
+
+        let merged = try store.getPage(id: page2.id)
+        #expect(merged.bodyMarkdown.contains("ws2-lineB"))
+    }
 }
