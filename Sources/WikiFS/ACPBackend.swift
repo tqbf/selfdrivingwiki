@@ -90,6 +90,13 @@ actor ACPBackend: AgentBackend {
         /// list (older agents). Captured at start so the launcher can cache them
         /// per-provider for the model picker (#329).
         let modelsInfo: ModelsInfo?
+        /// Session-lifetime notification fanout (cause 6 fix,
+        /// `plans/acp-stall-recovery.md` §1b). Replaces the per-turn
+        /// re-acquisition of `client.notifications`.
+        let notificationFanout: NotificationFanout
+        /// The session-lifetime drain task (owns the single `client.notifications`
+        /// iterator). Cancelled in `cancel`.
+        let drainTask: Task<Void, Never>?
     }
 
     private var sessions: [String: ACPSession] = [:]
@@ -103,12 +110,29 @@ actor ACPBackend: AgentBackend {
     /// terminal (the structural second gate from the design doc).
     private let capabilities: ClientCapabilities
 
+    /// Turn inactivity watchdog: how long without a `session/update`
+    /// notification before declaring a stall (`plans/acp-stall-recovery.md` §1a).
+    private let turnIdleTimeout: TimeInterval
+
+    /// Hard ceiling on total turn duration — backstop against a chatty agent
+    /// that streams forever without finishing.
+    private let turnCeilingTimeout: TimeInterval
+
+    /// Watchdog poll interval (seconds).
+    private let watchdogPollInterval: TimeInterval
+
     init(
         permissionPolicy: PermissionPolicy = .bypass,
-        capabilities: ClientCapabilities = ACPBackend.defaultCapabilities
+        capabilities: ClientCapabilities = ACPBackend.defaultCapabilities,
+        turnIdleTimeout: TimeInterval = TurnLivenessPolicy.defaultIdleTimeout,
+        turnCeilingTimeout: TimeInterval = TurnLivenessPolicy.defaultCeilingTimeout,
+        watchdogPollInterval: TimeInterval = TurnLivenessPolicy.defaultPollInterval
     ) {
         self.permissionPolicy = permissionPolicy
         self.capabilities = capabilities
+        self.turnIdleTimeout = turnIdleTimeout
+        self.turnCeilingTimeout = turnCeilingTimeout
+        self.watchdogPollInterval = watchdogPollInterval
     }
 
     /// `fs` read/write + `terminal` — mirrors paseo's `BASE_ACP_CLIENT_CAPABILITIES`
@@ -240,12 +264,31 @@ actor ACPBackend: AgentBackend {
             }
         }
 
+        // Session-lifetime notification drain (cause 6 fix,
+        // `plans/acp-stall-recovery.md` §1b). Acquire `client.notifications`
+        // ONCE here and fan events into a per-session `NotificationFanout`.
+        // Each turn subscribes to the fanout instead of re-acquiring the SDK
+        // stream (AsyncStream is single-consumer — two concurrent iterators
+        // split elements, silently dropping notifications).
+        let fanout = NotificationFanout()
+        let drainTask = Task { [client, fanout] in
+            let notifications = await client.notifications
+            for await notification in notifications {
+                if Task.isCancelled { break }
+                fanout.yield(notification)
+            }
+            fanout.finish()
+        }
+        DebugLog.agent("ACPBackend.start: session-lifetime notification drain started") // TEMP DEBUG (existed; re-tagged)
+
         let sessionID = UUID().uuidString
         sessions[sessionID] = ACPSession(
             client: client,
             sessionId: sessionId,
             permissionDelegate: permissionDelegate,
-            modelsInfo: modelsInfo
+            modelsInfo: modelsInfo,
+            notificationFanout: fanout,
+            drainTask: drainTask
         )
 
         // Wire onExit to the agent process termination. `Client.terminate()` is
@@ -269,29 +312,80 @@ actor ACPBackend: AgentBackend {
         let client = session.client
         let sessionId = session.sessionId
         let translator = ACPEventTranslator()
+        let fanout = session.notificationFanout
+        let idleTimeout = turnIdleTimeout
+        let ceilingTimeout = turnCeilingTimeout
+        let pollInterval = watchdogPollInterval
 
         // `.unbounded` buffering — the @MainActor consumer drains promptly and
         // no events may be dropped (same invariant as the CLI backend).
         return AsyncStream<AgentEvent>(bufferingPolicy: .unbounded) { continuation in
-            // The prompt task. It runs concurrently with the notification drain:
-            // `sendPrompt` BLOCKS until the whole turn completes (returns
-            // SessionPromptResponse with stopReason), while notifications stream
-            // in during that time. We capture the handle so cancellation can
-            // tear it down.
-            let promptTask = Task { [client, sessionId] in
-                // Drain notifications for THIS session while the prompt runs.
-                // `client.notifications` is an actor-isolated computed property
-                // on the `Client` actor (backed by a stored `AsyncStream`), so
-                // we `await` it once to obtain the stream, then iterate. (A
-                // future multi-session fan-out would need a per-session split —
-                // out of scope for this single-session backend.)
-                let notifications = await client.notifications
+            // Shared flag: once either the prompt task or the watchdog resolves
+            // the turn, the other short-circuits (yield/finish to an already-
+            // finished continuation are safe no-ops, but this avoids redundant
+            // cancelSession calls and confusing duplicate log lines).
+            let completionFlag = TurnCompletionFlag()
+            let turnStartedAt = fanout.activityTimestamp
+
+            // --- Watchdog task (cause 5 fix, plans/acp-stall-recovery.md §1a) ---
+            // Polls every `pollInterval`; if the prompt hasn't completed AND no
+            // notification has arrived for `idleTimeout`, or the total duration
+            // exceeds `ceilingTimeout`, fail the turn: cancelSession best-effort,
+            // synthesize turn-end events, finish the continuation.
+            let watchdogTask = Task { [client, sessionId, fanout, completionFlag] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(pollInterval))
+                    if Task.isCancelled { return }
+                    let decision = TurnLivenessPolicy.evaluate(
+                        now: Date(),
+                        promptDone: completionFlag.isDone,
+                        turnStartedAt: turnStartedAt,
+                        lastActivityAt: fanout.activityTimestamp,
+                        idleTimeout: idleTimeout,
+                        ceilingTimeout: ceilingTimeout
+                    )
+                    switch decision {
+                    case .healthy:
+                        continue
+                    case .stalled(let idle):
+                        DebugLog.agent("ACPBackend: TURN STALLED — idle \(Int(idle))s, recovering (cancelSession + turnEnd)") // TEMP DEBUG (existed; re-tagged)
+                        completionFlag.markDone()
+                        for event in Self.turnEndEvents(error: ACPBackendError.turnStalled(idleSeconds: idle)) {
+                            continuation.yield(event)
+                        }
+                        continuation.finish()
+                        try? await client.cancelSession(sessionId: sessionId)
+                        return
+                    case .ceilingExceeded(let total):
+                        DebugLog.agent("ACPBackend: TURN CEILING exceeded (\(Int(total))s), recovering") // TEMP DEBUG (existed; re-tagged)
+                        completionFlag.markDone()
+                        for event in Self.turnEndEvents(error: ACPBackendError.turnCeilingExceeded(totalSeconds: total)) {
+                            continuation.yield(event)
+                        }
+                        continuation.finish()
+                        try? await client.cancelSession(sessionId: sessionId)
+                        return
+                    }
+                }
+            }
+
+            // --- Prompt task ---
+            // Runs concurrently with the watchdog. `sendPrompt` BLOCKS until the
+            // whole turn completes (returns SessionPromptResponse with
+            // stopReason), while notifications stream in via the fanout
+            // subscription. The prompt task and watchdog are both cancelled on
+            // consumer termination.
+            let promptTask = Task { [client, sessionId, fanout, completionFlag] in
+                // Subscribe to the session-lifetime fanout (NOT the SDK's
+                // `client.notifications` — that's single-consumer; re-acquiring
+                // it per turn was cause 6). Turns are serialized by the
+                // generation gate, so at most one subscriber is active.
+                let updates = fanout.subscribe()
                 let drainTask = Task {
-                    for await notification in notifications {
+                    for await notification in updates {
                         if Task.isCancelled { return }
                         guard notification.method == "session/update" else { continue }
                         guard let params = notification.params else { continue }
-                        // Decode params → SessionUpdateNotification, then translate.
                         let events = ACPBackend.translateNotification(params: params, sessionId: sessionId, translator: translator)
                         DebugLog.agent("ACPBackend: session/update → \(events.count) AgentEvent(s)") // TEMP DEBUG (existed; re-tagged)
                         for event in events {
@@ -307,19 +401,20 @@ actor ACPBackend: AgentBackend {
                         sessionId: sessionId,
                         content: [.text(TextContent(text: turn.userText))]
                     )
+                    // If the watchdog already resolved the turn (e.g. it fired
+                    // just as sendPrompt returned), skip — continuation is done.
+                    guard !completionFlag.isDone else { return }
+                    completionFlag.markDone()
                     DebugLog.agent("ACPBackend: prompt completed stopReason=\(response.stopReason.rawValue)") // TEMP DEBUG (existed; re-tagged)
-                    // ACP has no explicit turn-end notification; the turn ends
-                    // when the prompt REQUEST returns. Synthesize the turn-end
-                    // events (always ending in `.messageStop`) to satisfy the
-                    // port's turn-boundary contract. The pure helper is
-                    // unit-tested directly — see `ACPBackendTests`.
                     for event in Self.turnEndEvents(error: nil) {
                         continuation.yield(event)
                     }
                 } catch {
+                    // If the watchdog already resolved the turn, the error here
+                    // is just the fallout from cancelSession — skip it.
+                    guard !completionFlag.isDone else { return }
+                    completionFlag.markDone()
                     DebugLog.agent("ACPBackend: prompt failed: \(error.localizedDescription)") // TEMP DEBUG (existed; re-tagged)
-                    // Error is also a turn boundary — synthesize `.messageStop`
-                    // so the consumer's for-await exits and the gate releases.
                     for event in Self.turnEndEvents(error: error) {
                         continuation.yield(event)
                     }
@@ -328,10 +423,11 @@ actor ACPBackend: AgentBackend {
             }
 
             // Cancellation bridge: if the consumer cancels the for-await loop
-            // (stopAgent), cancel the prompt task and send session/cancel.
+            // (stopAgent), cancel both tasks and send session/cancel.
             continuation.onTermination = { @Sendable reason in
                 if case .cancelled = reason {
                     promptTask.cancel()
+                    watchdogTask.cancel()
                     Task { [client, sessionId] in
                         try? await client.cancelSession(sessionId: sessionId)
                     }
@@ -353,6 +449,10 @@ actor ACPBackend: AgentBackend {
             return
         }
         DebugLog.agent("ACPBackend.cancel: cancelling session=\(record.sessionId.value) handle=\(session.id)") // TEMP DEBUG
+        // Tear down the session-lifetime notification drain (cause 6 fix) BEFORE
+        // terminating — so no notifications arrive after the fanout is finished.
+        record.drainTask?.cancel()
+        record.notificationFanout.finish()
         // Drain any in-flight always-ask continuations BEFORE tearing down, so a
         // pending `request_permission` never leaks its `CheckedContinuation`
         // (leaked continuations warn/trap at task end). The agent receives a
@@ -484,6 +584,27 @@ actor ACPBackend: AgentBackend {
     }
 }
 
+// MARK: - Turn completion flag
+
+/// Mutable flag shared between the prompt task and the watchdog inside a single
+/// `ACPBackend.send` turn. Once either marks the turn resolved, the other
+/// short-circuits to avoid redundant `cancelSession` calls and confusing log
+/// lines. `@unchecked Sendable` with an internal lock — accessed from multiple
+/// Tasks inside the `@Sendable` continuation closure.
+private final class TurnCompletionFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _done = false
+
+    var isDone: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _done
+    }
+
+    func markDone() {
+        lock.lock(); _done = true; lock.unlock()
+    }
+}
+
 // MARK: - Errors
 
 enum ACPBackendError: Error, LocalizedError {
@@ -492,6 +613,13 @@ enum ACPBackendError: Error, LocalizedError {
     case missingAPIKey
     /// `Client.authenticate` returned `success: false` (bad/expired key, etc.).
     case authenticationFailed(String?)
+    /// The turn went silent — no `session/update` notification arrived for
+    /// `idleSeconds`. The turn was cancelled; the user can retry.
+    /// (`plans/acp-stall-recovery.md` §1a.)
+    case turnStalled(idleSeconds: TimeInterval)
+    /// The turn exceeded the hard ceiling duration — the agent was still
+    /// streaming but took too long. The turn was cancelled.
+    case turnCeilingExceeded(totalSeconds: TimeInterval)
 
     var errorDescription: String? {
         switch self {
@@ -509,6 +637,16 @@ enum ACPBackendError: Error, LocalizedError {
         case .authenticationFailed(let detail):
             let suffix = detail.map { " (\($0))" } ?? ""
             return "ACP agent authentication failed.\(suffix)"
+        case .turnStalled(let idle):
+            return """
+            ACP agent stalled — no activity for \(Int(idle))s. \
+            The turn was cancelled; try sending again.
+            """
+        case .turnCeilingExceeded(let total):
+            return """
+            ACP agent exceeded the maximum turn duration (\(Int(total))s). \
+            The turn was cancelled; try sending again.
+            """
         }
     }
 }
