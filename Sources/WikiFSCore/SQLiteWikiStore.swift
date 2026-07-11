@@ -1535,10 +1535,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             JOIN source_versions sv ON sv.id = r.version_id
             WHERE r.kind = 'source-content' AND r.owner_id = ?1;
             """)
+            defer { resolveVersion.reset() }
             let resolveVersionMax = try statement("""
             SELECT id FROM source_versions
             WHERE source_id = ?1 ORDER BY id DESC LIMIT 1;
             """)
+            defer { resolveVersionMax.reset() }
 
             for row in rows {
                 // SHA-256 of the UTF-8 markdown bytes.
@@ -1591,8 +1593,6 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             insBlob.reset()
             insActivity.reset()
             upd.reset()
-            resolveVersion.reset()
-            resolveVersionMax.reset()
         }
     }
 
@@ -2402,7 +2402,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             // Direct existence check — no `getChat` entity fetch needed; the
             // canonical resolver only needs to know whether the id is live.
             let stmt = try statement("SELECT 1 FROM chats WHERE id = ?1;")
-            stmt.reset()
+            defer { stmt.reset() }
             try stmt.bind(id.rawValue, at: 1)
             return (try stmt.step()) ? id : nil
         }
@@ -2959,7 +2959,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         SELECT COUNT(*) FROM source_versions
         WHERE activity_id = ?1 AND original_path IS NOT NULL;
         """)
-        stmt.reset()
+        defer { stmt.reset() }
         try stmt.bind(activityID, at: 1)
         guard try stmt.step() else { return false }
         return stmt.int(at: 0) > 0
@@ -3237,7 +3237,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         JOIN source_versions sv ON sv.id = r.version_id
         WHERE r.kind = 'source-content' AND r.owner_id = ?1;
         """)
-        refStmt.reset()
+        defer { refStmt.reset() }
         try refStmt.bind(id.rawValue, at: 1)
         var blobHash: String?
         if try refStmt.step() {
@@ -3253,7 +3253,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             SELECT blob_hash FROM source_versions
             WHERE source_id = ?1 ORDER BY id DESC LIMIT 1;
             """)
-            maxStmt.reset()
+            defer { maxStmt.reset() }
             try maxStmt.bind(id.rawValue, at: 1)
             if try maxStmt.step() {
                 if sqlite3_column_type(maxStmt.handle, 0) != SQLITE_NULL {
@@ -3272,7 +3272,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
         // 3. Read the blob bytes.
         let blobStmt = try statement("SELECT content FROM blobs WHERE hash = ?1;")
-        blobStmt.reset()
+        defer { blobStmt.reset() }
         try blobStmt.bind(blobHash, at: 1)
         guard try blobStmt.step() else {
             // A version points at a blob that is missing — an integrity break
@@ -3298,7 +3298,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         JOIN source_versions sv ON sv.id = r.version_id
         WHERE r.kind = 'source-content' AND r.owner_id = ?1;
         """)
-        refStmt.reset()
+        defer { refStmt.reset() }
         try refStmt.bind(sourceID.rawValue, at: 1)
         if try refStmt.step() {
             return sourceVersion(from: refStmt)
@@ -3309,7 +3309,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         FROM source_versions
         WHERE source_id = ?1 ORDER BY id DESC LIMIT 1;
         """)
-        maxStmt.reset()
+        defer { maxStmt.reset() }
         try maxStmt.bind(sourceID.rawValue, at: 1)
         guard try maxStmt.step() else { return nil }
         return sourceVersion(from: maxStmt)
@@ -3373,7 +3373,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         LEFT JOIN agents a ON a.id = act.agent_id
         WHERE r.kind = 'source-content' AND r.owner_id = ?1;
         """)
-        refStmt.reset()
+        defer { refStmt.reset() }
         try refStmt.bind(sourceID.rawValue, at: 1)
         if try refStmt.step() {
             return originFrom(stmt: refStmt)
@@ -3386,7 +3386,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         LEFT JOIN agents a ON a.id = act.agent_id
         WHERE sv.source_id = ?1 ORDER BY sv.id DESC LIMIT 1;
         """)
-        maxStmt.reset()
+        defer { maxStmt.reset() }
         try maxStmt.bind(sourceID.rawValue, at: 1)
         guard try maxStmt.step() else { return nil }
         return originFrom(stmt: maxStmt)
@@ -3466,12 +3466,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     private func legacyImportAgentID() throws -> String {
         let find = try statement(
             "SELECT id FROM agents WHERE name = 'legacy-import' LIMIT 1;")
-        find.reset()
+        defer { find.reset() }
         if try find.step() { return find.text(at: 0) }
         let id = ULID.generate()
         let ins = try statement(
             "INSERT INTO agents (id, kind, name) VALUES (?1, 'software', 'legacy-import');")
-        ins.reset()
+        defer { ins.reset() }
         try ins.bind(id, at: 1)
         _ = try ins.step()
         return id
@@ -3485,7 +3485,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                              version: String? = nil, externalRef: String? = nil) throws -> String {
         let find = try statement(
             "SELECT id FROM agents WHERE name = ?1 AND kind = ?2 LIMIT 1;")
-        find.reset()
+        defer { find.reset() }
         try find.bind(name, at: 1)
         try find.bind(kind, at: 2)
         if try find.step() { return find.text(at: 0) }
@@ -3494,7 +3494,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         INSERT INTO agents (id, kind, name, version, external_ref)
         VALUES (?1, ?2, ?3, ?4, ?5);
         """)
-        ins.reset()
+        defer { ins.reset() }
         try ins.bind(id, at: 1)
         try ins.bind(kind, at: 2)
         try ins.bind(name, at: 3)
@@ -3760,7 +3760,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             SELECT blob_hash, mime_type FROM source_versions
             WHERE id = ?1 AND source_id = ?2;
             """)
-            target.reset()
+            defer { target.reset() }
             try target.bind(versionID.rawValue, at: 1)
             try target.bind(sourceID.rawValue, at: 2)
             guard try target.step() else {
@@ -3775,7 +3775,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             var byteSize: Int64 = 0
             if let blobHash {
                 let bs = try statement("SELECT byte_size FROM blobs WHERE hash = ?1;")
-                bs.reset()
+                defer { bs.reset() }
                 try bs.bind(blobHash, at: 1)
                 if try bs.step() { byteSize = bs.int(at: 0) }
             }
@@ -3830,7 +3830,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         SELECT generation FROM refs
         WHERE kind = 'source-content' AND owner_id = ?1;
         """)
-        stmt.reset()
+        defer { stmt.reset() }
         try stmt.bind(sourceID.rawValue, at: 1)
         if try stmt.step() { return Int(stmt.int(at: 0)) }
         return nil
@@ -4334,7 +4334,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             // Capture the parent for sibling renumbering after the delete.
             let info = try statement(
                 "SELECT parent_id FROM bookmark_nodes WHERE id = ?1;")
-            info.reset()
+            defer { info.reset() }
             try info.bind(id, at: 1)
             var oldParent: String? = nil
             if try info.step() {
@@ -4362,7 +4362,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             // Read the node's current parent + position.
             let info = try statement(
                 "SELECT parent_id, position FROM bookmark_nodes WHERE id = ?1;")
-            info.reset()
+            defer { info.reset() }
             try info.bind(id, at: 1)
             guard try info.step() else {
                 throw WikiStoreError.unexpected("moveBookmarkNode: node \(id) not found")
@@ -4376,6 +4376,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 var ancestor: String? = toParentID
                 let ancestorStmt = try statement(
                     "SELECT parent_id FROM bookmark_nodes WHERE id = ?1;")
+                defer { ancestorStmt.reset() }
                 while let current = ancestor {
                     if current == id {
                         throw WikiStoreError.unexpected(
@@ -4535,7 +4536,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         return try mutate(event: { _ in localEvent(.chat, id: chatID.rawValue, change: .updated) }) {
         let inserted = try withTransaction {
             let exists = try statement("SELECT 1 FROM chats WHERE id = ?1;")
-            exists.reset()
+            defer { exists.reset() }
             try exists.bind(chatID.rawValue, at: 1)
             guard try exists.step() else {
                 throw WikiStoreError.notFound(chatID)
@@ -4545,7 +4546,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             // so the first row lands at 0).
             let maxSeq = try statement(
                 "SELECT COALESCE(MAX(seq), -1) FROM chat_messages WHERE chat_id = ?1;")
-            maxSeq.reset()
+            defer { maxSeq.reset() }
             try maxSeq.bind(chatID.rawValue, at: 1)
             _ = try maxSeq.step()
             var nextSeq = Int(maxSeq.int(at: 0)) + 1
@@ -4729,7 +4730,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try mutate(event: { _ in localEvent(.chat, id: id.rawValue, change: .updated) }) {
         try withTransaction {
             let exists = try statement("SELECT 1 FROM chats WHERE id = ?1;")
-            exists.reset()
+            defer { exists.reset() }
             try exists.bind(id.rawValue, at: 1)
             guard try exists.step() else {
                 throw WikiStoreError.notFound(id)
@@ -4818,6 +4819,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let depth = transactionDepth
         let savepoint = "wiki_txn_\(depth)"
         if depth == 0 {
+            #if DEBUG
+            try assertNoBusyStatements()
+            #endif
             let start = DispatchTime.now()
             do {
                 try exec("BEGIN IMMEDIATE;")
@@ -4917,6 +4921,31 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         statements[sql] = stmt
         return stmt
     }
+
+    #if DEBUG
+    /// Assert no cached statement is left busy. A busy statement pins the
+    /// connection's WAL read snapshot, causing stale reads and write-lock
+    /// failures after external commits (#332). Acquires the recursive lock
+    /// internally — safe from within `withTransaction` (re-entrant) and
+    /// from bare test calls.
+    internal func assertNoBusyStatements() throws {
+        lock.lock(); defer { lock.unlock() }
+        for (sql, stmt) in statements {
+            if stmt.isBusy {
+                throw WikiStoreError.unexpected(
+                    "Busy cached statement detected: \(sql.prefix(80))")
+            }
+        }
+    }
+
+    /// Test-only seam: prepare-and-step a SQL string without resetting,
+    /// so `testAssertNoBusyStatementsDetectsLeak` can trigger a busy state.
+    internal func _testProbeBusyStatement(_ sql: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement(sql)
+        _ = try stmt.step()   // intentionally NOT reset — simulates the bug
+    }
+    #endif
 
     /// Execute a statement that returns no rows (DDL / PRAGMA assignment).
     /// Not cached — these run once at open time.
@@ -5762,12 +5791,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         \(Self.smvBlobJoin)
         WHERE r.kind = 'source-derived' AND r.owner_id = ?1;
         """) {
-            refStmt.reset()
+            defer { refStmt.reset() }
             try refStmt.bind(sourceID.rawValue, at: 1)
             if try refStmt.step() {
                 return sourceMarkdownVersion(from: refStmt)
             }
-            refStmt.reset()
         }
         guard let stmt = try? statement("""
         SELECT \(Self.smvSelectColumns)
@@ -5886,16 +5914,15 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         SELECT version_id FROM refs
         WHERE kind = 'source-derived' AND owner_id = ?1;
         """) {
-            refStmt.reset()
+            defer { refStmt.reset() }
             try refStmt.bind(sourceID.rawValue, at: 1)
             if try refStmt.step() { return refStmt.text(at: 0) }
-            refStmt.reset()
         }
         let maxStmt = try statement("""
         SELECT id FROM source_markdown_versions
         WHERE file_id = ?1 ORDER BY id DESC LIMIT 1;
         """)
-        maxStmt.reset()
+        defer { maxStmt.reset() }
         try maxStmt.bind(sourceID.rawValue, at: 1)
         if try maxStmt.step() { return maxStmt.text(at: 0) }
         return nil
@@ -6126,7 +6153,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         SELECT version_id FROM refs
         WHERE kind = 'source-derived' AND owner_id = ?1;
         """)
-        stmt.reset()
+        defer { stmt.reset() }
         try stmt.bind(sourceID.rawValue, at: 1)
         if try stmt.step() { return stmt.text(at: 0) }
         return nil
@@ -6162,6 +6189,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 sourceID: sourceID, content: targetVersion.content,
                 origin: "revert", note: "revert to \(versionID.rawValue)")
         }
+        // All values extracted — release the read snapshot before the write
+        // transaction so `target` is not left busy through BEGIN IMMEDIATE (#332).
+        target.reset()
 
         // Append a new row reusing the target's blob_hash (INSERT OR IGNORE on the
         // existing hash is a no-op — zero new blob bytes), then repoint the ref.
@@ -6235,7 +6265,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         SELECT generation FROM refs
         WHERE kind = 'source-derived' AND owner_id = ?1;
         """)
-        stmt.reset()
+        defer { stmt.reset() }
         try stmt.bind(sourceID.rawValue, at: 1)
         if try stmt.step() { return Int(stmt.int(at: 0)) }
         return nil
@@ -6252,7 +6282,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             SELECT 1 FROM source_markdown_versions
             WHERE id = ?1 AND file_id = ?2;
             """)
-            check.reset()
+            defer { check.reset() }
             try check.bind(versionID.rawValue, at: 1)
             try check.bind(sourceID.rawValue, at: 2)
             guard try check.step() else {

@@ -97,9 +97,12 @@ agents, NOT Polytoken):
   still flow through the `@MainActor` model; off-main reads go through
   `WikiReadPool`.** Multi-step writes compose via `withTransaction` (savepoint
   nesting — never raw `BEGIN`), and no statement handle or column pointer may
-  cross a method boundary. Never run inference/network inside a transaction,
-  and never pool `init(databaseURL:)` connections (that init writes; read-only
-  pools use `init(readOnlyURL:)`). Follow
+  cross a method boundary. Every stepped `SQLiteStatement` must be covered by
+  `defer { stmt.reset() }` — a statement left at `SQLITE_ROW` pins the
+  connection's WAL read snapshot, causing stale reads and `BEGIN IMMEDIATE`
+  failures after external writes (#332). Never run inference/network inside a
+  transaction, and never pool `init(databaseURL:)` connections (that init
+  writes; read-only pools use `init(readOnlyURL:)`). Follow
   [`docs/skills/sqlite-concurrency/SKILL.md`](docs/skills/sqlite-concurrency/SKILL.md)
   and `plans/graph-model-and-versioning.md` §8; regression suite:
   `swift test --filter StoreConcurrencyTests`.

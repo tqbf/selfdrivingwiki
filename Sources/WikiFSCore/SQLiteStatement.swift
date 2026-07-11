@@ -32,6 +32,14 @@ final class SQLiteStatement {
         sqlite3_clear_bindings(handle)
     }
 
+    /// True when the statement is stepped-to-ROW but not yet reset — i.e. it
+    /// holds an implicit read transaction open, pinning the connection's WAL
+    /// snapshot. Every stepped statement must be covered by `defer { reset() }`.
+    var isBusy: Bool {
+        guard let handle else { return false }
+        return sqlite3_stmt_busy(handle) != 0
+    }
+
     // MARK: - Binding (1-based indexes, per the SQLite C API)
 
     func bind(_ value: String, at index: Int32) throws {
