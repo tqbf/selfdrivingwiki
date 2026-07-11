@@ -14,15 +14,21 @@ struct FakeSessionBehavior: Sendable {
     /// If set, write this JSON to `plan.json` in the scratch directory on
     /// `start()`, simulating the planner phase's output.
     var planJSON: Data? = nil
+    /// If true, `send()` yields `events` but NEVER finishes the stream —
+    /// simulates a stalled `sendPrompt` that never returns (issue #334).
+    /// The consumer must cancel the iteration (like `stopAgent` does).
+    var neverFinish: Bool = false
 
     init(
         events: [AgentEvent] = [.messageStop],
         shouldFailOnStart: Bool = false,
-        planJSON: Data? = nil
+        planJSON: Data? = nil,
+        neverFinish: Bool = false
     ) {
         self.events = events
         self.shouldFailOnStart = shouldFailOnStart
         self.planJSON = planJSON
+        self.neverFinish = neverFinish
     }
 }
 
@@ -104,14 +110,20 @@ actor FakeAgentBackend: AgentBackend {
         sendCount += 1
         sentTexts.append(turn.userText)
 
-        let events = sessionBehaviors[session.id]?.events ?? [.messageStop]
+        let behavior = sessionBehaviors[session.id]
+        let events = behavior?.events ?? [.messageStop]
+        let neverFinish = behavior?.neverFinish ?? false
         allYieldedEvents.append(contentsOf: events)
 
         return AsyncStream { continuation in
             for event in events {
                 continuation.yield(event)
             }
-            continuation.finish()
+            // When neverFinish is true, DON'T finish — simulates a stalled
+            // sendPrompt (issue #334). The consumer must cancel the iteration.
+            if !neverFinish {
+                continuation.finish()
+            }
         }
     }
 
