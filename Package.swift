@@ -31,10 +31,13 @@ let package = Package(
         // ACPBackend (plans/acp-backend-and-permissions.md): the app is the ACP
         // *client*; it launches any ACP agent subprocess over JSON-RPC/stdio and
         // mediates writes via session/request_permission (the always-ask/yolo lever).
-        // NOTE: the README says `from: "1.0.0"` but the only published tag is
-        // v0.1.0 (24 commits, community/early). Pin 0.1.0 and validate under Swift
-        // 6.0 / macOS 15 — see plans/acp-spike-findings.md.
-        .package(url: "https://github.com/wiedymi/swift-acp", from: "0.1.0"),
+        //
+        // Forked from wiedymi/swift-acp v0.1.0 (plans/acp-stall-recovery.md Phase 2):
+        // the upstream is dead since v0.1.0 and has four root-cause bugs (unordered
+        // transport reads, actor head-of-line blocking on request_permission,
+        // discarded stderr, unexposed PID). The fork fixes all four. Upstream PRs
+        // offered when the upstream resumes.
+        .package(url: "https://github.com/wsargent/swift-acp", from: "0.2.0"),
     ],
     targets: [
         // Statically-linked sqlite-vec (semantic vector search). The amalgamation
