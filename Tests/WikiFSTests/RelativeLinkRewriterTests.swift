@@ -3,123 +3,219 @@ import Testing
 @testable import WikiFSCore
 
 /// Unit tests for the `[[wiki-link]]` → relative-Markdown-link rewriter used by
-/// the `pages/by-title` FileProvider projection. No store, no view: the resolver
-/// is injected as a closure, exactly as `Projection` supplies it.
+/// the `by-title` / `by-name` FileProvider projections. No store, no view: the
+/// namespace resolution + baseDir are injected, exactly as `Projection` supplies.
 struct RelativeLinkRewriterTests {
 
-    private func resolve(_ title: String) -> String? {
-        switch title {
-        case "Home":     return "Home--01AAAAAAAA.md"
-        case "Alpha":    return "Alpha--01BBBBBBBB.md"
-        case "C# Guide": return "C# Guide--01CCCCCCCC.md"
-        default:         return nil
-        }
+    // Canonical ULIDs for the fixture rows (26-char Crockford base32, uppercase).
+    private static let homeID   = "01AAAAAAAAAAAAAAAAAAAAAAAA"
+    private static let alphaID  = "01BBBBBBBBBBBBBBBBBBBBBBBB"
+    private static let srcID     = "01CCCCCCCCCCCCCCCCCCCCCCCC"
+    private static let chatID    = "01DDDDDDDDDDDDDDDDDDDDDDDD"
+
+    private typealias Target = RelativeLinkRewriter.Target
+
+    private static let pages: [String: Target] = [
+        "Home":  Target(path: ["pages", "by-title", "Home--01AAAAAA.md"], title: "Home"),
+        "Alpha": Target(path: ["pages", "by-title", "Alpha--01BBBBBB.md"], title: "Alpha"),
+        "C# Guide": Target(path: ["pages", "by-title", "C# Guide--01AAAAAA.md"], title: "C# Guide"),
+    ]
+    private static let pagesByID: [String: Target] = [
+        homeID.uppercased():  pages["Home"]!,
+        alphaID.uppercased(): pages["Alpha"]!,
+    ]
+    private static let sources: [String: Target] = [
+        "Teleportation.pdf": Target(path: ["sources", "by-name", "Teleportation--01CCCCCC.md"],
+                                    title: "Teleportation.pdf"),
+    ]
+    private static let sourcesByID: [String: Target] = [
+        srcID.uppercased(): sources["Teleportation.pdf"]!,
+    ]
+    private static let chats: [String: Target] = [
+        "My Chat": Target(path: ["chats", "by-name", "My Chat--01DDDDDD.md"], title: "My Chat"),
+    ]
+    private static let chatsByID: [String: Target] = [
+        chatID.uppercased(): chats["My Chat"]!,
+    ]
+
+    /// A resolver rooted at `baseDir` (default: the page by-title view).
+    private func resolver(baseDir: [String] = ["pages", "by-title"]) -> RelativeLinkRewriter.Resolver {
+        RelativeLinkRewriter.Resolver(
+            baseDir: baseDir,
+            page:   { t, isID in isID ? Self.pagesByID[t.uppercased()]   : Self.pages[t] },
+            source: { t, isID in isID ? Self.sourcesByID[t.uppercased()] : Self.sources[t] },
+            chat:   { t, isID in isID ? Self.chatsByID[t.uppercased()]   : Self.chats[t] }
+        )
     }
 
-    // MARK: - Basic rewrites
+    /// Convenience: rewrite from the page view.
+    private func rewrite(_ body: String, baseDir: [String] = ["pages", "by-title"]) -> String {
+        RelativeLinkRewriter.rewrite(body, resolver: resolver(baseDir: baseDir))
+    }
 
-    @Test func simplePageLinkBecomesRelativeMarkdownLink() {
-        let out = RelativeLinkRewriter.rewrite("See [[Home]] here.", resolver: resolve)
-        #expect(out == "See [Home](Home--01AAAAAAAA.md) here.")
+    // MARK: - Page links (name-based)
+
+    @Test func simplePageLinkBecomesSiblingLink() {
+        #expect(rewrite("See [[Home]] here.") == "See [Home](Home--01AAAAAA.md) here.")
     }
 
     @Test func aliasedLinkUsesAliasTextAndTargetFilename() {
-        let out = RelativeLinkRewriter.rewrite("Go to [[Home|start page]].", resolver: resolve)
-        #expect(out == "Go to [start page](Home--01AAAAAAAA.md).")
+        #expect(rewrite("Go to [[Home|start page]].") == "Go to [start page](Home--01AAAAAA.md).")
     }
 
     @Test func multipleLinksAreEachRewritten() {
-        let out = RelativeLinkRewriter.rewrite("[[Home]] and [[Alpha]].", resolver: resolve)
-        #expect(out == "[Home](Home--01AAAAAAAA.md) and [Alpha](Alpha--01BBBBBBBB.md).")
+        #expect(rewrite("[[Home]] and [[Alpha]].")
+            == "[Home](Home--01AAAAAA.md) and [Alpha](Alpha--01BBBBBB.md).")
     }
 
-    // MARK: - Anchors
+    // MARK: - Canonical ULID page links (Phase 5 form)
 
-    @Test func anchorIsPreservedAfterFilename() {
-        let out = RelativeLinkRewriter.rewrite("See [[Home#Introduction]].", resolver: resolve)
-        #expect(out == "See [Home](Home--01AAAAAAAA.md#Introduction).")
+    @Test func canonicalULIDPageLinkResolvesByIDAndUsesAlias() {
+        #expect(rewrite("A [[page:\(Self.homeID)|Geoffrey Litt]] essay.")
+            == "A [Geoffrey Litt](Home--01AAAAAA.md) essay.")
     }
 
-    @Test func aliasedAnchorLinkUsesAliasAndPreservesFragment() {
-        let out = RelativeLinkRewriter.rewrite("[[Home#Intro|intro]]", resolver: resolve)
-        #expect(out == "[intro](Home--01AAAAAAAA.md#Intro)")
+    @Test func canonicalULIDPageLinkWithoutAliasUsesCurrentTitle() {
+        #expect(rewrite("See [[page:\(Self.alphaID)]].") == "See [Alpha](Alpha--01BBBBBB.md).")
+    }
+
+    @Test func canonicalULIDPageLinkPreservesHeadingFragment() {
+        #expect(rewrite("[[page:\(Self.homeID)#Intro|home intro]]")
+            == "[home intro](Home--01AAAAAA.md#Intro)")
+    }
+
+    @Test func canonicalULIDForDeletedPageStaysVerbatim() {
+        let missing = "01ZZZZZZZZZZZZZZZZZZZZZZZZ"
+        #expect(rewrite("[[page:\(missing)|Gone]]") == "[[page:\(missing)|Gone]]")
+    }
+
+    @Test func lowercaseULIDIsTreatedAsNameAndStaysVerbatim() {
+        // ULID.allowedCharacters is uppercase-only by design: a lowercase ULID
+        // is NOT canonical, resolves by name → no match → left verbatim.
+        let lower = Self.homeID.lowercased()
+        #expect(rewrite("[[page:\(lower)|Home]]") == "[[page:\(lower)|Home]]")
+    }
+
+    // MARK: - Source links → sources/by-name (cross-namespace)
+
+    @Test func canonicalSourceLinkResolvesToRelativePath() {
+        // From pages/by-title, a source cite climbs out to sources/by-name.
+        let out = rewrite("Cite [[source:\(Self.srcID)|the essay]].")
+        #expect(out == "Cite [the essay](../../sources/by-name/Teleportation--01CCCCCC.md).")
+    }
+
+    @Test func sourceQuoteFragmentIsDropped() {
+        // A `#"quote"` cite fragment isn't a resolvable anchor — drop it.
+        let out = rewrite("[[source:\(Self.srcID)#\"What if we invented teleportation?\"|cite]]")
+        #expect(out == "[cite](../../sources/by-name/Teleportation--01CCCCCC.md)")
+    }
+
+    @Test func nameBasedSourceLinkResolves() {
+        let out = rewrite("[[source:Teleportation.pdf]]")
+        #expect(out == "[Teleportation.pdf](../../sources/by-name/Teleportation--01CCCCCC.md)")
+    }
+
+    @Test func unknownSourceLinkStaysVerbatim() {
+        #expect(rewrite("[[source:missing.pdf]]") == "[[source:missing.pdf]]")
+    }
+
+    // MARK: - Chat links → chats/by-name (cross-namespace)
+
+    @Test func canonicalChatLinkResolvesToRelativePath() {
+        // The space in "My Chat" is percent-encoded in the PATH; the display
+        // text keeps the literal space.
+        let out = rewrite("See [[chat:\(Self.chatID)|our chat]].")
+        #expect(out == "See [our chat](../../chats/by-name/My%20Chat--01DDDDDD.md).")
+    }
+
+    @Test func nameBasedChatLinkResolves() {
+        let out = rewrite("[[chat:My Chat]]")
+        #expect(out == "[My Chat](../../chats/by-name/My%20Chat--01DDDDDD.md)")
+    }
+
+    @Test func unknownChatLinkStaysVerbatim() {
+        #expect(rewrite("[[chat:Nope]]") == "[[chat:Nope]]")
+    }
+
+    // MARK: - baseDir sensitivity (same doc kind → sibling; cross-kind → climb)
+
+    @Test func sourceViewLinkingToAnotherSourceIsSibling() {
+        // A source markdown sibling links to another source in the same dir.
+        let out = rewrite("[[source:\(Self.srcID)|self]]", baseDir: ["sources", "by-name"])
+        #expect(out == "[self](Teleportation--01CCCCCC.md)")
+    }
+
+    @Test func sourceViewLinkingToPageClimbsOut() {
+        let out = rewrite("[[Home]]", baseDir: ["sources", "by-name"])
+        #expect(out == "[Home](../../pages/by-title/Home--01AAAAAA.md)")
+    }
+
+    @Test func chatViewLinkingToPageClimbsOut() {
+        let out = rewrite("[[page:\(Self.homeID)|Home]]", baseDir: ["chats", "by-name"])
+        #expect(out == "[Home](../../pages/by-title/Home--01AAAAAA.md)")
     }
 
     // MARK: - Hash-in-title disambiguation
 
     @Test func hashInTitleIsDisambiguatedCorrectly() {
-        // "C# Guide" is a real page; "C" is not. Should resolve to C# Guide.
-        let out = RelativeLinkRewriter.rewrite("See [[C# Guide]].", resolver: resolve)
-        #expect(out == "See [C# Guide](C%23%20Guide--01CCCCCCCC.md).")
+        // "C# Guide" is a real page; "C" is not.
+        #expect(rewrite("See [[C# Guide]].") == "See [C# Guide](C%23%20Guide--01AAAAAA.md).")
     }
 
-    // MARK: - Unresolvable links stay verbatim
+    // MARK: - Anchors (page headings)
+
+    @Test func anchorIsPreservedAfterFilename() {
+        #expect(rewrite("See [[Home#Introduction]].")
+            == "See [Home](Home--01AAAAAA.md#Introduction).")
+    }
+
+    @Test func aliasedAnchorLinkUsesAliasAndPreservesFragment() {
+        #expect(rewrite("[[Home#Intro|intro]]") == "[intro](Home--01AAAAAA.md#Intro)")
+    }
+
+    // MARK: - Unresolvable / non-link forms stay verbatim
 
     @Test func unknownPageLinkStaysVerbatim() {
-        let out = RelativeLinkRewriter.rewrite("[[Deleted Page]]", resolver: resolve)
-        #expect(out == "[[Deleted Page]]")
-    }
-
-    // MARK: - Non-page links stay verbatim
-
-    @Test func sourceLinkStaysVerbatim() {
-        let out = RelativeLinkRewriter.rewrite("[[source:report.pdf]]", resolver: resolve)
-        #expect(out == "[[source:report.pdf]]")
-    }
-
-    @Test func chatLinkStaysVerbatim() {
-        let out = RelativeLinkRewriter.rewrite("[[chat:My Chat]]", resolver: resolve)
-        #expect(out == "[[chat:My Chat]]")
+        #expect(rewrite("[[Deleted Page]]") == "[[Deleted Page]]")
     }
 
     @Test func embedStaysVerbatim() {
-        let out = RelativeLinkRewriter.rewrite("![[source:image.png]]", resolver: resolve)
-        #expect(out == "![[source:image.png]]")
+        #expect(rewrite("![[source:image.png]]") == "![[source:image.png]]")
     }
 
-    // MARK: - Code span protection
+    @Test func canonicalSourceEmbedStaysVerbatim() {
+        let body = "![[source:\(Self.srcID)]]"
+        #expect(rewrite(body) == body)
+    }
 
     @Test func linkInsideCodeSpanIsLeftVerbatim() {
-        let out = RelativeLinkRewriter.rewrite("Use `[[Home]]` in code.", resolver: resolve)
-        #expect(out == "Use `[[Home]]` in code.")
+        #expect(rewrite("Use `[[Home]]` in code.") == "Use `[[Home]]` in code.")
     }
 
     @Test func linkInsideFencedBlockIsLeftVerbatim() {
         let body = "```\n[[Home]]\n```"
-        let out = RelativeLinkRewriter.rewrite(body, resolver: resolve)
-        #expect(out == body)
+        #expect(rewrite(body) == body)
     }
-
-    // MARK: - Same-page anchors stay verbatim
 
     @Test func samePageAnchorStaysVerbatim() {
-        let out = RelativeLinkRewriter.rewrite("Jump to [[#Introduction]].", resolver: resolve)
-        #expect(out == "Jump to [[#Introduction]].")
+        #expect(rewrite("Jump to [[#Introduction]].") == "Jump to [[#Introduction]].")
     }
 
-    // MARK: - Filename percent-encoding
+    // MARK: - Percent-encoding
 
-    @Test func filenameWithSpecialCharsIsPercentEncoded() {
-        // A filename with spaces must be percent-encoded so Markdown parsers
-        // don't break the link at the first space.
-        var called = false
-        let out = RelativeLinkRewriter.rewrite("[[Home]]", resolver: { title in
-            called = true
-            return "My Home Page--01AA.md"   // has spaces
-        })
-        #expect(called)
-        #expect(out == "[Home](My%20Home%20Page--01AA.md)")
+    @Test func filenameWithSpacesIsPercentEncodedPerComponent() {
+        // Spaces in the filename → %20; the `/` path separators are NOT encoded.
+        let out = rewrite("[[chat:My Chat]]")
+        #expect(out == "[My Chat](../../chats/by-name/My%20Chat--01DDDDDD.md)")
+        #expect(!out.contains("%2F"))   // separators intact
     }
 
-    // MARK: - Passthrough when no links
+    // MARK: - Passthrough
 
     @Test func bodyWithNoLinksIsReturnedUnchanged() {
         let body = "Just plain text, no wikilinks."
-        let out = RelativeLinkRewriter.rewrite(body, resolver: resolve)
-        #expect(out == body)
+        #expect(rewrite(body) == body)
     }
-
-    // MARK: - Frontmatter passthrough
 
     @Test func yamlFrontmatterIsNotModified() {
         let body = """
@@ -132,8 +228,22 @@ struct RelativeLinkRewriterTests {
 
         See [[Alpha]].
         """
-        let out = RelativeLinkRewriter.rewrite(body, resolver: resolve)
+        let out = rewrite(body)
         #expect(out.hasPrefix("---\ntitle: \"Home\"\ndate: 2026-07-11\n---"))
-        #expect(out.contains("[Alpha](Alpha--01BBBBBBBB.md)"))
+        #expect(out.contains("[Alpha](Alpha--01BBBBBB.md)"))
+    }
+
+    // MARK: - relativePath unit
+
+    @Test func relativePathSameDirIsBareFilename() {
+        let p = RelativeLinkRewriter.relativePath(
+            from: ["pages", "by-title"], to: ["pages", "by-title", "Home--01AA.md"])
+        #expect(p == "Home--01AA.md")
+    }
+
+    @Test func relativePathCrossSubtreeClimbs() {
+        let p = RelativeLinkRewriter.relativePath(
+            from: ["pages", "by-title"], to: ["sources", "by-name", "x.md"])
+        #expect(p == "../../sources/by-name/x.md")
     }
 }

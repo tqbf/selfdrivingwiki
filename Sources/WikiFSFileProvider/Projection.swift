@@ -558,10 +558,8 @@ struct Projection {
                   let page = try? store.getPage(id: PageID(rawValue: ulid)) else { return nil }
             // For by-title pages, size must match the rewritten bytes that
             // contents(for:) will serve — a mismatch truncates cat (#216).
-            if id.rawValue.hasPrefix(Identity.byTitlePrefix),
-               let pages = try? store.listAllPagesOrderedByID() {
-                let map = projection.titleToFilenameMap(pages: pages)
-                let data = projection.byTitleContent(for: page, map: map)
+            if id.rawValue.hasPrefix(Identity.byTitlePrefix) {
+                let data = projection.byTitleContent(for: page, maps: projection.makeLinkMaps())
                 return Self.pageFileNode(for: id, page: page, contentData: data)
             }
             return Self.pageFileNode(for: id, page: page)
@@ -571,10 +569,8 @@ struct Projection {
                   let store = projection.openReadStore(),
                   let page = try? store.getPage(id: PageID(rawValue: ulid)) else { return nil }
             // By-title view: rewrite [[wikilinks]] to relative Markdown links.
-            if id.rawValue.hasPrefix(Identity.byTitlePrefix),
-               let pages = try? store.listAllPagesOrderedByID() {
-                let map = projection.titleToFilenameMap(pages: pages)
-                return projection.byTitleContent(for: page, map: map)
+            if id.rawValue.hasPrefix(Identity.byTitlePrefix) {
+                return projection.byTitleContent(for: page, maps: projection.makeLinkMaps())
             }
             return Data(PageMarkdownFormat.fileContent(for: page).utf8)
         }
@@ -598,10 +594,9 @@ struct Projection {
                     return nil
                 }
                 // For by-name markdown siblings, size must match rewritten bytes.
-                if id.rawValue.hasPrefix(Identity.sourceMarkdownByNamePrefix),
-                   let pages = try? store.listAllPagesOrderedByID() {
-                    let map = projection.titleToFilenameMap(pages: pages)
-                    let data = projection.rewriteMarkdown(head.content, map: map)
+                if id.rawValue.hasPrefix(Identity.sourceMarkdownByNamePrefix) {
+                    let data = projection.rewriteLinks(head.content, maps: projection.makeLinkMaps(),
+                                                       baseDir: Self.sourcesByNameDir)
                     return Self.sourceMarkdownNode(for: id, source: file, head: head, contentData: data)
                 }
                 return Self.sourceMarkdownNode(for: id, source: file, head: head)
@@ -620,10 +615,9 @@ struct Projection {
                     return nil
                 }
                 // By-name markdown siblings: rewrite [[wikilinks]] to relative links.
-                if id.rawValue.hasPrefix(Identity.sourceMarkdownByNamePrefix),
-                   let pages = try? store.listAllPagesOrderedByID() {
-                    let map = projection.titleToFilenameMap(pages: pages)
-                    return projection.rewriteMarkdown(head.content, map: map)
+                if id.rawValue.hasPrefix(Identity.sourceMarkdownByNamePrefix) {
+                    return projection.rewriteLinks(head.content, maps: projection.makeLinkMaps(),
+                                                   baseDir: Self.sourcesByNameDir)
                 }
                 return Data(head.content.utf8)
             }
@@ -648,12 +642,11 @@ struct Projection {
                   let chats = try? store.listAllChatsOrderedByID(),
                   let chat = chats.first(where: { $0.id.rawValue == ulid }) else { return nil }
             // For by-name chats, size must match rewritten bytes.
-            if id.rawValue.hasPrefix(Identity.chatByNamePrefix),
-               let pages = try? store.listAllPagesOrderedByID() {
-                let map = projection.titleToFilenameMap(pages: pages)
+            if id.rawValue.hasPrefix(Identity.chatByNamePrefix) {
                 let messages = (try? store.chatMessages(chatID: chat.id)) ?? []
                 let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
-                let data = projection.rewriteMarkdown(raw, map: map)
+                let data = projection.rewriteLinks(raw, maps: projection.makeLinkMaps(),
+                                                   baseDir: Self.chatsByNameDir)
                 return Self.chatFileNode(for: id, chat: chat, in: store, contentData: data)
             }
             return Self.chatFileNode(for: id, chat: chat, in: store)
@@ -666,10 +659,9 @@ struct Projection {
                   let messages = try? store.chatMessages(chatID: chat.id) else { return nil }
             let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
             // By-name chats: rewrite [[wikilinks]] to relative links.
-            if id.rawValue.hasPrefix(Identity.chatByNamePrefix),
-               let pages = try? store.listAllPagesOrderedByID() {
-                let map = projection.titleToFilenameMap(pages: pages)
-                return projection.rewriteMarkdown(raw, map: map)
+            if id.rawValue.hasPrefix(Identity.chatByNamePrefix) {
+                return projection.rewriteLinks(raw, maps: projection.makeLinkMaps(),
+                                               baseDir: Self.chatsByNameDir)
             }
             return Data(raw.utf8)
         }
@@ -906,12 +898,37 @@ struct Projection {
         name.replacingOccurrences(of: "/", with: "-")
     }
 
+    /// The projection-relative directory components CONTAINING `node` —
+    /// `["bookmarks"]` for a root-level ref, plus one sanitized label per
+    /// ancestor folder (root → immediate parent). Used as the rewriter's
+    /// `baseDir` so a nested ref's links climb the right number of `../`.
+    /// The parent walk is capped (matches `BookmarkNode.displayPath`) so a
+    /// corrupted parent cycle can't loop forever.
+    private func bookmarkBaseDir(for node: BookmarkNode,
+                                 in nodes: [BookmarkNode]) -> [String] {
+        var byID: [String: BookmarkNode] = [:]
+        byID.reserveCapacity(nodes.count)
+        for n in nodes { byID[n.id] = n }
+
+        var labels: [String] = []
+        var current = node.parentID.flatMap { byID[$0] }
+        var depth = 0
+        let maxDepth = 64
+        while let folder = current, depth < maxDepth {
+            depth += 1
+            labels.insert(Self.sanitizeFilename(folder.label ?? "Untitled"), at: 0)
+            current = folder.parentID.flatMap { byID[$0] }
+        }
+        return ["bookmarks"] + labels
+    }
+
     /// Build a `ProjectedNode` for one bookmark node, resolving the target for
     /// refs. Stale refs (target deleted) render as a small placeholder file so
     /// the tree shape is preserved. All bookmark nodes are versioned by the
     /// change token so any mutation re-fetches them.
     private func bookmarkNodeItem(
-        for node: BookmarkNode, in store: SQLiteWikiStore
+        for node: BookmarkNode, in store: SQLiteWikiStore,
+        maps: LinkMaps, allNodes: [BookmarkNode]
     ) -> ProjectedNode {
         let id = Self.bookmarkID(for: node)
         let parent = Self.bookmarkParent(for: node)
@@ -922,7 +939,9 @@ struct Projection {
         case .pageRef:
             if let targetID = node.targetID,
                let page = try? store.getPage(id: targetID) {
-                let body = Data(PageMarkdownFormat.fileContent(for: page).utf8)
+                let baseDir = bookmarkBaseDir(for: node, in: allNodes)
+                let body = rewriteLinks(PageMarkdownFormat.fileContent(for: page),
+                                        maps: maps, baseDir: baseDir)
                 let name = Self.sanitizeFilename(page.title) + ".md"
                 return .file(id: id, parent: parent, name: name, size: body.count,
                              version: version, metadataVersion: version,
@@ -951,7 +970,9 @@ struct Projection {
             if let targetID = node.targetID,
                let chat = (try? store.listAllChatsOrderedByID())?.first(where: { $0.id == targetID }) {
                 let messages = (try? store.chatMessages(chatID: chat.id)) ?? []
-                let body = Data(ChatTranscriptRenderer.render(summary: chat, messages: messages).utf8)
+                let baseDir = bookmarkBaseDir(for: node, in: allNodes)
+                let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
+                let body = rewriteLinks(raw, maps: maps, baseDir: baseDir)
                 let name = Self.sanitizeFilename(chat.title) + ".md"
                 return .file(id: id, parent: parent, name: name, size: body.count,
                              version: version, metadataVersion: version,
@@ -970,7 +991,7 @@ struct Projection {
               let store = openReadStore(),
               let nodes = try? store.listBookmarkNodes(),
               let node = nodes.first(where: { $0.id == ulid }) else { return nil }
-        return bookmarkNodeItem(for: node, in: store)
+        return bookmarkNodeItem(for: node, in: store, maps: makeLinkMaps(), allNodes: nodes)
     }
 
     /// Enumerate the children of a bookmark container (the topLevel folder or a
@@ -987,10 +1008,11 @@ struct Projection {
         }
         guard let store = openReadStore(),
               let nodes = try? store.listBookmarkNodes() else { return [] }
+        let maps = makeLinkMaps()
         return nodes
             .filter { $0.parentID == parentID }
             .sorted { $0.position < $1.position }
-            .compactMap { bookmarkNodeItem(for: $0, in: store) }
+            .compactMap { bookmarkNodeItem(for: $0, in: store, maps: maps, allNodes: nodes) }
     }
 
     /// Serve content for a bookmark ref leaf, resolving the target. Folders
@@ -1008,7 +1030,9 @@ struct Projection {
                   let page = try? store.getPage(id: targetID) else {
                 return Data("# Stale reference\n\nThis bookmark points to a deleted page.".utf8)
             }
-            return Data(PageMarkdownFormat.fileContent(for: page).utf8)
+            return rewriteLinks(PageMarkdownFormat.fileContent(for: page),
+                                maps: makeLinkMaps(),
+                                baseDir: bookmarkBaseDir(for: node, in: nodes))
         case .sourceRef:
             guard let targetID = node.targetID else {
                 return Data("# Stale reference\n\nThis bookmark points to a deleted source.".utf8)
@@ -1021,7 +1045,9 @@ struct Projection {
                 return Data("# Stale reference\n\nThis bookmark points to a deleted chat.".utf8)
             }
             let messages = (try? store.chatMessages(chatID: chat.id)) ?? []
-            return Data(ChatTranscriptRenderer.render(summary: chat, messages: messages).utf8)
+            let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
+            return rewriteLinks(raw, maps: makeLinkMaps(),
+                                baseDir: bookmarkBaseDir(for: node, in: nodes))
         }
     }
 
@@ -1029,7 +1055,8 @@ struct Projection {
     private func allBookmarkNodes() -> [ProjectedNode] {
         guard let store = openReadStore(),
               let nodes = try? store.listBookmarkNodes() else { return [] }
-        return nodes.compactMap { bookmarkNodeItem(for: $0, in: store) }
+        let maps = makeLinkMaps()
+        return nodes.compactMap { bookmarkNodeItem(for: $0, in: store, maps: maps, allNodes: nodes) }
     }
 
     // MARK: - Metadata resolution
@@ -1181,31 +1208,94 @@ struct Projection {
         )
     }
 
-    /// Build a title → by-title-filename map for all pages. Used by the by-title
-    /// link rewriter so `[[wikilinks]]` resolve to sibling filenames.
-    private func titleToFilenameMap(pages: [WikiPage]) -> [String: String] {
-        var map: [String: String] = [:]
-        for page in pages {
-            map[page.title] = FilenameEscaping.byTitleFilename(
-                title: page.title, pageID: page.id.rawValue)
+    // MARK: - Link rewriting (by-title / by-name views)
+
+    /// Root-relative directory of each projected view, matching the FileProvider
+    /// tree. These are the `baseDir` / target-path prefixes the rewriter uses to
+    /// compute relative link destinations across namespaces.
+    static let pagesByTitleDir  = ["pages", "by-title"]
+    static let sourcesByNameDir = ["sources", "by-name"]
+    static let chatsByNameDir   = ["chats", "by-name"]
+
+    /// The six title/id → target maps the rewriter resolves against, built once
+    /// from the store. Keys: page/chat by title, source by human name, and each
+    /// by uppercased ULID (canonical `[[page:<ULID>]]` form). A `resolver` for a
+    /// given document `baseDir` closes over these to relativize each target path.
+    struct LinkMaps {
+        let pageByTitle:  [String: RelativeLinkRewriter.Target]
+        let pageByID:     [String: RelativeLinkRewriter.Target]
+        let sourceByName: [String: RelativeLinkRewriter.Target]
+        let sourceByID:   [String: RelativeLinkRewriter.Target]
+        let chatByTitle:  [String: RelativeLinkRewriter.Target]
+        let chatByID:     [String: RelativeLinkRewriter.Target]
+
+        func resolver(baseDir: [String]) -> RelativeLinkRewriter.Resolver {
+            RelativeLinkRewriter.Resolver(
+                baseDir: baseDir,
+                page:   { t, isID in isID ? pageByID[t.uppercased()]   : pageByTitle[t] },
+                source: { t, isID in isID ? sourceByID[t.uppercased()] : sourceByName[t] },
+                chat:   { t, isID in isID ? chatByID[t.uppercased()]   : chatByTitle[t] }
+            )
         }
-        return map
     }
 
-    /// Produce the rewritten by-title content for `page`: replaces `[[wikilinks]]`
-    /// with relative Markdown links pointing to sibling by-title files. The
-    /// returned `Data` is the single source of truth for both `documentSize`
-    /// (reported in `pageFileNode`) and the bytes served by `contents(for:)`.
-    private func byTitleContent(for page: WikiPage, map: [String: String]) -> Data {
-        rewriteMarkdown(PageMarkdownFormat.fileContent(for: page), map: map)
+    /// Build the link-resolution maps from the shared read store. Resilient to
+    /// pre-migration tables (missing → empty map → links left `[[…]]` verbatim).
+    /// Source links target the readable `.md` sibling when one exists, else the
+    /// verbatim file — matching the file that `sourceNodes` actually projects.
+    private func makeLinkMaps() -> LinkMaps {
+        let store = openReadStore()
+
+        var pageByTitle: [String: RelativeLinkRewriter.Target] = [:]
+        var pageByID: [String: RelativeLinkRewriter.Target] = [:]
+        for page in (try? store?.listAllPagesOrderedByID()) ?? [] {
+            let file = FilenameEscaping.byTitleFilename(title: page.title, pageID: page.id.rawValue)
+            let target = RelativeLinkRewriter.Target(path: Self.pagesByTitleDir + [file], title: page.title)
+            pageByTitle[page.title] = target
+            pageByID[page.id.rawValue.uppercased()] = target
+        }
+
+        var sourceByName: [String: RelativeLinkRewriter.Target] = [:]
+        var sourceByID: [String: RelativeLinkRewriter.Target] = [:]
+        let heads = (try? store?.processedMarkdownHeadsBySource()) ?? [:]
+        for row in (try? store?.listAllSourcesOrderedByID()) ?? [] {
+            let humanName = row.displayName ?? row.filename
+            // Sibling eligibility mirrors `sourceNodes`: a processed head AND a
+            // non-`text/*` mime yields the `.md` sibling; otherwise the verbatim file.
+            let hasSibling = heads[row.id] != nil && (row.mime.map { !$0.hasPrefix("text/") } ?? false)
+            let file = hasSibling
+                ? FilenameEscaping.byNameSourceFilename(filename: humanName, ext: "md", sourceID: row.id)
+                : FilenameEscaping.byNameSourceFilename(filename: humanName, ext: row.ext, sourceID: row.id)
+            let target = RelativeLinkRewriter.Target(path: Self.sourcesByNameDir + [file], title: humanName)
+            sourceByName[humanName] = target
+            sourceByID[row.id.uppercased()] = target
+        }
+
+        var chatByTitle: [String: RelativeLinkRewriter.Target] = [:]
+        var chatByID: [String: RelativeLinkRewriter.Target] = [:]
+        for chat in (try? store?.listAllChatsOrderedByID()) ?? [] {
+            let file = FilenameEscaping.byTitleFilename(title: chat.title, pageID: chat.id.rawValue)
+            let target = RelativeLinkRewriter.Target(path: Self.chatsByNameDir + [file], title: chat.title)
+            chatByTitle[chat.title] = target
+            chatByID[chat.id.rawValue.uppercased()] = target
+        }
+
+        return LinkMaps(pageByTitle: pageByTitle, pageByID: pageByID,
+                        sourceByName: sourceByName, sourceByID: sourceByID,
+                        chatByTitle: chatByTitle, chatByID: chatByID)
     }
 
-    /// Rewrite `[[wikilinks]]` in `raw` to relative Markdown links using
-    /// `map` (page title → by-title filename). Single source of truth shared by
-    /// pages, source-markdown siblings, and chat transcripts.
-    private func rewriteMarkdown(_ raw: String, map: [String: String]) -> Data {
-        let rewritten = RelativeLinkRewriter.rewrite(raw) { map[$0] }
-        return Data(rewritten.utf8)
+    /// Rewrite `[[wikilinks]]` in `raw` to relative Markdown links, computing
+    /// destinations relative to `baseDir` (the document's own directory). Single
+    /// source of truth for both `documentSize` and served bytes — a mismatch
+    /// truncates `cat`, so every size/content pair must share this.
+    private func rewriteLinks(_ raw: String, maps: LinkMaps, baseDir: [String]) -> Data {
+        Data(RelativeLinkRewriter.rewrite(raw, resolver: maps.resolver(baseDir: baseDir)).utf8)
+    }
+
+    /// The rewritten by-title page content (page bodies live in `pages/by-title`).
+    private func byTitleContent(for page: WikiPage, maps: LinkMaps) -> Data {
+        rewriteLinks(PageMarkdownFormat.fileContent(for: page), maps: maps, baseDir: Self.pagesByTitleDir)
     }
 
     // MARK: - Enumeration
@@ -1313,11 +1403,11 @@ struct Projection {
     private func pageNodes(byTitle: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
               let pages = try? store.listAllPagesOrderedByID() else { return [] }
-        let titleMap = byTitle ? titleToFilenameMap(pages: pages) : nil
+        let maps = byTitle ? makeLinkMaps() : nil
         return pages.map { page in
             let id = byTitle ? Identity.pageByTitle(page.id.rawValue)
                              : Identity.pageByID(page.id.rawValue)
-            let contentData = titleMap.map { byTitleContent(for: page, map: $0) }
+            let contentData = maps.map { byTitleContent(for: page, maps: $0) }
             return Self.pageFileNode(for: id, page: page, contentData: contentData)
         }
     }
@@ -1333,10 +1423,8 @@ struct Projection {
         guard let store = openReadStore(),
               let files = try? store.listAllSourcesOrderedByID() else { return [] }
         let heads = (try? store.processedMarkdownHeadsBySource()) ?? [:]
-        // Build title map once for by-name markdown sibling rewriting.
-        let titleMap: [String: String]? = byName
-            ? (try? store.listAllPagesOrderedByID()).map { titleToFilenameMap(pages: $0) }
-            : nil
+        // Build link maps once for by-name markdown sibling rewriting.
+        let maps = byName ? makeLinkMaps() : nil
         return files.flatMap { row in
             let id = byName ? Identity.sourceByName(row.id) : Identity.sourceByID(row.id)
             let summary = SourceSummary(
@@ -1352,7 +1440,9 @@ struct Projection {
             let markdownID = byName
                 ? Identity.sourceMarkdownByName(row.id)
                 : Identity.sourceMarkdownByID(row.id)
-            let contentData = titleMap.map { rewriteMarkdown(head.content, map: $0) }
+            let contentData = maps.map {
+                rewriteLinks(head.content, maps: $0, baseDir: Self.sourcesByNameDir)
+            }
             return [verbatimNode, Self.sourceMarkdownNode(for: markdownID, source: summary,
                                                           head: head, contentData: contentData)]
         }
@@ -1365,19 +1455,17 @@ struct Projection {
     private func chatNodes(byName: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
               let chats = try? store.listAllChatsOrderedByID() else { return [] }
-        // Build title map once for by-name chat rewriting.
-        let titleMap: [String: String]? = byName
-            ? (try? store.listAllPagesOrderedByID()).map { titleToFilenameMap(pages: $0) }
-            : nil
+        // Build link maps once for by-name chat rewriting.
+        let maps = byName ? makeLinkMaps() : nil
         return chats.map { chat in
             let id = byName ? Identity.chatByName(chat.id.rawValue)
                             : Identity.chatByID(chat.id.rawValue)
-            guard let map = titleMap else {
+            guard let maps else {
                 return Self.chatFileNode(for: id, chat: chat, in: store)
             }
             let messages = (try? store.chatMessages(chatID: chat.id)) ?? []
             let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
-            let data = rewriteMarkdown(raw, map: map)
+            let data = rewriteLinks(raw, maps: maps, baseDir: Self.chatsByNameDir)
             return Self.chatFileNode(for: id, chat: chat, in: store, contentData: data)
         }
     }

@@ -1,41 +1,87 @@
 import Foundation
 
-/// Rewrites Obsidian-style `[[wiki-links]]` in a page body to standard
-/// relative Markdown links `[display](filename.md)` for the `pages/by-title`
-/// filesystem projection. Allows external tools like Obsidian and VS Code
-/// to follow links when they point at the `pages/by-title/` folder as a vault.
+/// Rewrites Obsidian-style `[[wiki-links]]` in a projected document to standard
+/// relative Markdown links `[display](relative/path.md)` so external tools like
+/// Obsidian (vault rooted at the mount) and VS Code can follow them.
+///
+/// Handles all three linkable namespaces, each resolving to a file elsewhere in
+/// the projection tree:
+///   * `[[Title]]` / `[[page:<ULID>|alias]]`   → `pages/by-title/<file>.md`
+///   * `[[source:Name]]` / `[[source:<ULID>]]` → `sources/by-name/<file>`
+///   * `[[chat:Title]]` / `[[chat:<ULID>]]`    → `chats/by-name/<file>.md`
+///
+/// The link destination is computed **relative to the directory of the document
+/// being rewritten** (`Resolver.baseDir`), so a page→page link stays a sibling
+/// (`Other--01AB.md`) while a page→source link climbs out (`../../sources/…`).
 ///
 /// Rules:
-/// - Only plain page links (`[[Title]]`, `[[Title|alias]]`, `[[Title#anchor]]`)
-///   are rewritten — `[[source:…]]`, `[[chat:…]]`, and embeds (`![[…]]`) are
-///   left verbatim (no corresponding file exists in `by-title/`).
-/// - Unresolvable links (broken, links to deleted pages) are left as
-///   `[[wikilink]]` so Obsidian treats them as "new page" stubs.
-/// - Links inside code spans and fenced code blocks are left verbatim.
-/// - Fragment anchors (`[[Title#Heading]]`) are preserved in the rewritten link.
-/// - `#`-in-title disambiguation uses `WikiLinkResolver` (same rule as in-app).
-/// - The filename in the output URL is percent-encoded for Markdown compatibility.
+/// - Unresolvable targets (deleted / unknown) are left `[[…]]` verbatim so
+///   Obsidian treats them as "new page" stubs.
+/// - Embeds (`![[source:…]]`) are left verbatim — they're media, not links.
+/// - Links inside code spans / fenced blocks are left verbatim.
+/// - Heading fragments (`#Section`) are preserved; quote fragments (`#"quote"`,
+///   used by source cites) are dropped — they aren't resolvable anchors.
+/// - Canonical ULID targets resolve by id and self-heal the display text to the
+///   target's CURRENT title (unless an explicit alias is present).
+/// - `#`-in-name disambiguation reuses `WikiLinkResolver` (same rule as in-app).
 ///
-/// This is a **filesystem projection** concern only — the on-disk by-title body
-/// has rewritten links; the SQLite store retains `[[…]]` verbatim. Nothing
-/// here writes back to the store.
+/// This is a **filesystem projection** concern only — the SQLite store retains
+/// `[[…]]` verbatim; nothing here writes back.
 public enum RelativeLinkRewriter {
+
+    /// A resolved link target: its root-relative path components (last component
+    /// is the filename) and the CURRENT display title (for the alias fallback).
+    public struct Target: Equatable, Sendable {
+        public let path: [String]
+        public let title: String
+        public init(path: [String], title: String) {
+            self.path = path
+            self.title = title
+        }
+    }
+
+    /// Namespace resolution injected by the caller. Each closure takes the
+    /// prefix-stripped target and whether it is a canonical ULID, returning the
+    /// resolved `Target` or `nil` (unknown → link left verbatim).
+    public struct Resolver {
+        /// Root-relative path components of the directory holding the document
+        /// being rewritten — e.g. `["pages", "by-title"]`.
+        public let baseDir: [String]
+        public let page:   (_ target: String, _ isCanonicalID: Bool) -> Target?
+        public let source: (_ target: String, _ isCanonicalID: Bool) -> Target?
+        public let chat:   (_ target: String, _ isCanonicalID: Bool) -> Target?
+
+        public init(
+            baseDir: [String],
+            page: @escaping (String, Bool) -> Target?,
+            source: @escaping (String, Bool) -> Target?,
+            chat: @escaping (String, Bool) -> Target?
+        ) {
+            self.baseDir = baseDir
+            self.page = page
+            self.source = source
+            self.chat = chat
+        }
+
+        func namespace(for kind: WikiLinkParser.ParsedLink.LinkType) -> (String, Bool) -> Target? {
+            switch kind {
+            case .page:   return page
+            case .source: return source
+            case .chat:   return chat
+            }
+        }
+    }
 
     private static let regex = WikiLinkSpan.regex
 
-    /// Rewrite all resolvable page `[[wiki-links]]` in `body` to relative
-    /// Markdown links `[display](filename.md)`.
+    /// Rewrite all resolvable `[[wiki-links]]` in `body` to relative Markdown links.
     ///
     /// - Parameters:
-    ///   - body: Full page content as produced by `PageMarkdownFormat.fileContent`
-    ///           (YAML frontmatter + H1 + body). Frontmatter is passed through
-    ///           unchanged since no `[[…]]` occurs in well-formed frontmatter.
-    ///   - resolver: Maps a canonical (whitespace-collapsed) page title to its
-    ///               by-title filename (e.g. `"Home"` → `"Home--01ABC.md"`).
-    ///               Returns `nil` when the title has no matching page.
-    /// - Returns: The rewritten body, or `body` unchanged if no resolvable page
-    ///            links were found.
-    public static func rewrite(_ body: String, resolver: (String) -> String?) -> String {
+    ///   - body: Full projected document (frontmatter + content). Frontmatter is
+    ///           passed through since no `[[…]]` occurs in well-formed frontmatter.
+    ///   - resolver: Namespace resolution + the document's `baseDir`.
+    /// - Returns: The rewritten body, or `body` unchanged if nothing resolved.
+    public static func rewrite(_ body: String, resolver: Resolver) -> String {
         let ns = body as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
         let matches = regex.matches(in: body, range: NSRange(location: 0, length: ns.length))
@@ -50,8 +96,7 @@ public enum RelativeLinkRewriter {
             if WikiLinkSpan.isProtected(full, by: codeRanges) { continue }
 
             // Copy the gap before this match. If a `!` embed prefix immediately
-            // precedes the match, consume it so we can emit `![[…]]` verbatim
-            // (the `!` is already excluded from the match range).
+            // precedes the match, consume it so we can emit `![[…]]` verbatim.
             let isEmbedPrefix = WikiLinkSpan.isEmbedPrefix(ns, full)
             let copyEnd = isEmbedPrefix ? full.location - 1 : full.location
             if copyEnd > cursor {
@@ -59,7 +104,7 @@ public enum RelativeLinkRewriter {
             }
             cursor = full.location + full.length
 
-            // Embeds (`![[source:…]]` etc.) — no relative file exists; leave verbatim.
+            // Embeds (`![[source:…]]` etc.) — media, not links; leave verbatim.
             if isEmbedPrefix {
                 out += "!" + ns.substring(with: full)
                 continue
@@ -76,9 +121,11 @@ public enum RelativeLinkRewriter {
                 out += ns.substring(with: full)
                 continue
             }
+            let alias = fixed.alias.map { WikiText.normalized($0) }.flatMap { $0.isEmpty ? nil : $0 }
 
-            // Split on "#" and strip version pin — same pipeline as WikiLinkMarkdown.
-            let (base, _) = WikiLinkParser.splitFragment(collapsed)
+            // Split on "#"/"#\"" and strip version pin — same pipeline as the
+            // in-app renderer, so on-disk and in-app resolve the same set.
+            let (base, baseFragment) = WikiLinkParser.splitFragment(collapsed)
             guard !base.isEmpty else {
                 // Same-page anchor (`[[#Heading]]`): no file target; leave as-is.
                 out += ns.substring(with: full)
@@ -88,52 +135,52 @@ public enum RelativeLinkRewriter {
             let (bareBase, _) = WikiLinkParser.splitVersionPin(base)
             let (kind, bareTarget) = WikiLinkParser.classify(bareBase)
 
-            guard !bareTarget.isEmpty,
-                  !WikiLinkParser.isEmptyPrefix(bareBase),
-                  kind == .page else {
-                // source:, chat:, or empty prefix — no by-title file; leave as-is.
+            guard !bareTarget.isEmpty, !WikiLinkParser.isEmptyPrefix(bareBase) else {
                 out += ns.substring(with: full)
                 continue
             }
 
-            // Resolve, handling `#`-in-title disambiguation.
-            let split = WikiLinkResolver.resolvedSplit(of: collapsed) { resolver($0) != nil }
-            let linkTitle = split?.base ?? bareTarget
-            let linkFragment = split?.fragment
+            let resolve = resolver.namespace(for: kind)
 
-            guard let filename = resolver(linkTitle) else {
-                // Unresolvable (ghost link): leave as [[wikilink]].
-                out += ns.substring(with: full)
+            // Canonical ULID target: resolve by id, self-heal display to current title.
+            if WikiLinkParser.isCanonicalULID(bareTarget) {
+                guard let target = resolve(bareTarget, true) else {
+                    out += ns.substring(with: full)   // deleted → ghost
+                    continue
+                }
+                out += markdownLink(display: alias ?? target.title,
+                                    path: relativePath(from: resolver.baseDir, to: target.path),
+                                    fragment: baseFragment)
                 continue
             }
 
-            // Display text: alias > link title.
-            let rawDisplay: String
-            if let alias = fixed.alias {
-                let a = WikiText.normalized(alias)
-                rawDisplay = a.isEmpty ? linkTitle : a
-            } else {
-                rawDisplay = linkTitle
+            // Name-based target: strip the `kind:` prefix (if present) BEFORE
+            // `#`-in-name disambiguation, else the split keys carry the prefix and
+            // never resolve. Page links usually have no prefix; source/chat do.
+            let nameSearch = stripPrefix(kind, from: collapsed)
+            let split = WikiLinkResolver.resolvedSplit(of: nameSearch) {
+                resolve($0, false) != nil
             }
-            let safeDisplay = rawDisplay
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "[", with: "\\[")
-                .replacingOccurrences(of: "]", with: "\\]")
-
-            // Percent-encode the filename for the Markdown URL (spaces → %20 etc.).
-            // Remove `()` from allowed set so an unbalanced `)` never ends the link.
-            let encodedFilename = filename
-                .addingPercentEncoding(withAllowedCharacters: markdownPathAllowed)
-                ?? filename
-
-            if let frag = linkFragment, !frag.isEmpty {
-                let encodedFrag = frag
-                    .addingPercentEncoding(withAllowedCharacters: markdownFragmentAllowed)
-                    ?? frag
-                out += "[\(safeDisplay)](\(encodedFilename)#\(encodedFrag))"
+            // When a split resolved, take ITS (base, fragment) — even a nil
+            // fragment (the whole name matched). Only fall back to the heuristic
+            // `splitFragment` result when nothing resolved (ghost link).
+            let linkName: String
+            let linkFragment: String?
+            if let split {
+                linkName = split.base
+                linkFragment = split.fragment
             } else {
-                out += "[\(safeDisplay)](\(encodedFilename))"
+                linkName = bareTarget
+                linkFragment = baseFragment
             }
+
+            guard let target = resolve(linkName, false) else {
+                out += ns.substring(with: full)   // ghost link
+                continue
+            }
+            out += markdownLink(display: alias ?? target.title,
+                                path: relativePath(from: resolver.baseDir, to: target.path),
+                                fragment: linkFragment)
         }
 
         // Tail text after the last match.
@@ -143,19 +190,68 @@ public enum RelativeLinkRewriter {
         return out
     }
 
+    // MARK: - Relative path
+
+    /// Root-relative path from `baseDir` (a directory) to `target` (whose last
+    /// component is a filename), percent-encoded per component. Same directory →
+    /// bare filename; different subtree → `../…/…`.
+    static func relativePath(from baseDir: [String], to target: [String]) -> String {
+        let targetDir = target.dropLast()
+        var common = 0
+        while common < baseDir.count && common < targetDir.count
+                && baseDir[common] == targetDir[common] {
+            common += 1
+        }
+        let ups = baseDir.count - common
+        var comps = Array(repeating: "..", count: ups)
+        comps += target[common...]
+        return comps
+            .map { $0.addingPercentEncoding(withAllowedCharacters: markdownPathAllowed) ?? $0 }
+            .joined(separator: "/")
+    }
+
     // MARK: - Private
 
-    /// URL path characters allowed in the Markdown link destination. Starts from
-    /// `urlPathAllowed` and removes `()` (an unbalanced `)` would end the link
-    /// destination early in CommonMark parsers).
+    /// Strip a leading `page:` / `source:` / `chat:` prefix matching `kind` from
+    /// `collapsed`, preserving any inner `#` (so `#`-in-name disambiguation works).
+    private static func stripPrefix(_ kind: WikiLinkParser.ParsedLink.LinkType,
+                                    from collapsed: String) -> String {
+        let token = "\(kind.rawValue):"
+        return collapsed.hasPrefix(token) ? String(collapsed.dropFirst(token.count)) : collapsed
+    }
+
+    /// Build one `[display](path#fragment)` Markdown link. Escapes `[`/`]`/`\` in
+    /// the display text; drops quote-style fragments (`"…"`) that aren't
+    /// resolvable anchors; percent-encodes a kept heading fragment. `path` is
+    /// already percent-encoded by `relativePath`.
+    private static func markdownLink(display: String, path: String,
+                                     fragment: String?) -> String {
+        let safeDisplay = display
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "[", with: "\\[")
+            .replacingOccurrences(of: "]", with: "\\]")
+        // A quote fragment (source cite, `#"…"`) is not a heading anchor — drop it.
+        if let frag = fragment, !frag.isEmpty, !frag.hasPrefix("\"") {
+            let encodedFrag = frag
+                .addingPercentEncoding(withAllowedCharacters: markdownFragmentAllowed)
+                ?? frag
+            return "[\(safeDisplay)](\(path)#\(encodedFrag))"
+        }
+        return "[\(safeDisplay)](\(path))"
+    }
+
+    /// URL path characters allowed in a Markdown link destination component.
+    /// Removes `()` (an unbalanced `)` ends the destination early in CommonMark)
+    /// and `/` (we join components ourselves, so a `/` inside a component would
+    /// forge a false path separator).
     private static let markdownPathAllowed: CharacterSet = {
         var set = CharacterSet.urlPathAllowed
-        set.remove(charactersIn: "()")
+        set.remove(charactersIn: "()/")
         return set
     }()
 
-    /// Fragment characters allowed after `#`. Removes `#`, `"`, `%`, and `()`
-    /// to match `WikiLinkMarkdown`'s fragment encoding rules.
+    /// Fragment characters allowed after `#`. Removes `#`, `"`, `%`, and `()` to
+    /// match `WikiLinkMarkdown`'s fragment encoding rules.
     private static let markdownFragmentAllowed: CharacterSet = {
         var set = CharacterSet.urlFragmentAllowed
         set.remove(charactersIn: "#\"%()")
