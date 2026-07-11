@@ -307,6 +307,22 @@ final class AgentLauncher {
         }
     }
 
+    /// After a successful `backend.start`, if it was an ACP backend, read the
+    /// process identifier and assign `currentProcessID` (SDK fork Fix 4). Lets
+    /// the watchdog `kill(pgid)` a stuck agent after cancel fails. Non-blocking:
+    /// runs as a detached `@MainActor` Task.
+    func captureProcessID(session: SessionHandle) {
+        guard let acp = backend as? ACPBackend else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let pid = await acp.processIdentifier(for: session)
+            if let pid {
+                self.currentProcessID = pid
+                DebugLog.agent("captureProcessID: pid=\(pid)") // TEMP DEBUG
+            }
+        }
+    }
+
     /// The currently-pending write-permission requests surfaced from the backend
     /// (always-ask mode). When non-empty AND this surface is the live chat, the
     /// UI renders an inline Approve/Reject affordance (slice 2). Mirrors how
@@ -1037,6 +1053,7 @@ final class AgentLauncher {
             // #329: cache the agent's advertised models per-provider for the
             // picker (ACP only; the CLI backend has no model discovery).
             captureAndCacheModels(provider: provider, session: session)
+            captureProcessID(session: session)
             startCompletionWatchdog()
 
             // Consume the per-turn stream in a background Task (fire-and-forget:
@@ -1201,6 +1218,7 @@ final class AgentLauncher {
         if let acp = backend as? ACPBackend {
             let models = await acp.availableModels(for: plannerSession)
             captureAndCacheModels(provider: provider, session: plannerSession)
+            captureProcessID(session: plannerSession)
             executorModelId = Self.findSonnetModelId(in: models)
             if executorModelId == nil {
                 DebugLog.agent("runACPIngest: no Sonnet model in advertised list (\(models.map { $0.modelId })); executors use default model")
@@ -1365,6 +1383,7 @@ final class AgentLauncher {
             phaseName: "fallback-single"
         ) {
             captureAndCacheModels(provider: provider, session: session)
+            captureProcessID(session: session)
             await backend.cancel(session)
             finish(status: 0)
         } else {
@@ -1650,6 +1669,7 @@ final class AgentLauncher {
             // here (after spawn commit) so the session record is populated; it
             // runs as a detached task and never blocks the first turn.
             captureAndCacheModels(provider: provider, session: session)
+            captureProcessID(session: session)
             DebugLog.agent("startInteractiveQuery: spawned") // TEMP DEBUG (existed; re-tagged)
             // Start the first turn — this acquires the generation gate for turn 1.
             sendInteractiveMessage(firstMessage, displayText: firstMessageDisplay)

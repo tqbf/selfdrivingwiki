@@ -281,6 +281,16 @@ actor ACPBackend: AgentBackend {
         }
         DebugLog.agent("ACPBackend.start: session-lifetime notification drain started") // TEMP DEBUG (existed; re-tagged)
 
+        // Forward agent stderr to DebugLog.agent (SDK fork Fix 3). Best-effort:
+        // the stream finishes on terminate, so this task exits naturally.
+        Task { [client] in
+            guard let stderrStream = await client.stderrLines() else { return }
+            for await line in stderrStream {
+                if Task.isCancelled { break }
+                DebugLog.agent("ACP stderr: \(line)")
+            }
+        }
+
         let sessionID = UUID().uuidString
         sessions[sessionID] = ACPSession(
             client: client,
@@ -476,6 +486,15 @@ actor ACPBackend: AgentBackend {
     func availableModels(for sessionHandle: SessionHandle) async -> [ModelInfo] {
         guard let session = sessions[sessionHandle.id] else { return [] }
         return session.modelsInfo?.availableModels ?? []
+    }
+
+    /// The agent process identifier for a session (SDK fork Fix 4). nil when
+    /// the session is gone or the process hasn't launched. The launcher reads
+    /// this to populate `currentProcessID` so the watchdog can eventually
+    /// `kill(pgid)` a stuck agent.
+    func processIdentifier(for sessionHandle: SessionHandle) async -> Int32? {
+        guard let session = sessions[sessionHandle.id] else { return nil }
+        return await session.client.processIdentifier()
     }
 
     /// The agent's current model id for a session (`ModelsInfo.currentModelId`),
