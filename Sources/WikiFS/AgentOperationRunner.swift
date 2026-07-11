@@ -304,18 +304,17 @@ enum AgentOperationRunner {
         DebugLog.agent("startChat: done preflightError=\(launcher.preflightError ?? "nil")") // TEMP DEBUG
     }
 
-    // MARK: - Pure predicates (issue #235)
+    // MARK: - Pure predicates
 
-    /// Whether a write-capable chat session should be blocked from starting
-    /// because an ingest is in progress. The edit lock (`isAgentRunning`) was
-    /// removed — CAS (page versions, W0) prevents data races, so concurrent
-    /// agent runs are fine. Only extraction (pdf2md) still blocks, because it
-    /// is resource-intensive and can't handle concurrent writes. Pure so the
-    /// predicate is unit-testable without driving a live launcher or store.
+    /// Whether a write-capable chat session should be blocked from starting.
+    /// Never blocks — CAS (page versions, W0) prevents data races, and the
+    /// generation gate serializes active generation (a chat started during an
+    /// ingest queues behind it). Kept as a static predicate for test backwards
+    /// compatibility; always returns false.
     static func shouldBlockEditStart(
         isIngestInProgress: Bool
     ) -> Bool {
-        isIngestInProgress
+        false
     }
 
     // MARK: - Continue a persisted chat (D3, seeded-fallback)

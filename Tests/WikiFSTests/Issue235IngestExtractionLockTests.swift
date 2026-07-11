@@ -19,14 +19,11 @@ struct Issue235IngestExtractionLockTests {
 
     // MARK: - shouldBlockEditStart predicate
 
-    @Test func chatBlockedWhenIngestInProgress() {
-        // Extraction phase: isIngestInProgress is true. Chat must be blocked.
-        #expect(AgentOperationRunner.shouldBlockEditStart(
+    @Test func chatNeverBlocked() {
+        // CAS prevents data races; the generation gate serializes active
+        // generation. Chats can always start — they queue on the gate.
+        #expect(!AgentOperationRunner.shouldBlockEditStart(
             isIngestInProgress: true))
-    }
-
-    @Test func chatAllowedWhenIdle() {
-        // No ingest in progress — chat is free to start.
         #expect(!AgentOperationRunner.shouldBlockEditStart(
             isIngestInProgress: false))
     }
