@@ -91,6 +91,13 @@ struct WikiFSApp: App {
         let generationGate = GenerationGate()
         _agentLauncher = State(initialValue: AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator))
         _chatLauncher   = State(initialValue: AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator))
+
+        // Assert bun is bundled — ACP providers (claude-acp via bunx) are broken
+        // without it. If this fires, run `./build.sh` (which now hard-fails when
+        // bun is absent) and reinstall to /Applications.
+        if AgentLauncher.bundledHelperPath("bun") == nil {
+            DebugLog.agent("⚠️ LAUNCH CHECK: bun NOT found in Contents/Helpers — ACP ingestion will fail. Run ./build.sh and reinstall.")
+        }
     }
 
     var body: some Scene {

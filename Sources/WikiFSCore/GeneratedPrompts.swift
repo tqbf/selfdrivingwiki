@@ -470,4 +470,146 @@ Steps:
 
 """#
 
+    static let ingestPlanner = #"""
+PLANNER PHASE — Multi-page ingest. You are the PLANNER. Read the staged source files, decide what pages this wiki should have, and write a plan. Do NOT write any wiki pages in this phase.
+
+## Wiki state snapshot
+
+A snapshot of the current wiki state is at: {{STATE_FILE_PATH}}
+Read it FIRST to see what pages already exist. This avoids creating duplicates on re-ingest.
+
+## Source files (in your working directory)
+
+{{SOURCE_FILES}}
+
+## Source IDs (required for wikictl log --source)
+
+{{SOURCE_IDS}}
+
+## Instructions
+
+1. Read the wiki state snapshot at the path above to see existing pages and the current index.
+
+2. Check existing pages: `$WIKICTL page list` — update-in-place rather than creating duplicates on re-ingest.
+
+3. For each source file, inspect its size and structure. Use `wc -l`, `head`, `sed -n 'START,ENDp'`, or `grep` to sample the content without reading the entire file if it is large.
+
+4. DECIDE the page set: what summary/entity/concept pages does this wiki need? Each page is backed by content from ONE source file (the `sourceFile` field). Cross-reference across sources to find connections and avoid duplicate pages. If two sources discuss the same topic, assign the page to the source with the most content on that topic and cross-link from the other executor's pages using [[wiki links]].
+
+5. Write your plan to `plan.json` in your current working directory using this EXACT JSON schema:
+
+```json
+{
+  "pages": [
+    {
+      "title": "Page Title",
+      "sourceFile": "source-1.md",
+      "sourceRanges": "lines 1-80",
+      "outline": "1-3 sentence description of what this page covers"
+    }
+  ],
+  "sourceIDs": ["<id1>", "<id2>"]
+}
+```
+
+### Field rules
+
+- `title`: the wiki page title (clear, specific, stable). Upserting an existing title updates it.
+- `sourceFile`: the actual filename in your working directory (e.g. "source-1.md").
+- `sourceRanges`: a human-readable description of where in the source file the content for this page is (e.g. "lines 1-80" or "section 'Introduction'" or "entire file").
+- `outline`: a 1-3 sentence description of what the page will cover.
+- `sourceIDs`: the list of source IDs given above. Copy them verbatim.
+
+IMPORTANT:
+- Do NOT write any wiki pages in this phase. No `$WIKICTL page upsert`.
+- Do NOT dispatch sub-agents, background tasks, or async agents.
+- Do NOT use sleep or ScheduleWakeup.
+- Write ONLY `plan.json` and stop.
+
+"""#
+
+    static let ingestExecutor = #"""
+EXECUTOR PHASE — Multi-page ingest. You are an EXECUTOR. You have been assigned specific pages to write. Read your source section and write each page via `$WIKICTL page upsert`.
+
+## Wiki state snapshot
+
+A snapshot of the current wiki state is at: {{STATE_FILE_PATH}}
+
+## Your assigned pages
+
+{{ASSIGNED_PAGES}}
+
+## All pages in this ingest (for cross-linking)
+
+{{ALL_PAGE_TITLES}}
+
+## Source IDs
+
+{{SOURCE_IDS}}
+
+## Instructions
+
+For EACH assigned page:
+
+1. Read the source file section at the given range. The source file is in your working directory. Use `sed -n 'START,ENDp' {{PRIMARY_SOURCE_FILE}}` or `cat {{PRIMARY_SOURCE_FILE}}` to read the relevant section.
+
+2. Write the page body to `./body.md`:
+   - Summarize the source content into a clear, well-structured wiki page.
+   - Cross-link related pages with [[Page Title]] wiki-links. Use the page titles listed above.
+   - Cite sources by their `sources/…` path.
+
+3. Create or update the page: `$WIKICTL page upsert --title 'PAGE TITLE' --body-file ./body.md`
+
+4. Verify: `$WIKICTL page get --title 'PAGE TITLE'`
+
+### Write rules
+
+- The ONLY way to create or update content is `$WIKICTL`. The wiki mount is READ-ONLY.
+- Always use `--body-file ./body.md`, never shell pipes or heredocs.
+- After a write, read it back with `$WIKICTL page get` (the mount lags the database by ~5s).
+
+IMPORTANT:
+- Do NOT dispatch sub-agents, background tasks, or async agents.
+- Do NOT use sleep or ScheduleWakeup.
+- Write ALL your assigned pages before stopping.
+
+"""#
+
+    static let ingestFinalizer = #"""
+FINALIZER PHASE — Multi-page ingest. The executors have written all wiki pages. Your job is to finalize the ingestion: write index.md and record log entries.
+
+## Wiki state snapshot
+
+A snapshot of the current wiki state is at: {{STATE_FILE_PATH}}
+
+## Source files and IDs
+
+For each source, record the ingest in the log. The source files and their IDs are:
+
+{{SOURCE_FILES_AND_IDS}}
+
+## Instructions
+
+1. Read the current page list: `$WIKICTL page list`
+
+2. Write `index.md` — the curated catalog of ALL pages in the wiki (not just new ones). Write it to `./index.md`, then: `$WIKICTL index set --body-file ./index.md`
+
+3. For EACH source listed above, record the ingest in the log:
+   ```
+   $WIKICTL log append --kind ingest --title "<source file name>" --source <id>
+   ```
+   The `--source` id is REQUIRED — it marks that file as Ingested in the app.
+
+### Write rules
+
+- The ONLY way to create or update content is `$WIKICTL`. The wiki mount is READ-ONLY.
+- Always use `--body-file ./index.md`, never shell pipes or heredocs.
+
+IMPORTANT:
+- Do NOT dispatch sub-agents, background tasks, or async agents.
+- Do NOT use sleep or ScheduleWakeup.
+- Write the index.md and ALL log entries before stopping.
+
+"""#
+
 }

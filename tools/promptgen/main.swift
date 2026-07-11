@@ -36,6 +36,9 @@ let entries: [(file: String, constant: String)] = [
     ("chat.md",                       "chat"),
     ("lint-task.md",                 "lintTask"),
     ("lint-page-task.md",            "lintPageTask"),
+    ("ingest-planner.md",            "ingestPlanner"),
+    ("ingest-executor.md",           "ingestExecutor"),
+    ("ingest-finalizer.md",          "ingestFinalizer"),
 ]
 
 // Resolve the repo root from this script's location (tools/promptgen/ → up 2).

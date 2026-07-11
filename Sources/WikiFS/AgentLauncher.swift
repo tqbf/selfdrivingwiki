@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import WikiFSCore
+import ACPModel
 
 /// Runs the three `claude -p` operations — Ingest / Query / Lint — against the
 /// currently-selected wiki, streaming a live activity feed back into the app
@@ -878,14 +879,23 @@ final class AgentLauncher {
         var resolvedACPCommand: [String] = []
         var acpAPIKey: String?
         if useACP, let command = provider.command, let exe = command.first {
-            switch PathPreflight.resolveOnLoginShell(executable: AgentCommandConfig.expandTilde(exe)) {
-            case .found(let path):
-                resolvedACPCommand = [path] + Array(command.dropFirst())
-            case .missing(let reason):
-                preflightError = reason
-                isRunning = false
-                releaseGenerationSlot()
-                return
+            // For "bun", prefer the binary bundled in Contents/Helpers so the app
+            // works without a system-wide bun install. Fall back to PATH resolution.
+            // NOTE: Bundle.url(forAuxiliaryExecutable:) does NOT search
+            // Contents/Helpers (only MacOS + Resources), so we check manually.
+            if exe == "bun",
+               let bundled = Self.bundledHelperPath("bun") {
+                resolvedACPCommand = [bundled] + Array(command.dropFirst())
+            } else {
+                switch PathPreflight.resolveOnLoginShell(executable: AgentCommandConfig.expandTilde(exe)) {
+                case .found(let path):
+                    resolvedACPCommand = [path] + Array(command.dropFirst())
+                case .missing(let reason):
+                    preflightError = reason
+                    isRunning = false
+                    releaseGenerationSlot()
+                    return
+                }
             }
             acpAPIKey = acpCredentialStore.apiKey(forProvider: provider.id)
         }
@@ -956,6 +966,30 @@ final class AgentLauncher {
         onLock()
         onUnlockHandler = onUnlock
 
+        // Multi-phase ACP ingest: for large sources over ACP, sub-agents (the
+        // Sonnet `source-reader` digester) don't work — ACP has no custom agent
+        // types and background agents can't complete within a single turn. Replace
+        // the one-shot spawn with sequential single-turn sessions: planner →
+        // executors → finalizer. Tiny sources (< 4 KB) and all CLI runs use the
+        // existing single-session path below.
+        if useACP, case .ingest(_, _, _, let plan) = operation, plan.isLargeSource {
+            await runACPIngestPlannerExecutors(
+                provider: provider,
+                scratch: scratch,
+                operation: operation,
+                wikiRoot: wikiRoot,
+                wikiID: wikiID,
+                systemPrompt: systemPrompt,
+                wikictlDirectory: wikictlDirectory,
+                resolvedACPCommand: resolvedACPCommand,
+                acpAPIKey: acpAPIKey,
+                resolvedPath: resolvedPath,
+                agentConfig: agentConfig,
+                sandbox: sandbox
+            )
+            return
+        }
+
         // Build the backend profile. The launcher resolves app-level concerns
         // (scratch dir, sandbox, config, executable path); the backend owns
         // OperationCommand assembly + Process spawn + parse/encode.
@@ -1011,10 +1045,21 @@ final class AgentLauncher {
             let backend = self.backend
             let generationGateReleasesPerTurn = Self.releasesGenerationSlotPerTurn(
                 isInteractiveSession: isInteractiveSession)
+            // For ACP, the prompt is sent via `send()` (not baked into the CLI
+            // argv like the CLI backend). For CLI, the prompt is already in the
+            // `-p` flag so an empty string is correct (just drains stdout).
+            // For ACP, the sub-agent plan (source-reader digester agents) doesn't
+            // work — ACP has no custom agent types and background agents can't
+            // complete within a single turn. Append an instruction to do
+            // everything directly.
+            var promptText = useACP ? operation.prompt(wikiRoot: wikiRoot) : ""
+            if useACP {
+                promptText += "\n\nIMPORTANT: Do NOT dispatch sub-agents, background tasks, or async agents. Do NOT use sleep or ScheduleWakeup. Read all sources, process them, and write all wiki pages directly in THIS session — everything must complete before you stop."
+            }
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let stream = await backend.send(
-                    TurnInput(userText: ""), into: session)
+                    TurnInput(userText: promptText), into: session)
                 for await event in stream {
                     self.mergeOrAppend(event)
                     if AgentEvent.endsGeneration(event) {
@@ -1044,6 +1089,317 @@ final class AgentLauncher {
             isRunning = false
             releaseGenerationSlot()
         }
+    }
+
+    // MARK: - Multi-phase ACP ingestion (planner → executors → finalizer)
+
+    /// Replace the broken single-session ACP ingestion (which relies on Claude's
+    /// in-process sub-agents that don't work over ACP) with a multi-process
+    /// architecture: a **Planner** session reads sources and produces a page plan
+    /// (`plan.json`), then **Executor** sessions each write their assigned pages
+    /// directly via `wikictl`, and a **Finalizer** session writes `index.md` + log
+    /// entries. Each phase is a clean, independent single-turn ACP session — no
+    /// sub-agents, no background dispatch, no sleep.
+    ///
+    /// **Lifecycle ownership:** This method is a structural replacement for
+    /// `run()`'s spawn-commit block for ACP large ingest. It is called AFTER
+    /// `run()` has acquired the generation gate, fired `onLock`, opened log files,
+    /// and set `isRunning`/`setGenerating(true)`/`ingestingSourceIDs`. It MUST:
+    /// - Pass a phase-tracking `onExit` to each phase (does NOT call `finish()`).
+    /// - Update `sessionHandle`/`currentRunToken` per phase so `stopAgent()` and
+    ///   the watchdog track the live phase.
+    /// - Call `finish()` exactly once at the end (success or unrecoverable failure).
+    private func runACPIngestPlannerExecutors(
+        provider: AgentProvider,
+        scratch: URL,
+        operation: WikiOperation,
+        wikiRoot: String,
+        wikiID: String,
+        systemPrompt: String,
+        wikictlDirectory: String,
+        resolvedACPCommand: [String],
+        acpAPIKey: String?,
+        resolvedPath: String,
+        agentConfig: AgentCommandConfig,
+        sandbox: SandboxProfile.SandboxInvocation?
+    ) async {
+        // Safety net: if any code path exits without calling finish() (e.g. an
+        // unexpected throw from a future adding await between phases), ensure the
+        // generation gate + edit lock are released. finish() is idempotent (guards
+        // isRunning), so this is a no-op when finish() was already called.
+        defer {
+            if isRunning { finish(status: -1) }
+        }
+
+        startCompletionWatchdog()
+
+        guard case .ingest(let sourcePaths, let stagedSourcePaths, let stateFilePath, _) = operation else {
+            DebugLog.agent("runACPIngest: not an ingest operation — aborting")
+            finish(status: -1)
+            return
+        }
+        let sourceIDs = sourcePaths.map { WikiOperation.sourceID(fromPath: $0) }
+        let sourceFileNames = stagedSourcePaths.map { ($0 as NSString).lastPathComponent }
+
+        // Build a shared CLI profile closure (sets env vars the ACP backend reads:
+        // WIKI_DB, WIKI_ROOT, WIKICTL, PATH). The ACP backend ignores
+        // resolvedExecutable/command/sandbox (those are CLI-backend-only), but
+        // the env vars are critical.
+        let selectedModelId = providersConfig().selectedModelId(forProvider: provider.id)
+        let makeCLIProfile = { (op: WikiOperation) in
+            CLIProfile(
+                operation: op,
+                wikiRoot: wikiRoot,
+                wikiID: wikiID,
+                wikictlDirectory: wikictlDirectory,
+                resolvedExecutable: resolvedPath,
+                command: agentConfig,
+                sandbox: sandbox)
+        }
+        let makeProviderHints = { (modelId: String?) in
+            AgentBackendFactory.providerHints(
+                provider: provider,
+                resolvedCommand: resolvedACPCommand,
+                apiKey: acpAPIKey,
+                selectedModelId: modelId)
+        }
+
+        // --- Phase 1: Planner (Opus / default model) ---
+        DebugLog.agent("runACPIngest: Phase 1 — Planner")
+        let plannerProfile = BackendProfile(
+            providerHints: makeProviderHints(selectedModelId),
+            scratchDirectory: scratch,
+            isReadOnly: false,
+            cli: makeCLIProfile(operation))
+        let plannerPrompt = ACPIngestPrompts.plannerPrompt(
+            stateFilePath: stateFilePath,
+            stagedSourcePaths: stagedSourcePaths,
+            sourceIDs: sourceIDs)
+
+        guard let plannerSession = await runPhase(
+            profile: plannerProfile,
+            systemPrompt: systemPrompt,
+            prompt: plannerPrompt,
+            phaseName: "planner"
+        ) else {
+            // Planner failed — fall back to single-session ACP ingest.
+            DebugLog.agent("runACPIngest: planner failed — falling back to single-session")
+            await runACPIngestFallback(
+                operation: operation,
+                wikiRoot: wikiRoot,
+                scratch: scratch,
+                systemPrompt: systemPrompt,
+                makeCLIProfile: makeCLIProfile,
+                makeProviderHints: makeProviderHints,
+                selectedModelId: selectedModelId,
+                provider: provider)
+            return
+        }
+
+        // Capture models (provider-level, not phase-level) + pick Sonnet for executors.
+        var executorModelId: String? = nil
+        if let acp = backend as? ACPBackend {
+            let models = await acp.availableModels(for: plannerSession)
+            captureAndCacheModels(provider: provider, session: plannerSession)
+            executorModelId = Self.findSonnetModelId(in: models)
+            if executorModelId == nil {
+                DebugLog.agent("runACPIngest: no Sonnet model in advertised list (\(models.map { $0.modelId })); executors use default model")
+            }
+        }
+        await backend.cancel(plannerSession)
+
+        // Check for cancellation (user hit Stop during planner).
+        guard isRunning else {
+            DebugLog.agent("runACPIngest: cancelled after planner phase")
+            return  // finish() already called by stopAgent()
+        }
+
+        // Read the plan the planner wrote.
+        guard let plan = ACPIngestPlan.load(from: scratch) else {
+            // No valid plan.json — fall back to single-session.
+            DebugLog.agent("runACPIngest: no valid plan.json — falling back to single-session")
+            await runACPIngestFallback(
+                operation: operation,
+                wikiRoot: wikiRoot,
+                scratch: scratch,
+                systemPrompt: systemPrompt,
+                makeCLIProfile: makeCLIProfile,
+                makeProviderHints: makeProviderHints,
+                selectedModelId: selectedModelId,
+                provider: provider)
+            return
+        }
+        DebugLog.agent("runACPIngest: plan loaded — \(plan.pages.count) pages across \(plan.distinctSourceFiles.count) source file(s)")
+
+        // --- Phase 2: Executors (one per source file, Sonnet) ---
+        for sourceFile in plan.distinctSourceFiles {
+            guard isRunning else { break }  // cancelled
+            let assignments = plan.assignments(forSource: sourceFile)
+            guard !assignments.isEmpty else { continue }
+            let executorProfile = BackendProfile(
+                providerHints: makeProviderHints(executorModelId),
+                scratchDirectory: scratch,
+                isReadOnly: false,
+                cli: makeCLIProfile(operation))
+            let executorPrompt = ACPIngestPrompts.executorPrompt(
+                stateFilePath: stateFilePath,
+                assignments: assignments,
+                allPageTitles: plan.allPageTitles,
+                sourceIDs: sourceIDs)
+            DebugLog.agent("runACPIngest: Phase 2 — Executor[\(sourceFile)] (\(assignments.count) page(s))")
+            // Partial failure: log and continue to next executor.
+            if let session = await runPhase(
+                profile: executorProfile,
+                systemPrompt: systemPrompt,
+                prompt: executorPrompt,
+                phaseName: "executor[\(sourceFile)]"
+            ) {
+                await backend.cancel(session)
+            } else {
+                DebugLog.agent("runACPIngest: executor[\(sourceFile)] FAILED — skipping (partial failure)")
+            }
+        }
+
+        // Check for cancellation before finalizer.
+        guard isRunning else {
+            DebugLog.agent("runACPIngest: cancelled after executor phases")
+            return
+        }
+
+        // --- Phase 3: Finalizer (Opus / default model) ---
+        let finalizerProfile = BackendProfile(
+            providerHints: makeProviderHints(selectedModelId),
+            scratchDirectory: scratch,
+            isReadOnly: false,
+            cli: makeCLIProfile(operation))
+        let finalizerPrompt = ACPIngestPrompts.finalizerPrompt(
+            stateFilePath: stateFilePath,
+            sourceFileNames: sourceFileNames,
+            sourceIDs: sourceIDs)
+        DebugLog.agent("runACPIngest: Phase 3 — Finalizer")
+        if let session = await runPhase(
+            profile: finalizerProfile,
+            systemPrompt: systemPrompt,
+            prompt: finalizerPrompt,
+            phaseName: "finalizer"
+        ) {
+            await backend.cancel(session)
+        }
+
+        finish(status: 0)
+    }
+
+    /// Run one ACP phase: start a session, send the prompt, drain to
+    /// `.messageStop`/`.result`, then return the session (caller cancels).
+    /// The `onExit` closure is phase-tracking only — it logs but does NOT call
+    /// `finish()`. That is the critical lifecycle invariant: `finish()` is called
+    /// exactly once by `runACPIngestPlannerExecutors()` at the very end.
+    ///
+    /// Updates `sessionHandle` + `currentRunToken` so `stopAgent()` and the
+    /// watchdog target the live phase. Returns `nil` if `backend.start` throws.
+    private func runPhase(
+        profile: BackendProfile,
+        systemPrompt: String,
+        prompt: String,
+        phaseName: String
+    ) async -> SessionHandle? {
+        let runToken = UUID()
+        do {
+            DebugLog.agent("runACPIngest[\(phaseName)]: starting")
+            let session = try await backend.start(
+                profile: profile,
+                systemPrompt: systemPrompt,
+                onExit: { status in
+                    // Phase tracker: does NOT call finish(). The orchestrator
+                    // owns finish(); a per-phase exit is just telemetry.
+                    DebugLog.agent("runACPIngest[\(phaseName)]: onExit status=\(status) (phase-tracked)")
+                })
+            sessionHandle = session
+            currentRunToken = runToken
+
+            setGenerating(true)
+            let backend = self.backend
+            let stream = await backend.send(TurnInput(userText: prompt), into: session)
+            for await event in stream {
+                mergeOrAppend(event)
+                if AgentEvent.endsGeneration(event) {
+                    setGenerating(false)
+                    flushTranscript()
+                    // One-shot runs do NOT release the generation gate per turn —
+                    // the gate is held across all phases and released by finish().
+                }
+            }
+            DebugLog.agent("runACPIngest[\(phaseName)]: stream drained")
+            return session
+        } catch {
+            DebugLog.agent("runACPIngest[\(phaseName)]: FAILED: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// Fallback: single-session ACP ingest when the planner fails or produces no
+    /// valid `plan.json`. Sends the original one-shot ingest prompt (with the
+    /// "no sub-agents" instruction) in one session, then calls `finish()`.
+    private func runACPIngestFallback(
+        operation: WikiOperation,
+        wikiRoot: String,
+        scratch: URL,
+        systemPrompt: String,
+        makeCLIProfile: (WikiOperation) -> CLIProfile,
+        makeProviderHints: (String?) -> [String: String],
+        selectedModelId: String?,
+        provider: AgentProvider
+    ) async {
+        let profile = BackendProfile(
+            providerHints: makeProviderHints(selectedModelId),
+            scratchDirectory: scratch,
+            isReadOnly: false,
+            cli: makeCLIProfile(operation))
+        var promptText = operation.prompt(wikiRoot: wikiRoot)
+        promptText += "\n\nIMPORTANT: Do NOT dispatch sub-agents, background tasks, or async agents. Do NOT use sleep or ScheduleWakeup. Read all sources, process them, and write all wiki pages directly in THIS session — everything must complete before you stop."
+
+        if let session = await runPhase(
+            profile: profile,
+            systemPrompt: systemPrompt,
+            prompt: promptText,
+            phaseName: "fallback-single"
+        ) {
+            captureAndCacheModels(provider: provider, session: session)
+            await backend.cancel(session)
+            finish(status: 0)
+        } else {
+            finish(status: -1)
+        }
+    }
+
+    /// Resolve the path to a binary bundled in `Contents/Helpers/`, or nil if
+    /// not present or not executable.
+    ///
+    /// `Bundle.url(forAuxiliaryExecutable:)` does NOT search `Contents/Helpers/`
+    /// (it only looks in `Contents/MacOS/` and `Contents/Resources/`), so we
+    /// construct the path manually. This is the fix for "bun not found on your
+    /// path" — bun was correctly bundled in Helpers but the old API call never
+    /// found it.
+    static nonisolated func bundledHelperPath(_ name: String) -> String? {
+        let path = Bundle.main.bundleURL
+            .appendingPathComponent("Contents")
+            .appendingPathComponent("Helpers")
+            .appendingPathComponent(name)
+            .path
+        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+    }
+
+    /// Find the advertised Sonnet model id for executor profiles. The alias
+    /// "sonnet" will NOT match `ACPModelSelectionResolver` (it does exact-id
+    /// matching against advertised models), so we search for a model whose id or
+    /// name contains "sonnet" (case-insensitive). Returns nil if no match — the
+    /// caller falls back to the provider's default model.
+    static nonisolated func findSonnetModelId(in models: [ModelInfo]) -> String? {
+        models.first { model in
+            let id = model.modelId.lowercased()
+            let name = model.name.lowercased()
+            return id.contains("sonnet") || name.contains("sonnet")
+        }?.modelId
     }
 
     /// Heartbeat logger + stale-idle detector. Replaces the old liveness-poller
@@ -1133,8 +1489,10 @@ final class AgentLauncher {
         if useACP, let command = provider.command, let exe = command.first {
             // For "bun", prefer the binary bundled in Contents/Helpers so the app
             // works without a system-wide bun install. Fall back to PATH resolution.
+            // NOTE: Bundle.url(forAuxiliaryExecutable:) does NOT search
+            // Contents/Helpers (only MacOS + Resources), so we check manually.
             if exe == "bun",
-               let bundled = Bundle.main.url(forAuxiliaryExecutable: "bun")?.path {
+               let bundled = Self.bundledHelperPath("bun") {
                 DebugLog.agent("startInteractiveQuery: using bundled bun at \(bundled)") // TEMP DEBUG
                 resolvedACPCommand = [bundled] + Array(command.dropFirst())
             } else {

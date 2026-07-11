@@ -52,6 +52,17 @@ public enum IngestPlan: Equatable, Sendable {
     sourceByteSize < tinySourceByteThreshold ? .singleOpus : .opusCurator
   }
 
+  /// Whether this plan is for a large source that needs multi-phase processing
+  /// (planner → executors → finalizer for ACP, or curator + digesters for CLI).
+  /// Model-agnostic: any powerful model can be the planner/curator — this is a
+  /// source-size predicate, NOT a model-tier gate.
+  public var isLargeSource: Bool {
+    switch self {
+    case .singleOpus: false
+    case .opusCurator: true
+    }
+  }
+
   /// The top-level `--model` alias. ALWAYS `opus` — Opus is the curator/writer in
   /// both modes; the single pass and the curator both run on Opus.
   public var topLevelModelAlias: String {

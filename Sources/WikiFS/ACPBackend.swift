@@ -144,10 +144,26 @@ actor ACPBackend: AgentBackend {
         await client.setDelegate(permissionDelegate)
 
         DebugLog.agent("ACPBackend.start: launching \(spawn.executablePath) \(spawn.arguments.joined(separator: " "))") // TEMP DEBUG (existed; re-tagged)
+        // Build the environment so the agent can find wikictl + the wiki DB.
+        // Mirrors what OperationCommand.resolveWikictl does for the CLI backend.
+        var env = ProcessInfo.processInfo.environment
+        if let cli = profile.cli {
+            env["WIKI_DB"] = cli.wikiID
+            env["WIKI_ROOT"] = cli.wikiRoot
+            env["WIKICTL"] = cli.wikictlDirectory + "/wikictl"
+            let existingPath = env["PATH"] ?? "/usr/bin:/bin"
+            env["PATH"] = cli.wikictlDirectory + ":" + existingPath
+        }
+        // Also add any extra env from the provider config.
+        for (key, value) in profile.providerHints where key.hasPrefix("env.") {
+            env[String(key.dropFirst(4))] = value
+        }
+
         try await client.launch(
             agentPath: spawn.executablePath,
             arguments: spawn.arguments,
-            workingDirectory: spawn.workingDirectory
+            workingDirectory: spawn.workingDirectory,
+            environment: env
         )
 
         DebugLog.agent("ACPBackend.start: process launched, sending initialize") // TEMP DEBUG (existed; re-tagged)
