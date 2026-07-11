@@ -2553,19 +2553,18 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let refStmt = try statement("""
         SELECT version_id FROM refs WHERE kind = 'page-content' AND owner_id = ?1;
         """)
-        refStmt.reset()
+        defer { refStmt.reset() }
         try refStmt.bind(pageID.rawValue, at: 1)
         if try refStmt.step() {
             return refStmt.text(at: 0)
         }
-        refStmt.reset()
         // No ref → default-active = MAX(id) for this page.
         let maxStmt = try statement("""
         SELECT id FROM page_versions
         WHERE page_id = ?1
         ORDER BY id DESC LIMIT 1;
         """)
-        maxStmt.reset()
+        defer { maxStmt.reset() }
         try maxStmt.bind(pageID.rawValue, at: 1)
         if try maxStmt.step() {
             return maxStmt.text(at: 0)
