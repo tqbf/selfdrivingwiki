@@ -597,6 +597,13 @@ struct Projection {
                       let head = try? store.processedMarkdownHead(sourceID: PageID(rawValue: ulid)) else {
                     return nil
                 }
+                // For by-name markdown siblings, size must match rewritten bytes.
+                if id.rawValue.hasPrefix(Identity.sourceMarkdownByNamePrefix),
+                   let pages = try? store.listAllPagesOrderedByID() {
+                    let map = projection.titleToFilenameMap(pages: pages)
+                    let data = projection.rewriteMarkdown(head.content, map: map)
+                    return Self.sourceMarkdownNode(for: id, source: file, head: head, contentData: data)
+                }
                 return Self.sourceMarkdownNode(for: id, source: file, head: head)
             }
             if let ulid = Identity.fileULID(from: id) {
@@ -611,6 +618,12 @@ struct Projection {
                 guard let store = projection.openReadStore(),
                       let head = try? store.processedMarkdownHead(sourceID: PageID(rawValue: ulid)) else {
                     return nil
+                }
+                // By-name markdown siblings: rewrite [[wikilinks]] to relative links.
+                if id.rawValue.hasPrefix(Identity.sourceMarkdownByNamePrefix),
+                   let pages = try? store.listAllPagesOrderedByID() {
+                    let map = projection.titleToFilenameMap(pages: pages)
+                    return projection.rewriteMarkdown(head.content, map: map)
                 }
                 return Data(head.content.utf8)
             }
@@ -634,6 +647,15 @@ struct Projection {
                   let store = projection.openReadStore(),
                   let chats = try? store.listAllChatsOrderedByID(),
                   let chat = chats.first(where: { $0.id.rawValue == ulid }) else { return nil }
+            // For by-name chats, size must match rewritten bytes.
+            if id.rawValue.hasPrefix(Identity.chatByNamePrefix),
+               let pages = try? store.listAllPagesOrderedByID() {
+                let map = projection.titleToFilenameMap(pages: pages)
+                let messages = (try? store.chatMessages(chatID: chat.id)) ?? []
+                let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
+                let data = projection.rewriteMarkdown(raw, map: map)
+                return Self.chatFileNode(for: id, chat: chat, in: store, contentData: data)
+            }
             return Self.chatFileNode(for: id, chat: chat, in: store)
         },
         contentForLeaf: { projection, id in
@@ -642,7 +664,14 @@ struct Projection {
                   let chats = try? store.listAllChatsOrderedByID(),
                   let chat = chats.first(where: { $0.id.rawValue == ulid }),
                   let messages = try? store.chatMessages(chatID: chat.id) else { return nil }
-            return Data(ChatTranscriptRenderer.render(summary: chat, messages: messages).utf8)
+            let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
+            // By-name chats: rewrite [[wikilinks]] to relative links.
+            if id.rawValue.hasPrefix(Identity.chatByNamePrefix),
+               let pages = try? store.listAllPagesOrderedByID() {
+                let map = projection.titleToFilenameMap(pages: pages)
+                return projection.rewriteMarkdown(raw, map: map)
+            }
+            return Data(raw.utf8)
         }
     )
 
@@ -1079,7 +1108,8 @@ struct Projection {
     static func sourceMarkdownNode(
         for id: NSFileProviderItemIdentifier,
         source: SourceSummary,
-        head: SourceMarkdownVersion
+        head: SourceMarkdownVersion,
+        contentData: Data? = nil
     ) -> ProjectedNode {
         let raw = id.rawValue
         let isByName = raw.hasPrefix(Identity.sourceMarkdownByNamePrefix)
@@ -1089,8 +1119,9 @@ struct Projection {
                 filename: humanName, ext: "md", sourceID: source.id.rawValue)
             : FilenameEscaping.byIDSourceFilename(sourceID: source.id.rawValue, ext: "md")
         let parent = isByName ? Identity.sourcesByName : Identity.sourcesByID
+        let size = contentData?.count ?? head.content.utf8.count
         return .file(
-            id: id, parent: parent, name: name, size: head.content.utf8.count,
+            id: id, parent: parent, name: name, size: size,
             version: Data(head.id.rawValue.utf8),
             metadataVersion: Data(head.id.rawValue.utf8),
             created: head.createdAt, modified: head.createdAt,
@@ -1166,7 +1197,13 @@ struct Projection {
     /// returned `Data` is the single source of truth for both `documentSize`
     /// (reported in `pageFileNode`) and the bytes served by `contents(for:)`.
     private func byTitleContent(for page: WikiPage, map: [String: String]) -> Data {
-        let raw = PageMarkdownFormat.fileContent(for: page)
+        rewriteMarkdown(PageMarkdownFormat.fileContent(for: page), map: map)
+    }
+
+    /// Rewrite `[[wikilinks]]` in `raw` to relative Markdown links using
+    /// `map` (page title → by-title filename). Single source of truth shared by
+    /// pages, source-markdown siblings, and chat transcripts.
+    private func rewriteMarkdown(_ raw: String, map: [String: String]) -> Data {
         let rewritten = RelativeLinkRewriter.rewrite(raw) { map[$0] }
         return Data(rewritten.utf8)
     }
@@ -1296,6 +1333,10 @@ struct Projection {
         guard let store = openReadStore(),
               let files = try? store.listAllSourcesOrderedByID() else { return [] }
         let heads = (try? store.processedMarkdownHeadsBySource()) ?? [:]
+        // Build title map once for by-name markdown sibling rewriting.
+        let titleMap: [String: String]? = byName
+            ? (try? store.listAllPagesOrderedByID()).map { titleToFilenameMap(pages: $0) }
+            : nil
         return files.flatMap { row in
             let id = byName ? Identity.sourceByName(row.id) : Identity.sourceByID(row.id)
             let summary = SourceSummary(
@@ -1311,7 +1352,9 @@ struct Projection {
             let markdownID = byName
                 ? Identity.sourceMarkdownByName(row.id)
                 : Identity.sourceMarkdownByID(row.id)
-            return [verbatimNode, Self.sourceMarkdownNode(for: markdownID, source: summary, head: head)]
+            let contentData = titleMap.map { rewriteMarkdown(head.content, map: $0) }
+            return [verbatimNode, Self.sourceMarkdownNode(for: markdownID, source: summary,
+                                                          head: head, contentData: contentData)]
         }
     }
 
@@ -1322,10 +1365,20 @@ struct Projection {
     private func chatNodes(byName: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
               let chats = try? store.listAllChatsOrderedByID() else { return [] }
+        // Build title map once for by-name chat rewriting.
+        let titleMap: [String: String]? = byName
+            ? (try? store.listAllPagesOrderedByID()).map { titleToFilenameMap(pages: $0) }
+            : nil
         return chats.map { chat in
             let id = byName ? Identity.chatByName(chat.id.rawValue)
                             : Identity.chatByID(chat.id.rawValue)
-            return Self.chatFileNode(for: id, chat: chat, in: store)
+            guard let map = titleMap else {
+                return Self.chatFileNode(for: id, chat: chat, in: store)
+            }
+            let messages = (try? store.chatMessages(chatID: chat.id)) ?? []
+            let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
+            let data = rewriteMarkdown(raw, map: map)
+            return Self.chatFileNode(for: id, chat: chat, in: store, contentData: data)
         }
     }
 
@@ -1336,7 +1389,8 @@ struct Projection {
     /// the node. Like `pageFileNode(for:page:)`.
     static func chatFileNode(for id: NSFileProviderItemIdentifier,
                              chat: ChatSummary,
-                             in store: SQLiteWikiStore) -> ProjectedNode {
+                             in store: SQLiteWikiStore,
+                             contentData: Data? = nil) -> ProjectedNode {
         let raw = id.rawValue
         let isByName = raw.hasPrefix(Identity.chatByNamePrefix)
         let name = isByName
@@ -1345,12 +1399,18 @@ struct Projection {
         let parent = isByName ? Identity.chatsByName : Identity.chatsByID
         // Render once for size; `contents(for:)` renders again independently (the
         // read store is cheap + WAL — same pattern as pages). The renderer is
-        // deterministic, so the two renders agree byte-for-byte.
-        let messages = (try? store.chatMessages(chatID: chat.id)) ?? []
-        let rendered = Data(ChatTranscriptRenderer.render(summary: chat, messages: messages).utf8)
+        // deterministic, so the two renders agree byte-for-byte. For by-name,
+        // the caller may supply pre-rewritten bytes so size == rewritten content.
+        let size: Int
+        if let data = contentData {
+            size = data.count
+        } else {
+            let messages = (try? store.chatMessages(chatID: chat.id)) ?? []
+            size = ChatTranscriptRenderer.render(summary: chat, messages: messages).utf8.count
+        }
         let version = Data(String(chat.updatedAt.timeIntervalSince1970).utf8)
         return .file(
-            id: id, parent: parent, name: name, size: rendered.count,
+            id: id, parent: parent, name: name, size: size,
             version: version, metadataVersion: version,
             created: chat.createdAt, modified: chat.updatedAt
         )
