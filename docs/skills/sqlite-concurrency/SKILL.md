@@ -129,6 +129,51 @@ rather than a crash-safety requirement — but do not convert it to a background
 job without designing model coordination (who reloads observable state, when)
 — plan §13.4.
 
+### 7. Statement lifetime: always `defer { stmt.reset() }`
+
+A prepared statement left stepped-to-`SQLITE_ROW` (busy) holds an **implicit
+read transaction** open on the connection, pinning the WAL read snapshot. In
+WAL mode this has two consequences:
+
+1. **Stale reads** — subsequent reads on the same connection see data as of the
+   pinned snapshot, even after an external writer commits.
+2. **Write-lock failure** — `BEGIN IMMEDIATE` fails with `SQLITE_BUSY_SNAPSHOT`
+   when the snapshot is stale relative to the WAL head.
+
+This was the root cause of issue #332: 18 functions used a "reset-before-use"
+idiom (`stmt.reset()` *before* `bind`/`step`) that cleared the *previous* call's
+leftover but left the *current* call's statement busy on return.
+
+**The rule:** every stepped statement gets `defer { stmt.reset() }` immediately
+after `try statement(...)`. This covers all exit paths — success, early return,
+and throw — uniformly.
+
+```swift
+// ✅ Correct — defer bounds the statement's read transaction to the call.
+let stmt = try statement("SELECT … WHERE id = ?1;")
+defer { stmt.reset() }
+try stmt.bind(id, at: 1)
+if try stmt.step() { return stmt.text(at: 0) }
+
+// ❌ Wrong — reset-before-use clears the PREVIOUS call's leftover but leaves
+// the CURRENT call's statement busy at ROW when the function returns.
+let stmt = try statement("SELECT … WHERE id = ?1;")
+stmt.reset()
+try stmt.bind(id, at: 1)
+if try stmt.step() { return stmt.text(at: 0) }
+```
+
+When a read precedes a `withTransaction` in the same method (e.g.
+`revertProcessedMarkdown` reads a target row, then writes), add an explicit
+`target.reset()` after extracting the values — the `defer` fires at scope exit,
+but `withTransaction` runs first and its debug guard would fire.
+
+**Debug guard:** `assertNoBusyStatements()` (DEBUG-only) is called at the top of
+`withTransaction` at depth 0 — it throws if any cached statement is busy before
+`BEGIN IMMEDIATE`. The `SQLiteStatement.isBusy` property wraps
+`sqlite3_stmt_busy`. The regression test `noBusyStatementsAfterReads` exercises
+every fixed site and asserts no busy statement remains.
+
 ## Anti-patterns (updated)
 
 - **Pooling `init(databaseURL:)` connections** — that init writes (migrations,
@@ -140,6 +185,9 @@ job without designing model coordination (who reloads observable state, when)
 - **Letting a statement or column pointer outlive its method** — the lock can't
   protect it.
 - **`String(cString:)` on a DB column** — byte-length lossy decode only.
+- **Reset-before-use instead of `defer { stmt.reset() }`** — leaves the
+  statement busy at `SQLITE_ROW` when the function returns, pinning the WAL
+  snapshot (#332). Always `defer` immediately after `try statement(...)`.
 - **Treating `SQLITE_OPEN_FULLMUTEX` as app-level safety** — it serializes C
   calls, not bind/step/read sequences; the recursive lock does that.
 
@@ -153,4 +201,6 @@ grep -c "lock.lock(); defer { lock.unlock() }" Sources/WikiFSCore/SQLiteWikiStor
 grep -n "BEGIN IMMEDIATE\|ROLLBACK" Sources/WikiFSCore/SQLiteWikiStore.swift   # only inside withTransaction
 # The regression suite:
 swift test --filter StoreConcurrencyTests
+# Statement lifecycle (issue #332):
+swift test --filter SQLiteStatementLifecycleTests
 ```
