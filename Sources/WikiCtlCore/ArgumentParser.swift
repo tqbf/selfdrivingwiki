@@ -126,6 +126,8 @@ public enum ArgumentParser {
       chat list [--json]                     list chats (TSV, or JSON lines)
       chat get  (--id X | --title T)         print a chat transcript as markdown
       chat search --query X [--limit N]      semantic + keyword search of chats
+      chat rename (--id X | --title T) --to <new-title>
+                                               rename a chat
       workspace create [--name N]              create a workspace (prints ID)
       workspace status --id W                  show workspace status + pages
       workspace abandon --id W                abandon a workspace (GC refs)
@@ -392,6 +394,13 @@ public enum ArgumentParser {
                 limit = 10
             }
             return .chat(.search(query: query, limit: limit))
+
+        case "rename":
+            let selector = try options.requireChatSelector()
+            guard let newName = options.value("--to"), !newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw Failure.usage("chat rename: --to <new-title> is required")
+            }
+            return .chat(.rename(selector, to: newName))
 
         default:
             throw Failure.usage("chat: unknown subcommand \(sub.debugDescription)")
