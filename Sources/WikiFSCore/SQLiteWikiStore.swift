@@ -527,6 +527,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // per existing page in the v29→30 step.
         try createPageVersionsV30()
         try exec("PRAGMA user_version=30;")
+
+        // v31 (W1 — workspaces, PR #312): durable workspace substrate for
+        // multi-writer ingestion. Purely additive (`IF NOT EXISTS`); a fresh
+        // DB has no workspaces to seed.
+        try createWorkspacesV31()
+        try exec("PRAGMA user_version=31;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -623,6 +629,38 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         );
         """)
         try exec("CREATE INDEX IF NOT EXISTS page_versions_page ON page_versions(page_id, id);")
+    }
+
+    /// Create the workspace tables (v31, W1 — PR #312). `workspaces` holds the
+    /// durable, named speculative branch for a long-running ingestion;
+    /// `workspace_refs` is the per-page overlay (the workspace's current head
+    /// + the base version observed at first write, for three-way merge).
+    /// Called by both the fresh-schema fast path and the v30→31 migration step
+    /// so the two stay schema-identical. `IF NOT EXISTS`: idempotent.
+    private func createWorkspacesV31() throws {
+        try exec("""
+        CREATE TABLE IF NOT EXISTS workspaces (
+            id               TEXT PRIMARY KEY,
+            name             TEXT,
+            status           TEXT NOT NULL DEFAULT 'open',
+            activity_id      TEXT REFERENCES activities(id),
+            index_body       TEXT,
+            index_base_version TEXT,
+            created_at       REAL NOT NULL,
+            updated_at       REAL NOT NULL
+        );
+        """)
+        try exec("""
+        CREATE TABLE IF NOT EXISTS workspace_refs (
+            workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            kind           TEXT NOT NULL CHECK (kind = 'page-content'),
+            owner_id       TEXT NOT NULL,
+            base_version_id TEXT,
+            version_id     TEXT NOT NULL,
+            updated_at     REAL NOT NULL,
+            PRIMARY KEY (workspace_id, kind, owner_id)
+        );
+        """)
     }
 
     /// Create the two persisted-chat-history tables (issue #119 phase 1):
@@ -1339,6 +1377,15 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try migrateV29ToV30()
             try exec("PRAGMA user_version=30;")
             version = 30
+        }
+
+        // Step 30 → 31 (W1 — workspaces, PR #312): creates the `workspaces` +
+        // `workspace_refs` tables for multi-writer ingestion isolation. Purely
+        // additive (`IF NOT EXISTS`); no existing data to backfill.
+        if version < 31 {
+            try createWorkspacesV31()
+            try exec("PRAGMA user_version=31;")
+            version = 31
         }
     }
 
