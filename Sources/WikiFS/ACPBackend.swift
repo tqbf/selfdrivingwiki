@@ -513,14 +513,14 @@ actor ACPBackend: AgentBackend {
     /// was resolved, false if no such pending id exists.
     func resolvePermission(sessionHandle: SessionHandle, optionId: String) async -> Bool {
         guard let session = sessions[sessionHandle.id] else { return false }
-        return await session.permissionDelegate.resolve(optionId: optionId)
+        return session.permissionDelegate.resolve(optionId: optionId)
     }
 
     /// The currently-pending permission requests for a session (always-ask
     /// mode). The future UI surfaces these as Approve/Reject affordances.
     func pendingPermissions(sessionHandle: SessionHandle) async -> [PendingPermission] {
         guard let session = sessions[sessionHandle.id] else { return [] }
-        return await session.permissionDelegate.pendingSnapshot()
+        return session.permissionDelegate.pendingSnapshot()
     }
 
     /// Drain all pending always-ask requests for a session (resume each as

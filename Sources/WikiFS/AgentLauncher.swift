@@ -1490,7 +1490,7 @@ final class AgentLauncher {
     /// (`kill(-pid, ...)`) so agent-spawned children are also killed.
     private func startKillEscalation(pid: Int32) {
         guard pid > 0 else { return }
-        Task { @MainActor [weak self] in
+        Task { @MainActor in
             // Phase 1: wait for cancel to take effect.
             try? await Task.sleep(for: .seconds(10))
             if Self.isProcessAlive(pid) {
