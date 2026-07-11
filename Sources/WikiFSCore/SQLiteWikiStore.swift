@@ -3605,6 +3605,48 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try workspaceMerge(workspaceID: workspaceID)
     }
 
+    public func reapStaleWorkspaces(ttl: TimeInterval) throws -> Int {
+        try mutate(event: { _ in nil }) {
+        let cutoff = Date().timeIntervalSince1970 - ttl
+        // Select stale open workspace IDs.
+        let select = try statement("""
+        SELECT id FROM workspaces
+        WHERE status = 'open' AND updated_at < ?1;
+        """)
+        defer { select.reset() }
+        try select.bind(cutoff, at: 1)
+        var staleIDs: [String] = []
+        while try select.step() {
+            staleIDs.append(select.text(at: 0))
+        }
+
+        var reaped = 0
+        for id in staleIDs {
+            // Delete workspace_refs + conflicts, then mark abandoned.
+            let delRefs = try statement(
+                "DELETE FROM workspace_refs WHERE workspace_id = ?1;")
+            delRefs.reset()
+            try delRefs.bind(id, at: 1)
+            _ = try delRefs.step()
+
+            let delConflicts = try statement(
+                "DELETE FROM workspace_conflicts WHERE workspace_id = ?1;")
+            delConflicts.reset()
+            try delConflicts.bind(id, at: 1)
+            _ = try delConflicts.step()
+
+            let abandon = try statement(
+                "UPDATE workspaces SET status = 'abandoned', updated_at = ?2 WHERE id = ?1;")
+            abandon.reset()
+            try abandon.bind(id, at: 1)
+            try abandon.bind(Date().timeIntervalSince1970, at: 2)
+            _ = try abandon.step()
+            reaped += 1
+        }
+        return reaped
+        }
+    }
+
     public func deletePage(id: PageID) throws {
         try mutate(event: { _ in localEvent(.page, id: id.rawValue, change: .deleted) }) {
         // FK safety: `page_links`, `attachments`, and `source_links` all have

@@ -413,6 +413,12 @@ public protocol WikiStore: Sendable {
     /// (W3). Resolves remaining conflicts (or parks again).
     func workspaceRetryMerge(workspaceID: String) throws
 
+    /// Reap stale open workspaces: mark any workspace with status `open`
+    /// whose `updated_at` is older than the TTL as `abandoned` (W4, PR #312).
+    /// Called on app launch or via `wikictl workspace reap` to clean up
+    /// crashed/abandoned runs. Returns the number of workspaces reaped.
+    func reapStaleWorkspaces(ttl: TimeInterval) throws -> Int
+
     // MARK: - System prompt (singleton document, v3)
 
     /// Read the user-editable singleton system-prompt document (projected at the

@@ -496,4 +496,42 @@ struct WorkspaceTests {
         let merged = try store.getPage(id: page2.id)
         #expect(merged.bodyMarkdown.contains("ws2-lineB"))
     }
+
+    // MARK: - Reaper (W4)
+
+    @Test func reapAbandonsStaleOpenWorkspaces() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Reap Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Reap Page", body: "v1",
+            expectedHeadVersionID: nil)
+
+        // Create a workspace (it's 'open').
+        let wsID = try store.createWorkspace(name: "stale", activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page.id, title: "Reap Page", body: "ws")
+
+        // Reap with a TTL that covers it (it was just created, so 0 TTL reaps it).
+        let reaped = try store.reapStaleWorkspaces(ttl: 0)
+        #expect(reaped == 1)
+
+        let summary = try store.workspaceSummary(id: wsID)
+        #expect(summary?.status == .abandoned)
+
+        // Workspace refs should be deleted.
+        let refs = try store.workspaceRefs(workspaceID: wsID)
+        #expect(refs.isEmpty)
+    }
+
+    @Test func reapDoesNotTouchActiveWorkspaces() throws {
+        let store = try tempStore()
+        let wsID = try store.createWorkspace(name: "active", activityID: nil)
+
+        // Reap with a 1-hour TTL — the workspace was just created, should survive.
+        let reaped = try store.reapStaleWorkspaces(ttl: 3600)
+        #expect(reaped == 0)
+
+        let summary = try store.workspaceSummary(id: wsID)
+        #expect(summary?.status == .open)
+    }
 }

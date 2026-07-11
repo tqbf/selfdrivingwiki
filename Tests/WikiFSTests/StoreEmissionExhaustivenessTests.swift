@@ -96,6 +96,7 @@ struct StoreEmissionExhaustivenessTests {
         // pages mirror + main refs, triggering the existing page change path).
         "createWorkspace", "workspaceWritePage", "abandonWorkspace", "workspaceMerge",
         "workspaceRefresh", "workspaceResolveConflict", "workspaceRetryMerge",
+        "reapStaleWorkspaces",
     ]
 
     /// Every EMIT member must route through `mutate()` (AC.2). A newly added

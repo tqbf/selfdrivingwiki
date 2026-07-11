@@ -135,6 +135,7 @@ public enum ArgumentParser {
       workspace resolve --id W --page P --body-file <path|->
                                                resolve a conflict with the given body
       workspace retry --id W                   re-open + re-merge after resolving conflicts
+      workspace reap [--ttl <seconds>]         abandon stale open workspaces (default 3600s)
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -461,6 +462,13 @@ public enum ArgumentParser {
                 throw Failure.usage("workspace retry: --id is required")
             }
             return .workspace(.retry(id: id))
+
+        case "reap":
+            let ttlStr = options.value("--ttl") ?? "3600"
+            guard let ttl = TimeInterval(ttlStr) else {
+                throw Failure.usage("workspace reap: --ttl must be a number (seconds)")
+            }
+            return .workspace(.reap(ttl: ttl))
 
         default:
             throw Failure.usage("workspace: unknown subcommand \(sub.debugDescription)")
