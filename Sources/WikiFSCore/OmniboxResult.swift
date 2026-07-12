@@ -42,10 +42,10 @@ public enum OmniboxResult: Identifiable, Hashable, Sendable {
 
     public var systemImageName: String {
         switch self {
-        case .page: return "doc.text"
-        case .source: return "doc"
-        case .chat: return "bubble.left.and.bubble.right"
-        case .bookmark: return "bookmark"
+        case .page: return ResourceKind.page.systemImageName
+        case .source: return ResourceKind.source.systemImageName
+        case .chat: return ResourceKind.chat.systemImageName
+        case .bookmark: return ResourceKind.bookmark.systemImageName
         case .ask: return "sparkles"
         }
     }

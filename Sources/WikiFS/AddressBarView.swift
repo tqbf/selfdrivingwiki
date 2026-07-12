@@ -200,13 +200,25 @@ struct AddressBarView: View {
 
     // MARK: - Reader menu (Safari-style page controls)
 
-    /// The leading page-menu button (Safari's "Page Menu" glyph); opens a
-    /// dropdown with Zoom and Find on Page.
+    /// The leading icon: reflects the active tab's content type (matching the
+    /// sidebar and detail-view icons) and opens a dropdown with Zoom and Find
+    /// on Page. Draggable — dragging it carries a `SidebarDragPayloadList` for
+    /// the current page/source/chat, so it can be dropped on the welcome screen
+    /// or bookmarks just like a sidebar row.
+    @ViewBuilder
     private var readerMenuButton: some View {
+        if let payload = dragPayload {
+            readerMenuButtonCore.draggable(payload)
+        } else {
+            readerMenuButtonCore
+        }
+    }
+
+    private var readerMenuButtonCore: some View {
         Button {
             showReaderMenu.toggle()
         } label: {
-            Image(systemName: "text.page.badge.magnifyingglass")
+            Image(systemName: contentSymbol)
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .frame(width: 18, height: 22)
@@ -216,6 +228,36 @@ struct AddressBarView: View {
         .help("Page controls")
         .popover(isPresented: $showReaderMenu, arrowEdge: .bottom) {
             ReaderControlsMenu(zoom: $readerZoom, onFind: findOnPage)
+        }
+    }
+
+    /// The SF Symbol matching the active tab's content type, so the omnibox's
+    /// leading icon agrees with the sidebar section icon and the detail-view
+    /// header icon. Falls back to the generic page-controls glyph for
+    /// non-content selections (system prompt, change log, etc.).
+    private var contentSymbol: String {
+        switch store.activeTab?.selection {
+        case .page: ResourceKind.page.systemImageName
+        case .source: ResourceKind.source.systemImageName
+        case .chat, .newChat: ResourceKind.chat.systemImageName
+        default: "text.page.badge.magnifyingglass"
+        }
+    }
+
+    /// A `SidebarDragPayloadList` for the currently-loaded resource, so the
+    /// omnibox icon can be dragged to the welcome screen or bookmarks like a
+    /// sidebar row. `nil` when the selection isn't a draggable page/source/chat.
+    private var dragPayload: SidebarDragPayloadList? {
+        guard let selection = store.activeTab?.selection else { return nil }
+        switch selection {
+        case .page(let id):
+            return SidebarDragPayloadList([SidebarDragPayload(kind: .page, id: id.rawValue)])
+        case .source(let id):
+            return SidebarDragPayloadList([SidebarDragPayload(kind: .source, id: id.rawValue)])
+        case .chat(let id):
+            return SidebarDragPayloadList([SidebarDragPayload(kind: .chat, id: id.rawValue)])
+        default:
+            return nil
         }
     }
 

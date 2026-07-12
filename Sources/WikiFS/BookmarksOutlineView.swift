@@ -136,8 +136,11 @@ final class BookmarksOutlineViewController: NSViewController {
         // Required for the outline view to act as a drop target at all — without
         // this, validateDrop/acceptDrop are never called and no highlight shows.
         // `.string` powers intra-tree reorder (a node id); `.url` lets a
-        // `wiki://` link dragged out of a page/source body land here (issue #169).
-        outlineView.registerForDraggedTypes([.string, .init("public.url")])
+        // `wiki://` link dragged out of a page/source body land here (issue #169);
+        // the sidebar-item type lets the omnibox icon (and sidebar rows via
+        // SwiftUI .draggable) drop a page/source/chat here to create a bookmark.
+        let sidebarItemType = NSPasteboard.PasteboardType(UTType.wikiSidebarItem.identifier)
+        outlineView.registerForDraggedTypes([.string, .init("public.url"), sidebarItemType])
         // NSTableView/NSOutlineView is its own NSDraggingSource; there is no
         // delegate callback for this — the mask is configured imperatively.
         // Without it, the default local-drag mask is a multi-bit value that
@@ -252,13 +255,13 @@ final class BookmarksOutlineViewController: NSViewController {
         case .folder: return "folder"
         case .pageRef:
             let isStale = node.targetID.flatMap { id in store?.summaries.first { $0.id == id } } == nil
-            return isStale ? "exclamationmark.triangle" : "doc.text"
+            return isStale ? "exclamationmark.triangle" : ResourceKind.page.systemImageName
         case .sourceRef:
             let isStale = node.targetID.flatMap { id in store?.sources.first { $0.id == id } } == nil
-            return isStale ? "exclamationmark.triangle" : "doc"
+            return isStale ? "exclamationmark.triangle" : ResourceKind.source.systemImageName
         case .chatRef:
             let isStale = node.targetID.flatMap { id in store?.chats.first { $0.id == id } } == nil
-            return isStale ? "exclamationmark.triangle" : "bubble.left.and.bubble.right"
+            return isStale ? "exclamationmark.triangle" : ResourceKind.chat.systemImageName
         }
     }
 
@@ -375,6 +378,55 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
         return nil
     }
 
+    /// Read the first `SidebarDragPayloadList` from a drag pasteboard. The
+    /// omnibox icon (and sidebar rows via SwiftUI `.draggable`) write payload
+    /// JSON under the `wikiSidebarItem` UTType. Returns nil for non-sidebar
+    /// drags (wiki-link drops, intra-tree reorders).
+    private static func firstSidebarPayload(from pb: NSPasteboard) -> SidebarDragPayloadList? {
+        let sidebarType = NSPasteboard.PasteboardType(UTType.wikiSidebarItem.identifier)
+        guard let data = pb.data(forType: sidebarType),
+              let list = try? JSONDecoder().decode(SidebarDragPayloadList.self, from: data) else {
+            return nil
+        }
+        return list
+    }
+
+    /// Resolve a dropped sidebar-item payload and insert a bookmark node for
+    /// each target (page/source/chat) at the drop position. Mirrors the
+    /// wiki-link drop's parent/position resolution.
+    @discardableResult
+    private func acceptSidebarPayloadDrop(_ list: SidebarDragPayloadList,
+                                          onto item: Any?, atIndex index: Int,
+                                          store: WikiStoreModel) -> Bool {
+        let parentID: String?
+        let basePosition: Int
+        if let folder = item as? BookmarkNode, folder.kind == .folder {
+            parentID = folder.id
+            basePosition = index >= 0 ? index : children(of: folder.id).count
+        } else if let leaf = item as? BookmarkNode {
+            parentID = leaf.parentID
+            basePosition = index >= 0 ? index : leaf.position
+        } else {
+            parentID = nil
+            basePosition = index >= 0 ? index : children(of: nil).count
+        }
+        var position = basePosition
+        for payload in list.items {
+            let pageID = PageID(rawValue: payload.id)
+            switch payload.kind {
+            case .page:
+                store.addPageRef(parentID: parentID, pageID: pageID, position: position)
+            case .source:
+                store.addSourceRef(parentID: parentID, sourceID: pageID, position: position)
+            case .chat:
+                store.addChatRef(parentID: parentID, chatID: pageID, position: position)
+            }
+            DebugLog.tabs("[drop] sidebar-item bookmark created: kind=\(payload.kind) id=\(payload.id) parentID=\(parentID ?? "root") position=\(position)")
+            position += 1
+        }
+        return true
+    }
+
     /// Resolve a dropped `wiki://` link to a page/source and insert a bookmark
     /// node for it at the drop position. Mirrors `WikiReaderView.linkRoute(for:)`'s
     /// resolution: title from `WikiLinkMarkdown.target`, kind from `resolvedKind`,
@@ -456,6 +508,15 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
             if item is BookmarkNode { return .copy }              // leaf → sibling
             return []
         }
+        // Sidebar-item drop: a page/source/chat dragged from the omnibox icon
+        // or a sidebar row via SwiftUI .draggable. Accept as `.copy` so
+        // `acceptDrop` creates a bookmark node for the payload's target.
+        if Self.firstSidebarPayload(from: info.draggingPasteboard) != nil {
+            if item == nil { return .copy }                       // root
+            if (item as? BookmarkNode)?.kind == .folder { return .copy }
+            if item is BookmarkNode { return .copy }              // leaf → sibling
+            return []
+        }
         guard info.draggingSourceOperationMask.contains(.move) else { return [] }
         // Allow drop onto folders or between rows.
         if let folder = item as? BookmarkNode, folder.kind == .folder {
@@ -483,6 +544,12 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
         // `.string` as a bookmark *node id* and would no-op on a `wiki://` URL.
         if let url = Self.firstWikiLinkURL(from: info.draggingPasteboard) {
             return acceptWikiLinkDrop(url: url, onto: item, atIndex: index, store: store)
+        }
+
+        // Sidebar-item drop → create a bookmark for each page/source/chat in
+        // the payload (omnibox icon drag, or a SwiftUI .draggable sidebar row).
+        if let payloadList = Self.firstSidebarPayload(from: info.draggingPasteboard) {
+            return acceptSidebarPayloadDrop(payloadList, onto: item, atIndex: index, store: store)
         }
 
         // Multi-selection is allowed, so a reorder drag can carry more than one
@@ -639,9 +706,9 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
         // Add Page / Add Source — folder, single item only.
         if !isBatch && clicked.kind == .folder {
             menu.addItem(.separator())
-            menu.addItem(menuItem("Add Page…", systemImage: "doc.text",
+            menu.addItem(menuItem("Add Page…", systemImage: ResourceKind.page.systemImageName,
                                   action: #selector(addPageAction(_:)), payload: payload))
-            menu.addItem(menuItem("Add Source…", systemImage: "doc",
+            menu.addItem(menuItem("Add Source…", systemImage: ResourceKind.source.systemImageName,
                                   action: #selector(addSourceAction(_:)), payload: payload))
         }
 

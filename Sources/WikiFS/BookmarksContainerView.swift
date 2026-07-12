@@ -70,10 +70,10 @@ struct BookmarksContainerView: View {
             headerButton(systemImage: "folder.badge.plus", help: "New Folder") {
                 onNewFolder()
             }
-            headerButton(systemImage: "doc.text", help: "Add Page…") {
+            headerButton(systemImage: ResourceKind.page.systemImageName, help: "Add Page…") {
                 onShowPicker(PickerContext(id: UUID(), parentID: nil, kind: .pages))
             }
-            headerButton(systemImage: "doc", help: "Add Source…") {
+            headerButton(systemImage: ResourceKind.source.systemImageName, help: "Add Source…") {
                 onShowPicker(PickerContext(id: UUID(), parentID: nil, kind: .sources))
             }
         }

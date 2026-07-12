@@ -34,6 +34,22 @@ public protocol Resource: Sendable {
 /// *consumer* of kinds, not their home).
 public enum ResourceKind: String, Sendable, CaseIterable {
     case page, source, systemPrompt, wikiIndex, log, bookmark, chat
+
+    /// The SF Symbol name used for this resource kind across every UI surface:
+    /// sidebar sections, detail-view headers, the omnibox icon, bookmark row
+    /// icons, source list rows, and the picker sheet. Centralized here so a
+    /// kind's icon can't drift between surfaces.
+    public var systemImageName: String {
+        switch self {
+        case .page:        "doc.text"
+        case .source:      "tray.full"
+        case .bookmark:    "bookmark"
+        case .chat:        "bubble.left.and.bubble.right"
+        case .systemPrompt: "doc.text"
+        case .wikiIndex:   "book.closed"
+        case .log:         "clock.arrow.circlepath"
+        }
+    }
 }
 
 /// Declares one resource kind's contribution to the whole-wiki
