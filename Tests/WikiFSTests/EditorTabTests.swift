@@ -106,19 +106,19 @@ struct EditorTabTests {
         #expect(model.selection == .page(a.id))
     }
 
-    // MARK: - Singleton chat tab
+    // MARK: - Draft-state (.newChat) tabs
 
-    /// The headline AC: `.newChat` is a singleton key — opening it twice reuses
-    /// the same tab rather than spawning a duplicate. (The old dual `.ask`/
-    /// `.edit` chat-mode coexistence test is gone — there is now one chat
-    @Test func newChatTabIsSingleton() throws {
+    /// `.newChat` is a draft state, not a unique resource — opening it twice
+    /// creates two draft tabs, not a duplicate of a singleton (#348).
+    @Test func newChatAllowsMultipleDraftTabs() throws {
         let (model, _) = try tempModel()
         model.openTab(.newChat)
         #expect(model.tabs.count == 1)
         #expect(model.tabs.contains { $0.selection == .newChat })
-        // Opening again reuses the existing tab (no duplicate).
+        // Opening again creates a second draft tab.
         model.openTab(.newChat)
-        #expect(model.tabs.count == 1)
+        #expect(model.tabs.count == 2)
+        #expect(model.tabs.filter { $0.selection == .newChat }.count == 2)
     }
 
     // MARK: - Singleton reuse
@@ -132,12 +132,10 @@ struct EditorTabTests {
         model.handleSelectionChange(to: .page(a.id))
         model.openTab(.newChat)
         #expect(model.tabs.count == 2)
-        let askTabID = model.tabs[1].id
 
-        // Opening ask again should focus the existing ask tab.
+        // Opening .newChat again creates a second draft tab (#348).
         model.openTab(.newChat)
-        #expect(model.tabs.count == 2)  // No duplicate
-        #expect(model.activeTabID == askTabID)  // Ask tab is active
+        #expect(model.tabs.count == 3)
     }
 
     @Test func singletonSystemPromptReusesExistingTab() throws {
@@ -154,6 +152,31 @@ struct EditorTabTests {
         #expect(model.tabs.count == 1)
         model.openTab(.changeLog)
         #expect(model.tabs.count == 1)
+    }
+
+    // MARK: - retargetTab
+
+    /// Retargeting a tab to `.newChat` should not reuse an existing draft tab
+    /// — each `.newChat` is a separate draft state (#348).
+    @Test func retargetTabToNewChatDoesNotReuseExistingDraft() throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        model.reloadFromStore()
+
+        // Open a page tab and a .newChat draft tab.
+        model.openTab(.page(a.id))
+        model.openTab(.newChat)
+        #expect(model.tabs.count == 2)
+
+        let pageTabID = model.tabs[0].id
+        // Retarget the page tab to .newChat — should NOT reuse/focus the existing
+        // draft tab, but instead retarget in place.
+        model.retargetTab(id: pageTabID, to: .newChat)
+        #expect(model.tabs.count == 2) // No tab removed
+        #expect(model.tabs[0].selection == .newChat) // Retargeted in place
+        // The active tab (the .newChat draft, tab 1) is unchanged — retarget
+        // didn't hijack focus to the retargeted tab.
+        #expect(model.tabs[1].selection == .newChat)
     }
 
     // MARK: - selectTab
