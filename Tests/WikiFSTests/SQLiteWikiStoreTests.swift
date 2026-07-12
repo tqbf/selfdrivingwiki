@@ -178,10 +178,12 @@ struct SQLiteWikiStoreTests {
         try store.updatePage(id: b.id, title: "Beta", body: "beta edit")
         #expect(try store.changeToken() == "2:4:0:0:1:0:1:0:0:2:2:0:0:0")
 
-        // Delete changes page COUNT and SUM. deletePage does NOT cascade refs/
-        // activities, so refsGenSum + actCount are unchanged.
+        // Delete changes page COUNT and SUM. deletePage also cascades the page's
+        // `page-content` ref (W0/#312 made refs.owner_id polymorphic with no FK
+        // cascade), so refsGenSum drops from 2 → 1. Activities are provenance and
+        // are NOT cascaded, so actCount stays at 2.
         try store.deletePage(id: b.id)
-        #expect(try store.changeToken() == "1:2:0:0:1:0:1:0:0:2:2:0:0:0")
+        #expect(try store.changeToken() == "1:2:0:0:1:0:1:0:0:1:2:0:0:0")
     }
 
     /// The token MUST advance on ingest AND on delete (else the `files/` tree

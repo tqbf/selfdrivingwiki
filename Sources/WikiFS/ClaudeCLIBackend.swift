@@ -156,7 +156,7 @@ actor ClaudeCLIBackend: AgentBackend {
         // (Settings modelOverride → per-op alias). Default = unchanged.
         let cliSelectedModel = profile.providerHints["cliSelectedModel"]
         let isInteractive: Bool
-        let command: OperationCommand
+        var command: OperationCommand
         if case .queryChat = cli.operation {
             isInteractive = true
             command = OperationCommand.buildInteractiveQuery(
@@ -186,6 +186,15 @@ actor ClaudeCLIBackend: AgentBackend {
                 selectedModel: cliSelectedModel
             )
         }
+
+        // Phase 7: expand `env.*` provider hints into the child process
+        // environment (matches ACPBackend.start's convention). Used for
+        // per-spawn WIKI_WORKSPACE injection — NOT process-global setenv.
+        var commandEnv = command.environment
+        for (key, value) in profile.providerHints where key.hasPrefix("env.") {
+            commandEnv[String(key.dropFirst(4))] = value
+        }
+        command.environment = commandEnv
 
         DebugLog.agent("ClaudeCLIBackend.start: command \(command.debugSummary)") // TEMP DEBUG (existed; re-tagged)
         DebugLog.agent("ClaudeCLIBackend.start: isInteractive=\(isInteractive) exe=\(command.executable) argCount=\(command.arguments.count) authSet=\(!(command.environment["ANTHROPIC_API_KEY"]?.isEmpty ?? true)) cwd=\(profile.scratchDirectory?.lastPathComponent ?? "(none)")") // TEMP DEBUG
