@@ -201,19 +201,30 @@ public struct WorkspaceSummary: Equatable, Sendable {
 /// `baseVersionID` is the main head observed at the workspace's first write
 /// to this page (the three-way-merge base); nil means the page was created
 /// in this workspace (doesn't exist on main yet).
+///
+/// Two staging shapes coexist (v35):
+/// - **Existing page**: `versionID` is set (a `page_versions` row), `blobHash`
+///   and `title` are nil — content lives in the version's blob.
+/// - **Created page**: `versionID` is nil (no `pages` row on main yet), and
+///   `blobHash` + `title` carry the staged content. The page is minted at merge.
 public struct WorkspaceRef: Equatable, Sendable {
     public let workspaceID: String
     public let ownerID: PageID
     public let baseVersionID: String?
-    public let versionID: String
+    public let versionID: String?
+    public let blobHash: String?
+    public let title: String?
     public let updatedAt: Date
 
     public init(workspaceID: String, ownerID: PageID, baseVersionID: String?,
-                versionID: String, updatedAt: Date) {
+                versionID: String?, blobHash: String?, title: String?,
+                updatedAt: Date) {
         self.workspaceID = workspaceID
         self.ownerID = ownerID
         self.baseVersionID = baseVersionID
         self.versionID = versionID
+        self.blobHash = blobHash
+        self.title = title
         self.updatedAt = updatedAt
     }
 }

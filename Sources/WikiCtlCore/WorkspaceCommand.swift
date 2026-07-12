@@ -81,7 +81,8 @@ public enum WorkspaceCommand {
         } else {
             for ref in refs {
                 let base = ref.baseVersionID ?? "—"
-                lines.append("  \(ref.ownerID.rawValue)\tbase=\(base.prefix(12))\thead=\(ref.versionID.prefix(12))")
+                let head = ref.versionID?.prefix(12) ?? "blob:\(ref.blobHash?.prefix(8) ?? "?")"
+                lines.append("  \(ref.ownerID.rawValue)\tbase=\(base.prefix(12))\thead=\(head)\t\(ref.title ?? "")")
             }
         }
         return Result(output: lines.joined(separator: "\n"), didCommit: false)

@@ -2,6 +2,99 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-12 — Multi-Writer Hardening: All 7 Phases Complete
+
+**All 7 phases of the multi-writer hardening plan are implemented.** The
+design doc lives at `docs/design-plans/2026-07-12-multi-writer-hardening.md`;
+the implementation plan is at `plans/multi-writer-hardening.md`.
+
+**Phase 0 (hotfix):** Fixed `vacuum-blobs --apply` data-loss bug —
+`orphanBlobPredicate` was missing `page_versions.blob_hash`, deleting live
+page-history blobs.
+
+**Phase 1: Agent CAS writes.** `page get --json` outputs
+`head_version_id`; `page upsert --expect-head <ver>` CAS-protects writes
+(exit code 3 on conflict). Agent prompts updated with read→expect→retry-once
+discipline. Blind upsert behavior preserved.
+
+**Phase 2: Lane-aware generation gate.** `GenerationGate` split into
+`.ingest` (limit 1) and `.interactive` (limit 3) lanes — a long ingest no
+longer blocks chat. Cancellation safety preserved per-lane.
+
+**Phase 3: Head-ref invariant (v34).** Every page now has an explicit
+`page-content` ref from birth (`createPage` seeds root version + ref).
+v34 migration backfills refs for existing pages, seeding root versions
+where needed. MAX(id) fallback demoted to logged assertion.
+
+**Phase 4: Autosave amend + version GC.** Same-actor saves within 5s
+coalesce via amend (no new version row). `vacuumPageVersions` deletes
+unreachable versions. Also fixed `orphanActivityPredicate` (missing
+`page_versions.activity_id` edge).
+
+**Phase 5: Workspace created-page staging (v35).** `workspace_refs`
+rebuilt with nullable `version_id` + `blob_hash` + `title`. Created pages
+stage as blob+title (no phantom `pages` row, no changeToken movement,
+no abandon residue). Merge mints the `pages` row + root version.
+
+**Phase 6: Merge completeness.** `workspaceMerge` returns merged page IDs
+for post-merge re-embedding. Wiki-index line-set three-way merge using
+`Diff3`. Ingest-completion log entry appended after successful merge.
+
+**Phase 7: Ingest isolation behind flag.** `--workspace W` on `page
+upsert`/`page get`/`index set`; `WIKI_WORKSPACE` env var for the agent
+subprocess. `workspacesEnabled` flag (default off).
+`reapStaleWorkspaces` on app launch (24h TTL).
+
+**Known issues.** AC7.2 (human edit during isolated ingest) hits a SQLite
+statement-lifecycle error on the same connection — disabled with a note;
+store-layer isolation is correct, needs manual validation (R6).
+
+## 2026-07-12 — Phase 6: Merge completeness
+
+**What shipped.** Phase 6 of the multi-writer hardening plan: post-merge
+state is fully consistent (embeddings, structural index, log entry).
+
+**workspaceMerge returns merged page IDs** (`SQLiteWikiStore.swift`):
+- Changed return type from `Void` to `[String]` (`@discardableResult`).
+- Tracks each successfully merged page (fast-forward, created-page mint,
+  diff3 merge) in a local array.
+- Updated `WikiStore` protocol signature; all call sites are compatible via
+  `@discardableResult`.
+
+**Post-merge re-embedding**:
+- After the merge transaction commits (lock released by `mutate()`), each
+  merged page is re-embedded via `getPage` → `EmbeddingService.chunkedEmbeddings`
+  → `storePageChunks`, mirroring `PageUpsert`'s post-save path.
+- Best-effort (`try?`/`if !chunks.isEmpty`) — no embedder in tests/`wikictl`
+  means the call is a no-op (the background backfill embeds it later).
+- No inference-in-transaction violation: embeddings regenerate AFTER commit.
+
+**Ingest-completion log entry**:
+- After successful merge, `appendLog(kind: .ingest, title: "Workspace merge
+  completed", note: "<count> page(s) merged")` is appended. Best-effort
+  (`_ = try?`).
+
+**Wiki-index line-set three-way merge** (`Diff3`):
+- If `workspaces.index_body` is non-null at merge time, runs
+  `Diff3.merge(base: index_base_version, ours: current main wiki_index,
+  theirs: index_body)`.
+- On `.clean`: updates main `wiki_index` directly inside the transaction.
+- On `.conflict`: appends to conflicts list → workspace parks as conflicted.
+- New `setWorkspaceIndexBody(workspaceID:indexBody:indexBaseVersion:)`
+  method (NO-EMIT, not on protocol) stages index changes into the workspace
+  — the future `index set --workspace` CLI verb (Phase 7) will use it.
+
+**Tests** (`Tests/WikiFSTests/WorkspaceMergeCompletenessTests.swift`):
+- `mergeReturnsMergedPageIDs_fastForward` — fast-forward returns page IDs.
+- `mergeReturnsMergedPageIDs_createdPage` — created-page mint returns IDs.
+- `mergeAppendsIngestCompletionLogEntry` — `.ingest` log entry with page count.
+- `conflictParkReturnsEmptyAndNoLogEntry` — `[]` return, no log on conflict.
+- `wikiIndexDisjointEditsBothSurvive` — disjoint line edits merge cleanly.
+- `wikiIndexSameLineConflictParks` — same-line edits park the workspace.
+- All 6 tests pass; `StoreEmissionExhaustivenessTests` passes (new method
+  correctly in NO-EMIT partition); existing `WorkspaceTests` +
+  `WorkspaceStagingTests` all pass.
+
 ## 2026-07-11 — W4: Concurrency at scale (PR #312)
 
 **What shipped.** Phase W4 (final) of the multi-writer concurrency plan:

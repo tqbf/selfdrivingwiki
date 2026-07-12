@@ -32,10 +32,11 @@ public enum ArgumentParser {
 
     public enum Command: Equatable {
         case list(json: Bool)
-        case get(PageCommand.Selector)
+        case get(PageCommand.Selector, json: Bool, workspace: String? = nil)
         /// The body source is `-` for stdin or a file path; `main` reads it and
-        /// builds the final `PageCommand.Action`.
-        case upsert(id: PageID?, title: String, bodyFile: String)
+        /// builds the final `PageCommand.Action`. `expectHead` carries the CAS
+        /// expectation for Phase 1 agent writes (nil = blind write).
+        case upsert(id: PageID?, title: String, bodyFile: String, expectHead: String? = nil, workspace: String? = nil)
         case delete(id: PageID)
         /// Phase B: append one dated log row. Carries its values directly (no
         /// deferred I/O) — the note is optional. `source` is the ingested-file id
@@ -43,7 +44,7 @@ public enum ArgumentParser {
         case logAppend(kind: LogEntry.Kind, title: String, note: String?, source: PageID?)
         /// Phase B: rewrite the singleton wiki-index body. Like `upsert`, the body
         /// source is `-` for stdin or a file path; `main` reads it.
-        case indexSet(bodyFile: String)
+        case indexSet(bodyFile: String, workspace: String? = nil)
         /// Semantic search: find pages by meaning, not keyword. Returns ranked
         /// results (most relevant first). Falls back to LIKE title match when
         /// embeddings aren't available.
@@ -92,9 +93,13 @@ public enum ArgumentParser {
 
     commands:
       page list [--json]                     list pages (TSV, or JSON lines)
-      page get  (--title X | --id Y)         print a page body (instant SoT read)
-      page upsert --title X [--id Y] --body-file <path|->
-                                             create-or-update a page from a body
+      page get  (--title X | --id Y) [--json] [--workspace W]
+                                             print a page body; --json adds head_version_id;
+                                             --workspace W reads the staged version
+      page upsert --title X [--id Y] --body-file <path|-> [--expect-head <ver>] [--workspace W]
+                                             create-or-update a page;
+                                             --expect-head enables CAS (exit 3 on conflict);
+                                             --workspace W writes into workspace W
       page delete --id Y                     delete a page
       page history (--title X | --id Y)       show version history (W0)
       page revert (--title X | --id Y) --version V
@@ -102,7 +107,9 @@ public enum ArgumentParser {
       log append --kind ingest|query|lint --title X [--note N] [--source <file-id>]
                                              append one dated row to log.md;
                                              --source stamps that file "Processed"
-      index set --body-file <path|->         rewrite the curated index.md body
+      index set --body-file <path|-> [--workspace W]
+                                             rewrite the curated index.md body;
+                                             --workspace W stages into workspace W
       search --query X [--limit N]           semantic search (cosine similarity);
                                              falls back to LIKE title match
       source list [--json]                    list sources (TSV, or JSON lines)
@@ -123,8 +130,11 @@ public enum ArgumentParser {
       admin vacuum-activities [--apply] [--json]
                                              report (and with --apply, reclaim)
                                                activities no version row references
+      admin vacuum-page-versions [--apply] [--json]
+                                              report (and with --apply, reclaim)
+                                                page versions no ref/workspace references
       admin vacuum-all [--apply] [--json]    report (and with --apply, reclaim)
-                                               both orphaned blobs and activities
+                                               orphaned blobs, activities, and page versions
       chat list [--json]                     list chats (TSV, or JSON lines)
       chat get  (--id X | --title T)         print a chat transcript as markdown
       chat search --query X [--limit N]      semantic + keyword search of chats
@@ -210,7 +220,7 @@ public enum ArgumentParser {
             return .list(json: options.flag("--json"))
 
         case "get":
-            return .get(try options.requireSelector())
+            return .get(try options.requireSelector(), json: options.flag("--json"), workspace: options.value("--workspace"))
 
         case "upsert":
             guard let title = options.value("--title") else {
@@ -220,7 +230,9 @@ public enum ArgumentParser {
                 throw Failure.usage("page upsert: --body-file is required (path or -)")
             }
             let id = options.value("--id").map { PageID(rawValue: $0) }
-            return .upsert(id: id, title: title, bodyFile: bodyFile)
+            let expectHead = options.value("--expect-head")
+            let workspace = options.value("--workspace")
+            return .upsert(id: id, title: title, bodyFile: bodyFile, expectHead: expectHead, workspace: workspace)
 
         case "delete":
             guard let id = options.value("--id") else {
@@ -372,8 +384,13 @@ public enum ArgumentParser {
             let options = try Options(rest, booleanFlags: ["--apply", "--json"])
             return .admin(.vacuumActivities(
                 dryRun: !options.flag("--apply"), json: options.flag("--json")))
+        case "vacuum-page-versions":
+            // Same flags as vacuum-blobs (Phase 4 — multi-writer hardening).
+            let options = try Options(rest, booleanFlags: ["--apply", "--json"])
+            return .admin(.vacuumPageVersions(
+                dryRun: !options.flag("--apply"), json: options.flag("--json")))
         case "vacuum-all":
-            // Combined: both blob + activity orphans in one pass (issue #257).
+            // Combined: blobs + activities + page versions in one pass.
             let options = try Options(rest, booleanFlags: ["--apply", "--json"])
             return .admin(.vacuumAll(
                 dryRun: !options.flag("--apply"), json: options.flag("--json")))
@@ -430,7 +447,7 @@ public enum ArgumentParser {
         guard let bodyFile = options.value("--body-file") else {
             throw Failure.usage("index set: --body-file is required (path or -)")
         }
-        return .indexSet(bodyFile: bodyFile)
+        return .indexSet(bodyFile: bodyFile, workspace: options.value("--workspace"))
     }
 
     // MARK: - bookmark

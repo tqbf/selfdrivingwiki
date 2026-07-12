@@ -407,6 +407,7 @@ struct WikiManagerTests {
         #expect(report != nil)
         #expect(report?.blobs.orphanCount == 0)
         #expect(report?.activities.orphanCount == 0)
+        #expect(report?.pageVersions.deletedCount == 0)
         #expect(report?.isEmpty == true)
 
         manager.applyVacuumAll()

@@ -579,6 +579,12 @@ final class AgentLauncher {
     /// `endsGeneration` event). Private — observable externally via `isGenerating`.
     @ObservationIgnored private var holdsGenerationSlot = false
 
+    /// Which lane this launcher acquired (for lane-aware release, Phase 2).
+    /// Set at acquire time so `releaseGenerationSlot()` doesn't need callers
+    /// to pass the lane — it's called from multiple sites (finish, interactive
+    /// turn boundaries) and the lane is always the same within a run.
+    @ObservationIgnored private var acquiredLane: GenerationGate.GenerationLane?
+
     let extractionCoordinator: ExtractionCoordinator
 
     init(generationGate: GenerationGate = GenerationGate(),
@@ -588,18 +594,22 @@ final class AgentLauncher {
         self.extractionCoordinator = extractionCoordinator
     }
 
-    /// Wait for the shared generation gate, returning `true` iff this caller
-    /// acquired it (and `holdsGenerationSlot` is now `true`). Returns `false` if
-    /// the wait was cancelled before the slot was handed over — in that case the
-    /// caller owns nothing and must simply return (no release). Cancellation-safe:
-    /// a cancelled waiter self-removes from the gate's queue and is never handed
-    /// the slot. See `GenerationGate` for the full FIFO + cancellation protocol.
+    /// Wait for the shared generation gate on the given lane, returning `true`
+    /// iff this caller acquired it (and `holdsGenerationSlot` is now `true`).
+    /// Returns `false` if the wait was cancelled before the slot was handed over
+    /// — in that case the caller owns nothing and must simply return (no
+    /// release). Cancellation-safe: a cancelled waiter self-removes from the
+    /// gate's queue and is never handed the slot. See `GenerationGate` for the
+    /// full FIFO + cancellation protocol.
     ///
     /// NOTE: this does NOT touch `isRunning`. Process lifetime (`isRunning`) is
     /// decoupled from generation serialization (`holdsGenerationSlot`).
-    func awaitGenerationSlot() async -> Bool {
-        let ok = await generationGate.acquire()
-        if ok { holdsGenerationSlot = true }
+    func awaitGenerationSlot(for lane: GenerationGate.GenerationLane = .interactive) async -> Bool {
+        let ok = await generationGate.acquire(lane)
+        if ok {
+            holdsGenerationSlot = true
+            acquiredLane = lane
+        }
         return ok
     }
 
@@ -610,7 +620,9 @@ final class AgentLauncher {
     func releaseGenerationSlot() {
         guard holdsGenerationSlot else { return }
         holdsGenerationSlot = false
-        generationGate.release()
+        let lane = acquiredLane ?? .interactive
+        acquiredLane = nil
+        generationGate.release(lane)
     }
 
     // MARK: - Serialized extraction slot (pdf2md only)
@@ -824,10 +836,11 @@ final class AgentLauncher {
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void
     ) async {
-        // Serialize on the shared generation gate. Extraction does NOT take the
-        // gate, so a pdf2md conversion may overlap a query run; only the active
-        // generation serializes.
-        let acquired = await awaitGenerationSlot()
+        // Serialize on the shared generation gate (Phase 2: lane-aware).
+        // The lane is derived from the request kind: ingest-class (ingest,
+        // lint, lintPage) → .ingest lane; query/chat → .interactive lane.
+        let lane = request.generationLane
+        let acquired = await awaitGenerationSlot(for: lane)
         guard acquired, !Task.isCancelled else {
             // Cancelled while queued (self-removed; gate not acquired) — bail without
             // touching the gate. If we were handed the gate then cancelled (race),

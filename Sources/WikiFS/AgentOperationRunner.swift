@@ -168,13 +168,58 @@ enum AgentOperationRunner {
         }
 
         DebugLog.ingest("runMultiIngest: handing off \(sources.count) source(s), totalBytes=\(sources.reduce(0) { $0 + $1.bytes.count })")
-        await run(
-            request: .ingest(sources: sources, stateMarkdown: stateMarkdown),
-            launcher: launcher,
-            store: store,
-            manager: manager,
-            fileProvider: fileProvider,
-            ingestingSourceIDs: Set(sourceIDs))
+
+        // Phase 7: workspace-isolated ingestion. When the capability flag is on,
+        // create a workspace, set WIKI_WORKSPACE so the agent's `wikictl` calls
+        // route into it, and auto-merge on completion. When the flag is off,
+        // behavior is identical to today (writes directly to main).
+        if store.workspacesEnabled {
+            do {
+                let wsID = try store.createWorkspace(
+                    name: "ingest-\(sourceIDs.count)", activityID: nil)
+                DebugLog.ingest("runMultiIngest: workspace isolated, wsID=\(wsID)")
+                // Set the env var so the agent's wikictl subprocess calls auto-route
+                // to the workspace. The subprocess inherits the parent's environment.
+                setenv("WIKI_WORKSPACE", wsID, 1)
+                await run(
+                    request: .ingest(sources: sources, stateMarkdown: stateMarkdown),
+                    launcher: launcher,
+                    store: store,
+                    manager: manager,
+                    fileProvider: fileProvider,
+                    ingestingSourceIDs: Set(sourceIDs),
+                    onWorkspaceMerge: { [weak store] in
+                        // Auto-merge after the agent finishes. The merge is
+                        // best-effort: if it conflicts, the workspace is parked
+                        // and surfaced via the conflict verbs (main is safe).
+                        guard let store else { return }
+                        do {
+                            try store.workspaceMerge(workspaceID: wsID)
+                            DebugLog.ingest("runMultiIngest: workspace merged wsID=\(wsID)")
+                        } catch {
+                            DebugLog.ingest("runMultiIngest: workspace merge FAILED wsID=\(wsID) — \(error.localizedDescription)")
+                        }
+                        unsetenv("WIKI_WORKSPACE")
+                    })
+            } catch {
+                DebugLog.ingest("runMultiIngest: workspace creation FAILED — falling back to main, \(error.localizedDescription)")
+                await run(
+                    request: .ingest(sources: sources, stateMarkdown: stateMarkdown),
+                    launcher: launcher,
+                    store: store,
+                    manager: manager,
+                    fileProvider: fileProvider,
+                    ingestingSourceIDs: Set(sourceIDs))
+            }
+        } else {
+            await run(
+                request: .ingest(sources: sources, stateMarkdown: stateMarkdown),
+                launcher: launcher,
+                store: store,
+                manager: manager,
+                fileProvider: fileProvider,
+                ingestingSourceIDs: Set(sourceIDs))
+        }
 
         // If the ingest Task was cancelled while queued for the spawn slot (behind a
         // running query), `launcher.run` returned without spawning and never set
@@ -607,7 +652,8 @@ enum AgentOperationRunner {
         store: WikiStoreModel,
         manager: WikiManager,
         fileProvider: FileProviderSpike,
-        ingestingSourceIDs: Set<PageID> = []
+        ingestingSourceIDs: Set<PageID> = [],
+        onWorkspaceMerge: (@MainActor () -> Void)? = nil
     ) async {
         guard let wikiID = manager.activeWikiID else { return }
 
@@ -635,6 +681,9 @@ enum AgentOperationRunner {
                 store.agentRunEnded()
                 // Ingest runs also clear the ingest-in-progress flag (issue #235).
                 if !ingestingSourceIDs.isEmpty { store.endIngest() }
+                // Phase 7: if this was a workspace-isolated ingest, auto-merge
+                // now that the agent has finished writing to the workspace.
+                onWorkspaceMerge?()
             }
         )
     }

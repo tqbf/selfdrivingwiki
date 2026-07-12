@@ -12,7 +12,10 @@ public enum LogIndexCommand {
         /// ingest) is the ingested-file id to additionally stamp as ingested.
         case logAppend(kind: LogEntry.Kind, title: String, note: String?, source: PageID?)
         /// Replace the singleton wiki-index body wholesale (UPSERT, version + 1).
-        case indexSet(body: String)
+        /// When `workspace` is set (Phase 7), stage into the workspace instead of
+        /// writing to main — the caller provides the current main body as the
+        /// three-way-merge base.
+        case indexSet(body: String, workspace: String? = nil)
     }
 
     /// Run one action against `store`. Both actions COMMIT (the caller posts the
@@ -26,13 +29,24 @@ public enum LogIndexCommand {
             // so the UI shows the file as Ingested without guessing from the title.
             if let source { try store.markSourceIngested(id: source) }
             return PageCommand.Result(output: entry.id.rawValue, didCommit: true)
-        case .indexSet(let body):
+        case .indexSet(let body, let workspace):
             guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw PageCommand.Failure.message(
                     "refusing to set an empty index body — nothing was delivered. "
                     + "Under the sandbox a piped or heredoc'd body can arrive empty; "
                     + "write the body to a file in your cwd and pass --body-file <path>."
                 )
+            }
+            if let workspace {
+                // Phase 7: stage index changes into the workspace. The base
+                // version is the current main wiki_index body (captured now as
+                // the three-way-merge base; on first touch it's the snapshot
+                // at staging time, on subsequent touches the workspace keeps
+                // the original base via the UPDATE).
+                let baseVersion = (try? store.getWikiIndex())?.body ?? WikiIndex.defaultBody
+                try store.setWorkspaceIndexBody(
+                    workspaceID: workspace, indexBody: body, indexBaseVersion: baseVersion)
+                return PageCommand.Result(output: "", didCommit: true)
             }
             try store.updateWikiIndex(body: body)
             return PageCommand.Result(output: "", didCommit: true)

@@ -3,3 +3,5 @@ WRITES — READ THIS FIRST. The wiki mount is READ-ONLY BY DESIGN. NEVER write f
   wikictl index set --body-file ./index.md
   wikictl log append --kind ingest --title "…" --note "…"
 After a write, read it back with `wikictl page get` (the mount lags the database by ~5s, so cat-ing the mount right after a write shows stale bytes). Cross-link pages with [[Page Title]] wiki-links.
+
+**CAS discipline:** Before writing or updating a page, read its current `head_version_id` — run `wikictl page get --json` (the `head_version_id` field) or capture the stderr line in text mode. Then pass `--expect-head <that id>` to `wikictl page upsert`. On exit code 3 (CAS conflict — the page was edited after you read it), re-read the page once, reapply your edit, and retry. If it fails again, report the conflict rather than looping. Blind upserts (no `--expect-head`) succeed unconditionally with no CAS check, as before.

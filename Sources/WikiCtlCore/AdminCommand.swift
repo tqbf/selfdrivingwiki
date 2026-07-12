@@ -19,8 +19,14 @@ public enum AdminCommand {
         /// / `--apply` / `--json` semantics as `vacuumBlobs`.
         case vacuumActivities(dryRun: Bool, json: Bool)
 
-        /// Sweep both orphaned blobs AND activities in one pass (#257). The
-        /// common case — users don't usually care about the distinction.
+        /// Sweep orphaned page versions (Phase 4 — multi-writer hardening):
+        /// versions not reachable from any `page-content` ref target or
+        /// referenced by any workspace. Same dry-run / `--apply` / `--json`
+        /// semantics as `vacuumBlobs`.
+        case vacuumPageVersions(dryRun: Bool, json: Bool)
+
+        /// Sweep orphaned blobs, activities, AND page versions in one pass.
+        /// The common case — users don't usually care about the distinction.
         case vacuumAll(dryRun: Bool, json: Bool)
     }
 
@@ -40,13 +46,19 @@ public enum AdminCommand {
             let report = try store.vacuumActivities(dryRun: dryRun)
             return SourceCommand.Result(
                 payload: .text(Self.format(report, json: json)), didCommit: report.applied)
+        case .vacuumPageVersions(let dryRun, let json):
+            let report = try store.vacuumPageVersions(dryRun: dryRun)
+            return SourceCommand.Result(
+                payload: .text(Self.format(report, json: json)), didCommit: report.applied)
         case .vacuumAll(let dryRun, let json):
             let blobReport = try store.vacuumBlobs(dryRun: dryRun)
             let activityReport = try store.vacuumActivities(dryRun: dryRun)
+            let pageVersionReport = try store.vacuumPageVersions(dryRun: dryRun)
             return SourceCommand.Result(
                 payload: .text(Self.formatAll(
-                    blobs: blobReport, activities: activityReport, json: json)),
-                didCommit: blobReport.applied || activityReport.applied)
+                    blobs: blobReport, activities: activityReport,
+                    pageVersions: pageVersionReport, json: json)),
+                didCommit: blobReport.applied || activityReport.applied || pageVersionReport.applied)
         }
     }
 
@@ -72,13 +84,24 @@ public enum AdminCommand {
         return "\(report.orphanCount) orphaned activit\(report.orphanCount == 1 ? "y" : "ies") \(verb)\(hint)"
     }
 
-    private static func formatAll(blobs: BlobVacuumReport, activities: ActivityVacuumReport, json: Bool) -> String {
+    private static func format(_ report: PageVersionVacuumReport, json: Bool) -> String {
         if json {
             return """
-            {"blobs":{"orphanCount":\(blobs.orphanCount),"bytesReclaimed":\(blobs.bytesReclaimed),"applied":\(blobs.applied)},"activities":{"orphanCount":\(activities.orphanCount),"applied":\(activities.applied)}}
+            {"deletedCount":\(report.deletedCount),"applied":\(report.applied)}
             """
         }
-        let lines = [format(blobs, json: false), format(activities, json: false)]
+        let verb = report.applied ? "reclaimed" : "reclaimable"
+        let hint = report.applied ? "" : " (dry-run; pass --apply to delete)"
+        return "\(report.deletedCount) orphaned page version\(report.deletedCount == 1 ? "" : "s") \(verb)\(hint)"
+    }
+
+    private static func formatAll(blobs: BlobVacuumReport, activities: ActivityVacuumReport, pageVersions: PageVersionVacuumReport, json: Bool) -> String {
+        if json {
+            return """
+            {"blobs":{"orphanCount":\(blobs.orphanCount),"bytesReclaimed":\(blobs.bytesReclaimed),"applied":\(blobs.applied)},"activities":{"orphanCount":\(activities.orphanCount),"applied":\(activities.applied)},"pageVersions":{"deletedCount":\(pageVersions.deletedCount),"applied":\(pageVersions.applied)}}
+            """
+        }
+        let lines = [format(blobs, json: false), format(activities, json: false), format(pageVersions, json: false)]
         return lines.joined(separator: "\n")
     }
 }

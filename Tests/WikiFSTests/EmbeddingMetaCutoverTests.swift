@@ -20,7 +20,7 @@ struct EmbeddingMetaCutoverTests {
     @Test func freshDBSeedsNLEmbedderIdentifier() throws {
         let store = try tempStore()
         let stored = store.pragmaValue("user_version")
-        #expect(stored == "33")
+        #expect(stored == "35")
         // ensureEmbedderConsistency with the default identifier (nlembedding-512)
         // is a no-op: the seed matches, so nothing is wiped.
         store.ensureEmbedderConsistency(activeIdentifierOverride: NLEmbedder.identifier)

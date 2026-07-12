@@ -218,6 +218,35 @@ public final class WikiStoreModel {
     /// process termination.
     public private(set) var isIngestInProgress = false
 
+    /// Phase 7: capability flag for workspace-isolated ingestion. When true,
+    /// `AgentOperationRunner.runMultiIngest` creates a workspace, sets
+    /// `WIKI_WORKSPACE` so the agent's `wikictl` calls route into it, and
+    /// auto-merges on completion. Defaults to `false` — existing behavior is
+    /// unchanged when the flag is off.
+    public var workspacesEnabled: Bool = false
+
+    // MARK: - Workspace facades (Phase 7)
+
+    /// Create a workspace (delegates to the store). Used by
+    /// `AgentOperationRunner` when `workspacesEnabled` is on.
+    @discardableResult
+    public func createWorkspace(name: String?, activityID: String?) throws -> String {
+        try store.createWorkspace(name: name, activityID: activityID)
+    }
+
+    /// Merge a workspace into main (delegates to the store). Used by
+    /// `AgentOperationRunner` to auto-merge after an isolated ingest.
+    @discardableResult
+    public func workspaceMerge(workspaceID: String) throws -> [String] {
+        try store.workspaceMerge(workspaceID: workspaceID)
+    }
+
+    /// Reap stale open workspaces (delegates to the store).
+    @discardableResult
+    public func reapStaleWorkspaces(ttl: TimeInterval) throws -> Int {
+        try store.reapStaleWorkspaces(ttl: ttl)
+    }
+
     private let store: WikiStore
     /// Read-only snapshot connections for OFF-MAIN reads (debounced search).
     /// Injected by `WikiManager.openActive` for file-backed wikis; `nil` for
@@ -1385,14 +1414,22 @@ public final class WikiStoreModel {
         try? store.vacuumActivities(dryRun: dryRun)
     }
 
-    /// Run both GC sweeps (blobs + activities) in one call. Each runs in its
-    /// own transaction — they are independent and idempotent, so a partial
-    /// failure is safe to retry. Returns nil only if both throw.
+    /// Run the page-version-GC sweep against the active store (Phase 4).
+    /// Returns nil only if the store call throws.
+    @discardableResult
+    public func performPageVersionVacuum(dryRun: Bool) -> PageVersionVacuumReport? {
+        try? store.vacuumPageVersions(dryRun: dryRun)
+    }
+
+    /// Run all GC sweeps (blobs + activities + page versions) in one call. Each
+    /// runs in its own transaction — they are independent and idempotent, so a
+    /// partial failure is safe to retry. Returns nil only if all throw.
     public func performVacuumAll(dryRun: Bool) -> VacuumReport? {
         let blobs = performBlobVacuum(dryRun: dryRun)
         let activities = performActivityVacuum(dryRun: dryRun)
-        guard let blobs, let activities else { return nil }
-        return VacuumReport(blobs: blobs, activities: activities)
+        let pageVersions = performPageVersionVacuum(dryRun: dryRun)
+        guard let blobs, let activities, let pageVersions else { return nil }
+        return VacuumReport(blobs: blobs, activities: activities, pageVersions: pageVersions)
     }
 
     // MARK: - Agent run lock (Phase C, decision #6)
