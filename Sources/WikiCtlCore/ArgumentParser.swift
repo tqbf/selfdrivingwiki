@@ -69,6 +69,8 @@ public enum ArgumentParser {
         case admin(AdminCommand.Action)
         /// Chat commands: list, read chat transcripts from SQLite.
         case chat(ChatCommand.Action)
+        /// Bookmark commands: list, create, rename, delete, move (#239).
+        case bookmark(BookmarkCommand.Action)
         /// Workspace commands (W1, PR #312): create, status, abandon, merge.
         case workspace(WorkspaceCommand.Action)
     }
@@ -128,6 +130,16 @@ public enum ArgumentParser {
       chat search --query X [--limit N]      semantic + keyword search of chats
       chat rename (--id X | --title T) --to <new-title>
                                                rename a chat
+      bookmark list [--json]                   list bookmark nodes (TSV, or JSON)
+      bookmark create-folder [--parent ID] --name <name>
+                                               create a bookmark folder
+      bookmark add-ref [--parent ID] --kind <page|source|chat> --target <id>
+                                               add a page/source/chat ref to bookmarks
+      bookmark rename --id <node-id> --to <new-name>
+                                               rename a bookmark folder
+      bookmark delete --id <node-id>           delete a bookmark node (cascades)
+      bookmark move --id <node-id> [--parent ID] [--position N]
+                                               move a bookmark node
       workspace create [--name N]              create a workspace (prints ID)
       workspace status --id W                  show workspace status + pages
       workspace abandon --id W                abandon a workspace (GC refs)
@@ -178,6 +190,8 @@ public enum ArgumentParser {
             command = try parseAdminCommand(Array(args.dropFirst()))
         case "chat":
             command = try parseChatCommand(Array(args.dropFirst()))
+        case "bookmark":
+            command = try parseBookmarkCommand(Array(args.dropFirst()))
         case "workspace":
             command = try parseWorkspaceCommand(Array(args.dropFirst()))
         default:
@@ -417,6 +431,78 @@ public enum ArgumentParser {
             throw Failure.usage("index set: --body-file is required (path or -)")
         }
         return .indexSet(bodyFile: bodyFile)
+    }
+
+    // MARK: - bookmark
+
+    private static func parseBookmarkCommand(_ args: [String]) throws -> Command {
+        guard let sub = args.first else { throw Failure.usage("bookmark: missing subcommand") }
+        let rest = Array(args.dropFirst())
+        let options = try Options(rest)
+
+        switch sub {
+        case "list":
+            return .bookmark(.list(json: options.flag("--json")))
+
+        case "create-folder":
+            guard let name = options.value("--name"), !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw Failure.usage("bookmark create-folder: --name <folder-name> is required")
+            }
+            let parentID = options.value("--parent")  // nil = root
+            return .bookmark(.createFolder(parentID: parentID, name: name))
+
+        case "add-ref":
+            guard let kindStr = options.value("--kind") else {
+                throw Failure.usage("bookmark add-ref: --kind <page|source|chat> is required")
+            }
+            let kind: BookmarkNodeKind
+            switch kindStr {
+            case "page": kind = .pageRef
+            case "source": kind = .sourceRef
+            case "chat": kind = .chatRef
+            default:
+                throw Failure.usage("bookmark add-ref: --kind must be page, source, or chat")
+            }
+            guard let targetID = options.value("--target"), !targetID.isEmpty else {
+                throw Failure.usage("bookmark add-ref: --target <id> is required")
+            }
+            let parentID = options.value("--parent")
+            return .bookmark(.addRef(parentID: parentID, kind: kind, targetID: PageID(rawValue: targetID)))
+
+        case "rename":
+            guard let id = options.value("--id"), !id.isEmpty else {
+                throw Failure.usage("bookmark rename: --id <node-id> is required")
+            }
+            guard let newName = options.value("--to"), !newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw Failure.usage("bookmark rename: --to <new-name> is required")
+            }
+            return .bookmark(.rename(id: id, to: newName))
+
+        case "delete":
+            guard let id = options.value("--id"), !id.isEmpty else {
+                throw Failure.usage("bookmark delete: --id <node-id> is required")
+            }
+            return .bookmark(.delete(id: id))
+
+        case "move":
+            guard let id = options.value("--id"), !id.isEmpty else {
+                throw Failure.usage("bookmark move: --id <node-id> is required")
+            }
+            let toParent = options.value("--parent")  // nil = root
+            let position: Int
+            if let raw = options.value("--position") {
+                guard let n = Int(raw) else {
+                    throw Failure.usage("bookmark move: --position must be an integer")
+                }
+                position = n
+            } else {
+                position = -1  // Append to end
+            }
+            return .bookmark(.move(id: id, toParentID: toParent, position: position))
+
+        default:
+            throw Failure.usage("bookmark: unknown subcommand \(sub.debugDescription)")
+        }
     }
 
     private static func parseWorkspaceCommand(_ args: [String]) throws -> Command {

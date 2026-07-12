@@ -2092,7 +2092,12 @@ public final class WikiStoreModel {
         // uses, so the snapshot lines are byte-identical to what `tail log.md`
         // shows (no second, drifting log format).
         let logLines = logEntries.map { LogRenderer.line(for: $0) }
-        return WikiStateSnapshot.make(allTitles: titles, indexBody: indexBody, logLines: logLines)
+        // Include the bookmark tree so the agent can see the user's organization (#239).
+        let bookmarks = (try? store.listBookmarkNodes()) ?? []
+        return WikiStateSnapshot.make(
+            allTitles: titles, indexBody: indexBody, logLines: logLines,
+            bookmarkNodes: bookmarks
+        )
     }
 
     /// Render the operation log exactly as the File Provider's `log.md` does, so
