@@ -31,16 +31,39 @@ jobs:
       - name: Build
         run: xcrun swift build || swift build
       - name: Test (fast tier — slow SQLite suites skipped, issue #292)
-        # CI runs only the fast tier. The slow SQLite integration suites
+        # Fast tier — quick PR feedback. The slow SQLite integration suites
         # (tagged .integration in Tests/WikiFSTests/TestTags.swift) are skipped
         # by name: `swift test` does not yet filter by tag (SwiftPM's --skip is
         # name-regex only; tag filtering is xcodebuild-only). The full suite
-        # (including these) must be run locally before merge — see AGENTS.md.
+        # (including these) runs in the parallel `swift-integration` job below
+        # (issue #364) — promote that job to a required status check so a
+        # failing AC test blocks merge. Still run `swift test` locally before
+        # merge for fast iteration — see AGENTS.md.
         # ProjectionTreeTests un-skipped after #291 (ReadScope): ~32 s on CI
         # hardware (~2–3x slower), down from 165 s+ per working-set test.
         env:
           SKIP: 'EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests|SQLiteStatementLifecycleIntegrationTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests'
         run: xcrun swift test --skip "$SKIP" || swift test --skip "$SKIP"
+
+  swift-integration:
+    # Full test suite — including the SQLite integration suites the fast-tier
+    # `swift` job skips (issue #364). Runs in parallel so it doesn't slow down
+    # PR feedback; promote this job to a required status check in branch
+    # protection so a failing AC test blocks merge.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode (mlx-swift needs Swift 6.3)
+        run: |
+          # macos-latest may default the `swift` command to the CLT toolchain
+          # (Swift 6.1), but mlx-swift 0.31.x requires 6.3. Force Xcode.
+          ls /Applications/Xcode*.app 2>/dev/null
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | tail -1)" || true
+          swift --version || xcrun swift --version
+      - name: Build
+        run: xcrun swift build || swift build
+      - name: Test (full suite — integration suites included, issue #364)
+        run: xcrun swift test || swift test
 
   python:
     runs-on: ubuntu-latest

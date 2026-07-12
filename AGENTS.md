@@ -198,19 +198,25 @@ Persistent chats are two tables: `chats` (one row per conversation) and
 ```
 swift build          # compile
 swift test           # full suite (run locally before merge)
-# fast tier — what CI runs; skips the slow SQLite integration suites:
-swift test --skip 'ProjectionTreeTests|EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests'
+# fast tier — what the CI `swift` job runs; skips the slow SQLite integration suites:
+swift test --skip 'EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests|SQLiteStatementLifecycleIntegrationTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests'
 swift test --filter PdfExtractionServiceTests  # pdf extraction only
 ```
 
-CI runs the **fast tier** only (issue #292): it skips the slow SQLite
-integration suites, which open real databases and dominate runtime (notably
-`ProjectionTreeTests` working-set tests at 165s+ each, #291). They are tagged
-`.integration` (`Tests/WikiFSTests/TestTags.swift`); note `swift test` does not
-yet filter by tag, so CI skips them by name. **Run the full `swift test` locally
-before merging** so those suites aren't skipped. To mark a new slow suite, add
-`.tags(.integration)` AND append its name to the CI skip regex in
-`.github/workflows/ci.yml`.
+CI runs **two Swift jobs** (issue #364):
+- **`swift`** (fast tier, issue #292) — skips the slow SQLite integration
+  suites for quick PR feedback. These suites open real databases and dominate
+  runtime (notably `ProjectionTreeTests` working-set tests at 165s+ each, #291).
+  They are tagged `.integration` (`Tests/WikiFSTests/TestTags.swift`); `swift
+  test` does not yet filter by tag, so the fast tier skips them by name.
+- **`swift-integration`** — runs the full `swift test` (no skip), so the
+  integration suites (and any AC tests in them) gate merges. **Promote this
+  job to a required status check in branch protection** so a failing AC test
+  blocks merge. Still run `swift test` locally before merging for fast iteration.
+
+To mark a new slow suite, add `.tags(.integration)` AND append its name to the
+fast-tier `--skip` regex in `.github/workflows/ci.yml` (it will still run in
+the `swift-integration` job).
 
 **Python / pdf2md** (from `tools/pdf2md`):
 ```
