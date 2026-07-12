@@ -174,6 +174,63 @@ but `withTransaction` runs first and its debug guard would fire.
 `sqlite3_stmt_busy`. The regression test `noBusyStatementsAfterReads` exercises
 every fixed site and asserts no busy statement remains.
 
+### 8. Cached statement reuse: `reset()` before `bind` on shared statements
+
+The statement cache keys by SQL text — two methods that use identical SQL share
+the **same `sqlite3_stmt*`**. After `step` returns `SQLITE_DONE` (an INSERT,
+UPDATE, or SELECT with no rows), the statement is in the "done" state. Calling
+`sqlite3_bind_*` on a statement in the "done" state **without `sqlite3_reset`
+first** returns `SQLITE_MISUSE` (error 21: "bad parameter or other API misuse").
+
+This bit `updatePage` after Phase 4's `appendPageVersion` amend path was added:
+both methods use the same `UPDATE pages SET ...` SQL. `appendPageVersion` called
+`stmt.reset()` before binding (clearing the prior state). `updatePage` only had
+`defer { stmt.reset() }` — which runs *after* the body, so `bind` hit a
+statement still at `SQLITE_DONE` from `appendPageVersion`'s call.
+
+**The rule:** when a method uses `statement(...)` to get a cached statement and
+then calls `bind`, always call `stmt.reset()` before the first `bind` — `defer`
+alone is too late because it runs at scope exit, not before reuse.
+
+```swift
+// ✅ Correct — reset before bind (covers cached-statement reuse) AND defer
+//   for the current call's cleanup.
+let stmt = try statement("UPDATE pages SET ... WHERE id = ?1;")
+stmt.reset()                    // clear any SQLITE_DONE from a prior caller
+defer { stmt.reset() }          // clean up THIS call's state on exit
+try stmt.bind(id, at: 1)
+_ = try stmt.step()
+
+// ❌ Wrong — defer runs AFTER bind, so if the cached statement was left at
+//   SQLITE_DONE by a prior call, sqlite3_bind_text returns SQLITE_MISUSE.
+let stmt = try statement("UPDATE pages SET ... WHERE id = ?1;")
+defer { stmt.reset() }          // too late — bind already failed
+try stmt.bind(id, at: 1)
+_ = try stmt.step()
+```
+
+**Multi-statement methods** (e.g. `tryAmendPageVersion`) have a related hazard:
+if several statements are created in sequence, a SELECT left at `SQLITE_ROW`
+via `defer` pins the connection while the *next* `statement()` or `step()` runs.
+Reset each statement **immediately after reading its value**, not via `defer`:
+
+```swift
+// ✅ Correct — reset immediately after reading, before creating the next stmt.
+let check = try statement("SELECT ... WHERE id = ?1;")
+try check.bind(id, at: 1)
+guard try check.step() else { check.reset(); return nil }
+let value = check.text(at: 0)
+check.reset()                   // don't pin the connection for the next stmt
+
+// ❌ Wrong — the SELECT stays at SQLITE_ROW while the next statement is
+//   prepared and stepped, pinning the WAL read snapshot mid-method.
+let check = try statement("SELECT ... WHERE id = ?1;")
+defer { check.reset() }
+try check.bind(id, at: 1)
+guard try check.step() else { return nil }
+let value = check.text(at: 0)
+// ... next statement created here — check is still busy
+
 ## Anti-patterns (updated)
 
 - **Pooling `init(databaseURL:)` connections** — that init writes (migrations,
@@ -190,6 +247,15 @@ every fixed site and asserts no busy statement remains.
   snapshot (#332). Always `defer` immediately after `try statement(...)`.
 - **Treating `SQLITE_OPEN_FULLMUTEX` as app-level safety** — it serializes C
   calls, not bind/step/read sequences; the recursive lock does that.
+- **`bind` without `reset()` on a cached statement** — when two methods share
+  the same SQL (same cached `sqlite3_stmt*`), the prior call leaves it at
+  `SQLITE_DONE`; `bind` without `reset` returns `SQLITE_MISUSE` (error 21).
+  Always `stmt.reset()` before the first `bind`, even if `defer { stmt.reset() }`
+  is also present (Rule 8).
+- **Multi-statement methods with `defer` only** — in a method that creates
+  multiple statements in sequence, a SELECT left at `SQLITE_ROW` via `defer`
+  pins the WAL read snapshot while the next statement is prepared and stepped.
+  Reset each statement immediately after reading its value (Rule 8).
 
 ## Verifying
 
