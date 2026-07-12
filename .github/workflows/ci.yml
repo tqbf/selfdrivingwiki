@@ -11,6 +11,13 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Select Xcode (mlx-swift needs Swift 6.3)
+        run: |
+          # macos-latest may default the `swift` command to the CLT toolchain
+          # (Swift 6.1), but mlx-swift 0.31.x requires 6.3. Force Xcode.
+          ls /Applications/Xcode*.app 2>/dev/null
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | tail -1)" || true
+          swift --version || xcrun swift --version
       - name: Environment
         run: |
           sw_vers
@@ -22,7 +29,7 @@ jobs:
       - name: Generated prompts are fresh
         run: make check-prompts
       - name: Build
-        run: swift build || xcrun swift build
+        run: xcrun swift build || swift build
       - name: Test (fast tier — slow SQLite suites skipped, issue #292)
         # CI runs only the fast tier. The slow SQLite integration suites
         # (tagged .integration in Tests/WikiFSTests/TestTags.swift) are skipped
@@ -33,7 +40,7 @@ jobs:
         # hardware (~2–3x slower), down from 165 s+ per working-set test.
         env:
           SKIP: 'EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests|SQLiteStatementLifecycleIntegrationTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests'
-        run: swift test --skip "$SKIP" || xcrun swift test --skip "$SKIP"
+        run: xcrun swift test --skip "$SKIP" || swift test --skip "$SKIP"
 
   python:
     runs-on: ubuntu-latest

@@ -12,7 +12,7 @@ import WikiFSCore
 /// a per-wiki Darwin notification so the app refreshes. It NEVER signals the File
 /// Provider itself (single-owner invariant) and NEVER writes the mount.
 ///
-/// Exit codes: 0 success, 2 usage error, 1 runtime error.
+/// Exit codes: 0 success, 2 usage error, 1 runtime error, 3 CAS conflict.
 func run() -> Int32 {
     let arguments = Array(CommandLine.arguments.dropFirst())
 
@@ -27,6 +27,12 @@ func run() -> Int32 {
         return 2
     }
 
+    // Phase 7: WIKI_WORKSPACE env var. When set by an isolated ingest run,
+    // it auto-applies --workspace to page get/upsert and index set commands
+    // that don't already pass --workspace explicitly. This lets the agent
+    // subprocess use plain `wikictl` commands without knowing the workspace ID.
+    let command = applyWorkspaceEnv(invocation.command, env: ProcessInfo.processInfo.environment)
+
     do {
         let resolver = try WikiResolver.appGroupContainer()
         guard let descriptor = resolver.descriptor(forSelector: invocation.wikiSelector) else {
@@ -35,7 +41,7 @@ func run() -> Int32 {
         }
         let store = try SQLiteWikiStore(databaseURL: resolver.databaseURL(for: descriptor))
 
-        let result = try execute(invocation.command, in: store)
+        let result = try execute(command, in: store)
 
         switch result.payload {
         case .text(let output):
@@ -52,12 +58,46 @@ func run() -> Int32 {
     } catch let failure as PageCommand.Failure {
         FileHandle.standardError.write(Data("wikictl: \(failure)\n".utf8))
         return 1
+    } catch let conflict as PageConflictError {
+        // Phase 1: CAS conflict — the page was edited after the caller read it.
+        // Exit code 3 signals the agent to re-read, reapply, and retry once.
+        let actual = conflict.actualVersionID ?? "(none)"
+        let message = """
+        wikictl: CAS conflict on page \(conflict.pageID.rawValue) — \
+        expected head \(conflict.expectedVersionID), \
+        but actual head is \(actual). \
+        Re-read the page, reapply your edit, and retry once.
+
+        """
+        FileHandle.standardError.write(Data(message.utf8))
+        return 3
     } catch let failure as SourceCommand.Failure {
         FileHandle.standardError.write(Data("wikictl: \(failure)\n".utf8))
         return 1
     } catch {
         FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
         return 1
+    }
+}
+
+/// Phase 7: Apply the `WIKI_WORKSPACE` environment variable to commands that
+/// support `--workspace` but don't already have one set. This lets the agent
+/// subprocess use plain `wikictl page get/upsert` / `index set` commands and
+/// have them automatically routed to the ingest's workspace — the runner sets
+/// the env var before launching the agent process.
+func applyWorkspaceEnv(_ command: ArgumentParser.Command, env: [String: String]) -> ArgumentParser.Command {
+    guard let workspaceID = env["WIKI_WORKSPACE"], !workspaceID.isEmpty else {
+        return command
+    }
+    switch command {
+    case .get(let selector, let json, let workspace) where workspace == nil:
+        return .get(selector, json: json, workspace: workspaceID)
+    case .upsert(let id, let title, let bodyFile, let expectHead, let workspace) where workspace == nil:
+        return .upsert(id: id, title: title, bodyFile: bodyFile, expectHead: expectHead, workspace: workspaceID)
+    case .indexSet(let bodyFile, let workspace) where workspace == nil:
+        return .indexSet(bodyFile: bodyFile, workspace: workspaceID)
+    default:
+        return command
     }
 }
 
@@ -70,22 +110,22 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
     case .list(let json):
         let r = try PageCommand.run(.list(json: json), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
-    case .get(let selector):
-        let r = try PageCommand.run(.get(selector), in: store)
+    case .get(let selector, let json, let workspace):
+        let r = try PageCommand.run(.get(selector, json: json, workspace: workspace), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .delete(let id):
         let r = try PageCommand.run(.delete(id: id), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
-    case .upsert(let id, let title, let bodyFile):
+    case .upsert(let id, let title, let bodyFile, let expectHead, let workspace):
         let body = try readBody(from: bodyFile)
-        let r = try PageCommand.run(.upsert(id: id, title: title, body: body), in: store)
+        let r = try PageCommand.run(.upsert(id: id, title: title, body: body, expectHead: expectHead, workspace: workspace), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .logAppend(let kind, let title, let note, let source):
         let r = try LogIndexCommand.run(.logAppend(kind: kind, title: title, note: note, source: source), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
-    case .indexSet(let bodyFile):
+    case .indexSet(let bodyFile, let workspace):
         let body = try readBody(from: bodyFile)
-        let r = try LogIndexCommand.run(.indexSet(body: body), in: store)
+        let r = try LogIndexCommand.run(.indexSet(body: body, workspace: workspace), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .search(let query, let limit):
         let r = try PageCommand.run(.search(query: query, limit: limit), in: store)

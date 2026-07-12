@@ -95,4 +95,28 @@ struct GeneratedPromptsParityTests {
     @Test func lintPageTaskMatchesFile() {
         #expect(GeneratedPrompts.lintPageTask == md("lint-page-task.md"))
     }
+
+    // MARK: - AC1.5: prompt templates contain CAS discipline
+
+    @Test func promptsContainCASDiscipline() {
+        // The prompts that invoke `page upsert` must teach the agent the
+        // read-head → thread-expectation → retry-once discipline (Phase 1).
+        let promptsToCheck = [
+            ("ingest-executor", GeneratedPrompts.ingestExecutor),
+            ("ingest-single-task", GeneratedPrompts.ingestSingleTask),
+            ("ingest-curator-task", GeneratedPrompts.ingestCuratorTask),
+            ("query-task", GeneratedPrompts.queryTask),
+            ("lint-page-task", GeneratedPrompts.lintPageTask),
+            ("chat", GeneratedPrompts.chat),
+            ("ingest-write-rule", GeneratedPrompts.ingestWriteRule),
+        ]
+        for (name, prompt) in promptsToCheck {
+            #expect(prompt.contains("--expect-head"),
+                   "prompt \(name) must mention --expect-head for CAS discipline")
+            // At least one of these retry/conflict indicators should appear.
+            let hasRetry = prompt.contains("retry") || prompt.contains("re-read") || prompt.contains("re-apply") || prompt.contains("reapply")
+            #expect(hasRetry,
+                    "prompt \(name) must mention retry-once discipline for CAS")
+        }
+    }
 }

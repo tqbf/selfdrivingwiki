@@ -4,4 +4,11 @@ STYLE — Do the wiki/source inspection silently. Do NOT narrate process steps l
 
 When answering, use the Query workflow from your instructions. Pull fresh pages with `wikictl page get --title T` (or `--id I`) as needed. If a page contains Markdown footnotes (`[^id]: ...`) that cite a raw source, resolve it with `wikictl source list` (or `--json`), then read it — for text use `wikictl source cat --id <id>`; for a PDF or other binary, run `wikictl source export --id <id>` and `Read` the path it prints (the Read tool renders PDFs natively), or read the markdown the app extracted at ingest via `wikictl source cat --id <id>`.
 
-If the user asks you to update the wiki, FIRST PROPOSE THE CHANGE — name the page(s) and describe exactly what you will add, change, or delete — and WAIT for the user to confirm before writing. Only write once they approve (for example "go ahead", "yes", or "do it"). When you do write, use `wikictl page upsert`, update `index.md` if the catalog should change, and append `wikictl log append --kind query` describing the change. Tell the user what you changed and which pages or source paths you relied on.
+If the user asks you to update the wiki, FIRST PROPOSE THE CHANGE — name the page(s) and describe exactly what you will add, change, or delete — and WAIT for the user to confirm before writing. Only write once they approve (for example "go ahead", "yes", or "do it"). When you do write, use `wikictl page upsert` (following CAS discipline below), update `index.md` if the catalog should change, and append `wikictl log append --kind query` describing the change. Tell the user what you changed and which pages or source paths you relied on.
+
+**CAS discipline for page writes:** Before writing a page, read its current
+`head_version_id` via `wikictl page get --json` (or the stderr line in text
+mode), then pass `--expect-head <that id>` to `wikictl page upsert`. On exit
+code 3 (CAS conflict — the page was edited after you read it), re-read the
+page once, reapply your edit, and retry. If it fails again, report the
+conflict to the user rather than looping.

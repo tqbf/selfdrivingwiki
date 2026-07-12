@@ -58,27 +58,43 @@ public struct ActivityVacuumReport: Equatable, Sendable {
     }
 }
 
+/// Result of a page-version-GC sweep (`WikiStore.vacuumPageVersions`).
+/// Page versions carry no byte payload separate from blobs (the blob is
+/// deduped separately), so the report is just a count + whether the delete ran.
+/// `applied` is `true` only when the call actually deleted rows.
+public struct PageVersionVacuumReport: Equatable, Sendable {
+    public let deletedCount: Int
+    public let applied: Bool
+
+    public init(deletedCount: Int, applied: Bool) {
+        self.deletedCount = deletedCount
+        self.applied = applied
+    }
+}
+
 /// Combined result of a `vacuum-all` sweep (blobs + activities). Used by the
 /// app's Help-menu confirm flow and the `wikictl admin vacuum-all` command so
 /// a single pass reports everything reclaimable.
 public struct VacuumReport: Equatable, Sendable {
     public let blobs: BlobVacuumReport
     public let activities: ActivityVacuumReport
+    public let pageVersions: PageVersionVacuumReport
 
-    public init(blobs: BlobVacuumReport, activities: ActivityVacuumReport) {
+    public init(blobs: BlobVacuumReport, activities: ActivityVacuumReport, pageVersions: PageVersionVacuumReport) {
         self.blobs = blobs
         self.activities = activities
+        self.pageVersions = pageVersions
     }
 
     /// `true` when neither sweep found anything to reclaim.
-    public var isEmpty: Bool { blobs.orphanCount == 0 && activities.orphanCount == 0 }
+    public var isEmpty: Bool { blobs.orphanCount == 0 && activities.orphanCount == 0 && pageVersions.deletedCount == 0 }
 
     /// Human-readable summary for the vacuum confirm alert. Handles the empty
     /// case, pluralization, and byte formatting so the SwiftUI alert body stays
     /// a one-liner (keeps the type checker happy in the complex app-scene body).
     public var alertMessage: String {
         if isEmpty {
-            return "No orphaned blobs or activities found — nothing to reclaim."
+            return "No orphaned blobs, activities, or page versions found — nothing to reclaim."
         }
         let bytes = ByteCountFormatter.string(
             fromByteCount: Int64(blobs.bytesReclaimed), countStyle: .file)
@@ -88,6 +104,9 @@ public struct VacuumReport: Equatable, Sendable {
         }
         if activities.orphanCount > 0 {
             parts.append("\(activities.orphanCount) orphaned activit\(activities.orphanCount == 1 ? "y" : "ies")")
+        }
+        if pageVersions.deletedCount > 0 {
+            parts.append("\(pageVersions.deletedCount) orphaned page version\(pageVersions.deletedCount == 1 ? "" : "s")")
         }
         return "\(parts.joined(separator: "; ")) reclaimable. This removes data no source references and cannot be undone."
     }
@@ -385,12 +404,30 @@ public protocol WikiStore: Sendable {
     /// Returns nil if the workspace hasn't touched this page.
     func workspacePageVersion(workspaceID: String, pageID: PageID) throws -> String?
 
+    /// Overlay read for the workspace's staged page body (Phase 7). Returns the
+    /// body the agent would see if it read the page from within this workspace —
+    /// either the workspace's version blob (existing page) or the staged blob
+    /// (created page). Returns nil if the workspace hasn't touched this page,
+    /// so the caller falls through to the main version.
+    func workspacePageBody(workspaceID: String, pageID: PageID) throws -> String?
+
+    /// Stage wiki-index changes into the workspace (`index_body` +
+    /// `index_base_version`). Phase 7: routed from `index set --workspace`.
+    func setWorkspaceIndexBody(
+        workspaceID: String, indexBody: String, indexBaseVersion: String
+    ) throws
+
     /// Attempt a fast-forward-only merge. For each workspace_ref: if main head
     /// == base_version_id (or base is nil = page created in workspace), fast-
     /// forward (repoint main ref + update mirror + links/FTS). Any divergence
     /// → park the workspace as `conflicted` (durable, retryable). On success,
     /// set status to `merged`.
-    func workspaceMerge(workspaceID: String) throws
+    ///
+    /// Returns the page IDs that were merged (Phase 6). After the merge
+    /// transaction commits, those pages are re-embedded and an ingest-
+    /// completion log entry is appended — both best-effort.
+    @discardableResult
+    func workspaceMerge(workspaceID: String) throws -> [String]
 
     /// Abandon a workspace: set status to `abandoned` + delete its
     /// `workspace_refs`. Orphaned versions/blobs fall to lazy GC.
@@ -595,6 +632,15 @@ public protocol WikiStore: Sendable {
     /// to *change* on mutation, which a GC delete does).
     @discardableResult
     func vacuumActivities(dryRun: Bool) throws -> ActivityVacuumReport
+
+    /// Sweep **orphaned** `page_versions` rows — versions not reachable from
+    /// any `page-content` ref target (by walking `parent_id`/`merge_parent_id`
+    /// chains), and not referenced by any `workspace_refs` row. `dryRun == true`
+    /// reports the orphan count WITHOUT deleting; `false` deletes them in one
+    /// transaction. Classified NO_EMIT: vacuuming orphans changes no projected
+    /// `ResourceKind` — the served tree is unaffected.
+    @discardableResult
+    func vacuumPageVersions(dryRun: Bool) throws -> PageVersionVacuumReport
 }
 
 // MARK: - addSource default-argument convenience

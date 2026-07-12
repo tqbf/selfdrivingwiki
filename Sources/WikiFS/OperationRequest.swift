@@ -39,6 +39,16 @@ enum OperationRequest {
   /// (pre-computed before the LLM run so the agent has concrete targets).
   case lintPage(pageTitle: String, brokenLinks: [String], stateMarkdown: String)
 
+  /// Which generation lane this request runs on (Phase 2: lane-aware gate).
+  /// Ingest-class operations (ingest, lint, lintPage) serialize on `.ingest`;
+  /// query/chat runs on `.interactive` so they don't block on a long ingest.
+  var generationLane: GenerationGate.GenerationLane {
+    switch self {
+    case .ingest, .lint, .lintPage: return .ingest
+    case .query: return .interactive
+    }
+  }
+
   /// Stage this request's inputs into `scratch` and return the finalized
   /// `WikiOperation`. Writes `WIKI_STATE.md` (always) and, for Ingest, the raw
   /// `source-1.<ext>`, `source-2.<ext>`, …; the Ingest plan (single Opus pass vs

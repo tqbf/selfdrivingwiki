@@ -191,7 +191,7 @@ struct Phase5StoreCanonicalizationTests {
 
         // Reopen → v23 sweep runs.
         let reopened = try SQLiteWikiStore(databaseURL: url)
-        #expect(reopened.pragmaValue("user_version") == "33")
+        #expect(reopened.pragmaValue("user_version") == "35")
 
         let migrated = try reopened.getPage(id: linkerID)
         // Resolvable link canonicalized; forward link left verbatim.
