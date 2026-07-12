@@ -175,6 +175,42 @@ struct WorkspaceStagingTests {
         let mainPage = try store.getPage(id: newPageID)
         #expect(mainPage.bodyMarkdown == "other body")
     }
+
+    // MARK: - AC7 (latent defect fix): workspaceWritePage rejects non-open workspaces
+
+    @Test func writePageRejectsMergedWorkspace() throws {
+        let store = try tempStore()
+        let existingPage = try store.createPage(title: "Pre-existing")
+
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        // Stage and merge → status is 'merged'.
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: existingPage.id, title: "Pre-existing", body: "ws edit")
+        try store.workspaceMerge(workspaceID: wsID)
+
+        // A subsequent write to the merged workspace must throw, not silently
+        // succeed (which would vanish the edit — the workspace will never merge
+        // again).
+        #expect(throws: WikiStoreError.self) {
+            _ = try store.workspaceWritePage(
+                workspaceID: wsID, pageID: existingPage.id, title: "Pre-existing", body: "lost edit")
+        }
+    }
+
+    @Test func writePageRejectsAbandonedWorkspace() throws {
+        let store = try tempStore()
+        let existingPage = try store.createPage(title: "Pre-existing")
+
+        let wsID = try store.createWorkspace(name: nil, activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: existingPage.id, title: "Pre-existing", body: "ws edit")
+        try store.abandonWorkspace(id: wsID)
+
+        #expect(throws: WikiStoreError.self) {
+            _ = try store.workspaceWritePage(
+                workspaceID: wsID, pageID: existingPage.id, title: "Pre-existing", body: "lost edit")
+        }
+    }
 }
 
 // MARK: - Test helper extension

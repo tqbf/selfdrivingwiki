@@ -833,6 +833,7 @@ final class AgentLauncher {
         systemPrompt: String,
         wikictlDirectory: String,
         ingestingSourceIDs: Set<PageID> = [],
+        workspaceID: String? = nil,
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void
     ) async {
@@ -1019,12 +1020,22 @@ final class AgentLauncher {
             onStderrChunk: { [weak self] chunk in
                 Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
             })
-        let profile = BackendProfile(
-            providerHints: AgentBackendFactory.providerHints(
+        var providerHints = AgentBackendFactory.providerHints(
                 provider: provider,
                 resolvedCommand: resolvedACPCommand,
                 apiKey: acpAPIKey,
-                selectedModelId: providersConfig().selectedModelId(forProvider: provider.id)),
+                selectedModelId: providersConfig().selectedModelId(forProvider: provider.id))
+        // Phase 7: inject the workspace ID as a per-spawn env var (NOT
+        // process-global setenv — which would leak to chat-edit agents spawned
+        // mid-ingest via the interactive lane). The `env.` prefix is the
+        // established convention: ACPBackend.start already expands env.* keys
+        // into the child process environment, and ClaudeCLIBackend.start does
+        // the same (see below). Non-workspace runs pass nil → no injection.
+        if let wsID = workspaceID {
+            providerHints["env.WIKI_WORKSPACE"] = wsID
+        }
+        let profile = BackendProfile(
+            providerHints: providerHints,
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: cli)

@@ -1967,11 +1967,35 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             //    Guard: if refs already has the CHECK (a DB rewound to v29 for
             //    testing after already being at v30), the rebuild is a no-op
             //    (copy → drop → rename is identity).
-            let refsHasCheck = try queryScalarText(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name='refs';").contains("CHECK")
-            if !refsHasCheck {
+            //
+            //    Guard: hand-built migration fixtures (e.g. a v28 chats-only DB)
+            //    may not have a `refs` table at all — the v19→v20 step that
+            //    creates it was skipped. If refs doesn't exist, create it fresh
+            //    (the CHECK-constrained shape) rather than copying from nothing.
+            let refsExists = try queryScalarText(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='refs';") != "0"
+            if refsExists {
+                let refsHasCheck = try queryScalarText(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='refs';").contains("CHECK")
+                if !refsHasCheck {
+                    try exec("""
+                    CREATE TABLE _refs_new (
+                        kind       TEXT NOT NULL CHECK (kind IN ('source-content','source-derived','page-content')),
+                        owner_id   TEXT NOT NULL,
+                        version_id TEXT NOT NULL,
+                        generation INTEGER NOT NULL DEFAULT 1,
+                        updated_at REAL NOT NULL,
+                        PRIMARY KEY (kind, owner_id)
+                    );
+                    """)
+                    try exec("INSERT INTO _refs_new (kind, owner_id, version_id, generation, updated_at) SELECT kind, owner_id, version_id, generation, updated_at FROM refs;")
+                    try exec("DROP TABLE refs;")
+                    try exec("ALTER TABLE _refs_new RENAME TO refs;")
+                }
+            } else {
+                // No `refs` table → create the CHECK-constrained shape fresh.
                 try exec("""
-                CREATE TABLE _refs_new (
+                CREATE TABLE IF NOT EXISTS refs (
                     kind       TEXT NOT NULL CHECK (kind IN ('source-content','source-derived','page-content')),
                     owner_id   TEXT NOT NULL,
                     version_id TEXT NOT NULL,
@@ -1980,9 +2004,6 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                     PRIMARY KEY (kind, owner_id)
                 );
                 """)
-                try exec("INSERT INTO _refs_new (kind, owner_id, version_id, generation, updated_at) SELECT kind, owner_id, version_id, generation, updated_at FROM refs;")
-                try exec("DROP TABLE refs;")
-                try exec("ALTER TABLE _refs_new RENAME TO refs;")
             }
 
             // 3. Seed root versions for existing pages. Idempotent: if
@@ -2072,16 +2093,30 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try withTransaction {
             // Guard: check each column exists before adding (the fresh schema
             // createFreshSchemaV20 may already include them on a rewound DB).
-            let pagesCols = try tableColumnInfo("pages")
-            if !pagesCols.contains("created_by") {
-                try exec("ALTER TABLE pages ADD COLUMN created_by TEXT;")
+            // Also guard table existence: hand-built migration fixtures (e.g.
+            // a v28 chats-only DB) may not have `pages` or
+            // `source_markdown_versions` — the steps that create them (0→1,
+            // 7→8) were skipped because the fixture stamps a high user_version.
+            // Migrating such a fixture all the way to v35 must not throw on a
+            // table that was never created.
+            let hasPages = try queryScalarText(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pages';") != "0"
+            if hasPages {
+                let pagesCols = try tableColumnInfo("pages")
+                if !pagesCols.contains("created_by") {
+                    try exec("ALTER TABLE pages ADD COLUMN created_by TEXT;")
+                }
+                if !pagesCols.contains("last_edited_by") {
+                    try exec("ALTER TABLE pages ADD COLUMN last_edited_by TEXT;")
+                }
             }
-            if !pagesCols.contains("last_edited_by") {
-                try exec("ALTER TABLE pages ADD COLUMN last_edited_by TEXT;")
-            }
-            let smvCols = try tableColumnInfo("source_markdown_versions")
-            if !smvCols.contains("technique") {
-                try exec("ALTER TABLE source_markdown_versions ADD COLUMN technique TEXT;")
+            let hasSMV = try queryScalarText(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='source_markdown_versions';") != "0"
+            if hasSMV {
+                let smvCols = try tableColumnInfo("source_markdown_versions")
+                if !smvCols.contains("technique") {
+                    try exec("ALTER TABLE source_markdown_versions ADD COLUMN technique TEXT;")
+                }
             }
         }
     }
@@ -2095,6 +2130,19 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// re-running on a v34 DB is a no-op (all pages already have refs).
     private func migrateV33ToV34() throws {
         try withTransaction {
+            // Guard: hand-built migration fixtures (e.g. a v19 sources-only or
+            // v28 chats-only DB) may not have `pages` or `refs` — the steps
+            // that create them (0→1 for pages, 19→20 for refs) were skipped
+            // because the fixture stamps a high user_version. If the tables
+            // don't exist, there is nothing to backfill → no-op. Matches the
+            // resilience convention from migrateV29ToV30 (hasPages guard).
+            let hasPages = try queryScalarText(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pages';") != "0"
+            guard hasPages else { return }
+            let hasRefs = try queryScalarText(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='refs';") != "0"
+            guard hasRefs else { return }
+
             // Reuse the legacy-import agent (same as v20/v30 seeding).
             let legacyAgentID = try legacyImportAgentID()
             let now = Date().timeIntervalSince1970
@@ -3322,6 +3370,19 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let nowTS = now.timeIntervalSince1970
 
         return try withTransaction {
+            // Guard: the workspace must be 'open'. Writes to a
+            // merged/conflicted/abandoned workspace would succeed silently but
+            // be invisible — the workspace will never merge again, so agent
+            // edits (e.g. via a stale WIKI_WORKSPACE env var) would vanish.
+            let statusStmt = try statement(
+                "SELECT status FROM workspaces WHERE id = ?1;")
+            statusStmt.reset()
+            try statusStmt.bind(workspaceID, at: 1)
+            guard try statusStmt.step(), statusStmt.text(at: 0) == "open" else {
+                throw WikiStoreError.unexpected("workspace \(workspaceID) is not open")
+            }
+            statusStmt.reset()
+
             // 0. Determine whether the page exists on main.
             let pageExists = try statement("SELECT 1 FROM pages WHERE id = ?1;")
             try pageExists.bind(pageID.rawValue, at: 1)

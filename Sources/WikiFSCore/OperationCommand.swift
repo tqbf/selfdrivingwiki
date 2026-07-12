@@ -18,7 +18,9 @@ public struct OperationCommand: Equatable, Sendable {
     /// The full argument vector after `executable`.
     public let arguments: [String]
     /// The child process environment (a copy of the parent's, plus our additions).
-    public let environment: [String: String]
+    /// `var` so backends can inject per-spawn env (e.g. `WIKI_WORKSPACE` from
+    /// `providerHints`) after `OperationCommand.build` constructs the base.
+    public var environment: [String: String]
     /// The working directory: a per-run WRITABLE scratch dir (Claude Code needs a
     /// writable cwd for session/todo scratch — decision #4). NEVER the read-only
     /// mount.

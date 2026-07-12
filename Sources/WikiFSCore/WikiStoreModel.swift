@@ -219,10 +219,11 @@ public final class WikiStoreModel {
     public private(set) var isIngestInProgress = false
 
     /// Phase 7: capability flag for workspace-isolated ingestion. When true,
-    /// `AgentOperationRunner.runMultiIngest` creates a workspace, sets
-    /// `WIKI_WORKSPACE` so the agent's `wikictl` calls route into it, and
-    /// auto-merges on completion. Defaults to `false` — existing behavior is
-    /// unchanged when the flag is off.
+    /// `AgentOperationRunner.runMultiIngest` creates a workspace, passes the
+    /// workspace ID to the launcher (which injects `WIKI_WORKSPACE` into the
+    /// child process's per-spawn environment — NOT process-global `setenv`),
+    /// and auto-merges on completion. Defaults to `false` — existing behavior
+    /// is unchanged when the flag is off.
     public var workspacesEnabled: Bool = false
 
     // MARK: - Workspace facades (Phase 7)

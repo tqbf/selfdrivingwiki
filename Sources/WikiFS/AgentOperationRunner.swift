@@ -170,17 +170,16 @@ enum AgentOperationRunner {
         DebugLog.ingest("runMultiIngest: handing off \(sources.count) source(s), totalBytes=\(sources.reduce(0) { $0 + $1.bytes.count })")
 
         // Phase 7: workspace-isolated ingestion. When the capability flag is on,
-        // create a workspace, set WIKI_WORKSPACE so the agent's `wikictl` calls
-        // route into it, and auto-merge on completion. When the flag is off,
-        // behavior is identical to today (writes directly to main).
+        // create a workspace, pass the workspace ID to the launcher so it injects
+        // `WIKI_WORKSPACE` into the child process's per-spawn environment (NOT
+        // process-global setenv — which would leak to chat-edit agents spawned
+        // mid-ingest via the interactive lane), and auto-merge on completion.
+        // When the flag is off, behavior is identical to today (writes to main).
         if store.workspacesEnabled {
             do {
                 let wsID = try store.createWorkspace(
                     name: "ingest-\(sourceIDs.count)", activityID: nil)
                 DebugLog.ingest("runMultiIngest: workspace isolated, wsID=\(wsID)")
-                // Set the env var so the agent's wikictl subprocess calls auto-route
-                // to the workspace. The subprocess inherits the parent's environment.
-                setenv("WIKI_WORKSPACE", wsID, 1)
                 await run(
                     request: .ingest(sources: sources, stateMarkdown: stateMarkdown),
                     launcher: launcher,
@@ -188,6 +187,7 @@ enum AgentOperationRunner {
                     manager: manager,
                     fileProvider: fileProvider,
                     ingestingSourceIDs: Set(sourceIDs),
+                    workspaceID: wsID,
                     onWorkspaceMerge: { [weak store] in
                         // Auto-merge after the agent finishes. The merge is
                         // best-effort: if it conflicts, the workspace is parked
@@ -199,7 +199,6 @@ enum AgentOperationRunner {
                         } catch {
                             DebugLog.ingest("runMultiIngest: workspace merge FAILED wsID=\(wsID) — \(error.localizedDescription)")
                         }
-                        unsetenv("WIKI_WORKSPACE")
                     })
             } catch {
                 DebugLog.ingest("runMultiIngest: workspace creation FAILED — falling back to main, \(error.localizedDescription)")
@@ -653,6 +652,7 @@ enum AgentOperationRunner {
         manager: WikiManager,
         fileProvider: FileProviderSpike,
         ingestingSourceIDs: Set<PageID> = [],
+        workspaceID: String? = nil,
         onWorkspaceMerge: (@MainActor () -> Void)? = nil
     ) async {
         guard let wikiID = manager.activeWikiID else { return }
@@ -676,6 +676,7 @@ enum AgentOperationRunner {
             systemPrompt: store.currentSystemPromptBody(),
             wikictlDirectory: HelpersLocation.wikictlDirectory,
             ingestingSourceIDs: ingestingSourceIDs,
+            workspaceID: workspaceID,
             onLock: { store.agentRunStarted() },
             onUnlock: {
                 store.agentRunEnded()
