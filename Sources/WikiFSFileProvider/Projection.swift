@@ -1161,7 +1161,7 @@ struct Projection {
                 filename: humanName, ext: "md", sourceID: source.id.rawValue)
             : FilenameEscaping.byIDSourceFilename(sourceID: source.id.rawValue, ext: "md")
         let parent = isByName ? Identity.sourcesByName : Identity.sourcesByID
-        let size = contentData?.count ?? head.content.utf8.count
+        let size = contentData?.count ?? SourceMarkdownFormat.fileContent(for: head).utf8.count
         return .file(
             id: id, parent: parent, name: name, size: size,
             version: Data(head.id.rawValue.utf8),

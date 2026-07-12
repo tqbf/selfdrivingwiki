@@ -99,8 +99,8 @@ struct ProjectionTests {
         #expect(node.ingestedExt == "md")
         // mimeType is "text/markdown"
         #expect(node.mimeType == "text/markdown")
-        // size is head.content.utf8.count
-        #expect(node.size == head.content.utf8.count)
+        // size is the frontmatter-wrapped content
+        #expect(node.size == SourceMarkdownFormat.fileContent(for: head).utf8.count)
         // created and modified are head.createdAt
         #expect(node.created == createdAt)
         #expect(node.modified == createdAt)
@@ -153,8 +153,8 @@ struct ProjectionTests {
         #expect(node.ingestedExt == "md")
         // mimeType is "text/markdown"
         #expect(node.mimeType == "text/markdown")
-        // size is head.content.utf8.count
-        #expect(node.size == head.content.utf8.count)
+        // size is the frontmatter-wrapped content
+        #expect(node.size == SourceMarkdownFormat.fileContent(for: head).utf8.count)
         // created and modified are head.createdAt
         #expect(node.created == createdAt)
         #expect(node.modified == createdAt)
