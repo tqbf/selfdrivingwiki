@@ -87,6 +87,44 @@ struct ProjectionTreeTests {
         #expect(s.projection.contents(for: id) == expected)
     }
 
+    @Test func byTitlePageRewritesLinksAndSizeMatchesBytes() throws {
+        // A page body linking to another page (canonical ULID) and a source
+        // (canonical ULID). The by-title view must rewrite both AND report a
+        // size equal to the rewritten bytes — a mismatch truncates `cat` (#216).
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-proj-links-\(UUID().uuidString).sqlite")
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let target = try store.createPage(title: "Target Page")
+        let pdf = try store.addSource(
+            filename: "paper.pdf", data: Data("%PDF fake".utf8), mimeType: "application/pdf")
+        _ = try store.appendProcessedMarkdown(
+            sourceID: pdf.id, content: "# Paper", origin: "test", note: nil)
+        let src = try store.createPage(title: "Home")
+        try store.updatePage(
+            id: src.id, title: "Home",
+            body: "See [[page:\(target.id.rawValue)|the target]] and "
+                + "[[source:\(pdf.id.rawValue)|the paper]].")
+        let projection = Projection(wikiID: "links-\(UUID().uuidString)", databaseURL: url)
+
+        let id = Projection.Identity.pageByTitle(src.id.rawValue)
+        guard let node = projection.node(for: id),
+              let bytes = projection.contents(for: id) else {
+            Issue.record("by-title node/content not found"); return
+        }
+        // Invariant: reported size == served bytes.
+        #expect(node.size == bytes.count)
+
+        let text = String(decoding: bytes, as: UTF8.self)
+        // Page link → sibling; source link → climbs to sources/by-name.
+        let targetFile = FilenameEscaping.byTitleFilename(
+            title: "Target Page", pageID: target.id.rawValue)
+        #expect(text.contains("[the target](\(targetFile.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)!))"))
+        #expect(text.contains("[the paper](../../sources/by-name/"))
+        // No raw wikilinks remain.
+        #expect(!text.contains("[[page:"))
+        #expect(!text.contains("[[source:"))
+    }
+
     @Test func sourceNodeResolvesWithVerbatimContent() throws {
         let s = try seed()
         let id = Projection.Identity.sourceByID(s.pdfSource.id.rawValue)
@@ -129,6 +167,78 @@ struct ProjectionTreeTests {
         // text source → NO .md sibling (text/ is markdown-native).
         #expect(ids.contains(Projection.Identity.sourceByID(s.textSource.id.rawValue)))
         #expect(!ids.contains(Projection.Identity.sourceMarkdownByID(s.textSource.id.rawValue)))
+    }
+
+    // MARK: - Source image rewriting (snapshot siblings)
+
+    @Test func snapshotImageSiblingResolvesAndRewritesPath() throws {
+        // Create a markdown-native source with an image that has a sibling.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-image-snapshot-\(UUID().uuidString).sqlite")
+        let store = try SQLiteWikiStore(databaseURL: url)
+
+        // Create a fetch activity for the snapshot.
+        let provenance = SourceProvenance(agentName: "test", activityKind: "website-snapshot")
+        let activityID = try store.ensureFetchActivity(provenance: provenance)
+
+        // Create the main markdown source WITH the activity (same pattern as storeSnapshot).
+        let mdSource = try store.addSource(
+            filename: "article.md", data: Data("![alt](assets/pic.png)".utf8),
+            mimeType: "text/markdown", provenance: provenance, role: .primary,
+            originalPath: nil, activityID: activityID)
+
+        // Add the snapshot image as a sibling (same activity).
+        _ = try store.addSnapshotImage(
+            filename: "pic.png", data: Data("png-data".utf8), mimeType: "image/png",
+            originalPath: "assets/pic.png", sourceURL: URL(string: "https://example.com/pic.png")!,
+            activityID: activityID, role: .media)
+
+        let projection = Projection(wikiID: "snapshot-\(UUID().uuidString)", databaseURL: url)
+
+        // Verify by-name view: node size must match served content.
+        let id = Projection.Identity.sourceByName(mdSource.id.rawValue)
+        guard let node = projection.node(for: id) else {
+            Issue.record("source node not found"); return
+        }
+        guard let bytes = projection.contents(for: id) else {
+            Issue.record("source content not found"); return
+        }
+
+        // Invariant: reported size == served bytes.
+        #expect(node.size == bytes.count)
+
+        // The served content should have rewritten the image path.
+        let text = String(decoding: bytes, as: UTF8.self)
+        #expect(!text.contains("assets/pic.png"))
+        // Should contain the by-name filename of the sibling (without "assets/" prefix).
+        #expect(text.contains("![alt](pic"))
+    }
+
+    @Test func sourceWithoutImageSiblingsIsUnaffected() throws {
+        // A text source with NO image siblings should serve unmodified bytes,
+        // and size should match byteSize, same as today (regression guard).
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-no-image-\(UUID().uuidString).sqlite")
+        let store = try SQLiteWikiStore(databaseURL: url)
+
+        let originalData = Data("This markdown has ![alt](missing.png) but no siblings.".utf8)
+        let textSource = try store.addSource(
+            filename: "lonely.md", data: originalData, mimeType: "text/markdown")
+
+        let projection = Projection(wikiID: "no-image-\(UUID().uuidString)", databaseURL: url)
+
+        // By-name view.
+        let id = Projection.Identity.sourceByName(textSource.id.rawValue)
+        guard let node = projection.node(for: id) else {
+            Issue.record("source node not found"); return
+        }
+        guard let bytes = projection.contents(for: id) else {
+            Issue.record("source content not found"); return
+        }
+
+        // Both size and content must be unchanged.
+        #expect(node.size == originalData.count)
+        #expect(bytes == originalData)
     }
 
     @Test func workingSetIncludesFlatLeaves() throws {
@@ -382,6 +492,124 @@ struct ProjectionTreeTests {
         #expect(names.contains("bookmarks"))
         // The folder is now empty.
         #expect(b.projection.children(of: Projection.Identity.bookmarks).isEmpty)
+    }
+
+    @Test func bookmarkPageRefRewritesLinksAndSizeMatchesBytes() throws {
+        // A page body linking to another page (canonical ULID). The bookmark
+        // pageRef must rewrite [[page:...]] → relative links and report a size
+        // equal to the rewritten bytes — a mismatch truncates `cat` (#216).
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-bm-links-\(UUID().uuidString).sqlite")
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let target = try store.createPage(title: "Target Page")
+        let home = try store.createPage(title: "Home")
+        try store.updatePage(
+            id: home.id, title: "Home",
+            body: "See [[page:\(target.id.rawValue)|t]].")
+        let pageRefNode = try store.createBookmarkNode(
+            parentID: nil, position: 0, kind: .pageRef, label: nil, targetID: home.id)
+        let projection = Projection(wikiID: "bm-links-\(UUID().uuidString)", databaseURL: url)
+
+        let id = Projection.Identity.bookmarkPageRef(pageRefNode.id)
+        guard let node = projection.node(for: id),
+              let bytes = projection.contents(for: id) else {
+            Issue.record("bookmark page ref node/content not found"); return
+        }
+        // Invariant: reported size == served bytes.
+        #expect(node.size == bytes.count)
+
+        let text = String(decoding: bytes, as: UTF8.self)
+        // Page link → sibling (one ../ to climb from bookmarks/ to root).
+        let targetFile = FilenameEscaping.byTitleFilename(
+            title: "Target Page", pageID: target.id.rawValue)
+        let encoded = targetFile.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)!
+        #expect(text.contains("[t](../pages/by-title/\(encoded))"))
+        // No raw wikilinks remain.
+        #expect(!text.contains("[[page:"))
+    }
+
+    @Test func nestedBookmarkPageRefClimbsCorrectDepth() throws {
+        // A page ref nested one level deep (inside a folder) must climb with
+        // two `../` to reach the root.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-bm-nested-\(UUID().uuidString).sqlite")
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let target = try store.createPage(title: "Target")
+        let home = try store.createPage(title: "Home")
+        try store.updatePage(
+            id: home.id, title: "Home",
+            body: "Link: [[page:\(target.id.rawValue)]].")
+        let folder = try store.createBookmarkNode(
+            parentID: nil, position: 0, kind: .folder, label: "Research", targetID: nil)
+        let pageRefNode = try store.createBookmarkNode(
+            parentID: folder.id, position: 0, kind: .pageRef, label: nil, targetID: home.id)
+        let projection = Projection(wikiID: "bm-nested-\(UUID().uuidString)", databaseURL: url)
+
+        let id = Projection.Identity.bookmarkPageRef(pageRefNode.id)
+        guard let node = projection.node(for: id),
+              let bytes = projection.contents(for: id) else {
+            Issue.record("nested bookmark content not found"); return
+        }
+        // Byte-identity must hold at nested depth too (size path builds baseDir
+        // from the same ancestor walk as the content path).
+        #expect(node.size == bytes.count)
+        let text = String(decoding: bytes, as: UTF8.self)
+        // Two levels: bookmarks/Research/ → root → pages/by-title/ = ../../pages/by-title/
+        #expect(text.contains("../../pages/by-title/"))
+    }
+
+    @Test func bookmarkChatRefRewritesLinksAndSizeMatchesBytes() throws {
+        // A chat transcript containing a [[page:...]] link, bookmarked as a
+        // chatRef, must rewrite the link AND keep size == served bytes (#216).
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-bm-chat-\(UUID().uuidString).sqlite")
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let target = try store.createPage(title: "Referenced Page")
+        let chat = try store.createChat(kind: .edit, title: "Chat With Link")
+        _ = try store.appendChatMessages(
+            chatID: chat.id,
+            events: [.userText("See [[page:\(target.id.rawValue)|that page]]."),
+                     .assistantText("Sure.")])
+        let chatRefNode = try store.createBookmarkNode(
+            parentID: nil, position: 0, kind: .chatRef, label: nil, targetID: chat.id)
+        let projection = Projection(wikiID: "bm-chat-\(UUID().uuidString)", databaseURL: url)
+
+        let id = Projection.Identity.bookmarkChatRef(chatRefNode.id)
+        guard let node = projection.node(for: id),
+              let bytes = projection.contents(for: id) else {
+            Issue.record("bookmark chat ref node/content not found"); return
+        }
+        // Invariant: reported size == served bytes.
+        #expect(node.size == bytes.count)
+        let text = String(decoding: bytes, as: UTF8.self)
+        // Root-level chatRef: one ../ to reach the pages view.
+        #expect(text.contains("[that page](../pages/by-title/"))
+        #expect(!text.contains("[[page:"))
+    }
+
+    @Test func bookmarkSourceRefIsLeftVerbatimWithSizeMatch() throws {
+        // A bookmark sourceRef must serve verbatim sourceContent bytes unchanged,
+        // and node.size must equal the byte count (#216).
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-bm-source-\(UUID().uuidString).sqlite")
+        let store = try SQLiteWikiStore(databaseURL: url)
+        let pdfBytes = Data("%PDF-1.4 test content".utf8)
+        let pdf = try store.addSource(
+            filename: "doc.pdf", data: pdfBytes, mimeType: "application/pdf")
+        let sourceRefNode = try store.createBookmarkNode(
+            parentID: nil, position: 0, kind: .sourceRef, label: nil, targetID: pdf.id)
+        let projection = Projection(wikiID: "bm-source-\(UUID().uuidString)", databaseURL: url)
+
+        let id = Projection.Identity.bookmarkSourceRef(sourceRefNode.id)
+        guard let node = projection.node(for: id),
+              let bytes = projection.contents(for: id) else {
+            Issue.record("bookmark source ref node/content not found"); return
+        }
+        // Invariant: reported size == served bytes.
+        #expect(node.size == bytes.count)
+        // Verbatim bytes from sourceContent.
+        let expected = try store.sourceContent(id: pdf.id)
+        #expect(bytes == expected)
     }
 
     // MARK: - Chats projection (#119)

@@ -75,7 +75,7 @@ NOTARY_PROFILE ?= wikifs-notary
 PROVISION_PROFILE ?=
 NOTES_FILE       ?=
 
-.PHONY: all deps build check test release run clean install uninstall register help prune-provider-registrations \
+.PHONY: all deps build check test release run reload clean install uninstall register help prune-provider-registrations \
         check-version notary-setup sign zip-notary notarize staple zip-release \
         checksum verify-release dist github-release print-version icon prompts check-prompts
 
@@ -91,6 +91,11 @@ help:
 	@echo "  check-prompts     CI gate — fail if GeneratedPrompts.swift is stale vs prompts/*.md"
 	@echo "  release           Build release into ./$(APP)"
 	@echo "  run               Install to /Applications and launch $(APP_NAME)"
+	@echo "  reload            Like run, but forces the File Provider domain to reset —"
+	@echo "                    use after changing FileProvider rendering (Projection.swift,"
+	@echo "                    PageMarkdownFormat, RelativeLinkRewriter, …); the daemon"
+	@echo "                    caches materialized files by data version, so a rendering-only"
+	@echo "                    change is otherwise invisible until content is next edited"
 	@echo "  clean             Remove ./build/ ./.build/ ./dist/"
 	@echo "  deps              Verify build prerequisites (auto-run before build)"
 	@echo ""
@@ -210,6 +215,47 @@ print-version:
 
 run: install
 	open "$(INSTALLED_APP)"
+
+# `reload` — like `run`, but forces every registered File Provider domain to be
+# removed and re-added before it mounts again.
+#
+# Why this exists: fileproviderd caches each materialized file's bytes keyed
+# by the DATA version the extension reports (page.version / chat.updatedAt /
+# the whole-DB changeToken — see Projection.swift's `pageFileNode` etc.), NOT
+# by the extension's own build/code version. So a rebuild that changes how a
+# file is RENDERED (e.g. #216's [[wikilink]] → relative-Markdown-link rewrite)
+# is invisible to already-materialized files on disk: the daemon sees the same
+# reported version it already cached and never calls back into the extension
+# for fresh bytes. A plain `make install`/`run` — even a from-scratch rebuild —
+# does not fix this; the stale copies live in fileproviderd's cache, not the
+# app bundle. There is no `fileproviderctl` evict/reimport subcommand on this
+# OS to force it from the shell, and a raw `rm` on a mounted file round-trips
+# through the (read-only) extension's `deleteItem` and is rejected.
+#
+# The one CLI-drivable fix is the app's own `WIKIFS_REENUMERATE=1` hatch
+# (FileProviderSpike.swift `registerDomain`): read once at launch, it calls
+# `NSFileProviderManager.remove(domain)` for each wiki before re-adding it —
+# tearing down and rebuilding the whole projection, which forces a full
+# re-fetch. `open --env` (macOS 14+) sets that var for the freshly-launched
+# process; a plain `open` does not propagate shell environment into the
+# relaunch, so this can't just be `WIKIFS_REENUMERATE=1 open ...`. Both the
+# app and extension processes are killed first so `-n` (new instance) doesn't
+# leave a stale, non-reset instance running alongside the fresh one.
+#
+# This is a one-shot manual hatch for local dev; it is deliberately NOT the
+# default `run`/`install` behavior because a full domain reset re-downloads
+# everything and would slow down routine iteration unrelated to rendering
+# changes. The permanent, no-flag-needed fix for a SHIPPED rendering-contract
+# change is bumping `FileProviderSpike.currentSchemaVersion`, which resets
+# every user's domain automatically on next launch (see its doc comment) —
+# use `reload` here to verify, then decide separately whether the change
+# warrants that bump.
+reload: install
+	@pkill -f "$(INSTALLED_APP)/Contents/MacOS/$(APP_NAME)" 2>/dev/null && echo "✓ killed running $(APP_NAME)" || true
+	@pkill -f "$(EXT_NAME).appex" 2>/dev/null && echo "✓ killed stale $(EXT_NAME) process" || true
+	@sleep 1
+	open --env WIKIFS_REENUMERATE=1 -n "$(INSTALLED_APP)"
+	@echo "✓ relaunched $(APP_NAME) with WIKIFS_REENUMERATE=1 — File Provider domain(s) will reset on this launch"
 
 install: build prune-provider-registrations
 	@if [ ! -d "$(APP)" ]; then echo "✗ $(APP) missing — build failed?"; exit 1; fi
