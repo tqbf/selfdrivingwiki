@@ -2833,6 +2833,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             updated_at = ?5, version = version + 1, last_edited_by = ?6
         WHERE id = ?1;
         """)
+        stmt.reset()  // reset cached statement before reusing (it may be at SQLITE_DONE)
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         try stmt.bind(title, at: 2)
@@ -2840,7 +2841,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try stmt.bind(body, at: 4)
         try stmt.bind(Date().timeIntervalSince1970, at: 5)
         if let lastEditedBy { try stmt.bind(lastEditedBy, at: 6) } else { try stmt.bind(nil, at: 6) }
+        DebugLog.store("updatePage DEBUG: about to step")
         _ = try stmt.step()
+        DebugLog.store("updatePage DEBUG: step OK, changes=\(sqlite3_changes(db))")
         guard sqlite3_changes(db) > 0 else { throw WikiStoreError.notFound(id) }
         }
     }
@@ -2998,20 +3001,20 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         guard let lastEditedBy else { return nil }
         let actorStmt = try statement(
             "SELECT last_edited_by FROM pages WHERE id = ?1;")
-        defer { actorStmt.reset() }
         try actorStmt.bind(pageID.rawValue, at: 1)
-        guard try actorStmt.step() else { return nil }
+        guard try actorStmt.step() else { actorStmt.reset(); return nil }
         let existingActor = actorStmt.text(at: 0)
+        actorStmt.reset()  // reset immediately — don't pin the connection at SQLITE_ROW
         guard existingActor == lastEditedBy else { return nil }
 
         // 2. Within the coalescing window.
         let windowStmt = try statement("""
         SELECT saved_at FROM page_versions WHERE id = ?1;
         """)
-        defer { windowStmt.reset() }
         try windowStmt.bind(head, at: 1)
-        guard try windowStmt.step() else { return nil }
+        guard try windowStmt.step() else { windowStmt.reset(); return nil }
         let savedAt = windowStmt.double(at: 0)
+        windowStmt.reset()
         let elapsed = nowTS - savedAt
         guard elapsed >= 0 && elapsed <= Self.amendCoalescingWindow else { return nil }
 
@@ -3021,10 +3024,10 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         SELECT COUNT(*) FROM page_versions
         WHERE parent_id = ?1 OR merge_parent_id = ?1;
         """)
-        defer { childStmt.reset() }
         try childStmt.bind(head, at: 1)
-        guard try childStmt.step() else { return nil }
+        guard try childStmt.step() else { childStmt.reset(); return nil }
         let childCount = Int(childStmt.int(at: 0))
+        childStmt.reset()
         guard childCount == 0 else { return nil }
 
         // 4. No workspace_refs row references the head (version_id or base_version_id).
@@ -3032,10 +3035,10 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         SELECT COUNT(*) FROM workspace_refs
         WHERE version_id = ?1 OR base_version_id = ?1;
         """)
-        defer { wsStmt.reset() }
         try wsStmt.bind(head, at: 1)
-        guard try wsStmt.step() else { return nil }
+        guard try wsStmt.step() else { wsStmt.reset(); return nil }
         let wsCount = Int(wsStmt.int(at: 0))
+        wsStmt.reset()
         guard wsCount == 0 else { return nil }
 
         // 5. Blind-write guard: pages.body_markdown must match the head version's
@@ -3046,16 +3049,16 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         JOIN blobs b ON b.hash = pv.blob_hash
         WHERE pv.id = ?1;
         """)
-        defer { bodyCheckStmt.reset() }
         try bodyCheckStmt.bind(head, at: 1)
-        guard try bodyCheckStmt.step() else { return nil }
+        guard try bodyCheckStmt.step() else { bodyCheckStmt.reset(); return nil }
         let headBlobData = bodyCheckStmt.blob(at: 0)
+        bodyCheckStmt.reset()
         let pageMirrorStmt = try statement(
             "SELECT body_markdown FROM pages WHERE id = ?1;")
-        defer { pageMirrorStmt.reset() }
         try pageMirrorStmt.bind(pageID.rawValue, at: 1)
-        guard try pageMirrorStmt.step() else { return nil }
+        guard try pageMirrorStmt.step() else { pageMirrorStmt.reset(); return nil }
         let mirrorBody = pageMirrorStmt.text(at: 0)
+        pageMirrorStmt.reset()
         let mirrorData = Data(mirrorBody.utf8)
         guard mirrorData == headBlobData else { return nil }
 

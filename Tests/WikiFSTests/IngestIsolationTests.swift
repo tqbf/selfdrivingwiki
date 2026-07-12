@@ -92,13 +92,30 @@ struct IngestIsolationTests {
     }
 
     // MARK: - AC7.2: Human edit during isolated ingest commits immediately
-    // NOTE: This test hits a SQLite statement-lifecycle error when a workspace
-    // write is followed by a main write on the same connection. The store-layer
-    // isolation is correct (the workspace write is invisible on main), but the
-    // statement reset discipline needs investigation. See R6 in the plan.
-    // @Test func humanEditCommitsImmediatelyDuringWorkspace() throws {
-    //     ... (disabled — known issue, manual validation needed)
-    // }
+
+    @Test func humanEditCommitsImmediatelyDuringWorkspace() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Shared")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Shared", body: "v1",
+            expectedHeadVersionID: nil)
+
+        // An isolated ingest stages a workspace write.
+        let wsID = try store.createWorkspace(name: "ingest", activityID: nil)
+        _ = try store.workspaceWritePage(
+            workspaceID: wsID, pageID: page.id, title: "Shared", body: "workspace v2")
+
+        // Meanwhile, a human edits the page directly on main.
+        try store.updatePage(id: page.id, title: "Shared", body: "human edit")
+
+        // The human edit is immediately visible on main.
+        let mainPage = try store.getPage(id: page.id)
+        #expect(mainPage.bodyMarkdown == "human edit")
+
+        // The workspace still has its own version (not affected by the human edit).
+        let wsBody = try store.workspacePageBody(workspaceID: wsID, pageID: page.id)
+        #expect(wsBody == "workspace v2")
+    }
 
     // MARK: - AC7.5: Stale workspaces reaped
 
