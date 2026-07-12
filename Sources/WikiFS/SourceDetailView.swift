@@ -1049,11 +1049,9 @@ struct SourceDetailView: View {
         }
     }
 
-    private var symbol: String {
-        if file.mimeType == "application/pdf" { return "doc.richtext" }
-        if let mime = file.mimeType, mime.hasPrefix("text/") { return "doc.plaintext" }
-        return "doc"
-    }
+    /// Matches the sidebar's Sources section icon (`tray.full`) so the same
+    /// source is represented by one icon everywhere in the app.
+    private var symbol: String { "tray.full" }
 
     // MARK: - Find bar
 
