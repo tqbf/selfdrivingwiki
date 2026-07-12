@@ -383,7 +383,7 @@ struct AddressBarView: View {
     /// Whether readable content (a page, source, chat, or document) is loaded in
     /// the active tab. When false (no tab, or a non-content selection), the bar is
     /// in its empty / search-first state: a leading search glyph, auto-focus, and
-    /// the "Search for pages" placeholder.
+    /// the omnibox placeholder.
     private var hasContentLoaded: Bool {
         !addressString.isEmpty
     }

@@ -65,7 +65,7 @@ struct OmniboxSearchField: NSViewRepresentable {
         // button is the omnibox's single leading icon (address bar, not search).
         let field = AddressSearchField()
         field.delegate = context.coordinator
-        field.placeholderString = "Search for pages"
+        field.placeholderString = "Search pages, sources, bookmarks, chats, or ask…"
         field.sendsWholeSearchString = false
         field.sendsSearchStringImmediately = false
         field.focusRingType = .none
