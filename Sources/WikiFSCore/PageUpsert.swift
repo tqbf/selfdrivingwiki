@@ -50,7 +50,8 @@ public enum PageUpsert {
         id: PageID?,
         title: String,
         body: String,
-        expectedHeadVersionID: String? = nil
+        expectedHeadVersionID: String? = nil,
+        author: String? = nil
     ) throws -> Outcome {
         // Sanitize BEFORE the title→id resolve, not just in the store's
         // create/update (which sanitizes again as a backstop): resolving the
@@ -68,7 +69,7 @@ public enum PageUpsert {
             resolveSource: store.resolveSourceByName,
             resolveChat: store.resolveChatByTitle)) ?? body
         let outcome = try writePage(in: store, id: id, title: title, body: canonicalBody,
-                                     expectedHeadVersionID: expectedHeadVersionID)
+                                     expectedHeadVersionID: expectedHeadVersionID, author: author)
         // Parse the CANONICAL body so link rows match the stored bytes exactly.
         try store.replaceLinks(from: outcome.id, parsedLinks: WikiLinkParser.parse(canonicalBody))
         // Compute + store chunk embeddings for the page body. Non-fatal: a
@@ -90,7 +91,8 @@ public enum PageUpsert {
         id: PageID?,
         title: String,
         body: String,
-        expectedHeadVersionID: String?
+        expectedHeadVersionID: String?,
+        author: String? = nil
     ) throws -> Outcome {
         if let id {
             // When CAS is active, route through appendPageVersion (versioned
@@ -99,9 +101,9 @@ public enum PageUpsert {
             if let expected = expectedHeadVersionID {
                 _ = try store.appendPageVersion(
                     pageID: id, title: title, body: body,
-                    expectedHeadVersionID: expected)
+                    expectedHeadVersionID: expected, lastEditedBy: author)
             } else {
-                try store.updatePage(id: id, title: title, body: body)
+                try store.updatePage(id: id, title: title, body: body, lastEditedBy: author)
             }
             return Outcome(id: id, didCreate: false)
         }
@@ -109,14 +111,14 @@ public enum PageUpsert {
             if let expected = expectedHeadVersionID {
                 _ = try store.appendPageVersion(
                     pageID: existing, title: title, body: body,
-                    expectedHeadVersionID: expected)
+                    expectedHeadVersionID: expected, lastEditedBy: author)
             } else {
-                try store.updatePage(id: existing, title: title, body: body)
+                try store.updatePage(id: existing, title: title, body: body, lastEditedBy: author)
             }
             return Outcome(id: existing, didCreate: false)
         }
-        let page = try store.createPage(title: title)
-        try store.updatePage(id: page.id, title: title, body: body)
+        let page = try store.createPage(title: title, createdBy: author)
+        try store.updatePage(id: page.id, title: title, body: body, lastEditedBy: author)
         return Outcome(id: page.id, didCreate: true)
     }
 }

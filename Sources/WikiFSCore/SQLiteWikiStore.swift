@@ -225,7 +225,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             body_markdown TEXT NOT NULL DEFAULT '',
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL,
-            version INTEGER NOT NULL DEFAULT 1
+            version INTEGER NOT NULL DEFAULT 1,
+            created_by TEXT,
+            last_edited_by TEXT
         );
         """)
         try exec("CREATE UNIQUE INDEX pages_slug_unique ON pages(slug);")
@@ -295,7 +297,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             activity_id       TEXT REFERENCES activities(id),
             source_version_id TEXT,
             blob_hash         TEXT REFERENCES blobs(hash),
-            mime_type         TEXT NOT NULL DEFAULT 'text/markdown'
+            mime_type         TEXT NOT NULL DEFAULT 'text/markdown',
+            technique         TEXT
         );
         """)
         try exec("""
@@ -539,6 +542,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // parked as `conflicted`. Purely additive.
         try createWorkspaceConflictsV32()
         try exec("PRAGMA user_version=32;")
+
+        // v33 (#131 — provenance frontmatter): adds `created_by`,
+        // `last_edited_by` to `pages` and `technique` to
+        // `source_markdown_versions`. The columns are already in the fresh
+        // schema's CREATE TABLE above, so this just advances the version stamp.
+        try exec("PRAGMA user_version=33;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -1420,6 +1429,18 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try exec("PRAGMA user_version=32;")
             version = 32
         }
+
+        // Step 32 → 33 (#131 — provenance frontmatter): adds `created_by` and
+        // `last_edited_by` nullable text columns to `pages` (agent/model
+        // attribution), and a `technique` nullable text column to
+        // `source_markdown_versions` (which extraction backend produced it).
+        // All additive — existing rows get NULL, which the frontmatter layer
+        // treats as "unknown" and omits.
+        if version < 33 {
+            try migrateV32ToV33()
+            try exec("PRAGMA user_version=33;")
+            version = 33
+        }
     }
 
     /// The v19→20 migration step. Creates the objects tables, then — for every
@@ -1996,6 +2017,38 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    /// v32 → v33 (#131): adds provenance columns to `pages`
+    /// (`created_by`, `last_edited_by`) and `source_markdown_versions`
+    /// (`technique`). All nullable, additive — existing rows get NULL.
+    private func migrateV32ToV33() throws {
+        try withTransaction {
+            // Guard: check each column exists before adding (the fresh schema
+            // createFreshSchemaV20 may already include them on a rewound DB).
+            let pagesCols = try tableColumnInfo("pages")
+            if !pagesCols.contains("created_by") {
+                try exec("ALTER TABLE pages ADD COLUMN created_by TEXT;")
+            }
+            if !pagesCols.contains("last_edited_by") {
+                try exec("ALTER TABLE pages ADD COLUMN last_edited_by TEXT;")
+            }
+            let smvCols = try tableColumnInfo("source_markdown_versions")
+            if !smvCols.contains("technique") {
+                try exec("ALTER TABLE source_markdown_versions ADD COLUMN technique TEXT;")
+            }
+        }
+    }
+
+    /// Returns column names for `table` via pragma_table_info.
+    private func tableColumnInfo(_ table: String) throws -> Set<String> {
+        let stmt = try statement("SELECT name FROM pragma_table_info('\(table)');")
+        defer { stmt.reset() }
+        var cols: Set<String> = []
+        while try stmt.step() {
+            cols.insert(stmt.text(at: 0))
+        }
+        return cols
+    }
+
     /// One-time backfill for the v18→19 step: hash every existing source's
     /// `content` (SHA-256, hex) into the new `content_hash` column. Content is a
     /// pure function of the stored bytes, so this is safe to compute once and
@@ -2455,7 +2508,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     public func getPage(id: PageID) throws -> WikiPage {
         lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
-        SELECT id, title, slug, body_markdown, created_at, updated_at, version
+        SELECT id, title, slug, body_markdown, created_at, updated_at, version, created_by, last_edited_by
         FROM pages WHERE id = ?1;
         """)
         defer { stmt.reset() }
@@ -2468,11 +2521,13 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             bodyMarkdown: stmt.text(at: 3),
             createdAt: Date(timeIntervalSince1970: stmt.double(at: 4)),
             updatedAt: Date(timeIntervalSince1970: stmt.double(at: 5)),
-            version: Int(stmt.int(at: 6))
+            version: Int(stmt.int(at: 6)),
+            createdBy: sqlite3_column_type(stmt.handle, 7) == SQLITE_NULL ? nil : stmt.text(at: 7),
+            lastEditedBy: sqlite3_column_type(stmt.handle, 8) == SQLITE_NULL ? nil : stmt.text(at: 8)
         )
     }
 
-    public func createPage(title: String) throws -> WikiPage {
+    public func createPage(title: String, createdBy: String? = nil) throws -> WikiPage {
         try mutate(event: { page in localEvent(.page, id: page.id.rawValue, change: .created) }) {
         // Titles must stay linkable (`[[title]]`) — see WikiNameRules.
         let title = WikiNameRules.sanitized(title)
@@ -2480,23 +2535,25 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let slug = try uniqueSlug(from: title, id: id)
         let now = Date()
         let stmt = try statement("""
-        INSERT INTO pages (id, title, slug, body_markdown, created_at, updated_at, version)
-        VALUES (?1, ?2, ?3, '', ?4, ?4, 1);
+        INSERT INTO pages (id, title, slug, body_markdown, created_at, updated_at, version, created_by, last_edited_by)
+        VALUES (?1, ?2, ?3, '', ?4, ?4, 1, ?5, ?5);
         """)
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         try stmt.bind(title, at: 2)
         try stmt.bind(slug, at: 3)
         try stmt.bind(now.timeIntervalSince1970, at: 4)
+        if let createdBy { try stmt.bind(createdBy, at: 5) } else { try stmt.bind(nil, at: 5) }
         _ = try stmt.step()
         return WikiPage(
             id: id, title: title, slug: slug, bodyMarkdown: "",
-            createdAt: now, updatedAt: now, version: 1
+            createdAt: now, updatedAt: now, version: 1,
+            createdBy: createdBy, lastEditedBy: createdBy
         )
         }
     }
 
-    public func updatePage(id: PageID, title: String, body: String) throws {
+    public func updatePage(id: PageID, title: String, body: String, lastEditedBy: String? = nil) throws {
         try mutate(event: { _ in localEvent(.page, id: id.rawValue, change: .updated) }) {
         // Recompute slug from the (possibly renamed) title, then bump version
         // and updated_at. version bumps support Phase 3 change signaling.
@@ -2506,7 +2563,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let stmt = try statement("""
         UPDATE pages
         SET title = ?2, slug = ?3, body_markdown = ?4,
-            updated_at = ?5, version = version + 1
+            updated_at = ?5, version = version + 1, last_edited_by = ?6
         WHERE id = ?1;
         """)
         defer { stmt.reset() }
@@ -2515,6 +2572,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try stmt.bind(slug, at: 3)
         try stmt.bind(body, at: 4)
         try stmt.bind(Date().timeIntervalSince1970, at: 5)
+        if let lastEditedBy { try stmt.bind(lastEditedBy, at: 6) } else { try stmt.bind(nil, at: 6) }
         _ = try stmt.step()
         guard sqlite3_changes(db) > 0 else { throw WikiStoreError.notFound(id) }
         }
@@ -2529,7 +2587,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// and reads stay unchanged.
     public func appendPageVersion(
         pageID: PageID, title: String, body: String,
-        expectedHeadVersionID: String?
+        expectedHeadVersionID: String?,
+        lastEditedBy: String? = nil
     ) throws -> String {
         try mutate(event: { _ in localEvent(.page, id: pageID.rawValue, change: .updated) }) {
         let title = WikiNameRules.sanitized(title)
@@ -2591,7 +2650,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             let upPage = try statement("""
             UPDATE pages
             SET title = ?2, slug = ?3, body_markdown = ?4,
-                updated_at = ?5, version = version + 1
+                updated_at = ?5, version = version + 1, last_edited_by = ?6
             WHERE id = ?1;
             """)
             upPage.reset()
@@ -2600,6 +2659,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try upPage.bind(slug, at: 3)
             try upPage.bind(body, at: 4)
             try upPage.bind(nowTS, at: 5)
+            if let lastEditedBy { try upPage.bind(lastEditedBy, at: 6) } else { try upPage.bind(nil, at: 6) }
             _ = try upPage.step()
             guard sqlite3_changes(db) > 0 else { throw WikiStoreError.notFound(pageID) }
 
@@ -7097,7 +7157,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             activityID: textOrNull(7),
             sourceVersionID: textOrNull(8),
             blobHash: textOrNull(9),
-            mimeType: textOrNull(10) ?? "text/markdown"
+            mimeType: textOrNull(10) ?? "text/markdown",
+            technique: textOrNull(11)
         )
     }
 
@@ -7108,7 +7169,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     smv.id, smv.file_id, smv.parent_id,
     COALESCE(CAST(b.content AS TEXT), ''),
     smv.origin, smv.note, smv.created_at,
-    smv.activity_id, smv.source_version_id, smv.blob_hash, smv.mime_type
+    smv.activity_id, smv.source_version_id, smv.blob_hash, smv.mime_type,
+    smv.technique
     """
     private static let smvBlobJoin = "LEFT JOIN blobs b ON b.hash = smv.blob_hash"
 
@@ -7343,12 +7405,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         var out: [ExtractionAlternative] = []
         while try stmt.step() {
             let version = sourceMarkdownVersion(from: stmt)
-            // Columns 0–10 are the smv row (see `smvSelectColumns`); 11/12 are
+            // Columns 0–11 are the smv row (see `smvSelectColumns`); 12/13 are
             // the agent name/version from the join.
-            let agentName = (sqlite3_column_type(stmt.handle, 11) == SQLITE_NULL)
-                ? "unknown" : stmt.text(at: 11)
-            let modelVersion: String? = (sqlite3_column_type(stmt.handle, 12) == SQLITE_NULL)
-                ? nil : stmt.text(at: 12)
+            let agentName = (sqlite3_column_type(stmt.handle, 12) == SQLITE_NULL)
+                ? "unknown" : stmt.text(at: 12)
+            let modelVersion: String? = (sqlite3_column_type(stmt.handle, 13) == SQLITE_NULL)
+                ? nil : stmt.text(at: 13)
             out.append(ExtractionAlternative(
                 version: version,
                 backendDisplayName: ExtractionAlternative.backendDisplayName(agentName: agentName),
@@ -7391,7 +7453,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
     @discardableResult
     public func appendProcessedMarkdown(sourceID: PageID, content: String,
-                                        origin: String, note: String?) throws -> SourceMarkdownVersion {
+                                        origin: String, note: String?,
+                                        technique: String? = nil) throws -> SourceMarkdownVersion {
         try mutate(event: { _ in localEvent(.source, id: sourceID.rawValue, change: .updated) }) {
         let id = PageID(rawValue: ULID.generate())
         let parentID = try processedMarkdownHead(sourceID: sourceID)?.id
@@ -7403,8 +7466,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let stmt = try statement("""
         INSERT INTO source_markdown_versions
           (id, file_id, parent_id, origin, note, created_at,
-           blob_hash, mime_type)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'text/markdown');
+           blob_hash, mime_type, technique)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'text/markdown', ?8);
         """)
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
@@ -7414,6 +7477,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         if let note { try stmt.bind(note, at: 5) }
         try stmt.bind(now.timeIntervalSince1970, at: 6)
         try stmt.bind(blobHash, at: 7)
+        if let technique { try stmt.bind(technique, at: 8) } else { try stmt.bind(nil, at: 8) }
         _ = try stmt.step()
 
         // Re-embed the source from the just-written content + its name so content
@@ -7427,7 +7491,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         return SourceMarkdownVersion(
             id: id, sourceID: sourceID, parentID: parentID,
             content: content, origin: origin, note: note, createdAt: now,
-            blobHash: blobHash, mimeType: "text/markdown"
+            blobHash: blobHash, mimeType: "text/markdown", technique: technique
         )
         }
     }
@@ -7484,8 +7548,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             let ins = try statement("""
             INSERT INTO source_markdown_versions
               (id, file_id, parent_id, origin, note, created_at,
-               activity_id, source_version_id, blob_hash, mime_type)
-            VALUES (?1, ?2, ?3, 'extraction', ?4, ?5, ?6, ?7, ?8, 'text/markdown');
+               activity_id, source_version_id, blob_hash, mime_type, technique)
+            VALUES (?1, ?2, ?3, 'extraction', ?4, ?5, ?6, ?7, ?8, 'text/markdown', ?9);
             """)
             ins.reset()
             try ins.bind(id.rawValue, at: 1)
@@ -7496,6 +7560,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try ins.bind(activityID, at: 6)
             if let resolvedSourceVersionID { try ins.bind(resolvedSourceVersionID, at: 7) }
             try ins.bind(blobHash, at: 8)
+            try ins.bind(backend.rawValue, at: 9)
             _ = try ins.step()
             ins.reset()
         }
@@ -7513,7 +7578,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             id: id, sourceID: sourceID, parentID: parentID,
             content: content, origin: "extraction", note: note, createdAt: now,
             activityID: storedActivityID, sourceVersionID: resolvedSourceVersionID,
-            blobHash: storedBlobHash, mimeType: "text/markdown"
+            blobHash: storedBlobHash, mimeType: "text/markdown",
+            technique: backend.rawValue
         )
         }
     }

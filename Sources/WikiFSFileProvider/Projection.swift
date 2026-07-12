@@ -620,12 +620,14 @@ struct Projection {
                       let head = try? store.processedMarkdownHead(sourceID: PageID(rawValue: ulid)) else {
                     return nil
                 }
+                // Wrap with provenance frontmatter (#131).
+                let wrapped = SourceMarkdownFormat.fileContent(for: head)
                 // By-name markdown siblings: rewrite [[wikilinks]] to relative links.
                 if id.rawValue.hasPrefix(Identity.sourceMarkdownByNamePrefix) {
-                    return projection.rewriteLinks(head.content, maps: projection.makeLinkMaps(),
+                    return projection.rewriteLinks(wrapped, maps: projection.makeLinkMaps(),
                                                    baseDir: Self.sourcesByNameDir)
                 }
-                return Data(head.content.utf8)
+                return Data(wrapped.utf8)
             }
             if let ulid = Identity.fileULID(from: id) {
                 guard let store = projection.openReadStore(),
