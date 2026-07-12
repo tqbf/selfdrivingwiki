@@ -169,6 +169,78 @@ struct ProjectionTreeTests {
         #expect(!ids.contains(Projection.Identity.sourceMarkdownByID(s.textSource.id.rawValue)))
     }
 
+    // MARK: - Source image rewriting (snapshot siblings)
+
+    @Test func snapshotImageSiblingResolvesAndRewritesPath() throws {
+        // Create a markdown-native source with an image that has a sibling.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-image-snapshot-\(UUID().uuidString).sqlite")
+        let store = try SQLiteWikiStore(databaseURL: url)
+
+        // Create a fetch activity for the snapshot.
+        let provenance = SourceProvenance(agentName: "test", activityKind: "website-snapshot")
+        let activityID = try store.ensureFetchActivity(provenance: provenance)
+
+        // Create the main markdown source WITH the activity (same pattern as storeSnapshot).
+        let mdSource = try store.addSource(
+            filename: "article.md", data: Data("![alt](assets/pic.png)".utf8),
+            mimeType: "text/markdown", provenance: provenance, role: .primary,
+            originalPath: nil, activityID: activityID)
+
+        // Add the snapshot image as a sibling (same activity).
+        _ = try store.addSnapshotImage(
+            filename: "pic.png", data: Data("png-data".utf8), mimeType: "image/png",
+            originalPath: "assets/pic.png", sourceURL: URL(string: "https://example.com/pic.png")!,
+            activityID: activityID, role: .media)
+
+        let projection = Projection(wikiID: "snapshot-\(UUID().uuidString)", databaseURL: url)
+
+        // Verify by-name view: node size must match served content.
+        let id = Projection.Identity.sourceByName(mdSource.id.rawValue)
+        guard let node = projection.node(for: id) else {
+            Issue.record("source node not found"); return
+        }
+        guard let bytes = projection.contents(for: id) else {
+            Issue.record("source content not found"); return
+        }
+
+        // Invariant: reported size == served bytes.
+        #expect(node.size == bytes.count)
+
+        // The served content should have rewritten the image path.
+        let text = String(decoding: bytes, as: UTF8.self)
+        #expect(!text.contains("assets/pic.png"))
+        // Should contain the by-name filename of the sibling (without "assets/" prefix).
+        #expect(text.contains("![alt](pic"))
+    }
+
+    @Test func sourceWithoutImageSiblingsIsUnaffected() throws {
+        // A text source with NO image siblings should serve unmodified bytes,
+        // and size should match byteSize, same as today (regression guard).
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-no-image-\(UUID().uuidString).sqlite")
+        let store = try SQLiteWikiStore(databaseURL: url)
+
+        let originalData = Data("This markdown has ![alt](missing.png) but no siblings.".utf8)
+        let textSource = try store.addSource(
+            filename: "lonely.md", data: originalData, mimeType: "text/markdown")
+
+        let projection = Projection(wikiID: "no-image-\(UUID().uuidString)", databaseURL: url)
+
+        // By-name view.
+        let id = Projection.Identity.sourceByName(textSource.id.rawValue)
+        guard let node = projection.node(for: id) else {
+            Issue.record("source node not found"); return
+        }
+        guard let bytes = projection.contents(for: id) else {
+            Issue.record("source content not found"); return
+        }
+
+        // Both size and content must be unchanged.
+        #expect(node.size == originalData.count)
+        #expect(bytes == originalData)
+    }
+
     @Test func workingSetIncludesFlatLeaves() throws {
         let s = try seed()
         let ids = Set(s.projection.children(of: .workingSet).map(\.id))

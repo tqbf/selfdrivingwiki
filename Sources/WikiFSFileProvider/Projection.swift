@@ -604,6 +604,12 @@ struct Projection {
             if let ulid = Identity.fileULID(from: id) {
                 guard let store = projection.openReadStore(),
                       let file = try? store.getSource(id: PageID(rawValue: ulid)) else { return nil }
+                if id.rawValue.hasPrefix(Identity.sourceByNamePrefix) {
+                    let contentData = projection.rewrittenVerbatimSourceContent(
+                        id: PageID(rawValue: ulid), mimeType: file.mimeType,
+                        maps: projection.makeLinkMaps())
+                    return Self.sourceNode(for: id, file: file, contentData: contentData)
+                }
                 return Self.sourceNode(for: id, file: file)
             }
             return nil
@@ -623,7 +629,14 @@ struct Projection {
             }
             if let ulid = Identity.fileULID(from: id) {
                 guard let store = projection.openReadStore(),
+                      let file = try? store.getSource(id: PageID(rawValue: ulid)),
                       let data = try? store.sourceContent(id: PageID(rawValue: ulid)) else { return nil }
+                if id.rawValue.hasPrefix(Identity.sourceByNamePrefix),
+                   let rewritten = projection.rewrittenVerbatimSourceContent(
+                       id: PageID(rawValue: ulid), mimeType: file.mimeType,
+                       maps: projection.makeLinkMaps()) {
+                    return rewritten
+                }
                 return data
             }
             return nil
@@ -1163,7 +1176,8 @@ struct Projection {
     /// display name (or filename fallback) + updated_at so a rename re-fetches
     /// the by-name node. By-id stays filename-keyed (stable identity).
     static func sourceNode(for id: NSFileProviderItemIdentifier,
-                                 file: SourceSummary) -> ProjectedNode {
+                                 file: SourceSummary,
+                                 contentData: Data? = nil) -> ProjectedNode {
         let raw = id.rawValue
         let isByName = raw.hasPrefix(Identity.sourceByNamePrefix)
         let humanName = file.displayName ?? file.filename
@@ -1176,7 +1190,7 @@ struct Projection {
             ? "\(humanName)|\(file.updatedAt.timeIntervalSince1970)|\(file.version)"
             : "\(file.filename)|\(file.updatedAt.timeIntervalSince1970)|\(file.version)"
         return .file(
-            id: id, parent: parent, name: name, size: file.byteSize,
+            id: id, parent: parent, name: name, size: contentData?.count ?? file.byteSize,
             version: Data(String(file.version).utf8),
             metadataVersion: Data(metaKey.utf8),
             created: file.createdAt, modified: file.updatedAt,
@@ -1228,6 +1242,7 @@ struct Projection {
         let sourceByID:   [String: RelativeLinkRewriter.Target]
         let chatByTitle:  [String: RelativeLinkRewriter.Target]
         let chatByID:     [String: RelativeLinkRewriter.Target]
+        let siblingImages: [PageID: [String: PageID]]   // sourceID -> [originalPath -> sibling sourceID]
 
         func resolver(baseDir: [String]) -> RelativeLinkRewriter.Resolver {
             RelativeLinkRewriter.Resolver(
@@ -1236,6 +1251,17 @@ struct Projection {
                 source: { t, isID in isID ? sourceByID[t.uppercased()] : sourceByName[t] },
                 chat:   { t, isID in isID ? chatByID[t.uppercased()]   : chatByTitle[t] }
             )
+        }
+
+        /// The image-src resolver for ONE source's own markdown, or an
+        /// always-nil resolver if it has no image siblings (the common case —
+        /// most sources never call this at all, gated by the caller).
+        func imageResolver(forSource sourceID: PageID, baseDir: [String]) -> SourceImageRewriter.Resolver {
+            let siblingMap = siblingImages[sourceID] ?? [:]
+            return SourceImageRewriter.Resolver(baseDir: baseDir, resolve: { originalPath in
+                guard let siblingID = siblingMap[originalPath] else { return nil }
+                return sourceByID[siblingID.rawValue.uppercased()]
+            })
         }
     }
 
@@ -1280,9 +1306,12 @@ struct Projection {
             chatByID[chat.id.rawValue.uppercased()] = target
         }
 
+        let siblingImages = (try? store?.siblingImageResolvers()) ?? [:]
+
         return LinkMaps(pageByTitle: pageByTitle, pageByID: pageByID,
                         sourceByName: sourceByName, sourceByID: sourceByID,
-                        chatByTitle: chatByTitle, chatByID: chatByID)
+                        chatByTitle: chatByTitle, chatByID: chatByID,
+                        siblingImages: siblingImages)
     }
 
     /// Rewrite `[[wikilinks]]` in `raw` to relative Markdown links, computing
@@ -1296,6 +1325,27 @@ struct Projection {
     /// The rewritten by-title page content (page bodies live in `pages/by-title`).
     private func byTitleContent(for page: WikiPage, maps: LinkMaps) -> Data {
         rewriteLinks(PageMarkdownFormat.fileContent(for: page), maps: maps, baseDir: Self.pagesByTitleDir)
+    }
+
+    /// Rewrite relative image srcs in a markdown-native verbatim source's own
+    /// content, IF it has image siblings (`makeLinkMaps().siblingImages`).
+    /// Returns `nil` when there's nothing to rewrite (binary sources, sources
+    /// with no image siblings, or non-`by-name` requests) — the caller then
+    /// falls back to raw stored bytes with NO computation, matching today's
+    /// behavior exactly for every unaffected source (the overwhelming
+    /// majority). Byte-identity: both the size path and content path MUST
+    /// call this with the same inputs and use the SAME returned Data.
+    private func rewrittenVerbatimSourceContent(
+        id: PageID, mimeType: String?, maps: LinkMaps
+    ) -> Data? {
+        guard let mime = mimeType, mime.hasPrefix("text/"),
+              let siblingMap = maps.siblingImages[id], !siblingMap.isEmpty,
+              let store = openReadStore(),
+              let raw = try? store.sourceContent(id: id),
+              let text = String(data: raw, encoding: .utf8) else { return nil }
+        let resolver = maps.imageResolver(forSource: id, baseDir: Self.sourcesByNameDir)
+        let rewritten = SourceImageRewriter.rewrite(text, resolver: resolver)
+        return Data(rewritten.utf8)
     }
 
     // MARK: - Enumeration
@@ -1432,7 +1482,12 @@ struct Projection {
                 mimeType: row.mime, byteSize: row.byteSize,
                 createdAt: row.createdAt, updatedAt: row.updatedAt, version: row.version,
                 displayName: row.displayName)
-            let verbatimNode = Self.sourceNode(for: id, file: summary)
+            let verbatimContentData = byName
+                ? maps.map { rewrittenVerbatimSourceContent(
+                    id: PageID(rawValue: row.id), mimeType: row.mime, maps: $0) }
+                  .flatMap { $0 }
+                : nil
+            let verbatimNode = Self.sourceNode(for: id, file: summary, contentData: verbatimContentData)
             // Sibling eligibility: has a chain AND is NOT markdown-native.
             // Markdown-native sources don't get a sibling — the verbatim .md is the content.
             guard let head = heads[row.id],
