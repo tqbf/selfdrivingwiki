@@ -38,7 +38,7 @@ struct AddressBarView: View {
     var homePageID: PageID?
 
     @State private var queryText = ""
-    @State private var results: [WikiPageSummary] = []
+    @State private var results: [OmniboxResult] = []
     @State private var searchTask: Task<Void, Never>?
     @State private var focusToken = 0
     /// Pointer is over the omnibox — reveals the trailing "add to bookmarks" plus.
@@ -301,7 +301,7 @@ struct AddressBarView: View {
         searchTask = Task {
             try? await Task.sleep(for: .milliseconds(200))
             if Task.isCancelled { return }
-            results = store.searchSimilar(query: trimmed, limit: 8)
+            results = store.searchOmnibox(query: trimmed)
         }
     }
 
@@ -310,8 +310,15 @@ struct AddressBarView: View {
         navigate(to: first)
     }
 
-    private func navigate(to result: WikiPageSummary) {
-        store.selectPage(byTitle: result.title)
+    private func navigate(to result: OmniboxResult) {
+        switch result {
+        case .ask(let question):
+            // Open a new chat tab with the question pre-filled (#288).
+            store.pendingChatQuestion = question
+            store.openTab(.newChat)
+        default:
+            store.select(result.selection)
+        }
         queryText = ""
         results = []
         isFocused = false
@@ -416,13 +423,13 @@ struct AddressBarView: View {
 /// highlight on hover (accent tint) and the top row shows a `↩` glyph — the
 /// Enter target.
 struct AddressResultsList: View {
-    let results: [WikiPageSummary]
+    let results: [OmniboxResult]
     /// The arrow-key-selected row, pushed in from the AppKit coordinator. `nil`
     /// means nothing is explicitly selected and Enter targets the top row.
     let selectedIndex: Int?
-    let onSelect: (WikiPageSummary) -> Void
+    let onSelect: (OmniboxResult) -> Void
 
-    @State private var hoveredResultID: PageID?
+    @State private var hoveredResultID: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -439,7 +446,7 @@ struct AddressResultsList: View {
     }
 
     @ViewBuilder
-    private func row(_ result: WikiPageSummary, index: Int) -> some View {
+    private func row(_ result: OmniboxResult, index: Int) -> some View {
         let hovered = hoveredResultID == result.id
         let keyboardSelected = selectedIndex == index
         // The keyboard highlight yields to the mouse: once the pointer is over a
@@ -451,13 +458,19 @@ struct AddressResultsList: View {
             onSelect(result)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "doc.text")
+                Image(systemName: result.systemImageName)
                     .font(.caption)
                     .foregroundStyle(highlighted ? Color.accentColor : .secondary)
                     .frame(width: 16)
-                Text(result.title)
-                    .lineLimit(1)
-                    .font(.callout)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(result.displayTitle)
+                        .lineLimit(1)
+                        .font(.callout)
+                    Text(result.subtitle)
+                        .lineLimit(1)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
                 Spacer(minLength: 8)
                 if isEnterTarget {
                     Image(systemName: "return")

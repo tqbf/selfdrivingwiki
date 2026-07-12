@@ -13,14 +13,14 @@ struct OmniboxSearchField: NSViewRepresentable {
     /// The current location (`[[Page Title]]`) shown when the field isn't being
     /// edited — the browser URL-bar "where am I" cue.
     var locationText: String
-    var results: [WikiPageSummary]
+    var results: [OmniboxResult]
     /// Bumped by the parent (Cmd-L) to request focus.
     var focusToken: Int
     var onTextChange: (String) -> Void
     var onSubmit: () -> Void
     var onEscape: () -> Void
     var onBlur: () -> Void
-    var onSelect: (WikiPageSummary) -> Void
+    var onSelect: (OmniboxResult) -> Void
     /// Leading inset for the editable text, so it clears the overlaid Page Menu
     /// and add-bookmark icons. Varies with hover (the "+" only needs room when
     /// it's shown), so it's applied live in `updateNSView`.
@@ -130,8 +130,8 @@ struct OmniboxSearchField: NSViewRepresentable {
         // monitors both deliver there — so the cross-isolation capture in
         // `handleArrowKey` is race-free.
         private var selectedIndex: Int?
-        private var results: [WikiPageSummary] = []
-        private var cachedResultIDs: [PageID] = []
+        private var results: [OmniboxResult] = []
+        private var cachedResultIDs: [String] = []
         private weak var anchor: NSSearchField?
         private var keyMonitor: Any?
 
@@ -178,7 +178,7 @@ struct OmniboxSearchField: NSViewRepresentable {
         }
 
         @MainActor
-        func render(results: [WikiPageSummary], anchor: NSSearchField) {
+        func render(results: [OmniboxResult], anchor: NSSearchField) {
             // Reset the keyboard highlight whenever the result set changes, so a
             // stale index can't point past the end of a new, shorter list.
             let ids = results.map(\.id)
@@ -301,7 +301,7 @@ final class SuggestionsPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    func update(results: [WikiPageSummary], selectedIndex: Int?, width: CGFloat, onSelect: @escaping (WikiPageSummary) -> Void) {
+    func update(results: [OmniboxResult], selectedIndex: Int?, width: CGFloat, onSelect: @escaping (OmniboxResult) -> Void) {
         let content = AddressResultsList(results: results, selectedIndex: selectedIndex, onSelect: onSelect)
             .frame(width: width)
             .background(.regularMaterial)
