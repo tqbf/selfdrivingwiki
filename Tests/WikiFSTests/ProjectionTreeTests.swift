@@ -150,7 +150,7 @@ struct ProjectionTreeTests {
         guard let head = try s.store.processedMarkdownHead(sourceID: s.pdfSource.id) else {
             Issue.record("markdown head not found"); return
         }
-        #expect(s.projection.contents(for: id) == Data(head.content.utf8))
+        #expect(s.projection.contents(for: id) == Data(SourceMarkdownFormat.fileContent(for: head).utf8))
     }
 
     @Test func markdownSiblingAppearsForNonTextSource() throws {

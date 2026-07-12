@@ -38,6 +38,10 @@ public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
     public let blobHash: String?
     /// MIME type of the body (`text/markdown`).
     public let mimeType: String
+    /// Which extraction backend/technique produced this version (e.g.
+    /// "pdf2md", "anthropic", "gemini", "docling"). `nil` for pre-#131 rows
+    /// and for user edits/reverts (#131).
+    public let technique: String?
 
     public init(
         id: PageID,
@@ -50,7 +54,8 @@ public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
         activityID: String? = nil,
         sourceVersionID: String? = nil,
         blobHash: String? = nil,
-        mimeType: String = "text/markdown"
+        mimeType: String = "text/markdown",
+        technique: String? = nil
     ) {
         self.id = id
         self.sourceID = sourceID
@@ -63,5 +68,6 @@ public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
         self.sourceVersionID = sourceVersionID
         self.blobHash = blobHash
         self.mimeType = mimeType
+        self.technique = technique
     }
 }

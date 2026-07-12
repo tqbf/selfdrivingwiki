@@ -108,8 +108,8 @@ public protocol WikiStore: Sendable {
     /// Page summaries ordered by the given sort criterion.
     func listPages(sortBy: PageSortOrder) throws -> [WikiPageSummary]
     func getPage(id: PageID) throws -> WikiPage
-    func createPage(title: String) throws -> WikiPage
-    func updatePage(id: PageID, title: String, body: String) throws
+    func createPage(title: String, createdBy: String?) throws -> WikiPage
+    func updatePage(id: PageID, title: String, body: String, lastEditedBy: String?) throws
     func deletePage(id: PageID) throws
 
     /// Resolve a page *title* to its id, or nil if no page has that title.
@@ -309,7 +309,8 @@ public protocol WikiStore: Sendable {
     /// head to set `parentID`. Returns the new version.
     @discardableResult
     func appendProcessedMarkdown(sourceID: PageID, content: String,
-                                 origin: String, note: String?) throws -> SourceMarkdownVersion
+                                 origin: String, note: String?,
+                                 technique: String?) throws -> SourceMarkdownVersion
 
     /// Revert to an older version by appending a NEW version whose content
     /// copies the target. History is preserved; HEAD = the new revert version.
@@ -342,7 +343,8 @@ public protocol WikiStore: Sendable {
     /// the new version's id.
     func appendPageVersion(
         pageID: PageID, title: String, body: String,
-        expectedHeadVersionID: String?
+        expectedHeadVersionID: String?,
+        lastEditedBy: String?
     ) throws -> String
 
     /// Resolve the active page-content version id (ref → version_id, or

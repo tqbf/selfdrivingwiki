@@ -9,6 +9,12 @@ public struct WikiPage: Identifiable, Hashable, Sendable {
     public let createdAt: Date
     public var updatedAt: Date
     public var version: Int
+    /// Which agent/model created this page (e.g. "claude-sonnet-4-5-20250929",
+    /// "user"). `nil` for pages created before provenance tracking (#131).
+    public var createdBy: String?
+    /// Which agent/model last edited this page. `nil` if unknown or unchanged
+    /// since creation (#131).
+    public var lastEditedBy: String?
 
     public init(
         id: PageID,
@@ -17,7 +23,9 @@ public struct WikiPage: Identifiable, Hashable, Sendable {
         bodyMarkdown: String,
         createdAt: Date,
         updatedAt: Date,
-        version: Int
+        version: Int,
+        createdBy: String? = nil,
+        lastEditedBy: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -26,5 +34,7 @@ public struct WikiPage: Identifiable, Hashable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.version = version
+        self.createdBy = createdBy
+        self.lastEditedBy = lastEditedBy
     }
 }

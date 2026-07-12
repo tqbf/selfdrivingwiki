@@ -999,7 +999,7 @@ public final class WikiStoreModel {
     public func newPageInNewTab(title: String = "Untitled") {
         flushPendingSaves()
         do {
-            let page = try store.createPage(title: title)
+            let page = try store.createPage(title: title, createdBy: "user")
             try store.replaceLinks(from: page.id, parsedLinks: WikiLinkParser.parse(page.bodyMarkdown))
             reloadSummaries()
             openTab(.page(page.id), title: title)
@@ -1140,7 +1140,8 @@ public final class WikiStoreModel {
             // the editor loaded, this throws `PageConflictError` instead of
             // silently clobbering.
             try PageUpsert.upsert(in: store, id: id, title: draftTitle, body: draftBody,
-                                  expectedHeadVersionID: loadedPageHeadVersionID)
+                                  expectedHeadVersionID: loadedPageHeadVersionID,
+                                  author: "user")
             isDraftDirty = false
             // After a successful versioned save, refresh the head version id so
             // the next save CAS-expects the version we just wrote.
@@ -1442,7 +1443,7 @@ public final class WikiStoreModel {
     public func newPage(title: String = "Untitled") -> PageID? {
         flushPendingSaves()
         do {
-            let page = try store.createPage(title: title)
+            let page = try store.createPage(title: title, createdBy: "user")
             // A fresh page has an empty body, so this resolves to no links — but
             // run it for uniformity with the save() path (and so a future
             // create-with-body wouldn't silently skip link indexing).
@@ -1464,7 +1465,7 @@ public final class WikiStoreModel {
         do {
             let page = try store.getPage(id: id)
             let cleanBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
-            try store.updatePage(id: id, title: newTitle, body: cleanBody)
+            try store.updatePage(id: id, title: newTitle, body: cleanBody, lastEditedBy: nil)
             reloadSummaries()
             if selection == .page(id) { draftTitle = newTitle }
             // Update any tab showing this renamed page.
@@ -1753,7 +1754,7 @@ public final class WikiStoreModel {
                 provenance: prov, role: .primary)
             let markdown = String(data: transcript.data, encoding: .utf8) ?? ""
             try store.appendProcessedMarkdown(
-                sourceID: summary.id, content: markdown, origin: "transcript", note: nil)
+                sourceID: summary.id, content: markdown, origin: "transcript", note: nil, technique: nil)
             reloadSources()
             openTab(.source(summary.id))
             return URLFetchService.FetchOutcome(
@@ -1939,7 +1940,7 @@ public final class WikiStoreModel {
                 sourceID: id, data: data, mimeType: nil, provenance: prov)
         case .derivedMarkdown(let content):
             try store.appendProcessedMarkdown(
-                sourceID: id, content: content, origin: "transcript", note: nil)
+                sourceID: id, content: content, origin: "transcript", note: nil, technique: nil)
         }
         reloadSources()
         return "Refreshed \(origin.displayLabel) source."
@@ -2170,7 +2171,7 @@ public final class WikiStoreModel {
         guard let bytes = try? store.sourceContent(id: file.id),
               let text = String(data: bytes, encoding: .utf8) else { return nil }
         return try? store.appendProcessedMarkdown(
-            sourceID: file.id, content: text, origin: "source", note: nil)
+            sourceID: file.id, content: text, origin: "source", note: nil, technique: nil)
     }
 
     /// True when at least one processed-markdown version exists for this source.
@@ -2242,7 +2243,7 @@ public final class WikiStoreModel {
     @discardableResult
     public func saveProcessedMarkdown(for sourceID: PageID, content: String) -> SourceMarkdownVersion? {
         try? store.appendProcessedMarkdown(
-            sourceID: sourceID, content: content, origin: "user", note: nil)
+            sourceID: sourceID, content: content, origin: "user", note: nil, technique: nil)
     }
 
     /// Seed the first processed-markdown version for a PDF from extraction
