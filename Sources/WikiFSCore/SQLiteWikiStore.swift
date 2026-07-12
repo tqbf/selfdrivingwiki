@@ -548,6 +548,20 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // `source_markdown_versions`. The columns are already in the fresh
         // schema's CREATE TABLE above, so this just advances the version stamp.
         try exec("PRAGMA user_version=33;")
+
+        // v34 (#multi-writer-hardening Phase 3 — head-ref invariant): a fresh
+        // DB has no pages to backfill; the version stamp is needed so the
+        // stepwise ladder's v33→34 step is a no-op when re-run. The
+        // `createPage` ref-seeding change ensures all future-created pages
+        // have refs from birth.
+        try exec("PRAGMA user_version=34;")
+
+        // v35 (#multi-writer-hardening Phase 5 — created-page staging):
+        // `workspace_refs.version_id` is nullable and `blob_hash` + `title`
+        // columns are present so created pages can be staged without a phantom
+        // `pages` row. A fresh DB has no workspaces, so this is a version
+        // stamp only — `createWorkspacesV31` above already uses the new shape.
+        try exec("PRAGMA user_version=35;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -650,6 +664,14 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// durable, named speculative branch for a long-running ingestion;
     /// `workspace_refs` is the per-page overlay (the workspace's current head
     /// + the base version observed at first write, for three-way merge).
+    ///
+    /// v35 (multi-writer-hardening Phase 5): `version_id` is now nullable and
+    /// `blob_hash` + `title` columns are added so created pages can be staged
+    /// entirely inside `workspace_refs` — no phantom `pages` row on main until
+    /// merge. The staging invariant:
+    /// - Existing page: `version_id` set, `blob_hash` + `title` nil.
+    /// - Created page: `version_id` nil, `blob_hash` + `title` set.
+    ///
     /// Called by both the fresh-schema fast path and the v30→31 migration step
     /// so the two stay schema-identical. `IF NOT EXISTS`: idempotent.
     private func createWorkspacesV31() throws {
@@ -671,7 +693,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             kind           TEXT NOT NULL CHECK (kind = 'page-content'),
             owner_id       TEXT NOT NULL,
             base_version_id TEXT,
-            version_id     TEXT NOT NULL,
+            version_id     TEXT,
+            blob_hash      TEXT REFERENCES blobs(hash),
+            title          TEXT,
             updated_at     REAL NOT NULL,
             PRIMARY KEY (workspace_id, kind, owner_id)
         );
@@ -1441,6 +1465,30 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try exec("PRAGMA user_version=33;")
             version = 33
         }
+
+        // Step 33 → 34 (#multi-writer-hardening Phase 3 — head-ref invariant):
+        // backfills a `page-content` ref for every page that lacks one, and
+        // seeds a root version for pages that have none (agent-created pages
+        // via blind `wikictl page upsert` never created a version row).
+        // After v34, every page has an explicit ref → the MAX(id) fallback in
+        // `pageHeadVersionIDLocked` is dead code for migrated data.
+        if version < 34 {
+            try migrateV33ToV34()
+            try exec("PRAGMA user_version=34;")
+            version = 34
+        }
+
+        // Step 34 → 35 (#multi-writer-hardening Phase 5 — created-page staging):
+        // Rebuilds `workspace_refs` to make `version_id` nullable and add
+        // `blob_hash` + `title` columns. SQLite cannot ALTER TABLE to relax a
+        // NOT NULL constraint, so a table rebuild (CREATE-INSERT-DROP-RENAME)
+        // is required. Existing rows are preserved with their original
+        // `version_id` values; new `blob_hash`/`title` columns are NULL.
+        if version < 35 {
+            try migrateV34ToV35()
+            try exec("PRAGMA user_version=35;")
+            version = 35
+        }
     }
 
     /// The v19→20 migration step. Creates the objects tables, then — for every
@@ -2038,6 +2086,168 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    /// v33 → v34 (#multi-writer-hardening Phase 3 — head-ref invariant):
+    /// For every `pages` row that has no `page-content` ref, resolves the head
+    /// via MAX(id), seeds a root version if the page has none (agent-created
+    /// pages via blind `wikictl page upsert`), then inserts a `page-content`
+    /// ref pointing at the resolved head. After this, the MAX(id) fallback in
+    /// `pageHeadVersionIDLocked` is dead code for migrated data. Idempotent:
+    /// re-running on a v34 DB is a no-op (all pages already have refs).
+    private func migrateV33ToV34() throws {
+        try withTransaction {
+            // Reuse the legacy-import agent (same as v20/v30 seeding).
+            let legacyAgentID = try legacyImportAgentID()
+            let now = Date().timeIntervalSince1970
+
+            // Collect refless page IDs first (avoid stepping a query cursor while
+            // inserting — the SQLite statement discipline forbids leaving a cursor
+            // at SQLITE_ROW across other statement operations).
+            let reflessPages = try statement("""
+            SELECT p.id, p.title, p.body_markdown, p.created_at
+            FROM pages p
+            WHERE NOT EXISTS (
+                SELECT 1 FROM refs r
+                WHERE r.kind = 'page-content' AND r.owner_id = p.id
+            );
+            """)
+            var pages: [(id: String, title: String, body: Data, createdAt: Double)] = []
+            while try reflessPages.step() {
+                pages.append((
+                    id: reflessPages.text(at: 0),
+                    title: reflessPages.text(at: 1),
+                    body: Data(reflessPages.blob(at: 2)),
+                    createdAt: reflessPages.double(at: 3)
+                ))
+            }
+            reflessPages.reset()
+
+            // No refless pages → no-op (idempotent for a v34 DB).
+            guard !pages.isEmpty else { return }
+
+            // Prepared statements for the seeding path.
+            let maxStmt = try statement("""
+            SELECT id FROM page_versions
+            WHERE page_id = ?1
+            ORDER BY id DESC LIMIT 1;
+            """)
+            let insBlob = try statement(
+                "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+            let insActivity = try statement("""
+            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+            VALUES (?1, 'import', ?2, ?3, ?3);
+            """)
+            let insVersion = try statement("""
+            INSERT INTO page_versions (id, page_id, parent_id, blob_hash, title, activity_id, saved_at)
+            VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6);
+            """)
+            let insRef = try statement("""
+            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+            VALUES ('page-content', ?1, ?2, 1, ?3);
+            """)
+            defer {
+                maxStmt.reset()
+                insBlob.reset()
+                insActivity.reset()
+                insVersion.reset()
+                insRef.reset()
+            }
+
+            for page in pages {
+                // Resolve the head via MAX(id) — the pre-v34 fallback.
+                maxStmt.reset()
+                try maxStmt.bind(page.id, at: 1)
+
+                var headVersionID: String
+                if try maxStmt.step() {
+                    // The page already has versions but no ref → just write the ref.
+                    headVersionID = maxStmt.text(at: 0)
+                } else {
+                    // No versions at all → seed a root version (agent-created page
+                    // via blind upsert). Mirror the v30 migration pattern.
+                    let hash = SHA256.hash(data: page.body)
+                        .map { String(format: "%02x", $0) }.joined()
+
+                    insBlob.reset()
+                    try insBlob.bind(hash, at: 1)
+                    try insBlob.bind(Int64(page.body.count), at: 2)
+                    try insBlob.bind(page.body, at: 3)
+                    _ = try insBlob.step()
+
+                    let activityID = ULID.generate()
+                    insActivity.reset()
+                    try insActivity.bind(activityID, at: 1)
+                    try insActivity.bind(legacyAgentID, at: 2)
+                    try insActivity.bind(page.createdAt, at: 3)
+                    _ = try insActivity.step()
+
+                    headVersionID = ULID.generate()
+                    insVersion.reset()
+                    try insVersion.bind(headVersionID, at: 1)
+                    try insVersion.bind(page.id, at: 2)
+                    try insVersion.bind(hash, at: 3)
+                    try insVersion.bind(page.title, at: 4)
+                    try insVersion.bind(activityID, at: 5)
+                    try insVersion.bind(page.createdAt, at: 6)
+                    _ = try insVersion.step()
+                }
+
+                // Write the ref pointing at the resolved head.
+                insRef.reset()
+                try insRef.bind(page.id, at: 1)
+                try insRef.bind(headVersionID, at: 2)
+                try insRef.bind(now, at: 3)
+                _ = try insRef.step()
+            }
+        }
+    }
+
+    /// v34 → v35 (#multi-writer-hardening Phase 5 — created-page staging):
+    /// Rebuilds `workspace_refs` to make `version_id` nullable and add
+    /// `blob_hash` + `title` columns. SQLite cannot `ALTER TABLE` to relax a
+    /// NOT NULL constraint, so a CREATE-INSERT-DROP-RENAME table rebuild is
+    /// required. Existing `workspace_refs` rows are preserved with their
+    /// original values; the new columns are NULL for pre-v35 data.
+    ///
+    /// The PK is inline (part of CREATE TABLE), so it survives the rebuild.
+    /// Idempotent: if `workspace_refs` already has `blob_hash`, the migration
+    /// is a no-op (re-running on a v35 DB).
+    private func migrateV34ToV35() throws {
+        // Idempotency guard: if `blob_hash` column already exists, skip.
+        let columns = try tableColumnInfo("workspace_refs")
+        guard !columns.contains("blob_hash") else { return }
+
+        try withTransaction {
+            // 1. Create the new table with the updated shape.
+            try exec("""
+            CREATE TABLE _workspace_refs_new (
+                workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                kind           TEXT NOT NULL CHECK (kind = 'page-content'),
+                owner_id       TEXT NOT NULL,
+                base_version_id TEXT,
+                version_id     TEXT,
+                blob_hash      TEXT REFERENCES blobs(hash),
+                title          TEXT,
+                updated_at     REAL NOT NULL,
+                PRIMARY KEY (workspace_id, kind, owner_id)
+            );
+            """)
+
+            // 2. Copy all existing rows (blob_hash + title = NULL for migrated data).
+            try exec("""
+            INSERT INTO _workspace_refs_new
+                (workspace_id, kind, owner_id, base_version_id, version_id, blob_hash, title, updated_at)
+            SELECT workspace_id, kind, owner_id, base_version_id, version_id, NULL, NULL, updated_at
+            FROM workspace_refs;
+            """)
+
+            // 3. Drop the old table.
+            try exec("DROP TABLE workspace_refs;")
+
+            // 4. Rename the new table into place.
+            try exec("ALTER TABLE _workspace_refs_new RENAME TO workspace_refs;")
+        }
+    }
+
     /// Returns column names for `table` via pragma_table_info.
     private func tableColumnInfo(_ table: String) throws -> Set<String> {
         let stmt = try statement("SELECT name FROM pragma_table_info('\(table)');")
@@ -2534,6 +2744,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let id = PageID(rawValue: ULID.generate())
         let slug = try uniqueSlug(from: title, id: id)
         let now = Date()
+        let nowTS = now.timeIntervalSince1970
         let stmt = try statement("""
         INSERT INTO pages (id, title, slug, body_markdown, created_at, updated_at, version, created_by, last_edited_by)
         VALUES (?1, ?2, ?3, '', ?4, ?4, 1, ?5, ?5);
@@ -2542,9 +2753,65 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try stmt.bind(id.rawValue, at: 1)
         try stmt.bind(title, at: 2)
         try stmt.bind(slug, at: 3)
-        try stmt.bind(now.timeIntervalSince1970, at: 4)
+        try stmt.bind(nowTS, at: 4)
         if let createdBy { try stmt.bind(createdBy, at: 5) } else { try stmt.bind(nil, at: 5) }
         _ = try stmt.step()
+
+        // Phase 3 (head-ref invariant): seed a root version + page-content ref
+        // atomically so the page has a ref from birth (not relying on the
+        // first save). The empty body is the initial blob.
+        let bodyData = Data("".utf8)
+        let hash = SHA256.hash(data: bodyData)
+            .map { String(format: "%02x", $0) }.joined()
+
+        let insBlob = try statement(
+            "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+        insBlob.reset()
+        try insBlob.bind(hash, at: 1)
+        try insBlob.bind(Int64(0), at: 2)
+        try insBlob.bind(bodyData, at: 3)
+        _ = try insBlob.step()
+        insBlob.reset()
+
+        let legacyAgentID = try legacyImportAgentID()
+        let activityID = ULID.generate()
+        let insActivity = try statement("""
+        INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+        VALUES (?1, 'import', ?2, ?3, ?3);
+        """)
+        insActivity.reset()
+        try insActivity.bind(activityID, at: 1)
+        try insActivity.bind(legacyAgentID, at: 2)
+        try insActivity.bind(nowTS, at: 3)
+        _ = try insActivity.step()
+        insActivity.reset()
+
+        let versionID = ULID.generate()
+        let insVersion = try statement("""
+        INSERT INTO page_versions (id, page_id, parent_id, blob_hash, title, activity_id, saved_at)
+        VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6);
+        """)
+        insVersion.reset()
+        try insVersion.bind(versionID, at: 1)
+        try insVersion.bind(id.rawValue, at: 2)
+        try insVersion.bind(hash, at: 3)
+        try insVersion.bind(title, at: 4)
+        try insVersion.bind(activityID, at: 5)
+        try insVersion.bind(nowTS, at: 6)
+        _ = try insVersion.step()
+        insVersion.reset()
+
+        let insRef = try statement("""
+        INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+        VALUES ('page-content', ?1, ?2, 1, ?3);
+        """)
+        insRef.reset()
+        try insRef.bind(id.rawValue, at: 1)
+        try insRef.bind(versionID, at: 2)
+        try insRef.bind(nowTS, at: 3)
+        _ = try insRef.step()
+        insRef.reset()
+
         return WikiPage(
             id: id, title: title, slug: slug, bodyMarkdown: "",
             createdAt: now, updatedAt: now, version: 1,
@@ -2566,6 +2833,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             updated_at = ?5, version = version + 1, last_edited_by = ?6
         WHERE id = ?1;
         """)
+        stmt.reset()  // reset cached statement before reusing (it may be at SQLITE_DONE)
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
         try stmt.bind(title, at: 2)
@@ -2573,7 +2841,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try stmt.bind(body, at: 4)
         try stmt.bind(Date().timeIntervalSince1970, at: 5)
         if let lastEditedBy { try stmt.bind(lastEditedBy, at: 6) } else { try stmt.bind(nil, at: 6) }
+        DebugLog.store("updatePage DEBUG: about to step")
         _ = try stmt.step()
+        DebugLog.store("updatePage DEBUG: step OK, changes=\(sqlite3_changes(db))")
         guard sqlite3_changes(db) > 0 else { throw WikiStoreError.notFound(id) }
         }
     }
@@ -2605,6 +2875,20 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             if let expected = expectedHeadVersionID, expected != head {
                 throw PageConflictError(
                     pageID: pageID, expectedVersionID: expected, actualVersionID: head)
+            }
+
+            // 1b. Amend check (Phase 4 — autosave coalescing). Same-actor saves
+            //     within a short coalescing window amend the head version in
+            //     place instead of appending a new row. This bounds page history
+            //     growth from autosave debouncing without losing data (the
+            //     amend is in-place + event-emitted, so the File Provider
+            //     invalidates and re-projects).
+            if let amendVersionID = try tryAmendPageVersion(
+                pageID: pageID, head: head, title: title, slug: slug,
+                body: body, bodyData: bodyData, hash: hash,
+                lastEditedBy: lastEditedBy, now: now, nowTS: nowTS)
+            {
+                return amendVersionID
             }
 
             // 2. Blob (identical body = one row, ever).
@@ -2684,7 +2968,159 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    /// Resolve the active page-content version id: ref → version_id, or
+    /// Coalescing window for autosave amend (Phase 4). Same-actor saves within
+    /// this window amend the head version in place instead of appending a new
+    /// row, bounding history growth from the 500ms autosave debounce. Tunable.
+    private static let amendCoalescingWindow: TimeInterval = 5.0
+
+    /// Attempt to amend the head page version in place instead of appending.
+    /// Returns the (unchanged) version id if the amend succeeded, or nil to
+    /// fall through to the append path. Assumes the caller holds the lock and
+    /// is inside a `withTransaction` (internal helper called from
+    /// `appendPageVersion`).
+    ///
+    /// All five conditions must hold:
+    /// 1. Same actor (pre-save `pages.last_edited_by` == incoming `lastEditedBy`).
+    /// 2. Head saved within the coalescing window.
+    /// 3. Head has no children (no `parent_id`/`merge_parent_id` points at it).
+    /// 4. No `workspace_refs` row references the head.
+    /// 5. Blind-write guard: `pages.body_markdown` matches the head blob (no
+    ///    unversioned `updatePage` happened between the last versioned save and now).
+    private func tryAmendPageVersion(
+        pageID: PageID, head: String?, title: String, slug: String,
+        body: String, bodyData: Data, hash: String,
+        lastEditedBy: String?, now: Date, nowTS: Double
+    ) throws -> String? {
+        // Need a head to amend.
+        guard let head else { return nil }
+
+        // 1. Same-actor check: the head must have been produced by the same
+        //    actor as this save. We compare the pre-save `pages.last_edited_by`
+        //    (which reflects the head version's actor — every versioned save
+        //    routes through here and sets it) against the incoming actor.
+        guard let lastEditedBy else { return nil }
+        let actorStmt = try statement(
+            "SELECT last_edited_by FROM pages WHERE id = ?1;")
+        try actorStmt.bind(pageID.rawValue, at: 1)
+        guard try actorStmt.step() else { actorStmt.reset(); return nil }
+        let existingActor = actorStmt.text(at: 0)
+        actorStmt.reset()  // reset immediately — don't pin the connection at SQLITE_ROW
+        guard existingActor == lastEditedBy else { return nil }
+
+        // 2. Within the coalescing window.
+        let windowStmt = try statement("""
+        SELECT saved_at FROM page_versions WHERE id = ?1;
+        """)
+        try windowStmt.bind(head, at: 1)
+        guard try windowStmt.step() else { windowStmt.reset(); return nil }
+        let savedAt = windowStmt.double(at: 0)
+        windowStmt.reset()
+        let elapsed = nowTS - savedAt
+        guard elapsed >= 0 && elapsed <= Self.amendCoalescingWindow else { return nil }
+
+        // 3. Head has no children (no version has parent_id or merge_parent_id
+        //    pointing at it).
+        let childStmt = try statement("""
+        SELECT COUNT(*) FROM page_versions
+        WHERE parent_id = ?1 OR merge_parent_id = ?1;
+        """)
+        try childStmt.bind(head, at: 1)
+        guard try childStmt.step() else { childStmt.reset(); return nil }
+        let childCount = Int(childStmt.int(at: 0))
+        childStmt.reset()
+        guard childCount == 0 else { return nil }
+
+        // 4. No workspace_refs row references the head (version_id or base_version_id).
+        let wsStmt = try statement("""
+        SELECT COUNT(*) FROM workspace_refs
+        WHERE version_id = ?1 OR base_version_id = ?1;
+        """)
+        try wsStmt.bind(head, at: 1)
+        guard try wsStmt.step() else { wsStmt.reset(); return nil }
+        let wsCount = Int(wsStmt.int(at: 0))
+        wsStmt.reset()
+        guard wsCount == 0 else { return nil }
+
+        // 5. Blind-write guard: pages.body_markdown must match the head version's
+        //    blob content. If they diverge, an unversioned `updatePage` happened
+        //    between the last versioned save and now — append instead of amend.
+        let bodyCheckStmt = try statement("""
+        SELECT b.content FROM page_versions pv
+        JOIN blobs b ON b.hash = pv.blob_hash
+        WHERE pv.id = ?1;
+        """)
+        try bodyCheckStmt.bind(head, at: 1)
+        guard try bodyCheckStmt.step() else { bodyCheckStmt.reset(); return nil }
+        let headBlobData = bodyCheckStmt.blob(at: 0)
+        bodyCheckStmt.reset()
+        let pageMirrorStmt = try statement(
+            "SELECT body_markdown FROM pages WHERE id = ?1;")
+        try pageMirrorStmt.bind(pageID.rawValue, at: 1)
+        guard try pageMirrorStmt.step() else { pageMirrorStmt.reset(); return nil }
+        let mirrorBody = pageMirrorStmt.text(at: 0)
+        pageMirrorStmt.reset()
+        let mirrorData = Data(mirrorBody.utf8)
+        guard mirrorData == headBlobData else { return nil }
+
+        // All conditions hold — amend in place.
+        DebugLog.store("appendPageVersion: amending head \(head) for page \(pageID.rawValue) (same-actor coalescing, \(String(format: "%.2f", elapsed))s since last save)")
+
+        // Insert the new blob (identical body = one row, ever).
+        let insBlob = try statement(
+            "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+        insBlob.reset()
+        try insBlob.bind(hash, at: 1)
+        try insBlob.bind(Int64(bodyData.count), at: 2)
+        try insBlob.bind(bodyData, at: 3)
+        _ = try insBlob.step()
+
+        // Update the head version's blob_hash + title in place (same version id).
+        let upVersion = try statement("""
+        UPDATE page_versions
+        SET blob_hash = ?2, title = ?3
+        WHERE id = ?1;
+        """)
+        upVersion.reset()
+        try upVersion.bind(head, at: 1)
+        try upVersion.bind(hash, at: 2)
+        try upVersion.bind(title, at: 3)
+        _ = try upVersion.step()
+
+        // Update the denormalized pages mirror.
+        let upPage = try statement("""
+        UPDATE pages
+        SET title = ?2, slug = ?3, body_markdown = ?4,
+            updated_at = ?5, version = version + 1, last_edited_by = ?6
+        WHERE id = ?1;
+        """)
+        upPage.reset()
+        try upPage.bind(pageID.rawValue, at: 1)
+        try upPage.bind(title, at: 2)
+        try upPage.bind(slug, at: 3)
+        try upPage.bind(body, at: 4)
+        try upPage.bind(nowTS, at: 5)
+        try upPage.bind(lastEditedBy, at: 6)
+        _ = try upPage.step()
+        guard sqlite3_changes(db) > 0 else { throw WikiStoreError.notFound(pageID) }
+
+        // Bump the page-content ref generation (same version_id, but generation
+        // increments to signal the body change to the File Provider).
+        let upRef = try statement("""
+        INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+        VALUES ('page-content', ?1, ?2, 1, ?3)
+        ON CONFLICT(kind, owner_id) DO UPDATE SET
+            version_id = excluded.version_id,
+            generation = generation + 1,
+            updated_at = excluded.updated_at;
+        """)
+        upRef.reset()
+        try upRef.bind(pageID.rawValue, at: 1)
+        try upRef.bind(head, at: 2)
+        try upRef.bind(nowTS, at: 3)
+        _ = try upRef.step()
+
+        return head
+    }
     /// MAX(id) from page_versions if no ref row exists (default-active rule).
     /// Returns nil if the page has no versions. Assumes the lock is held
     /// (internal helper called from within `withTransaction`/`mutate`).
@@ -2699,6 +3135,10 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             return refStmt.text(at: 0)
         }
         // No ref → default-active = MAX(id) for this page.
+        // After v34, every page has a ref — reaching this fallback means a code
+        // path failed to seed one. Log it (not assertionFailure — this remains
+        // correct behavior, but it surfaces a ref-seeding gap).
+        DebugLog.store("pageHeadVersionIDLocked: MAX(id) fallback for page \(pageID.rawValue) — no page-content ref found (should not happen after v34 migration)")
         let maxStmt = try statement("""
         SELECT id FROM page_versions
         WHERE page_id = ?1
@@ -2847,7 +3287,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     public func workspaceRefs(workspaceID: String) throws -> [WorkspaceRef] {
         lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
-        SELECT workspace_id, owner_id, base_version_id, version_id, updated_at
+        SELECT workspace_id, owner_id, base_version_id, version_id, blob_hash, title, updated_at
         FROM workspace_refs WHERE workspace_id = ?1;
         """)
         defer { stmt.reset() }
@@ -2855,12 +3295,17 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         var out: [WorkspaceRef] = []
         while try stmt.step() {
             let baseIsNull = sqlite3_column_type(stmt.handle, 2) == SQLITE_NULL
+            let versionIsNull = sqlite3_column_type(stmt.handle, 3) == SQLITE_NULL
+            let blobHashIsNull = sqlite3_column_type(stmt.handle, 4) == SQLITE_NULL
+            let titleIsNull = sqlite3_column_type(stmt.handle, 5) == SQLITE_NULL
             out.append(WorkspaceRef(
                 workspaceID: stmt.text(at: 0),
                 ownerID: PageID(rawValue: stmt.text(at: 1)),
                 baseVersionID: baseIsNull ? nil : stmt.text(at: 2),
-                versionID: stmt.text(at: 3),
-                updatedAt: Date(timeIntervalSince1970: stmt.double(at: 4))))
+                versionID: versionIsNull ? nil : stmt.text(at: 3),
+                blobHash: blobHashIsNull ? nil : stmt.text(at: 4),
+                title: titleIsNull ? nil : stmt.text(at: 5),
+                updatedAt: Date(timeIntervalSince1970: stmt.double(at: 6))))
         }
         return out
     }
@@ -2877,26 +3322,57 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let nowTS = now.timeIntervalSince1970
 
         return try withTransaction {
-            // 0. If the page doesn't exist on main yet (created in workspace),
-            //    create a placeholder `pages` row so the page_versions FK
-            //    holds. The body is empty — it's filled at merge time.
+            // 0. Determine whether the page exists on main.
             let pageExists = try statement("SELECT 1 FROM pages WHERE id = ?1;")
-            defer { pageExists.reset() }
             try pageExists.bind(pageID.rawValue, at: 1)
-            if !(try pageExists.step()) {
-                let slug = try uniqueSlug(from: title, id: pageID)
-                let insPage = try statement("""
-                INSERT INTO pages (id, title, slug, body_markdown, created_at, updated_at, version)
-                VALUES (?1, ?2, ?3, '', ?4, ?4, 1);
+            let existsOnMain = try pageExists.step()
+            pageExists.reset()  // reset immediately — don't pin the connection at SQLITE_ROW
+
+            if !existsOnMain {
+                // Created page: stage entirely in workspace_refs (v35).
+                // No `pages` row, no `page_versions` row, no activity.
+                // The page is invisible on main until merge mints it.
+                // The blob is needed so the merge can read the staged body.
+                let insBlob = try statement(
+                    "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
+                insBlob.reset()
+                try insBlob.bind(hash, at: 1)
+                try insBlob.bind(Int64(bodyData.count), at: 2)
+                try insBlob.bind(bodyData, at: 3)
+                _ = try insBlob.step()
+
+                // UPSERT workspace_refs: blob_hash + title set, version_id NULL,
+                // base_version_id NULL (created page — no base to diff against).
+                let upRef = try statement("""
+                INSERT INTO workspace_refs (workspace_id, kind, owner_id, base_version_id, version_id, blob_hash, title, updated_at)
+                VALUES (?1, 'page-content', ?2, NULL, NULL, ?3, ?4, ?5)
+                ON CONFLICT(workspace_id, kind, owner_id) DO UPDATE SET
+                    version_id = NULL,
+                    blob_hash = excluded.blob_hash,
+                    title = excluded.title,
+                    updated_at = excluded.updated_at;
                 """)
-                insPage.reset()
-                try insPage.bind(pageID.rawValue, at: 1)
-                try insPage.bind(title, at: 2)
-                try insPage.bind(slug, at: 3)
-                try insPage.bind(nowTS, at: 4)
-                _ = try insPage.step()
+                upRef.reset()
+                try upRef.bind(workspaceID, at: 1)
+                try upRef.bind(pageID.rawValue, at: 2)
+                try upRef.bind(hash, at: 3)
+                try upRef.bind(title, at: 4)
+                try upRef.bind(nowTS, at: 5)
+                _ = try upRef.step()
+
+                // Touch the workspace's updated_at.
+                let touchWs = try statement(
+                    "UPDATE workspaces SET updated_at = ?2 WHERE id = ?1;")
+                touchWs.reset()
+                try touchWs.bind(workspaceID, at: 1)
+                try touchWs.bind(nowTS, at: 2)
+                _ = try touchWs.step()
+
+                // Return the blob hash as the identifier (no version was created).
+                return hash
             }
 
+            // Existing page (stages version_id): current behavior unchanged.
             // 1. Blob.
             let insBlob = try statement(
                 "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?1, ?2, ?3);")
@@ -2946,7 +3422,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
             // 4. UPSERT workspace_refs. On first touch, record base_version_id
             //    = main head (the three-way-merge base). On subsequent touches,
-            //    keep the original base.
+            //    keep the original base. Clear blob_hash + title to maintain
+            //    the staging invariant (existing page → version_id set, not
+            //    blob_hash + title).
             let baseToRecord: String?
             if wsHead != nil {
                 // Already have a workspace_ref → keep the existing base.
@@ -2957,10 +3435,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             }
 
             let upRef = try statement("""
-            INSERT INTO workspace_refs (workspace_id, kind, owner_id, base_version_id, version_id, updated_at)
-            VALUES (?1, 'page-content', ?2, ?3, ?4, ?5)
+            INSERT INTO workspace_refs (workspace_id, kind, owner_id, base_version_id, version_id, blob_hash, title, updated_at)
+            VALUES (?1, 'page-content', ?2, ?3, ?4, NULL, NULL, ?5)
             ON CONFLICT(workspace_id, kind, owner_id) DO UPDATE SET
                 version_id = excluded.version_id,
+                blob_hash = NULL,
+                title = NULL,
                 updated_at = excluded.updated_at;
             """)
             upRef.reset()
@@ -2985,7 +3465,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     /// Internal: resolve the workspace's current version for a page.
-    /// Assumes the lock is held.
+    /// Assumes the lock is held. Returns nil if the page has no workspace_ref
+    /// or if the page is staged as a created page (version_id is NULL — the
+    /// content lives in blob_hash instead of a page_version row).
     private func workspacePageVersionLocked(
         workspaceID: String, pageID: PageID
     ) throws -> String? {
@@ -2997,6 +3479,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try stmt.bind(workspaceID, at: 1)
         try stmt.bind(pageID.rawValue, at: 2)
         if try stmt.step() {
+            // Created pages have version_id = NULL (staged as blob_hash).
+            if sqlite3_column_type(stmt.handle, 0) == SQLITE_NULL { return nil }
             return stmt.text(at: 0)
         }
         return nil
@@ -3007,11 +3491,77 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         return try workspacePageVersionLocked(workspaceID: workspaceID, pageID: pageID)
     }
 
-    public func workspaceMerge(workspaceID: String) throws {
+    /// Overlay read: return the workspace's staged body for a page, or nil if
+    /// the workspace hasn't touched it. For existing pages (version_id set),
+    /// reads the version's blob. For created pages (blob_hash set, version_id
+    /// nil), reads the staged blob directly. Phase 7.
+    public func workspacePageBody(workspaceID: String, pageID: PageID) throws -> String? {
+        lock.lock(); defer { lock.unlock() }
+        // Check if the workspace has a ref for this page.
+        let refStmt = try statement("""
+        SELECT version_id, blob_hash FROM workspace_refs
+        WHERE workspace_id = ?1 AND kind = 'page-content' AND owner_id = ?2;
+        """)
+        defer { refStmt.reset() }
+        try refStmt.bind(workspaceID, at: 1)
+        try refStmt.bind(pageID.rawValue, at: 2)
+        guard try refStmt.step() else { return nil }
+
+        let versionIsNull = sqlite3_column_type(refStmt.handle, 0) == SQLITE_NULL
+        let blobHashIsNull = sqlite3_column_type(refStmt.handle, 1) == SQLITE_NULL
+        let versionID = versionIsNull ? nil : refStmt.text(at: 0)
+        let blobHash = blobHashIsNull ? nil : refStmt.text(at: 1)
+        refStmt.reset()
+
+        if let versionID {
+            // Existing page: read the version's blob.
+            let blobStmt = try statement(
+                "SELECT pv.blob_hash, b.content FROM page_versions pv "
+                + "JOIN blobs b ON b.hash = pv.blob_hash WHERE pv.id = ?1;")
+            defer { blobStmt.reset() }
+            try blobStmt.bind(versionID, at: 1)
+            guard try blobStmt.step() else { return nil }
+            let data = blobStmt.blob(at: 1)
+            return String(data: data, encoding: .utf8)
+        }
+
+        guard let blobHash else { return nil }
+        // Created page: read the staged blob directly.
+        let blobStmt = try statement("SELECT content FROM blobs WHERE hash = ?1;")
+        defer { blobStmt.reset() }
+        try blobStmt.bind(blobHash, at: 1)
+        guard try blobStmt.step() else { return nil }
+        let data = blobStmt.blob(at: 0)
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// Stage wiki-index changes into the workspace (`index_body` + the
+    /// `index_base_version` snapshot taken at workspace creation). NO-EMIT:
+    /// workspace writes are invisible to the File Provider token until merge.
+    public func setWorkspaceIndexBody(
+        workspaceID: String, indexBody: String, indexBaseVersion: String
+    ) throws {
+        try mutate(event: { _ in nil }) {
+        let stmt = try statement("""
+        UPDATE workspaces SET index_body = ?2, index_base_version = ?3, updated_at = ?4
+        WHERE id = ?1;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(workspaceID, at: 1)
+        try stmt.bind(indexBody, at: 2)
+        try stmt.bind(indexBaseVersion, at: 3)
+        try stmt.bind(Date().timeIntervalSince1970, at: 4)
+        _ = try stmt.step()
+        }
+    }
+
+    @discardableResult
+    public func workspaceMerge(workspaceID: String) throws -> [String] {
         // Phase 1: attempt the merge inside a transaction. If any page
         // conflicts, roll back the partial fast-forwards AND park the
         // workspace as 'conflicted' in a separate transaction.
         var conflicts: [(pageID: String, base: String?, wsVersion: String, mainVersion: String?)] = []
+        var mergedPageIDs: [String] = []
         do {
             try mutate(event: { _ in nil }) {
             try withTransaction {
@@ -3026,9 +3576,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                     throw WikiStoreError.unexpected("workspace \(workspaceID) is not open (already merging/merged/conflicted/abandoned)")
                 }
 
-                // 2. For each workspace_ref, attempt fast-forward.
+                // 2. For each workspace_ref, attempt fast-forward or mint.
                 let refs = try statement("""
-                SELECT owner_id, base_version_id, version_id
+                SELECT owner_id, base_version_id, version_id, blob_hash, title
                 FROM workspace_refs WHERE workspace_id = ?1;
                 """)
                 defer { refs.reset() }
@@ -3038,44 +3588,116 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                     let pageIDStr = refs.text(at: 0)
                     let baseIsNull = sqlite3_column_type(refs.handle, 1) == SQLITE_NULL
                     let base = baseIsNull ? nil : refs.text(at: 1)
-                    let wsVersion = refs.text(at: 2)
+                    let versionIdIsNull = sqlite3_column_type(refs.handle, 2) == SQLITE_NULL
+                    let wsVersion = versionIdIsNull ? nil : refs.text(at: 2)
+                    let blobHashIsNull = sqlite3_column_type(refs.handle, 3) == SQLITE_NULL
+                    let blobHash = blobHashIsNull ? nil : refs.text(at: 3)
+                    let title = refs.text(at: 4)
                     let pageID = PageID(rawValue: pageIDStr)
 
                     // Resolve main head.
                     let mainHead = try pageHeadVersionIDLocked(pageID: pageID)
 
-                    if base == nil {
-                        // Page created in workspace (no base). A placeholder
-                        // `pages` row was created by workspaceWritePage, so the
-                        // page exists on main with an empty body. Check if a main
-                        // ref exists — if not, the page was created in-workspace
-                        // and we fast-forward. If a ref exists, someone else
-                        // created the same page → conflict.
+                    if versionIdIsNull {
+                        // Created page (v35 staging): content is in blob_hash +
+                        // title, no page_version row. Mint the `pages` row +
+                        // root version + page-content ref here.
+                        guard let stagedHash = blobHash else {
+                            throw WikiStoreError.unexpected("workspaceMerge: created page \(pageIDStr) has nil blob_hash")
+                        }
+                        // Conflict: a page-content ref already exists on main
+                        // (another workspace created the same page identity). Park
+                        // rather than creating a duplicate.
                         let mainRefExists = try statement("""
                         SELECT 1 FROM refs WHERE kind = 'page-content' AND owner_id = ?1;
                         """)
                         defer { mainRefExists.reset() }
                         try mainRefExists.bind(pageIDStr, at: 1)
                         if try mainRefExists.step() {
-                            conflicts.append((pageIDStr, base, wsVersion, mainHead))
+                            conflicts.append((pageIDStr, nil, stagedHash, mainHead))
+                            continue
+                        }
+                        try mintCreatedPage(
+                            pageID: pageID, blobHash: stagedHash, title: title)
+                        mergedPageIDs.append(pageIDStr)
+                    } else if base == nil {
+                        // Old-style created page (pre-v35: version_id set, base
+                        // nil). A placeholder `pages` row was created by the
+                        // old workspaceWritePage. Fast-forward the existing
+                        // version.
+                        let mainRefExists = try statement("""
+                        SELECT 1 FROM refs WHERE kind = 'page-content' AND owner_id = ?1;
+                        """)
+                        defer { mainRefExists.reset() }
+                        try mainRefExists.bind(pageIDStr, at: 1)
+                        if try mainRefExists.step() {
+                            conflicts.append((pageIDStr, base, wsVersion!, mainHead))
                             continue
                         }
                         try fastForwardPage(
-                            pageID: pageID, versionID: wsVersion)
+                            pageID: pageID, versionID: wsVersion!)
+                        mergedPageIDs.append(pageIDStr)
                     } else if mainHead == base {
                         try fastForwardPage(
-                            pageID: pageID, versionID: wsVersion)
+                            pageID: pageID, versionID: wsVersion!)
+                        mergedPageIDs.append(pageIDStr)
                     } else {
                         // Divergence — attempt diff3 merge (W2).
                         let mergeResult = try diff3MergePage(
                             pageID: pageID, baseVersionID: base!,
-                            mainVersionID: mainHead!, wsVersionID: wsVersion)
+                            mainVersionID: mainHead!, wsVersionID: wsVersion!)
                         switch mergeResult {
                         case .merged:
-                            break  // merge version created, mirror updated
+                            mergedPageIDs.append(pageIDStr)  // merge version created, mirror updated
                         case .conflict:
-                            conflicts.append((pageIDStr, base, wsVersion, mainHead))
+                            conflicts.append((pageIDStr, base, wsVersion!, mainHead))
                         }
+                    }
+                }
+
+                // 2b. Wiki-index line-set three-way merge (Phase 6). If the
+                //     workspace staged an index body (`index_body` non-null),
+                //     merge it against main using `index_base_version` as the
+                //     common ancestor. On conflict, park the workspace.
+                let idxStmt = try statement("""
+                SELECT index_body, index_base_version
+                FROM workspaces WHERE id = ?1;
+                """)
+                defer { idxStmt.reset() }
+                try idxStmt.bind(workspaceID, at: 1)
+                if try idxStmt.step(),
+                   sqlite3_column_type(idxStmt.handle, 0) != SQLITE_NULL {
+                    let theirs = idxStmt.text(at: 0)
+                    let base = idxStmt.text(at: 1)  // may be empty/seeded
+                    // Read the current main wiki_index body (ours).
+                    let mainIdx = try statement(
+                        "SELECT COALESCE(body_markdown, '') FROM wiki_index WHERE id = 1;")
+                    defer { mainIdx.reset() }
+                    let ours: String
+                    if try mainIdx.step() {
+                        ours = mainIdx.text(at: 0)
+                    } else {
+                        ours = WikiIndex.defaultBody
+                    }
+                    switch Diff3.merge(base: base, ours: ours, theirs: theirs) {
+                    case .clean(let mergedText):
+                        // Write the merged result directly (bypass updateWikiIndex
+                        // so we stay inside this transaction — no lock re-entry).
+                        let upIdx = try statement("""
+                        INSERT INTO wiki_index (id, body_markdown, updated_at, version)
+                        VALUES (1, ?1, ?2, 1)
+                        ON CONFLICT(id) DO UPDATE SET
+                            body_markdown = excluded.body_markdown,
+                            updated_at = excluded.updated_at,
+                            version = wiki_index.version + 1;
+                        """)
+                        upIdx.reset()
+                        defer { upIdx.reset() }
+                        try upIdx.bind(mergedText, at: 1)
+                        try upIdx.bind(Date().timeIntervalSince1970, at: 2)
+                        _ = try upIdx.step()
+                    case .conflict:
+                        conflicts.append(("wiki_index", base, theirs, ours))
                     }
                 }
 
@@ -3136,10 +3758,37 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                     _ = try insConflict.step()
                 }
                 }
-                return
+                return []  // parked as conflicted — no pages merged
             }
             throw error
         }
+
+        // Post-merge completeness (Phase 6): re-embed merged pages and append a
+        // log entry. Both are best-effort and run AFTER the merge transaction
+        // commits (no inference-in-transaction). The lock has been released by
+        // mutate() at this point, so appendLog/storePageChunks each re-enter it
+        // cleanly.
+        if !mergedPageIDs.isEmpty {
+            for pageIDStr in mergedPageIDs {
+                let pid = PageID(rawValue: pageIDStr)
+                if let page = try? getPage(id: pid) {
+                    let text = page.bodyMarkdown.isEmpty
+                        ? page.title
+                        : "\(page.title)\n\n\(page.bodyMarkdown)"
+                    let chunks = EmbeddingService.chunkedEmbeddings(for: text)
+                    if !chunks.isEmpty {
+                        try? storePageChunks(id: pid, chunks: chunks)
+                    }
+                }
+            }
+            let note = "\(mergedPageIDs.count) page(s) merged"
+            _ = try? appendLog(
+                kind: .ingest,
+                title: "Workspace merge completed",
+                note: note)
+        }
+
+        return mergedPageIDs
     }
 
     /// Fast-forward an existing page: repoint the main `page-content` ref to
@@ -3196,14 +3845,91 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         _ = try upRef.step()
     }
 
-    /// Fast-forward a page created in the workspace (no base). Since
-    /// `workspaceWritePage` creates a placeholder `pages` row, this is the
-    /// same as `fastForwardPage` — just update the mirror + repoint the ref.
-    /// Assumes lock + transaction held.
+    /// Fast-forward a page created in the workspace via the old (pre-v35)
+    /// placeholder-row path. Since the old `workspaceWritePage` created a
+    /// placeholder `pages` row, this is the same as `fastForwardPage` — just
+    /// update the mirror + repoint the ref. Assumes lock + transaction held.
     private func fastForwardCreatePage(
         pageID: PageID, versionID: String, workspaceID: String
     ) throws {
         try fastForwardPage(pageID: pageID, versionID: versionID)
+    }
+
+    /// Mint a created page at merge time (v35 staged-page path). Creates the
+    /// `pages` row, a root `page_versions` row from the staged blob, and a
+    /// `page-content` ref pointing at it. This is the merge-time counterpart
+    /// to the created-page staging in `workspaceWritePage` — until now, the
+    /// page existed only as `workspace_refs.blob_hash` + `title`. Assumes the
+    /// lock + a transaction are held.
+    private func mintCreatedPage(
+        pageID: PageID, blobHash: String, title: String
+    ) throws {
+        // Fetch the staged body from the blob.
+        let bodyStmt = try statement(
+            "SELECT content FROM blobs WHERE hash = ?1;")
+        bodyStmt.reset()
+        try bodyStmt.bind(blobHash, at: 1)
+        guard try bodyStmt.step() else {
+            throw WikiStoreError.unexpected("mintCreatedPage: blob \(blobHash) not found")
+        }
+        let bodyData = bodyStmt.blob(at: 0)
+        bodyStmt.reset()
+        let body = String(data: bodyData, encoding: .utf8) ?? ""
+
+        let now = Date().timeIntervalSince1970
+        let slug = try uniqueSlug(from: title, id: pageID)
+
+        // 1. Create the `pages` row.
+        let insPage = try statement("""
+        INSERT INTO pages (id, title, slug, body_markdown, created_at, updated_at, version)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?5, 1);
+        """)
+        insPage.reset()
+        try insPage.bind(pageID.rawValue, at: 1)
+        try insPage.bind(title, at: 2)
+        try insPage.bind(slug, at: 3)
+        try insPage.bind(body, at: 4)
+        try insPage.bind(now, at: 5)
+        _ = try insPage.step()
+
+        // 2. Activity + agent.
+        let agentID = try legacyImportAgentID()
+        let activityID = ULID.generate()
+        let insActivity = try statement("""
+        INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+        VALUES (?1, 'edit', ?2, ?3, ?3);
+        """)
+        insActivity.reset()
+        try insActivity.bind(activityID, at: 1)
+        try insActivity.bind(agentID, at: 2)
+        try insActivity.bind(now, at: 3)
+        _ = try insActivity.step()
+
+        // 3. Root version (parent NULL — this is the first version).
+        let versionID = ULID.generate()
+        let insVersion = try statement("""
+        INSERT INTO page_versions (id, page_id, parent_id, blob_hash, title, activity_id, saved_at)
+        VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6);
+        """)
+        insVersion.reset()
+        try insVersion.bind(versionID, at: 1)
+        try insVersion.bind(pageID.rawValue, at: 2)
+        try insVersion.bind(blobHash, at: 3)
+        try insVersion.bind(title, at: 4)
+        try insVersion.bind(activityID, at: 5)
+        try insVersion.bind(now, at: 6)
+        _ = try insVersion.step()
+
+        // 4. Page-content ref pointing at the new root version.
+        let insRef = try statement("""
+        INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+        VALUES ('page-content', ?1, ?2, 1, ?3);
+        """)
+        insRef.reset()
+        try insRef.bind(pageID.rawValue, at: 1)
+        try insRef.bind(versionID, at: 2)
+        try insRef.bind(now, at: 3)
+        _ = try insRef.step()
     }
 
     /// The result of a diff3 merge attempt for a single page.
@@ -3404,12 +4130,16 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                     let pageIDStr = refs.text(at: 0)
                     let baseIsNull = sqlite3_column_type(refs.handle, 1) == SQLITE_NULL
                     let base = baseIsNull ? nil : refs.text(at: 1)
-                    let wsVersion = refs.text(at: 2)
+                    let versionIdIsNull = sqlite3_column_type(refs.handle, 2) == SQLITE_NULL
+                    let wsVersion = versionIdIsNull ? nil : refs.text(at: 2)
                     let pageID = PageID(rawValue: pageIDStr)
 
                     let mainHead = try pageHeadVersionIDLocked(pageID: pageID)
 
-                    if base == nil || mainHead == base {
+                    // Created pages (v35: version_id NULL) have no version to
+                    // diff3; their staging stays in blob_hash until merge.
+                    // Pages where base is already current have no divergence.
+                    if versionIdIsNull || base == nil || mainHead == base {
                         // No divergence — base is already current.
                         continue
                     }
@@ -3420,11 +4150,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                     // Main is NOT modified during refresh.
                     let baseText = try fetchVersionBody(versionID: base!)
                     let oursText = try fetchVersionBody(versionID: mainHead!)
-                    let theirsText = try fetchVersionBody(versionID: wsVersion)
+                    let theirText = try fetchVersionBody(versionID: wsVersion!)
 
-                    let result = Diff3.merge(base: baseText, ours: oursText, theirs: theirsText)
+                    let result = Diff3.merge(base: baseText, ours: oursText, theirs: theirText)
                     guard case .clean(let mergedText) = result else {
-                        conflicts.append((pageIDStr, base, wsVersion, mainHead))
+                        conflicts.append((pageIDStr, base, wsVersion!, mainHead))
                         continue
                     }
 
@@ -3457,7 +4187,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                     // Fetch the title from the workspace version.
                     let titleStmt = try statement("SELECT title FROM page_versions WHERE id = ?1;")
                     titleStmt.reset()
-                    try titleStmt.bind(wsVersion, at: 1)
+                    try titleStmt.bind(wsVersion!, at: 1)
                     guard try titleStmt.step() else { continue }
                     let title = titleStmt.text(at: 0)
                     titleStmt.reset()
@@ -3471,7 +4201,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                     try insVersion.bind(newVersionID, at: 1)
                     try insVersion.bind(pageID.rawValue, at: 2)
                     try insVersion.bind(mainHead, at: 3)      // parent = main head (re-based)
-                    try insVersion.bind(wsVersion, at: 4)      // merge_parent = old workspace version
+                    try insVersion.bind(wsVersion!, at: 4)      // merge_parent = old workspace version
                     try insVersion.bind(hash, at: 5)
                     try insVersion.bind(title, at: 6)
                     try insVersion.bind(activityID, at: 7)
@@ -3595,15 +4325,55 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             _ = try insActivity.step()
 
             // 3. New workspace version (parent = workspace's current head).
+            //    For created-page conflicts (v35: version_id NULL), wsHead
+            //    is nil — read the title from workspace_refs.title instead.
             let wsHead = try workspacePageVersionLocked(
                 workspaceID: workspaceID, pageID: pageID)
-            let titleStmt = try statement(
-                "SELECT title FROM page_versions WHERE id = ?1;")
-            titleStmt.reset()
-            if let wsHead { try titleStmt.bind(wsHead, at: 1) }
-            _ = try titleStmt.step()
-            let title = titleStmt.text(at: 0)
-            titleStmt.reset()
+            let title: String
+            if let wsHead {
+                let titleStmt = try statement(
+                    "SELECT title FROM page_versions WHERE id = ?1;")
+                titleStmt.reset()
+                try titleStmt.bind(wsHead, at: 1)
+                _ = try titleStmt.step()
+                title = titleStmt.text(at: 0)
+                titleStmt.reset()
+            } else {
+                // Created-page staging: title lives in workspace_refs.title.
+                let titleStmt = try statement("""
+                SELECT title FROM workspace_refs
+                WHERE workspace_id = ?1 AND kind = 'page-content' AND owner_id = ?2;
+                """)
+                titleStmt.reset()
+                try titleStmt.bind(workspaceID, at: 1)
+                try titleStmt.bind(pageID.rawValue, at: 2)
+                _ = try titleStmt.step()
+                title = titleStmt.text(at: 0)
+                titleStmt.reset()
+            }
+
+            // 3a. For created-page conflicts, the page may not exist on main
+            //     yet (the conflict was that a ref exists with the same page_id,
+            //     or the page was created by another workspace). Create a
+            //     placeholder if needed so the page_versions FK holds.
+            let pageCheck = try statement("SELECT 1 FROM pages WHERE id = ?1;")
+            defer { pageCheck.reset() }
+            try pageCheck.bind(pageID.rawValue, at: 1)
+            let pageExists = try pageCheck.step()
+            pageCheck.reset()  // don't leave a cursor at SQLITE_ROW
+            if !pageExists {
+                let slug = try uniqueSlug(from: title, id: pageID)
+                let insPage = try statement("""
+                INSERT INTO pages (id, title, slug, body_markdown, created_at, updated_at, version)
+                VALUES (?1, ?2, ?3, '', ?4, ?4, 1);
+                """)
+                insPage.reset()
+                try insPage.bind(pageID.rawValue, at: 1)
+                try insPage.bind(title, at: 2)
+                try insPage.bind(slug, at: 3)
+                try insPage.bind(nowTS, at: 4)
+                _ = try insPage.step()
+            }
 
             let versionID = ULID.generate()
             let insVersion = try statement("""
@@ -3621,12 +4391,14 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             _ = try insVersion.step()
 
             // 4. Update workspace_ref to point at the resolved version.
-            //    Update base_version_id to current main head so the retry
-            //    merge sees no divergence.
+            //    Clear blob_hash + title to maintain the staging invariant
+            //    (resolving converts a created-page staging to a version-based
+            //    staging). Update base_version_id to current main head so the
+            //    retry merge sees no divergence.
             let mainHead = try pageHeadVersionIDLocked(pageID: pageID)
             let upRef = try statement("""
             UPDATE workspace_refs
-            SET version_id = ?2, base_version_id = ?3, updated_at = ?4
+            SET version_id = ?2, base_version_id = ?3, blob_hash = NULL, title = NULL, updated_at = ?4
             WHERE workspace_id = ?1 AND kind = 'page-content' AND owner_id = ?5;
             """)
             upRef.reset()
@@ -4980,17 +5752,26 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
     // MARK: - Blob GC (graph-model §13 / issue #253)
 
-    /// A blob is orphaned when no version row references its hash. The three
+    /// A blob is orphaned when no version row references its hash. The
     /// reachability edges into `blobs` are `source_versions.blob_hash`,
-    /// `source_versions.thumbnail_hash`, and `source_markdown_versions.blob_hash`
-    /// (chunks/embeddings/attachments store bytes inline, so they don't count).
-    /// Each subquery filters out NULLs: without that, SQLite's three-valued
-    /// `NOT IN (…, NULL, …)` logic would suppress live orphans. Shared by the
-    /// count SELECT and the DELETE so the report always matches what's reclaimed.
+    /// `source_versions.thumbnail_hash`, `source_markdown_versions.blob_hash`,
+    /// and `page_versions.blob_hash` (chunks/embeddings/attachments store
+    /// bytes inline, so they don't count). Each subquery filters out NULLs:
+    /// without that, SQLite's three-valued `NOT IN (…, NULL, …)` logic would
+    /// suppress live orphans. Shared by the count SELECT and the DELETE so the
+    /// report always matches what's reclaimed.
+    ///
+    /// **Bug fix (#multi-writer-hardening Phase 0):** the `page_versions.blob_hash`
+    /// edge was MISSING from the original predicate, so `vacuum-blobs --apply`
+    /// deleted blobs still referenced by page history — silent page-version
+    /// data loss. It is included here too; after v35 lands, `workspace_refs.blob_hash`
+    /// (staged created-page bodies) is a further edge.
     private static let orphanBlobPredicate = """
         hash NOT IN (SELECT blob_hash        FROM source_versions            WHERE blob_hash IS NOT NULL)
         AND hash NOT IN (SELECT thumbnail_hash FROM source_versions          WHERE thumbnail_hash IS NOT NULL)
         AND hash NOT IN (SELECT blob_hash      FROM source_markdown_versions WHERE blob_hash IS NOT NULL)
+        AND hash NOT IN (SELECT blob_hash      FROM page_versions             WHERE blob_hash IS NOT NULL)
+        AND hash NOT IN (SELECT blob_hash      FROM workspace_refs            WHERE blob_hash IS NOT NULL)
     """
 
     /// Sweep **orphaned** blob rows — blobs no version references. Deleting a
@@ -5035,6 +5816,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     private static let orphanActivityPredicate = """
         id NOT IN (SELECT activity_id FROM source_versions            WHERE activity_id IS NOT NULL)
         AND id NOT IN (SELECT activity_id FROM source_markdown_versions WHERE activity_id IS NOT NULL)
+        AND id NOT IN (SELECT activity_id FROM page_versions           WHERE activity_id IS NOT NULL)
     """
 
     /// Sweep **orphaned** activity rows — activities no version references.
@@ -5067,6 +5849,131 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 _ = try deleter.step()
             }
             return ActivityVacuumReport(orphanCount: orphanCount, applied: !dryRun)
+        }
+    }
+
+    // MARK: - Page-version GC (Phase 4 — multi-writer hardening)
+
+    /// The set of reachable `page_versions` ids — those targeted directly by a
+    /// `page-content` ref, or transitively reachable via `parent_id` /
+    /// `merge_parent_id` chains from a ref target, or referenced by any
+    /// `workspace_refs` row (`version_id` or `base_version_id`). Used as a
+    /// NOT IN predicate to identify orphans: everything NOT in the reachable set
+    /// is garbage. Shared by the count SELECT and the DELETE so the report
+    /// always matches what's reclaimed.
+    private func orphanPageVersionIDs() throws -> Set<String> {
+        // Start with the direct ref targets.
+        let refTargets = try statement("""
+        SELECT version_id FROM refs WHERE kind = 'page-content' AND version_id IS NOT NULL;
+        """)
+        defer { refTargets.reset() }
+        var reachable: Set<String> = []
+        while try refTargets.step() {
+            reachable.insert(refTargets.text(at: 0))
+        }
+
+        // Workspace-refenced versions (version_id and base_version_id).
+        let wsVersions = try statement("""
+        SELECT version_id FROM workspace_refs WHERE version_id IS NOT NULL
+        UNION
+        SELECT base_version_id FROM workspace_refs WHERE base_version_id IS NOT NULL;
+        """)
+        defer { wsVersions.reset() }
+        while try wsVersions.step() {
+            reachable.insert(wsVersions.text(at: 0))
+        }
+
+        // Transitively walk the ancestor chain from each reachable version.
+        // This is a BFS: for each version in the frontier, find its parent_id
+        // and merge_parent_id (walking UP the chain toward the root).
+        var frontier = reachable
+        while !frontier.isEmpty {
+            let placeholders = frontier.map { _ in "?" }.joined(separator: ",")
+            // Find the parent_id / merge_parent_id OF the frontier versions
+            // (walking UP the chain, not down to children).
+            let parents = try statement("""
+            SELECT DISTINCT parent_id FROM page_versions
+            WHERE id IN (\(placeholders)) AND parent_id IS NOT NULL
+            UNION
+            SELECT DISTINCT merge_parent_id FROM page_versions
+            WHERE id IN (\(placeholders)) AND merge_parent_id IS NOT NULL;
+            """)
+            defer { parents.reset() }
+            for (i, id) in frontier.enumerated() {
+                try parents.bind(id, at: Int32(i + 1))           // parent_id binds
+            }
+            let frontierCount = frontier.count
+            for (i, id) in frontier.enumerated() {
+                try parents.bind(id, at: Int32(frontierCount + i + 1))  // merge_parent_id binds
+            }
+            var newReachable: Set<String> = []
+            while try parents.step() {
+                let pid = parents.text(at: 0)
+                if !reachable.contains(pid) {
+                    newReachable.insert(pid)
+                }
+            }
+            reachable.formUnion(newReachable)
+            frontier = newReachable
+        }
+
+        return reachable
+    }
+
+    /// Sweep **orphaned** `page_versions` rows — versions not reachable from
+    /// any `page-content` ref target (via `parent_id`/`merge_parent_id`
+    /// chains), and not referenced by any `workspace_refs` row. `dryRun ==
+    /// true` (the CLI default) reports the orphan count WITHOUT deleting;
+    /// `dryRun == false` (`--apply`) deletes them. Count + delete run in ONE
+    /// transaction, so the report is always exactly what was (or would be)
+    /// reclaimed.
+    ///
+    /// **NO_EMIT** (see `StoreEmissionExhaustivenessTests`): vacuuming orphaned
+    /// versions changes no projected `ResourceKind` — the served tree is
+    /// determined by the `page-content` ref targets, which are all in the
+    /// reachable set. It does NOT route through `mutate()` and emits no event.
+    @discardableResult
+    public func vacuumPageVersions(dryRun: Bool) throws -> PageVersionVacuumReport {
+        try withTransaction {
+            let reachable = try orphanPageVersionIDs()
+
+            // Orphan = every page_versions row whose id is NOT in the reachable set.
+            // If the reachable set is empty (no pages at all), everything is orphaned.
+            let orphanCount: Int
+            if reachable.isEmpty {
+                let counter = try statement("SELECT COUNT(*) FROM page_versions;")
+                defer { counter.reset() }
+                _ = try counter.step()
+                orphanCount = Int(counter.int(at: 0))
+            } else {
+                let placeholders = reachable.map { _ in "?" }.joined(separator: ",")
+                let counter = try statement(
+                    "SELECT COUNT(*) FROM page_versions WHERE id NOT IN (\(placeholders));")
+                defer { counter.reset() }
+                for (i, id) in reachable.enumerated() {
+                    try counter.bind(id, at: Int32(i + 1))
+                }
+                _ = try counter.step()
+                orphanCount = Int(counter.int(at: 0))
+            }
+
+            if !dryRun && orphanCount > 0 {
+                if reachable.isEmpty {
+                    let deleter = try statement("DELETE FROM page_versions;")
+                    defer { deleter.reset() }
+                    _ = try deleter.step()
+                } else {
+                    let placeholders = reachable.map { _ in "?" }.joined(separator: ",")
+                    let deleter = try statement(
+                        "DELETE FROM page_versions WHERE id NOT IN (\(placeholders));")
+                    defer { deleter.reset() }
+                    for (i, id) in reachable.enumerated() {
+                        try deleter.bind(id, at: Int32(i + 1))
+                    }
+                    _ = try deleter.step()
+                }
+            }
+            return PageVersionVacuumReport(deletedCount: orphanCount, applied: !dryRun)
         }
     }
 

@@ -50,11 +50,11 @@ struct WikiCtlCommandTests {
     @Test func parsesGetByTitleAndByID() throws {
         let byTitle = try ArgumentParser.parse(
             ["--wiki", "W", "page", "get", "--title", "Home"], env: noEnv)
-        #expect(byTitle.command == .get(.title("Home")))
+        #expect(byTitle.command == .get(.title("Home"), json: false))
 
         let byID = try ArgumentParser.parse(
             ["--wiki", "W", "page", "get", "--id", "01ABC"], env: noEnv)
-        #expect(byID.command == .get(.id(PageID(rawValue: "01ABC"))))
+        #expect(byID.command == .get(.id(PageID(rawValue: "01ABC")), json: false))
     }
 
     @Test func getRequiresExactlyOneSelector() {
@@ -149,7 +149,7 @@ struct WikiCtlCommandTests {
     @Test func getReturnsBodyAndDoesNotCommit() throws {
         let store = try tempStore()
         _ = try PageCommand.run(.upsert(id: nil, title: "Doc", body: "the body"), in: store)
-        let result = try PageCommand.run(.get(.title("Doc")), in: store)
+        let result = try PageCommand.run(.get(.title("Doc"), json: false), in: store)
         #expect(result.output == "the body")
         #expect(!result.didCommit)
     }
@@ -157,7 +157,7 @@ struct WikiCtlCommandTests {
     @Test func getByMissingTitleThrows() throws {
         let store = try tempStore()
         #expect(throws: PageCommand.Failure.self) {
-            try PageCommand.run(.get(.title("Nope")), in: store)
+            try PageCommand.run(.get(.title("Nope"), json: false), in: store)
         }
     }
 

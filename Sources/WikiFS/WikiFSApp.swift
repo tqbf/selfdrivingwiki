@@ -85,10 +85,13 @@ struct WikiFSApp: App {
         let coordinator = ExtractionCoordinator(containerDirectory: directory)
         _extractionCoordinator = State(initialValue: coordinator)
         // Both launchers share one GenerationGate so ingest and chat-turn
-        // generations contend on the same FIFO queue. With CAS + workspaces
-        // (W0–W4), concurrent writes are safe — allow multiple concurrent
-        // generations so a chat doesn't block behind a long-running ingest.
-        let generationGate = GenerationGate(maxConcurrent: 4)
+        // generations coordinate. Phase 2 splits the gate into per-lane queues:
+        // ingest-class runs (ingest, lint, lintPage) serialize on the
+        // `.ingest` lane (limit 1 — one ingest at a time), while interactive
+        // turns (query/chat) run on the `.interactive` lane (limit 3 — chat
+        // stays responsive during an ingest). With CAS + workspaces (W0–W4),
+        // concurrent writes are safe across lanes.
+        let generationGate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
         _agentLauncher = State(initialValue: AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator))
         _chatLauncher   = State(initialValue: AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator))
 
@@ -152,6 +155,11 @@ struct WikiFSApp: App {
                 }
                 .task {
                     fileProvider.wire(into: manager)
+                    // Phase 7: reap stale open workspaces older than 24h on launch.
+                    // Cleans up crashed/abandoned ingest runs that never merged.
+                    if let model = manager.activeStore {
+                        _ = try? model.reapStaleWorkspaces(ttl: 86_400)
+                    }
                     // First render already loaded the wiki list (reloadData, no
                     // selection).  Now set the active store: only triggers selectRow
                     // (not reloadData), so no NSTableView reentrancy on macOS 26.

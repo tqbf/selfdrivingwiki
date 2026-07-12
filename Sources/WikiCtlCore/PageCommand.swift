@@ -29,11 +29,14 @@ public enum PageCommand {
 
     public enum Action: Equatable {
         case list(json: Bool)
-        case get(Selector)
+        case get(Selector, json: Bool = false, workspace: String? = nil)
         /// `upsert` always carries the body (read from `--body-file`); the
         /// optional id forces updating a specific page, otherwise the title
-        /// resolves create-or-update.
-        case upsert(id: PageID?, title: String, body: String)
+        /// resolves create-or-update. `expectHead` carries the CAS expectation
+        /// (the `head_version_id` the caller read before editing); when non-nil,
+        /// the upsert routes through `appendPageVersion` and a mismatch throws
+        /// `PageConflictError` (Phase 1: agent CAS writes).
+        case upsert(id: PageID?, title: String, body: String, expectHead: String? = nil, workspace: String? = nil)
         case delete(id: PageID)
         /// Semantic search: find pages by meaning (cosine similarity via
         /// sqlite-vec), falling back to LIKE title match.
@@ -73,10 +76,10 @@ public enum PageCommand {
         switch action {
         case .list(let json):
             return try list(in: store, json: json)
-        case .get(let selector):
-            return try get(selector, in: store)
-        case .upsert(let id, let title, let body):
-            return try upsert(id: id, title: title, body: body, in: store, validator: validator, linter: linter)
+        case .get(let selector, let json, let workspace):
+            return try get(selector, in: store, json: json, workspace: workspace)
+        case .upsert(let id, let title, let body, let expectHead, let workspace):
+            return try upsert(id: id, title: title, body: body, expectHead: expectHead, workspace: workspace, in: store, validator: validator, linter: linter)
         case .delete(let id):
             return try delete(id: id, in: store)
         case .search(let query, let limit):
@@ -137,11 +140,68 @@ public enum PageCommand {
 
     // MARK: - get
 
-    private static func get(_ selector: Selector, in store: WikiStore) throws -> Result {
+    /// The JSON object emitted by `page get --json`.
+    private struct PageGetJSON: Encodable {
+        let body_markdown: String
+        let head_version_id: String?
+    }
+
+    private static func get(_ selector: Selector, in store: WikiStore, json: Bool = false, workspace: String? = nil) throws -> Result {
+        // Phase 7: workspace overlay read. When --workspace is set, check
+        // the workspace's staged version FIRST. A created page (staged as
+        // blob_hash) has no `pages` row on main, so `getPage` would throw.
+        // We resolve the selector to an ID — for a created page, the agent
+        // must pass --id (there's no title row on main to resolve).
+        if let workspace {
+            // Try to resolve the ID without throwing (created pages may not
+            // resolve via title on main).
+            let id: PageID?
+            switch selector {
+            case .id(let pageID):
+                id = pageID
+            case .title:
+                id = try? resolve(selector, in: store)
+            }
+            if let id, let stagedBody = try store.workspacePageBody(workspaceID: workspace, pageID: id) {
+                var headVersionID = try? store.workspacePageVersion(workspaceID: workspace, pageID: id)
+                if headVersionID == nil {
+                    headVersionID = try? store.pageHeadVersionID(pageID: id)
+                }
+                if json {
+                    let row = PageGetJSON(body_markdown: stagedBody, head_version_id: headVersionID)
+                    let encoder = JSONEncoder()
+                    encoder.outputFormatting = [.sortedKeys]
+                    let data = try encoder.encode(row)
+                    return Result(output: String(decoding: data, as: UTF8.self), didCommit: false)
+                }
+                if let headVersionID {
+                    FileHandle.standardError.write(Data("head_version_id: \(headVersionID)\n".utf8))
+                }
+                return Result(output: stagedBody, didCommit: false)
+            }
+            // Not staged in workspace, or no ID — fall through to main read.
+        }
+
         let id = try resolve(selector, in: store)
         let page = try store.getPage(id: id)
-        // Print the body verbatim — this is the instant SoT read that bypasses
-        // the ~5 s mount lag.
+        let headVersionID = try store.pageHeadVersionID(pageID: id)
+
+        if json {
+            // JSON mode: emit body_markdown + head_version_id as one JSON object.
+            let row = PageGetJSON(body_markdown: page.bodyMarkdown, head_version_id: headVersionID)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(row)
+            return Result(output: String(decoding: data, as: UTF8.self), didCommit: false)
+        }
+
+        // Text mode: print the body verbatim — this is the instant SoT read
+        // that bypasses the ~5 s mount lag. The head_version_id goes to
+        // stderr so stdout stays clean for body piping (agents read it from
+        // stderr for CAS threading).
+        if let headVersionID {
+            FileHandle.standardError.write(Data("head_version_id: \(headVersionID)\n".utf8))
+        }
         return Result(output: page.bodyMarkdown, didCommit: false)
     }
 
@@ -151,6 +211,8 @@ public enum PageCommand {
         id: PageID?,
         title: String,
         body: String,
+        expectHead: String? = nil,
+        workspace: String? = nil,
         in store: WikiStore,
         validator: MermaidValidator?,
         linter: MarkdownLinter?
@@ -172,10 +234,35 @@ public enum PageCommand {
         //    whitespace fixes don't disturb a fence boundary). Skipped silently
         //    when the validator is nil.
         try abortOnInvalidMermaid(fixed, validator: validator)
+
+        // Phase 7: workspace routing. When --workspace is set, route to
+        // workspaceWritePage (main is untouched until merge). The page ID is
+        // resolved the same way — title resolves to an existing page or creates
+        // a new one (staged as a created page if it doesn't exist on main).
+        if let workspace {
+            let pageID: PageID
+            if let id {
+                pageID = id
+            } else {
+                // Resolve by title: if the page exists on main, use its ID;
+                // otherwise generate a new ULID (the workspace will stage it
+                // as a created page).
+                if let existingID = try store.resolveTitleToID(title) {
+                    pageID = existingID
+                } else {
+                    pageID = PageID(rawValue: ULID.generate())
+                }
+            }
+            let resultID = try store.workspaceWritePage(
+                workspaceID: workspace, pageID: pageID, title: title, body: fixed)
+            return Result(output: resultID, didCommit: true)
+        }
+
         // 3. The SHARED seam: identical create-or-update + `[[link]]` reparse as
         //    the in-app editor, so the link graph stays consistent across both
         //    writers.
-        let outcome = try PageUpsert.upsert(in: store, id: id, title: title, body: fixed)
+        let outcome = try PageUpsert.upsert(in: store, id: id, title: title, body: fixed,
+                                             expectedHeadVersionID: expectHead)
         return Result(output: outcome.id.rawValue, didCommit: true)
     }
 

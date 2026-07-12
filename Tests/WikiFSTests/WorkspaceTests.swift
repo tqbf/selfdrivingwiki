@@ -170,21 +170,22 @@ struct WorkspaceTests {
         let store = try tempStore()
 
         // Create a workspace and write a page that doesn't exist on main.
-        // We need a pageID — the workspace write will create a page_versions
-        // row for it, but no `pages` row exists yet.
+        // v35 staging: the page is staged as blob_hash + title in
+        // workspace_refs — no pages row on main until merge.
         let wsID = try store.createWorkspace(name: nil, activityID: nil)
         let newPageID = PageID(rawValue: ULID.generate())
         _ = try store.workspaceWritePage(
             workspaceID: wsID, pageID: newPageID, title: "Brand New Page", body: "new content")
 
-        // The page exists on main as a placeholder (empty body).
-        let pageBefore = try store.getPage(id: newPageID)
-        #expect(pageBefore.bodyMarkdown.isEmpty)
+        // The page does NOT exist on main yet (v35 staging — no placeholder).
+        #expect(throws: WikiStoreError.self) {
+            _ = try store.getPage(id: newPageID)
+        }
 
-        // Merge — should update the mirror to the workspace's version body.
+        // Merge — should mint the pages row + root version from the staged blob.
         try store.workspaceMerge(workspaceID: wsID)
 
-        // Now the page exists on main.
+        // Now the page exists on main with the staged body.
         let pageAfter = try store.getPage(id: newPageID)
         #expect(pageAfter.title == "Brand New Page")
         #expect(pageAfter.bodyMarkdown == "new content")

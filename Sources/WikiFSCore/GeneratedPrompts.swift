@@ -308,6 +308,8 @@ WRITES — READ THIS FIRST. The wiki mount is READ-ONLY BY DESIGN. NEVER write f
   wikictl log append --kind ingest --title "…" --note "…"
 After a write, read it back with `wikictl page get` (the mount lags the database by ~5s, so cat-ing the mount right after a write shows stale bytes). Cross-link pages with [[Page Title]] wiki-links.
 
+**CAS discipline:** Before writing or updating a page, read its current `head_version_id` — run `wikictl page get --json` (the `head_version_id` field) or capture the stderr line in text mode. Then pass `--expect-head <that id>` to `wikictl page upsert`. On exit code 3 (CAS conflict — the page was edited after you read it), re-read the page once, reapply your edit, and retry. If it fails again, report the conflict rather than looping. Blind upserts (no `--expect-head`) succeed unconditionally with no CAS check, as before.
+
 """#
 
     static let footnoteConclusionsRule = #"""
@@ -415,7 +417,7 @@ read-only mount lags a few seconds, so don't `cat` the mount to verify a fresh w
 """#
 
     static let ingestSingleTask = #"""
-TASK — Ingest {{fileCount}} file{{fileNoun}} into the wiki, following the Ingest workflow from your instructions. Act immediately; do not explore the mount first. Read each staged source, DECIDE what belongs in the wiki, CROSS-REFERENCE across all sources to find connections and avoid duplicates, and write one or more summary/entity/concept pages via `wikictl page upsert` (cross-linking with [[wiki links]]). Then rewrite index.md via `wikictl index set`, and for EACH ingested source record it with `wikictl log append --kind ingest --source <id> --title "<source>"`. The `--source` ids are: {{sourceIds}}. Each `--source` id is REQUIRED — it marks that file Ingested in the app. Work autonomously to completion; the live app shows your changes as they land.
+TASK — Ingest {{fileCount}} file{{fileNoun}} into the wiki, following the Ingest workflow from your instructions. Act immediately; do not explore the mount first. Read each staged source, DECIDE what belongs in the wiki, CROSS-REFERENCE across all sources to find connections and avoid duplicates, and write one or more summary/entity/concept pages via `wikictl page upsert` (cross-linking with [[wiki links]]). Each page write must follow CAS discipline: read the page's current `head_version_id` first (`wikictl page get --json`, or the stderr line in text mode), then pass `--expect-head <that id>` to `wikictl page upsert`; on exit code 3 (CAS conflict), re-read once, reapply, retry once — if it fails again, report the conflict rather than looping. Then rewrite index.md via `wikictl index set`, and for EACH ingested source record it with `wikictl log append --kind ingest --source <id> --title "<source>"`. The `--source` ids are: {{sourceIds}}. Each `--source` id is REQUIRED — it marks that file Ingested in the app. Work autonomously to completion; the live app shows your changes as they land.
 
 """#
 
@@ -425,7 +427,7 @@ TASK — Ingest {{fileCount}} file{{fileNoun}} into the wiki, following the Inge
 1. INSPECT each staged source's size and structure WITHOUT reading the whole bulk — e.g. `wc -l`/`head` for text, or count pages for a PDF — then split it into chunks (byte/line ranges, sections, or page ranges).
 2. FAN OUT RAW INGESTION to Sonnet `source-reader` subagents via the Task tool — use MORE THAN 1 and FEWER THAN 20 workers (between 2 and 19). Size the fan-out to the material: do NOT spawn 15 workers for 3 pages; one worker can digest adjacent chunks. In each worker's task, give it the staged source path(s) ({{stagedSourceList}}) and the exact chunk/section/page-range it must DIGEST. Each worker READS its chunk and returns a structured digest; workers do NOT write to the wiki.
 3. SYNTHESIZE the digests, CROSS-REFERENCE across all sources to find connections and avoid duplicate pages, and DECIDE the set of wiki pages this ingest should produce (summary pages plus the entity/concept pages), reusing existing titles where they fit. You MAY fork MORE `source-reader` workers to ask follow-up QUESTIONS ("re-read section 4 and tell me X"), and you MAY pull specific existing wiki pages with `wikictl page get` to double-check facts. Keep TOTAL Sonnet worker invocations under 20 across the whole run.
-4. WRITE every page yourself via `wikictl page upsert` (cross-linking with [[wiki links]]), then rewrite index.md wholesale via `wikictl index set` so it catalogs the new pages, and for EACH ingested source record it with `wikictl log append --kind ingest --source <id> --title "<source>"`. The `--source` ids are: {{sourceIds}}. Each `--source` id is REQUIRED — it marks that file Ingested in the app.
+4. WRITE every page yourself via `wikictl page upsert` (cross-linking with [[wiki links]]), then rewrite index.md wholesale via `wikictl index set` so it catalogs the new pages, and for EACH ingested source record it with `wikictl log append --kind ingest --source <id> --title "<source>"`. The `--source` ids are: {{sourceIds}}. Each `--source` id is REQUIRED — it marks that file Ingested in the app. Each page write must follow CAS discipline: read the page's current `head_version_id` first (`wikictl page get --json`, or the stderr line in text mode), then pass `--expect-head <that id>` to `wikictl page upsert`; on exit code 3 (CAS conflict), re-read once, reapply, retry once — if it fails again, report the conflict rather than looping.
 
 Work autonomously to completion; the live app shows changes as they land.
 
@@ -434,7 +436,7 @@ Work autonomously to completion; the live app shows changes as they land.
     static let queryTask = #"""
 TASK — Answer a question from this wiki, following the Query workflow from your instructions. The mount has a root `WIKI-STRUCTURE.md` file that explains the current filesystem layout and `wikictl` cheatsheet; read it when you need to orient to paths or raw sources.
 
-To answer, pull wiki pages from SQLite with `wikictl page get --title T` (or `--id I`) so you see fresh authoritative content. If a page contains Markdown footnotes (`[^id]: ...`) that cite a raw source, FOLLOW THEM: resolve the source with `wikictl source list` (or `--json`), then read it — for text use `wikictl source cat --id <id>`; for a PDF or other binary, run `wikictl source export --id <id>` and `Read` the path it prints (the Read tool renders PDFs natively), or read the markdown the app extracted at ingest via `wikictl source cat --id <id>`. When you cite a source in your answer, follow the CITE SOURCES rule above. If you file a useful answer back as a page, write it via `wikictl page upsert` and log it with `wikictl log append --kind query`.
+To answer, pull wiki pages from SQLite with `wikictl page get --title T` (or `--id I`) so you see fresh authoritative content. If a page contains Markdown footnotes (`[^id]: ...`) that cite a raw source, FOLLOW THEM: resolve the source with `wikictl source list` (or `--json`), then read it — for text use `wikictl source cat --id <id>`; for a PDF or other binary, run `wikictl source export --id <id>` and `Read` the path it prints (the Read tool renders PDFs natively), or read the markdown the app extracted at ingest via `wikictl source cat --id <id>`. When you cite a source in your answer, follow the CITE SOURCES rule above. If you file a useful answer back as a page, write it via `wikictl page upsert` and log it with `wikictl log append --kind query`. Follow CAS discipline on the page write: read the page's current `head_version_id` first (via `wikictl page get --json`, or the stderr line in text mode), then pass `--expect-head <that id>` to `wikictl page upsert`; on exit code 3 (CAS conflict), re-read once, reapply, retry once — if it fails again, report the conflict rather than looping.
 
 """#
 
@@ -445,7 +447,14 @@ STYLE — Do the wiki/source inspection silently. Do NOT narrate process steps l
 
 When answering, use the Query workflow from your instructions. Pull fresh pages with `wikictl page get --title T` (or `--id I`) as needed. If a page contains Markdown footnotes (`[^id]: ...`) that cite a raw source, resolve it with `wikictl source list` (or `--json`), then read it — for text use `wikictl source cat --id <id>`; for a PDF or other binary, run `wikictl source export --id <id>` and `Read` the path it prints (the Read tool renders PDFs natively), or read the markdown the app extracted at ingest via `wikictl source cat --id <id>`.
 
-If the user asks you to update the wiki, FIRST PROPOSE THE CHANGE — name the page(s) and describe exactly what you will add, change, or delete — and WAIT for the user to confirm before writing. Only write once they approve (for example "go ahead", "yes", or "do it"). When you do write, use `wikictl page upsert`, update `index.md` if the catalog should change, and append `wikictl log append --kind query` describing the change. Tell the user what you changed and which pages or source paths you relied on.
+If the user asks you to update the wiki, FIRST PROPOSE THE CHANGE — name the page(s) and describe exactly what you will add, change, or delete — and WAIT for the user to confirm before writing. Only write once they approve (for example "go ahead", "yes", or "do it"). When you do write, use `wikictl page upsert` (following CAS discipline below), update `index.md` if the catalog should change, and append `wikictl log append --kind query` describing the change. Tell the user what you changed and which pages or source paths you relied on.
+
+**CAS discipline for page writes:** Before writing a page, read its current
+`head_version_id` via `wikictl page get --json` (or the stderr line in text
+mode), then pass `--expect-head <that id>` to `wikictl page upsert`. On exit
+code 3 (CAS conflict — the page was edited after you read it), re-read the
+page once, reapply your edit, and retry. If it fails again, report the
+conflict to the user rather than looping.
 
 """#
 
@@ -466,6 +475,9 @@ Steps:
 2. For each broken link listed above: search `wikictl page list` to find the correct target, create the page if it should exist, or remove the link if spurious.
 3. Check the page for other issues (stale content, broken external links, factual gaps) and fix what you can.
 4. If any changes are needed, rewrite: `wikictl page upsert --title "{{pageTitle}}"`
+
+**CAS discipline:** When rewriting the page, first read its current `head_version_id` via `wikictl page get --title "{{pageTitle}}" --json` (or the stderr line in text mode), then pass `--expect-head <that id>` to `wikictl page upsert`. On exit code 3 (CAS conflict — the page changed since you read it), re-read once, reapply your fix, and retry. If it fails again, report the conflict rather than looping.
+
 5. Record your findings: `wikictl log append --kind lint`
 
 """#
@@ -558,7 +570,7 @@ For EACH assigned page:
    - Cross-link related pages with [[Page Title]] wiki-links. Use the page titles listed above.
    - Cite sources by their `sources/…` path.
 
-3. Create or update the page: `$WIKICTL page upsert --title 'PAGE TITLE' --body-file ./body.md`
+3. Create or update the page: `$WIKICTL page upsert --title 'PAGE TITLE' --body-file ./body.md --expect-head '<head_version_id>'` (get `head_version_id` per the CAS discipline below)
 
 4. Verify: `$WIKICTL page get --title 'PAGE TITLE'`
 
@@ -567,6 +579,13 @@ For EACH assigned page:
 - The ONLY way to create or update content is `$WIKICTL`. The wiki mount is READ-ONLY.
 - Always use `--body-file ./body.md`, never shell pipes or heredocs.
 - After a write, read it back with `$WIKICTL page get` (the mount lags the database by ~5s).
+
+**CAS discipline for page writes:** Before writing a page, run
+`$WIKICTL page get --title 'PAGE TITLE' --json` to read its current
+`head_version_id`, then pass `--expect-head <that id>` to
+`$WIKICTL page upsert`. On exit code 3 (CAS conflict — the page was edited after
+you read it), re-read the page once, reapply your edit, and retry. If it fails
+again, report the conflict rather than looping.
 
 IMPORTANT:
 - Do NOT dispatch sub-agents, background tasks, or async agents.
