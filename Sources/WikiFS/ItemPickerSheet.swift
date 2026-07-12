@@ -125,7 +125,7 @@ struct ItemPickerSheet: View {
             Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                 .font(.callout)
-            Image(systemName: item.isPage ? "doc.text" : "doc")
+            Image(systemName: item.isPage ? ResourceKind.page.systemImageName : ResourceKind.source.systemImageName)
                 .foregroundStyle(.secondary)
                 .font(.callout)
             Text(item.title)

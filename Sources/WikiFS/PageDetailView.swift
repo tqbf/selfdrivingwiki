@@ -42,7 +42,7 @@ struct PageDetailView: View {
                         onCommit: renameCurrentPage
                     )
                 } icon: {
-                    Image(systemName: "doc.text")
+                    Image(systemName: ResourceKind.page.systemImageName)
                         .foregroundStyle(.secondary)
                 }
 

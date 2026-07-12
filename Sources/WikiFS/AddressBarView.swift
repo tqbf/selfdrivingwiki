@@ -237,9 +237,9 @@ struct AddressBarView: View {
     /// non-content selections (system prompt, change log, etc.).
     private var contentSymbol: String {
         switch store.activeTab?.selection {
-        case .page: "doc.text"
-        case .source: "tray.full"
-        case .chat, .newChat: "bubble.left.and.bubble.right"
+        case .page: ResourceKind.page.systemImageName
+        case .source: ResourceKind.source.systemImageName
+        case .chat, .newChat: ResourceKind.chat.systemImageName
         default: "text.page.badge.magnifyingglass"
         }
     }

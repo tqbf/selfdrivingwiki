@@ -59,10 +59,10 @@ struct SidebarView: View {
 
         var systemImage: String {
             switch self {
-            case .pages: "doc.text"
-            case .sources: "tray.full"
-            case .bookmarks: "bookmark"
-            case .chats: "bubble.left.and.bubble.right"
+            case .pages: ResourceKind.page.systemImageName
+            case .sources: ResourceKind.source.systemImageName
+            case .bookmarks: ResourceKind.bookmark.systemImageName
+            case .chats: ResourceKind.chat.systemImageName
             }
         }
     }

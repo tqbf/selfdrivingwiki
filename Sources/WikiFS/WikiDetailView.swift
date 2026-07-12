@@ -66,10 +66,10 @@ struct WikiDetailView: View {
                     .padding(.top, 60)
 
                     VStack(alignment: .leading, spacing: 20) {
-                        introRow(title: "Pages", description: "Create and edit markdown notes with deep wiki-linking.", systemImage: "doc.text")
-                        introRow(title: "Sources", description: "Manage and ingest raw material from URLs, folders, or Zotero.", systemImage: "tray.full")
-                        introRow(title: "Bookmarks", description: "Organize pages and sources into a custom folder tree for quick access.", systemImage: "bookmark")
-                        introRow(title: "Chats", description: "Ask questions and edit your wiki through chat.", systemImage: "bubble.left.and.bubble.right")
+                        introRow(title: "Pages", description: "Create and edit markdown notes with deep wiki-linking.", systemImage: ResourceKind.page.systemImageName)
+                        introRow(title: "Sources", description: "Manage and ingest raw material from URLs, folders, or Zotero.", systemImage: ResourceKind.source.systemImageName)
+                        introRow(title: "Bookmarks", description: "Organize pages and sources into a custom folder tree for quick access.", systemImage: ResourceKind.bookmark.systemImageName)
+                        introRow(title: "Chats", description: "Ask questions and edit your wiki through chat.", systemImage: ResourceKind.chat.systemImageName)
                     }
                     .frame(maxWidth: 400)
 
@@ -178,7 +178,7 @@ struct WikiDetailView: View {
             }
         case .bookmark:
             ContentUnavailableView {
-                Label("Bookmarks", systemImage: "bookmark")
+                Label("Bookmarks", systemImage: ResourceKind.bookmark.systemImageName)
             } description: {
                 Text("Bookmark folders are managed in the sidebar.")
             }

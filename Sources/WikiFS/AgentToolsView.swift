@@ -230,7 +230,7 @@ private struct RecentChatRow: View {
                 }
             }
         } icon: {
-            Image(systemName: "bubble.left.and.bubble.right")
+            Image(systemName: ResourceKind.chat.systemImageName)
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .frame(width: 18)

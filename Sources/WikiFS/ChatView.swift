@@ -235,7 +235,7 @@ struct ChatView: View {
         } else if chatID != nil && !isLiveChat && chatSummary == nil {
             // Persisted chat that no longer exists in the store.
             ContentUnavailableView {
-                Label("Chat Missing", systemImage: "bubble.left.and.bubble.right")
+                Label("Chat Missing", systemImage: ResourceKind.chat.systemImageName)
             } description: {
                 Text("This chat is no longer available.")
             }
@@ -383,7 +383,7 @@ struct ChatView: View {
                     }
                 )
             } icon: {
-                Image(systemName: "bubble.left.and.bubble.right")
+                Image(systemName: ResourceKind.chat.systemImageName)
                     .foregroundStyle(.secondary)
             }
 

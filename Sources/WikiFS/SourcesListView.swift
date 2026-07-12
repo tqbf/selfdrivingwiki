@@ -204,10 +204,10 @@ final class SourceListCellView: NSTableCellView {
         }
     }
 
+    /// Matches the sidebar's Sources section icon and the SourceDetailView
+    /// header icon — one icon per source everywhere.
     private static func symbol(for source: SourceSummary) -> String {
-        if source.mimeType == "application/pdf" { return "doc.richtext" }
-        if let mime = source.mimeType, mime.hasPrefix("text/") { return "doc.plaintext" }
-        return "doc"
+        ResourceKind.source.systemImageName
     }
 
     private static let sizeFormatter: ByteCountFormatter = {
@@ -430,7 +430,7 @@ extension SourcesListViewController {
 
         menu.addItem(item(
             title: isMulti ? "Add \(count) Sources to Bookmarks…" : "Add to Bookmarks…",
-            systemImage: "bookmark", action: #selector(addToBookmarksAction(_:)), payload: payload))
+            systemImage: ResourceKind.bookmark.systemImageName, action: #selector(addToBookmarksAction(_:)), payload: payload))
 
         if isMulti {
             menu.addItem(item(title: "Share \(count) Sources", systemImage: "square.and.arrow.up",

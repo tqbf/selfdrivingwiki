@@ -260,7 +260,7 @@ extension PagesListViewController: NSTableViewDelegate {
             ])
         }
 
-        cell.imageView?.image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)
+        cell.imageView?.image = NSImage(systemSymbolName: ResourceKind.page.systemImageName, accessibilityDescription: nil)
         cell.textField?.stringValue = summary.title.isEmpty ? "Untitled" : summary.title
         cell.toolTip = summary.title.isEmpty ? "Untitled" : summary.title
         return cell
@@ -334,7 +334,7 @@ extension PagesListViewController {
 
         menu.addItem(menuItem(
             title: isBatch ? "Add \(count) Pages to Bookmarks…" : "Add to Bookmarks…",
-            systemImage: "bookmark", action: #selector(addToBookmarksAction(_:)), payload: payload))
+            systemImage: ResourceKind.bookmark.systemImageName, action: #selector(addToBookmarksAction(_:)), payload: payload))
 
         if isBatch {
             menu.addItem(menuItem(
