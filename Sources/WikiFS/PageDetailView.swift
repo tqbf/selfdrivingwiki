@@ -34,12 +34,17 @@ struct PageDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Header — always visible, same layout in both modes.
             VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
-                EditableTitle(
-                    title: store.draftTitle,
-                    placeholder: "Untitled",
-                    isDisabled: false,
-                    onCommit: renameCurrentPage
-                )
+                Label {
+                    EditableTitle(
+                        title: store.draftTitle,
+                        placeholder: "Untitled",
+                        isDisabled: false,
+                        onCommit: renameCurrentPage
+                    )
+                } icon: {
+                    Image(systemName: "doc.text")
+                        .foregroundStyle(.secondary)
+                }
 
                 HStack(spacing: 12) {
                     if let date = pageUpdatedAt {
