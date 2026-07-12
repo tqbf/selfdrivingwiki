@@ -123,6 +123,13 @@ struct ChatView: View {
                 persistedMessages = store.chatMessages(chatID: chatID)
             } else {
                 persistedMessages = []
+                // Omnibox "Ask" action (#288): if a pending question was set
+                // (from the omnibox Ask action), pre-fill the composer and
+                // auto-send it. This starts a new chat with the question.
+                if let question = store.pendingChatQuestion {
+                    store.pendingChatQuestion = nil
+                    draftMessage = question
+                }
             }
         }
         // D2: when the live session ends (activeChatID clears), re-read from the

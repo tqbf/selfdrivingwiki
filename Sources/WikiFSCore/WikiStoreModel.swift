@@ -165,6 +165,11 @@ public final class WikiStoreModel {
     /// like `bookmarkNodes`.
     public private(set) var chats: [ChatSummary] = []
 
+    /// A pending question to pre-fill the chat composer, set by the omnibox
+    /// "Ask" action (#288). Consumed by `ChatView` on first appearance, then
+    /// cleared. `nil` means no pre-fill is waiting.
+    public var pendingChatQuestion: String?
+
     /// Rebuild `chats` from the store. Best-effort (`try?`) — the history list
     /// degrading to empty on a store hiccup must never crash the sidebar.
     public func reloadChats() {
@@ -446,6 +451,89 @@ public final class WikiStoreModel {
     /// `searchSimilar`, over chats. Used by the Chats sidebar search field.
     public func searchSimilarChats(query: String, limit: Int = 20) -> [ChatSummary] {
         (try? store.searchSimilarChats(query: query, limit: limit)) ?? []
+    }
+
+    /// Unified omnibox search across all resource types (#288). Returns a
+    /// ranked, deduplicated `[OmniboxResult]` that mixes pages, sources, chats,
+    /// and bookmark nodes. The result always starts with an `.ask(question:)`
+    /// action row (so the user can send the query straight to chat), followed by
+    /// up to 3 pages, 2 sources, 2 chats, and 3 bookmark matches.
+    public func searchOmnibox(query: String) -> [OmniboxResult] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        var results: [OmniboxResult] = []
+
+        // 1. The "Ask" action row — always first, so Enter sends to chat.
+        results.append(.ask(question: trimmed))
+
+        // 2. Pages (semantic + FTS).
+        let pages = searchSimilar(query: trimmed, limit: 3)
+        results.append(contentsOf: pages.map { .page($0) })
+
+        // 3. Sources (semantic + FTS).
+        let sources = searchSimilarSources(query: trimmed, limit: 2)
+        results.append(contentsOf: sources.map { .source($0) })
+
+        // 4. Chats (semantic + FTS).
+        let chats = searchSimilarChats(query: trimmed, limit: 2)
+        results.append(contentsOf: chats.map { .chat($0) })
+
+        // 5. Bookmarks (plain substring over folder labels + resolved ref titles).
+        let matchingBookmarks = searchBookmarks(query: trimmed).prefix(3).map { node in
+            OmniboxResult.bookmark(node: node, resolvedTitle: resolveBookmarkTitle(node))
+        }
+        results.append(contentsOf: matchingBookmarks)
+
+        return results
+    }
+
+    /// Substring search over bookmark nodes — matches folder labels and the
+    /// resolved title of page/source/chat refs. Returns matching nodes plus
+    /// their ancestor folders (so a hit inside a collapsed folder is visible).
+    /// Inlined here (in WikiFSCore) so the omnibox search can use it without
+    /// crossing into the WikiFS UI module (#288, mirrors #240's logic).
+    private func searchBookmarks(query: String) -> [BookmarkNode] {
+        guard !query.isEmpty else { return bookmarkNodes }
+        let byID = Dictionary(uniqueKeysWithValues: bookmarkNodes.map { ($0.id, $0) })
+
+        var matchingIDs = Set<String>()
+        for node in bookmarkNodes {
+            let title = resolveBookmarkTitle(node)
+            if title.localizedCaseInsensitiveContains(query) {
+                matchingIDs.insert(node.id)
+            }
+        }
+
+        var visibleIDs = Set<String>()
+        for id in matchingIDs {
+            var current: String? = id
+            while let cid = current, let node = byID[cid] {
+                visibleIDs.insert(cid)
+                current = node.parentID
+            }
+        }
+        return bookmarkNodes.filter { visibleIDs.contains($0.id) }
+    }
+
+    /// Resolves the display title for a bookmark node: folder label, or for
+    /// refs, the title/name of the target page/source/chat (#240 / #288).
+    private func resolveBookmarkTitle(_ node: BookmarkNode) -> String {
+        switch node.kind {
+        case .folder: return node.label ?? ""
+        case .pageRef:
+            return node.targetID.flatMap { id in
+                summaries.first { $0.id == id }?.title
+            } ?? ""
+        case .sourceRef:
+            return node.targetID.flatMap { id in
+                sources.first { $0.id == id }?.effectiveName
+            } ?? ""
+        case .chatRef:
+            return node.targetID.flatMap { id in
+                chats.first { $0.id == id }?.title
+            } ?? ""
+        }
     }
 
     /// Resolve a page title to its id (lowest-ULID on a duplicate-title
