@@ -198,7 +198,7 @@ actor ACPBackend: AgentBackend {
         let initResponse = try await client.initialize(
             protocolVersion: 1,
             capabilities: capabilities,
-            clientInfo: ClientInfo(name: "SelfDrivingWiki", title: "Self Driving Wiki", version: "1.0.0")
+            clientInfo: ClientInfo(name: "SelfDrivingWiki", title: "Self Driving Wiki", version: GeneratedVersion.appVersion)
         )
         DebugLog.agent("ACPBackend.start: initialize OK agent=\(initResponse.agentInfo?.name ?? "?") authMethods=\(initResponse.authMethods?.count ?? 0)") // TEMP DEBUG (existed; re-tagged)
 

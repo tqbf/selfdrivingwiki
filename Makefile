@@ -44,6 +44,15 @@ PROMPT_SOURCES    := $(wildcard prompts/*.md)
 PROMPT_GENERATOR  := tools/promptgen/main.swift
 GENERATED_PROMPTS := Sources/WikiFSCore/GeneratedPrompts.swift
 
+# Version codegen (git state → a checked-in Swift file with appVersion, gitSHA,
+# gitCommitCount, buildVersion). Same pattern as promptgen above: the file is
+# checked in so bare `swift build` works; `make version` regenerates it from the
+# current git state. CI runs `make check-version-gen` to fail on drift. The
+# generator only writes when content actually changes, so being a .PHONY prereq
+# of build/check/test/release doesn't force recompilation on every invocation.
+VERSIONGEN_SCRIPT  := tools/versiongen/main.swift
+GENERATED_VERSION  := Sources/WikiFSCore/GeneratedVersion.swift
+
 # ---------------------------------------------------------------------------
 # Release variables
 # ---------------------------------------------------------------------------
@@ -77,7 +86,8 @@ NOTES_FILE       ?=
 
 .PHONY: all deps build check test release run reload clean install uninstall register help prune-provider-registrations \
         check-version notary-setup sign zip-notary notarize staple zip-release \
-        checksum verify-release dist github-release print-version icon prompts check-prompts
+        checksum verify-release dist github-release print-version icon prompts check-prompts \
+        version check-version-gen
 
 all: build
 
@@ -88,7 +98,9 @@ help:
 	@echo "  check             Compile only (swift build) — no bundle/sign; CI/agent gate"
 	@echo "  test              Run the SwiftPM test suite"
 	@echo "  prompts           Regenerate Sources/WikiFSCore/GeneratedPrompts.swift from prompts/*.md"
-	@echo "  check-prompts     CI gate — fail if GeneratedPrompts.swift is stale vs prompts/*.md"
+	@echo "  check-prompts     CI gate — fail if GeneratedPrompts.swift is stale"
+	@echo "  version           Regenerate Sources/WikiFSCore/GeneratedVersion.swift from git state"
+	@echo "  check-version-gen CI gate — fail if GeneratedVersion.swift is stale"
 	@echo "  release           Build release into ./$(APP)"
 	@echo "  run               Install to /Applications and launch $(APP_NAME)"
 	@echo "  reload            Like run, but forces the File Provider domain to reset —"
@@ -161,19 +173,19 @@ $(APP_ICON): $(ICON_SCRIPT)
 
 icon: $(APP_ICON)
 
-build: deps $(APP_ICON) $(GENERATED_PROMPTS)
+build: deps $(APP_ICON) $(GENERATED_PROMPTS) version
 	SIGN_IDENTITY="$(DEV_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh $(CONFIG)
 
-release: deps $(APP_ICON) $(GENERATED_PROMPTS)
+release: deps $(APP_ICON) $(GENERATED_PROMPTS) version
 	SIGN_IDENTITY="$(DEV_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh release
 
 # Compile-only gate — no .app, no signing. CI / agent verification.
-check: deps $(GENERATED_PROMPTS)
+check: deps $(GENERATED_PROMPTS) version
 	swift build -c $(CONFIG)
 	@echo "✓ compiles ($(CONFIG))"
 
 # Run the test suite.
-test: deps $(GENERATED_PROMPTS)
+test: deps $(GENERATED_PROMPTS) version
 	swift test
 	@echo "✓ tests pass"
 
@@ -204,10 +216,28 @@ check-prompts: ## CI gate — fail if GeneratedPrompts.swift is stale vs prompts
 	fi
 
 
+# Version codegen — regenerate Sources/WikiFSCore/GeneratedVersion.swift from
+# the current git state (tag/VERSION file → appVersion; SHA + commit count →
+# buildVersion). Always runs; the generator skips writing if content is
+# unchanged, so this doesn't force recompilation on every make invocation.
+version:
+	@swift $(VERSIONGEN_SCRIPT)
+
+# CI gate — fail if the checked-in GeneratedVersion.swift is stale vs git.
+check-version-gen:
+	@tmp=$$(mktemp); trap 'rm -f $$tmp' EXIT; \
+	swift $(VERSIONGEN_SCRIPT) --stdout > $$tmp; \
+	if ! diff -u Sources/WikiFSCore/GeneratedVersion.swift $$tmp; then \
+		echo ">> GeneratedVersion.swift is stale. Run 'make version' and commit." >&2; exit 1; \
+	fi
+
 print-version:
 	@echo "VERSION=$(VERSION)"
 	@echo "  git tag at HEAD: $(if $(GIT_TAG_VERSION),$(GIT_TAG_VERSION),(none))"
 	@echo "  VERSION file:    $(if $(FILE_VERSION),$(FILE_VERSION),(missing))"
+	@echo "  git SHA:         $$(git rev-parse --short HEAD 2>/dev/null || echo '(unknown)')"
+	@echo "  commit count:    $$(git rev-list --count HEAD 2>/dev/null || echo '?')"
+	@echo "  build version:   $$(git rev-list --count HEAD 2>/dev/null || echo '0')-$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 # ---------------------------------------------------------------------------
 # Run / install / register

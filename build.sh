@@ -73,7 +73,15 @@ EXT_ENTITLEMENTS="${BUILD_DIR}/WikiFSFileProvider.entitlements"
 
 VERSION="$(git describe --tags --exact-match --match 'v[0-9]*' 2>/dev/null | sed 's/^v//' || true)"
 if [ -z "${VERSION}" ] && [ -f VERSION ]; then VERSION="$(sed -n '1p' VERSION | tr -d '[:space:]')"; fi
-VERSION="${VERSION:-0.0.0-dev}"
+VERSION="${VERSION:-0.0.0}"
+
+# Build identifier: commit count + short SHA (e.g. "423-abc1234"). Monotone
+# integer for Apple's build-number expectations, with the SHA baked in for
+# traceability. Goes into CFBundleVersion (separate from the marketing
+# VERSION above, which goes into CFBundleShortVersionString).
+GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+GIT_COMMIT_COUNT="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
+BUILD_VERSION="${GIT_COMMIT_COUNT}-${GIT_SHA}"
 
 echo "→ swift build -c ${CONFIG}"
 swift build -c "${CONFIG}"
@@ -212,7 +220,10 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
 	<key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleShortVersionString</key><string>${VERSION}</string>
-	<key>CFBundleVersion</key><string>${VERSION}</string>
+	<key>CFBundleVersion</key><string>${BUILD_VERSION}</string>
+	<key>WIKIGitSHA</key><string>${GIT_SHA}</string>
+	<key>WIKIGitCommitCount</key><string>${GIT_COMMIT_COUNT}</string>
+	<key>WIKIBuildVersion</key><string>${BUILD_VERSION}</string>
 	<key>CFBundleIconFile</key><string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key><string>${MIN_MACOS}</string>
 	<key>NSHighResolutionCapable</key><true/>
@@ -265,7 +276,7 @@ cat > "${APPEX_CONTENTS}/Info.plist" <<PLIST
 	<key>CFBundleIdentifier</key><string>${EXT_BUNDLE_ID}</string>
 	<key>CFBundlePackageType</key><string>XPC!</string>
 	<key>CFBundleShortVersionString</key><string>${VERSION}</string>
-	<key>CFBundleVersion</key><string>${VERSION}</string>
+	<key>CFBundleVersion</key><string>${BUILD_VERSION}</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>LSMinimumSystemVersion</key><string>${MIN_MACOS}</string>
 	<key>NSExtension</key>
@@ -391,5 +402,5 @@ else
   fi
   codesign --force --sign - "${APPEX}"
   codesign --force --sign - "${APP_BUNDLE}"
-  echo "✓ built ${APP_BUNDLE} (${CONFIG}, v${VERSION}, ad-hoc)"
+  echo "✓ built ${APP_BUNDLE} (${CONFIG}, v${VERSION} (${BUILD_VERSION}), ad-hoc)"
 fi

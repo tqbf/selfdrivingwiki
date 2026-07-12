@@ -74,6 +74,8 @@ public enum ArgumentParser {
         case bookmark(BookmarkCommand.Action)
         /// Workspace commands (W1, PR #312): create, status, abandon, merge.
         case workspace(WorkspaceCommand.Action)
+        /// Print build version info. Does not require a wiki selection.
+        case version(json: Bool)
     }
 
     public enum Failure: Error, Equatable, CustomStringConvertible {
@@ -90,8 +92,10 @@ public enum ArgumentParser {
     usage: wikictl [--wiki <id>] <command>
 
     Selects the wiki by --wiki <id-or-name> or the WIKI_DB env var.
+    `version` / `--version` / `-v` prints build info and needs no wiki.
 
     commands:
+      version [--json]                       print build version info; --json for machine-readable
       page list [--json]                     list pages (TSV, or JSON lines)
       page get  (--title X | --id Y) [--json] [--workspace W]
                                              print a page body; --json adds head_version_id;
@@ -170,6 +174,19 @@ public enum ArgumentParser {
         env: (String) -> String?
     ) throws -> Invocation {
         var args = arguments
+
+        // `version` / `--version` / `-v` — print build version info and exit.
+        // Intercepted BEFORE the wiki selector requirement so it works without
+        // --wiki or WIKI_DB.
+        if let first = args.first {
+            if first == "version" {
+                let options = try Options(Array(args.dropFirst()), booleanFlags: ["--json"])
+                return Invocation(wikiSelector: "", command: .version(json: options.flag("--json")))
+            }
+            if first == "--version" || first == "-v" {
+                return Invocation(wikiSelector: "", command: .version(json: false))
+            }
+        }
 
         // A leading `--wiki <id>` is optional; otherwise fall back to WIKI_DB.
         var wikiSelector: String?
