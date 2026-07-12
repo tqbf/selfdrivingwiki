@@ -2,6 +2,34 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-12 — Fix orphaned `refs` on source/page delete (changeToken stale)
+
+**Symptom.** `changeTokenAdvancesOnIngestAndDelete` (and
+`deleteSourceCascadesVersionsAndRefsKeepsBlobs`) failed after the W0
+workspace commit (#312), not — as initially suspected — the #131 provenance
+commit (which only touched `user_version` literals in this test file).
+
+**Root cause.** W0 (`5fb2650`, PR #312) rebuilt the `refs` table to drop the
+`owner_id REFERENCES sources(id) ON DELETE CASCADE` FK, because `owner_id` is
+now polymorphic: a source id for `source-content`/`source-derived` refs, a page
+id for `page-content` refs (a single FK onto `sources` no longer fits). The
+`source_versions` / `source_markdown_versions` rows still cascade via their own
+FKs, but the `refs` row itself has no cascade — so `deleteSource` orphaned it.
+The orphan left `refsGenerationSum` (a `changeToken` fold) stale, so the token
+didn't advance on delete and the File Provider's `files/` tree wouldn't refresh.
+
+**Fix.** `deleteSource` now explicitly `DELETE FROM refs WHERE owner_id = ?1
+AND kind IN ('source-content','source-derived')` inside the same
+`withTransaction` as the source row delete. Mirrored in `deletePage` for
+`page-content` refs (same latent leak — a page with a CAS `page-content` ref
+would orphan it on delete).
+
+**Tests.** The two regressing tests pass; full `changeToken`/delete/emission/
+schema/workspace sweep (90 tests) green; fast tier (2304 tests) green. The two
+pre-existing migration-test failures (`migrateV19ToV20…`,
+`migrateV28ToV29RewritesAskChatsToEdit`) fail identically on clean `ebd31e4`
+and are unrelated to this change.
+
 ## 2026-07-11 — W4: Concurrency at scale (PR #312)
 
 **What shipped.** Phase W4 (final) of the multi-writer concurrency plan:

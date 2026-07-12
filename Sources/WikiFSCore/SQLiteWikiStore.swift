@@ -3734,6 +3734,17 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try deleteAttachments.bind(id.rawValue, at: 1)
             _ = try deleteAttachments.step()
 
+            // `page-content` refs use the page id as `owner_id`. Like sources,
+            // the `refs` table has no FK cascade onto `pages` (W0/#312 made
+            // `owner_id` polymorphic), so a page with a CAS `page-content` ref
+            // would leak the ref row on delete — orphaning `version_id` and
+            // staling the changeToken. Delete it in the same transaction.
+            let deleteRefs = try statement(
+                "DELETE FROM refs WHERE owner_id = ?1 AND kind = 'page-content';")
+            deleteRefs.reset()
+            try deleteRefs.bind(id.rawValue, at: 1)
+            _ = try deleteRefs.step()
+
             let stmt = try statement("DELETE FROM pages WHERE id = ?1;")
             stmt.reset()
             try stmt.bind(id.rawValue, at: 1)
@@ -4938,10 +4949,32 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
     public func deleteSource(id: PageID) throws {
         try mutate(event: { _ in localEvent(.source, id: id.rawValue, change: .deleted) }) {
-        let stmt = try statement("DELETE FROM sources WHERE id = ?1;")
-        defer { stmt.reset() }
-        try stmt.bind(id.rawValue, at: 1)
-        _ = try stmt.step()
+        // The `refs` table has NO `owner_id REFERENCES sources(id) ON DELETE
+        // CASCADE` FK — W0 (#312) dropped it because `owner_id` is polymorphic:
+        // a source id for `source-content`/`source-derived` refs, a page id for
+        // `page-content` refs. So deleting a source would otherwise orphan its
+        // ref rows (the `version_id` they point at cascades away via
+        // `source_versions`/`source_markdown_versions` FKs, but the ref row
+        // itself survives), leaving `refsGenerationSum` — a changeToken fold —
+        // stale and the File Provider's `files/` tree unrefreshed. Delete the
+        // source's refs explicitly, in the same transaction as the source row.
+        // Regression: `changeTokenAdvancesOnIngestAndDelete`,
+        // `deleteSourceCascadesVersionsAndRefsKeepsBlobs`.
+        try withTransaction {
+            let deleteRefs = try statement(
+                """
+                DELETE FROM refs
+                WHERE owner_id = ?1 AND kind IN ('source-content','source-derived');
+                """)
+            defer { deleteRefs.reset() }
+            try deleteRefs.bind(id.rawValue, at: 1)
+            _ = try deleteRefs.step()
+
+            let stmt = try statement("DELETE FROM sources WHERE id = ?1;")
+            defer { stmt.reset() }
+            try stmt.bind(id.rawValue, at: 1)
+            _ = try stmt.step()
+        }
         }
     }
 
