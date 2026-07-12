@@ -18,6 +18,9 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
     /// the omnibox "+", context menus, etc. update the database but the outline
     /// never refreshes (no SwiftUI state change to force `updateNSViewController`).
     let nodes: [BookmarkNode]
+    /// When true, all folders are force-expanded (used during search so hits
+    /// inside collapsed folders are immediately visible).
+    var forceExpandAll: Bool = false
     let fileProvider: FileProviderSpike
     var onOpen: ([WikiSelection]) -> Void
     var onOpenBackground: ([WikiSelection]) -> Void
@@ -52,7 +55,8 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
             onAddPage: onAddPage, onAddSource: onAddSource,
             onNewFolder: onNewFolder, onNewSubfolder: onNewSubfolder
         )
-        let needs = vc.needsReload(nodes: nodes)
+        let needs = vc.needsReload(nodes: nodes) || vc.forceExpandAll != forceExpandAll
+        vc.forceExpandAll = forceExpandAll
         DebugLog.tabs("BookmarksOutlineView.updateNSVC: nodes=\(nodes.count) needsReload=\(needs)")
         if needs {
             vc.reloadData(from: nodes)
@@ -115,6 +119,9 @@ final class BookmarksOutlineViewController: NSViewController {
     /// Tracks whether the initial expand-all has run. After that, reloads
     /// preserve the user's expand/collapse choices instead of force-expanding.
     private var hasPerformedInitialLoad = false
+
+    /// When true, all folders are force-expanded on reload (search mode).
+    var forceExpandAll = false
 
     override func loadView() {
         scrollView = NSScrollView()
@@ -194,6 +201,13 @@ final class BookmarksOutlineViewController: NSViewController {
                 outlineView.expandItem(node)
             }
             hasPerformedInitialLoad = true
+        } else if forceExpandAll {
+            // Search mode: force-expand all folders so hits inside collapsed
+            // folders are immediately visible.
+            outlineView.reloadData()
+            for node in nodes where node.kind == .folder {
+                outlineView.expandItem(node)
+            }
         } else {
             // Subsequent reloads: snapshot expanded state, reload, restore.
             let expandedIDs = Set(

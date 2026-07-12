@@ -12,18 +12,28 @@ struct BookmarksContainerView: View {
     var onEdit: (String) -> Void
     var onNewFolder: () -> Void
 
+    @State private var searchText: String = ""
+
     var body: some View {
         VStack(spacing: 0) {
             // Section header: title on the left, compact action buttons on the
             // right — the native macOS pattern (Finder, Notes, Mail).
             bookmarksHeader
 
+            // Search field: substring filter over bookmark labels and resolved
+            // page/source/chat titles (issue #240).
+            if !store.bookmarkNodes.isEmpty {
+                bookmarksSearchBar
+                Divider()
+            }
+
             Divider()
 
             // NSOutlineView — instant selection, native macOS performance
             BookmarksOutlineView(
                 store: store,
-                nodes: store.bookmarkNodes,
+                nodes: filteredNodes,
+                forceExpandAll: !searchText.isEmpty,
                 fileProvider: fileProvider,
                 onOpen: { selections in
                     for sel in selections { store.openTab(sel) }
@@ -85,6 +95,105 @@ struct BookmarksContainerView: View {
         }
         .buttonStyle(.plain)
         .help(help)
+    }
+
+    // MARK: - Search
+
+    private var bookmarksSearchBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .font(.callout)
+            TextField("Search bookmarks…", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.callout)
+                .disableAutocorrection(true)
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+        .padding(8)
+        .padding(.horizontal, 4)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+    }
+
+    /// When search is active, returns only matching nodes plus their ancestor
+    /// folders (so hits inside nested folders are visible). When search is
+    /// empty, returns all nodes unchanged.
+    private var filteredNodes: [BookmarkNode] {
+        let allNodes = store.bookmarkNodes
+        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return allNodes
+        }
+        return Self.filterNodes(
+            allNodes,
+            query: searchText,
+            resolveTitle: { Self.resolveTitle(for: $0, in: store) }
+        )
+    }
+
+    /// Resolves the display title for a bookmark node: folder label, or for
+    /// refs, the title/name of the target page/source/chat.
+    static func resolveTitle(for node: BookmarkNode, in store: WikiStoreModel) -> String {
+        switch node.kind {
+        case .folder:
+            return node.label ?? ""
+        case .pageRef:
+            return node.targetID.flatMap { id in
+                store.summaries.first { $0.id == id }?.title
+            } ?? ""
+        case .sourceRef:
+            return node.targetID.flatMap { id in
+                store.sources.first { $0.id == id }?.effectiveName
+            } ?? ""
+        case .chatRef:
+            return node.targetID.flatMap { id in
+                store.chats.first { $0.id == id }?.title
+            } ?? ""
+        }
+    }
+
+    /// Pure filtering logic: returns nodes whose resolved title matches `query`
+    /// (case-insensitive substring), plus all ancestor folders so nested hits
+    /// are visible. Extracted so the rule is unit-testable without a live store.
+    nonisolated static func filterNodes(
+        _ nodes: [BookmarkNode],
+        query: String,
+        resolveTitle: (BookmarkNode) -> String
+    ) -> [BookmarkNode] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return nodes }
+
+        let byID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+
+        // Collect ids of nodes that match the query.
+        var matchingIDs = Set<String>()
+        for node in nodes {
+            let title = resolveTitle(node)
+            if title.localizedCaseInsensitiveContains(q) {
+                matchingIDs.insert(node.id)
+            }
+        }
+
+        // Expand to include all ancestors of matching nodes (so a hit inside a
+        // nested folder is visible when the folder would otherwise be collapsed).
+        var visibleIDs = Set<String>()
+        for id in matchingIDs {
+            var current: String? = id
+            while let cid = current, let node = byID[cid] {
+                visibleIDs.insert(cid)
+                current = node.parentID
+            }
+        }
+
+        return nodes.filter { visibleIDs.contains($0.id) }
     }
 }
 
