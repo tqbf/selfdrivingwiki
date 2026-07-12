@@ -37,6 +37,10 @@ public struct WikiStateSnapshot: Equatable, Sendable {
   /// already rendered as its grep-able `## [date] kind | title` line (plus note),
   /// matching exactly what `log.md`'s `tail` would show.
   public let recentLog: [String]
+  /// The bookmark tree (folders + page/source/chat refs), flat but ordered
+  /// parents-before-children, siblings by position. Included so the agent can
+  /// see how the user has organized bookmarks and mirror that structure (#239).
+  public let bookmarkNodes: [BookmarkNode]
 
   /// Cap on listed titles for large wikis: list the most-recently-updated ~150
   /// and note the remainder, so a 10k-page wiki doesn't blow up the prompt.
@@ -49,12 +53,14 @@ public struct WikiStateSnapshot: Equatable, Sendable {
     pageTitles: [String],
     truncatedPageCount: Int,
     indexBody: String,
-    recentLog: [String]
+    recentLog: [String],
+    bookmarkNodes: [BookmarkNode] = []
   ) {
     self.pageTitles = pageTitles
     self.truncatedPageCount = truncatedPageCount
     self.indexBody = indexBody
     self.recentLog = recentLog
+    self.bookmarkNodes = bookmarkNodes
   }
 
   /// Build a snapshot from raw state, applying the large-wiki cap. `allTitles`
@@ -66,7 +72,8 @@ public struct WikiStateSnapshot: Equatable, Sendable {
   public static func make(
     allTitles: [String],
     indexBody: String,
-    logLines: [String]
+    logLines: [String],
+    bookmarkNodes: [BookmarkNode] = []
   ) -> WikiStateSnapshot {
     let listed = Array(allTitles.prefix(maxListedTitles))
     let dropped = max(0, allTitles.count - listed.count)
@@ -74,7 +81,8 @@ public struct WikiStateSnapshot: Equatable, Sendable {
       pageTitles: listed,
       truncatedPageCount: dropped,
       indexBody: indexBody,
-      recentLog: logLines
+      recentLog: logLines,
+      bookmarkNodes: bookmarkNodes
     )
   }
 
@@ -126,6 +134,63 @@ public struct WikiStateSnapshot: Equatable, Sendable {
       lines.append(recentLog.joined(separator: "\n"))
     }
 
+    // Bookmark tree (#239: let the agent see the user's bookmark organization).
+    lines.append("")
+    lines.append("## Bookmarks")
+    if bookmarkNodes.isEmpty {
+      lines.append("No bookmarks yet.")
+    } else {
+      lines.append(
+        "The user's bookmark organization. Use `wikictl bookmark` subcommands to manage these.")
+      lines.append("")
+      lines.append(Self.renderBookmarkTree(bookmarkNodes))
+    }
+
     return lines.joined(separator: "\n") + "\n"
+  }
+
+  /// Renders a flat `[BookmarkNode]` list (parents-before-children, siblings by
+  /// position) as an indented markdown tree. Folders show their label; refs
+  /// show their target id. The indentation level reflects nesting depth.
+  static func renderBookmarkTree(_ nodes: [BookmarkNode]) -> String {
+    // Build parent→children map for tree traversal.
+    var childrenMap: [String?: [BookmarkNode]] = [:]
+    for node in nodes {
+      childrenMap[node.parentID, default: []].append(node)
+    }
+    // Sort each group by position.
+    for key in childrenMap.keys {
+      childrenMap[key]?.sort { $0.position < $1.position }
+    }
+
+    var lines: [String] = []
+    func renderChildren(of parentID: String?, depth: Int) {
+      let children = childrenMap[parentID] ?? []
+      for child in children {
+        let indent = String(repeating: "  ", count: depth)
+        let icon: String
+        let label: String
+        switch child.kind {
+        case .folder:
+          icon = "📁"
+          label = child.label ?? "(unnamed folder)"
+        case .pageRef:
+          icon = "📄"
+          label = "page:\(child.targetID?.rawValue ?? "?")"
+        case .sourceRef:
+          icon = "📎"
+          label = "source:\(child.targetID?.rawValue ?? "?")"
+        case .chatRef:
+          icon = "💬"
+          label = "chat:\(child.targetID?.rawValue ?? "?")"
+        }
+        lines.append("\(indent)- \(icon) \(label)")
+        if child.kind == .folder {
+          renderChildren(of: child.id, depth: depth + 1)
+        }
+      }
+    }
+    renderChildren(of: nil, depth: 0)
+    return lines.joined(separator: "\n")
   }
 }
