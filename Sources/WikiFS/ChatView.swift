@@ -366,11 +366,15 @@ struct ChatView: View {
     private func header(for chat: ChatSummary) -> some View {
         VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
             Label {
-                Text(chat.title)
-                    .font(.largeTitle)
-                    .bold()
-                    .lineLimit(1)
-                    .textSelection(.enabled)
+                EditableTitle(
+                    title: chat.title,
+                    placeholder: "Untitled Chat",
+                    lineLimit: 1,
+                    isDisabled: false,
+                    onCommit: { newTitle in
+                        store.renameChat(id: chat.id, to: newTitle)
+                    }
+                )
             } icon: {
                 Image(systemName: "bubble.left.and.bubble.right")
                     .foregroundStyle(.secondary)

@@ -7,12 +7,13 @@ import WikiFSCore
 /// unit-testable against a temp DB.
 ///
 /// Read-only: `list` prints all chats (TSV or JSON), `get` prints one chat's
-/// transcript as rendered markdown (via `ChatTranscriptRenderer`). No write
-/// subcommands — chats are created/appended by the app's chat layer.
+/// transcript as rendered markdown (via `ChatTranscriptRenderer`). `rename`
+/// updates a chat's title. No other write subcommands — chats are
+/// created/appended by the app's chat layer.
 public enum ChatCommand {
 
     /// What a command produced: text to print and whether it COMMITTED a write.
-    /// Chat commands are always reads, so `didCommit` is always false.
+    /// Read commands have `didCommit = false`; `rename` commits.
     public struct Result: Equatable {
         public var output: String
         public var didCommit: Bool
@@ -33,6 +34,7 @@ public enum ChatCommand {
         case list(json: Bool)
         case get(Selector)
         case search(query: String, limit: Int)
+        case rename(Selector, to: String)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -45,7 +47,7 @@ public enum ChatCommand {
         }
     }
 
-    /// Run one action against `store`. All actions are pure reads.
+    /// Run one action against `store`. Reads never commit; `rename` does.
     public static func run(_ action: Action, in store: WikiStore) throws -> Result {
         switch action {
         case .list(let json):
@@ -54,6 +56,8 @@ public enum ChatCommand {
             return try get(selector, in: store)
         case .search(let query, let limit):
             return try search(query: query, limit: limit, in: store)
+        case .rename(let selector, let newTitle):
+            return try rename(selector, to: newTitle, in: store)
         }
     }
 
@@ -109,6 +113,17 @@ public enum ChatCommand {
             return "\(chat.id.rawValue)\t\(title)\t\(chat.kind.rawValue)\t\(chat.messageCount)"
         }.joined(separator: "\n")
         return Result(output: output, didCommit: false)
+    }
+
+    // MARK: - rename
+
+    /// Rename a chat's title and rebuild the `chat_search` FTS sidecar.
+    /// Commits — the caller posts the Darwin notification on `didCommit`.
+    /// Mirrors `SourceCommand.rename`.
+    private static func rename(_ selector: Selector, to newTitle: String, in store: WikiStore) throws -> Result {
+        let id = try resolve(selector, in: store)
+        try store.renameChat(id: id, to: newTitle)
+        return Result(output: "Renamed chat to \"\(newTitle)\".", didCommit: true)
     }
 
     // MARK: - Selector resolution

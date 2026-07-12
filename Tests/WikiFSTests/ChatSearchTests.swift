@@ -192,4 +192,68 @@ import SQLite3
         #expect(query == "hello")
         #expect(limit == 3)
     }
+
+    // MARK: - wikictl `chat rename`
+
+    @Test func chatRenameByIdCommitsAndUpdatesTitle() throws {
+        let store = try tempStore()
+        let chat = try store.createChat(kind: .edit, title: "Old Title")
+        let result = try ChatCommand.run(
+            .rename(.id(chat.id), to: "New Title"), in: store
+        )
+        #expect(result.didCommit == true)
+        #expect(result.output.contains("New Title"))
+        // Store-level verify: the title actually changed.
+        let chats = try store.listAllChatsOrderedByID()
+        #expect(chats.first(where: { $0.id == chat.id })?.title == "New Title")
+    }
+
+    @Test func chatRenameByTitleResolvesAndRenames() throws {
+        let store = try tempStore()
+        _ = try store.createChat(kind: .edit, title: "Original Title")
+        let result = try ChatCommand.run(
+            .rename(.title("Original Title"), to: "Renamed"), in: store
+        )
+        #expect(result.didCommit == true)
+        let chats = try store.listAllChatsOrderedByID()
+        #expect(chats.first?.title == "Renamed")
+    }
+
+    @Test func parseChatRenameRequiresTo() throws {
+        #expect(throws: ArgumentParser.Failure.self) {
+            _ = try ArgumentParser.parse([
+                "--wiki", "W", "chat", "rename", "--id", "abc",
+            ], env: noEnv)
+        }
+    }
+
+    @Test func parseChatRenameByIdProducesCorrectAction() throws {
+        let inv = try ArgumentParser.parse([
+            "--wiki", "W", "chat", "rename", "--id", "abc123", "--to", "New Name",
+        ], env: noEnv)
+        guard case .chat(let action) = inv.command,
+              case .rename(let selector, let newTitle) = action else {
+            Issue.record("expected .chat(.rename)"); return
+        }
+        guard case .id(let id) = selector else {
+            Issue.record("expected .id selector"); return
+        }
+        #expect(id.rawValue == "abc123")
+        #expect(newTitle == "New Name")
+    }
+
+    @Test func parseChatRenameByTitleProducesCorrectAction() throws {
+        let inv = try ArgumentParser.parse([
+            "--wiki", "W", "chat", "rename", "--title", "Old", "--to", "New",
+        ], env: noEnv)
+        guard case .chat(let action) = inv.command,
+              case .rename(let selector, let newTitle) = action else {
+            Issue.record("expected .chat(.rename)"); return
+        }
+        guard case .title(let title) = selector else {
+            Issue.record("expected .title selector"); return
+        }
+        #expect(title == "Old")
+        #expect(newTitle == "New")
+    }
 }
