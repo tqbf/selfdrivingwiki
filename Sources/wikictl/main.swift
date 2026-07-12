@@ -27,6 +27,22 @@ func run() -> Int32 {
         return 2
     }
 
+    // `version` doesn't need a wiki — print and exit before wiki resolution.
+    if case .version(let json) = invocation.command {
+        if json {
+            print("""
+            {"appVersion":"\(GeneratedVersion.appVersion)","gitSHA":"\(GeneratedVersion.gitSHA)","commitCount":\(GeneratedVersion.gitCommitCount),"buildVersion":"\(GeneratedVersion.buildVersion)","fullVersion":"\(GeneratedVersion.fullVersionString)"}
+            """)
+        } else {
+            print("wikictl \(GeneratedVersion.fullVersionString)")
+            print("  appVersion:  \(GeneratedVersion.appVersion)")
+            print("  git SHA:     \(GeneratedVersion.gitSHA)")
+            print("  commit:      \(GeneratedVersion.gitCommitCount)")
+            print("  build:       \(GeneratedVersion.buildVersion)")
+        }
+        return 0
+    }
+
     // Phase 7: WIKI_WORKSPACE env var. When set by an isolated ingest run,
     // it auto-applies --workspace to page get/upsert and index set commands
     // that don't already pass --workspace explicitly. This lets the agent
@@ -189,6 +205,9 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
     case .workspace(let action):
         let r = try WorkspaceCommand.run(action, in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
+    case .version:
+        // Handled before wiki resolution in `run()` — unreachable here.
+        return SourceCommand.Result(payload: .text(""), didCommit: false)
     }
 }
 

@@ -222,6 +222,8 @@ struct WikiFSApp: App {
 
         Settings {
             TabView {
+                AboutView()
+                    .tabItem { Label("About", systemImage: "info.circle") }
                 ZoteroSettingsView(containerDirectory: containerDirectory)
                     .tabItem { Label("Zotero", systemImage: "books.vertical") }
                 ExtractionSettingsView(containerDirectory: containerDirectory, launcher: agentLauncher)
