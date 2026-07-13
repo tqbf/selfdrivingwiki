@@ -236,6 +236,15 @@ struct WikiReaderView: View {
              wiki://missing?… by the linkifier — color it red so dangling
              references are obvious at a glance. */
           a[href^="wiki://missing"] { color: #ff453a; }
+          /* External links: append a small ↗ glyph so it's visually clear the
+             link will open in an external browser, unlike internal wiki://
+             links which navigate in-app. */
+          a[href^="http"]::after {
+            content: "↗";
+            font-size: 0.75em;
+            margin-left: 0.15em;
+            opacity: 0.6;
+          }
           ul, ol { padding-left: 1.6em; margin: 0 0 1em; }
           li { margin: 0.15em 0; }
           blockquote {
