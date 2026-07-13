@@ -71,18 +71,42 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol {
 
 // MARK: - Main
 
-do {
-    let containerDirectory = try DatabaseLocation.appGroupContainerDirectory()
-    let daemon = WikiDaemon(containerDirectory: containerDirectory)
+// Resolve the App Group container path WITHOUT calling
+// DatabaseLocation.appGroupContainerDirectory() directly — that function
+// builds the literal path ~/Library/Group Containers/<id>/ and accessing it
+// from a launchd-started daemon triggers kTCCServiceSystemPolicyAppData
+// ("wikid would like to access data from other apps") on every rebuild
+// (the code signature hash changes per build, resetting TCC trust).
+//
+// Instead: accept the container path from (1) a --container arg, or (2) the
+// WIKI_CONTAINER_DIR env var (set by the launchd plist). If neither is
+// present, fall back to DatabaseLocation (the prompt will appear once, then
+// the user approves and it sticks in TCC).
+let containerDirectory: URL
+if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix("-") }),
+   FileManager.default.fileExists(atPath: argPath) {
+    containerDirectory = URL(fileURLWithPath: argPath, isDirectory: true)
+} else if let envPath = ProcessInfo.processInfo.environment["WIKI_CONTAINER_DIR"],
+          FileManager.default.fileExists(atPath: envPath) {
+    containerDirectory = URL(fileURLWithPath: envPath, isDirectory: true)
+} else {
+    containerDirectory = try DatabaseLocation.appGroupContainerDirectory()
+}
 
+let daemon = WikiDaemon(containerDirectory: containerDirectory)
+
+do {
     let delegate = WikiDaemonListenerDelegate(daemon: daemon)
 
-    // For a launchd-managed daemon: launchd starts this process on-demand when a
-    // client connects to the mach service name. `NSXPCListener(machServiceName:)`
-    // registers with launchd.
+    // The daemon is always launched via launchd (the `MachServices` key in the
+    // plist registers the mach service name). `NSXPCListener(machServiceName:)`
+    // registers with launchd so clients connecting via
+    // `NSXPCConnection(machServiceName:)` reach this listener.
     //
-    // For direct-run (development): if launchd hasn't registered the service,
-    // `NSXPCListener(machServiceName:)` still works on a per-process basis.
+    // Direct-run without launchd does NOT work: the mach service isn't
+    // registered, and `NSXPCListenerEndpoint` can't be serialized to a file
+    // (it must pass through an existing XPC connection — a chicken-and-egg
+    // problem). Use `make install-daemon` for both development and production.
     let listener = NSXPCListener(machServiceName: WikiDaemonMachServiceName)
     listener.delegate = delegate
     listener.resume()

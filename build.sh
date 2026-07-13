@@ -34,6 +34,11 @@ APP_NAME="Self Driving Wiki"
 APP_TARGET_NAME="WikiFS"
 EXT_NAME="WikiFSFileProvider"
 CTL_NAME="wikictl"
+# wikid — the XPC daemon (plans/multi-wiki-daemon.md). Bundled under
+# Contents/Helpers so launchd can run it with the app's signing identity
+# (avoids kTCCServiceSystemPolicyAppData prompts — a standalone .build binary
+# has a different cdhash per rebuild, invalidating TCC trust each time).
+DAEMON_NAME="wikid"
 # podcast-token-helper: the FairPlay/Mescal signer for Apple Podcasts transcripts
 # (dlopens the private PodcastsFoundation framework in an isolated process). Bundled
 # under Contents/Helpers beside wikictl; WikiFSCore spawns it via Process. Private
@@ -89,8 +94,9 @@ BIN_DIR="$(swift build -c "${CONFIG}" --show-bin-path)"
 APP_BIN="${BIN_DIR}/${APP_TARGET_NAME}"
 EXT_BIN="${BIN_DIR}/${EXT_NAME}"
 CTL_BIN="${BIN_DIR}/${CTL_NAME}"
+DAEMON_BIN="${BIN_DIR}/${DAEMON_NAME}"
 PODCAST_HELPER_BIN="${BIN_DIR}/${PODCAST_HELPER_NAME}"
-for b in "${APP_BIN}" "${EXT_BIN}" "${CTL_BIN}"; do
+for b in "${APP_BIN}" "${EXT_BIN}" "${CTL_BIN}" "${DAEMON_BIN}"; do
   [ -x "$b" ] || { echo "✗ built binary missing: $b" >&2; exit 1; }
 done
 
@@ -99,10 +105,17 @@ done
 # ---------------------------------------------------------------------------
 echo "→ assembling ${APP_BUNDLE}"
 rm -rf "${APP_BUNDLE}"
-mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${APPEX_MACOS}" "${HELPERS_DIR}"
+mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${APPEX_MACOS}" "${HELPERS_DIR}" "${CONTENTS}/Library/LaunchAgents"
 cp "${APP_BIN}" "${MACOS_DIR}/${APP_NAME}"
 cp "${EXT_BIN}" "${APPEX_MACOS}/${EXT_NAME}"
 cp "${CTL_BIN}" "${HELPERS_DIR}/${CTL_NAME}"
+# wikid daemon — bundled beside wikictl so launchd launches the SIGNED binary
+# (inherits the app's TCC trust; a standalone .build binary prompts on every rebuild).
+cp "${DAEMON_BIN}" "${HELPERS_DIR}/${DAEMON_NAME}"
+# The SMAppService plist goes at Contents/Library/LaunchAgents/ so
+# SMAppService.agent(plistName:) can find it. Uses BundleProgram (relative
+# to the app bundle root) instead of ProgramArguments (absolute path).
+cp signing/com.selfdrivingwiki.wikid.plist "${CONTENTS}/Library/LaunchAgents/com.selfdrivingwiki.wikid.plist"
 # Also drop a copy at build/wikictl for the Phase A gate to invoke directly.
 cp "${CTL_BIN}" "${BUILD_DIR}/${CTL_NAME}"
 # podcast-token-helper alongside wikictl (spawned via Process for transcript
@@ -365,6 +378,13 @@ PLIST
   echo "→ codesign wikictl helper (${IDENTITY})"
   codesign --force --timestamp=none --sign "${IDENTITY}" \
     "${HELPERS_DIR}/${CTL_NAME}"
+  # wikid daemon — same inside-out signing as wikictl. No entitlements needed
+  # (un-sandboxed helper, inherits the app's TCC trust by being inside the bundle).
+  echo "→ codesign wikid daemon (${IDENTITY})"
+  codesign --force --timestamp=none \
+    --identifier com.selfdrivingwiki.wikid \
+    --sign "${IDENTITY}" \
+    "${HELPERS_DIR}/${DAEMON_NAME}"
   # pdf2md is a plain script bundled in Helpers/ — must also be signed, or the
   # outer app's seal fails ("code object is not signed at all").
   if [ -f "${HELPERS_DIR}/${PDF2MD_NAME}" ]; then

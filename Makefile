@@ -338,28 +338,53 @@ register: install
 # wikid daemon — launchd install/uninstall (plans/multi-wiki-daemon.md Phase 1B)
 # ---------------------------------------------------------------------------
 
+# wikid daemon — managed by SMAppService (plans/multi-wiki-daemon.md §4.3).
+# The app registers the daemon on launch via SMAppService.agent(plistName:).
+# The plist is at Contents/Library/LaunchAgents/ and the binary at
+# Contents/Helpers/wikid — both inside the app bundle, signed with the app's
+# identity. The daemon inherits the app's TCC trust (no permission prompts).
+#
+# `make install-daemon` is now a no-op for production (the app auto-registers).
+# It remains for dev-mode: signs the .build binaries + installs a manual
+# launchd plist pointing at the .build path (will prompt once for TCC).
 WIKID_BIN := $(shell swift build --show-bin-path)/wikid
 WIKID_PLIST := signing/com.selfdrivingwiki.wikid.plist
 WIKID_PLIST_DST := $(HOME)/Library/LaunchAgents/com.selfdrivingwiki.wikid.plist
+WIKID_SIGN_IDENTITY := $(shell grep '^DEV_IDENTITY=' signing/local.config 2>/dev/null | sed 's/DEV_IDENTITY=//; s/^"//; s/"$$//' || echo "-")
+WIKID_CONTAINER_DIR := $(HOME)/Library/Group Containers/$(shell grep '^APP_GROUP=' signing/local.config 2>/dev/null | sed 's/APP_GROUP=//; s/^"//; s/"$$//' || echo "group.org.sockpuppet.wiki")
 
 .PHONY: install-daemon uninstall-daemon daemon-status
 
-install-daemon: ## Install wikid as a launchd LaunchAgent (auto-starts on first XPC connection)
+install-daemon: ## Dev-only: install wikid via a manual launchd plist (for .build binaries). Production uses SMAppService (auto-registered by the app).
 install-daemon:
 	@echo "→ Building wikid…"
 	@swift build --target wikid
-	@echo "→ Installing launchd plist…"
+	@echo "→ Codesigning wikid + wikictl (identity: $(WIKID_SIGN_IDENTITY))…"
+	@codesign --force --timestamp=none --identifier com.selfdrivingwiki.wikid \
+		--entitlements signing/wikid.entitlements \
+		--sign "$(WIKID_SIGN_IDENTITY)" "$(WIKID_BIN)" 2>/dev/null \
+		|| codesign --force --timestamp=none --sign - "$(WIKID_BIN)"
+	@codesign --force --timestamp=none --identifier com.selfdrivingwiki.wikictl \
+		--entitlements signing/wikictl.entitlements \
+		--sign "$(WIKID_SIGN_IDENTITY)" "$(dir $(WIKID_BIN))wikictl" 2>/dev/null \
+		|| codesign --force --timestamp=none --sign - "$(dir $(WIKID_BIN))wikictl"
+	@echo "→ Installing launchd plist (dev mode — may prompt for TCC once)…"
 	@mkdir -p $(dir $(WIKID_PLIST_DST))
-	@# Copy the plist template, then inject the binary path into a ProgramArguments array.
 	@cp $(WIKID_PLIST) $(WIKID_PLIST_DST)
+	@# Replace BundleProgram with ProgramArguments (dev mode uses absolute path).
+	@plutil -remove BundleProgram -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST) 2>/dev/null || true
 	@plutil -insert ProgramArguments -array -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST) 2>/dev/null || true
 	@plutil -insert ProgramArguments.0 -string "$(WIKID_BIN)" -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST)
+	@plutil -insert EnvironmentVariables.WIKI_CONTAINER_DIR -string "$(WIKID_CONTAINER_DIR)" -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST) 2>/dev/null \
+		|| { plutil -insert EnvironmentVariables -xml '<dict/>' -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST); \
+		     plutil -insert EnvironmentVariables.WIKI_CONTAINER_DIR -string "$(WIKID_CONTAINER_DIR)" -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST); }
 	@launchctl unload $(WIKID_PLIST_DST) 2>/dev/null || true
 	@launchctl load $(WIKID_PLIST_DST)
-	@echo "✓ wikid installed. It will auto-start when a client connects via XPC."
-	@echo "  Binary: $(WIKID_BIN)"
-	@echo "  Plist:  $(WIKID_PLIST_DST)"
-	@echo "  Status: make daemon-status"
+	@echo "✓ wikid installed (dev mode). Production: the app auto-registers via SMAppService."
+	@echo "  Binary:     $(WIKID_BIN)"
+	@echo "  Container:  $(WIKID_CONTAINER_DIR)"
+	@echo "  Plist:      $(WIKID_PLIST_DST)"
+	@echo "  Status:     make daemon-status"
 
 uninstall-daemon: ## Remove the wikid launchd agent
 uninstall-daemon:
@@ -370,6 +395,14 @@ uninstall-daemon:
 daemon-status: ## Show the wikid launchd agent status
 daemon-status:
 	@launchctl list | grep wikid || echo "wikid is not loaded."
+
+approve-daemon: ## Open System Settings → Full Disk Access (add "Self Driving Wiki" to suppress TCC prompts)
+approve-daemon:
+	@echo "→ Opening System Settings → Privacy & Security → Full Disk Access"
+	@echo "  Add 'Self Driving Wiki' (from /Applications) to suppress the"
+	@echo "  'wikid would like to access data from other apps' prompt."
+	@echo "  This is a ONE-TIME step — the grant persists across rebuilds."
+	@open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
 
 # ---------------------------------------------------------------------------
 # Clean

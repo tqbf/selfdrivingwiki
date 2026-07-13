@@ -5,20 +5,23 @@
 <dict>
     <key>Label</key>
     <string>com.selfdrivingwiki.wikid</string>
+    <!-- BundleProgram is relative to the app bundle root. SMAppService uses
+         this instead of ProgramArguments (absolute path). The binary is at
+         Contents/Helpers/wikid (bundled by build.sh alongside wikictl). -->
+    <key>BundleProgram</key>
+    <string>Contents/Helpers/wikid</string>
     <key>MachServices</key>
     <dict>
         <key>com.selfdrivingwiki.wikid</key>
         <true/>
     </dict>
-    <key>RunAtLoad</key>
-    <true/>
     <key>KeepAlive</key>
     <dict>
-        <key>AfterInitialDemand</key>
+        <key>Crashed</key>
         <true/>
+        <key>SuccessfulExit</key>
+        <false/>
     </dict>
-    <key>IdleTimeout</key>
-    <integer>300</integer>
     <key>ProcessType</key>
     <string>Background</string>
 </dict>

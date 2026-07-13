@@ -1,7 +1,7 @@
 import SwiftUI
+import ServiceManagement
 import WikiFSEngine
 import WikiFSCore
-import WikiFSEngine
 import WikiFSMLX
 
 /// Entry point for the WikiFS macOS app.
@@ -112,6 +112,23 @@ struct WikiFSApp: App {
         // bun is absent) and reinstall to /Applications.
         if AgentLauncher.bundledHelperPath("bun") == nil {
             DebugLog.agent("⚠️ LAUNCH CHECK: bun NOT found in Contents/Helpers — ACP ingestion will fail. Run ./build.sh and reinstall.")
+        }
+
+        // Register the wikid daemon via SMAppService (macOS 13+). The daemon's
+        // plist is at Contents/Library/LaunchAgents/com.selfdrivingwiki.wikid.plist
+        // and its binary is at Contents/Helpers/wikid. SMAppService registers
+        // it as a launchd-managed LaunchAgent that inherits the app's bundle
+        // identity + TCC trust — no kTCCServiceSystemPolicyAppData prompts.
+        // See plans/multi-wiki-daemon.md §4.3.
+        // Best-effort: if registration fails (e.g. not in an app bundle during
+        // `swift run`), the daemon simply won't be available — wikictl falls
+        // back to direct file access.
+        do {
+            let daemonService = SMAppService.agent(plistName: "com.selfdrivingwiki.wikid.plist")
+            try daemonService.register()
+            DebugLog.store("wikid: SMAppService registered, status=\(daemonService.status.rawValue)")
+        } catch {
+            DebugLog.store("wikid: SMAppService registration failed (expected in dev mode): \(error)")
         }
     }
 
