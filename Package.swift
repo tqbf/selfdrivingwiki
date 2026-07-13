@@ -144,6 +144,18 @@ let package = Package(
             path: "Sources/wikictl",
             swiftSettings: podcastSwiftSettings
         ),
+        // wikid — the XPC daemon (plans/multi-wiki-daemon.md Phase 1B). Owns the
+        // live wiki registry + store lifecycle, serving clients via XPC. Launchd
+        // starts it on-demand when a client connects to the mach service name.
+        // The daemon links WikiFSCore (for WikiRegistry, SQLiteWikiStore, the
+        // WikiDaemonProtocol) — not WikiFSEngine (agent execution stays in the
+        // app for now; the daemon grows it in a later phase).
+        .executableTarget(
+            name: "wikid",
+            dependencies: ["WikiFSCore"],
+            path: "Sources/wikid",
+            swiftSettings: podcastSwiftSettings
+        ),
         // podcast-token-helper — the FairPlay/Mescal bearer-token signer for Apple
         // Podcasts transcripts. An ObjC executable ON PURPOSE: it dlopens the private
         // PodcastsFoundation framework and calls undeclared selectors (AMSMescal /

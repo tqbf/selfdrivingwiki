@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.selfdrivingwiki.wikid</string>
+    <key>MachServices</key>
+    <dict>
+        <key>com.selfdrivingwiki.wikid</key>
+        <true/>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>AfterInitialDemand</key>
+        <true/>
+    </dict>
+    <key>IdleTimeout</key>
+    <integer>300</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

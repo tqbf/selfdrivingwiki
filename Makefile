@@ -335,6 +335,42 @@ uninstall:
 register: install
 
 # ---------------------------------------------------------------------------
+# wikid daemon — launchd install/uninstall (plans/multi-wiki-daemon.md Phase 1B)
+# ---------------------------------------------------------------------------
+
+WIKID_BIN := $(shell swift build --show-bin-path)/wikid
+WIKID_PLIST := signing/com.selfdrivingwiki.wikid.plist
+WIKID_PLIST_DST := $(HOME)/Library/LaunchAgents/com.selfdrivingwiki.wikid.plist
+
+.PHONY: install-daemon uninstall-daemon daemon-status
+
+install-daemon: ## Install wikid as a launchd LaunchAgent (auto-starts on first XPC connection)
+install-daemon:
+	@echo "→ Building wikid…"
+	@swift build --target wikid
+	@echo "→ Installing launchd plist…"
+	@mkdir -p $(dir $(WIKID_PLIST_DST))
+	@# Copy the plist, substituting the binary path so launchd knows where wikid lives.
+	@plutil -remove ProgramArguments -o /dev/null $(WIKID_PLIST) 2>/dev/null || true
+	@plutil -insert ProgramArguments.0 -string "$(WIKID_BIN)" -o $(WIKID_PLIST_DST) $(WIKID_PLIST)
+	@launchctl unload $(WIKID_PLIST_DST) 2>/dev/null || true
+	@launchctl load $(WIKID_PLIST_DST)
+	@echo "✓ wikid installed. It will auto-start when a client connects via XPC."
+	@echo "  Binary: $(WIKID_BIN)"
+	@echo "  Plist:  $(WIKID_PLIST_DST)"
+	@echo "  Status: make daemon-status"
+
+uninstall-daemon: ## Remove the wikid launchd agent
+uninstall-daemon:
+	@launchctl unload $(WIKID_PLIST_DST) 2>/dev/null || true
+	@rm -f $(WIKID_PLIST_DST)
+	@echo "✓ wikid uninstalled."
+
+daemon-status: ## Show the wikid launchd agent status
+daemon-status:
+	@launchctl list | grep wikid || echo "wikid is not loaded."
+
+# ---------------------------------------------------------------------------
 # Clean
 # ---------------------------------------------------------------------------
 
