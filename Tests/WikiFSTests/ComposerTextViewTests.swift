@@ -15,10 +15,10 @@ import Testing
     // linear in `lineHeight`, so this exercises the formula without coupling
     // the test to a real font's metrics.
     private let lineHeight: CGFloat = 20
-    private var minHeight: CGFloat { lineHeight * 1 + ComposerTextView.Metrics.verticalInset }
+    private var minHeight: CGFloat { lineHeight * 3 + ComposerTextView.Metrics.verticalInset }
     private var maxHeight: CGFloat { lineHeight * 6 + ComposerTextView.Metrics.verticalInset }
 
-    @Test func clampedHeightBelowOneLineClampsToMinimum() {
+    @Test func clampedHeightBelowMinimumClampsToMinimum() {
         #expect(ComposerTextView.clampedHeight(contentHeight: 0, lineHeight: lineHeight) == minHeight)
         #expect(ComposerTextView.clampedHeight(contentHeight: 10, lineHeight: lineHeight) == minHeight)
     }

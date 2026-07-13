@@ -9,8 +9,8 @@ import UniformTypeIdentifiers
 /// Verifies the AppKit→SwiftUI drag bridge at the pasteboard level: an
 /// `NSPasteboardWriting` produced by the sidebar lists must put valid JSON under
 /// the sidebar-item type identifier (so SwiftUI's `.dropDestination(for:)` can
-/// decode it), and the bookmark writer must keep the `.string` node id for
-/// intra-tree reorder alongside the payload.
+/// decode it), and the bookmark writer must keep the bookmark-node-id (a private
+/// pasteboard type, not `.string`) for intra-tree reorder alongside the payload.
 @MainActor
 struct SidebarDragPasteboardBridgeTests {
 
@@ -52,7 +52,10 @@ struct SidebarDragPasteboardBridgeTests {
         let pb = write(SidebarDragPasteboardItem(payloads: [payload], bookmarkNodeID: "node-42"))
 
         // Intra-tree reorder reads this (BookmarksOutlineView.acceptDrop).
-        #expect(pb.string(forType: .string) == "node-42")
+        // Uses a private pasteboard type (not .string) so WKWebView doesn't
+        // intercept bookmark drags (issue #385).
+        let bookmarkType = NSPasteboard.PasteboardType("com.selfdrivingwiki.bookmark-node-id")
+        #expect(pb.string(forType: bookmarkType) == "node-42")
         // The welcome-screen drop reads this.
         let decoded = try JSONDecoder().decode(
             SidebarDragPayloadList.self,
@@ -65,7 +68,8 @@ struct SidebarDragPasteboardBridgeTests {
         // An empty folder has nothing to open, so it carries only the reorder id.
         let pb = write(SidebarDragPasteboardItem(payloads: [], bookmarkNodeID: "folder-1"))
 
-        #expect(pb.string(forType: .string) == "folder-1")
+        let bookmarkType = NSPasteboard.PasteboardType("com.selfdrivingwiki.bookmark-node-id")
+        #expect(pb.string(forType: bookmarkType) == "folder-1")
         #expect(pb.data(forType: sidebarType) == nil)
     }
 

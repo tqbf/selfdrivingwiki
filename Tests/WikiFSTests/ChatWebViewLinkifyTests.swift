@@ -6,8 +6,9 @@ import Testing
 
 /// Tests for the agent transcript's wiki-link linkify pre-pass. Assistant/result
 /// rows run their markdown through `ReaderMarkdown.prepared` so `[[wiki-links]]`
-/// render as clickable `wiki://` anchors; user text is left literal (a user
-/// typing `[[Foo]]` is not a link). Covers AC.3 at the row-render seam.
+/// render as clickable `wiki://` anchors. User text is also rendered through
+/// the markdown renderer so attachment references from drag-to-chat (#385)
+/// render as clickable links.
 ///
 /// Phase A.2 adds a `WikiRenderContext`-aware variant (`renderedMarkdown(_:context:)`,
 /// `feedRowHTML(for:context:isFinal:)`, `chatRowHTML(for:context:isFinal:)`) so
@@ -32,12 +33,13 @@ struct ChatWebViewLinkifyTests {
         #expect(html.contains("<a "))
     }
 
-    @Test func feedUserRowStaysLiteral() {
+    @Test func feedUserRowLinkifiesWikiLinks() {
+        // User text is now rendered through the markdown renderer so that
+        // attachment references ([[source:Name]]) render as clickable links
+        // (issue #385).
         let html = Transcript.feedRowHTML(for: .userText("See [[Page]] here."))
-        // No anchor tag — the raw brackets survive as literal text.
-        #expect(!html.contains("<a "))
-        #expect(!html.contains("wiki://"))
-        #expect(html.contains("[[Page]]"))
+        #expect(html.contains("<a "))
+        #expect(html.contains("wiki://"))
     }
 
     @Test func feedResultRowLinkifies() {
@@ -51,10 +53,13 @@ struct ChatWebViewLinkifyTests {
         #expect(html.contains("<a "))
     }
 
-    @Test func chatUserRowStaysLiteral() {
+    @Test func chatUserRowLinkifiesWikiLinks() {
+        // User text is now rendered through the markdown renderer so that
+        // attachment references ([[source:Name]]) render as clickable links
+        // (issue #385).
         let html = Transcript.chatRowHTML(for: .userText("See [[Page]] here."))
-        #expect(!html.contains("<a "))
-        #expect(!html.contains("wiki://"))
+        #expect(html.contains("<a "))
+        #expect(html.contains("wiki://"))
     }
 
     @Test func chatResultRowLinkifies() {
