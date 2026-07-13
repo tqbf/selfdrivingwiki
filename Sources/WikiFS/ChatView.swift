@@ -567,6 +567,13 @@ struct ChatView: View {
     }
 
     private func sendMessage() {
+        // Guard: don't clear the draft or attempt to send when the agent is
+        // generating or waiting for a slot. The Send button is already gated
+        // by `canSend`, but the Return key in ComposerTextView calls this
+        // unconditionally — so the same guard here prevents the message from
+        // being silently dropped (issue #380). The draft is preserved so the
+        // user can send it once the agent finishes.
+        guard canSend else { return }
         let message = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
         draftMessage = ""
