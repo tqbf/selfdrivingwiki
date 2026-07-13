@@ -410,9 +410,11 @@ struct ChatView: View {
     /// User turns (questions) in display order — the chat outline entries. Sourced
     /// from `displayMessages` (the SAME transcript-visible events the web view
     /// renders), so outline index `i` matches the i-th `.chat-user` row.
+    /// Strips the prepended `[[…]]` attachment reference lines so the outline
+    /// shows only the user's actual question, not the raw wikilinks (issue #385).
     private var chatTurns: [String] {
         displayMessages.compactMap { event in
-            if case .userText(let text) = event { return text }
+            if case .userText(let text) = event { return humanizeAttachmentRefs(in: text) }
             return nil
         }
     }
@@ -562,6 +564,22 @@ struct ChatView: View {
         }
         .shadow(color: Color.black.opacity(0.06), radius: 18, x: 0, y: 8)
         .frame(maxWidth: .infinity)
+        // Accept sidebar drags anywhere in the composer box. This is the
+        // innermost drop target for SidebarDragPayloadList — it intercepts the
+        // drag before WikiDetailView's broader drop destination (which opens a
+        // new tab) can handle it. Must be on the composer container (not just
+        // attachmentChips) so it exists even when there are no attachments yet
+        // (issue #385 regression).
+        .dropDestination(for: SidebarDragPayloadList.self) { lists, _ in
+            let payloads = lists.flatMap(\.items)
+            for payload in payloads {
+                let attachment = ChatAttachment(payload: payload, store: store)
+                if !attachments.contains(attachment) {
+                    attachments.append(attachment)
+                }
+            }
+            return !payloads.isEmpty
+        }
     }
 
     /// True while the agent is actively generating or queued for the generation
@@ -633,16 +651,6 @@ struct ChatView: View {
                 }
             }
             .padding(.horizontal, 2)
-        }
-        .dropDestination(for: SidebarDragPayloadList.self) { lists, _ in
-            let payloads = lists.flatMap(\.items)
-            for payload in payloads {
-                let attachment = ChatAttachment(payload: payload, store: store)
-                if !attachments.contains(attachment) {
-                    attachments.append(attachment)
-                }
-            }
-            return !payloads.isEmpty
         }
     }
 
@@ -827,12 +835,15 @@ private struct ChatAttachment: Identifiable, Hashable {
     }
 
     /// The reference text prepended to the wire message so the agent knows
-    /// which wiki resource to use as context.
+    /// which wiki resource to use as context. Uses the display name (not the
+    /// raw ULID) so the agent can understand the reference — the system prompt
+    /// instructs the agent to use `[[source:DisplayName]]` / `[[page:Title]]` /
+    /// `[[chat:Title]]` wikilinks with human-readable names.
     var referenceText: String {
         switch kind {
-        case .page:   return "[[page:\(itemID)]]"
-        case .source: return "[[source:\(itemID)]]"
-        case .chat:   return "[[chat:\(itemID)]]"
+        case .page:   return "[[page:\(displayName)]]"
+        case .source: return "[[source:\(displayName)]]"
+        case .chat:   return "[[chat:\(displayName)]]"
         }
     }
 }
@@ -953,4 +964,18 @@ struct ChatOutlineView: View {
             .background(Color(nsColor: .windowBackgroundColor))
         }
     }
+}
+
+/// Humanize the leading `[[page:…]]` / `[[source:…]]` / `[[chat:…]]`
+/// wikilink lines that `sendMessage` prepends as attachment references, so
+/// the chat outline shows readable names instead of raw `[[…]]` syntax.
+/// In the transcript WebView, user text is run through the markdown renderer
+/// so wikilinks render as clickable links there; this helper is only used by
+/// the plain-text outline (issue #385).
+func humanizeAttachmentRefs(in text: String) -> String {
+    let pattern = #"\[\[(page|source|chat):([^\]]+)\]\]"#
+    let result = text.replacingOccurrences(of: pattern,
+                                            with: "$2",
+                                            options: .regularExpression)
+    return result.trimmingCharacters(in: .whitespacesAndNewlines)
 }

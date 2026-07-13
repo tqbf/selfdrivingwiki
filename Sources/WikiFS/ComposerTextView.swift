@@ -54,7 +54,7 @@ struct ComposerTextView: NSViewRepresentable {
     /// into `clampedHeight`, so the clamp's own `+ verticalInset` term has to
     /// match exactly).
     nonisolated enum Metrics {
-        static let minLines: CGFloat = 1
+        static let minLines: CGFloat = 3
         static let maxLines: CGFloat = 6
         static let verticalInsetPerSide: CGFloat = 4
         static var verticalInset: CGFloat { verticalInsetPerSide * 2 }
@@ -121,6 +121,13 @@ struct ComposerTextView: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.minSize = NSSize(width: 0, height: 0)
+        // Unregister drag types so the NSTextView doesn't intercept sidebar
+        // drags routed to the SwiftUI .dropDestination on the composer
+        // container. Without this, dragging a page/source/bookmark over the
+        // text view (including the placeholder) gets swallowed by AppKit's
+        // default text-drag handling and never reaches the composer's
+        // dropDestination (issue #385).
+        textView.unregisterDraggedTypes()
         if let container = textView.textContainer {
             container.widthTracksTextView = true
             container.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)

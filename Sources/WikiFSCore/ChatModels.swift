@@ -41,16 +41,33 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
 
     /// Derive a chat title from the first user message: first line, trimmed,
     /// elided. Pure so the rule is unit-testable and shared by every caller
-    /// that creates a chat.
+    /// that creates a chat. Strips leading `[[page:…]]` / `[[source:…]]` /
+    /// `[[chat:…]]` attachment reference lines (prepended by `sendMessage`
+    /// when sidebar items are dragged into the chat, issue #385) so the title
+    /// is the user's actual question, not the first attachment's wikilink.
     public static func title(fromFirstMessage message: String, maxLength: Int = 60) -> String {
-        let firstLine = message
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let stripped = Self.stripAttachmentRefs(from: message)
+        let firstLine = stripped
             .components(separatedBy: .newlines)
             .first ?? ""
         let trimmed = firstLine.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return "New Chat" }
         guard trimmed.count > maxLength else { return trimmed }
         return trimmed.prefix(maxLength - 1) + "…"
+    }
+
+    /// Remove leading `[[page:…]]` / `[[source:…]]` / `[[chat:…]]` wikilink
+    /// lines so the title reflects the user's question, not the attachment
+    /// references (issue #385).
+    private static func stripAttachmentRefs(from text: String) -> String {
+        var remaining = text[...]
+        while let range = remaining.range(of: #"\[\[(?:page|source|chat):[^\]]+\]\]"#,
+                                           options: .regularExpression),
+              range.lowerBound == remaining.startIndex {
+            remaining = remaining[range.upperBound...]
+            if remaining.first == "\n" { remaining = remaining.dropFirst() }
+        }
+        return String(remaining).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
