@@ -362,6 +362,10 @@ public final class AgentLauncher {
     /// active (one-shot runs, or the session was never assigned a chatID).
     /// Cleared in `finish()` and `resetRunArtifacts()` for hygiene.
     @ObservationIgnored private var summarySink: (@MainActor (PageID, String) -> Void)?
+    /// One-shot guard so the summary is generated only once per session
+    /// (after the first assistant turn completes), not on every turn.
+    /// Reset in `resetRunArtifacts()`.
+    @ObservationIgnored private var summaryGenerated = false
     /// Cursor into `events`: the count already handed to `transcriptSink`. Makes
     /// `flushTranscript()` incremental — each call only sends events appended since
     /// the last flush — and idempotent when nothing new arrived since the last call.
@@ -1825,6 +1829,7 @@ public final class AgentLauncher {
                 if AgentEvent.endsGeneration(event) {
                     self.setGenerating(false)
                     self.flushTranscript()
+                    self.generateChatSummary()
                     DebugLog.agent("sendInteractiveMessage: turn end (endsGeneration) → flushTranscript") // TEMP DEBUG
                     if Self.releasesGenerationSlotPerTurn(
                         isInteractiveSession: self.isInteractiveSession) {
@@ -1993,8 +1998,10 @@ public final class AgentLauncher {
     /// `flushTranscript()` and before `activeChatID = nil`. No-op when no
     /// summary can be extracted or no sink/chatID is set.
     private func generateChatSummary() {
+        guard !summaryGenerated else { return }
         guard let extracted = Self.firstSummaryText(from: events),
               let chatID = activeChatID else { return }
+        summaryGenerated = true
         summarySink?(PageID(rawValue: chatID), extracted)
     }
 
@@ -2165,6 +2172,7 @@ public final class AgentLauncher {
         // session's events (issue #119).
         transcriptSink = nil
         summarySink = nil
+        summaryGenerated = false
         persistedEventCount = 0
         firstMessagePrePersisted = false
         firstMessagePreDisplayed = false

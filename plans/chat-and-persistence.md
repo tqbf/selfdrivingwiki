@@ -144,12 +144,15 @@ main separately.
 
 The `chats` table gained two nullable columns — `summary TEXT` and
 `summary_at REAL` — for a one-line model-response summary shown in the sidebar
-under each `RecentChatRow`. The summary is generated **once** on chat
-completion (in `AgentLauncher.finish()`, after `flushTranscript()` and before
-`activeChatID = nil`) via `AgentLauncher.firstSummaryText(from:)`, which
-extracts the first sentence of the first `.assistantText` or `.result` event
-using `ChatSummary.summaryExtract(from:maxLength:)` (deterministic first-
-sentence extract, elided to 60 chars — no LLM call). The result is handed to a
+under each `RecentChatRow`. The summary is generated **once** (one-shot guard
+via `summaryGenerated`) at the first turn boundary — when
+`AgentEvent.endsGeneration` fires (`.messageStop` or `.result`) in
+`sendInteractiveMessage`, after `flushTranscript()`. A safety-net call also
+exists in `finish()` (for session teardown). The extraction uses
+`AgentLauncher.firstSummaryText(from:)`, which extracts the first sentence of
+the first `.assistantText` or `.result` event using
+`ChatSummary.summaryExtract(from:maxLength:)` (deterministic first-sentence
+extract, elided to 60 chars — no LLM call). The result is handed to a
 `summarySink` closure wired by `AgentOperationRunner` →
 `WikiStoreModel.updateChatSummary(chatID:summary:)`, which routes through
 `mutate()` (emitting a `ResourceChangeEvent`) and bumps `updated_at`.
