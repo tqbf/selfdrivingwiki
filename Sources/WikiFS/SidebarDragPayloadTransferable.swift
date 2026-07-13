@@ -64,18 +64,29 @@ final class SidebarDragPasteboardItem: NSObject {
     private var sidebarType: NSPasteboard.PasteboardType {
         NSPasteboard.PasteboardType(UTType.wikiSidebarItem.identifier)
     }
+
+    /// Private type for the bookmark node ID (intra-tree reorder only). Must
+    /// NOT be `.string` — `.string` conforms to `public.data`, and the chat
+    /// transcript's WKWebView auto-registers for `public.data`, so a bookmark
+    /// drag carrying `.string` gets intercepted by the WKWebView before it can
+    /// reach the composer's SwiftUI `.dropDestination`. A private type under
+    /// `public.item` doesn't conform to `public.data`, so the drag bubbles past
+    /// the WKWebView to the composer (issue #385).
+    private var bookmarkNodeType: NSPasteboard.PasteboardType {
+        NSPasteboard.PasteboardType("com.selfdrivingwiki.bookmark-node-id")
+    }
 }
 
 extension SidebarDragPasteboardItem: NSPasteboardWriting {
     func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
         var types: [NSPasteboard.PasteboardType] = []
-        if bookmarkNodeID != nil { types.append(.string) }
+        if bookmarkNodeID != nil { types.append(bookmarkNodeType) }
         if !payloads.isEmpty { types.append(sidebarType) }
         return types
     }
 
     func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
-        if type == .string { return bookmarkNodeID }
+        if type == bookmarkNodeType { return bookmarkNodeID }
         if type == sidebarType, !payloads.isEmpty,
            let data = try? JSONEncoder().encode(SidebarDragPayloadList(payloads)) {
             return data as NSData

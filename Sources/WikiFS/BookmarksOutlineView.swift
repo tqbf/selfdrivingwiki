@@ -135,12 +135,15 @@ final class BookmarksOutlineViewController: NSViewController {
         outlineView.delegate = self
         // Required for the outline view to act as a drop target at all — without
         // this, validateDrop/acceptDrop are never called and no highlight shows.
-        // `.string` powers intra-tree reorder (a node id); `.url` lets a
-        // `wiki://` link dragged out of a page/source body land here (issue #169);
-        // the sidebar-item type lets the omnibox icon (and sidebar rows via
-        // SwiftUI .draggable) drop a page/source/chat here to create a bookmark.
+        // The private bookmark-node-id type powers intra-tree reorder (a node id);
+        // `.url` lets a `wiki://` link dragged out of a page/source body land
+        // here (issue #169); the sidebar-item type lets the omnibox icon (and
+        // sidebar rows via SwiftUI .draggable) drop a page/source/chat here to
+        // create a bookmark. The bookmark-node-id type is a private UTType (not
+        // `.string`) so WKWebView doesn't intercept bookmark drags (issue #385).
         let sidebarItemType = NSPasteboard.PasteboardType(UTType.wikiSidebarItem.identifier)
-        outlineView.registerForDraggedTypes([.string, .init("public.url"), sidebarItemType])
+        let bookmarkNodeType = NSPasteboard.PasteboardType("com.selfdrivingwiki.bookmark-node-id")
+        outlineView.registerForDraggedTypes([bookmarkNodeType, .init("public.url"), sidebarItemType])
         // NSTableView/NSOutlineView is its own NSDraggingSource; there is no
         // delegate callback for this — the mask is configured imperatively.
         // Without it, the default local-drag mask is a multi-bit value that
@@ -316,12 +319,12 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
 
     // Drag and drop.
     // The writer carries TWO representations so one drag can serve two drop
-    // targets: the `.string` node id powers intra-tree reorder (`acceptDrop`
-    // reads `pb.string(forType: .string)`), and the resolved-target payload list
-    // lets the row be dropped onto the welcome screen to open whatever the
-    // bookmark points at (issue #133). A folder's payload list is every
-    // page/source reachable underneath it, so dropping a folder opens its full
-    // contents as tabs (issue #150).
+    // targets: the private `com.selfdrivingwiki.bookmark-node-id` type powers
+    // intra-tree reorder, and the resolved-target payload list lets the row be
+    // dropped onto the welcome screen to open whatever the bookmark points at
+    // (issue #133). A folder's payload list is every page/source reachable
+    // underneath it, so dropping a folder opens its full contents as tabs
+    // (issue #150).
     func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
         guard let node = item as? BookmarkNode else { return nil }
         let payloads: [SidebarDragPayload]
@@ -365,8 +368,8 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
 
     /// Read the first `wiki://…` href from a drag pasteboard. WebKit's default
     /// link drag may offer the href under `.url`, `.string`, or both, so check
-    /// each. Returns nil for an intra-tree bookmark reorder (whose `.string` is a
-    /// node id, not a `wiki://` URL).
+    /// each. Returns nil for an intra-tree bookmark reorder (which now uses a
+    /// private `com.selfdrivingwiki.bookmark-node-id` type, not `.string`).
     private static func firstWikiLinkURL(from pb: NSPasteboard) -> URL? {
         let schemePrefix = "\(WikiLinkMarkdown.scheme)://"
         for type in [NSPasteboard.PasteboardType("public.url"), NSPasteboard.PasteboardType.string] {
@@ -541,7 +544,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
 
         // Wiki-link drop → create a bookmark pointing at the link's target
         // (issue #169). Resolved before the intra-tree reorder path, which reads
-        // `.string` as a bookmark *node id* and would no-op on a `wiki://` URL.
+        // the private bookmark-node-id type (not `.string`).
         if let url = Self.firstWikiLinkURL(from: info.draggingPasteboard) {
             return acceptWikiLinkDrop(url: url, onto: item, atIndex: index, store: store)
         }
@@ -554,8 +557,9 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
 
         // Multi-selection is allowed, so a reorder drag can carry more than one
         // node id — one pasteboard item per dragged row.
+        let bookmarkNodeType = NSPasteboard.PasteboardType("com.selfdrivingwiki.bookmark-node-id")
         let draggedIDs = (info.draggingPasteboard.pasteboardItems ?? [])
-            .compactMap { $0.string(forType: .string) }
+            .compactMap { $0.string(forType: bookmarkNodeType) }
         guard !draggedIDs.isEmpty else { return false }
 
         func moveAll(toParentID parentID: String?, startingAt position: Int) -> Bool {
