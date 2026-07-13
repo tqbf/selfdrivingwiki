@@ -101,6 +101,30 @@ public struct AgentProvider: Codable, Equatable, Sendable, Identifiable {
         isDefault: true
     )
 
+    /// Hermes via ACP (`hermes acp`). Enabled, not default — one of the three
+    /// Phase-1 seed providers alongside Claude and OpenCode.
+    public static let hermesDefault = AgentProvider(
+        id: "hermes",
+        label: "Hermes",
+        backend: .acp,
+        command: ["hermes", "acp"],
+        env: [:],
+        enabled: true,
+        isDefault: false
+    )
+
+    /// OpenCode via ACP (`opencode acp`). Enabled, not default — one of the
+    /// three Phase-1 seed providers alongside Claude and Hermes.
+    public static let opencodeDefault = AgentProvider(
+        id: "opencode",
+        label: "OpenCode",
+        backend: .acp,
+        command: ["opencode", "acp"],
+        env: [:],
+        enabled: true,
+        isDefault: false
+    )
+
     /// Build an ACP provider from a discovered catalog agent. Mirrors paseo's
     /// `buildAcpProviderConfigPatch`: the catalog entry's `command` becomes the
     /// provider's spawn argv, and its `id`/`label` carry over. NOT default (the

@@ -8,7 +8,7 @@ import ACPModel
 @testable import WikiFSEngine
 
 /// Unit tests for the multi-phase ACP ingestion plan schema, tolerant JSON
-/// extraction, prompt builders, and the `findSonnetModelId` helper.
+/// extraction, and prompt builders.
 ///
 /// The multi-session orchestration itself (`runACPIngestPlannerExecutors`) is
 /// integration-level — it requires a live ACP agent or a fully-wired
@@ -218,45 +218,72 @@ import ACPModel
         #expect(prompt.contains("log append"))
     }
 
-    // MARK: - findSonnetModelId
+    // MARK: - Per-stage provider/model resolution (Phase 2,
+    // plans/acp-multi-provider.md — replaces the deleted `findSonnetModelId`
+    // substring heuristic: executors now resolve independently via
+    // `AgentProvidersConfig.resolvedProvider(for:)`, same as planner/finalizer.)
 
-    @Test func testFindSonnetModelIdMatch() {
-        let models = [
-            ModelInfo(modelId: "claude-opus-4-20250514", name: "Claude Opus 4"),
-            ModelInfo(modelId: "claude-sonnet-4-5-20250929", name: "Claude Sonnet 4.5"),
-            ModelInfo(modelId: "claude-haiku-3-5", name: "Claude Haiku 3.5"),
-        ]
-        let result = AgentLauncher.findSonnetModelId(in: models)
-        #expect(result == "claude-sonnet-4-5-20250929")
+    @Test func testResolvedProviderPerStageCanDiffer() {
+        let hermes = AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"])
+        let opencode = AgentProvider(id: "opencode", label: "OpenCode", backend: .acp, command: ["opencode", "acp"])
+        let config = AgentProvidersConfig(
+            providers: [.claudeAcpDefault, hermes, opencode],
+            stageAssignments: [
+                .planner: StageAssignment(providerId: "hermes", modelId: "hermes-large"),
+                .executor: StageAssignment(providerId: "opencode", modelId: "anthropic/claude-sonnet"),
+            ])
+
+        let planner = config.resolvedProvider(for: .planner)
+        #expect(planner.provider.id == "hermes")
+        #expect(planner.modelId == "hermes-large")
+
+        let executor = config.resolvedProvider(for: .executor)
+        #expect(executor.provider.id == "opencode")
+        #expect(executor.modelId == "anthropic/claude-sonnet")
+
+        // Finalizer has no assignment — falls back to the default provider.
+        let finalizer = config.resolvedProvider(for: .finalizer)
+        #expect(finalizer.provider.id == config.selectedProvider().id)
     }
 
-    @Test func testFindSonnetModelIdByName() {
-        let models = [
-            ModelInfo(modelId: "model-abc", name: "Sonnet Pro"),
-        ]
-        let result = AgentLauncher.findSonnetModelId(in: models)
-        #expect(result == "model-abc")
+    @Test func testResolvedProviderFallsBackWhenAssignedProviderDisabled() {
+        var opencode = AgentProvider(id: "opencode", label: "OpenCode", backend: .acp, command: ["opencode", "acp"])
+        opencode.enabled = false
+        let config = AgentProvidersConfig(
+            providers: [.claudeAcpDefault, opencode],
+            stageAssignments: [.executor: StageAssignment(providerId: "opencode", modelId: "x")])
+
+        let executor = config.resolvedProvider(for: .executor)
+        // Disabled provider → falls back to the default provider, not a silent
+        // downgrade to some other model on the disabled provider.
+        #expect(executor.provider.id == config.selectedProvider().id)
     }
 
-    @Test func testFindSonnetModelIdNoMatch() {
-        let models = [
-            ModelInfo(modelId: "claude-opus-4", name: "Opus"),
-            ModelInfo(modelId: "gpt-4o", name: "GPT-4o"),
-        ]
-        let result = AgentLauncher.findSonnetModelId(in: models)
-        #expect(result == nil)
+    @Test func testProviderHintsIncludesProviderEnv() {
+        let provider = AgentProvider(
+            id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"],
+            env: ["ZAI_API_KEY": "secretish", "HERMES_MODE": "fast"])
+        let hints = AgentBackendFactory.providerHints(
+            provider: provider,
+            resolvedCommand: ["/usr/local/bin/hermes", "acp"],
+            apiKey: nil,
+            selectedModelId: nil)
+        #expect(hints["env.ZAI_API_KEY"] == "secretish")
+        #expect(hints["env.HERMES_MODE"] == "fast")
     }
 
-    @Test func testFindSonnetModelIdEmpty() {
-        #expect(AgentLauncher.findSonnetModelId(in: []) == nil)
-    }
-
-    @Test func testFindSonnetModelIdCaseInsensitive() {
-        let models = [
-            ModelInfo(modelId: "CLAUDE-SONNET-4", name: "Sonnet"),
-        ]
-        let result = AgentLauncher.findSonnetModelId(in: models)
-        #expect(result == "CLAUDE-SONNET-4")
+    /// The per-stage resolved model id (`resolvedProvider(for:).modelId`) is
+    /// threaded into `acpSelectedModelId`, which `ACPBackend.start` reads to
+    /// call `session/set_model`. Pins the model-threading half of the per-stage
+    /// resolution hint building (Phase 2).
+    @Test func testProviderHintsThreadsSelectedModelId() {
+        let provider = AgentProvider(id: "opencode", label: "OpenCode", backend: .acp, command: ["opencode", "acp"])
+        let hints = AgentBackendFactory.providerHints(
+            provider: provider,
+            resolvedCommand: ["/usr/local/bin/opencode", "acp"],
+            apiKey: nil,
+            selectedModelId: "anthropic/claude-sonnet")
+        #expect(hints["acpSelectedModelId"] == "anthropic/claude-sonnet")
     }
 
     // MARK: - FakeAgentBackend recording

@@ -56,8 +56,8 @@ import ACPModel
     }
 
     /// Setting an UNKNOWN id as default does not collapse to zero defaults —
-    /// normalization keeps exactly one (claude-acp), so the selector never strands
-    /// the launcher with no provider.
+    /// normalization promotes the first enabled provider, so the selector
+    /// never strands the launcher with no provider.
     @Test func settingDefaultUnknownIdKeepsInvariant() {
         let config = AgentProvidersConfig(providers: [
             AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, enabled: true, isDefault: true),
@@ -67,7 +67,7 @@ import ACPModel
 
         let defaults = updated.providers.filter(\.isDefault)
         #expect(defaults.count == 1)
-        #expect(updated.defaultProvider.id == "claude-acp")
+        #expect(updated.defaultProvider.id == "claude")
     }
 
     /// The mutator is PURE: the original config is untouched (returns a new
@@ -81,8 +81,8 @@ import ACPModel
 
         _ = config.settingDefault(id: "gemini")
 
-        // Original unchanged: claude-acp is still default.
-        #expect(config.defaultProvider.id == "claude-acp")
+        // Original unchanged: claude is still default.
+        #expect(config.defaultProvider.id == "claude")
         #expect(config.provider(id: "gemini")?.isDefault == false)
     }
 
@@ -99,7 +99,7 @@ import ACPModel
         ])
 
         let ids = config.enabledProviders.map(\.id)
-        #expect(ids == ["claude-acp", "claude", "hermes"])
+        #expect(ids == ["claude", "hermes"])
         #expect(!ids.contains("gemini"))
     }
 

@@ -62,17 +62,27 @@ public actor ACPBackend: AgentBackend {
         /// key is configured (→ a `missingCredentials` preflight error IF the
         /// agent advertises `authMethods`).
         let apiKey: String?
+        /// Extra environment merged over the inherited process environment (+ the
+        /// `WIKI_DB`/`WIKI_ROOT`/`WIKICTL`/`PATH` vars `start()` sets from
+        /// `profile.cli`) when spawning the subprocess. Sourced from
+        /// `providerHints`' `env.`-prefixed entries — the same convention
+        /// `AgentProvider.env` is threaded through by
+        /// `AgentBackendFactory.providerHints` (Phase 2,
+        /// `plans/acp-multi-provider.md`). Empty for providers with no extra env.
+        let environment: [String: String]
 
         init(
             executablePath: String,
             arguments: [String] = [],
             workingDirectory: String? = nil,
-            apiKey: String? = nil
+            apiKey: String? = nil,
+            environment: [String: String] = [:]
         ) {
             self.executablePath = executablePath
             self.arguments = arguments
             self.workingDirectory = workingDirectory
             self.apiKey = apiKey
+            self.environment = environment
         }
     }
 
@@ -178,9 +188,11 @@ public actor ACPBackend: AgentBackend {
             let existingPath = env["PATH"] ?? "/usr/bin:/bin"
             env["PATH"] = cli.wikictlDirectory + ":" + existingPath
         }
-        // Also add any extra env from the provider config.
-        for (key, value) in profile.providerHints where key.hasPrefix("env.") {
-            env[String(key.dropFirst(4))] = value
+        // Also add any extra env from the provider config (Phase 2: sourced from
+        // `AgentSpawnConfig.environment`, resolved once in `resolveSpawnConfig`
+        // rather than re-scanning `providerHints` here).
+        for (key, value) in spawn.environment {
+            env[key] = value
         }
 
         try await client.launch(
@@ -546,15 +558,24 @@ public actor ACPBackend: AgentBackend {
     /// key is the Keychain-backed secret. NOT hardcoded to the Zed adapter — the
     /// user points at any ACP agent. Returns nil if no path is configured
     /// (→ `noAgentConfigured`).
-    private static func resolveSpawnConfig(from profile: BackendProfile) -> AgentSpawnConfig? {
+    /// Internal (not `private`) so `resolveSpawnConfig` — including the Phase 2
+    /// `environment` merge from `env.`-prefixed `providerHints` — is directly
+    /// unit-testable from `@testable import WikiFSEngine` without spawning a
+    /// subprocess (`ACPWiringTests`).
+    static func resolveSpawnConfig(from profile: BackendProfile) -> AgentSpawnConfig? {
         let path = profile.providerHints["acpAgentPath"] ?? profile.model
         guard let path, !path.isEmpty else { return nil }
         let args = AgentCommandConfig.tokenize(profile.providerHints["acpAgentArgs"] ?? "")
             .filter { !$0.isEmpty }
         let cwd = profile.scratchDirectory?.path
         let apiKey = profile.providerHints["acpAgentApiKey"]
+        var environment: [String: String] = [:]
+        for (key, value) in profile.providerHints where key.hasPrefix("env.") {
+            environment[String(key.dropFirst(4))] = value
+        }
         return AgentSpawnConfig(
-            executablePath: path, arguments: args, workingDirectory: cwd, apiKey: apiKey)
+            executablePath: path, arguments: args, workingDirectory: cwd, apiKey: apiKey,
+            environment: environment)
     }
 
     /// The events synthesized at `session/prompt` completion (the ACP turn

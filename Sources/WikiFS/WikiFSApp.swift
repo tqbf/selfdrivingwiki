@@ -240,10 +240,8 @@ struct WikiFSApp: App {
                     .tabItem { Label("Zotero", systemImage: "books.vertical") }
                 ExtractionSettingsView(containerDirectory: containerDirectory, launcher: agentLauncher)
                     .tabItem { Label("Extraction", systemImage: "doc.viewfinder") }
-                AgentCommandSettingsView(containerDirectory: containerDirectory)
-                    .tabItem { Label("Agent", systemImage: "terminal") }
-                AgentProvidersSettingsView(containerDirectory: containerDirectory)
-                    .tabItem { Label("Providers", systemImage: "cpu") }
+                AgentsSettingsView(containerDirectory: containerDirectory)
+                    .tabItem { Label("Agents", systemImage: "cpu") }
             }
             .frame(width: 460, height: 460)
         }

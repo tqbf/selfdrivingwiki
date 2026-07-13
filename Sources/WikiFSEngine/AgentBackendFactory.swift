@@ -93,6 +93,15 @@ public enum AgentBackendFactory {
         if let selectedModelId, !selectedModelId.isEmpty {
             hints["acpSelectedModelId"] = selectedModelId
         }
+        // Phase 2 (plans/acp-multi-provider.md): thread the provider's extra
+        // environment into the spawn via the established `env.`-prefix
+        // convention (`ACPBackend.start`/`ClaudeCLIBackend.start` both already
+        // expand `env.*` hints into the child process environment, e.g. the
+        // Phase-7 `WIKI_WORKSPACE` injection). Non-secret knobs only — API keys
+        // stay in `acpAgentApiKey`/the Keychain.
+        for (key, value) in provider.env {
+            hints["env.\(key)"] = value
+        }
         return hints
     }
 

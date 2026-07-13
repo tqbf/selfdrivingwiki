@@ -904,26 +904,14 @@ public final class AgentLauncher {
         // `claude` is resolved below from `AgentCommandConfig`.
         var resolvedACPCommand: [String] = []
         var acpAPIKey: String?
-        if useACP, let command = provider.command, let exe = command.first {
-            // For "bun", prefer the binary bundled in Contents/Helpers so the app
-            // works without a system-wide bun install. Fall back to PATH resolution.
-            // NOTE: Bundle.url(forAuxiliaryExecutable:) does NOT search
-            // Contents/Helpers (only MacOS + Resources), so we check manually.
-            if exe == "bun",
-               let bundled = Self.bundledHelperPath("bun") {
-                resolvedACPCommand = [bundled] + Array(command.dropFirst())
-            } else {
-                switch PathPreflight.resolveOnLoginShell(executable: AgentCommandConfig.expandTilde(exe)) {
-                case .found(let path):
-                    resolvedACPCommand = [path] + Array(command.dropFirst())
-                case .missing(let reason):
-                    preflightError = reason
-                    isRunning = false
-                    releaseGenerationSlot()
-                    return
-                }
+        if useACP {
+            guard let spawn = resolveACPProviderSpawn(provider) else {
+                isRunning = false
+                releaseGenerationSlot()
+                return
             }
-            acpAPIKey = acpCredentialStore.apiKey(forProvider: provider.id)
+            resolvedACPCommand = spawn.command
+            acpAPIKey = spawn.apiKey
         }
 
         // Resolve the executable we'll actually spawn. For `.acp` providers the
@@ -998,15 +986,12 @@ public final class AgentLauncher {
         // existing single-session path below.
         if useACP, case .ingest(_, _, _, let plan) = operation, plan.isLargeSource {
             await runACPIngestPlannerExecutors(
-                provider: provider,
                 scratch: scratch,
                 operation: operation,
                 wikiRoot: wikiRoot,
                 wikiID: wikiID,
                 systemPrompt: systemPrompt,
                 wikictlDirectory: wikictlDirectory,
-                resolvedACPCommand: resolvedACPCommand,
-                acpAPIKey: acpAPIKey,
                 resolvedPath: resolvedPath,
                 agentConfig: agentConfig,
                 sandbox: sandbox
@@ -1145,16 +1130,53 @@ public final class AgentLauncher {
     /// - Update `sessionHandle`/`currentRunToken` per phase so `stopAgent()` and
     ///   the watchdog track the live phase.
     /// - Call `finish()` exactly once at the end (success or unrecoverable failure).
+    /// One stage's resolved routing: the provider + model
+    /// (`AgentProvidersConfig.resolvedProvider(for:)`), the backend instance to
+    /// drive it (from `stageBackendCache`, keyed by `providerId|modelId` so
+    /// stages sharing a resolution reuse the same backend instance — Phase 2
+    /// connection cache), and the `BackendProfile.providerHints` to spawn it.
+    private struct StageRouting {
+        let provider: AgentProvider
+        let modelId: String?
+        let backend: AgentBackend
+        let providerHints: [String: String]
+    }
+
+    /// Resolve `stage`'s provider/model (`resolvedProvider(for:)`), the ACP spawn
+    /// command (PATH-resolved, bun-bundled-helper-special-cased) + Keychain API
+    /// key, and either reuse or create the backend for that (providerId, modelId)
+    /// pair via `cache`. Returns nil on a PATH-resolution failure (sets
+    /// `preflightError`) — the caller falls back to single-session ingest.
+    private func resolveStageRouting(
+        _ stage: IngestStage,
+        policy: PermissionPolicy,
+        cache: inout [String: AgentBackend]
+    ) -> StageRouting? {
+        let (provider, modelId) = providersConfig().resolvedProvider(for: stage)
+        guard let spawn = resolveACPProviderSpawn(provider) else { return nil }
+        let cacheKey = "\(provider.id)|\(modelId ?? "")"
+        let backend: AgentBackend
+        if let cached = cache[cacheKey] {
+            backend = cached
+        } else {
+            backend = AgentBackendFactory.makeBackend(provider: provider, policy: policy)
+            cache[cacheKey] = backend
+        }
+        let providerHints = AgentBackendFactory.providerHints(
+            provider: provider,
+            resolvedCommand: spawn.command,
+            apiKey: spawn.apiKey,
+            selectedModelId: modelId)
+        return StageRouting(provider: provider, modelId: modelId, backend: backend, providerHints: providerHints)
+    }
+
     private func runACPIngestPlannerExecutors(
-        provider: AgentProvider,
         scratch: URL,
         operation: WikiOperation,
         wikiRoot: String,
         wikiID: String,
         systemPrompt: String,
         wikictlDirectory: String,
-        resolvedACPCommand: [String],
-        acpAPIKey: String?,
         resolvedPath: String,
         agentConfig: AgentCommandConfig,
         sandbox: SandboxProfile.SandboxInvocation?
@@ -1178,11 +1200,23 @@ public final class AgentLauncher {
         let sourceIDs = sourcePaths.map { WikiOperation.sourceID(fromPath: $0) }
         let sourceFileNames = stagedSourcePaths.map { ($0 as NSString).lastPathComponent }
 
+        // Per-stage provider/model routing (#324/Phase 2): planner, executors, and
+        // finalizer each resolve independently via `resolvedProvider(for:)` and
+        // may land on different providers. `stageBackendCache` keeps at most one
+        // live backend per distinct (providerId, modelId) resolution for the
+        // whole run — stages sharing a resolution reuse it; each phase still
+        // spawns its own subprocess/session (`ACPBackend.start`/`.cancel`
+        // per-phase, unchanged), so the cache only avoids constructing redundant
+        // backend actor instances. Nothing further to tear down at run end: every
+        // phase below already calls `backend.cancel(session)` (or the
+        // fallback does), which fully tears down that phase's subprocess.
+        let policy: PermissionPolicy = resolvePermissionMode()
+        var stageBackendCache: [String: AgentBackend] = [:]
+
         // Build a shared CLI profile closure (sets env vars the ACP backend reads:
         // WIKI_DB, WIKI_ROOT, WIKICTL, PATH). The ACP backend ignores
         // resolvedExecutable/command/sandbox (those are CLI-backend-only), but
         // the env vars are critical.
-        let selectedModelId = providersConfig().selectedModelId(forProvider: provider.id)
         let makeCLIProfile = { (op: WikiOperation) in
             CLIProfile(
                 operation: op,
@@ -1193,18 +1227,16 @@ public final class AgentLauncher {
                 command: agentConfig,
                 sandbox: sandbox)
         }
-        let makeProviderHints = { (modelId: String?) in
-            AgentBackendFactory.providerHints(
-                provider: provider,
-                resolvedCommand: resolvedACPCommand,
-                apiKey: acpAPIKey,
-                selectedModelId: modelId)
-        }
 
-        // --- Phase 1: Planner (Opus / default model) ---
+        // --- Phase 1: Planner ---
         DebugLog.agent("runACPIngest: Phase 1 — Planner")
+        guard let plannerRouting = resolveStageRouting(.planner, policy: policy, cache: &stageBackendCache) else {
+            DebugLog.agent("runACPIngest: planner routing failed (\(preflightError ?? "?")) — aborting")
+            finish(status: -1)
+            return
+        }
         let plannerProfile = BackendProfile(
-            providerHints: makeProviderHints(selectedModelId),
+            providerHints: plannerRouting.providerHints,
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: makeCLIProfile(operation))
@@ -1214,12 +1246,14 @@ public final class AgentLauncher {
             sourceIDs: sourceIDs)
 
         guard let plannerSession = await runPhase(
+            backend: plannerRouting.backend,
             profile: plannerProfile,
             systemPrompt: systemPrompt,
             prompt: plannerPrompt,
             phaseName: "planner"
         ) else {
-            // Planner failed — fall back to single-session ACP ingest.
+            // Planner failed — fall back to single-session ACP ingest on the
+            // planner-stage resolution (Phase 2 fallback contract).
             DebugLog.agent("runACPIngest: planner failed — falling back to single-session")
             await runACPIngestFallback(
                 operation: operation,
@@ -1227,24 +1261,14 @@ public final class AgentLauncher {
                 scratch: scratch,
                 systemPrompt: systemPrompt,
                 makeCLIProfile: makeCLIProfile,
-                makeProviderHints: makeProviderHints,
-                selectedModelId: selectedModelId,
-                provider: provider)
+                routing: plannerRouting)
             return
         }
 
-        // Capture models (provider-level, not phase-level) + pick Sonnet for executors.
-        var executorModelId: String? = nil
-        if let acp = backend as? ACPBackend {
-            let models = await acp.availableModels(for: plannerSession)
-            captureAndCacheModels(provider: provider, session: plannerSession)
-            captureProcessID(session: plannerSession)
-            executorModelId = Self.findSonnetModelId(in: models)
-            if executorModelId == nil {
-                DebugLog.agent("runACPIngest: no Sonnet model in advertised list (\(models.map { $0.modelId })); executors use default model")
-            }
-        }
-        await backend.cancel(plannerSession)
+        // Capture models (provider-level, not phase-level).
+        captureAndCacheModels(provider: plannerRouting.provider, session: plannerSession)
+        captureProcessID(session: plannerSession)
+        await plannerRouting.backend.cancel(plannerSession)
 
         // Check for cancellation (user hit Stop during planner).
         guard isRunning else {
@@ -1262,40 +1286,44 @@ public final class AgentLauncher {
                 scratch: scratch,
                 systemPrompt: systemPrompt,
                 makeCLIProfile: makeCLIProfile,
-                makeProviderHints: makeProviderHints,
-                selectedModelId: selectedModelId,
-                provider: provider)
+                routing: plannerRouting)
             return
         }
         DebugLog.agent("runACPIngest: plan loaded — \(plan.pages.count) pages across \(plan.distinctSourceFiles.count) source file(s)")
 
-        // --- Phase 2: Executors (one per source file, Sonnet) ---
-        for sourceFile in plan.distinctSourceFiles {
-            guard isRunning else { break }  // cancelled
-            let assignments = plan.assignments(forSource: sourceFile)
-            guard !assignments.isEmpty else { continue }
-            let executorProfile = BackendProfile(
-                providerHints: makeProviderHints(executorModelId),
-                scratchDirectory: scratch,
-                isReadOnly: false,
-                cli: makeCLIProfile(operation))
-            let executorPrompt = ACPIngestPrompts.executorPrompt(
-                stateFilePath: stateFilePath,
-                assignments: assignments,
-                allPageTitles: plan.allPageTitles,
-                sourceIDs: sourceIDs)
-            DebugLog.agent("runACPIngest: Phase 2 — Executor[\(sourceFile)] (\(assignments.count) page(s))")
-            // Partial failure: log and continue to next executor.
-            if let session = await runPhase(
-                profile: executorProfile,
-                systemPrompt: systemPrompt,
-                prompt: executorPrompt,
-                phaseName: "executor[\(sourceFile)]"
-            ) {
-                await backend.cancel(session)
-            } else {
-                DebugLog.agent("runACPIngest: executor[\(sourceFile)] FAILED — skipping (partial failure)")
+        // --- Phase 2: Executors (one per source file) ---
+        if let executorRouting = resolveStageRouting(.executor, policy: policy, cache: &stageBackendCache) {
+            for sourceFile in plan.distinctSourceFiles {
+                guard isRunning else { break }  // cancelled
+                let assignments = plan.assignments(forSource: sourceFile)
+                guard !assignments.isEmpty else { continue }
+                let executorProfile = BackendProfile(
+                    providerHints: executorRouting.providerHints,
+                    scratchDirectory: scratch,
+                    isReadOnly: false,
+                    cli: makeCLIProfile(operation))
+                let executorPrompt = ACPIngestPrompts.executorPrompt(
+                    stateFilePath: stateFilePath,
+                    assignments: assignments,
+                    allPageTitles: plan.allPageTitles,
+                    sourceIDs: sourceIDs)
+                DebugLog.agent("runACPIngest: Phase 2 — Executor[\(sourceFile)] (\(assignments.count) page(s))")
+                // Partial failure: log and continue to next executor.
+                if let session = await runPhase(
+                    backend: executorRouting.backend,
+                    profile: executorProfile,
+                    systemPrompt: systemPrompt,
+                    prompt: executorPrompt,
+                    phaseName: "executor[\(sourceFile)]"
+                ) {
+                    await executorRouting.backend.cancel(session)
+                } else {
+                    DebugLog.agent("runACPIngest: executor[\(sourceFile)] FAILED — skipping (partial failure)")
+                }
             }
+        } else {
+            DebugLog.agent("runACPIngest: executor routing failed (\(preflightError ?? "?")) — skipping executor phase")
+            preflightError = nil
         }
 
         // Check for cancellation before finalizer.
@@ -1304,9 +1332,15 @@ public final class AgentLauncher {
             return
         }
 
-        // --- Phase 3: Finalizer (Opus / default model) ---
+        // --- Phase 3: Finalizer ---
+        guard let finalizerRouting = resolveStageRouting(.finalizer, policy: policy, cache: &stageBackendCache) else {
+            DebugLog.agent("runACPIngest: finalizer routing failed (\(preflightError ?? "?")) — aborting")
+            preflightError = nil
+            finish(status: -1)
+            return
+        }
         let finalizerProfile = BackendProfile(
-            providerHints: makeProviderHints(selectedModelId),
+            providerHints: finalizerRouting.providerHints,
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: makeCLIProfile(operation))
@@ -1316,19 +1350,24 @@ public final class AgentLauncher {
             sourceIDs: sourceIDs)
         DebugLog.agent("runACPIngest: Phase 3 — Finalizer")
         if let session = await runPhase(
+            backend: finalizerRouting.backend,
             profile: finalizerProfile,
             systemPrompt: systemPrompt,
             prompt: finalizerPrompt,
             phaseName: "finalizer"
         ) {
-            await backend.cancel(session)
+            await finalizerRouting.backend.cancel(session)
         }
 
         finish(status: 0)
     }
 
-    /// Run one ACP phase: start a session, send the prompt, drain to
-    /// `.messageStop`/`.result`, then return the session (caller cancels).
+    /// Run one ACP phase on the given `backend`: start a session, send the
+    /// prompt, drain to `.messageStop`/`.result`, then return the session
+    /// (caller cancels). Sets `self.backend` to `backend` so `stopAgent()`, the
+    /// watchdog, and `PermissionResolving` downcasts (`captureAndCacheModels`,
+    /// `captureProcessID`, permission polling) target the phase's actual backend
+    /// — required now that stages may resolve to different providers (Phase 2).
     /// The `onExit` closure is phase-tracking only — it logs but does NOT call
     /// `finish()`. That is the critical lifecycle invariant: `finish()` is called
     /// exactly once by `runACPIngestPlannerExecutors()` at the very end.
@@ -1336,11 +1375,13 @@ public final class AgentLauncher {
     /// Updates `sessionHandle` + `currentRunToken` so `stopAgent()` and the
     /// watchdog target the live phase. Returns `nil` if `backend.start` throws.
     private func runPhase(
+        backend: AgentBackend,
         profile: BackendProfile,
         systemPrompt: String,
         prompt: String,
         phaseName: String
     ) async -> SessionHandle? {
+        self.backend = backend
         let runToken = UUID()
         do {
             DebugLog.agent("runACPIngest[\(phaseName)]: starting")
@@ -1356,7 +1397,6 @@ public final class AgentLauncher {
             currentRunToken = runToken
 
             setGenerating(true)
-            let backend = self.backend
             let stream = await backend.send(TurnInput(userText: prompt), into: session)
             for await event in stream {
                 lastActivityAt = Date()
@@ -1378,19 +1418,19 @@ public final class AgentLauncher {
 
     /// Fallback: single-session ACP ingest when the planner fails or produces no
     /// valid `plan.json`. Sends the original one-shot ingest prompt (with the
-    /// "no sub-agents" instruction) in one session, then calls `finish()`.
+    /// "no sub-agents" instruction) in one session, then calls `finish()`. Keeps
+    /// using the PLANNER-stage resolution (`routing`) — Phase 2 fallback
+    /// contract: the fallback never re-resolves the executor/finalizer stages.
     private func runACPIngestFallback(
         operation: WikiOperation,
         wikiRoot: String,
         scratch: URL,
         systemPrompt: String,
         makeCLIProfile: (WikiOperation) -> CLIProfile,
-        makeProviderHints: (String?) -> [String: String],
-        selectedModelId: String?,
-        provider: AgentProvider
+        routing: StageRouting
     ) async {
         let profile = BackendProfile(
-            providerHints: makeProviderHints(selectedModelId),
+            providerHints: routing.providerHints,
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: makeCLIProfile(operation))
@@ -1398,14 +1438,15 @@ public final class AgentLauncher {
         promptText += "\n\nIMPORTANT: Do NOT dispatch sub-agents, background tasks, or async agents. Do NOT use sleep or ScheduleWakeup. Read all sources, process them, and write all wiki pages directly in THIS session — everything must complete before you stop."
 
         if let session = await runPhase(
+            backend: routing.backend,
             profile: profile,
             systemPrompt: systemPrompt,
             prompt: promptText,
             phaseName: "fallback-single"
         ) {
-            captureAndCacheModels(provider: provider, session: session)
+            captureAndCacheModels(provider: routing.provider, session: session)
             captureProcessID(session: session)
-            await backend.cancel(session)
+            await routing.backend.cancel(session)
             finish(status: 0)
         } else {
             finish(status: -1)
@@ -1429,17 +1470,31 @@ public final class AgentLauncher {
         return FileManager.default.isExecutableFile(atPath: path) ? path : nil
     }
 
-    /// Find the advertised Sonnet model id for executor profiles. The alias
-    /// "sonnet" will NOT match `ACPModelSelectionResolver` (it does exact-id
-    /// matching against advertised models), so we search for a model whose id or
-    /// name contains "sonnet" (case-insensitive). Returns nil if no match — the
-    /// caller falls back to the provider's default model.
-    static nonisolated func findSonnetModelId(in models: [ModelInfo]) -> String? {
-        models.first { model in
-            let id = model.modelId.lowercased()
-            let name = model.name.lowercased()
-            return id.contains("sonnet") || name.contains("sonnet")
-        }?.modelId
+    /// Resolve a `.acp` provider's spawn command (PATH-resolved, since the
+    /// swift-acp SDK's `launch()` does no PATH lookup itself) + its
+    /// Keychain-backed API key. `bun` prefers the helper bundled in
+    /// `Contents/Helpers/` over a PATH lookup so the app works without a
+    /// system-wide bun install. Sets `preflightError` and returns `nil` on
+    /// failure — callers must bail out (`isRunning = false` +
+    /// `releaseGenerationSlot()`) when this returns `nil`.
+    func resolveACPProviderSpawn(_ provider: AgentProvider) -> (command: [String], apiKey: String?)? {
+        guard let command = provider.command, let exe = command.first else {
+            preflightError = "Provider ‘\(provider.label)’ has no command configured."
+            return nil
+        }
+        let resolvedCommand: [String]
+        if exe == "bun", let bundled = Self.bundledHelperPath("bun") {
+            resolvedCommand = [bundled] + Array(command.dropFirst())
+        } else {
+            switch PathPreflight.resolveOnLoginShell(executable: AgentCommandConfig.expandTilde(exe)) {
+            case .found(let path):
+                resolvedCommand = [path] + Array(command.dropFirst())
+            case .missing(let reason):
+                preflightError = reason
+                return nil
+            }
+        }
+        return (resolvedCommand, acpCredentialStore.apiKey(forProvider: provider.id))
     }
 
     /// Stall threshold for the launcher-level watchdog. More generous than the

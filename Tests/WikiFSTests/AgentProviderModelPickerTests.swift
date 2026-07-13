@@ -125,10 +125,10 @@ import WikiFSCore
         let loaded = try JSONDecoder().decode(AgentProvidersConfig.self, from: Data(contentsOf: url))
         #expect(loaded.cachedModels(forProvider: "hermes").map(\.modelId) == ["glm-4.7", "glm-4-7"])
         #expect(loaded.selectedModelId(forProvider: "hermes") == "glm-4.7")
-        // Both Claude providers (claude-acp + legacy claude) have the hardcoded
-        // alias list (opus/sonnet/haiku) — the picker needs selectable rows.
-        #expect(loaded.cachedModels(forProvider: "claude-acp").map(\.modelId) == ["opus", "sonnet", "haiku"])
-        #expect(loaded.cachedModels(forProvider: "claude").map(\.modelId) == ["opus", "sonnet", "haiku"])
+        // Phase 1: the claudeCachedModels injection is removed — Claude has no
+        // cached models until ACP discovery captures a real list.
+        #expect(loaded.cachedModels(forProvider: "claude-acp").isEmpty)
+        #expect(loaded.cachedModels(forProvider: "claude").isEmpty)
         // No selection for either Claude provider → nil (agent default).
         #expect(loaded.selectedModelId(forProvider: "claude-acp") == nil)
         #expect(loaded.selectedModelId(forProvider: "claude") == nil)
@@ -136,10 +136,10 @@ import WikiFSCore
 
     @Test func preModelCacheFileDecodesWithEmptyCaches() throws {
         // A pre-#329 agent-providers.json (no providerModels / selectedModelIds
-        // keys) must decode without a migration → empty caches (legacy behavior:
-        // "no model selected → agent default"). The Claude provider's hardcoded
-        // model list IS injected on decode (so existing users get selectable
-        // Claude rows), but no per-provider selections are added.
+        // / stageAssignments keys) must decode without a migration → empty
+        // caches (legacy behavior: "no model selected → agent default"). Phase
+        // 1 removes the claudeCachedModels injection, so no cached models are
+        // synthesized — a real list only appears after ACP discovery.
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("provider-legacy-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -156,13 +156,16 @@ import WikiFSCore
         try legacyJSON.data(using: .utf8)!.write(to: url)
 
         let loaded = try JSONDecoder().decode(AgentProvidersConfig.self, from: Data(contentsOf: url))
-        // Both injected Claude providers get the hardcoded list (claude-acp was
-        // injected by normalized(), claude was in the legacy file).
-        #expect(loaded.cachedModels(forProvider: "claude-acp").map(\.modelId) == ["opus", "sonnet", "haiku"])
-        #expect(loaded.cachedModels(forProvider: "claude").map(\.modelId) == ["opus", "sonnet", "haiku"])
+        // No hardcoded injection — Claude has no cached models yet.
+        #expect(loaded.cachedModels(forProvider: "claude-acp").isEmpty)
+        #expect(loaded.cachedModels(forProvider: "claude").isEmpty)
         // Selections remain empty (legacy: no model selected → agent default).
         #expect(loaded.selectedModelIds.isEmpty)
         #expect(loaded.selectedModelId(forProvider: "claude") == nil)
+        // No claude-acp force-insertion: the decoded provider list is exactly
+        // what the legacy file specified.
+        #expect(loaded.providers.map(\.id) == ["claude"])
+        #expect(loaded.stageAssignments.isEmpty)
     }
 
     @Test func settingCachedModelsReplacesAndPersists() {

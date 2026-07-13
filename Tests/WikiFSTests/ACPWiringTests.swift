@@ -92,6 +92,33 @@ import ACPModel
         #expect(hints["acpAgentArgs"] == raw)
     }
 
+    // MARK: - AgentSpawnConfig.environment (Phase 2, plans/acp-multi-provider.md)
+
+    /// `env.`-prefixed `providerHints` (the convention
+    /// `AgentBackendFactory.providerHints` emits from `AgentProvider.env`) are
+    /// collected into `AgentSpawnConfig.environment`, stripped of the prefix.
+    /// This is the config `ACPBackend.start` later merges over the inherited
+    /// process environment.
+    @Test func resolveSpawnConfigCollectsEnvPrefixedHints() {
+        let profile = BackendProfile(providerHints: [
+            "acpAgentPath": "/usr/local/bin/hermes",
+            "acpAgentArgs": "acp",
+            "env.ZAI_API_KEY": "secretish",
+            "env.HERMES_MODE": "fast",
+        ])
+        let spawn = ACPBackend.resolveSpawnConfig(from: profile)
+        #expect(spawn?.executablePath == "/usr/local/bin/hermes")
+        #expect(spawn?.environment == ["ZAI_API_KEY": "secretish", "HERMES_MODE": "fast"])
+    }
+
+    /// No `env.`-prefixed hints → empty environment (no merge, unchanged
+    /// behavior for providers with no extra env).
+    @Test func resolveSpawnConfigEmptyEnvironmentWhenUnconfigured() {
+        let profile = BackendProfile(providerHints: ["acpAgentPath": "/bin/agent"])
+        let spawn = ACPBackend.resolveSpawnConfig(from: profile)
+        #expect(spawn?.environment.isEmpty == true)
+    }
+
     // MARK: - Turn-end synthesis (extracted from ACPBackend.send)
 
     /// A successful prompt completion synthesizes exactly `.messageStop` (the
