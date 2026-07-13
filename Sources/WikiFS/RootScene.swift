@@ -102,6 +102,11 @@ struct RootScene: View {
                 wikiID = newID
                 session = nil
                 resolveSession(for: newID)
+                // Keep frontmost tracking accurate — scenePhase won't
+                // re-emit `.active` on an in-window content swap, so we
+                // must update it here. Without this, VacuumCommands
+                // resolves the released session and silently no-ops.
+                sessionManager.frontmostWikiID = newID
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -118,8 +123,9 @@ struct RootScene: View {
             // has the same wiki open, the session is still in the cache (the
             // other window's RootScene will re-resolve it). Note: macOS may
             // not call .onDisappear on window close — unreleased sessions
-            // linger harmlessly in the SessionManager cache and are flushed
-            // by flushAllSessions() on app background (plan R3).
+            // linger harmlessly in the SessionManager cache and are drained
+            // by AppDelegate.applicationWillResignActive →
+            // flushAllSessions() on app background (plan R3).
             if let wikiID {
                 sessionManager.releaseSession(for: wikiID)
                 fileProvider.unsubscribeBus(for: wikiID)

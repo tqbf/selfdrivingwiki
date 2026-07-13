@@ -18,6 +18,7 @@ import WikiFSMLX
 /// active session's bus gets its own FP subscription.
 @main
 struct WikiFSApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     private let launchLocationWarning: LaunchLocationWarning?
     private let containerDirectory: URL
     @State private var registry: WikiRegistryClient
@@ -205,6 +206,12 @@ struct WikiFSApp: App {
                 }
                 bridge.refreshObservations()
                 changeBridge = bridge
+                // Give the AppDelegate a reference to the session manager so
+                // it can flush ALL sessions on app background (R3 safety net —
+                // unreleased sessions from closed-but-not-onDisappear'd
+                // windows are drained here, since per-window scenePhase only
+                // flushes active-window sessions).
+                appDelegate.sessionManager = sessionManager
             }
         }
         .windowToolbarStyle(.unified)
@@ -248,6 +255,23 @@ struct WikiFSApp: App {
             .frame(minWidth: 560, minHeight: 520)
         }
         .windowResizability(.contentMinSize)
+    }
+}
+
+/// Minimal app delegate: drains ALL sessions' pending saves on app background
+/// (the R3 safety net from `plans/multi-window-ui.md`). Per-window `scenePhase`
+/// in `RootScene` only flushes the active window's session; this catches the
+/// case where `onDisappear` didn't fire on window close and a session is
+/// lingering in the `SessionManager` cache with unflushed editor drafts.
+/// `applicationWillResignActive` fires when the app loses keyboard focus / is
+/// backgrounded — the closest macOS equivalent to "all windows inactive."
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    @MainActor weak var sessionManager: SessionManager?
+
+    func applicationWillResignActive(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            sessionManager?.flushAllSessions()
+        }
     }
 }
 
