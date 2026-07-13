@@ -562,6 +562,22 @@ struct ChatView: View {
         }
         .shadow(color: Color.black.opacity(0.06), radius: 18, x: 0, y: 8)
         .frame(maxWidth: .infinity)
+        // Accept sidebar drags anywhere in the composer box. This is the
+        // innermost drop target for SidebarDragPayloadList — it intercepts the
+        // drag before WikiDetailView's broader drop destination (which opens a
+        // new tab) can handle it. Must be on the composer container (not just
+        // attachmentChips) so it exists even when there are no attachments yet
+        // (issue #385 regression).
+        .dropDestination(for: SidebarDragPayloadList.self) { lists, _ in
+            let payloads = lists.flatMap(\.items)
+            for payload in payloads {
+                let attachment = ChatAttachment(payload: payload, store: store)
+                if !attachments.contains(attachment) {
+                    attachments.append(attachment)
+                }
+            }
+            return !payloads.isEmpty
+        }
     }
 
     /// True while the agent is actively generating or queued for the generation
@@ -633,16 +649,6 @@ struct ChatView: View {
                 }
             }
             .padding(.horizontal, 2)
-        }
-        .dropDestination(for: SidebarDragPayloadList.self) { lists, _ in
-            let payloads = lists.flatMap(\.items)
-            for payload in payloads {
-                let attachment = ChatAttachment(payload: payload, store: store)
-                if !attachments.contains(attachment) {
-                    attachments.append(attachment)
-                }
-            }
-            return !payloads.isEmpty
         }
     }
 
