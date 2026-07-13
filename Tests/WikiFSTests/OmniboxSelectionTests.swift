@@ -1,5 +1,6 @@
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Pure logic behind omnibox arrow-key navigation (issue #155). The actual
 /// AppKit event interception lives in `OmniboxSearchField.Coordinator`

@@ -1,5 +1,6 @@
 import SwiftUI
 import WikiFSCore
+import WikiFSEngine
 import ACPModel
 
 /// The inline Approve/Reject affordance for a pending write-permission request

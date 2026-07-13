@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import WikiFSCore
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Unit tests for `ChatView.displayMessages` (AC.6) — the pure source-of-truth
 /// selector that collapses the live/persisted transcript render path into one

@@ -1,7 +1,10 @@
 import Foundation
+import WikiFSEngine
 import Testing
+import WikiFSEngine
 @testable import WikiFSCore
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// `ExtractionCoordinator` backend resolution + readiness mapping. Uses an
 /// `InMemoryExtractionCredentialStore` and a temp container directory so tests
@@ -33,7 +36,8 @@ struct ExtractionCoordinatorTests {
         return ExtractionCoordinator(
             containerDirectory: dir,
             credentialStore: InMemoryExtractionCredentialStore(seeds: seeds),
-            fetcher: FakeHTTPFetcher(body: "x"))
+            fetcher: FakeHTTPFetcher(body: "x"),
+            localExtractorFactory: { LocalPdf2MarkdownExtractor() })
     }
 
     // MARK: - Backend resolution
@@ -139,7 +143,8 @@ struct ExtractionCoordinatorTests {
         let coord = ExtractionCoordinator(
             containerDirectory: dir,
             credentialStore: InMemoryExtractionCredentialStore(),
-            fetcher: FakeHTTPFetcher(body: "x"))
+            fetcher: FakeHTTPFetcher(body: "x"),
+            localExtractorFactory: { LocalPdf2MarkdownExtractor() })
         #expect(coord.config.backend == .localPdf2md)
         #expect(coord.current() is LocalPdf2MarkdownExtractor)
     }

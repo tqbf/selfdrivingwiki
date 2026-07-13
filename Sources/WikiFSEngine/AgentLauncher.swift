@@ -20,7 +20,7 @@ import ACPModel
 /// agent-run lifecycle ref-count is decremented.
 @MainActor
 @Observable
-final class AgentLauncher {
+public final class AgentLauncher {
     /// The live, ordered activity feed for the current/last run: typed events parsed
     /// from the stream-json NDJSON. The UI renders these as tool-call rows, prose,
     /// and a final result. Appended on the main actor as lines arrive.
@@ -28,7 +28,7 @@ final class AgentLauncher {
     /// Exposed without `private(set)` so tests can simulate "a transcript is
     /// visible" via `@testable import WikiFS`, without requiring a real spawned
     /// process.
-    var events: [AgentEvent] = []
+    public var events: [AgentEvent] = []
     /// The raw combined transcript (raw stream-json stdout + stderr) kept alongside
     /// the typed `events`, so the UI / a debugger can see exactly what the CLI
     /// emitted. This is the in-memory mirror of the on-disk `run.jsonl`.
@@ -41,14 +41,14 @@ final class AgentLauncher {
     ///
     /// Exposed without `private(set)` so tests can simulate pre-existing stderr
     /// state via `@testable import WikiFS`.
-    var stderr = ""
-    var extractionLog = ""
+    public var stderr = ""
+    public var extractionLog = ""
     /// True while a local `pdf2md` conversion subprocess is running (before the
     /// agent itself starts). Drives the PDF-extraction spinner / Cancel affordance.
-    var isExtracting = false
+    public var isExtracting = false
     /// PID of the running `pdf2md` conversion subprocess, surfaced in the UI so a
     /// stuck conversion can be identified (and killed) by the user.
-    var extractionPID: Int32?
+    public var extractionPID: Int32?
     /// The ingested-file ids whose **agent run** is in flight — set only once the
     /// claude spawn is actually committed (around `onLock`), and cleared in
     /// `finish()`. Drives the per-file "Ingesting…" row label and the cross-file
@@ -56,7 +56,7 @@ final class AgentLauncher {
     /// flag; it is NOT set during the pdf2md extraction phase that precedes the
     /// spawn (see `extractingSourceIDs`), so a pure extraction no longer mislabels
     /// a row as "Ingesting…" or greys out another file's Ingest button.
-    var ingestingSourceIDs: Set<PageID> = []
+    public var ingestingSourceIDs: Set<PageID> = []
     /// The ingested-file ids whose **pdf2md conversion** is in flight — set around
     /// the pdf2md block of EITHER extraction path (the ingest-path conversion in
     /// `AgentOperationRunner.runMultiIngest`, and the standalone
@@ -65,17 +65,17 @@ final class AgentLauncher {
     /// standalone Extract button's per-file disable. This is the **extraction
     /// phase** flag; it never feeds the cross-file Ingest greyout (that is
     /// `ingestingSourceIDs` only) and never touches the generation gate or edit lock.
-    var extractingSourceIDs: Set<PageID> = []
+    public var extractingSourceIDs: Set<PageID> = []
     /// The in-flight ingest operation Task (set by `IngestSheetView`). Cancelling
     /// it aborts a running `pdf2md` conversion (via its task-cancellation handler).
     /// Held here so `stop()` — driven from the transcript sidebar too — can cancel
     /// the conversion phase, not just the agent process. Self-clears when done.
-    @ObservationIgnored var ingestTask: Task<Void, Never>?
+    @ObservationIgnored public var ingestTask: Task<Void, Never>?
     /// The in-flight standalone extraction Task (set by the Extract Markdown button
     /// in `SourceDetailView`). Mirror of `ingestTask` for the standalone
     /// extract path — cancelled by `stop()` so the pdf2md subprocess is terminated
     /// via `PdfExtractionService`'s `onCancel` handler. Self-clears when done.
-    @ObservationIgnored var extractTask: Task<Void, Never>?
+    @ObservationIgnored public var extractTask: Task<Void, Never>?
     /// True while a spawned `claude -p` process is alive (one-shot runs: from spawn
     /// to finish; interactive sessions: from spawn to session end, across all turns).
     /// Set at spawn commit in `run()` and `startInteractiveQuery()`; cleared in
@@ -85,49 +85,49 @@ final class AgentLauncher {
     ///
     /// Exposed without `private(set)` so tests can simulate "process alive" state
     /// via `@testable import WikiFS`, without requiring a real spawned process.
-    var isRunning = false
+    public var isRunning = false
     /// True only while the agent is actively producing output. For one-shot runs
     /// (ingest/lint/query) this mirrors `isRunning` for the run's duration. For an
     /// interactive query session it tracks the *current turn*: set when a message is
     /// sent, cleared when the terminal `.result` or `.messageStop` event arrives —
     /// so an open-but-idle session does not show a perpetual spinner. Every UI
     /// spinner / Stop affordance keys off this rather than the raw `isRunning`.
-    private(set) var isGenerating = false
+    public private(set) var isGenerating = false
     /// True while an interactive session is queued waiting to acquire the shared
     /// generation gate (another launcher is currently generating). Cleared when the
     /// slot is acquired, when the wait is cancelled, or when the session ends.
     /// Published so the UI can show a "Waiting for the other session to finish…"
     /// hint and keep `canSend` false — the message is NOT silently dropped.
-    private(set) var isAwaitingGenerationSlot = false
+    public private(set) var isAwaitingGenerationSlot = false
     /// Exit status of the last finished process, or nil if none finished / one is
     /// running.
     ///
     /// Exposed without `private(set)` so tests can simulate pre-existing exit
     /// status via `@testable import WikiFS`.
-    var exitStatus: Int32?
+    public var exitStatus: Int32?
     /// Set when the PATH preflight fails (claude not resolvable) or the spawn
     /// itself throws; shown in the UI instead of spawning. Cleared on the next
     /// successful run. Settable from `AgentOperationRunner` for silent-failure
     /// paths where no agent process is spawned.
-    var preflightError: String?
+    public var preflightError: String?
     /// The kind of the operation currently running (drives the UI title / spinner).
     ///
     /// Exposed without `private(set)` so tests can simulate "a non-query run is
     /// active" (e.g. `.ingest`) via `@testable import WikiFS`, without requiring a
     /// real spawned process.
-    var runningKind: WikiOperation.Kind?
+    public var runningKind: WikiOperation.Kind?
     /// The per-run `run.jsonl` backend log on disk (raw stream-json), so the UI can
     /// offer a "Reveal log" affordance. Its sibling `run.stderr.log` holds stderr.
-    private(set) var logFileURL: URL?
+    public private(set) var logFileURL: URL?
     /// Wall-clock start time for the current/last run. Used by the UI to show a
     /// heartbeat instead of a context-free spinner.
-    private(set) var runStartedAt: Date?
+    public private(set) var runStartedAt: Date?
     /// Last time stdout/stderr produced bytes, or the run state changed. A live
     /// process with an old `lastActivityAt` is not necessarily dead, but the UI can
     /// name that it is quiet.
-    private(set) var lastActivityAt: Date?
+    public private(set) var lastActivityAt: Date?
     /// The spawned process ID while running, useful context when a run looks quiet.
-    private(set) var currentProcessID: Int32?
+    public private(set) var currentProcessID: Int32?
 
     /// Builds the login-shell PATH-resolved `claude` path. Injected so tests can
     /// stub it; the app uses the real login-shell preflight.
@@ -196,12 +196,19 @@ final class AgentLauncher {
             ?? FileManager.default.temporaryDirectory
     }
 
+    /// Resolve the bundled `pdf2md` script path to deny in the agent seatbelt,
+    /// or nil if no script is resolvable. Injected because `PdfExtractionService`
+    /// (which probes `Bundle.main`) lives in the app target. The app passes a
+    /// closure delegating to `PdfExtractionService.resolveScript()` at wiring
+    /// time; tests/the daemon default to nil (no deny rule emitted).
+    @ObservationIgnored public var pdf2mdScriptPathResolver: () -> String? = { nil }
+
     /// Read the persisted provider config (loads + seeds on first run). The
     /// composer's provider selector binds to this for the providers list + the
     /// current default. Refreshed on demand (not @Observable state) so a fresh
     /// selection — from Settings OR the composer — is visible next read.
     /// `@MainActor` to match the rest of the launcher's observable surface.
-    func providersConfig() -> AgentProvidersConfig {
+    public func providersConfig() -> AgentProvidersConfig {
         AgentProvidersConfig.loadOrSeed(from: resolveProvidersContainerDirectory())
     }
 
@@ -211,7 +218,7 @@ final class AgentLauncher {
     /// next `resolveSelectedProvider()` call reads this, so the next chat
     /// session uses the chosen provider with no launcher change.
     @discardableResult
-    func setDefaultProvider(id: String) -> AgentProvidersConfig {
+    public func setDefaultProvider(id: String) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingDefault(id: id)
         try? updated.save(to: dir)
@@ -225,7 +232,7 @@ final class AgentLauncher {
     /// `startInteractiveQuery` / `run` right after `backend.start` succeeds so
     /// the model picker has the agent's advertised list on the next read.
     /// `@MainActor`; no return — the picker reads the cache next load.
-    func cacheDiscoveredModels(_ models: [CachedModelInfo], forProvider providerId: String) {
+    public func cacheDiscoveredModels(_ models: [CachedModelInfo], forProvider providerId: String) {
         guard !models.isEmpty else { return }
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingCachedModels(models, forProvider: providerId)
@@ -237,7 +244,7 @@ final class AgentLauncher {
     /// the new config so the composer picker can update its bound state. A
     /// nil/empty `modelId` clears the selection ("use the agent's default").
     @discardableResult
-    func setSelectedModel(_ modelId: String?, forProvider providerId: String) -> AgentProvidersConfig {
+    public func setSelectedModel(_ modelId: String?, forProvider providerId: String) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingSelectedModel(modelId, forProvider: providerId)
         DebugLog.store("setSelectedModel: provider=\(providerId) modelId=\(modelId ?? "nil") → save") // TEMP DEBUG
@@ -251,7 +258,7 @@ final class AgentLauncher {
     /// choosing its provider (paseo's two-step), and both must land together.
     /// Returns the post-write config for the selector's bound state.
     @discardableResult
-    func setSelectedModelAndDefault(
+    public func setSelectedModelAndDefault(
         _ modelId: String?, provider: AgentProvider
     ) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
@@ -266,7 +273,7 @@ final class AgentLauncher {
     /// The user's persisted model selection for `providerId` (nil = "use the
     /// agent's default"). Read at spawn time so `ACPBackend.start` can call
     /// `session/set_model`. PURE-ish (one config load); `@MainActor`.
-    func selectedModelId(forProvider providerId: String) -> String? {
+    public func selectedModelId(forProvider providerId: String) -> String? {
         providersConfig().selectedModelId(forProvider: providerId)
     }
 
@@ -275,7 +282,7 @@ final class AgentLauncher {
     /// display-only preference (favorites sort to the top of the picker); no
     /// effect on which model actually launches.
     @discardableResult
-    func toggleFavoriteModel(_ modelId: String, forProvider providerId: String) -> AgentProvidersConfig {
+    public func toggleFavoriteModel(_ modelId: String, forProvider providerId: String) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().togglingFavoriteModel(modelId, forProvider: providerId)
         try? updated.save(to: dir)
@@ -286,7 +293,7 @@ final class AgentLauncher {
     /// models it advertised and cache them per-provider for the picker. Cheap
     /// (one actor hop + one secrets-free file write) and non-blocking: runs as
     /// a detached `@MainActor` Task so it never delays the first turn.
-    func captureAndCacheModels(provider: AgentProvider, session: SessionHandle) {
+    public func captureAndCacheModels(provider: AgentProvider, session: SessionHandle) {
         guard provider.backend == .acp, let acp = backend as? ACPBackend else {
             DebugLog.agent("captureAndCacheModels: skip (provider=\(provider.id) backend=\(provider.backend) not ACP)") // TEMP DEBUG
             return
@@ -311,7 +318,7 @@ final class AgentLauncher {
     /// process identifier and assign `currentProcessID` (SDK fork Fix 4). Lets
     /// the watchdog `kill(pgid)` a stuck agent after cancel fails. Non-blocking:
     /// runs as a detached `@MainActor` Task.
-    func captureProcessID(session: SessionHandle) {
+    public func captureProcessID(session: SessionHandle) {
         guard let acp = backend as? ACPBackend else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -329,7 +336,7 @@ final class AgentLauncher {
     /// streamed `AgentEvent`s flow: `ACPBackend` → launcher refresh → `@Observable`
     /// state → `ChatView`. Refreshed by `pendingPollTask` while a turn generates.
     /// Empty for the CLI backend (no permission channel) and while idle.
-    var pendingPermissions: [PendingPermission] = []
+    public var pendingPermissions: [PendingPermission] = []
 
     /// Backstop poller that refreshes `pendingPermissions` from the backend while
     /// a turn is generating (always-ask blocks the turn until resolved, so no
@@ -339,8 +346,8 @@ final class AgentLauncher {
     @ObservationIgnored private var pendingPollTask: Task<Void, Never>?
 
     /// UserDefaults keys shared with the `@AppStorage` bindings in Settings + ChatView.
-    static let useACPBackendKey = "useACPBackend"
-    static let permissionModeKey = "agentPermissionMode"
+    public static let useACPBackendKey = "useACPBackend"
+    public static let permissionModeKey = "agentPermissionMode"
     /// The active session handle (nil when no session is live). Replaces the
     /// old `process: Process?` — the launcher never touches a `Process` directly.
     @ObservationIgnored private var sessionHandle: SessionHandle?
@@ -398,7 +405,7 @@ final class AgentLauncher {
     /// Append-only handle to the per-run `run.stderr.log`.
     private var stderrLogHandle: FileHandle?
     /// True when the running process is waiting for user turns over stdin.
-    private(set) var isInteractiveSession = false
+    public private(set) var isInteractiveSession = false
     /// The chat row the current live interactive session is writing to (D2).
     /// Set by the runner when it installs the transcript sink — this is the chat
     /// whose `.chat(id)` tab is live-streaming. `ChatView` uses it as the
@@ -408,7 +415,7 @@ final class AgentLauncher {
     /// back to draft) and in `finish()` AFTER the final turn-boundary flush has
     /// committed — clearing it too early re-sources the view from the store before
     /// the tail lands, producing a transient truncated transcript (D2 flip-timing).
-    var activeChatID: String?
+    public var activeChatID: String?
     /// Stored, cancellable Task for the current interactive send (which waits for
     /// the generation gate before writing to stdin). Cancelled by `stopAgent()` and
     /// `finish()` so an in-flight gate wait doesn't outlive the session.
@@ -492,7 +499,7 @@ final class AgentLauncher {
     /// Pull the current pending-permission snapshot from the backend into
     /// `pendingPermissions` (main actor). No-op for the CLI backend (no
     /// `PermissionResolving` conformance) and when no session is live.
-    func refreshPendingPermissions() async {
+    public func refreshPendingPermissions() async {
         guard let handle = sessionHandle,
               let permBackend = backend as? PermissionResolving else {
             if !pendingPermissions.isEmpty { pendingPermissions = [] }
@@ -506,7 +513,7 @@ final class AgentLauncher {
     /// UI calls this with the chosen option's id. Resumes the backend's blocked
     /// continuation, unblocking the agent. Idempotent-ish: a no-op if the option
     /// isn't offered by any pending request.
-    func resolvePendingPermission(optionId: String) async {
+    public func resolvePendingPermission(optionId: String) async {
         guard let handle = sessionHandle,
               let permBackend = backend as? PermissionResolving else { return }
         let resolved = await permBackend.resolvePermission(sessionHandle: handle, optionId: optionId)
@@ -585,11 +592,12 @@ final class AgentLauncher {
     /// turn boundaries) and the lane is always the same within a run.
     @ObservationIgnored private var acquiredLane: GenerationGate.GenerationLane?
 
-    let extractionCoordinator: ExtractionCoordinator
+    public let extractionCoordinator: ExtractionCoordinator
 
-    init(generationGate: GenerationGate = GenerationGate(),
+    public init(generationGate: GenerationGate = GenerationGate(),
          extractionCoordinator: ExtractionCoordinator = ExtractionCoordinator(
-            containerDirectory: FileManager.default.temporaryDirectory)) {
+            containerDirectory: FileManager.default.temporaryDirectory,
+            localExtractorFactory: { UnavailablePdf2MarkdownExtractor() })) {
         self.generationGate = generationGate
         self.extractionCoordinator = extractionCoordinator
     }
@@ -649,7 +657,7 @@ final class AgentLauncher {
 
     /// True while a pdf2md conversion holds the extraction lock. Independent of
     /// `isRunning` (generation gate) and `store.agentRunCount` (agent-run lifecycle).
-    private(set) var isExtractionSlotBusy = false
+    public private(set) var isExtractionSlotBusy = false
 
     /// The number of extraction requests currently queued for the slot (test seam).
     var extractionSlotWaiterCount: Int { extractionWaiters.count }
@@ -661,7 +669,7 @@ final class AgentLauncher {
     /// waiter self-removes from the queue and is never handed the slot. Does NOT
     /// set `isRunning`, `isExtracting`, or fire `onLock` — fully independent of the
     /// generation gate and agent-run lifecycle.
-    func awaitExtractionSlot() async -> Bool {
+    public func awaitExtractionSlot() async -> Bool {
         // Fast path: slot free and nobody queued — acquire atomically. No
         // suspension point, so no other main-actor task can interleave.
         if !isExtractionSlotBusy && extractionWaiters.isEmpty {
@@ -702,7 +710,7 @@ final class AgentLauncher {
     /// freeing it. Called by both extraction paths in a `defer` once the conversion
     /// ends (success or failure). `isExtractionSlotBusy` stays `true` on a handoff
     /// so the transfer is atomic.
-    func releaseExtractionSlot() {
+    public func releaseExtractionSlot() {
         while let head = extractionWaiters.first {
             extractionWaiters.removeFirst()
             if head.didCancel {
@@ -721,7 +729,7 @@ final class AgentLauncher {
     /// Extract markdown from a PDF source, serialising through the extraction
     /// slot and updating UI state.  Same code path whether triggered from the
     /// detail view or the sidebar context menu.
-    func extractPDF(store: WikiStoreModel, id: PageID, filename: String, data: Data) async {
+    public func extractPDF(store: WikiStoreModel, id: PageID, filename: String, data: Data) async {
         // Wait for the extraction slot (serialises pdf2md conversions).
         let acquired = await awaitExtractionSlot()
         guard acquired, !Task.isCancelled else {
@@ -770,20 +778,22 @@ final class AgentLauncher {
     func ingestSource(
         sourceID: PageID,
         store: WikiStoreModel,
-        manager: WikiManager,
-        fileProvider: FileProviderSpike
+        wikiID: String,
+        changeSignaler: any ChangeSignaler,
+        wikictlDirectory: String
     ) {
-        ingestSources(sourceIDs: [sourceID], store: store, manager: manager, fileProvider: fileProvider)
+        ingestSources(sourceIDs: [sourceID], store: store, wikiID: wikiID, changeSignaler: changeSignaler, wikictlDirectory: wikictlDirectory)
     }
 
     /// Ingest one or more sources.  Single entrypoint for both the detail view
     /// and the sidebar context menu — handles extraction, staging, agent spawn,
     /// and UI state tracking.
-    func ingestSources(
+    public func ingestSources(
         sourceIDs: [PageID],
         store: WikiStoreModel,
-        manager: WikiManager,
-        fileProvider: FileProviderSpike
+        wikiID: String,
+        changeSignaler: any ChangeSignaler,
+        wikictlDirectory: String
     ) {
         ingestTask?.cancel()
         let task = Task {
@@ -792,8 +802,9 @@ final class AgentLauncher {
                 sourceIDs: sourceIDs,
                 launcher: self,
                 store: store,
-                manager: manager,
-                fileProvider: fileProvider,
+                wikiID: wikiID,
+                changeSignaler: changeSignaler,
+                wikictlDirectory: wikictlDirectory,
                 extractionCoordinator: extractionCoordinator)
         }
         ingestTask = task
@@ -1409,7 +1420,7 @@ final class AgentLauncher {
     /// construct the path manually. This is the fix for "bun not found on your
     /// path" — bun was correctly bundled in Helpers but the old API call never
     /// found it.
-    static nonisolated func bundledHelperPath(_ name: String) -> String? {
+    public static nonisolated func bundledHelperPath(_ name: String) -> String? {
         let path = Bundle.main.bundleURL
             .appendingPathComponent("Contents")
             .appendingPathComponent("Helpers")
@@ -1537,7 +1548,7 @@ final class AgentLauncher {
     ///   not-yet-persisted tail of `events` at each turn boundary and once more at
     ///   `finish()`. `nil` (the default) when the caller has no chat to persist
     ///   into (e.g. `store.startChat` failed) — the session simply runs unpersisted.
-    func startInteractiveQuery(
+    public func startInteractiveQuery(
         firstMessage: String,
         firstMessageDisplay: String? = nil,
         stateMarkdown: String,
@@ -1786,7 +1797,7 @@ final class AgentLauncher {
     /// (from the write to stdin until the agent emits `messageStop`/`result`). The
     /// acquisition is ASYNC and may wait if another launcher is currently generating.
     /// While waiting, `isAwaitingGenerationSlot` is `true` so the UI can show a hint.
-    func sendInteractiveMessage(_ message: String, displayText: String? = nil) {
+    public func sendInteractiveMessage(_ message: String, displayText: String? = nil) {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.shouldSendMessage(
             isRunning: isRunning,
@@ -1897,7 +1908,7 @@ final class AgentLauncher {
     /// phase). Does NOT touch the agent process — a running claude query/ingest
     /// is left alone. Cancels whichever task owns the extraction, then clears
     /// the extraction-phase flags so the sidebar dismisses the conversion box.
-    func stopExtraction() {
+    public func stopExtraction() {
         DebugLog.agent(
             "stopExtraction() requested: isExtracting=\(isExtracting) "
             + "extractTask=\(extractTask != nil) ingestTask=\(ingestTask != nil)")
@@ -1923,7 +1934,7 @@ final class AgentLauncher {
     /// Stop ONLY the agent process (claude -p). Does NOT touch a running pdf2md
     /// conversion — a standalone extract running alongside a query continues.
     /// Also cancels any in-flight send task (generation gate wait).
-    func stopAgent() {
+    public func stopAgent() {
         DebugLog.agent(
             "stopAgent() requested: isRunning=\(isRunning) "
             + "session=\(sessionHandle != nil) "
@@ -1960,7 +1971,7 @@ final class AgentLauncher {
     /// Guarded so it can never kill a non-query run (ingest/lint) streaming into
     /// this launcher, and it does NOT touch extractionLog/extractionPID — a
     /// concurrently running pdf2md extraction is untouched.
-    func startNewChat() {
+    public func startNewChat() {
         if isRunning && runningKind != .query { return }
         if isRunning {
             // stopAgent() is a safe no-op when idle (PR #198); here it terminates
@@ -2272,12 +2283,13 @@ final class AgentLauncher {
     }
 
     /// Resolve the bundled `pdf2md` script path to deny in the agent seatbelt, or nil
-    /// if no script is resolvable. Delegates to `PdfExtractionService.resolveScript()`
-    /// (the same canonical resolver the APP process uses to run the script) so the deny
-    /// always targets the exact file the agent would otherwise reach. Resolved once per
-    /// spawn and handed to BOTH the edit and read-only invocations.
+    /// if no script is resolvable. Delegates to the injected
+    /// `resolvePdf2mdScriptPath` closure (set by the app to call
+    /// `PdfExtractionService.resolveScript()`) so the deny always targets the
+    /// exact file the agent would otherwise reach. Resolved once per spawn and
+    /// handed to BOTH the edit and read-only invocations.
     private func resolvePdf2mdScriptPath() -> String? {
-        let path = PdfExtractionService.resolveScript()?.path
+        let path = pdf2mdScriptPathResolver()
         if path == nil {
             DebugLog.agent("sandbox: pdf2md not resolved — no PDF2MD_SCRIPT deny rule emitted")
         }

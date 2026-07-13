@@ -1,5 +1,6 @@
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Tests for `WikiReaderRep.highlightJS(quote:)` — the pure function that emits
 /// the JavaScript the WKWebView reader runs to highlight + scroll to a quoted

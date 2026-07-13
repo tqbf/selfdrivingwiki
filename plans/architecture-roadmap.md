@@ -360,7 +360,18 @@ sign-off, recorded here.
   wasteful than it first appears. Choose it if different-wiki-per-window is a
   near-term must-have *and* the daemon is far off.
 
-Record the chosen branch here when decided.
+**RESOLVED (2026-07-12):** neither branch above was taken. A third path was
+chosen — **daemon-first, app-in-process** — recorded in
+[`plans/multi-wiki-daemon.md`](multi-wiki-daemon.md). Rationale: engine
+separation from the UI is the structural goal; a lightweight `wikid` XPC daemon
+(extracting registry + store lifecycle + the agent execution engine into a
+`WikiFSEngine` library) is built standalone first, with `wikictl` as the first
+real XPC client. The app keeps `WikiManager` in-process until Phase 2
+(multi-window UI), when it refactors to per-window XPC sessions. This amends
+#162's recorded MVP scope: different-wiki-per-window arrives via the daemon,
+not via in-process multi-store bookkeeping — but it arrives *after* the daemon
+is battle-tested, not before. The #358 design doc's "hybrid approach" (daemon +
+app rewire in one phase) is superseded; Phase 1 is daemon-only.
 
 ---
 
@@ -452,6 +463,9 @@ Record the chosen branch here when decided.
   first test case; §6 places it.)
 - When the **#162 fork** (§4) is decided → record the chosen branch — and if
   the recommended branch is taken, amend #162's MVP scope in the issue.
+  **✅ Done (2026-07-12):** §4 resolved — daemon-first path chosen (not either
+  of the two original branches); see `multi-wiki-daemon.md`. #162's MVP scope
+  is amended: different-wiki-per-window arrives via the daemon in Phase 2.
 - When the **bus** (#129 2a) lands → its event vocabulary becomes the
   contract every distribution surface serializes; record vocabulary changes
   here alongside the layer map.

@@ -1,6 +1,9 @@
 import Testing
+import WikiFSEngine
 import Foundation
+import WikiFSEngine
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Unit tests for the launcher watchdog's stall-escalation decision
 /// (`plans/acp-stall-recovery.md` Phase 3 §3).

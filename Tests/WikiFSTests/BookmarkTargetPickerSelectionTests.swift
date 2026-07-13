@@ -1,5 +1,6 @@
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Tests for `BookmarkTargetPickerSheet.parentID(forSelection:)` — the
 /// sentinel-to-nil conversion that lets the picker offer a "Bookmarks" root

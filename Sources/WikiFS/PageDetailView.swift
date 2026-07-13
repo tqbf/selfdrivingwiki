@@ -1,5 +1,7 @@
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
+import WikiFSEngine
 
 /// Unified page surface. The header (title, date, action buttons) stays fixed
 /// regardless of mode. The content area below the divider swaps between rendered
@@ -84,7 +86,9 @@ struct PageDetailView: View {
                                     await AgentOperationRunner.runLintPages(
                                         pages: [(id: id, title: pageTitle)],
                                         launcher: launcher, store: store,
-                                        manager: manager, fileProvider: fileProvider)
+                                        wikiID: manager.activeWikiID ?? "",
+                                        changeSignaler: fileProvider,
+                                        wikictlDirectory: HelpersLocation.wikictlDirectory)
                                 }
                             }
                             .help("Fix [[wiki-link]] syntax and run LLM lint on this page")

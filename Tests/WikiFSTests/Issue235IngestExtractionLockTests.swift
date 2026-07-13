@@ -1,6 +1,9 @@
 import Foundation
+import WikiFSEngine
 import Testing
+import WikiFSEngine
 @testable import WikiFS
+@testable import WikiFSEngine
 import WikiFSCore
 
 /// Tests for issue #235: preventing silent hangs when starting a chat during

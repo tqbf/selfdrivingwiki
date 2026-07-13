@@ -1,5 +1,7 @@
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
+import WikiFSEngine
 
 /// The Chats section — a small SwiftUI `List` of the wiki's chat history.
 /// Mirrors the Pages/Sources/Bookmarks tabs: single-purpose, focused on one

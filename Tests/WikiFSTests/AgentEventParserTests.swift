@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import WikiFSCore
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Tests for the tolerant `claude -p --output-format stream-json` NDJSON parser.
 /// The fixture lines are REAL shapes captured from the installed CLI (2.1.178), so

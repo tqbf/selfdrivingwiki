@@ -23,14 +23,14 @@ import Foundation
 /// Phase 2 (`#multi-writer-hardening`): converted from single-FIFO to
 /// per-lane queues, preserving the exact cancellation-safety invariants.
 @MainActor
-final class GenerationGate {
+public final class GenerationGate {
 
     // MARK: - Lane
 
     /// Which lane a generation runs on. Ingest-class runs (ingest, lint,
     /// lintPage) serialize on `.ingest`; query/chat turns run on
     /// `.interactive`. Lane limits are constructor-configurable.
-    enum GenerationLane: Hashable, Sendable {
+    public enum GenerationLane: Hashable, Sendable {
         case ingest
         case interactive
     }
@@ -65,7 +65,7 @@ final class GenerationGate {
     /// Convenience constructor for a single-lane gate (backwards-compatible
     /// with tests that don't need lane separation). Uses one lane with the
     /// given limit; callers must specify which lane via `acquire(_:)`.
-    init(laneLimits: [GenerationLane: Int]) {
+    public init(laneLimits: [GenerationLane: Int]) {
         var l: [GenerationLane: LaneState] = [:]
         for (lane, limit) in laneLimits {
             l[lane] = LaneState(limit: max(1, limit))
@@ -75,7 +75,7 @@ final class GenerationGate {
 
     /// Single-lane convenience (for simpler tests). Uses the given limit for
     /// the `.interactive` lane — production code uses the dictionary init.
-    convenience init(maxConcurrent: Int = 1) {
+    public convenience init(maxConcurrent: Int = 1) {
         self.init(laneLimits: [.interactive: maxConcurrent])
     }
 

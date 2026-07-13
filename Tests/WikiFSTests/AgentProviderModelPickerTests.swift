@@ -1,8 +1,11 @@
 import Testing
+import WikiFSEngine
 import Foundation
+import WikiFSEngine
 import ACPModel
 import WikiFSCore
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// #329 per-provider model picker tests. Pure logic only — NO live agent
 /// subprocess (the slice forbids end-to-end testing; `ACPSmokeTests` covers the

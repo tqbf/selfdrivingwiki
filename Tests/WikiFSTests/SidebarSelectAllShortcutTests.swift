@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Verifies the Cmd+A "select all rows" shortcut on the sidebar table views is
 /// scoped to when the table (or a descendant) is the first responder, so it

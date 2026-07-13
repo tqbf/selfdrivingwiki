@@ -1,5 +1,7 @@
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
+import WikiFSEngine
 
 /// The Pages section of the sidebar — a native header (title, New Page, sort
 /// picker, search) above an AppKit `NSTableView` (`PagesListView`). Mirrors
@@ -152,7 +154,9 @@ struct PagesContainerView: View {
                     }
                     await AgentOperationRunner.runLintPages(
                         pages: pages, launcher: launcher, store: store,
-                        manager: manager, fileProvider: fileProvider)
+                        wikiID: manager.activeWikiID ?? "",
+                        changeSignaler: fileProvider,
+                        wikictlDirectory: HelpersLocation.wikictlDirectory)
                 }
             },
             onRename: { summary in beginRename(summary) },

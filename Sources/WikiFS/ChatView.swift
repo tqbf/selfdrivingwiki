@@ -1,5 +1,7 @@
 import AppKit
+import WikiFSEngine
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
 
 /// The unified chat surface (D2, pillar 2). One view replaces the split
@@ -562,8 +564,9 @@ struct ChatView: View {
                     message: message,
                     store: store,
                     launcher: launcher,
-                    manager: manager,
-                    fileProvider: fileProvider
+                    wikiID: manager.activeWikiID ?? "",
+                    changeSignaler: fileProvider,
+                    wikictlDirectory: HelpersLocation.wikictlDirectory
                 )
             }
         } else {
@@ -573,8 +576,9 @@ struct ChatView: View {
                     firstMessage: message,
                     launcher: launcher,
                     store: store,
-                    manager: manager,
-                    fileProvider: fileProvider
+                    wikiID: manager.activeWikiID ?? "",
+                    changeSignaler: fileProvider,
+                    wikictlDirectory: HelpersLocation.wikictlDirectory
                 )
             }
         }

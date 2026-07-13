@@ -1,8 +1,11 @@
 import Foundation
+import WikiFSEngine
 import SQLite3
+import WikiFSEngine
 import Testing
 @testable import WikiFSCore
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Tests for the v8 `file_markdown_versions` store API: version chain,
 /// revert, cascade, source immutability, seeding, and pre-migration fallback.

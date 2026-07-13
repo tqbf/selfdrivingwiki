@@ -1,5 +1,7 @@
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
+import WikiFSEngine
 import WikiFSMLX
 
 /// Entry point for the WikiFS macOS app.
@@ -82,7 +84,9 @@ struct WikiFSApp: App {
         let m = WikiManager(containerDirectory: directory)
         m.bootstrap(activateNow: false)
         _manager = State(initialValue: m)
-        let coordinator = ExtractionCoordinator(containerDirectory: directory)
+        let coordinator = ExtractionCoordinator(
+            containerDirectory: directory,
+            localExtractorFactory: { LocalPdf2MarkdownExtractor() })
         _extractionCoordinator = State(initialValue: coordinator)
         // Both launchers share one GenerationGate so ingest and chat-turn
         // generations coordinate. Phase 2 splits the gate into per-lane queues:
@@ -92,8 +96,16 @@ struct WikiFSApp: App {
         // stays responsive during an ingest). With CAS + workspaces (W0–W4),
         // concurrent writes are safe across lanes.
         let generationGate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
-        _agentLauncher = State(initialValue: AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator))
-        _chatLauncher   = State(initialValue: AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator))
+        _agentLauncher = State(initialValue: {
+            let l = AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator)
+            l.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
+            return l
+        }())
+        _chatLauncher   = State(initialValue: {
+            let l = AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator)
+            l.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
+            return l
+        }())
 
         // Assert bun is bundled — ACP providers (claude-acp via bunx) are broken
         // without it. If this fires, run `./build.sh` (which now hard-fails when

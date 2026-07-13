@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import WikiFSCore
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Headless benchmark for the WKWebView reader render path: isolates the
 /// non-layout costs the reader runs off the main actor — preprocessing

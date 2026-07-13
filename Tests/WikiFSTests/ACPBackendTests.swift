@@ -1,7 +1,10 @@
 import Testing
+import WikiFSEngine
 import Foundation
+import WikiFSEngine
 import ACPModel
 @testable import WikiFS
+@testable import WikiFSEngine
 @testable import WikiFSCore
 
 /// Unit tests for the ACP backend spike (`plans/acp-backend-and-permissions.md`).

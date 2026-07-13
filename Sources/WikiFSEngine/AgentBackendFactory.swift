@@ -18,7 +18,7 @@ import WikiFSCore
 /// The permission policy is baked into the `ACPBackend` at construction
 /// (`ACPBackend.start` installs it on the delegate); it has NO effect on the CLI
 /// backend (no permission channel).
-enum AgentBackendFactory {
+public enum AgentBackendFactory {
 
     /// Select + construct the backend for a session.
     ///

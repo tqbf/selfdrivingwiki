@@ -1,7 +1,10 @@
 import Testing
+import WikiFSEngine
 import Foundation
+import WikiFSEngine
 import ACPModel
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Unit tests for `NotificationFanout` — the session-lifetime notification drain
 /// that fixes the per-turn AsyncStream re-acquisition race

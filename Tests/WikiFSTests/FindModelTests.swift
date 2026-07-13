@@ -1,5 +1,6 @@
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// `FindModel` is the shared find-bar state that BOTH Cmd+F (in the detail
 /// views) and the address bar's "Find on Page…" menu item now drive (issue

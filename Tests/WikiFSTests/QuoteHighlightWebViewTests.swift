@@ -3,6 +3,7 @@ import SwiftUI
 import Testing
 import WebKit
 @testable import WikiFS
+@testable import WikiFSEngine
 @testable import WikiFSCore
 
 /// Integration tests that EXECUTE the quote-highlight JS against a live

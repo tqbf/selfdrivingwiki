@@ -1,5 +1,7 @@
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
+import WikiFSEngine
 
 /// A compact provider + model selector for the chat composer, modeled on
 /// paseo's `combined-model-selector` (translated to native macOS).

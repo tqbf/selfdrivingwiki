@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 @testable import WikiFSCore
 
 /// Hosted-view checks that the SwiftUI wiring behind the omnibox toolbar item

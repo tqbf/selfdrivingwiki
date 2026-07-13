@@ -1,7 +1,10 @@
 import Foundation
+import WikiFSEngine
 import Testing
+import WikiFSEngine
 @testable import WikiFSCore
 @testable import WikiFS
+@testable import WikiFSEngine
 
 @MainActor
 struct AgentOperationRunnerTests {

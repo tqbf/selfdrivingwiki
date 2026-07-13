@@ -1,5 +1,7 @@
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
+import WikiFSEngine
 
 /// Settings → Agent tab: configure the agent executable, prefix arguments,
 /// model override, and extra environment variables.

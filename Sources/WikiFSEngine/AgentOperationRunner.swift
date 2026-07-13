@@ -6,35 +6,38 @@ import WikiFSCore
 /// same way, then delegate here so staging, mount refresh, and edit-lock behavior
 /// do not drift.
 @MainActor
-enum AgentOperationRunner {
+public enum AgentOperationRunner {
     /// Ingest a single file via the existing detail-view path. Builds a
     /// single-element `[StagedSource]` and delegates to `runIngestSources`.
-    static func runIngest(
+    public static func runIngest(
         sourceID: PageID,
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        manager: WikiManager,
-        fileProvider: FileProviderSpike,
+        wikiID: String,
+        changeSignaler: any ChangeSignaler,
+        wikictlDirectory: String,
         extractionCoordinator: ExtractionCoordinator
     ) async {
         await runMultiIngest(
             sourceIDs: [sourceID],
             launcher: launcher,
             store: store,
-            manager: manager,
-            fileProvider: fileProvider,
+            wikiID: wikiID,
+            changeSignaler: changeSignaler,
+            wikictlDirectory: wikictlDirectory,
             extractionCoordinator: extractionCoordinator)
     }
 
     /// Ingest multiple files in a SINGLE agent run. All sources are staged together
     /// as `source-1.<ext>`, `source-2.<ext>`, … — the agent reads them all,
     /// cross-references, and writes pages/index/log in one pass.
-    static func runMultiIngest(
+    public static func runMultiIngest(
         sourceIDs: [PageID],
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        manager: WikiManager,
-        fileProvider: FileProviderSpike,
+        wikiID: String,
+        changeSignaler: any ChangeSignaler,
+        wikictlDirectory: String,
         extractionCoordinator: ExtractionCoordinator
     ) async {
         guard !sourceIDs.isEmpty else { return }
@@ -184,8 +187,9 @@ enum AgentOperationRunner {
                     request: .ingest(sources: sources, stateMarkdown: stateMarkdown),
                     launcher: launcher,
                     store: store,
-                    manager: manager,
-                    fileProvider: fileProvider,
+                    wikiID: wikiID,
+                    changeSignaler: changeSignaler,
+                    wikictlDirectory: wikictlDirectory,
                     ingestingSourceIDs: Set(sourceIDs),
                     workspaceID: wsID,
                     onWorkspaceMerge: { [weak store] in
@@ -206,8 +210,9 @@ enum AgentOperationRunner {
                     request: .ingest(sources: sources, stateMarkdown: stateMarkdown),
                     launcher: launcher,
                     store: store,
-                    manager: manager,
-                    fileProvider: fileProvider,
+                    wikiID: wikiID,
+                    changeSignaler: changeSignaler,
+                    wikictlDirectory: wikictlDirectory,
                     ingestingSourceIDs: Set(sourceIDs))
             }
         } else {
@@ -215,8 +220,9 @@ enum AgentOperationRunner {
                 request: .ingest(sources: sources, stateMarkdown: stateMarkdown),
                 launcher: launcher,
                 store: store,
-                manager: manager,
-                fileProvider: fileProvider,
+                wikiID: wikiID,
+                changeSignaler: changeSignaler,
+                wikictlDirectory: wikictlDirectory,
                 ingestingSourceIDs: Set(sourceIDs))
         }
 
@@ -236,12 +242,13 @@ enum AgentOperationRunner {
         }
     }
 
-    static func runQuery(
+    public static func runQuery(
         question: String,
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        manager: WikiManager,
-        fileProvider: FileProviderSpike
+        wikiID: String,
+        changeSignaler: any ChangeSignaler,
+        wikictlDirectory: String
     ) async {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -252,26 +259,24 @@ enum AgentOperationRunner {
                 stateMarkdown: store.currentStateSnapshot().renderStateFile()),
             launcher: launcher,
             store: store,
-            manager: manager,
-            fileProvider: fileProvider
+            wikiID: wikiID,
+            changeSignaler: changeSignaler,
+            wikictlDirectory: wikictlDirectory
         )
     }
 
-    static func startChat(
+    public static func startChat(
         firstMessage: String,
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        manager: WikiManager,
-        fileProvider: FileProviderSpike
+        wikiID: String,
+        changeSignaler: any ChangeSignaler,
+        wikictlDirectory: String
     ) async {
         let trimmed = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         DebugLog.agent("startChat: enter msg=\"\(trimmed.prefix(80))\" provider=\(launcher.resolveSelectedProvider().id) backend=\(launcher.resolveSelectedProvider().backend)") // TEMP DEBUG
         guard !trimmed.isEmpty else {
             DebugLog.agent("startChat: early-return — empty message") // TEMP DEBUG
-            return
-        }
-        guard let wikiID = manager.activeWikiID else {
-            DebugLog.agent("startChat: no active wiki — bailing") // TEMP DEBUG (existed; re-tagged)
             return
         }
 
@@ -286,11 +291,11 @@ enum AgentOperationRunner {
             return
         }
 
-        await fileProvider.signalChange()
+        await changeSignaler.signalChange()
         // The mount is reference-only (the agent reads via `wikictl`); proceed even
         // when it isn't mounted, passing an empty WIKI_ROOT. The prompt tells the
         // agent to read via `wikictl` only when the mount is unavailable.
-        let root = fileProvider.path ?? ""
+        let root = changeSignaler.path ?? ""
         DebugLog.agent("startChat: wikiRoot=\(root.isEmpty ? "<mount unavailable>" : root)")
 
         // Persist the chat from the first message (issue #119). Best-effort:
@@ -315,10 +320,7 @@ enum AgentOperationRunner {
             wikiID: wikiID,
             wikiRoot: root,
             systemPrompt: store.currentSystemPromptBody(),
-            wikictlDirectory: HelpersLocation.wikictlDirectory,
-            // D2: pass the chat row id so the launcher records it as
-            // activeChatID — ChatView's source-of-truth switch. `nil`
-            // when startChat failed (session runs unpersisted, no live tab).
+            wikictlDirectory: wikictlDirectory,
             chatID: chat?.id.rawValue,
             // The model seeded the first user message at chat creation; tell the
             // launcher so it skips double-inserting it on the first flush.
@@ -519,22 +521,19 @@ enum AgentOperationRunner {
     ///   nothing lost. Only THEN do we take over.
     /// - **mid-generation** → refuse (the composer is already disabled; this is a
     ///   guard). Returns without spawning.
-    static func continueChat(
+    public static func continueChat(
         chatID: PageID,
         message: String,
         store: WikiStoreModel,
         launcher: AgentLauncher,
-        manager: WikiManager,
-        fileProvider: FileProviderSpike
+        wikiID: String,
+        changeSignaler: any ChangeSignaler,
+        wikictlDirectory: String
     ) async {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         DebugLog.agent("continueChat: enter chatID=\(chatID.rawValue) msg=\"\(trimmed.prefix(80))\" provider=\(launcher.resolveSelectedProvider().id) backend=\(launcher.resolveSelectedProvider().backend)") // TEMP DEBUG
         guard !trimmed.isEmpty else {
             DebugLog.agent("continueChat: early-return — empty message") // TEMP DEBUG
-            return
-        }
-        guard let wikiID = manager.activeWikiID else {
-            DebugLog.agent("continueChat: no active wiki — bailing") // TEMP DEBUG (existed; re-tagged)
             return
         }
 
@@ -573,8 +572,8 @@ enum AgentOperationRunner {
             return
         }
 
-        await fileProvider.signalChange()
-        let root = fileProvider.path ?? ""
+        await changeSignaler.signalChange()
+        let root = changeSignaler.path ?? ""
         DebugLog.agent("continueChat: chatID=\(chatID.rawValue) wikiRoot=\(root.isEmpty ? "<mount unavailable>" : root)")
 
         // Build the condensed transcript + new message as the first prompt.
@@ -594,7 +593,7 @@ enum AgentOperationRunner {
             wikiID: wikiID,
             wikiRoot: root,
             systemPrompt: store.currentSystemPromptBody(),
-            wikictlDirectory: HelpersLocation.wikictlDirectory,
+            wikictlDirectory: wikictlDirectory,
             chatID: chatID.rawValue,
             historySeed: history.map(\.event),
             onLock: { store.agentRunStarted() },
@@ -604,29 +603,32 @@ enum AgentOperationRunner {
             })
     }
 
-    static func runLint(
+    public static func runLint(
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        manager: WikiManager,
-        fileProvider: FileProviderSpike
+        wikiID: String,
+        changeSignaler: any ChangeSignaler,
+        wikictlDirectory: String
     ) async {
         await run(
             request: .lint(stateMarkdown: store.currentStateSnapshot().renderStateFile()),
             launcher: launcher,
             store: store,
-            manager: manager,
-            fileProvider: fileProvider)
+            wikiID: wikiID,
+            changeSignaler: changeSignaler,
+            wikictlDirectory: wikictlDirectory)
     }
 
     /// Pre-flight one or more pages (fix `\]]` brackets + detect broken links),
     /// then run a single LLM lint with all the findings.  A single page gets
     /// its own run; multiple pages are combined into one agent pass.
-    static func runLintPages(
+    public static func runLintPages(
         pages: [(id: PageID, title: String)],
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        manager: WikiManager,
-        fileProvider: FileProviderSpike
+        wikiID: String,
+        changeSignaler: any ChangeSignaler,
+        wikictlDirectory: String
     ) async {
         let preflights = pages.map { page in
             let preflight = store.preflightLint(pageID: page.id)
@@ -641,40 +643,40 @@ enum AgentOperationRunner {
                 stateMarkdown: store.currentStateSnapshot().renderStateFile()),
             launcher: launcher,
             store: store,
-            manager: manager,
-            fileProvider: fileProvider)
+            wikiID: wikiID,
+            changeSignaler: changeSignaler,
+            wikictlDirectory: wikictlDirectory)
     }
 
     private static func run(
         request: OperationRequest,
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        manager: WikiManager,
-        fileProvider: FileProviderSpike,
+        wikiID: String,
+        changeSignaler: any ChangeSignaler,
+        wikictlDirectory: String,
         ingestingSourceIDs: Set<PageID> = [],
         workspaceID: String? = nil,
         onWorkspaceMerge: (@MainActor () -> Void)? = nil
     ) async {
-        guard let wikiID = manager.activeWikiID else { return }
-
         switch request {
         case .ingest:
             break
         case .query, .lint, .lintPage:
-            await fileProvider.signalChange()
+            await changeSignaler.signalChange()
         }
         // The mount path is reference-only in the prompts (the agent reads pages and
         // raw sources via `wikictl`/SQLite, not the mount), so every operation can
         // proceed even when the File Provider isn't mounted — it just gets an empty
         // WIKI_ROOT, and the prompt tells the agent to read via `wikictl` only.
-        let root = fileProvider.path ?? ""
+        let root = changeSignaler.path ?? ""
 
         await launcher.run(
             request: request,
             wikiID: wikiID,
             wikiRoot: root,
             systemPrompt: store.currentSystemPromptBody(),
-            wikictlDirectory: HelpersLocation.wikictlDirectory,
+            wikictlDirectory: wikictlDirectory,
             ingestingSourceIDs: ingestingSourceIDs,
             workspaceID: workspaceID,
             onLock: { store.agentRunStarted() },

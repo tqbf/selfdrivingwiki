@@ -1,4 +1,5 @@
 import Foundation
+import WikiFSEngine
 
 /// The trailing status a source row shows, mirroring the two phases in
 /// `AgentLauncher`. Pure data (no SwiftUI) so the precedence — extraction phase

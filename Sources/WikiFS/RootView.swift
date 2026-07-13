@@ -1,5 +1,7 @@
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
+import WikiFSEngine
 
 /// Hosts the active wiki's editor, swapping wholesale when the user switches
 /// wikis. Observing `manager` here (not inside `ContentView`) keeps the heavy

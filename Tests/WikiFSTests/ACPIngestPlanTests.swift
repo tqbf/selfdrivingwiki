@@ -1,8 +1,11 @@
 import Foundation
+import WikiFSEngine
 import Testing
+import WikiFSEngine
 import ACPModel
 @testable import WikiFSCore
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Unit tests for the multi-phase ACP ingestion plan schema, tolerant JSON
 /// extraction, prompt builders, and the `findSonnetModelId` helper.

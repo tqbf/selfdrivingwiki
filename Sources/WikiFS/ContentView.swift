@@ -1,5 +1,7 @@
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
+import WikiFSEngine
 
 /// The active wiki's shell: a sidebar (wiki switcher + pages + files) and a
 /// detail pane that edits the selected page, the system prompt, or shows a
@@ -355,8 +357,9 @@ struct ContentView: View {
                 sourceID: sourceID,
                 launcher: agentLauncher,
                 store: store,
-                manager: manager,
-                fileProvider: fileProvider,
+                wikiID: manager.activeWikiID ?? "",
+                changeSignaler: fileProvider,
+                wikictlDirectory: HelpersLocation.wikictlDirectory,
                 extractionCoordinator: extractionCoordinator)
         }
         agentLauncher.ingestTask = task

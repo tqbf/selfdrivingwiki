@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import AppKit
 @testable import WikiFS
+@testable import WikiFSEngine
 @testable import WikiFSCore
 
 /// Tests for the bookmarks outline's multi-select context menu.

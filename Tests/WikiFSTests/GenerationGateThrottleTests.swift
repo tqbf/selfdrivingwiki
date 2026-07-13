@@ -1,6 +1,9 @@
 import Foundation
+import WikiFSEngine
 import Testing
+import WikiFSEngine
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Tests for W4 — configurable N-throttle on GenerationGate (PR #312).
 ///

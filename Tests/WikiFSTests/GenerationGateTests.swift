@@ -1,6 +1,9 @@
 import Foundation
+import WikiFSEngine
 import Testing
+import WikiFSEngine
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Tests for the shared `GenerationGate` guarantee: two `AgentLauncher` instances
 /// that share a single `GenerationGate` serialize their ACTIVE GENERATIONS globally.

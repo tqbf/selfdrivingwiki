@@ -1,6 +1,9 @@
 import Testing
+import WikiFSEngine
 import Foundation
+import WikiFSEngine
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Pure unit tests for `TurnLivenessPolicy` — the turn inactivity watchdog
 /// decision helper (`plans/acp-stall-recovery.md` §1a).

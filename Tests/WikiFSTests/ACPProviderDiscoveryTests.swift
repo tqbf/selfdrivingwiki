@@ -1,5 +1,7 @@
 import Testing
+import WikiFSEngine
 import Foundation
+import WikiFSEngine
 import WikiFSCore
 
 /// Filesystem ACP-agent discovery (slice of #217). The discovery logic is pure

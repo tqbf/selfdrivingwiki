@@ -1,5 +1,7 @@
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
+import WikiFSEngine
 
 /// The main content pane for the current selection. Kept separate from
 /// `ContentView` so the app shell owns layout/chrome while this view owns the

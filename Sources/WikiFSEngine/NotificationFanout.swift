@@ -22,7 +22,7 @@ import ACPModel
 /// **Concurrency.** `@unchecked Sendable` with an internal `NSLock` — the
 /// readabilityHandler callback, the drain Task, and the watchdog Task all touch
 /// it from different execution contexts.
-final class NotificationFanout: @unchecked Sendable {
+public final class NotificationFanout: @unchecked Sendable {
 
     private let lock = NSLock()
     private var subscriber: AsyncStream<JSONRPCNotification>.Continuation?

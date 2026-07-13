@@ -1,4 +1,5 @@
 import SwiftUI
+import WikiFSEngine
 
 /// Permission-mode selector for the chat composer, mirroring `ProviderSelector`:
 /// a compact chip trigger (glyph + label + chevron) that opens a native popover

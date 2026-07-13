@@ -1,5 +1,7 @@
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
+import WikiFSEngine
 
 /// Sidebar host: a section-selector bar (Pages / Sources / Bookmarks / Chats)
 /// above the active section's view. Each section is now an independent view:
