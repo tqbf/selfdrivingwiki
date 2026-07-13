@@ -2549,14 +2549,12 @@ public final class WikiStoreModel {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, let self else { return }
             let query = self.chatSearchQuery
-            let results: [ChatSummary]
-            if let pool = self.readPool {
-                results = (try? await pool.asyncRead { reader in
-                    try reader.searchSimilarChats(query: query, limit: 20)
-                }) ?? []
-            } else {
-                results = (try? self.store.searchSimilarChats(query: query, limit: 20)) ?? []
-            }
+            // Use the main store (same connection as chatMessages load) so the
+            // search results and the body load see the same WAL snapshot —
+            // eliminates cross-connection staleness where the read pool could
+            // return a chat_id that's been renamed/reordered since the last
+            // checkpoint (issue #383).
+            let results = (try? self.store.searchSimilarChats(query: query, limit: 20)) ?? []
             guard !Task.isCancelled else { return }
             self.chatSearchResults = results
         }
