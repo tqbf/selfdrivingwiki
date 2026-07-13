@@ -250,7 +250,7 @@ public final class WikiStoreModel {
 
     private let store: WikiStore
     /// Read-only snapshot connections for OFF-MAIN reads (debounced search).
-    /// Injected by `WikiManager.openActive` for file-backed wikis; `nil` for
+    /// Injected by `WikiSession.init` for file-backed wikis; `nil` for
     /// in-memory stores (a separate connection to `:memory:` would see a
     /// different, empty database) and in tests — callers fall back to the
     /// main-actor store. See `WikiReadPool` for the safety argument.

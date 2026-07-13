@@ -1,7 +1,6 @@
 import AppKit
 import WikiFSEngine
 import SwiftUI
-import WikiFSEngine
 import WikiFSCore
 
 // MARK: - SwiftUI bridge
@@ -16,7 +15,7 @@ import WikiFSCore
 struct PagesListView: NSViewControllerRepresentable {
     let store: WikiStoreModel
     let fileProvider: FileProviderSpike
-    let manager: WikiManager
+    let session: WikiSession
     let launcher: AgentLauncher
     let callbacks: PagesListCallbacks
 
@@ -24,7 +23,6 @@ struct PagesListView: NSViewControllerRepresentable {
         let vc = PagesListViewController()
         vc.store = store
         vc.fileProvider = fileProvider
-        vc.manager = manager
         vc.launcher = launcher
         vc.callbacks = callbacks
         // Don't reloadData here — loadView hasn't run yet (mirrors
@@ -35,9 +33,9 @@ struct PagesListView: NSViewControllerRepresentable {
     func updateNSViewController(_ vc: PagesListViewController, context: Context) {
         vc.store = store
         vc.fileProvider = fileProvider
-        vc.manager = manager
         vc.launcher = launcher
         vc.callbacks = callbacks
+        vc.homePageID = session.descriptor.homePageID
         // Read the @Observable props here so SwiftUI re-invokes this method
         // when they change (the reload-trigger contract).
         let visible = store.searchQuery.isEmpty ? store.summaries : store.searchResults
@@ -74,6 +72,10 @@ struct PagesListCallbacks {
     var onLint: ([PageID]) -> Void
     var onRename: (WikiPageSummary) -> Void
     var onDelete: ([PageID]) -> Void
+    /// Set (or clear with nil) the active wiki's home page. Routes the registry's
+    /// `setHomePage` through a callback so the NSViewController stays dumb (no
+    /// `WikiRegistryClient` dependency).
+    var onSetHomePage: (PageID?) -> Void
     /// Bookmark a multi-row selection (or a single row) into a folder the user
     /// picks in the target-picker sheet. Opens `BookmarkTargetPickerSheet`.
     var onAddToBookmarks: ([PageID]) -> Void
@@ -93,7 +95,9 @@ final class PagesListViewController: NSViewController {
     var tableView: PagesNSTableView!
     var store: WikiStoreModel?
     var fileProvider: FileProviderSpike?
-    var manager: WikiManager?
+    /// The active wiki's home page (drives the Set/Clear Home Page menu item).
+    /// Set by `PagesListView.updateNSViewController` from the session descriptor.
+    var homePageID: PageID?
     var launcher: AgentLauncher?
     var callbacks: PagesListCallbacks?
 
@@ -388,9 +392,7 @@ extension PagesListViewController {
     /// Whether `pageID` is the active wiki's configured home page (issue #280) —
     /// decides "Set as Home Page" vs. "Clear Home Page" in the context menu.
     private func isCurrentHomePage(_ pageID: PageID) -> Bool {
-        guard let manager, let wikiID = manager.activeWikiID,
-              let wiki = manager.wikis.first(where: { $0.id == wikiID }) else { return false }
-        return wiki.homePageID == pageID
+        homePageID == pageID
     }
 
     private func menuItem(title: String, systemImage: String,
@@ -434,13 +436,11 @@ extension PagesListViewController {
         if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onRename(p.clicked) }
     }
     @objc private func setHomePageAction(_ sender: NSMenuItem) {
-        guard let p = sender.representedObject as? PagesMenuPayload,
-              let manager, let wikiID = manager.activeWikiID else { return }
-        manager.setHomePage(id: wikiID, pageID: p.clicked.id)
+        guard let p = sender.representedObject as? PagesMenuPayload else { return }
+        callbacks?.onSetHomePage(p.clicked.id)
     }
     @objc private func clearHomePageAction(_ sender: NSMenuItem) {
-        guard let manager, let wikiID = manager.activeWikiID else { return }
-        manager.setHomePage(id: wikiID, pageID: nil)
+        callbacks?.onSetHomePage(nil)
     }
     @objc private func deleteAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onDelete(p.effectiveIDs) }

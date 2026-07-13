@@ -1,7 +1,6 @@
 import AppKit
 import WikiFSEngine
 import SwiftUI
-import WikiFSEngine
 import WikiFSCore
 
 /// The Sources section — a native header (Add buttons, filter picker, search)
@@ -12,7 +11,8 @@ import WikiFSCore
 struct SourcesContainerView: View {
     @Bindable var store: WikiStoreModel
     let fileProvider: FileProviderSpike
-    let manager: WikiManager
+    /// The per-active-wiki session (store + launchers + descriptor).
+    var session: WikiSession
     let launcher: AgentLauncher
     var ingestingSourceIDs: Set<PageID> = []
     var extractingSourceIDs: Set<PageID> = []
@@ -61,7 +61,7 @@ struct SourcesContainerView: View {
             Divider()
             ZStack(alignment: .topLeading) {
                 SourcesListView(store: store, fileProvider: fileProvider,
-                                manager: manager, launcher: launcher,
+                                session: session, launcher: launcher,
                                 ingestingSourceIDs: ingestingSourceIDs,
                                 extractingSourceIDs: extractingSourceIDs,
                                 sources: visibleSources,
@@ -85,7 +85,7 @@ struct SourcesContainerView: View {
         ) {
             Button("Ingest Again", role: .destructive) {
                 launcher.ingestSources(sourceIDs: pendingBatchIngestIDs,
-                    store: store, wikiID: manager.activeWikiID ?? "",
+                    store: store, wikiID: session.wikiID,
                     changeSignaler: fileProvider,
                     wikictlDirectory: HelpersLocation.wikictlDirectory)
             }
@@ -211,7 +211,7 @@ struct SourcesContainerView: View {
             },
             onIngest: { ids in
                 launcher.ingestSources(sourceIDs: ids, store: store,
-                                       wikiID: manager.activeWikiID ?? "",
+                                       wikiID: session.wikiID,
                                        changeSignaler: fileProvider,
                                        wikictlDirectory: HelpersLocation.wikictlDirectory)
             },

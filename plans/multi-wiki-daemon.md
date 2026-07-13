@@ -644,21 +644,26 @@ serializes registry mutations.
 
 Phase 2 is when the app becomes an XPC client and multi-window lands:
 
-1. **`WikiManager` dissolves.** Its registry role → the daemon. Its
-   `activeStore` binding → per-window `WikiWindowState`. Its
-   `onActiveStoreDidChange` → direct daemon session subscription.
-2. **`WindowGroup(for: String.self)`** drives window creation by wiki ID.
-3. **Each window holds a `WikiWindowState`** (store read-pool,
-   `AgentLauncher`, `GenerationGate`, extraction coordinator) — the #358
-   design doc's §3.
+1. **~~`WikiManager` dissolves.~~** ✅ **Phase 2a shipped** (`plans/dissolve-wikimanager.md`) —
+   `WikiManager` is dissolved into `WikiRegistryClient` (app-scoped registry +
+   active id) + `WikiSession` (per-active-wiki store + launchers + gate). Its
+   `activeStore` binding → `WikiSession.store`. Its `onActiveStoreDidChange` →
+   `.onChange(of: registry.activeWikiID)` in `WikiFSApp`. Its registry role
+   stays in-process (the daemon is `wikictl`-only in Phase 1); the XPC migration
+   of registry ops is Phase 2b+.
+2. **`WindowGroup(for: String.self)`** drives window creation by wiki ID. **(Phase 2b — not yet done)**
+3. **Each window holds a `WikiSession`** (store read-pool, `AgentLauncher`,
+   `GenerationGate`, extraction coordinator) — the #358 design doc's §3.
+   ✅ `WikiSession` exists in `WikiFSEngine` (Phase 2a), but is single-instance
+   (created from `registry.activeWikiID`, not per-window) until Phase 2b.
 4. **`WikiChangeBridge` routes to all matching windows**, not just the active
-   one (§5 of the design doc).
+   one (§5 of the design doc). **(Phase 2b — currently holds `weak var session`)**
 5. **WikiSwitcher** opens a new window by default; Option+click switches the
-   current window's wiki (§6).
+   current window's wiki (§6). **(Phase 2b)**
 6. **Sole-writer migration** — the app stops opening `SQLiteWikiStore` for
    writes; all writes route through the daemon's XPC store session. This is
    where the full `WikiStore` protocol must be available over XPC (or a
-   write-proxy pattern).
+   write-proxy pattern). **(Phase 2b+)**
 
 Phase 2 is where the #358 design doc's §1–§10 become the plan of record.
 

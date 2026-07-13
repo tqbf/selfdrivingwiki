@@ -1,5 +1,6 @@
 import SwiftUI
 import WikiFSCore
+import WikiFSEngine
 
 /// Identifies which source to compare extractions for. Value-driven
 /// `WindowGroup(for:)` identity: `Hashable`/`==` are based on `sourceID` alone,
@@ -15,16 +16,16 @@ struct ExtractionCompareContext: Codable, Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(sourceID) }
 }
 
-/// Resolves the active wiki's store for the compare window. `manager` is the
+/// Resolves the active wiki's store for the compare window. `session` is the
 /// same `@State` instance the main window uses, so the window shares the live
 /// `WikiStoreModel` — a "Set Active" nominate here propagates to the detail
 /// view immediately (both read the same `@Observable` model).
 struct ExtractionCompareWindow: View {
-    let manager: WikiManager
+    let session: WikiSession?
     let context: ExtractionCompareContext?
 
     var body: some View {
-        if let store = manager.activeStore, let ctx = context {
+        if let store = session?.store, let ctx = context {
             ExtractionCompareSheet(store: store, sourceID: ctx.sourceID, filename: ctx.filename)
         } else {
             ContentUnavailableView {

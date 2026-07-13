@@ -1,7 +1,6 @@
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
-import WikiFSEngine
 
 /// The main content pane for the current selection. Kept separate from
 /// `ContentView` so the app shell owns layout/chrome while this view owns the
@@ -10,7 +9,8 @@ struct WikiDetailView: View {
     @Bindable var store: WikiStoreModel
     @Bindable var launcher: AgentLauncher       // ingest/lint + chat launcher
     @Bindable var chatLauncher: AgentLauncher   // chat launcher (write-capable)
-    @Bindable var manager: WikiManager
+    /// The per-active-wiki session (store + launchers + descriptor).
+    var session: WikiSession
     let fileProvider: FileProviderSpike
     let extractionCoordinator: ExtractionCoordinator
     let runIngest: (PageID) -> Void
@@ -130,7 +130,7 @@ struct WikiDetailView: View {
                 chatID: nil,
                 store: store,
                 launcher: chatLauncher,
-                manager: manager,
+                session: session,
                 fileProvider: fileProvider
             )
         case .systemPrompt:
@@ -141,13 +141,13 @@ struct WikiDetailView: View {
             LintView(
                 launcher: launcher,
                 store: store,
-                manager: manager,
+                session: session,
                 fileProvider: fileProvider)
         case .page:
             PageDetailView(
                 store: store,
                 launcher: launcher,
-                manager: manager,
+                session: session,
                 fileProvider: fileProvider)
         case .source(let id):
             if let file = store.sources.first(where: { $0.id == id }) {
@@ -191,7 +191,7 @@ struct WikiDetailView: View {
                 chatID: id,
                 store: store,
                 launcher: chatLauncher,
-                manager: manager,
+                session: session,
                 fileProvider: fileProvider
             )
         }

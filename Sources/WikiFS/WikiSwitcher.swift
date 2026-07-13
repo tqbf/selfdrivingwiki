@@ -10,7 +10,7 @@ import WikiFSCore
 /// `.headline` gives the active name prominence over the `.caption`-styled
 /// section headers and `.body` rows below it, without hardcoding sizes.
 struct WikiSwitcher: View {
-    @Bindable var manager: WikiManager
+    @Bindable var registry: WikiRegistryClient
 
     @State private var newWikiName = ""
     @State private var showingNewWikiSheet = false
@@ -23,9 +23,9 @@ struct WikiSwitcher: View {
 
     var body: some View {
         Menu {
-            ForEach(manager.wikis) { wiki in
+            ForEach(registry.wikis) { wiki in
                 Button {
-                    manager.select(wiki.id)
+                    registry.select(wiki.id)
                 } label: {
                     Label(wiki.displayName, systemImage: checkmark(for: wiki))
                 }
@@ -73,14 +73,14 @@ struct WikiSwitcher: View {
         .help("Switch between wikis, or create a new one")
         .sheet(isPresented: $showingNewWikiSheet) {
             NewWikiSheet(name: $newWikiName) { name in
-                Task { await manager.createWiki(displayName: name) }
+                Task { await registry.createWiki(displayName: name) }
             }
         }
         .alert("Rename Wiki", isPresented: renamePresented, presenting: renameTarget) { target in
             TextField("Name", text: $renameText)
             Button("Cancel", role: .cancel) { renameTarget = nil }
             Button("Rename") {
-                Task { await manager.renameWiki(id: target.id, to: renameText) }
+                Task { await registry.renameWiki(id: target.id, to: renameText) }
                 renameTarget = nil
             }
         }
@@ -89,7 +89,7 @@ struct WikiSwitcher: View {
                 guard let sourceURL = importSourceURL else { return }
                 Task {
                     do {
-                        _ = try await manager.importWiki(from: sourceURL, displayName: name)
+                        _ = try await registry.importWiki(from: sourceURL, displayName: name)
                     } catch {
                         failureMessage = String(describing: error)
                     }
@@ -99,7 +99,7 @@ struct WikiSwitcher: View {
         .alert("Delete Wiki?", isPresented: deletePresented, presenting: deleteTarget) { target in
             Button("Cancel", role: .cancel) { deleteTarget = nil }
             Button("Delete", role: .destructive) {
-                Task { await manager.deleteWiki(id: target.id) }
+                Task { await registry.deleteWiki(id: target.id) }
                 deleteTarget = nil
             }
         } message: { target in
@@ -113,12 +113,12 @@ struct WikiSwitcher: View {
     }
 
     private var activeDescriptor: WikiDescriptor? {
-        guard let id = manager.activeWikiID else { return nil }
-        return manager.wikis.first { $0.id == id }
+        guard let id = registry.activeWikiID else { return nil }
+        return registry.wikis.first { $0.id == id }
     }
 
     private func checkmark(for wiki: WikiDescriptor) -> String {
-        wiki.id == manager.activeWikiID ? "checkmark" : ""
+        wiki.id == registry.activeWikiID ? "checkmark" : ""
     }
 
     private var renamePresented: Binding<Bool> {
@@ -148,7 +148,7 @@ struct WikiSwitcher: View {
     private func exportWiki(_ wiki: WikiDescriptor) {
         guard let destinationURL = WikiFilePanels.exportURL(defaultName: wiki.displayName) else { return }
         do {
-            try manager.exportWiki(id: wiki.id, to: destinationURL)
+            try registry.exportWiki(id: wiki.id, to: destinationURL)
         } catch {
             failureMessage = String(describing: error)
         }

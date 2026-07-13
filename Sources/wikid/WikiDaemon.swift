@@ -57,7 +57,7 @@ final class WikiDaemon {
                 return nil
             }
 
-            // Seed a Home page if the store is empty (mirrors WikiManager.createWiki)
+            // Seed a Home page if the store is empty (mirrors WikiRegistryClient.createWiki)
             if let store = openStores[descriptor.id] {
                 let pages = (try? store.listPages(sortBy: .newestFirst)) ?? []
                 if pages.isEmpty {

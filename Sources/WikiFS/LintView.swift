@@ -1,14 +1,14 @@
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
-import WikiFSEngine
 
 /// Sidebar-accessible lint surface. Runs the Lint operation against the current
 /// wiki and displays the agent transcript.
 struct LintView: View {
     @Bindable var launcher: AgentLauncher
     @Bindable var store: WikiStoreModel
-    @Bindable var manager: WikiManager
+    /// The per-active-wiki session (store + launchers + descriptor).
+    var session: WikiSession
     let fileProvider: FileProviderSpike
 
     var body: some View {
@@ -26,7 +26,7 @@ struct LintView: View {
                         await AgentOperationRunner.runLint(
                             launcher: launcher,
                             store: store,
-                            wikiID: manager.activeWikiID ?? "",
+                            wikiID: session.wikiID,
                             changeSignaler: fileProvider,
                             wikictlDirectory: HelpersLocation.wikictlDirectory)
                     }

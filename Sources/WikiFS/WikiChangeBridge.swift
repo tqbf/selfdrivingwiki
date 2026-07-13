@@ -1,5 +1,6 @@
 import Foundation
 import WikiFSCore
+import WikiFSEngine
 
 /// The Phase A change bridge (`plans/llm-wiki.md` — "Change bridge in the app").
 ///
@@ -23,16 +24,22 @@ final class WikiChangeBridge {
     /// calls into a single sidebar rebuild + FP signal per wiki.
     static let coalesceWindow: Duration = .milliseconds(250)
 
-    private let manager: WikiManager
+    private let registry: WikiRegistryClient
     private let fileProvider: FileProviderSpike
+    /// The active wiki's session (if any). Held weak so a wiki switch that
+    /// creates a new session doesn't keep the old one alive. The app layer
+    /// sets this via `bridge.session = newSession` in the `.onChange(of:
+    /// registry.activeWikiID)` handler. When multi-window lands, this
+    /// becomes a set or a lookup closure.
+    weak var session: WikiSession?
     private var coalescer: ChangeCoalescer?
 
     /// The wiki ids we currently observe, so `refreshObservations()` is
     /// idempotent — it only adds newly-registered wikis and drops removed ones.
     private var observedWikiIDs: Set<String> = []
 
-    init(manager: WikiManager, fileProvider: FileProviderSpike) {
-        self.manager = manager
+    init(registry: WikiRegistryClient, fileProvider: FileProviderSpike) {
+        self.registry = registry
         self.fileProvider = fileProvider
         self.coalescer = ChangeCoalescer(
             schedule: { [weak self] work in self?.schedule(work) ?? Self.noopHandle() },
@@ -45,7 +52,7 @@ final class WikiChangeBridge {
     /// whenever the wiki set changes (create / delete), so a freshly-created
     /// wiki's CLI writes are heard and a deleted wiki's name is released.
     func refreshObservations() {
-        let current = Set(manager.wikis.map(\.id))
+        let current = Set(registry.wikis.map(\.id))
 
         for added in current.subtracting(observedWikiIDs) {
             addObserver(forWikiID: added)
@@ -121,24 +128,28 @@ final class WikiChangeBridge {
     /// the changed wiki — a `wikictl` write can land in any wiki's DB, and that
     /// wiki's filesystem projection must refresh regardless of which wiki is on
     /// screen. Additionally, when the changed wiki IS the active one, emits a
-    /// coarse event into the active store's bus so the on-screen model reloads
+    /// coarse event into the active session's bus so the on-screen model reloads
     /// its projections (sidebar, sources, chats). For a non-active wiki there is
     /// no in-memory store/bus, so only the FP is signaled; the model reads fresh
-    /// data when the user later switches to that wiki (`WikiManager.openActive`).
+    /// data when the user later switches to that wiki (the app layer creates a
+    /// new `WikiSession`).
     ///
     /// Issue #303: the previous either/or structure (bus-OR-FP) meant the active
     /// wiki's FP was refreshed only transitively via the bus subscriber (which
-    /// adds a second debounce), and in the edge case where `activeWikiID`
+    /// adds a second debounce), and in the edge case where the active wiki id
     /// changed during the coalesce window the model reload was skipped entirely.
     /// Now both paths fire unconditionally for their respective targets.
-    private func flush(wikiID: String) {
+    ///
+    /// Marked `internal` (not `private`) so `WikiChangeBridgeTests` can call it
+    /// directly via `@testable import WikiFS`.
+    func flush(wikiID: String) {
         // Always refresh the File Provider — direct, not via the bus subscriber,
         // so the mount is consistent for every wiki the bridge observes.
         Task { await fileProvider.signalChange(forWikiID: wikiID) }
 
         // If the changed wiki is the one on screen, also poke the bus so the
         // model rebuilds its projections (sidebar, sources, chats, draft).
-        if manager.activeWikiID == wikiID, let bus = manager.activeStore?.eventBus {
+        if wikiID == session?.wikiID, let bus = session?.store.eventBus {
             bus.emit(ResourceChangeEvent(
                 wikiID: wikiID, kind: nil, id: "", change: .updated))
         }

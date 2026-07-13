@@ -6,10 +6,13 @@ import WikiFSMLX
 
 /// Entry point for the WikiFS macOS app.
 ///
-/// Phase 0 (many wikis): a `WikiManager` owns the registry of wikis, the active
-/// store, and the create/select/delete operations. One File Provider domain is
-/// registered per wiki on launch. The legacy single-wiki `WikiFS.sqlite` is
-/// migrated into the registry as wiki #1 by `WikiManager.bootstrap()`.
+/// Phase 0 (many wikis): a `WikiRegistryClient` owns the registry of wikis +
+/// the active wiki id, and a `WikiSession` (one per active wiki) owns the store
+/// + launchers + gate. The registry never opens a store; the session is
+/// created/destroyed in the `.onChange(of: registry.activeWikiID)` handler.
+/// One File Provider domain is registered per wiki on launch. The legacy
+/// single-wiki `WikiFS.sqlite` is migrated into the registry as wiki #1 by
+/// `WikiRegistryClient.bootstrap()`.
 ///
 /// Flushes pending autosave when the app stops being active (§3.5
 /// immediate-on-background — don't lose buffered edits on quit).
@@ -17,14 +20,16 @@ import WikiFSMLX
 struct WikiFSApp: App {
     private let launchLocationWarning: LaunchLocationWarning?
     private let containerDirectory: URL
-    @State private var manager: WikiManager
+    @State private var registry: WikiRegistryClient
+    @State private var session: WikiSession?
     @State private var fileProvider = FileProviderSpike()
-    /// Both launchers share one `GenerationGate` so ingest and chat-turn
-    /// generations serialize globally — only one active generation at a time.
-    @State private var agentLauncher: AgentLauncher
-    @State private var chatLauncher: AgentLauncher
+    /// One app-scoped launcher for Settings-only use ("Test Connection" + backend
+    /// config). Has its own `GenerationGate`, independent of any session's gate
+    /// — a Settings connection test doesn't block an active wiki's ingest.
+    @State private var settingsLauncher: AgentLauncher
     /// App-wide extraction backend resolver (local pdf2md / Claude / Docling
-    /// Serve). Threaded like `agentLauncher` — one instance, owned by the app.
+    /// Serve). Threaded like `settingsLauncher` — one instance, owned by the app,
+    /// shared as a ref into each `WikiSession` (it carries no per-wiki state).
     @State private var extractionCoordinator: ExtractionCoordinator
     @State private var showingLaunchLocationWarning: Bool
     @State private var fileProviderSetupWarning: FileProviderSetupWarning?
@@ -32,8 +37,13 @@ struct WikiFSApp: App {
     /// Built lazily after `bootstrap` (it needs the registered wikis) — see the
     /// `.task` below. The change bridge observes `wikictl`'s Darwin notifications.
     @State private var changeBridge: WikiChangeBridge?
+    /// A class-based holder for the active session so the registry's
+    /// `flushActiveStore` closure (set in `.task`) can always reach the
+    /// *current* session at invocation time. `WikiFSApp` is a struct, so a
+    /// closure can't capture `self` by reference — this holder is the bridge.
+    @State private var sessionRef = SessionRef()
     /// Tracks whether the main window scene is active, so wiki switches (which
-    /// fire `onActiveStoreDidChange`) only kick off the Metal embedding backfill
+    /// fire `activeWikiID` onChange) only kick off the Metal embedding backfill
     /// once the window is up. The launch-time store activation happens during
     /// the first-render `.task`, before the scene is active; backfill for that
     /// case is driven by the `scenePhase == .active` transition instead.
@@ -66,43 +76,33 @@ struct WikiFSApp: App {
         // The v0 legacy import is strictly FIRST-RUN-ONLY. We gate the whole chain
         // on an empty registry: only a genuine first run (no wikis yet) may pull
         // the Phase-1 Application-Support `WikiFS.sqlite` into the container for
-        // `WikiManager.bootstrap()` to adopt as wiki #1. Once ANY wiki exists,
-        // this is skipped — otherwise the WikiManager renames the container file
-        // away on each launch, this layer re-copies it from Application Support,
-        // and the two form an infinite duplication loop.
+        // `WikiRegistryClient.bootstrap()` to adopt as wiki #1. Once ANY wiki
+        // exists, this is skipped — otherwise the registry renames the container
+        // file away on each launch, this layer re-copies it from Application
+        // Support, and the two form an infinite duplication loop.
         if WikiRegistry.load(from: directory).isEmpty {
             DatabaseLocation.migrateFromApplicationSupportIfNeeded()
         }
         containerDirectory = directory
-        // Populate wikis BEFORE handing the manager to @State so SwiftUI's
+        // Populate wikis BEFORE handing the registry to @State so SwiftUI's
         // first render sees a non-empty list.  activateNow: false means
         // activeWikiID stays nil for that render — NSTableView's initial
         // reloadData runs with data but no selection, which is safe.
         // activateMostRecent() in .task sets the selection AFTER the first
         // render; that update is selectRow-only (no concurrent reloadData),
         // avoiding an NSTableView reentrant-delegate warning on macOS 26.
-        let m = WikiManager(containerDirectory: directory)
-        m.bootstrap(activateNow: false)
-        _manager = State(initialValue: m)
+        let r = WikiRegistryClient(containerDirectory: directory)
+        r.bootstrap(activateNow: false)
+        _registry = State(initialValue: r)
         let coordinator = ExtractionCoordinator(
             containerDirectory: directory,
             localExtractorFactory: { LocalPdf2MarkdownExtractor() })
         _extractionCoordinator = State(initialValue: coordinator)
-        // Both launchers share one GenerationGate so ingest and chat-turn
-        // generations coordinate. Phase 2 splits the gate into per-lane queues:
-        // ingest-class runs (ingest, lint, lintPage) serialize on the
-        // `.ingest` lane (limit 1 — one ingest at a time), while interactive
-        // turns (query/chat) run on the `.interactive` lane (limit 3 — chat
-        // stays responsive during an ingest). With CAS + workspaces (W0–W4),
-        // concurrent writes are safe across lanes.
-        let generationGate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
-        _agentLauncher = State(initialValue: {
-            let l = AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator)
-            l.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
-            return l
-        }())
-        _chatLauncher   = State(initialValue: {
-            let l = AgentLauncher(generationGate: generationGate, extractionCoordinator: coordinator)
+        // Settings-only launcher (D5): its own gate, independent of any
+        // session's gate. Used for "Test Connection" + backend config only.
+        let settingsGate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
+        _settingsLauncher = State(initialValue: {
+            let l = AgentLauncher(generationGate: settingsGate, extractionCoordinator: coordinator)
             l.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
             return l
         }())
@@ -134,7 +134,7 @@ struct WikiFSApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(manager: manager, fileProvider: fileProvider, agentLauncher: agentLauncher, chatLauncher: chatLauncher, extractionCoordinator: extractionCoordinator)
+            RootView(session: session, registry: registry, fileProvider: fileProvider)
                 .alert(
                     "Install Self Driving Wiki in Applications",
                     isPresented: $showingLaunchLocationWarning,
@@ -168,77 +168,110 @@ struct WikiFSApp: App {
                 .alert(
                     "Vacuum Orphaned Storage",
                     isPresented: Binding(
-                        get: { manager.pendingVacuumAll != nil },
-                        set: { if !$0 { manager.pendingVacuumAll = nil } }
+                        get: { session?.pendingVacuumAll != nil },
+                        set: { if !$0 { session?.pendingVacuumAll = nil } }
                     ),
-                    presenting: manager.pendingVacuumAll
+                    presenting: session?.pendingVacuumAll
                 ) { report in
                     if report.isEmpty {
                         Button("OK", role: .cancel) {}
                     } else {
                         Button("Cancel", role: .cancel) {}
-                        Button("Vacuum", role: .destructive) { manager.applyVacuumAll() }
+                        Button("Vacuum", role: .destructive) { session?.applyVacuumAll() }
                     }
                 } message: { report in
                     Text(report.alertMessage)
                 }
                 .task {
-                    fileProvider.wire(into: manager)
-                    // Phase 7: reap stale open workspaces older than 24h on launch.
-                    // Cleans up crashed/abandoned ingest runs that never merged.
-                    if let model = manager.activeStore {
-                        _ = try? model.reapStaleWorkspaces(ttl: 86_400)
+                    fileProvider.wire(into: registry)
+                    registry.flushActiveStore = { [sessionRef] in
+                        sessionRef.session?.store.flushPendingSaves()
                     }
                     // First render already loaded the wiki list (reloadData, no
-                    // selection).  Now set the active store: only triggers selectRow
-                    // (not reloadData), so no NSTableView reentrancy on macOS 26.
-                    manager.activateMostRecent()
+                    // selection).  Now set the active wiki id: only triggers
+                    // selectRow (not reloadData), so no NSTableView reentrancy.
+                    registry.activateMostRecent()
                     if let warning = await FileProviderSetupVerifier.verifyAndRepairInstalledProvider() {
                         fileProviderSetupWarning = warning
                         showingFileProviderSetupWarning = true
                     }
                     await fileProvider.migrateDomainsIfNeeded(
-                        wikiIDs: manager.wikis.map(\.id))
-                    await manager.registerAllDomains()
-                    if let active = manager.activeWikiID,
-                       let descriptor = manager.wikis.first(where: { $0.id == active }) {
-                        await fileProvider.activate(id: descriptor.id, displayName: descriptor.displayName)
-                    }
+                        wikiIDs: registry.wikis.map(\.id))
+                    await registry.registerAllDomains()
                     // Stand up the change bridge now that the registry is loaded,
                     // then observe every wiki's `wikictl` Darwin notification.
-                    let bridge = WikiChangeBridge(manager: manager, fileProvider: fileProvider)
+                    let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
                     bridge.refreshObservations()
                     changeBridge = bridge
+                    // The onChange handler (below) fires asynchronously from
+                    // `registry.activateMostRecent()` above — it may have already
+                    // created a session before the bridge existed. Wire it now.
+                    // If it hasn't fired yet (session is nil), the next onChange
+                    // will set the bridge's session itself.
+                    if let session {
+                        bridge.session = session
+                    }
                 }
         }
         .windowToolbarStyle(.unified)
         .commands {
-            VacuumCommands(manager: manager)
+            VacuumCommands(session: session)
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { manager.activeStore?.flushPendingSaves() }
+            if phase != .active { session?.store.flushPendingSaves() }
             isSceneActive = (phase == .active)
-            if phase == .active { Task { await manager.upgradeActiveStoreSearchIndex() } }
+            if phase == .active { Task { await session?.upgradeSearchIndex() } }
         }
         // Keep the bridge's Darwin observations in lockstep with the wiki set:
         // a freshly-created wiki's CLI writes must be heard; a deleted wiki's
         // notification name released.
-        .onChange(of: manager.wikis) { _, _ in
+        .onChange(of: registry.wikis) { _, _ in
             changeBridge?.refreshObservations()
         }
-        // Backfill embeddings for a freshly-selected store, but only once the
-        // window is up. The launch-time activation (in the root `.task`) sets
-        // `activeWikiID` before the scene becomes active, so this is skipped at
-        // launch — the `scenePhase == .active` transition covers that case.
-        .onChange(of: manager.activeWikiID) { _, _ in
-            if isSceneActive { Task { await manager.upgradeActiveStoreSearchIndex() } }
+        // Create / destroy a WikiSession whenever the active wiki id changes.
+        // This is the core of the dissolution: the registry owns the id, this
+        // handler owns the session + the FP bus wiring + the FP domain
+        // activation + the stale-workspace reaping + the search-index
+        // backfill.
+        .onChange(of: registry.activeWikiID) { _, newID in
+            guard let newID,
+                  let descriptor = registry.wikis.first(where: { $0.id == newID }) else {
+                session?.store.flushPendingSaves()
+                session = nil
+                sessionRef.session = nil
+                changeBridge?.session = nil
+                return
+            }
+            // Tear down old session (flushes pending saves).
+            session?.store.flushPendingSaves()
+            // Create new session.
+            let newSession = WikiSession(
+                wikiID: newID,
+                descriptor: descriptor,
+                containerDirectory: containerDirectory,
+                extractionCoordinator: extractionCoordinator,
+                pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path }
+            )
+            session = newSession
+            sessionRef.session = newSession
+            // Wire the bridge.
+            changeBridge?.session = newSession
+            // Wire the File Provider bus subscription + activate domain.
+            fileProvider.subscribeActiveStoreBus(newSession.store.eventBus, wikiID: newID)
+            Task { await fileProvider.activate(id: descriptor.id, displayName: descriptor.displayName) }
+            // Reap stale workspaces (was in .task on launch — now per-session).
+            _ = try? newSession.store.reapStaleWorkspaces(ttl: 86_400)
+            // Backfill embeddings for the freshly-selected wiki. Only when the
+            // scene is already active — the launch-time activation is covered by
+            // the scenePhase == .active transition.
+            if isSceneActive { Task { await newSession.upgradeSearchIndex() } }
         }
 
         // Track C extraction compare: a real, resizable, non-modal window (one
         // per source, opened via `openWindow(value:)` from SourceDetailView).
-        // Shares the main window's `manager` so Set Active propagates live.
+        // Shares the main window's session so Set Active propagates live.
         WindowGroup("Compare Extractions", for: ExtractionCompareContext.self) { $context in
-            ExtractionCompareWindow(manager: manager, context: context)
+            ExtractionCompareWindow(session: session, context: context)
         }
         .defaultSize(width: 1080, height: 740)
         .windowResizability(.contentMinSize)
@@ -249,7 +282,7 @@ struct WikiFSApp: App {
                     .tabItem { Label("About", systemImage: "info.circle") }
                 ZoteroSettingsView(containerDirectory: containerDirectory)
                     .tabItem { Label("Zotero", systemImage: "books.vertical") }
-                ExtractionSettingsView(containerDirectory: containerDirectory, launcher: agentLauncher)
+                ExtractionSettingsView(containerDirectory: containerDirectory, launcher: settingsLauncher)
                     .tabItem { Label("Extraction", systemImage: "doc.viewfinder") }
                 AgentsSettingsView(containerDirectory: containerDirectory)
                     .tabItem { Label("Agents", systemImage: "cpu") }
@@ -258,6 +291,16 @@ struct WikiFSApp: App {
         }
         .windowResizability(.contentMinSize)
     }
+}
+
+/// A class-based holder for the active `WikiSession` so the registry's
+/// `flushActiveStore` closure (set in `.task`) can always reach the current
+/// session at invocation time. `WikiFSApp` is a struct — closures can't capture
+/// it by reference. This holder is the bridge: the app updates `session` on
+/// every wiki switch, and the closure captures the holder, not the app.
+@MainActor
+private final class SessionRef {
+    weak var session: WikiSession?
 }
 
 private struct LaunchLocationWarning {
@@ -284,30 +327,21 @@ private struct LaunchLocationWarning {
 }
 
 extension FileProviderSpike {
-    /// Inject this provider's per-wiki domain side effects into the manager, and
-    /// keep the active store's resource-change bus wired to a debounced
-    /// `signalChange()` after every store swap (select / create / delete).
+    /// Inject this provider's per-wiki domain side effects into the registry, so
+    /// `createWiki` / `deleteWiki` / `renameWiki` can register/remove/rename FP
+    /// domains. The FP bus subscription to the active store is wired separately
+    /// in the `.onChange(of: registry.activeWikiID)` handler (the session is
+    /// created there).
     @MainActor
-    func wire(into manager: WikiManager) {
-        manager.registerDomain = { [weak self] id, name in
+    func wire(into registry: WikiRegistryClient) {
+        registry.registerDomain = { [weak self] id, name in
             await self?.registerDomain(id: id, displayName: name)
         }
-        manager.removeDomain = { [weak self] id in
+        registry.removeDomain = { [weak self] id in
             await self?.removeDomain(id: id)
         }
-        manager.renameDomain = { [weak self] id, name in
+        registry.renameDomain = { [weak self] id, name in
             await self?.renameDomain(id: id, displayName: name)
-        }
-        manager.onActiveStoreDidChange = { [weak self, weak manager] in
-            guard let self, let manager else { return }
-            // Subscribe the FP signaler to the freshly-swapped store's bus (all
-            // kinds/origins, debounced via ChangeCoalescer) so local app writes
-            // refresh the mount — replacing the old `onPageDidChange` hand-fire.
-            self.subscribeActiveStoreBus(manager.activeStore?.eventBus, wikiID: manager.activeWikiID)
-            if let active = manager.activeWikiID,
-               let descriptor = manager.wikis.first(where: { $0.id == active }) {
-                Task { await self.activate(id: descriptor.id, displayName: descriptor.displayName) }
-            }
         }
     }
 }
