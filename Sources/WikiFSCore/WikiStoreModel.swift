@@ -2813,6 +2813,15 @@ public final class WikiStoreModel {
         }
     }
 
+    public func updateChatSummary(chatID: PageID, summary: String) {
+        do {
+            try store.updateChatSummary(chatID: chatID, summary: summary)
+            reloadChats()
+        } catch {
+            DebugLog.store("WikiStoreModel.updateChatSummary failed: \(error)")
+        }
+    }
+
     public func deleteChat(id: PageID) {
         do {
             try store.deleteChat(id: id)

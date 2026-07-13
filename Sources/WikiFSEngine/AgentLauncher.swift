@@ -356,6 +356,12 @@ public final class AgentLauncher {
     /// one-shot runs and whenever no chat has been created for the session (e.g.
     /// `store.startChat` failed). Cleared in `finish()` and `resetRunArtifacts()`.
     @ObservationIgnored private var transcriptSink: (@MainActor ([AgentEvent]) -> Void)?
+    /// Summary sink (issue #411): called once in `finish()` after the final
+    /// `flushTranscript()`, receiving (chatID, summary) so the store can
+    /// persist the one-line model-response summary. `nil` when no chat is
+    /// active (one-shot runs, or the session was never assigned a chatID).
+    /// Cleared in `finish()` and `resetRunArtifacts()` for hygiene.
+    @ObservationIgnored private var summarySink: (@MainActor (PageID, String) -> Void)?
     /// Cursor into `events`: the count already handed to `transcriptSink`. Makes
     /// `flushTranscript()` incremental — each call only sends events appended since
     /// the last flush — and idempotent when nothing new arrived since the last call.
@@ -1551,7 +1557,8 @@ public final class AgentLauncher {
         historySeed: [AgentEvent] = [],
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
-        onTranscript: (@MainActor ([AgentEvent]) -> Void)? = nil
+        onTranscript: (@MainActor ([AgentEvent]) -> Void)? = nil,
+        onSummary: (@MainActor (PageID, String) -> Void)? = nil
     ) async {
         // No gate acquisition here — the interactive session does NOT hold the gate
         // for its lifetime, only per-turn (via sendInteractiveMessage). Two sessions
@@ -1640,6 +1647,7 @@ public final class AgentLauncher {
         // both are per-session callbacks assigned once resetRunArtifacts() has run
         // (which clears any stale sink from a prior run).
         transcriptSink = onTranscript
+        summarySink = onSummary
         // D2: record the chat row this live session is writing to. This is the
         // source-of-truth switch for ChatView — when it matches a tab's
         // chatID, that tab renders `launcher.events` (streaming) instead of the
@@ -1955,6 +1963,41 @@ public final class AgentLauncher {
         return Array(events[persistedCount...])
     }
 
+    /// Extract the first assistant-text sentence from the event stream (issue
+    /// #411). Iterates `events` to find the first `.assistantText(String)` or
+    /// `.result(isError:text:)` with non-empty text, then extracts the first
+    /// sentence via `ChatSummary.summaryExtract(from:maxLength:)`. Returns `nil`
+    /// if no suitable event is found or the extract is empty. Static so the
+    /// event-selection logic is unit-testable without driving a live launcher.
+    nonisolated static func firstSummaryText(from events: [AgentEvent]) -> String? {
+        for event in events {
+            let text: String
+            switch event {
+            case .assistantText(let s):
+                text = s
+            case .result(_, let s):
+                text = s
+            default:
+                continue
+            }
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            let extract = ChatSummary.summaryExtract(from: text)
+            guard !extract.isEmpty else { continue }
+            return extract
+        }
+        return nil
+    }
+
+    /// Generate the one-line chat summary from `events` and hand it to
+    /// `summarySink` (issue #411). Called once in `finish()` after the final
+    /// `flushTranscript()` and before `activeChatID = nil`. No-op when no
+    /// summary can be extracted or no sink/chatID is set.
+    private func generateChatSummary() {
+        guard let extracted = Self.firstSummaryText(from: events),
+              let chatID = activeChatID else { return }
+        summarySink?(PageID(rawValue: chatID), extracted)
+    }
+
     /// Hand the not-yet-persisted tail of `events` to `transcriptSink`, if any, and
     /// advance the cursor. Filtering to persistable events is the model's job
     /// (`WikiStoreModel.appendChatEvents` filters via `AgentEvent.isPersistable`) —
@@ -2039,7 +2082,12 @@ public final class AgentLauncher {
         // Session over: flush any remaining tail (a killed/died session still
         // persists its last events) THEN detach the sink — no further writes.
         flushTranscript()
+        // Generate and persist the one-line chat summary (issue #411). Must
+        // run AFTER flushTranscript() (so the transcript is committed) and
+        // BEFORE activeChatID = nil (so the chat ID is still available).
+        generateChatSummary()
         transcriptSink = nil
+        summarySink = nil
         // D2 flip-timing: clear activeChatID AFTER flushTranscript() has
         // committed the final tail. flushTranscript() is synchronous — it calls
         // transcriptSink?(tail) which runs store.appendChatEvents on the main
@@ -2116,6 +2164,7 @@ public final class AgentLauncher {
         // A reset starts a new run: a stale sink must never receive a new
         // session's events (issue #119).
         transcriptSink = nil
+        summarySink = nil
         persistedEventCount = 0
         firstMessagePrePersisted = false
         firstMessagePreDisplayed = false

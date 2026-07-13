@@ -42,7 +42,7 @@ jobs:
         # ProjectionTreeTests un-skipped after #291 (ReadScope): ~32 s on CI
         # hardware (~2–3x slower), down from 165 s+ per working-set test.
         env:
-          SKIP: 'EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests|SQLiteStatementLifecycleIntegrationTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests'
+          SKIP: 'EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests|SQLiteStatementLifecycleIntegrationTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|ChatSummaryTests'
         run: xcrun swift test --skip "$SKIP" || swift test --skip "$SKIP"
 
   swift-integration:

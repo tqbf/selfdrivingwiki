@@ -332,6 +332,9 @@ public enum AgentOperationRunner {
             // the wrong wiki (issue #119).
             onTranscript: chat.map { chat -> (@MainActor ([AgentEvent]) -> Void) in
                 return { [weak store] events in store?.appendChatEvents(chatID: chat.id, events: events) }
+            },
+            onSummary: chat.map { chat -> (@MainActor (PageID, String) -> Void) in
+                return { [weak store] id, summary in store?.updateChatSummary(chatID: id, summary: summary) }
             }
         )
 
@@ -600,6 +603,9 @@ public enum AgentOperationRunner {
             onUnlock: { store.agentRunEnded() },
             onTranscript: { [weak store] events in
                 store?.appendChatEvents(chatID: chatID, events: events)
+            },
+            onSummary: { [weak store] id, summary in
+                store?.updateChatSummary(chatID: id, summary: summary)
             })
     }
 

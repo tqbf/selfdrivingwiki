@@ -199,7 +199,7 @@ Persistent chats are two tables: `chats` (one row per conversation) and
 swift build          # compile
 swift test           # full suite (run locally before merge)
 # fast tier — what the CI `swift` job runs; skips the slow SQLite integration suites:
-swift test --skip 'EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests|SQLiteStatementLifecycleIntegrationTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests'
+swift test --skip 'EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests|SQLiteStatementLifecycleIntegrationTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|ChatSummaryTests'
 swift test --filter PdfExtractionServiceTests  # pdf extraction only
 ```
 

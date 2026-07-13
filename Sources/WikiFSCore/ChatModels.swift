@@ -26,10 +26,20 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
     public var updatedAt: Date
     /// Persisted message count, for the history list's subtitle.
     public var messageCount: Int
+    /// One-line summary of the model's first response, generated on chat
+    /// completion (issue #411). `nil` for chats that haven't been summarized
+    /// yet (existing chats after migration, or chats whose `finish()` never
+    /// fired). The sidebar shows this when present, falling back to the
+    /// relative timestamp.
+    public var summary: String?
+    /// When the summary was written, for staleness display. `nil` alongside
+    /// `summary`.
+    public var summaryAt: Date?
 
     public init(
         id: PageID, kind: ChatKind, title: String,
-        createdAt: Date, updatedAt: Date, messageCount: Int
+        createdAt: Date, updatedAt: Date, messageCount: Int,
+        summary: String? = nil, summaryAt: Date? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -37,6 +47,8 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.messageCount = messageCount
+        self.summary = summary
+        self.summaryAt = summaryAt
     }
 
     /// Derive a chat title from the first user message: first line, trimmed,
@@ -54,6 +66,37 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
         guard !trimmed.isEmpty else { return "New Chat" }
         guard trimmed.count > maxLength else { return trimmed }
         return trimmed.prefix(maxLength - 1) + "…"
+    }
+
+    /// Derive a one-line summary from the model's first assistant response
+    /// (issue #411). Extracts the first sentence, elided to `maxLength` using
+    /// the same `prefix(maxLength - 1) + "…"` rule as `title(fromFirstMessage:)`.
+    /// Pure so the extraction logic is unit-testable without a live agent.
+    ///
+    /// Unlike `title(fromFirstMessage:)`, this does NOT strip `[[…]]`
+    /// attachment refs — those are prepended to *user* messages, not assistant
+    /// responses. The sentence boundary is `. `, `!\n`, or `?\n`; if none is
+    /// found the full (trimmed) text is used as the extract.
+    public static func summaryExtract(from assistantText: String, maxLength: Int = 60) -> String {
+        let trimmed = assistantText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        // Find the first sentence boundary: period+space, or !/? at end of line.
+        let extract: String
+        if let range = trimmed.range(of: #"\. |[!?]\n"#, options: .regularExpression) {
+            // Include the boundary punctuation in the extract.
+            var end = range.upperBound
+            // If we matched ". ", step back to include the period but not the space.
+            if trimmed[range] == ". " {
+                end = trimmed.index(before: end) // include the period
+            }
+            extract = String(trimmed[..<end])
+        } else {
+            extract = trimmed
+        }
+
+        guard extract.count > maxLength else { return extract }
+        return String(extract.prefix(maxLength - 1)) + "…"
     }
 
     /// Remove leading `[[page:…]]` / `[[source:…]]` / `[[chat:…]]` wikilink
