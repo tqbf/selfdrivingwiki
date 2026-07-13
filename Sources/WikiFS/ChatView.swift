@@ -197,14 +197,6 @@ struct ChatView: View {
                 .labelStyle(.iconOnly)
                 .menuStyle(.borderlessButton)
                 .help("Show activity and transcript internals")
-                // Stop button: visible while generating OR awaiting the generation slot.
-                Button(action: { launcher.stopAgent() }) {
-                    Image(systemName: "stop.circle.fill")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(Color.secondary)
-                }
-                .buttonStyle(.borderless)
-                .help("Stop the current response")
             }
         }
     }
@@ -341,9 +333,11 @@ struct ChatView: View {
             ProviderSelector(launcher: launcher)
             PermissionModeSelector(rawValue: $permissionModeRaw)
             Spacer(minLength: 0)
-            // Paseo: the send button appears only once there's something to
-            // send — an empty composer shows no action glyph at all.
-            if hasDraftText {
+            if showsStopButton {
+                stopButton
+            } else if hasDraftText {
+                // Paseo: the send button appears only once there's something to
+                // send — an empty composer shows no action glyph at all.
                 sendButton(active: sendActive)
             }
         }
@@ -510,6 +504,28 @@ struct ChatView: View {
         }
         .shadow(color: Color.black.opacity(0.06), radius: 18, x: 0, y: 8)
         .frame(maxWidth: .infinity)
+    }
+
+    /// True while the agent is actively generating or queued for the generation
+    /// slot — the stop button replaces the send button in the composer toolbar.
+    private var showsStopButton: Bool {
+        (launcher.isGenerating || launcher.isAwaitingGenerationSlot)
+            && launcher.runningKind == .query
+    }
+
+    /// The stop button shown in the composer toolbar while the agent is
+    /// responding. Sits in the same position as the send button (trailing edge
+    /// of the composer's bottom toolbar row).
+    private var stopButton: some View {
+        Button(action: { launcher.stopAgent() }) {
+            Image(systemName: "stop.circle.fill")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: ChatMetrics.sendButtonSize, height: ChatMetrics.sendButtonSize)
+                .background(Color.red.opacity(0.85), in: Circle())
+        }
+        .buttonStyle(.borderless)
+        .help("Stop the current response")
     }
 
     /// The trailing send button in the composer's bottom toolbar — a green
