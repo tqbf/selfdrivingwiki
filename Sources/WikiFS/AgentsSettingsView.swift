@@ -236,7 +236,6 @@ struct AgentsSettingsView: View {
         let blank = AgentProvider(
             id: id,
             label: "Custom Agent",
-            backend: .acp,
             command: [],
             env: [:],
             enabled: true,
@@ -569,7 +568,6 @@ private struct ProviderEditorView: View {
         let updated = AgentProvider(
             id: originalID,
             label: label.trimmingCharacters(in: .whitespaces),
-            backend: .acp,
             command: command.isEmpty ? nil : command,
             env: env,
             enabled: true,

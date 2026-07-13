@@ -56,22 +56,22 @@ public protocol AgentBackend: Sendable {
 
 /// Abstract per-mode/per-op configuration; each backend interprets it.
 ///
-/// The launcher resolves app-level concerns (scratch dir, sandbox, bundled
-/// `wikictl` path, log layout, agent command config) and passes them in here;
-/// the backend interprets the rest. For the CLI backend, `cli` carries the
-/// `OperationCommand`-building inputs. A future Polytoken/ACP backend ignores
-/// `cli` and reads `model`/`providerHints` instead.
+/// The launcher resolves app-level concerns (scratch dir, bundled `wikictl`
+/// path, log layout) and passes them in here; `ACPBackend` reads `model`/
+/// `providerHints` for routing and `cli` for the env vars it needs to spawn
+/// (`WIKI_DB`/`WIKI_ROOT`/`WIKICTL`/`PATH`) — see `CLIProfile`.
 public struct BackendProfile: Sendable {
     /// The model alias/name to pass to the agent (backend-interpreted).
     public var model: String?
     /// Backend-specific hints (e.g. provider routing). Opaque to the launcher.
     public var providerHints: [String: String]
-    /// The per-run writable scratch directory (cwd for the CLI backend).
+    /// The per-run writable scratch directory (session `cwd`).
     public var scratchDirectory: URL?
     /// Gates Write/Edit tools — read-only interactive sessions pass `false`.
     public var isReadOnly: Bool
-    /// CLI-backend-specific context. nil for non-CLI backends. The launcher
-    /// populates this for `ClaudeCLIBackend`; other backends ignore it.
+    /// The env-var context `ACPBackend.start` reads to spawn the agent with
+    /// `WIKI_DB`/`WIKI_ROOT`/`WIKICTL` visible. nil for sessions that don't
+    /// need them (none today — every launcher call site sets it).
     public var cli: CLIProfile?
 
     public init(
@@ -89,10 +89,9 @@ public struct BackendProfile: Sendable {
     }
 }
 
-/// The inputs `ClaudeCLIBackend` needs to assemble an `OperationCommand`.
-/// Carried inside `BackendProfile.cli` so the launcher can build the profile
-/// without knowing CLI flag details — it just forwards the resolved app-level
-/// values; the backend owns `OperationCommand.build`.
+/// The env-var context `ACPBackend.start` needs when spawning the agent
+/// subprocess (mirrors what the deleted CLI backend used to export). Carried
+/// inside `BackendProfile.cli`.
 public struct CLIProfile: Sendable {
     /// The staged operation (carries its own self-sufficient prompt + agents).
     public var operation: WikiOperation
@@ -102,12 +101,6 @@ public struct CLIProfile: Sendable {
     public var wikiID: String
     /// The directory holding the embedded `wikictl` binary (prepended to PATH).
     public var wikictlDirectory: String
-    /// The PATH-resolved executable path (preflight already done by the launcher).
-    public var resolvedExecutable: String
-    /// The loaded agent command config (prefix args, model override, extra env).
-    public var command: AgentCommandConfig
-    /// The resolved seatbelt sandbox invocation, or nil for un-sandboxed.
-    public var sandbox: SandboxProfile.SandboxInvocation?
     /// Raw stdout chunk callback (fires on the pipe's background queue). The
     /// launcher uses this to mirror `rawTranscript` and write `run.jsonl`.
     /// nil when raw mirroring is not needed (e.g. no log files opened).
@@ -122,9 +115,6 @@ public struct CLIProfile: Sendable {
         wikiRoot: String,
         wikiID: String,
         wikictlDirectory: String,
-        resolvedExecutable: String,
-        command: AgentCommandConfig,
-        sandbox: SandboxProfile.SandboxInvocation? = nil,
         onStdoutChunk: (@Sendable (String) -> Void)? = nil,
         onStderrChunk: (@Sendable (String) -> Void)? = nil
     ) {
@@ -132,9 +122,6 @@ public struct CLIProfile: Sendable {
         self.wikiRoot = wikiRoot
         self.wikiID = wikiID
         self.wikictlDirectory = wikictlDirectory
-        self.resolvedExecutable = resolvedExecutable
-        self.command = command
-        self.sandbox = sandbox
         self.onStdoutChunk = onStdoutChunk
         self.onStderrChunk = onStderrChunk
     }

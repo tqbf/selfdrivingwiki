@@ -135,50 +135,35 @@ public final class AgentLauncher {
         PathPreflight.resolveOnLoginShell(executable: "claude")
     }
 
-    /// The App Group container directory for loading `AgentCommandConfig`. When
-    /// nil (the default), resolved via `DatabaseLocation.appGroupContainerDirectory()`
-    /// at spawn time. Injected for tests; existing `AgentLauncher()` call sites are
-    /// unchanged.
+    /// The App Group container directory the provider config is loaded from.
+    /// When nil (the default), resolved via
+    /// `DatabaseLocation.appGroupContainerDirectory()` at spawn time. Injected
+    /// for tests; existing `AgentLauncher()` call sites are unchanged.
     var containerDirectory: URL? = nil
 
     /// The agent backend. Constructed PER-SESSION at spawn time from the
-    /// persisted `useACPBackend` pref + the chat's permission policy (slice 2 of
-    /// `plans/acp-backend-and-permissions.md`), via `AgentBackendFactory`.
-    /// Default `ClaudeCLIBackend` (today's Claude-CLI stream-json code, default
-    /// OFF) so existing behavior is unchanged until the opt-in pref is ON.
-    /// Injectable so tests can substitute a stub backend.
-    @ObservationIgnored var backend: AgentBackend = ClaudeCLIBackend()
-
-    /// Opt-in seam: whether the ACP backend is enabled (`@AppStorage("useACPBackend")`,
-    /// default `false`). Read fresh at spawn time (same as `AgentCommandConfig`),
-    /// so Settings changes apply on the next session without a restart. Injectable
-    /// for tests; the app reads `UserDefaults` (the same store `@AppStorage`
-    /// writes, so a Settings toggle is immediately visible).
-    @ObservationIgnored var resolveUseACPBackend: () -> Bool = {
-        UserDefaults.standard.bool(forKey: AgentLauncher.useACPBackendKey)
-    }
+    /// selected provider's permission policy, via `AgentBackendFactory`. The app
+    /// is ACP-only, so this is always an `ACPBackend`. Injectable so tests can
+    /// substitute a stub backend.
+    @ObservationIgnored var backend: AgentBackend = ACPBackend()
 
     /// The chat's permission mode (`@AppStorage("agentPermissionMode")`, default
     /// `.bypass`). v1: app-wide persisted. Read at spawn time so it bakes into
-    /// the `ACPBackend`'s `PermissionPolicy`. Has NO effect when the backend is
-    /// the CLI (no permission channel).
+    /// the `ACPBackend`'s `PermissionPolicy`.
     @ObservationIgnored var resolvePermissionMode: () -> PermissionPolicy = {
         let raw = UserDefaults.standard.string(forKey: AgentLauncher.permissionModeKey) ?? ""
         return PermissionPolicy(rawValue: raw) ?? .bypass
     }
 
-    /// The Keychain-backed store for the ACP agent's API key (slice 3). Injectable
-    /// so tests can substitute an in-memory store. Only read when `useACPBackend`
-    /// is ON; the key NEVER touches UserDefaults or a plaintext file.
+    /// The Keychain-backed store for the ACP agent's API key. Injectable so
+    /// tests can substitute an in-memory store. The key NEVER touches
+    /// UserDefaults or a plaintext file.
     @ObservationIgnored var acpCredentialStore: any ACPCredentialStore = KeychainACPCredentialStore()
 
     /// Provider selection (#324): resolves the configured providers from
     /// `agent-providers.json` (App Group container) and returns the provider the
-    /// launcher should use this session. Replaces the slice-3 `useACPBackend`
-    /// bool + single `ACPAgentConfig` with a provider list. **Default = Claude**
-    /// (`loadOrSeed` seeds Claude as default + enabled), so existing users see
-    /// zero behavior change. Read fresh at spawn time so Settings changes apply
-    /// on the next session. Injectable for tests.
+    /// launcher should use this session. Read fresh at spawn time so Settings
+    /// changes apply on the next session. Injectable for tests.
     @ObservationIgnored var resolveSelectedProvider: () -> AgentProvider = {
         let dir = (try? DatabaseLocation.appGroupContainerDirectory())
             ?? FileManager.default.temporaryDirectory
@@ -294,8 +279,8 @@ public final class AgentLauncher {
     /// (one actor hop + one secrets-free file write) and non-blocking: runs as
     /// a detached `@MainActor` Task so it never delays the first turn.
     public func captureAndCacheModels(provider: AgentProvider, session: SessionHandle) {
-        guard provider.backend == .acp, let acp = backend as? ACPBackend else {
-            DebugLog.agent("captureAndCacheModels: skip (provider=\(provider.id) backend=\(provider.backend) not ACP)") // TEMP DEBUG
+        guard let acp = backend as? ACPBackend else {
+            DebugLog.agent("captureAndCacheModels: skip (provider=\(provider.id) backend not ACP)") // TEMP DEBUG
             return
         }
         DebugLog.agent("captureAndCacheModels: enter provider=\(provider.id) session=\(session.id)") // TEMP DEBUG
@@ -345,8 +330,7 @@ public final class AgentLauncher {
     /// `setGenerating(false)` / `finish()` / `resetRunArtifacts()`.
     @ObservationIgnored private var pendingPollTask: Task<Void, Never>?
 
-    /// UserDefaults keys shared with the `@AppStorage` bindings in Settings + ChatView.
-    public static let useACPBackendKey = "useACPBackend"
+    /// UserDefaults key shared with the `@AppStorage` bindings in Settings + ChatView.
     public static let permissionModeKey = "agentPermissionMode"
     /// The active session handle (nil when no session is live). Replaces the
     /// old `process: Process?` — the launcher never touches a `Process` directly.
@@ -877,60 +861,31 @@ public final class AgentLauncher {
         // does not increment the run counter.
         resetRunArtifacts()
 
-        // Load agent command config fresh at spawn time so Settings changes apply
-        // without a restart.
+        // Resolved fresh at spawn time so Settings changes apply without a
+        // restart.
         let dir = containerDirectory ?? (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
-        let agentConfig = AgentCommandConfig.load(from: dir)
 
-        // Slice 2/3: select the backend per the opt-in pref + the chat's permission
-        // policy (default OFF = ClaudeCLI; default yolo). Constructed HERE so both
-        // `start` and the per-turn stream consumer capture the same backend. The
-        // ACP agent spawn (path + args + key) is threaded into providerHints below.
+        // The chat's permission policy (default yolo). Constructed HERE so both
+        // `start` and the per-turn stream consumer capture the same backend.
         let policy: PermissionPolicy = resolvePermissionMode()
 
-        // #324: provider selection replaces the slice-3 `useACPBackend` bool +
-        // single `ACPAgentConfig`. The launcher reads `agent-providers.json`,
-        // picks the default (or selected) provider, and drives the matching
-        // backend. **Default = Claude (`claudeCLI`) → `ClaudeCLIBackend`**, so
-        // existing users see zero behavior change. A `.acp` provider resolves
-        // its PATH command + Keychain key into providerHints.
+        // #324: the launcher reads `agent-providers.json`, picks the default
+        // (or selected) provider, and resolves its PATH command + Keychain key
+        // into providerHints. The app is ACP-only.
         let provider = resolveSelectedProvider()
-        let useACP = provider.backend == .acp
-        self.backend = AgentBackendFactory.makeBackend(provider: provider, policy: policy)
+        self.backend = AgentBackendFactory.makeBackend(policy: policy)
 
-        // ACP: resolve the provider's spawn command (PATH-resolved because the
+        // Resolve the provider's spawn command (PATH-resolved because the
         // swift-acp SDK's launch() does NOT do PATH lookup) + the Keychain-backed
-        // API key (keyed by provider id). CLI: the provider has no command —
-        // `claude` is resolved below from `AgentCommandConfig`.
-        var resolvedACPCommand: [String] = []
-        var acpAPIKey: String?
-        if useACP {
-            guard let spawn = resolveACPProviderSpawn(provider) else {
-                isRunning = false
-                releaseGenerationSlot()
-                return
-            }
-            resolvedACPCommand = spawn.command
-            acpAPIKey = spawn.apiKey
+        // API key (keyed by provider id).
+        guard let spawn = resolveACPProviderSpawn(provider) else {
+            isRunning = false
+            releaseGenerationSlot()
+            return
         }
-
-        // Resolve the executable we'll actually spawn. For `.acp` providers the
-        // spawn command is already resolved above; for `.claudeCLI` we resolve
-        // `claude` from `AgentCommandConfig` (the CLI backend ignores providerHints).
-        let resolvedPath: String
-        if useACP, let exe = resolvedACPCommand.first {
-            resolvedPath = exe
-        } else {
-            switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
-            case .found(let path):
-                resolvedPath = path
-            case .missing(let reason):
-                preflightError = reason
-                isRunning = false
-                releaseGenerationSlot()
-                return
-            }
-        }
+        let resolvedACPCommand = spawn.command
+        let acpAPIKey = spawn.apiKey
+        let resolvedPath = resolvedACPCommand[0]
         preflightError = nil
 
         guard let scratch = makeScratchDirectory() else {
@@ -978,38 +933,31 @@ public final class AgentLauncher {
         onLock()
         onUnlockHandler = onUnlock
 
-        // Multi-phase ACP ingest: for large sources over ACP, sub-agents (the
-        // Sonnet `source-reader` digester) don't work — ACP has no custom agent
-        // types and background agents can't complete within a single turn. Replace
+        // Multi-phase ACP ingest: for large sources, sub-agents (the Sonnet
+        // `source-reader` digester) don't work — ACP has no custom agent types
+        // and background agents can't complete within a single turn. Replace
         // the one-shot spawn with sequential single-turn sessions: planner →
-        // executors → finalizer. Tiny sources (< 4 KB) and all CLI runs use the
-        // existing single-session path below.
-        if useACP, case .ingest(_, _, _, let plan) = operation, plan.isLargeSource {
+        // executors → finalizer. Tiny sources (< 4 KB) use the existing
+        // single-session path below.
+        if case .ingest(_, _, _, let plan) = operation, plan.isLargeSource {
             await runACPIngestPlannerExecutors(
                 scratch: scratch,
                 operation: operation,
                 wikiRoot: wikiRoot,
                 wikiID: wikiID,
                 systemPrompt: systemPrompt,
-                wikictlDirectory: wikictlDirectory,
-                resolvedPath: resolvedPath,
-                agentConfig: agentConfig,
-                sandbox: sandbox
+                wikictlDirectory: wikictlDirectory
             )
             return
         }
 
         // Build the backend profile. The launcher resolves app-level concerns
-        // (scratch dir, sandbox, config, executable path); the backend owns
-        // OperationCommand assembly + Process spawn + parse/encode.
+        // (scratch dir, wikictl env); `ACPBackend` owns the spawn + session.
         let cli = CLIProfile(
             operation: operation,
             wikiRoot: wikiRoot,
             wikiID: wikiID,
             wikictlDirectory: wikictlDirectory,
-            resolvedExecutable: resolvedPath,
-            command: agentConfig,
-            sandbox: sandbox,
             onStdoutChunk: { [weak self] chunk in
                 Task { @MainActor [weak self] in self?.ingestRawStdout(chunk) }
             },
@@ -1024,9 +972,9 @@ public final class AgentLauncher {
         // Phase 7: inject the workspace ID as a per-spawn env var (NOT
         // process-global setenv — which would leak to chat-edit agents spawned
         // mid-ingest via the interactive lane). The `env.` prefix is the
-        // established convention: ACPBackend.start already expands env.* keys
-        // into the child process environment, and ClaudeCLIBackend.start does
-        // the same (see below). Non-workspace runs pass nil → no injection.
+        // established convention: `ACPBackend.start` expands env.* keys into
+        // the child process environment. Non-workspace runs pass nil → no
+        // injection.
         if let wsID = workspaceID {
             providerHints["env.WIKI_WORKSPACE"] = wsID
         }
@@ -1065,17 +1013,12 @@ public final class AgentLauncher {
             let backend = self.backend
             let generationGateReleasesPerTurn = Self.releasesGenerationSlotPerTurn(
                 isInteractiveSession: isInteractiveSession)
-            // For ACP, the prompt is sent via `send()` (not baked into the CLI
-            // argv like the CLI backend). For CLI, the prompt is already in the
-            // `-p` flag so an empty string is correct (just drains stdout).
-            // For ACP, the sub-agent plan (source-reader digester agents) doesn't
-            // work — ACP has no custom agent types and background agents can't
-            // complete within a single turn. Append an instruction to do
-            // everything directly.
-            var promptText = useACP ? operation.prompt(wikiRoot: wikiRoot) : ""
-            if useACP {
-                promptText += "\n\nIMPORTANT: Do NOT dispatch sub-agents, background tasks, or async agents. Do NOT use sleep or ScheduleWakeup. Read all sources, process them, and write all wiki pages directly in THIS session — everything must complete before you stop."
-            }
+            // The prompt is sent via `send()`. The sub-agent plan (source-reader
+            // digester agents) doesn't work over ACP — no custom agent types,
+            // and background agents can't complete within a single turn. Append
+            // an instruction to do everything directly.
+            var promptText = operation.prompt(wikiRoot: wikiRoot)
+            promptText += "\n\nIMPORTANT: Do NOT dispatch sub-agents, background tasks, or async agents. Do NOT use sleep or ScheduleWakeup. Read all sources, process them, and write all wiki pages directly in THIS session — everything must complete before you stop."
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let stream = await backend.send(
@@ -1159,7 +1102,7 @@ public final class AgentLauncher {
         if let cached = cache[cacheKey] {
             backend = cached
         } else {
-            backend = AgentBackendFactory.makeBackend(provider: provider, policy: policy)
+            backend = AgentBackendFactory.makeBackend(policy: policy)
             cache[cacheKey] = backend
         }
         let providerHints = AgentBackendFactory.providerHints(
@@ -1176,10 +1119,7 @@ public final class AgentLauncher {
         wikiRoot: String,
         wikiID: String,
         systemPrompt: String,
-        wikictlDirectory: String,
-        resolvedPath: String,
-        agentConfig: AgentCommandConfig,
-        sandbox: SandboxProfile.SandboxInvocation?
+        wikictlDirectory: String
     ) async {
         // Safety net: if any code path exits without calling finish() (e.g. an
         // unexpected throw from a future adding await between phases), ensure the
@@ -1213,19 +1153,14 @@ public final class AgentLauncher {
         let policy: PermissionPolicy = resolvePermissionMode()
         var stageBackendCache: [String: AgentBackend] = [:]
 
-        // Build a shared CLI profile closure (sets env vars the ACP backend reads:
-        // WIKI_DB, WIKI_ROOT, WIKICTL, PATH). The ACP backend ignores
-        // resolvedExecutable/command/sandbox (those are CLI-backend-only), but
-        // the env vars are critical.
+        // Build a shared CLI profile closure (sets the env vars `ACPBackend`
+        // reads: WIKI_DB, WIKI_ROOT, WIKICTL, PATH).
         let makeCLIProfile = { (op: WikiOperation) in
             CLIProfile(
                 operation: op,
                 wikiRoot: wikiRoot,
                 wikiID: wikiID,
-                wikictlDirectory: wikictlDirectory,
-                resolvedExecutable: resolvedPath,
-                command: agentConfig,
-                sandbox: sandbox)
+                wikictlDirectory: wikictlDirectory)
         }
 
         // --- Phase 1: Planner ---
@@ -1486,7 +1421,7 @@ public final class AgentLauncher {
         if exe == "bun", let bundled = Self.bundledHelperPath("bun") {
             resolvedCommand = [bundled] + Array(command.dropFirst())
         } else {
-            switch PathPreflight.resolveOnLoginShell(executable: AgentCommandConfig.expandTilde(exe)) {
+            switch PathPreflight.resolveOnLoginShell(executable: ShellArgv.expandTilde(exe)) {
             case .found(let path):
                 resolvedCommand = [path] + Array(command.dropFirst())
             case .missing(let reason):
@@ -1637,66 +1572,30 @@ public final class AgentLauncher {
         // the user message the model already seeded at chat creation.
         self.firstMessagePrePersisted = firstMessagePrePersisted
 
-        // Load agent command config fresh at spawn time.
+        // Resolved fresh at spawn time.
         let dir = containerDirectory ?? (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
-        let agentConfig = AgentCommandConfig.load(from: dir)
 
-        // Slice 2/3: select the backend per the chat's permission policy (default
-        // yolo). The ACP agent spawn is threaded into providerHints below.
+        // The chat's permission policy (default yolo). The ACP agent spawn is
+        // threaded into providerHints below.
         let policy: PermissionPolicy = resolvePermissionMode()
         DebugLog.agent("startInteractiveQuery: permissionPolicy=\(policy)") // TEMP DEBUG
 
-        // #324: provider selection replaces the slice-3 `useACPBackend` bool +
-        // single `ACPAgentConfig`. **Default = Claude** → zero behavior change.
+        // #324: the launcher reads `agent-providers.json` and picks the
+        // default (or selected) provider. The app is ACP-only.
         let provider = resolveSelectedProvider()
-        let useACP = provider.backend == .acp
         let resolvedSelectedModel = providersConfig().selectedModelId(forProvider: provider.id)
-        DebugLog.agent("startInteractiveQuery: provider=\(provider.id) backend=\(provider.backend) useACP=\(useACP) selectedModel=\(resolvedSelectedModel ?? "nil")") // TEMP DEBUG
-        self.backend = AgentBackendFactory.makeBackend(provider: provider, policy: policy)
+        DebugLog.agent("startInteractiveQuery: provider=\(provider.id) selectedModel=\(resolvedSelectedModel ?? "nil")") // TEMP DEBUG
+        self.backend = AgentBackendFactory.makeBackend(policy: policy)
 
-        // ACP: resolve the provider's spawn command (PATH-resolved) + the
-        // Keychain-backed API key (keyed by provider id). CLI: no command.
-        var resolvedACPCommand: [String] = []
-        var acpAPIKey: String?
-        if useACP, let command = provider.command, let exe = command.first {
-            // For "bun", prefer the binary bundled in Contents/Helpers so the app
-            // works without a system-wide bun install. Fall back to PATH resolution.
-            // NOTE: Bundle.url(forAuxiliaryExecutable:) does NOT search
-            // Contents/Helpers (only MacOS + Resources), so we check manually.
-            if exe == "bun",
-               let bundled = Self.bundledHelperPath("bun") {
-                DebugLog.agent("startInteractiveQuery: using bundled bun at \(bundled)") // TEMP DEBUG
-                resolvedACPCommand = [bundled] + Array(command.dropFirst())
-            } else {
-                switch PathPreflight.resolveOnLoginShell(executable: AgentCommandConfig.expandTilde(exe)) {
-                case .found(let path):
-                    resolvedACPCommand = [path] + Array(command.dropFirst())
-                case .missing(let reason):
-                    DebugLog.agent("startInteractiveQuery: ACP exe missing — \(reason)") // TEMP DEBUG
-                    preflightError = reason
-                    return
-                }
-            }
-            acpAPIKey = acpCredentialStore.apiKey(forProvider: provider.id)
-            DebugLog.agent("startInteractiveQuery: ACP apiKey set=\(acpAPIKey != nil)") // TEMP DEBUG
+        // Resolve the provider's spawn command (PATH-resolved) + the
+        // Keychain-backed API key (keyed by provider id).
+        guard let spawn = resolveACPProviderSpawn(provider) else {
+            DebugLog.agent("startInteractiveQuery: ACP exe missing — \(preflightError ?? "?")") // TEMP DEBUG
+            return
         }
-
-        // Resolve the executable we'll actually spawn. For `.acp` providers the
-        // spawn command is already resolved above; for `.claudeCLI` we resolve
-        // `claude` from `AgentCommandConfig`.
-        let resolvedPath: String
-        if useACP, let exe = resolvedACPCommand.first {
-            resolvedPath = exe
-        } else {
-            switch PathPreflight.resolveOnLoginShell(executable: agentConfig.resolvedExecutable()) {
-            case .found(let path):
-                resolvedPath = path
-            case .missing(let reason):
-                DebugLog.agent("startInteractiveQuery: CLI exe missing — \(reason)") // TEMP DEBUG
-                preflightError = reason
-                return
-            }
-        }
+        let resolvedACPCommand = spawn.command
+        let acpAPIKey = spawn.apiKey
+        let resolvedPath = resolvedACPCommand[0]
         preflightError = nil
 
         guard let scratch = makeScratchDirectory() else {
@@ -1762,15 +1661,12 @@ public final class AgentLauncher {
         // acquired). If we set it here, `sendInteractiveMessage`'s gate-guard would
         // see `isGenerating == true` and bail — claude would block on stdin forever.
 
-        // Build the backend profile (the backend owns OperationCommand assembly).
+        // Build the backend profile (`ACPBackend` owns the spawn + session).
         let cli = CLIProfile(
             operation: operation,
             wikiRoot: wikiRoot,
             wikiID: wikiID,
             wikictlDirectory: wikictlDirectory,
-            resolvedExecutable: resolvedPath,
-            command: agentConfig,
-            sandbox: sandbox,
             onStdoutChunk: { [weak self] chunk in
                 Task { @MainActor [weak self] in self?.ingestRawStdout(chunk) }
             },
@@ -1789,7 +1685,7 @@ public final class AgentLauncher {
         DebugLog.agent("startInteractiveQuery: profile built providerHints keys=\(profile.providerHints.keys.sorted()) scratch=\(scratch.lastPathComponent)") // TEMP DEBUG
 
         do {
-            DebugLog.agent("startInteractiveQuery: backend.start provider=\(provider.id) backend=\(provider.backend) exe=\(resolvedPath) args=\(provider.command ?? []) useACP=\(useACP)") // TEMP DEBUG (existed; re-tagged)
+            DebugLog.agent("startInteractiveQuery: backend.start provider=\(provider.id) exe=\(resolvedPath) args=\(provider.command ?? [])") // TEMP DEBUG (existed; re-tagged)
             let runToken = UUID()
             let session = try await backend.start(
                 profile: profile,
@@ -1812,9 +1708,9 @@ public final class AgentLauncher {
             isRunning = true
             DebugLog.agent("startInteractiveQuery: spawn-commit session=\(session.id) isInteractive=true") // TEMP DEBUG
             // #329: cache the agent's advertised models per-provider for the
-            // picker (ACP only; the CLI backend has no model discovery). Done
-            // here (after spawn commit) so the session record is populated; it
-            // runs as a detached task and never blocks the first turn.
+            // picker. Done here (after spawn commit) so the session record is
+            // populated; it runs as a detached task and never blocks the first
+            // turn.
             captureAndCacheModels(provider: provider, session: session)
             captureProcessID(session: session)
             DebugLog.agent("startInteractiveQuery: spawned") // TEMP DEBUG (existed; re-tagged)
@@ -2351,13 +2247,14 @@ public final class AgentLauncher {
         return path
     }
 
-    /// Create the `scratch/.tmp` directory that `OperationCommand.applySandbox`
-    /// points `TMPDIR` at for sandboxed spawns. Must be called at each spawn site
-    /// whenever a non-nil sandbox is applied so the directory exists before the
-    /// child process tries to write into it. Best-effort: failure (e.g. scratch
-    /// unwritable) is surfaced later by the child's own write errors.
+    /// Create the `scratch/.tmp` directory a sandboxed spawn would point
+    /// `TMPDIR` at. Must be called at each spawn site whenever a non-nil
+    /// sandbox is resolved so the directory exists before the child process
+    /// tries to write into it. Best-effort: failure (e.g. scratch unwritable)
+    /// is surfaced later by the child's own write errors.
+    private static let tmpRelocationLeaf = ".tmp"
     private func createSandboxTmpDir(in scratch: URL) {
-        let tmp = scratch.appendingPathComponent(OperationCommand.tmpRelocationLeaf, isDirectory: true)
+        let tmp = scratch.appendingPathComponent(Self.tmpRelocationLeaf, isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
     }
 }

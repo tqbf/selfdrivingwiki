@@ -16,27 +16,13 @@ import ACPModel
 
     // MARK: - Backend selection (AgentBackendFactory)
 
-    /// Default-OFF: the factory returns the Claude CLI backend (today's
-    /// behavior, unchanged for existing users).
-    @Test func factorySelectsClaudeCLIWhenOff() {
-        let backend = AgentBackendFactory.makeBackend(useACPBackend: false, policy: .bypass)
-        #expect(backend is ClaudeCLIBackend)
-    }
-
-    /// Opt-in ON: the factory returns the ACP backend.
-    @Test func factorySelectsACPWhenOn() {
-        let backend = AgentBackendFactory.makeBackend(useACPBackend: true, policy: .bypass)
+    /// ACP-only (Phase 4, `plans/acp-multi-provider.md`): the factory always
+    /// returns the ACP backend, which conforms to `PermissionResolving` (the
+    /// capability seam the launcher downcasts to surface pending requests).
+    @Test func factorySelectsACP() {
+        let backend = AgentBackendFactory.makeBackend(policy: .bypass)
         #expect(backend is ACPBackend)
-    }
-
-    /// ACP backend also conforms to `PermissionResolving` (the capability seam
-    /// the launcher downcasts to surface pending requests); the CLI backend does
-    /// NOT (it has no permission channel).
-    @Test func acpBackendExposesPermissionCapability() {
-        let acp = AgentBackendFactory.makeBackend(useACPBackend: true, policy: .bypass)
-        let cli = AgentBackendFactory.makeBackend(useACPBackend: false, policy: .bypass)
-        #expect(acp is PermissionResolving)
-        #expect(!(cli is PermissionResolving))
+        #expect(backend is PermissionResolving)
     }
 
     /// Permission policy threading: the factory threads `alwaysAsk` into the ACP
@@ -44,52 +30,43 @@ import ACPModel
     /// construction doesn't crash and yields an ACP backend for both policies
     /// (the policy's effect on the delegate is covered by `ACPBackendTests`).
     @Test func factoryThreadsBothPolicies() {
-        let yolo = AgentBackendFactory.makeBackend(useACPBackend: true, policy: .bypass)
-        let alwaysAsk = AgentBackendFactory.makeBackend(useACPBackend: true, policy: .alwaysAsk)
+        let yolo = AgentBackendFactory.makeBackend(policy: .bypass)
+        let alwaysAsk = AgentBackendFactory.makeBackend(policy: .alwaysAsk)
         #expect(yolo is ACPBackend)
         #expect(alwaysAsk is ACPBackend)
     }
 
-    // MARK: - ACP provider hints (ACPAgentConfig → profile)
+    // MARK: - ACP provider hints (AgentProvider → profile)
 
-    /// The resolved executable path becomes `acpAgentPath`; prefix args become
-    /// `acpAgentArgs`. Slice 3: sourced from the DEDICATED ACP config (the key
-    /// goes through the Keychain store, tested separately).
-    @Test func acpProviderHintsFromConfig() {
-        let hints = AgentBackendFactory.acpProviderHints(
-            resolvedExecutable: "/usr/local/bin/npx",
-            prefixArguments: "--yes @agentclientprotocol/claude-agent-acp",
+    /// The resolved executable path becomes `acpAgentPath`; the rest of the
+    /// argv becomes `acpAgentArgs` (joined; the key goes through the Keychain
+    /// store, tested separately).
+    @Test func providerHintsFromResolvedCommand() {
+        let provider = AgentProvider(id: "claude-acp", label: "Claude")
+        let hints = AgentBackendFactory.providerHints(
+            provider: provider,
+            resolvedCommand: ["/usr/local/bin/npx", "--yes", "@agentclientprotocol/claude-agent-acp"],
             apiKey: nil)
         #expect(hints["acpAgentPath"] == "/usr/local/bin/npx")
         #expect(hints["acpAgentArgs"] == "--yes @agentclientprotocol/claude-agent-acp")
     }
 
-    /// Empty inputs yield an empty dict (→ `ACPBackend` throws
-    /// `noAgentConfigured`). The opt-in feature requires a configured agent.
-    @Test func acpProviderHintsEmptyWhenUnconfigured() {
-        let hints = AgentBackendFactory.acpProviderHints(
-            resolvedExecutable: "", prefixArguments: "", apiKey: nil)
+    /// An empty resolved command yields an empty dict (→ `ACPBackend` throws
+    /// `noAgentConfigured`).
+    @Test func providerHintsEmptyWhenUnconfigured() {
+        let provider = AgentProvider(id: "x", label: "X")
+        let hints = AgentBackendFactory.providerHints(
+            provider: provider, resolvedCommand: [], apiKey: nil)
         #expect(hints.isEmpty)
     }
 
-    /// Only the path set (no prefix args) → just `acpAgentPath`.
-    @Test func acpProviderHintsPathOnly() {
-        let hints = AgentBackendFactory.acpProviderHints(
-            resolvedExecutable: "/bin/agent", prefixArguments: "", apiKey: nil)
+    /// Only the executable (no args) → just `acpAgentPath`.
+    @Test func providerHintsPathOnly() {
+        let provider = AgentProvider(id: "x", label: "X")
+        let hints = AgentBackendFactory.providerHints(
+            provider: provider, resolvedCommand: ["/bin/agent"], apiKey: nil)
         #expect(hints.count == 1)
         #expect(hints["acpAgentPath"] == "/bin/agent")
-    }
-
-    /// The args string is tokenized shell-aware at spawn time (in
-    /// `ACPBackend.resolveSpawnConfig`), NOT by the factory. The factory passes
-    /// the raw string through so a quoted multi-token arg like `--yes @org/agent`
-    /// survives intact for the tokenizer to split. This pins the contract: the
-    /// factory stores the raw string; the backend tokenizes.
-    @Test func acpProviderHintsPreservesRawArgsForTokenization() {
-        let raw = "--yes @agentclientprotocol/claude-agent-acp"
-        let hints = AgentBackendFactory.acpProviderHints(
-            resolvedExecutable: "npx", prefixArguments: raw, apiKey: nil)
-        #expect(hints["acpAgentArgs"] == raw)
     }
 
     // MARK: - AgentSpawnConfig.environment (Phase 2, plans/acp-multi-provider.md)

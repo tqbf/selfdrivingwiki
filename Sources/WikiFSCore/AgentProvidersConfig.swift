@@ -60,22 +60,6 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
     /// disabled provider is dropped rather than silently resolved elsewhere.
     public var stageAssignments: [IngestStage: StageAssignment]
 
-    /// The hardcoded model list for the Claude CLI provider. `ClaudeCLIBackend`
-    /// has no ACP model discovery (it drives `claude -p` directly), so the
-    /// selector has no captured list to show. These are the `--model` aliases
-    /// `WikiOperation` already threads (`opus`/`sonnet`/`haiku`) — seeded into
-    /// `providerModels["claude"]` so the provider always has selectable rows.
-    /// Selecting one threads it through `--model` (see
-    /// `providerHints["cliSelectedModel"]`).
-    ///
-    /// `opus` is first so it reads as the default tier (it is what
-    /// `topLevelModelAlias` resolves to when no selection is set). PURE constant.
-    public static let claudeCachedModels: [CachedModelInfo] = [
-        CachedModelInfo(modelId: "opus", name: "Opus"),
-        CachedModelInfo(modelId: "sonnet", name: "Sonnet"),
-        CachedModelInfo(modelId: "haiku", name: "Haiku"),
-    ]
-
     public init(
         providers: [AgentProvider] = [AgentProvider.claudeAcpDefault],
         providerModels: [String: [CachedModelInfo]] = [:],

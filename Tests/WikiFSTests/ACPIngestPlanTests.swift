@@ -224,8 +224,8 @@ import ACPModel
     // `AgentProvidersConfig.resolvedProvider(for:)`, same as planner/finalizer.)
 
     @Test func testResolvedProviderPerStageCanDiffer() {
-        let hermes = AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"])
-        let opencode = AgentProvider(id: "opencode", label: "OpenCode", backend: .acp, command: ["opencode", "acp"])
+        let hermes = AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"])
+        let opencode = AgentProvider(id: "opencode", label: "OpenCode", command: ["opencode", "acp"])
         let config = AgentProvidersConfig(
             providers: [.claudeAcpDefault, hermes, opencode],
             stageAssignments: [
@@ -247,7 +247,7 @@ import ACPModel
     }
 
     @Test func testResolvedProviderFallsBackWhenAssignedProviderDisabled() {
-        var opencode = AgentProvider(id: "opencode", label: "OpenCode", backend: .acp, command: ["opencode", "acp"])
+        var opencode = AgentProvider(id: "opencode", label: "OpenCode", command: ["opencode", "acp"])
         opencode.enabled = false
         let config = AgentProvidersConfig(
             providers: [.claudeAcpDefault, opencode],
@@ -261,7 +261,7 @@ import ACPModel
 
     @Test func testProviderHintsIncludesProviderEnv() {
         let provider = AgentProvider(
-            id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"],
+            id: "hermes", label: "Hermes", command: ["hermes", "acp"],
             env: ["ZAI_API_KEY": "secretish", "HERMES_MODE": "fast"])
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
@@ -277,7 +277,7 @@ import ACPModel
     /// call `session/set_model`. Pins the model-threading half of the per-stage
     /// resolution hint building (Phase 2).
     @Test func testProviderHintsThreadsSelectedModelId() {
-        let provider = AgentProvider(id: "opencode", label: "OpenCode", backend: .acp, command: ["opencode", "acp"])
+        let provider = AgentProvider(id: "opencode", label: "OpenCode", command: ["opencode", "acp"])
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: ["/usr/local/bin/opencode", "acp"],

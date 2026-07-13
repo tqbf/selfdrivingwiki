@@ -23,7 +23,6 @@ import ACPModel
         // OpenCode — with Claude as the default.
         let config = AgentProvidersConfig.seed(discovered: [])
         #expect(config.providers.map(\.id) == ["claude-acp", "hermes", "opencode"])
-        #expect(config.providers.first?.backend == .acp)
         #expect(config.providers.first?.isDefault == true)
         #expect(config.providers.allSatisfy { $0.enabled })
         #expect(config.providers.filter(\.isDefault).count == 1)
@@ -53,8 +52,8 @@ import ACPModel
         // Phase 1: no force-inserted claude-acp — the FIRST isDefault==true
         // provider in the input list keeps it, the rest are demoted.
         let raw = [
-            AgentProvider(id: "a", label: "A", backend: .acp, command: ["a"], isDefault: true),
-            AgentProvider(id: "b", label: "B", backend: .acp, command: ["b"], isDefault: true),
+            AgentProvider(id: "a", label: "A", command: ["a"], isDefault: true),
+            AgentProvider(id: "b", label: "B", command: ["b"], isDefault: true),
         ]
         let config = AgentProvidersConfig(providers: raw)
         let defaults = config.providers.filter(\.isDefault)
@@ -68,8 +67,8 @@ import ACPModel
         // Phase 1: with none marked default, the FIRST ENABLED provider is
         // promoted (no more hardcoded claude-acp fallback).
         let raw = [
-            AgentProvider(id: "a", label: "A", backend: .acp, command: ["a"], enabled: false, isDefault: false),
-            AgentProvider(id: "b", label: "B", backend: .acp, command: ["b"], enabled: true, isDefault: false),
+            AgentProvider(id: "a", label: "A", command: ["a"], enabled: false, isDefault: false),
+            AgentProvider(id: "b", label: "B", command: ["b"], enabled: true, isDefault: false),
         ]
         let config = AgentProvidersConfig(providers: raw)
         #expect(config.defaultProvider.id == "b")
@@ -87,8 +86,8 @@ import ACPModel
 
     @Test func selectedProviderPicksDefaultWhenEnabled() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, enabled: true, isDefault: true),
-            AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"], enabled: true, isDefault: false),
+            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
+            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
         ])
         #expect(config.selectedProvider().id == "claude")
     }
@@ -96,16 +95,16 @@ import ACPModel
     @Test func selectedProviderFallsBackToFirstEnabled() {
         // Default (claude-acp) disabled → falls back to the first enabled provider.
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude-acp", label: "Claude", backend: .acp, command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: false, isDefault: true),
-            AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"], enabled: true, isDefault: false),
+            AgentProvider(id: "claude-acp", label: "Claude", command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: false, isDefault: true),
+            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
         ])
         #expect(config.selectedProvider().id == "gemini")
     }
 
     @Test func selectedProviderFallsBackToClaudeAcpWhenAllDisabled() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude-acp", label: "Claude", backend: .acp, command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: false, isDefault: true),
-            AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"], enabled: false, isDefault: false),
+            AgentProvider(id: "claude-acp", label: "Claude", command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: false, isDefault: true),
+            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], enabled: false, isDefault: false),
         ])
         // All disabled → falls back to the claudeAcpDefault static.
         #expect(config.selectedProvider().id == "claude-acp")
@@ -124,9 +123,9 @@ import ACPModel
         // the model-cache injection symmetric between init(providers:) and
         // init(from:) → the round-trip is exactly equal.
         let original = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude-acp", label: "Claude", backend: .acp, command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: true, isDefault: true),
-            AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, enabled: true, isDefault: false),
-            AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"], env: ["FOO": "bar"], enabled: true, isDefault: false),
+            AgentProvider(id: "claude-acp", label: "Claude", command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: true, isDefault: true),
+            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: false),
+            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], env: ["FOO": "bar"], enabled: true, isDefault: false),
         ])
         try original.save(to: tmp)
 
@@ -257,31 +256,22 @@ import ACPModel
 
     // MARK: - Selection → backend mapping
 
-    @Test func claudeCLIProviderYieldsClaudeBackend() {
-        let provider = AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI)
-        let backend = AgentBackendFactory.makeBackend(provider: provider, policy: .bypass)
-        #expect(backend is ClaudeCLIBackend)
-        // CLI backend has no permission channel.
-        #expect(!(backend is PermissionResolving))
-    }
-
     @Test func acpProviderYieldsACPBackend() {
-        let provider = AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"])
-        let backend = AgentBackendFactory.makeBackend(provider: provider, policy: .bypass)
+        // Phase 4 (acp-multi-provider): the factory is ACP-only.
+        let backend = AgentBackendFactory.makeBackend(policy: .bypass)
         #expect(backend is ACPBackend)
         #expect(backend is PermissionResolving)
     }
 
     @Test func acpProviderThreadsAlwaysAskPolicy() {
-        let provider = AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"])
-        let backend = AgentBackendFactory.makeBackend(provider: provider, policy: .alwaysAsk)
+        let backend = AgentBackendFactory.makeBackend(policy: .alwaysAsk)
         #expect(backend is ACPBackend)
     }
 
     // MARK: - providerHints
 
     @Test func providerHintsForACPProvider() {
-        let provider = AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"])
+        let provider = AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"])
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: ["/usr/local/bin/gemini", "--acp"],
@@ -292,7 +282,7 @@ import ACPModel
     }
 
     @Test func providerHintsEmptyForCLIProvider() {
-        let provider = AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI)
+        let provider = AgentProvider(id: "claude", label: "Claude")
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: [],
@@ -301,7 +291,7 @@ import ACPModel
     }
 
     @Test func providerHintsEmptyForACPWithNoCommand() {
-        let provider = AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: nil)
+        let provider = AgentProvider(id: "gemini", label: "Gemini", command: nil)
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: [],
@@ -310,7 +300,7 @@ import ACPModel
     }
 
     @Test func providerHintsNoApiKeyWhenAbsent() {
-        let provider = AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"])
+        let provider = AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"])
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: ["/usr/local/bin/gemini", "--acp"],
@@ -345,7 +335,6 @@ import ACPModel
         let agent = KnownACPAgent(id: "gemini", label: "Gemini CLI", summary: "", detectExecutable: "gemini", command: ["gemini", "--acp"])
         let provider = AgentProvider.acp(from: agent)
         #expect(provider.id == "gemini")
-        #expect(provider.backend == .acp)
         #expect(provider.command == ["gemini", "--acp"])
         #expect(provider.isDefault == false)
     }
@@ -397,8 +386,8 @@ import ACPModel
         // the config without it — the first remaining ENABLED provider is
         // promoted.
         let withHermesDefault = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude-acp", label: "Claude", backend: .acp, command: ["bun"], enabled: true, isDefault: false),
-            AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"], enabled: true, isDefault: true),
+            AgentProvider(id: "claude-acp", label: "Claude", command: ["bun"], enabled: true, isDefault: false),
+            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: true),
         ])
         #expect(withHermesDefault.defaultProvider.id == "hermes")
 
@@ -411,8 +400,8 @@ import ACPModel
         // No provider marked default, and the first in list order is disabled
         // → the first ENABLED provider is promoted, not the first overall.
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "a", label: "A", backend: .acp, command: ["a"], enabled: false, isDefault: false),
-            AgentProvider(id: "b", label: "B", backend: .acp, command: ["b"], enabled: true, isDefault: false),
+            AgentProvider(id: "a", label: "A", command: ["a"], enabled: false, isDefault: false),
+            AgentProvider(id: "b", label: "B", command: ["b"], enabled: true, isDefault: false),
         ])
         #expect(config.defaultProvider.id == "b")
     }
@@ -422,8 +411,8 @@ import ACPModel
     @Test func resolvedProviderUsesStageAssignment() {
         let config = AgentProvidersConfig(
             providers: [
-                AgentProvider(id: "claude-acp", label: "Claude", backend: .acp, command: ["bun"], enabled: true, isDefault: true),
-                AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"], enabled: true, isDefault: false),
+                AgentProvider(id: "claude-acp", label: "Claude", command: ["bun"], enabled: true, isDefault: true),
+                AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
             ],
             stageAssignments: [.planner: StageAssignment(providerId: "hermes", modelId: "glm-4.7")])
         let resolved = config.resolvedProvider(for: .planner)
@@ -434,8 +423,8 @@ import ACPModel
     @Test func resolvedProviderFallsBackToSelectedModelIdWhenAssignmentHasNoModel() {
         let config = AgentProvidersConfig(
             providers: [
-                AgentProvider(id: "claude-acp", label: "Claude", backend: .acp, command: ["bun"], enabled: true, isDefault: true),
-                AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"], enabled: true, isDefault: false),
+                AgentProvider(id: "claude-acp", label: "Claude", command: ["bun"], enabled: true, isDefault: true),
+                AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
             ],
             selectedModelIds: ["hermes": "glm-4.7"],
             stageAssignments: [.executor: StageAssignment(providerId: "hermes", modelId: nil)])
@@ -446,8 +435,8 @@ import ACPModel
 
     @Test func resolvedProviderFallsBackToSelectedProviderWhenStageUnassigned() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude-acp", label: "Claude", backend: .acp, command: ["bun"], enabled: true, isDefault: true),
-            AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"], enabled: true, isDefault: false),
+            AgentProvider(id: "claude-acp", label: "Claude", command: ["bun"], enabled: true, isDefault: true),
+            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
         ])
         // .finalizer has no assignment at all.
         let resolved = config.resolvedProvider(for: .finalizer)
@@ -459,8 +448,8 @@ import ACPModel
         // constructor prunes the now-dangling assignment.
         let withAssignment = AgentProvidersConfig(
             providers: [
-                AgentProvider(id: "claude-acp", label: "Claude", backend: .acp, command: ["bun"], enabled: true, isDefault: true),
-                AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"], enabled: true, isDefault: false),
+                AgentProvider(id: "claude-acp", label: "Claude", command: ["bun"], enabled: true, isDefault: true),
+                AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
             ],
             stageAssignments: [.planner: StageAssignment(providerId: "hermes")])
         #expect(withAssignment.stageAssignments[.planner] != nil)
@@ -476,8 +465,8 @@ import ACPModel
     @Test func stageAssignmentPrunedWhenProviderDisabled() {
         let config = AgentProvidersConfig(
             providers: [
-                AgentProvider(id: "claude-acp", label: "Claude", backend: .acp, command: ["bun"], enabled: true, isDefault: true),
-                AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"], enabled: false, isDefault: false),
+                AgentProvider(id: "claude-acp", label: "Claude", command: ["bun"], enabled: true, isDefault: true),
+                AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: false, isDefault: false),
             ],
             stageAssignments: [.executor: StageAssignment(providerId: "hermes")])
         // hermes is disabled → the assignment is pruned at construction time.
@@ -489,16 +478,15 @@ import ACPModel
 
     @Test func claudeIsNoLongerForceInsertedIntoAnArbitraryProviderList() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"], enabled: true, isDefault: true),
+            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: true),
         ])
         #expect(config.providers.map(\.id) == ["hermes"])
         #expect(config.defaultProvider.id == "hermes")
     }
 
-    @Test func claudeCachedModelsConstantStillExistsButIsNotAutoInjected() {
-        // The `claudeCachedModels` constant is retained (other targets may
-        // still reference it), but construction/decoding no longer injects it.
-        #expect(AgentProvidersConfig.claudeCachedModels.map(\.modelId) == ["opus", "sonnet", "haiku"])
+    @Test func claudeModelsAreNotAutoInjected() {
+        // Phase 4: the hardcoded opus/sonnet/haiku alias list is gone — model
+        // lists come only from ACP discovery (providerModels capture).
         let config = AgentProvidersConfig(providers: [.claudeAcpDefault])
         #expect(config.cachedModels(forProvider: "claude-acp").isEmpty)
     }

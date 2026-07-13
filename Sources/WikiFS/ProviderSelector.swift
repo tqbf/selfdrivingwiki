@@ -24,12 +24,8 @@ import WikiFSEngine
 /// The popover also has a **search `TextField`** (filters rows by provider +
 /// model name) and a **gear button** → Settings → Providers.
 ///
-/// **Claude (CLI):** `ClaudeCLIBackend` has no ACP model discovery, so Claude's
-/// model list is the hardcoded alias set (`AgentProvidersConfig.claudeCachedModels`
-/// — opus/sonnet/haiku). Selecting one threads it through `--model` via
-/// `providerHints["cliSelectedModel"]`.
-///
-/// **ACP** providers show their captured models (discovered on first chat).
+/// The app is ACP-only: every provider shows its captured models (discovered
+/// on first chat).
 /// Selecting one threads it through `providerHints["acpSelectedModelId"]` →
 /// `session/set_model`.
 ///
@@ -167,7 +163,7 @@ struct ProviderSelector: View {
         HStack(spacing: 8) {
             Image(systemName: glyph(for: row.provider))
                 .frame(width: 16)
-                .foregroundStyle(row.provider.backend == .claudeCLI ? Color.purple : Color.blue)
+                .foregroundStyle(Color.blue)
             VStack(alignment: .leading, spacing: 1) {
                 Text(row.title)
                     .font(.system(size: 13, weight: .semibold))
@@ -322,7 +318,7 @@ struct ProviderSelector: View {
     private var trigger: some View {
         HStack(spacing: 4) {
             Image(systemName: glyph(for: current))
-                .foregroundStyle(current.backend == .claudeCLI ? Color.purple : Color.blue)
+                .foregroundStyle(Color.blue)
             Text(triggerLabel)
                 .foregroundStyle(.secondary)
             Image(systemName: "chevron.up.chevron.down")
@@ -340,8 +336,8 @@ struct ProviderSelector: View {
         "\(current.label) · \(modelSegment(for: current))"
     }
 
-    /// The model text shown in the trigger for a provider. For ACP: the user's
-    /// selection, else "default". For Claude: the selected alias, else "default".
+    /// The model text shown in the trigger for a provider: the user's
+    /// selection, else "default".
     private func modelSegment(for provider: AgentProvider) -> String {
         if let selected = config.selectedModelId(forProvider: provider.id) {
             // Use the cached friendly name when available.
@@ -355,10 +351,7 @@ struct ProviderSelector: View {
     }
 
     private var defaultHelpText: String {
-        if current.backend == .acp {
-            return "Provider and model for new chats"
-        }
-        return "Default provider for new chats"
+        "Provider and model for new chats"
     }
 
     // MARK: - Actions
@@ -386,13 +379,10 @@ struct ProviderSelector: View {
 
     // MARK: - Glyphs
 
-    /// SF Symbol per provider. Claude uses a terminal glyph; ACP agents share a
-    /// CPU glyph (paseo uses per-provider brand glyphs we don't have assets
-    /// for — symbols are a clean stand-in).
+    /// SF Symbol per provider. Every provider is ACP; they share a CPU glyph
+    /// (paseo uses per-provider brand glyphs we don't have assets for —
+    /// symbols are a clean stand-in).
     private func glyph(for provider: AgentProvider) -> String {
-        switch provider.backend {
-        case .claudeCLI: return "terminal.fill"
-        case .acp: return "cpu"
-        }
+        "cpu"
     }
 }

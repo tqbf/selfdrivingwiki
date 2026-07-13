@@ -114,8 +114,8 @@ import WikiFSCore
         ]
         let original = AgentProvidersConfig(
             providers: [
-                AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, enabled: true, isDefault: true),
-                AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"], enabled: true, isDefault: false),
+                AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
+                AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
             ],
             providerModels: ["hermes": models],
             selectedModelIds: ["hermes": "glm-4.7"])
@@ -170,7 +170,7 @@ import WikiFSCore
 
     @Test func settingCachedModelsReplacesAndPersists() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes"], isDefault: true),
+            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes"], isDefault: true),
         ])
         let models = [CachedModelInfo(modelId: "glm-4.7", name: "GLM-4.7")]
         let updated = config.settingCachedModels(models, forProvider: "hermes")
@@ -182,7 +182,7 @@ import WikiFSCore
 
     @Test func settingCachedModelsEmptyClearsEntry() {
         let config = AgentProvidersConfig(
-            providers: [AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes"], isDefault: true)],
+            providers: [AgentProvider(id: "hermes", label: "Hermes", command: ["hermes"], isDefault: true)],
             providerModels: ["hermes": [CachedModelInfo(modelId: "x", name: "X")]])
         let updated = config.settingCachedModels([], forProvider: "hermes")
         #expect(updated.cachedModels(forProvider: "hermes") == [])
@@ -191,7 +191,7 @@ import WikiFSCore
 
     @Test func settingSelectedModelAndClearing() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes"], isDefault: true),
+            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes"], isDefault: true),
         ])
         let selected = config.settingSelectedModel("glm-4.7", forProvider: "hermes")
         #expect(selected.selectedModelId(forProvider: "hermes") == "glm-4.7")
@@ -207,8 +207,8 @@ import WikiFSCore
         // must NOT wipe the per-provider model caches or selections.
         let config = AgentProvidersConfig(
             providers: [
-                AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, isDefault: true),
-                AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes"], isDefault: false),
+                AgentProvider(id: "claude", label: "Claude", isDefault: true),
+                AgentProvider(id: "hermes", label: "Hermes", command: ["hermes"], isDefault: false),
             ],
             providerModels: ["hermes": [CachedModelInfo(modelId: "glm-4.7", name: "GLM-4.7")]],
             selectedModelIds: ["hermes": "glm-4.7"])
@@ -221,7 +221,7 @@ import WikiFSCore
     // MARK: - providerHints selectedModelId threading
 
     @Test func providerHintsCarriesSelectedModelId() {
-        let provider = AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"])
+        let provider = AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"])
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: ["/usr/local/bin/hermes", "acp"],
@@ -232,7 +232,7 @@ import WikiFSCore
     }
 
     @Test func providerHintsOmitsSelectedModelIdWhenNil() {
-        let provider = AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"])
+        let provider = AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"])
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: ["/usr/local/bin/hermes", "acp"],
@@ -241,30 +241,16 @@ import WikiFSCore
         #expect(hints["acpSelectedModelId"] == nil)
     }
 
-    @Test func providerHintsCarriesCLISelectedModel() {
-        // CLI provider: the picker's model selection is threaded as
-        // `cliSelectedModel` so ClaudeCLIBackend.start can override `--model`.
-        let provider = AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI)
+    @Test func providerHintsEmptyWhenCommandUnresolved() {
+        // Phase 4 (ACP-only): an empty resolved command yields empty hints —
+        // even with a model selection — so ACPBackend throws noAgentConfigured
+        // instead of spawning garbage.
+        let provider = AgentProvider(id: "claude-acp", label: "Claude")
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: [],
             apiKey: nil,
             selectedModelId: "sonnet")
-        #expect(hints["cliSelectedModel"] == "sonnet")
-        // No ACP keys leak into a CLI provider's hints.
-        #expect(hints["acpSelectedModelId"] == nil)
-        #expect(hints["acpAgentPath"] == nil)
-    }
-
-    @Test func providerHintsOmitsCLISelectedModelWhenNil() {
-        // CLI provider with no selection → empty hints (legacy: use the per-op
-        // alias / Settings override). Default = unchanged.
-        let provider = AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI)
-        let hints = AgentBackendFactory.providerHints(
-            provider: provider,
-            resolvedCommand: [],
-            apiKey: nil,
-            selectedModelId: nil)
         #expect(hints.isEmpty)
     }
 
@@ -280,8 +266,8 @@ import WikiFSCore
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let initial = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, enabled: true, isDefault: true),
-            AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"], enabled: true, isDefault: false),
+            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
+            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
         ])
         try initial.save(to: tmp)
 
@@ -321,7 +307,7 @@ import WikiFSCore
         // The launcher's cache path maps SDK → CachedModelInfo + persists.
         let launcher = AgentLauncher()
         launcher.resolveProvidersContainerDirectory = { tmp }
-        let provider = AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes"], isDefault: true)
+        let provider = AgentProvider(id: "hermes", label: "Hermes", command: ["hermes"], isDefault: true)
         try AgentProvidersConfig(providers: [provider]).save(to: tmp)
 
         let cached = discovered.map {

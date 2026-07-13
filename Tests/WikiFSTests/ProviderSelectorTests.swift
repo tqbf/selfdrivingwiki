@@ -21,9 +21,9 @@ import ACPModel
     /// default survives.
     @Test func settingDefaultDemotesOthers() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, enabled: true, isDefault: true),
-            AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"], enabled: true, isDefault: false),
-            AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"], enabled: true, isDefault: false),
+            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
+            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
+            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
         ])
 
         let updated = config.settingDefault(id: "gemini")
@@ -43,8 +43,8 @@ import ACPModel
     /// idempotent w.r.t. the invariant and reversible.
     @Test func settingDefaultIsReversible() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, enabled: true, isDefault: true),
-            AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"], enabled: true, isDefault: false),
+            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
+            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
         ])
 
         let switched = config.settingDefault(id: "gemini")
@@ -60,7 +60,7 @@ import ACPModel
     /// never strands the launcher with no provider.
     @Test func settingDefaultUnknownIdKeepsInvariant() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, enabled: true, isDefault: true),
+            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
         ])
 
         let updated = config.settingDefault(id: "does-not-exist")
@@ -75,8 +75,8 @@ import ACPModel
     /// mutating the source.
     @Test func settingDefaultIsPure() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, enabled: true, isDefault: true),
-            AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"], enabled: true, isDefault: false),
+            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
+            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
         ])
 
         _ = config.settingDefault(id: "gemini")
@@ -93,9 +93,9 @@ import ACPModel
     /// selector menu must agree, or it could show a provider that won't run.
     @Test func enabledProvidersExcludesDisabled() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", backend: .claudeCLI, enabled: true, isDefault: true),
-            AgentProvider(id: "gemini", label: "Gemini", backend: .acp, command: ["gemini", "--acp"], enabled: false, isDefault: false),
-            AgentProvider(id: "hermes", label: "Hermes", backend: .acp, command: ["hermes", "acp"], enabled: true, isDefault: false),
+            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
+            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], enabled: false, isDefault: false),
+            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
         ])
 
         let ids = config.enabledProviders.map(\.id)

@@ -274,7 +274,7 @@ public enum AgentOperationRunner {
         wikictlDirectory: String
     ) async {
         let trimmed = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        DebugLog.agent("startChat: enter msg=\"\(trimmed.prefix(80))\" provider=\(launcher.resolveSelectedProvider().id) backend=\(launcher.resolveSelectedProvider().backend)") // TEMP DEBUG
+        DebugLog.agent("startChat: enter msg=\"\(trimmed.prefix(80))\" provider=\(launcher.resolveSelectedProvider().id)") // TEMP DEBUG
         guard !trimmed.isEmpty else {
             DebugLog.agent("startChat: early-return — empty message") // TEMP DEBUG
             return
@@ -531,7 +531,7 @@ public enum AgentOperationRunner {
         wikictlDirectory: String
     ) async {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        DebugLog.agent("continueChat: enter chatID=\(chatID.rawValue) msg=\"\(trimmed.prefix(80))\" provider=\(launcher.resolveSelectedProvider().id) backend=\(launcher.resolveSelectedProvider().backend)") // TEMP DEBUG
+        DebugLog.agent("continueChat: enter chatID=\(chatID.rawValue) msg=\"\(trimmed.prefix(80))\" provider=\(launcher.resolveSelectedProvider().id)") // TEMP DEBUG
         guard !trimmed.isEmpty else {
             DebugLog.agent("continueChat: early-return — empty message") // TEMP DEBUG
             return

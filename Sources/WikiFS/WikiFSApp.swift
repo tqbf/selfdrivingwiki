@@ -196,7 +196,6 @@ struct WikiFSApp: App {
         }
         .windowToolbarStyle(.unified)
         .commands {
-            ClaudePromptHelpCommands()
             VacuumCommands(manager: manager)
         }
         .onChange(of: scenePhase) { _, phase in
@@ -217,11 +216,6 @@ struct WikiFSApp: App {
         .onChange(of: manager.activeWikiID) { _, _ in
             if isSceneActive { Task { await manager.upgradeActiveStoreSearchIndex() } }
         }
-
-        Window("Claude Prompt Templates", id: "claudePromptHelp") {
-            ClaudePromptHelpView()
-        }
-        .defaultSize(width: 880, height: 680)
 
         // Track C extraction compare: a real, resizable, non-modal window (one
         // per source, opened via `openWindow(value:)` from SourceDetailView).

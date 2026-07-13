@@ -1,6 +1,7 @@
 # ACP Multi-Provider Configuration
 
-**Status:** design approved (2026-07-12), implementation in progress.
+**Status:** implementation complete (2026-07-12). All 4 phases shipped;
+ACP multi-provider plan fully delivered.
 
 ## Definition of done
 
