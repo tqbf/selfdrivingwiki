@@ -191,11 +191,22 @@ public enum PermissionPolicy: String, Sendable, CaseIterable {
 public struct PendingPermission: Sendable, Equatable {
     public let toolCallId: String
     public let title: String?
+    /// A human-readable tool name (e.g. "Edit file", "Create directory").
+    /// Derived from the permission request's `ToolCallUpdate.title`/`.kind`.
+    public let toolName: String?
+    /// A one-liner summary of what the tool will do (e.g. the file path being
+    /// edited). Derived from `ToolCallUpdate.locations`.
+    public let inputSummary: String?
     public let options: [PermissionOption]
 
-    public init(toolCallId: String, title: String?, options: [PermissionOption]) {
+    public init(
+        toolCallId: String, title: String?, toolName: String?,
+        inputSummary: String?, options: [PermissionOption]
+    ) {
         self.toolCallId = toolCallId
         self.title = title
+        self.toolName = toolName
+        self.inputSummary = inputSummary
         self.options = options
     }
 
@@ -220,6 +231,8 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
     /// A pending request's resolution channel.
     private struct Pending {
         let options: [PermissionOption]
+        let toolName: String?
+        let inputSummary: String?
         let continuation: CheckedContinuation<RequestPermissionResponse, Never>
     }
 
@@ -279,10 +292,15 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
         request: RequestPermissionRequest,
         lock: OSAllocatedUnfairLock<LockedState>
     ) async -> RequestPermissionResponse {
-        await withCheckedContinuation { (continuation: CheckedContinuation<RequestPermissionResponse, Never>) in
+        let toolCall = request.toolCall
+        let toolName = Self.toolName(for: toolCall)
+        let inputSummary = Self.toolSummary(for: toolCall)
+        return await withCheckedContinuation { (continuation: CheckedContinuation<RequestPermissionResponse, Never>) in
             lock.withLock { state in
                 state.pending[request.toolCall.toolCallId] = Pending(
                     options: request.options,
+                    toolName: toolName,
+                    inputSummary: inputSummary,
                     continuation: continuation
                 )
             }
@@ -362,7 +380,13 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
     func pendingSnapshot() -> [PendingPermission] {
         lock.withLock { state in
             state.pending.map { (toolCallId, pending) in
-                PendingPermission(toolCallId: toolCallId, title: nil, options: pending.options)
+                PendingPermission(
+                    toolCallId: toolCallId,
+                    title: pending.toolName,
+                    toolName: pending.toolName,
+                    inputSummary: pending.inputSummary,
+                    options: pending.options
+                )
             }
         }
     }
@@ -410,6 +434,24 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
     }
 
     // MARK: - Helpers
+
+    /// A renderable tool name for a permission request. Prefers the ACP
+    /// `title`; falls back to the `kind` (capitalized), then a generic "tool".
+    /// Same logic as `ACPEventTranslator.toolName(for:)`.
+    private static func toolName(for call: ToolCallUpdate) -> String? {
+        if let title = call.title, !title.isEmpty { return title }
+        if let kind = call.kind { return kind.rawValue.capitalized }
+        return nil
+    }
+
+    /// A one-liner summary for a permission request — the file path being
+    /// changed. Same logic as `ACPEventTranslator.toolSummary(for:)`.
+    private static func toolSummary(for call: ToolCallUpdate) -> String? {
+        if let path = call.locations?.first?.path, !path.isEmpty {
+            return path
+        }
+        return nil
+    }
 
     /// Pick the "allow" option from a permission request's options. An allow
     /// option's `kind` is `allow_once`/`allow_always`; fall back to any option

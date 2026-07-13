@@ -39,9 +39,18 @@ struct PermissionApprovalView: View {
                 Text(titleText)
                     .font(.subheadline)
                     .fontWeight(.semibold)
-                Text("The agent is waiting for your approval to proceed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if let summary = detailText {
+                    Text(summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                }
+                if !showsDetail {
+                    Text("The agent is waiting for your approval to proceed.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 8)
             HStack(spacing: 8) {
@@ -71,9 +80,20 @@ struct PermissionApprovalView: View {
         .accessibilityLabel("Permission request awaiting approval")
     }
 
-    /// The request's title: the tool-call's title if offered (e.g. "Edit file"),
-    /// otherwise a generic "Approve write?" prompt.
+    /// The request's title: the tool name if available (e.g. "Edit file"),
+    /// otherwise a generic "Approve this change?" prompt.
     private var titleText: String {
-        permission.title ?? "Approve this change?"
+        permission.toolName ?? permission.title ?? "Approve this change?"
+    }
+
+    /// The file path or other input detail for the pending change, if any.
+    private var detailText: String? {
+        permission.inputSummary
+    }
+
+    /// Whether we have a real tool name or path to show instead of the generic
+    /// caption.
+    private var showsDetail: Bool {
+        detailText != nil
     }
 }
