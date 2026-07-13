@@ -40,6 +40,13 @@ struct WikiFSApp: App {
     @State private var isSceneActive = false
     @Environment(\.scenePhase) private var scenePhase
 
+    /// App delegate that intercepts termination to show a "confirm to quit"
+    /// dialog (toggleable in Settings → General). Catches all quit paths:
+    /// ⌘Q, Apple menu, Dock, and system shutdown.
+    @NSApplicationDelegateAdaptor(
+        QuitConfirmationDelegate.self
+    ) private var quitDelegate
+
     init() {
         // Migrate the renamed chat-zoom @AppStorage key before any ChatView reads
         // it. Idempotent: copies `conversation.zoom` → `chat.zoom` only when the
@@ -129,6 +136,16 @@ struct WikiFSApp: App {
             DebugLog.store("wikid: SMAppService registered, status=\(daemonService.status.rawValue)")
         } catch {
             DebugLog.store("wikid: SMAppService registration failed (expected in dev mode): \(error)")
+        }
+
+        // Wire the quit-confirmation delegate's closures. Flush pending autosaves
+        // (don't lose buffered edits), and report whether any agent is running so
+        // the quit dialog message is tailored when operations are in flight.
+        quitDelegate.flushPendingSaves = { [weak manager] in
+            manager?.activeStore?.flushPendingSaves()
+        }
+        quitDelegate.isAnyAgentRunning = { [weak agentLauncher, weak chatLauncher] in
+            agentLauncher?.isRunning == true || chatLauncher?.isRunning == true
         }
     }
 
@@ -247,6 +264,8 @@ struct WikiFSApp: App {
             TabView {
                 AboutView()
                     .tabItem { Label("About", systemImage: "info.circle") }
+                GeneralSettingsView()
+                    .tabItem { Label("General", systemImage: "gearshape") }
                 ZoteroSettingsView(containerDirectory: containerDirectory)
                     .tabItem { Label("Zotero", systemImage: "books.vertical") }
                 ExtractionSettingsView(containerDirectory: containerDirectory, launcher: agentLauncher)
