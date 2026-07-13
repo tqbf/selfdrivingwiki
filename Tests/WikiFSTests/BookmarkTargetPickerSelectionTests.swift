@@ -5,6 +5,7 @@ import Testing
 /// Tests for `BookmarkTargetPickerSheet.parentID(forSelection:)` — the
 /// sentinel-to-nil conversion that lets the picker offer a "Bookmarks" root
 /// destination (parentID == nil) alongside real folders (#243).
+@MainActor
 @Suite struct BookmarkTargetPickerSelectionTests {
 
     @Test func rootSentinelMapsToNilParentID() {
