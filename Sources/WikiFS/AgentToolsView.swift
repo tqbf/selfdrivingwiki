@@ -56,6 +56,7 @@ struct AgentToolsView: View {
                 }
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
+                .padding(.top, 4)
                 // "Show In List" reveal: a detail-view button requested that a
                 // chat be surfaced. The active tab already selects this chat
                 // (we're viewing it), so the row is highlighted — we only need
