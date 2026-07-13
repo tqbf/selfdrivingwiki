@@ -254,8 +254,9 @@ struct WikiFSApp: App {
                 AgentsSettingsView(containerDirectory: containerDirectory)
                     .tabItem { Label("Agents", systemImage: "cpu") }
             }
-            .frame(width: 460, height: 460)
+            .frame(minWidth: 560, minHeight: 520)
         }
+        .windowResizability(.contentMinSize)
     }
 }
 

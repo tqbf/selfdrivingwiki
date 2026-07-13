@@ -98,7 +98,7 @@ struct ExtractionSettingsView: View {
             backendConfigSection
         }
         .formStyle(.grouped)
-        .frame(width: Metrics.width, height: Metrics.height)
+        .frame(minWidth: Metrics.width, minHeight: Metrics.height)
         .disabled(extractionInProgress)
         .alert("Couldn't Connect to Claude", isPresented: anthropicErrorBinding,
                presenting: anthropicErrorMessage) { _ in
