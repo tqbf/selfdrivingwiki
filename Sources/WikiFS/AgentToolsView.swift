@@ -37,6 +37,9 @@ struct AgentToolsView: View {
                             isLive: isLive(chat)
                         )
                             .tag(WikiSelection.chat(chat.id))
+                            .draggable(SidebarDragPayloadList([
+                                SidebarDragPayload(kind: .chat, id: chat.id.rawValue)
+                            ]))
                             .contextMenu {
                                 Button("Rename Chat…") {
                                     renameDraft = chat.title
