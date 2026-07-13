@@ -410,9 +410,11 @@ struct ChatView: View {
     /// User turns (questions) in display order — the chat outline entries. Sourced
     /// from `displayMessages` (the SAME transcript-visible events the web view
     /// renders), so outline index `i` matches the i-th `.chat-user` row.
+    /// Strips the prepended `[[…]]` attachment reference lines so the outline
+    /// shows only the user's actual question, not the raw wikilinks (issue #385).
     private var chatTurns: [String] {
         displayMessages.compactMap { event in
-            if case .userText(let text) = event { return text }
+            if case .userText(let text) = event { return stripAttachmentRefs(from: text) }
             return nil
         }
     }
@@ -833,12 +835,15 @@ private struct ChatAttachment: Identifiable, Hashable {
     }
 
     /// The reference text prepended to the wire message so the agent knows
-    /// which wiki resource to use as context.
+    /// which wiki resource to use as context. Uses the display name (not the
+    /// raw ULID) so the agent can understand the reference — the system prompt
+    /// instructs the agent to use `[[source:DisplayName]]` / `[[page:Title]]` /
+    /// `[[chat:Title]]` wikilinks with human-readable names.
     var referenceText: String {
         switch kind {
-        case .page:   return "[[page:\(itemID)]]"
-        case .source: return "[[source:\(itemID)]]"
-        case .chat:   return "[[chat:\(itemID)]]"
+        case .page:   return "[[page:\(displayName)]]"
+        case .source: return "[[source:\(displayName)]]"
+        case .chat:   return "[[chat:\(displayName)]]"
         }
     }
 }
@@ -959,4 +964,20 @@ struct ChatOutlineView: View {
             .background(Color(nsColor: .windowBackgroundColor))
         }
     }
+}
+
+/// Strip leading `[[page:…]]` / `[[source:…]]` / `[[chat:…]]` wikilink
+/// lines that `sendMessage` prepends as attachment references. Used by both
+/// the chat outline (ChatView.chatTurns) and the transcript WebView
+/// (ChatWebView row rendering) so neither shows raw wikilink syntax to the
+/// user (issue #385).
+func stripAttachmentRefs(from text: String) -> String {
+    var remaining = text[...]
+    while let range = remaining.range(of: #"\[\[(?:page|source|chat):[^\]]+\]\]"#,
+                                       options: .regularExpression),
+          range.lowerBound == remaining.startIndex {
+        remaining = remaining[range.upperBound...]
+        if remaining.first == "\n" { remaining = remaining.dropFirst() }
+    }
+    return String(remaining).trimmingCharacters(in: .whitespacesAndNewlines)
 }

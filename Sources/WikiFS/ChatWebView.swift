@@ -408,7 +408,7 @@ struct ChatWebView: NSViewRepresentable {
             case .userText(let text):
                 return """
                 <div class="row row-user"><div class="row-label">You</div>\
-                <div class="row-body">\(escapePreservingBreaks(text))</div></div>
+                <div class="row-body">\(escapePreservingBreaks(stripAttachmentRefs(from: text)))</div></div>
                 """
             case .systemInit(let model):
                 return "<div class=\"row row-meta\">Started · \(escape(model))</div>"
@@ -451,7 +451,7 @@ struct ChatWebView: NSViewRepresentable {
             switch event {
             case .userText(let text):
                 return """
-                <div class="row chat-row chat-user"><div class="bubble">\(escapePreservingBreaks(text))</div></div>
+                <div class="row chat-row chat-user"><div class="bubble">\(escapePreservingBreaks(stripAttachmentRefs(from: text)))</div></div>
                 """
             case .assistantText(let text):
                 return assistantBubbleHTML(text: text, context: context, isFinal: isFinal)
