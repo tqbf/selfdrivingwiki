@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import WikiFSCore
 
 /// The wiki switcher: a sidebar header `Menu` showing the active wiki's name
@@ -9,8 +10,15 @@ import WikiFSCore
 ///
 /// `.headline` gives the active name prominence over the `.caption`-styled
 /// section headers and `.body` rows below it, without hardcoding sizes.
+///
+/// Default click opens a new window (`openWindow(value:)`) or focuses an existing
+/// one — the Safari/Xcode "open in new window" pattern. Option+click switches
+/// the current window's wiki in place (releases old session, resolves new one in
+/// the same window), via `registry.select` which sets `activeWikiID`; the
+/// frontmost window's `RootScene` observes that and swaps its session.
 struct WikiSwitcher: View {
     @Bindable var registry: WikiRegistryClient
+    @Environment(\.openWindow) private var openWindow
 
     @State private var newWikiName = ""
     @State private var showingNewWikiSheet = false
@@ -25,7 +33,17 @@ struct WikiSwitcher: View {
         Menu {
             ForEach(registry.wikis) { wiki in
                 Button {
-                    registry.select(wiki.id)
+                    if NSEvent.modifierFlags.contains(.option) {
+                        // Option+click: switch THIS window's wiki in place
+                        // (release old session, open new one in the same
+                        // window). `registry.select` sets `activeWikiID`;
+                        // the frontmost `RootScene` observes it and swaps.
+                        registry.select(wiki.id)
+                    } else {
+                        // Default: open a new window (or focus existing —
+                        // `WindowGroup(for:)` deduplicates by `==`).
+                        openWindow(value: wiki.id)
+                    }
                 } label: {
                     Label(wiki.displayName, systemImage: checkmark(for: wiki))
                 }

@@ -821,7 +821,9 @@ struct SourceDetailView: View {
             Section {
                 Button("Compare Extractions…", systemImage: "arrow.left.and.right.square") {
                     openWindow(value: ExtractionCompareContext(
-                        sourceID: file.id, filename: file.filename))
+                        sourceID: file.id,
+                        filename: file.filename,
+                        wikiID: store.eventBus?.wikiID ?? ""))
                 }
                 .disabled(!hasMultipleExtractions)
                 .help(hasMultipleExtractions

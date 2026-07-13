@@ -14,24 +14,28 @@ import WikiFSCore
 ///     They reuse the existing `WikiSelection` destinations already rendered by
 ///     `WikiDetailView`.
 struct VacuumCommands: Commands {
-    let session: WikiSession?
+    /// The shared session manager — resolves the frontmost window's session
+    /// via `frontmostSession` (updated by per-window scenePhase transitions).
+    /// `.commands` is a `Scene` modifier (not a `View` modifier), so this
+    /// lives at the app level, not inside `RootScene`.
+    let sessionManager: SessionManager
 
     var body: some Commands {
         CommandGroup(after: .help) {
             Button("Vacuum All…") {
-                session?.previewVacuumAll()
+                sessionManager.frontmostSession?.previewVacuumAll()
             }
 
             Divider()
 
             Button("Lint Wiki") {
-                session?.store.openTab(.lint)
+                sessionManager.frontmostSession?.store.openTab(.lint)
             }
             Button("Agent Instructions") {
-                session?.store.openTab(.systemPrompt)
+                sessionManager.frontmostSession?.store.openTab(.systemPrompt)
             }
             Button("Activity Log") {
-                session?.store.openTab(.changeLog)
+                sessionManager.frontmostSession?.store.openTab(.changeLog)
             }
         }
     }

@@ -39,11 +39,12 @@ final class FileProviderSpike: ChangeSignaler {
     // exactly as the old `onPageDidChange` hand-fire did. Coalescing lives at the
     // subscriber edge (§3 decision 4), reusing the pure `ChangeCoalescer`.
 
-    /// The active store's bus we currently subscribe to (weak — the store owns
-    /// it; we just hold a reference to unsubscribe on swap).
-    private weak var activeStoreBus: WikiEventBus?
-    /// The subscription token for `activeStoreBus`; unsubscribed on each swap.
-    private var activeStoreChangeToken: SubscriptionToken?
+    /// Multi-window bus subscriptions: one per active session's wiki. Each
+    /// entry holds the bus ref (so `unsubscribe` can call
+    /// `bus.unsubscribe(token)` — the bus instance owns its subscriber list)
+    /// and the subscription token. Unsubscribed in `unsubscribeBus(for:)`
+    /// when a session is released (window close / in-window switch).
+    private var activeBusSubscriptions: [String: (bus: WikiEventBus, token: SubscriptionToken)] = [:]
     /// Collapses a burst of store events into a single FP signal per wiki.
     private var signalCoalescer: ChangeCoalescer?
 
@@ -528,20 +529,29 @@ final class FileProviderSpike: ChangeSignaler {
         )
     }
 
-    /// Subscribe the debounced FP signaler to the freshly-swapped active store's
-    /// bus (all kinds, both origins). Unsubscribes the previous store's token so a
-    /// store swap (select / create / delete) re-points cleanly with no leak.
-    func subscribeActiveStoreBus(_ bus: WikiEventBus?, wikiID: String?) {
+    /// Subscribe the debounced FP signaler to a wiki's store bus (all kinds,
+    /// both origins). Replaces the former single-subscribe
+    /// `subscribeActiveStoreBus` — in multi-window, each active session's bus
+    /// needs its own subscription, stored in `activeBusSubscriptions`.
+    /// Calling this for a wiki ID that already has a subscription drops the
+    /// old one first (no leak).
+    func subscribeBus(for wikiID: String, bus: WikiEventBus?) {
         ensureSignalCoalescer()
-        // Drop the previous subscription.
-        if let oldBus = activeStoreBus, let token = activeStoreChangeToken {
-            oldBus.unsubscribe(token)
-        }
-        activeStoreBus = bus
-        activeStoreChangeToken = nil
-        guard let bus, let wikiID else { return }
-        activeStoreChangeToken = bus.subscribe(nil) { [weak self] _ in
+        // Drop any existing subscription for this wiki.
+        unsubscribeBus(for: wikiID)
+        guard let bus else { return }
+        let token = bus.subscribe(nil) { [weak self] _ in
             self?.signalCoalescer?.noteChange(forWikiID: wikiID)
+        }
+        activeBusSubscriptions[wikiID] = (bus: bus, token: token)
+    }
+
+    /// Unsubscribe the FP signaler from a wiki's store bus. Called when a
+    /// session is released (window close / in-window switch). Safe to call
+    /// with a wiki ID that has no subscription (no-op).
+    func unsubscribeBus(for wikiID: String) {
+        if let entry = activeBusSubscriptions.removeValue(forKey: wikiID) {
+            entry.bus.unsubscribe(entry.token)
         }
     }
 
