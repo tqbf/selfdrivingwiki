@@ -408,7 +408,7 @@ struct ChatWebView: NSViewRepresentable {
             case .userText(let text):
                 return """
                 <div class="row row-user"><div class="row-label">You</div>\
-                <div class="row-body">\(renderedMarkdown(humanizeAttachmentRefs(in: text), context: context, isFinal: isFinal))</div></div>
+                <div class="row-body">\(renderedMarkdown(text, context: context, isFinal: isFinal))</div></div>
                 """
             case .systemInit(let model):
                 return "<div class=\"row row-meta\">Started · \(escape(model))</div>"
@@ -454,7 +454,7 @@ struct ChatWebView: NSViewRepresentable {
                 // attachment refs ([[source:Name]]) render as clickable
                 // wikilinks, not raw escaped text (issue #385).
                 return """
-                <div class="row chat-row chat-user"><div class="bubble">\(renderedMarkdown(humanizeAttachmentRefs(in: text), context: context, isFinal: isFinal))</div></div>
+                <div class="row chat-row chat-user"><div class="bubble">\(renderedMarkdown(text, context: context, isFinal: isFinal))</div></div>
                 """
             case .assistantText(let text):
                 return assistantBubbleHTML(text: text, context: context, isFinal: isFinal)
