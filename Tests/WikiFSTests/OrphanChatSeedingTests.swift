@@ -1,6 +1,9 @@
 import Foundation
+import WikiFSEngine
 import Testing
+import WikiFSEngine
 @testable import WikiFS
+@testable import WikiFSEngine
 @testable import WikiFSCore
 
 /// Tests for the orphan-chat fix: a persisted chat must never be

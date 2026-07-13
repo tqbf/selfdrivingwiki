@@ -137,7 +137,7 @@ struct ACPEventTranslator: Sendable {
 /// **Caveat (design doc):** always-ask enforcement *depends on the agent
 /// emitting `request_permission` for writes*. Most do (Claude via the wrapper,
 /// Copilot, …), but not all — so yolo is the safe default.
-enum PermissionPolicy: String, Sendable, CaseIterable {
+public enum PermissionPolicy: String, Sendable, CaseIterable {
     /// Skip all permission prompts — writes apply automatically.
     case bypass
     /// Pause for user approval before each tool that needs permission.
@@ -147,7 +147,7 @@ enum PermissionPolicy: String, Sendable, CaseIterable {
     /// Deny all writes — read-only analysis mode.
     case plan
 
-    var label: String {
+    public var label: String {
         switch self {
         case .bypass: "Bypass"
         case .alwaysAsk: "Always Ask"
@@ -156,7 +156,7 @@ enum PermissionPolicy: String, Sendable, CaseIterable {
         }
     }
 
-    var help: String {
+    public var help: String {
         switch self {
         case .bypass: "Skip all permission prompts (use with caution)"
         case .alwaysAsk: "Pause for your approval before each write"
@@ -168,7 +168,7 @@ enum PermissionPolicy: String, Sendable, CaseIterable {
     /// SF Symbol for the mode's composer chip + dropdown row. A shield motif
     /// echoing paseo's permission menu (bolt = skip/fast, checkmark = safe/ask,
     /// exclamation = auto-apply edits, half-shield = read-only plan).
-    var glyph: String {
+    public var glyph: String {
         switch self {
         case .bypass: "bolt.shield"
         case .alwaysAsk: "checkmark.shield"
@@ -188,18 +188,18 @@ enum PermissionPolicy: String, Sendable, CaseIterable {
 /// launcher's snapshot diff (`snapshot != pendingPermissions`) relies on to
 /// avoid redundant view updates. (`PermissionOption` is not `Equatable`, so
 /// `==` cannot be synthesized — implemented explicitly instead.)
-struct PendingPermission: Sendable, Equatable {
-    let toolCallId: String
-    let title: String?
-    let options: [PermissionOption]
+public struct PendingPermission: Sendable, Equatable {
+    public let toolCallId: String
+    public let title: String?
+    public let options: [PermissionOption]
 
-    init(toolCallId: String, title: String?, options: [PermissionOption]) {
+    public init(toolCallId: String, title: String?, options: [PermissionOption]) {
         self.toolCallId = toolCallId
         self.title = title
         self.options = options
     }
 
-    static func == (lhs: PendingPermission, rhs: PendingPermission) -> Bool {
+    public static func == (lhs: PendingPermission, rhs: PendingPermission) -> Bool {
         lhs.toolCallId == rhs.toolCallId
     }
 }
@@ -215,7 +215,7 @@ struct PendingPermission: Sendable, Equatable {
 /// `Sendable` without `@unchecked`. The pending map maps `toolCallId` → a
 /// `CheckedContinuation` that `resolve(optionId:)` resumes. No actor hop needed
 /// (the continuation + map are lock-protected), so resolution is immediate.
-final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
+public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
 
     /// A pending request's resolution channel.
     private struct Pending {
@@ -239,7 +239,7 @@ final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
 
     // MARK: - ClientDelegate: the permission seam
 
-    func handlePermissionRequest(request: RequestPermissionRequest) async throws -> RequestPermissionResponse {
+    public func handlePermissionRequest(request: RequestPermissionRequest) async throws -> RequestPermissionResponse {
         switch policy {
         case .bypass:
             // Auto-approve: resolve immediately with the request's allow option.
@@ -309,31 +309,31 @@ final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
     // for MCP/elicitation). A future slice wires these to perform (and gate)
     // file writes / terminal commands on the agent's behalf.
 
-    func handleFileReadRequest(_ path: String, sessionId: String, line: Int?, limit: Int?) async throws -> ReadTextFileResponse {
+    public func handleFileReadRequest(_ path: String, sessionId: String, line: Int?, limit: Int?) async throws -> ReadTextFileResponse {
         throw ClientError.invalidResponse
     }
 
-    func handleFileWriteRequest(_ path: String, content: String, sessionId: String) async throws -> WriteTextFileResponse {
+    public func handleFileWriteRequest(_ path: String, content: String, sessionId: String) async throws -> WriteTextFileResponse {
         throw ClientError.invalidResponse
     }
 
-    func handleTerminalCreate(command: String, sessionId: String, args: [String]?, cwd: String?, env: [EnvVariable]?, outputByteLimit: Int?) async throws -> CreateTerminalResponse {
+    public func handleTerminalCreate(command: String, sessionId: String, args: [String]?, cwd: String?, env: [EnvVariable]?, outputByteLimit: Int?) async throws -> CreateTerminalResponse {
         throw ClientError.invalidResponse
     }
 
-    func handleTerminalOutput(terminalId: TerminalId, sessionId: String) async throws -> TerminalOutputResponse {
+    public func handleTerminalOutput(terminalId: TerminalId, sessionId: String) async throws -> TerminalOutputResponse {
         throw ClientError.invalidResponse
     }
 
-    func handleTerminalWaitForExit(terminalId: TerminalId, sessionId: String) async throws -> WaitForExitResponse {
+    public func handleTerminalWaitForExit(terminalId: TerminalId, sessionId: String) async throws -> WaitForExitResponse {
         throw ClientError.invalidResponse
     }
 
-    func handleTerminalKill(terminalId: TerminalId, sessionId: String) async throws -> KillTerminalResponse {
+    public func handleTerminalKill(terminalId: TerminalId, sessionId: String) async throws -> KillTerminalResponse {
         throw ClientError.invalidResponse
     }
 
-    func handleTerminalRelease(terminalId: TerminalId, sessionId: String) async throws -> ReleaseTerminalResponse {
+    public func handleTerminalRelease(terminalId: TerminalId, sessionId: String) async throws -> ReleaseTerminalResponse {
         throw ClientError.invalidResponse
     }
 

@@ -4,6 +4,7 @@ import Testing
 import UniformTypeIdentifiers
 @testable import WikiFSCore
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Verifies the AppKit→SwiftUI drag bridge at the pasteboard level: an
 /// `NSPasteboardWriting` produced by the sidebar lists must put valid JSON under

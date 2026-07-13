@@ -1,5 +1,7 @@
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
+import WikiFSEngine
 
 /// Sidebar-accessible lint surface. Runs the Lint operation against the current
 /// wiki and displays the agent transcript.
@@ -24,8 +26,9 @@ struct LintView: View {
                         await AgentOperationRunner.runLint(
                             launcher: launcher,
                             store: store,
-                            manager: manager,
-                            fileProvider: fileProvider)
+                            wikiID: manager.activeWikiID ?? "",
+                            changeSignaler: fileProvider,
+                            wikictlDirectory: HelpersLocation.wikictlDirectory)
                     }
                 }
                 .disabled(launcher.isRunning)

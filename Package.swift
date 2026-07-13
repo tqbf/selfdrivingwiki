@@ -89,14 +89,30 @@ let package = Package(
             ],
             path: "Sources/WikiFSMLX"
         ),
+        // The agent execution engine — extracted from the app target so a
+        // standalone daemon (`wikid`) can link it. Holds: AgentLauncher,
+        // ACPBackend, ClaudeCLIBackend, AgentOperationRunner, GenerationGate,
+        // ExtractionCoordinator, AgentBackend/Factory, OperationRequest, plus
+        // the ACP stall-recovery + permission seams. See
+        // plans/multi-wiki-daemon.md §3.
+        .target(
+            name: "WikiFSEngine",
+            dependencies: [
+                "WikiFSCore",
+                // ACP client runtime (ACPBackend — plans/acp-backend-and-permissions.md).
+                .product(name: "ACP", package: "swift-acp"),
+                .product(name: "ACPModel", package: "swift-acp"),
+            ],
+            path: "Sources/WikiFSEngine",
+            swiftSettings: podcastSwiftSettings
+        ),
         .executableTarget(
             name: "WikiFS",
             dependencies: [
                 "WikiFSCore",
+                "WikiFSEngine",
                 "WikiFSMLX",
                 .product(name: "Markdown", package: "swift-markdown"),
-                // ACP client runtime (ACPBackend — plans/acp-backend-and-permissions.md).
-                .product(name: "ACP", package: "swift-acp"),
             ],
             path: "Sources/WikiFS",
             // WKWebView for the reader path (Sources/WikiFS/WikiReaderView.swift)
@@ -159,7 +175,7 @@ let package = Package(
         ),
         .testTarget(
             name: "WikiFSTests",
-            dependencies: ["WikiFSCore", "WikiCtlCore", "WikiFS", "WikiFSMLX", "WikiFSFileProvider",
+            dependencies: ["WikiFSCore", "WikiCtlCore", "WikiFS", "WikiFSMLX", "WikiFSEngine", "WikiFSFileProvider",
                            // ACP model types for ACPBackendTests (no live subprocess — pure translator tests).
                            .product(name: "ACPModel", package: "swift-acp")],
             path: "Tests/WikiFSTests",

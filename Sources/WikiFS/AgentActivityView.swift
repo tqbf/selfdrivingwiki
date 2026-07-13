@@ -1,5 +1,7 @@
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
+import WikiFSEngine
 
 /// The live activity feed for a `claude -p` run. This is the inspector/log
 /// surface: compact rows, tool calls, diagnostics, and optional internals.

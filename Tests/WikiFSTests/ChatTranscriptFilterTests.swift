@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import WikiFSCore
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Tests for `[AgentEvent].transcriptVisible`, the filter shared by the live
 /// Query page (`ChatTranscriptView`) and the read-only chat-history view

@@ -16,26 +16,35 @@ import WikiFSCore
 /// immediately by the next extract.
 @MainActor
 @Observable
-final class ExtractionCoordinator {
-    let containerDirectory: URL
-    let credentialStore: any ExtractionCredentialStore
+public final class ExtractionCoordinator {
+    public let containerDirectory: URL
+    public let credentialStore: any ExtractionCredentialStore
     /// Shared HTTP fetcher for the remote/model backends (production: a generous
     /// `URLSession`; tests inject a fake).
-    let fetcher: any HTTPRequestFetcher
+    public let fetcher: any HTTPRequestFetcher
 
-    init(
+    /// Factory for the local pdf2md extractor (`LocalPdf2MarkdownExtractor`).
+    /// Injected because that type lives in the app target (it delegates to the
+    /// AppKit-coupled `PdfExtractionService`). The app passes a concrete closure
+    /// at wiring time; `current()` calls it when the configured backend is
+    /// `.localPdf2md`.
+    private let localExtractorFactory: @MainActor () -> any MarkdownExtractor
+
+    public init(
         containerDirectory: URL,
         credentialStore: any ExtractionCredentialStore = KeychainExtractionCredentialStore(),
-        fetcher: any HTTPRequestFetcher = URLSessionRequestFetcher()
+        fetcher: any HTTPRequestFetcher = URLSessionRequestFetcher(),
+        localExtractorFactory: @escaping @MainActor () -> any MarkdownExtractor
     ) {
         self.containerDirectory = containerDirectory
         self.credentialStore = credentialStore
         self.fetcher = fetcher
+        self.localExtractorFactory = localExtractorFactory
     }
 
     /// The latest non-secret config off disk. Re-loaded each access so a
     /// Settings Save is picked up immediately by the next `current()` call.
-    var config: ExtractionConfig {
+    public var config: ExtractionConfig {
         ExtractionConfig.load(from: containerDirectory)
     }
 
@@ -45,11 +54,11 @@ final class ExtractionCoordinator {
     /// secrets; Docling's endpoint is the raw config value (empty when unset, so
     /// its `readiness()` reports `.needsSetup`); Anthropic falls back to the
     /// public API base URL when no override is configured.
-    func current() -> any MarkdownExtractor {
+    public func current() -> any MarkdownExtractor {
         let cfg = config
         switch cfg.backend {
         case .localPdf2md:
-            return LocalPdf2MarkdownExtractor()
+            return localExtractorFactory()
         case .anthropic:
             let base = cfg.anthropicBaseURLOverride.flatMap(URL.init(string:))
                 ?? URL(string: ExtractionConfig.defaultAnthropicBaseURL)!

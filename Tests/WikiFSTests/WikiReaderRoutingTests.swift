@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 @testable import WikiFSCore
 
 /// Tests for `WikiReaderView.linkRoute(for:)` — the pure URL→routing classifier

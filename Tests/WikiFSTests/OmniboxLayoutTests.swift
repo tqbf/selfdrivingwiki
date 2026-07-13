@@ -1,6 +1,7 @@
 import CoreGraphics
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Sizing/overflow behavior of the toolbar omnibox. Uses a fixed `Metrics` so the
 /// thresholds are exact and independent of the real switcher/transcript widths.

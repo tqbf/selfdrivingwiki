@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Tests for `FileProviderSpike` schema migration and non-blocking path
 /// resolution.  Share URL resolution (`resolveSourceByNameURL` /

@@ -1,6 +1,9 @@
 import Foundation
+import WikiFSEngine
 import Testing
+import WikiFSEngine
 @testable import WikiFS
+@testable import WikiFSEngine
 import WikiFSCore
 
 /// Tests for `AgentLauncher.startNewChat()`'s clearing/guard behavior

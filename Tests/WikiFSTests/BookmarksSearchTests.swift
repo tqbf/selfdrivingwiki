@@ -1,5 +1,6 @@
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 import WikiFSCore
 
 /// Tests for `BookmarksContainerView.filterNodes` — the pure substring search

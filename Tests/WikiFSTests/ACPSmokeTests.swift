@@ -1,7 +1,10 @@
 import Testing
+import WikiFSEngine
 import Foundation
+import WikiFSEngine
 import WikiFSCore
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Live ACP smoke harness — drives `ACPBackend` against a REAL ACP agent
 /// subprocess, validating the wire path the unit tests can't: launch →

@@ -1,5 +1,7 @@
 import AppKit
+import WikiFSEngine
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
 
 /// The Sources section — a native header (Add buttons, filter picker, search)
@@ -83,7 +85,9 @@ struct SourcesContainerView: View {
         ) {
             Button("Ingest Again", role: .destructive) {
                 launcher.ingestSources(sourceIDs: pendingBatchIngestIDs,
-                    store: store, manager: manager, fileProvider: fileProvider)
+                    store: store, wikiID: manager.activeWikiID ?? "",
+                    changeSignaler: fileProvider,
+                    wikictlDirectory: HelpersLocation.wikictlDirectory)
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -207,7 +211,9 @@ struct SourcesContainerView: View {
             },
             onIngest: { ids in
                 launcher.ingestSources(sourceIDs: ids, store: store,
-                                       manager: manager, fileProvider: fileProvider)
+                                       wikiID: manager.activeWikiID ?? "",
+                                       changeSignaler: fileProvider,
+                                       wikictlDirectory: HelpersLocation.wikictlDirectory)
             },
             onIngestNeedsConfirmation: { ids, names in
                 pendingBatchIngestIDs = ids

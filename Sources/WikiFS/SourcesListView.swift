@@ -1,5 +1,7 @@
 import AppKit
+import WikiFSEngine
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
 
 // MARK: - SwiftUI bridge

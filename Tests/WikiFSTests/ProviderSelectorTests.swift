@@ -1,7 +1,10 @@
 import Testing
+import WikiFSEngine
 import Foundation
+import WikiFSEngine
 import ACPModel
 @testable import WikiFS
+@testable import WikiFSEngine
 @testable import WikiFSCore
 
 /// v1 provider-selector tests (#325): the `settingDefault(id:)` mutator on

@@ -1,6 +1,7 @@
 import AppKit
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Tests for the WKWebView subclass's pure helpers that back the right-click
 /// "Add as Source" item: the AppKit→CSS coordinate flip (`cssHitTestPoint`) and

@@ -3,6 +3,7 @@ import Testing
 import WebKit
 import WikiFSCore
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Tests for `BlobSchemeHandler` — the `WKURLSchemeHandler` that serves source
 /// blob bytes from SQLite to the WKWebView via `wiki-blob://source/<id>`

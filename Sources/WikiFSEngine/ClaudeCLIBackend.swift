@@ -25,7 +25,7 @@ import WikiFSCore
 /// the launcher's `onStdoutChunk`/`onStderrChunk` for raw mirroring
 /// (`rawTranscript`, `stderr`, `run.jsonl`, `run.stderr.log`). The launcher
 /// owns the log file handles and the mirrors — only the pipe reading moved.
-actor ClaudeCLIBackend: AgentBackend {
+public actor ClaudeCLIBackend: AgentBackend {
 
     /// A `Sendable` gate that fires an `onExit` callback exactly once. Used by
     /// the `terminationHandler` (background queue) without needing to hop to
@@ -139,7 +139,7 @@ actor ClaudeCLIBackend: AgentBackend {
 // TEMP DEBUG: lifecycle logging (spawn args, per-event routing, turn end). Strip
 // TEMP DEBUG: via `grep -n "TEMP DEBUG"`.
 
-    func start(
+    public func start(
         profile: BackendProfile,
         systemPrompt: String,
         onExit: @escaping @Sendable (Int) -> Void
@@ -328,7 +328,7 @@ actor ClaudeCLIBackend: AgentBackend {
     /// `send` so the consumer begins draining immediately.
     private var initialStreams: [String: AsyncStream<AgentEvent>] = [:]
 
-    func send(_ turn: TurnInput, into handle: SessionHandle) async -> AsyncStream<AgentEvent> {
+    public func send(_ turn: TurnInput, into handle: SessionHandle) async -> AsyncStream<AgentEvent> {
         guard let session = sessions[handle.id] else {
             // Session gone (cancelled/finished) — return an empty stream.
             DebugLog.agent("ClaudeCLIBackend.send: no session for handle \(handle.id) — empty stream") // TEMP DEBUG
@@ -393,13 +393,13 @@ actor ClaudeCLIBackend: AgentBackend {
         return stream
     }
 
-    func resume(sessionID: String, profile: BackendProfile) async throws -> SessionHandle? {
+    public func resume(sessionID: String, profile: BackendProfile) async throws -> SessionHandle? {
         // Phase 0 does NOT implement resume. The CLI backend cannot resume a
         // prior session by opaque id (claude's `--resume` was never wired).
         return nil
     }
 
-    func cancel(_ session: SessionHandle) async {
+    public func cancel(_ session: SessionHandle) async {
         guard let session = sessions.removeValue(forKey: session.id) else {
             DebugLog.agent("ClaudeCLIBackend.cancel: no session for handle \(session.id) — no-op") // TEMP DEBUG
             return

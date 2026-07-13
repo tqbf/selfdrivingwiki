@@ -1,5 +1,6 @@
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 @testable import WikiFSCore
 
 /// Fidelity tests for the source web reader's Markdown→HTML renderer. The

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Tests for `EditableTitle.committedValue` — the pure rule that decides whether
 /// an inline title edit is a real rename worth committing.

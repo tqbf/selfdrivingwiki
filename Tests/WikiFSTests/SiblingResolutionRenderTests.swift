@@ -2,6 +2,7 @@ import Testing
 import Foundation
 @testable import WikiFSCore
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Phase 4 render-time sibling resolution tests (AC.4). Verifies that
 /// `MarkdownHTMLRenderer.render(_, imageResolver:)` rewrites relative image srcs

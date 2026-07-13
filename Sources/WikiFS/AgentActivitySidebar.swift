@@ -1,5 +1,7 @@
 import AppKit
+import WikiFSEngine
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
 
 /// A trailing inspector for the active agent run. It reuses the operations

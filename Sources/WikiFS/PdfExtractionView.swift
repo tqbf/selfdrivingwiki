@@ -1,5 +1,7 @@
 import SwiftUI
+import WikiFSEngine
 import WikiFSCore
+import WikiFSEngine
 
 /// The local pdf2md output surface, shown above `AgentActivityView` in the
 /// ingest sheet when the source is a PDF.

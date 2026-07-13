@@ -2,6 +2,7 @@ import AppKit
 @preconcurrency import FileProvider
 import Observation
 import WikiFSCore
+import WikiFSEngine
 
 /// Drives the File Provider domains from the app — now ONE domain per wiki
 /// (`plans/llm-wiki.md` Phase 0). Registers/removes a domain per wiki, resolves
@@ -14,9 +15,13 @@ import WikiFSCore
 /// reads `domain.identifier` to pick `<ulid>.sqlite`. The display name only sets
 /// the Finder mount label (`~/Library/CloudStorage/Self Driving Wiki-<name>`), so a rename
 /// is cosmetic and never breaks the DB mapping.
+///
+/// Conforms to `ChangeSignaler` so the engine (`AgentOperationRunner`,
+/// `AgentLauncher`) can signal changes + read the mount path without depending
+/// on this AppKit-coupled class directly (plans/multi-wiki-daemon.md §3.2).
 @MainActor
 @Observable
-final class FileProviderSpike {
+final class FileProviderSpike: ChangeSignaler {
     var status = "Not registered"
     /// The user-visible mount path of the ACTIVE wiki (resolved at select time).
     var path: String?

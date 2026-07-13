@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 
 @MainActor
 @Suite struct ComposerTextViewTests {

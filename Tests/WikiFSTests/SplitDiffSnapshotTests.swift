@@ -3,6 +3,7 @@ import Foundation
 import SwiftUI
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 @testable import WikiFSCore
 
 /// Not assertion tests — a visual harness. Hosts the real compare surfaces in a

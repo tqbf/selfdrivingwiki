@@ -1,4 +1,5 @@
 import SwiftUI
+import WikiFSEngine
 
 struct AgentRunStatusView: View {
     @Bindable var launcher: AgentLauncher

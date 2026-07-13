@@ -44,7 +44,7 @@ import WikiFSCore
 /// **Spike scope:** not wired into the launcher/UI yet (a later slice). No
 /// live-agent end-to-end testing; the translator + permission policy are
 /// unit-tested with no subprocess.
-actor ACPBackend: AgentBackend {
+public actor ACPBackend: AgentBackend {
 
     /// How the configured ACP agent subprocess is spawned. Pluggable (NOT locked
     /// to the Zed adapter) — the user points at any ACP agent via the dedicated
@@ -150,7 +150,7 @@ actor ACPBackend: AgentBackend {
 // TEMP DEBUG: prompt). Each DebugLog.agent line is tagged TEMP DEBUG for a
 // TEMP DEBUG: later `grep -n "TEMP DEBUG"` strip.
 
-    func start(
+    public func start(
         profile: BackendProfile,
         systemPrompt: String,
         onExit: @escaping @Sendable (Int) -> Void
@@ -311,7 +311,7 @@ actor ACPBackend: AgentBackend {
         return SessionHandle(id: sessionID)
     }
 
-    func send(_ turn: TurnInput, into handle: SessionHandle) async -> AsyncStream<AgentEvent> {
+    public func send(_ turn: TurnInput, into handle: SessionHandle) async -> AsyncStream<AgentEvent> {
         guard let session = sessions[handle.id] else {
             // Session gone (cancelled/finished) — return an empty, finished stream.
             DebugLog.agent("ACPBackend.send: no session for handle \(handle.id) — empty stream") // TEMP DEBUG (existed; re-tagged)
@@ -447,13 +447,13 @@ actor ACPBackend: AgentBackend {
         }
     }
 
-    func resume(sessionID: String, profile: BackendProfile) async throws -> SessionHandle? {
+    public func resume(sessionID: String, profile: BackendProfile) async throws -> SessionHandle? {
         // Phase 0 does NOT implement resume — matches the port's default. ACP
         // *can* resume via session/load, but that's a later slice.
         return nil
     }
 
-    func cancel(_ session: SessionHandle) async {
+    public func cancel(_ session: SessionHandle) async {
         guard let record = sessions.removeValue(forKey: session.id) else {
             DebugLog.agent("ACPBackend.cancel: no session for handle \(session.id) — no-op") // TEMP DEBUG
             return

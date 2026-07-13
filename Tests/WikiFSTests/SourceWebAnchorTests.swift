@@ -1,5 +1,6 @@
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 @testable import WikiFSCore
 
 /// Tests for the source web reader's anchor resolution — the Swift-side logic

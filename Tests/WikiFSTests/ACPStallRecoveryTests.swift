@@ -1,6 +1,9 @@
 import Testing
+import WikiFSEngine
 import Foundation
+import WikiFSEngine
 @testable import WikiFS
+@testable import WikiFSEngine
 @testable import WikiFSCore
 
 /// Stop-path audit + stall recovery (1c from `plans/acp-stall-recovery.md`).

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 @testable import WikiFSCore
 
 /// Tests for the agent transcript's wiki-link linkify pre-pass. Assistant/result

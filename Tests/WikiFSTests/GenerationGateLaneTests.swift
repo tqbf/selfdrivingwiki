@@ -1,6 +1,9 @@
 import Foundation
+import WikiFSEngine
 import Testing
+import WikiFSEngine
 @testable import WikiFS
+@testable import WikiFSEngine
 
 /// Tests for Phase 2: lane-aware generation gate (`#multi-writer-hardening`).
 ///

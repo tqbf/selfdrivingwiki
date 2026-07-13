@@ -1,7 +1,10 @@
 import Testing
+import WikiFSEngine
 import Foundation
+import WikiFSEngine
 import ACPModel
 @testable import WikiFS
+@testable import WikiFSEngine
 @testable import WikiFSCore
 
 /// #324 provider model + selection tests. Pure logic only — NO live agent

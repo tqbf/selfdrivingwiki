@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import WikiFS
+@testable import WikiFSEngine
 
 @Suite struct PdfExtractionServiceTests {
 
