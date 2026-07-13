@@ -37,15 +37,18 @@ struct ChatTranscriptView: View {
     /// Versioned quote-anchor highlight request (`[[chat:Title#"quote"]]`,
     /// issue #281), forwarded to the transcript web view.
     var quoteAnchor: ChatHighlightRequest? = nil
+    /// When true, tool-call rows are filtered from the transcript (issue #381).
+    var hideToolCalls: Bool = false
 
     var body: some View {
-        Group {
-            if events.isEmpty {
+        let visibleEvents = hideToolCalls ? events.filter { !$0.isToolCall } : events
+        return Group {
+            if visibleEvents.isEmpty {
                 placeholder
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
                 ChatWebView(
-                    events: events,
+                    events: visibleEvents,
                     style: .chat,
                     onWikiLink: onWikiLink,
                     renderContext: renderContext,

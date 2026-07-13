@@ -130,6 +130,15 @@ public enum AgentEvent: Equatable, Sendable, Codable {
         if case .messageStop = event { return true }
         return false
     }
+
+    /// True for tool-use and tool-result events (issue #381). Used to filter
+    /// tool calls from the transcript when `hideToolCalls` is enabled.
+    public var isToolCall: Bool {
+        switch self {
+        case .toolUse, .toolResult: return true
+        default: return false
+        }
+    }
 }
 
 /// Tolerant line-at-a-time parser for `claude -p --output-format stream-json`

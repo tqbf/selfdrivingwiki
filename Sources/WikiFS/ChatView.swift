@@ -33,6 +33,10 @@ struct ChatView: View {
     @State private var persistedMessages: [ChatMessage] = []
     @AppStorage("chat.zoom") private var chatZoom = Double(ZoomScale.defaultScale)
     @AppStorage("isChatOutlineExpanded") private var chatOutlineExpanded = false
+    /// Persisted toggle to hide tool-call rows from the chat transcript
+    /// (issue #381). Independent of "Show internals" which gates the full
+    /// raw activity feed.
+    @AppStorage("chat.hideToolCalls") private var hideToolCalls = false
     @State private var outlineScroll: ChatScrollRequest? = nil
     @State private var quoteAnchor: ChatHighlightRequest? = nil
     /// The chat's always-ask/yolo mode (shared with the launcher, read at spawn).
@@ -183,6 +187,7 @@ struct ChatView: View {
                 }
                 Menu {
                     Toggle("Show internals", isOn: $showsInternals)
+                    Toggle("Hide tool calls", isOn: $hideToolCalls)
                     if let status = launcher.exitStatus {
                         Label(status == 0 ? "Ended" : "Exited \(status)", systemImage: status == 0 ? "checkmark.circle" : "xmark.circle")
                     }
@@ -284,7 +289,8 @@ struct ChatView: View {
                         blobStore: store,
                         zoom: chatZoom,
                         scrollRequest: outlineScroll,
-                        quoteAnchor: quoteAnchor
+                        quoteAnchor: quoteAnchor,
+                        hideToolCalls: hideToolCalls
                     )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.horizontal, PageEditorMetrics.contentInset)

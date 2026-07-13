@@ -490,9 +490,19 @@ struct ChatWebView: NSViewRepresentable {
             let nameHTML = name.map { "<span class=\"chat-tool-name\">\(escape($0))</span>" } ?? ""
             let body = summary.isEmpty ? (isError ? "(error)" : "") : summary
             let summaryHTML = body.isEmpty ? "" : "<span class=\"chat-tool-summary\">\(escape(body))</span>"
+            // Expandable tool row (issue #381): a <details> element so the user
+            // can click to reveal the full summary. Only adds the disclosure if
+            // there's content to expand into; otherwise renders as before.
+            if body.isEmpty {
+                return """
+                <div class="row chat-row chat-tool\(isError ? " is-error" : "")">\
+                \(nameHTML)\(summaryHTML)</div>
+                """
+            }
             return """
-            <div class="row chat-row chat-tool\(isError ? " is-error" : "")">\
-            \(nameHTML)\(summaryHTML)</div>
+            <details class="row chat-row chat-tool\(isError ? " is-error" : "")">\
+            <summary>\(nameHTML)\(summaryHTML)</summary>\
+            <pre class="chat-tool-detail\">\(escape(body))</pre></details>
             """
         }
 
@@ -641,6 +651,20 @@ struct ChatWebView: NSViewRepresentable {
           }
           .chat-tool.is-error { color: #ff453a; }
           .chat-tool.is-error .chat-tool-name { color: #ff453a; }
+          .chat-tool > summary { list-style: none; cursor: pointer; }
+          .chat-tool > summary::-webkit-details-marker { display: none; }
+          .chat-tool[open] > summary .chat-tool-summary::before {
+            content: "▾ "; opacity: 0.5;
+          }
+          .chat-tool:not([open]) > summary .chat-tool-summary::before {
+            content: "▸ "; opacity: 0.5;
+          }
+          .chat-tool-detail {
+            margin: 4px 0 0; padding: 6px 8px; font-size: 11px;
+            background: var(--code-bg); border-radius: 4px;
+            white-space: pre-wrap; word-break: break-word;
+            max-height: 200px; overflow-y: auto;
+          }
           p { margin: 0 0 0.6em; }
           p:last-child { margin-bottom: 0; }
           h1, h2, h3, h4, h5, h6 { line-height: 1.25; font-weight: 600; margin: 0.7em 0 0.3em; }
