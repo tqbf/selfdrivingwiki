@@ -112,7 +112,7 @@ The test target is `WikiFSTests` (in `Tests/WikiFSTests/`).
 **Where to look** for the main subsystems:
 
 - **Schema + migrations + change token:** `Sources/WikiFSCore/SQLiteWikiStore.swift`
-- **Multi-wiki:** `WikiRegistry.swift` / `WikiDescriptor.swift` / `WikiManager.swift`, `DatabaseLocation.swift`
+- **Multi-wiki:** `WikiRegistry.swift` / `WikiDescriptor.swift` / `WikiRegistryClient.swift`, `DatabaseLocation.swift`
 - **File Provider projection:** `Sources/WikiFSFileProvider/Projection.swift`, `FileProviderExtension.swift`, `WikiFSEnumerator.swift`, `WikiFSItem.swift`
 - **The agent operations:** `WikiOperation.swift` / `OperationCommand.swift` / `IngestPlan.swift` / `IngestWriteRule.swift` / `AgentEvent.swift` (core) and `AgentLauncher.swift` / `SpawnGate.swift` (spawn serialization) / `QueryConversationView.swift` (ask/edit sessions) / `OperationsView.swift` / `AgentActivityView.swift` / `OperationRequest.swift` (app)
 - **Write path + change bridge:** `wikictl/main.swift`, `WikiCtlCore/*`, `WikiFSCore/PageUpsert.swift`, `WikiFSCore/WikiChangeNotification.swift`, `WikiFS/WikiChangeBridge.swift`, `WikiFSCore/ChangeCoalescer.swift`

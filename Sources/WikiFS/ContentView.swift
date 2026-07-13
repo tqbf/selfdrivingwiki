@@ -1,7 +1,6 @@
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
-import WikiFSEngine
 
 /// The active wiki's shell: a sidebar (wiki switcher + pages + files) and a
 /// detail pane that edits the selected page, the system prompt, or shows a
@@ -9,7 +8,10 @@ import WikiFSEngine
 /// which swaps it wholesale (via `.id`) when the user switches wikis.
 struct ContentView: View {
     @Bindable var store: WikiStoreModel
-    @Bindable var manager: WikiManager
+    /// The per-active-wiki session (store + launchers + gate + descriptor).
+    var session: WikiSession
+    /// App-scoped registry: wiki list + active id + create/select/delete.
+    @Bindable var registry: WikiRegistryClient
     let fileProvider: FileProviderSpike
     @Bindable var agentLauncher: AgentLauncher
     let chatLauncher: AgentLauncher
@@ -151,7 +153,7 @@ struct ContentView: View {
     @ViewBuilder
     private var baseContent: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(store: store, manager: manager, fileProvider: fileProvider,
+            SidebarView(store: store, registry: registry, session: session, fileProvider: fileProvider,
                         launcher: agentLauncher,
                         chatLauncher: chatLauncher,
                         ingestingSourceIDs: agentLauncher.ingestingSourceIDs,
@@ -234,17 +236,13 @@ struct ContentView: View {
     /// instead of pushing the switcher into overflow. Mirrors `WikiSwitcher`'s
     /// `activeDescriptor`.
     private var activeWikiName: String {
-        guard let id = manager.activeWikiID,
-              let wiki = manager.wikis.first(where: { $0.id == id }) else { return "No Wiki" }
-        return wiki.displayName
+        session.descriptor.displayName
     }
 
     /// The active wiki's configured home page, if any (issue #280). `nil` hides
     /// the omnibox home button.
     private var activeHomePageID: PageID? {
-        guard let id = manager.activeWikiID,
-              let wiki = manager.wikis.first(where: { $0.id == id }) else { return nil }
-        return wiki.homePageID
+        session.descriptor.homePageID
     }
 
     /// The selected-document/source detail pane, extracted so the `HStack`'s
@@ -316,7 +314,7 @@ struct ContentView: View {
             // The wiki switcher moves out of the sidebar header into the toolbar,
             // trailing the omnibox (like a browser account / profile control).
             ToolbarItem(placement: .primaryAction) {
-                WikiSwitcher(manager: manager)
+                WikiSwitcher(registry: registry)
             }
 
             primaryToolbarItems()
@@ -338,7 +336,7 @@ struct ContentView: View {
             store: store,
             launcher: agentLauncher,
             chatLauncher: chatLauncher,
-            manager: manager,
+            session: session,
             fileProvider: fileProvider,
             extractionCoordinator: extractionCoordinator,
             runIngest: runIngest,
@@ -357,7 +355,7 @@ struct ContentView: View {
                 sourceID: sourceID,
                 launcher: agentLauncher,
                 store: store,
-                wikiID: manager.activeWikiID ?? "",
+                wikiID: session.wikiID,
                 changeSignaler: fileProvider,
                 wikictlDirectory: HelpersLocation.wikictlDirectory,
                 extractionCoordinator: extractionCoordinator)

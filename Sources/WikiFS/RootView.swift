@@ -1,35 +1,42 @@
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
-import WikiFSEngine
 
 /// Hosts the active wiki's editor, swapping wholesale when the user switches
-/// wikis. Observing `manager` here (not inside `ContentView`) keeps the heavy
-/// editor view from re-initializing on unrelated manager changes — it re-creates
-/// only when `activeStore`'s identity changes.
+/// wikis. The session (one per active wiki) carries the store + launchers;
+/// the registry carries the wiki list + active id. Observing both here (not
+/// inside `ContentView`) keeps the heavy editor view from re-initializing on
+/// unrelated registry changes — it re-creates only when the session's wiki
+/// changes.
 ///
-/// `.id(manager.activeWikiID)` forces a clean `ContentView` rebuild on a wiki
-/// switch so no editor draft or selection leaks across wikis (§3.1 — state tied
-/// to the wrong source is the classic frozen-snapshot bug).
+/// `.id(session.wikiID)` forces a clean `ContentView` rebuild on a wiki switch
+/// so no editor draft or selection leaks across wikis (§3.1 — state tied to the
+/// wrong source is the classic frozen-snapshot bug). Without `.id()`, SwiftUI
+/// keys `@State` by structural identity, not by the `@Observable` object's
+/// identity — a session swap (non-nil→non-nil) would NOT reset child `@State`
+/// (editor drafts, selection), reintroducing the frozen-snapshot bug.
 struct RootView: View {
-    @Bindable var manager: WikiManager
+    /// The per-active-wiki session (store + launchers + gate). Nil before any
+    /// wiki exists / after the last one is deleted — the empty state shows a
+    /// "create a wiki" affordance.
+    var session: WikiSession?
+    /// App-scoped registry: wiki list + active id + create/select/delete.
+    @Bindable var registry: WikiRegistryClient
     let fileProvider: FileProviderSpike
-    @Bindable var agentLauncher: AgentLauncher
-    let chatLauncher: AgentLauncher
-    @Bindable var extractionCoordinator: ExtractionCoordinator
 
     var body: some View {
         Group {
-            if let store = manager.activeStore {
+            if let session {
                 ContentView(
-                    store: store,
-                    manager: manager,
+                    store: session.store,
+                    session: session,
+                    registry: registry,
                     fileProvider: fileProvider,
-                    agentLauncher: agentLauncher,
-                    chatLauncher: chatLauncher,
-                    extractionCoordinator: extractionCoordinator
+                    agentLauncher: session.agentLauncher,
+                    chatLauncher: session.chatLauncher,
+                    extractionCoordinator: session.extractionCoordinator
                 )
-                .id(manager.activeWikiID)
+                .id(session.wikiID)
             } else {
                 ContentUnavailableView {
                     Label("No Wikis", systemImage: "books.vertical")
@@ -37,7 +44,7 @@ struct RootView: View {
                     Text("Create a wiki to get started.")
                 } actions: {
                     Button("New Wiki", systemImage: "plus") {
-                        Task { await manager.createWiki(displayName: "My Wiki") }
+                        Task { await registry.createWiki(displayName: "My Wiki") }
                     }
                 }
             }

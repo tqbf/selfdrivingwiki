@@ -1,7 +1,6 @@
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
-import WikiFSEngine
 
 /// Unified page surface. The header (title, date, action buttons) stays fixed
 /// regardless of mode. The content area below the divider swaps between rendered
@@ -10,7 +9,8 @@ import WikiFSEngine
 struct PageDetailView: View {
     @Bindable var store: WikiStoreModel
     @Bindable var launcher: AgentLauncher
-    @Bindable var manager: WikiManager
+    /// The per-active-wiki session (store + launchers + descriptor).
+    var session: WikiSession
     let fileProvider: FileProviderSpike
     @State private var isEditing = false
     /// Pending scroll-to-heading for the editor (outline click while editing).
@@ -86,7 +86,7 @@ struct PageDetailView: View {
                                     await AgentOperationRunner.runLintPages(
                                         pages: [(id: id, title: pageTitle)],
                                         launcher: launcher, store: store,
-                                        wikiID: manager.activeWikiID ?? "",
+                                        wikiID: session.wikiID,
                                         changeSignaler: fileProvider,
                                         wikictlDirectory: HelpersLocation.wikictlDirectory)
                                 }

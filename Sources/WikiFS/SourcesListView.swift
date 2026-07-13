@@ -1,7 +1,6 @@
 import AppKit
 import WikiFSEngine
 import SwiftUI
-import WikiFSEngine
 import WikiFSCore
 
 // MARK: - SwiftUI bridge
@@ -17,7 +16,7 @@ import WikiFSCore
 struct SourcesListView: NSViewControllerRepresentable {
     let store: WikiStoreModel
     let fileProvider: FileProviderSpike
-    let manager: WikiManager
+    let session: WikiSession
     let launcher: AgentLauncher
     let ingestingSourceIDs: Set<PageID>
     let extractingSourceIDs: Set<PageID>
@@ -29,7 +28,6 @@ struct SourcesListView: NSViewControllerRepresentable {
         let vc = SourcesListViewController()
         vc.store = store
         vc.fileProvider = fileProvider
-        vc.manager = manager
         vc.launcher = launcher
         vc.callbacks = callbacks
         vc.ingestingIDs = ingestingSourceIDs
@@ -40,7 +38,6 @@ struct SourcesListView: NSViewControllerRepresentable {
     func updateNSViewController(_ vc: SourcesListViewController, context: Context) {
         vc.store = store
         vc.fileProvider = fileProvider
-        vc.manager = manager
         vc.launcher = launcher
         vc.callbacks = callbacks
         vc.ingestingIDs = ingestingSourceIDs
@@ -226,7 +223,6 @@ final class SourcesListViewController: NSViewController {
     var tableView: SourcesNSTableView!
     var store: WikiStoreModel?
     var fileProvider: FileProviderSpike?
-    var manager: WikiManager?
     var launcher: AgentLauncher?
     var callbacks: SourcesListCallbacks?
     var ingestingIDs: Set<PageID> = []

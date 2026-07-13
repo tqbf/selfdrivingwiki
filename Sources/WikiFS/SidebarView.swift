@@ -11,8 +11,10 @@ import WikiFSEngine
 /// machinery are gone — each view owns its selection.
 struct SidebarView: View {
     @Bindable var store: WikiStoreModel
-    /// The multi-wiki manager — backs the switcher header at the top of the list.
-    @Bindable var manager: WikiManager
+    /// App-scoped registry — backs the switcher header at the top of the list.
+    @Bindable var registry: WikiRegistryClient
+    /// The per-active-wiki session (store + launchers + descriptor).
+    var session: WikiSession
     /// Used to open an ingested file in its default app via its user-visible URL.
     let fileProvider: FileProviderSpike
     /// Required to launch the LLM lint from the sidebar context menu.
@@ -164,11 +166,12 @@ struct SidebarView: View {
         switch selectedSection {
         case .pages:
             PagesContainerView(store: store, fileProvider: fileProvider,
-                               manager: manager, launcher: launcher,
+                               session: session, registry: registry,
+                               launcher: launcher,
                                onNewPage: onNewPage)
         case .sources:
             SourcesContainerView(store: store, fileProvider: fileProvider,
-                                 manager: manager, launcher: launcher,
+                                 session: session, launcher: launcher,
                                  ingestingSourceIDs: ingestingSourceIDs,
                                  extractingSourceIDs: extractingSourceIDs,
                                  showingAddFromZotero: $showingAddFromZotero,
@@ -191,8 +194,7 @@ struct SidebarView: View {
     /// The active wiki's display name for the window title (falls back to the app
     /// name when no wiki is selected yet).
     private var activeWikiName: String {
-        guard let id = manager.activeWikiID else { return "Self Driving Wiki" }
-        return manager.wikis.first { $0.id == id }?.displayName ?? "Self Driving Wiki"
+        session.descriptor.displayName
     }
 }
 

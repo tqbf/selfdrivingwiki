@@ -23,7 +23,8 @@ struct ChatView: View {
 
     @Bindable var store: WikiStoreModel
     @Bindable var launcher: AgentLauncher
-    @Bindable var manager: WikiManager
+    /// The per-active-wiki session (store + launchers + descriptor).
+    var session: WikiSession
     let fileProvider: FileProviderSpike
 
     @State private var draftMessage = ""
@@ -335,10 +336,10 @@ struct ChatView: View {
     @ViewBuilder
     private func composerToolbar(sendActive: Bool) -> some View {
         HStack(spacing: 10) {
-            if manager.activeWikiID != nil {
-                ProviderSelector(launcher: launcher)
-                PermissionModeSelector(rawValue: $permissionModeRaw)
-            }
+            // Inside ContentView the session is always non-nil (a wiki is
+            // open), so the provider/model chips are always shown.
+            ProviderSelector(launcher: launcher)
+            PermissionModeSelector(rawValue: $permissionModeRaw)
             Spacer(minLength: 0)
             // Paseo: the send button appears only once there's something to
             // send — an empty composer shows no action glyph at all.
@@ -560,7 +561,7 @@ struct ChatView: View {
                     message: message,
                     store: store,
                     launcher: launcher,
-                    wikiID: manager.activeWikiID ?? "",
+                    wikiID: session.wikiID,
                     changeSignaler: fileProvider,
                     wikictlDirectory: HelpersLocation.wikictlDirectory
                 )
@@ -572,7 +573,7 @@ struct ChatView: View {
                     firstMessage: message,
                     launcher: launcher,
                     store: store,
-                    wikiID: manager.activeWikiID ?? "",
+                    wikiID: session.wikiID,
                     changeSignaler: fileProvider,
                     wikictlDirectory: HelpersLocation.wikictlDirectory
                 )
@@ -600,10 +601,10 @@ struct ChatView: View {
     /// is responding) disables the composer — the takeover rules refuse a
     /// mid-generation interrupt, so the composer reflects that.
     private var isComposerEnabled: Bool {
-        // Draft state (.newChat with chatID == nil): always enabled (when a
-        // wiki is open and nothing is generating).
+        // Draft state (.newChat with chatID == nil): always enabled (a wiki
+        // is open inside ContentView; nothing is generating).
         guard chatID != nil else {
-            return manager.activeWikiID != nil && (launcher.isInteractiveSession || !launcher.isRunning)
+            return launcher.isInteractiveSession || !launcher.isRunning
         }
         // The active live chat: enabled when a turn isn't in flight.
         if isLiveChat {
@@ -613,8 +614,9 @@ struct ChatView: View {
         // is idle (`!isGenerating && !isAwaitingGenerationSlot`). If that launcher
         // is mid-generation (a different chat), the composer stays
         // disabled — `continueChat`'s takeover guard would refuse anyway.
-        return manager.activeWikiID != nil
-            && !launcher.isGenerating
+        // (A session is only alive when a wiki is open, so the activeWikiID
+        // check the old code had is always true here.)
+        return !launcher.isGenerating
             && !launcher.isAwaitingGenerationSlot
     }
 
@@ -631,7 +633,10 @@ struct ChatView: View {
     }
 
     private var canType: Bool {
-        manager.activeWikiID != nil && (launcher.isInteractiveSession || !launcher.isRunning)
+        // A session is always alive when ChatView is rendered inside
+        // ContentView, so the old `activeWikiID != nil` check is
+        // always true here.
+        launcher.isInteractiveSession || !launcher.isRunning
     }
 
     private var canSend: Bool {

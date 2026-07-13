@@ -1,7 +1,6 @@
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
-import WikiFSEngine
 
 /// The Pages section of the sidebar — a native header (title, New Page, sort
 /// picker, search) above an AppKit `NSTableView` (`PagesListView`). Mirrors
@@ -10,7 +9,10 @@ import WikiFSEngine
 struct PagesContainerView: View {
     @Bindable var store: WikiStoreModel
     let fileProvider: FileProviderSpike
-    let manager: WikiManager
+    /// The per-active-wiki session (store + launchers + descriptor).
+    var session: WikiSession
+    /// App-scoped registry — used for `setHomePage` persistence.
+    var registry: WikiRegistryClient
     let launcher: AgentLauncher
     let onNewPage: () -> Void
 
@@ -29,7 +31,7 @@ struct PagesContainerView: View {
             Divider()
             ZStack(alignment: .topLeading) {
                 PagesListView(store: store, fileProvider: fileProvider,
-                              manager: manager, launcher: launcher,
+                              session: session, launcher: launcher,
                               callbacks: callbacks)
                 if visible.isEmpty && !store.searchQuery.isEmpty {
                     Text("No matching pages")
@@ -154,7 +156,7 @@ struct PagesContainerView: View {
                     }
                     await AgentOperationRunner.runLintPages(
                         pages: pages, launcher: launcher, store: store,
-                        wikiID: manager.activeWikiID ?? "",
+                        wikiID: session.wikiID,
                         changeSignaler: fileProvider,
                         wikictlDirectory: HelpersLocation.wikictlDirectory)
                 }
@@ -162,6 +164,17 @@ struct PagesContainerView: View {
             onRename: { summary in beginRename(summary) },
             onDelete: { ids in
                 for id in ids { store.delete(id) }
+            },
+            onSetHomePage: { pageID in
+                registry.setHomePage(id: session.wikiID, pageID: pageID)
+                // Optimistically update the session's in-memory descriptor so
+                // the menu toggles immediately (the registry write + wikis
+                // reload won't propagate to the session until the app layer
+                // bridges it — do it eagerly here). WikiDescriptor is a
+                // struct, so we copy-mutate through a local.
+                var d = session.descriptor
+                d.homePageID = pageID
+                session.updateDescriptor(d)
             },
             onAddToBookmarks: { ids in
                 addToBookmarksContext = BookmarkTargetPickerContext(kind: .pages, ids: ids)
