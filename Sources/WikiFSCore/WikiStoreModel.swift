@@ -566,6 +566,21 @@ public final class WikiStoreModel {
         }
     }
 
+    /// Resolve a sidebar drag payload to a human-readable name for display
+    /// in the chat attachment chips (issue #385). Mirrors the bookmark title
+    /// resolution, but works off `SidebarDragPayload` directly.
+    public func resolveAttachmentName(for payload: SidebarDragPayload) -> String? {
+        let pageID = PageID(rawValue: payload.id)
+        switch payload.kind {
+        case .page:
+            return summaries.first { $0.id == pageID }?.title
+        case .source:
+            return sources.first { $0.id == pageID }?.effectiveName
+        case .chat:
+            return chats.first { $0.id == pageID }?.title
+        }
+    }
+
     /// Resolve a page title to its id (lowest-ULID on a duplicate-title
     /// collision, matching the link graph). Best-effort: `nil` on any error or
     /// when no page matches. Used by "Copy File Path" to build the mount path.
