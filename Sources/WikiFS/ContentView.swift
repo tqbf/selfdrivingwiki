@@ -345,6 +345,7 @@ struct ContentView: View {
             isZoteroConfigured: isZoteroConfigured
         )
         .frame(maxWidth: .infinity)
+        .swipeNavigation(store: store)
     }
 
     private func runIngest(sourceID: PageID) {
