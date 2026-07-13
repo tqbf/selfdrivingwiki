@@ -31,6 +31,9 @@ struct ChatView: View {
     @State private var showsInternals = false
     @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: ChatMetrics.composerFont)
     @State private var persistedMessages: [ChatMessage] = []
+    /// Items dragged from the sidebar onto the chat composer, attached as
+    /// context for the next message (issue #385).
+    @State private var attachments: [ChatAttachment] = []
     @AppStorage("chat.zoom") private var chatZoom = Double(ZoomScale.defaultScale)
     @AppStorage("isChatOutlineExpanded") private var chatOutlineExpanded = false
     /// Persisted toggle to hide tool-call rows from the chat transcript
@@ -519,6 +522,9 @@ struct ChatView: View {
         // (bottom) — model chip · permission chip · send button. Replaces the old
         // capsule-with-inline-send + separate selector bar below.
         return VStack(alignment: .leading, spacing: ChatMetrics.composerRowSpacing) {
+            if !attachments.isEmpty {
+                attachmentChips
+            }
             ComposerTextView(
                 text: $draftMessage,
                 isEditable: enabled,
@@ -597,6 +603,49 @@ struct ChatView: View {
         .help(sendButtonTitle)
     }
 
+    // MARK: - Attachments
+
+    /// Attachment chips shown above the composer. Each chip shows the item's
+    /// name + a remove button. Drop sidebar items here to attach them as
+    /// context for the next message (issue #385).
+    private var attachmentChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(attachments) { attachment in
+                    HStack(spacing: 4) {
+                        Image(systemName: attachment.systemImage)
+                            .font(.caption2)
+                        Text(attachment.displayName)
+                            .font(.caption)
+                            .lineLimit(1)
+                        Button {
+                            attachments.removeAll { $0.id == attachment.id }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.accentColor.opacity(0.1), in: Capsule())
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+        .dropDestination(for: SidebarDragPayloadList.self) { lists, _ in
+            let payloads = lists.flatMap(\.items)
+            for payload in payloads {
+                let attachment = ChatAttachment(payload: payload, store: store)
+                if !attachments.contains(attachment) {
+                    attachments.append(attachment)
+                }
+            }
+            return !payloads.isEmpty
+        }
+    }
+
     // MARK: - Send logic
 
     /// True once the composer holds non-whitespace text — drives the send
@@ -623,9 +672,19 @@ struct ChatView: View {
         let message = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
         draftMessage = ""
+        // Build the wire message: prepend attachment references so the agent
+        // has context about the dragged-in pages/sources (issue #385).
+        let wireMessage: String
+        if !attachments.isEmpty {
+            let refs = attachments.map { $0.referenceText }.joined(separator: "\n")
+            wireMessage = "\(refs)\n\n\(message)"
+            attachments = []
+        } else {
+            wireMessage = message
+        }
         if launcher.isInteractiveSession {
             // Live chat mid-session: append a turn to the existing session.
-            launcher.sendInteractiveMessage(message)
+            launcher.sendInteractiveMessage(wireMessage)
         } else if let chatID {
             // D3: a persisted (non-live) chat — start a fresh session that
             // continues this chat (seeded-fallback), streaming into the
@@ -633,7 +692,7 @@ struct ChatView: View {
             Task {
                 await AgentOperationRunner.continueChat(
                     chatID: chatID,
-                    message: message,
+                    message: wireMessage,
                     store: store,
                     launcher: launcher,
                     wikiID: session.wikiID,
@@ -645,7 +704,7 @@ struct ChatView: View {
             // Draft state (.newChat): start a NEW chat.
             Task {
                 await AgentOperationRunner.startChat(
-                    firstMessage: message,
+                    firstMessage: wireMessage,
                     launcher: launcher,
                     store: store,
                     wikiID: session.wikiID,
@@ -730,6 +789,51 @@ struct ChatView: View {
             return "Wait for the response before sending the next message"
         }
         return launcher.isInteractiveSession ? "Send" : "Start Query"
+    }
+}
+
+/// A sidebar item dragged onto the chat composer as context for the next
+/// message (issue #385). Resolves the display name and builds a reference
+/// string prepended to the wire message so the agent knows about the
+/// attached page/source/chat.
+private struct ChatAttachment: Identifiable, Hashable {
+    let kind: SidebarDragPayload.Kind
+    let itemID: String
+    let displayName: String
+
+    var hashableID: String { "\(kind.rawValue):\(itemID)" }
+
+    @MainActor
+    init(payload: SidebarDragPayload, store: WikiStoreModel) {
+        self.kind = payload.kind
+        self.itemID = payload.id
+        self.displayName = store.resolveAttachmentName(for: payload) ?? payload.id
+    }
+
+    var id: String { hashableID }
+
+    func hash(into hasher: inout Hasher) { hasher.combine(hashableID) }
+
+    static func == (lhs: ChatAttachment, rhs: ChatAttachment) -> Bool {
+        lhs.hashableID == rhs.hashableID
+    }
+
+    var systemImage: String {
+        switch kind {
+        case .page: return "doc.text"
+        case .source: return "doc"
+        case .chat: return "bubble.left.and.bubble.right"
+        }
+    }
+
+    /// The reference text prepended to the wire message so the agent knows
+    /// which wiki resource to use as context.
+    var referenceText: String {
+        switch kind {
+        case .page:   return "[[page:\(itemID)]]"
+        case .source: return "[[source:\(itemID)]]"
+        case .chat:   return "[[chat:\(itemID)]]"
+        }
     }
 }
 
