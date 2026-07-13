@@ -299,7 +299,7 @@ struct ChatView: View {
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)
             if chatOutlineExpanded {
-                ChatOutlineView(turns: chatTurns) { turnIndex in
+                ChatOutlineView(entries: chatOutlineEntries) { turnIndex in
                     outlineScroll = ChatScrollRequest(
                         version: (outlineScroll?.version ?? 0) + 1,
                         turnIndex: turnIndex)
@@ -407,16 +407,41 @@ struct ChatView: View {
         store.chats.first { $0.id == chatID }
     }
 
-    /// User turns (questions) in display order — the chat outline entries. Sourced
-    /// from `displayMessages` (the SAME transcript-visible events the web view
-    /// renders), so outline index `i` matches the i-th `.chat-user` row.
-    /// Strips the prepended `[[…]]` attachment reference lines so the outline
-    /// shows only the user's actual question, not the raw wikilinks (issue #385).
-    private var chatTurns: [String] {
-        displayMessages.compactMap { event in
-            if case .userText(let text) = event { return humanizeAttachmentRefs(in: text) }
-            return nil
+    /// Paired (question, response summary) entries for the chat outline. Each
+    /// user turn is paired with the first assistant text that follows it
+    /// (extracted to one sentence, elided), so the outline shows both sides of
+    /// the conversation. Sourced from `displayMessages` (same events as the
+    /// transcript). Uses `ChatSummary.summaryExtract` for the response text.
+    private var chatOutlineEntries: [ChatOutlineEntry] {
+        var entries: [ChatOutlineEntry] = []
+        var pendingQuestion: String?
+        for event in displayMessages {
+            switch event {
+            case .userText(let text):
+                if let q = pendingQuestion {
+                    entries.append(ChatOutlineEntry(question: q, response: nil))
+                }
+                pendingQuestion = humanizeAttachmentRefs(in: text)
+            case .assistantText(let text):
+                if let q = pendingQuestion {
+                    let summary = ChatSummary.summaryExtract(from: text, maxLength: 200)
+                    entries.append(ChatOutlineEntry(question: q, response: summary.isEmpty ? nil : summary))
+                    pendingQuestion = nil
+                }
+            case .result(_, let text):
+                if let q = pendingQuestion {
+                    let summary = ChatSummary.summaryExtract(from: text, maxLength: 200)
+                    entries.append(ChatOutlineEntry(question: q, response: summary.isEmpty ? nil : summary))
+                    pendingQuestion = nil
+                }
+            default:
+                break
+            }
         }
+        if let q = pendingQuestion {
+            entries.append(ChatOutlineEntry(question: q, response: nil))
+        }
+        return entries
     }
 
     @ViewBuilder
@@ -886,12 +911,22 @@ enum ChatMetrics {
     static var composerFont: NSFont { .preferredFont(forTextStyle: .body) }
 }
 
+/// One entry in the chat outline: a user question paired with a one-line
+/// summary of the model's response (if any). The `question` is the
+/// humanized user text; `response` is the first-sentence extract of the
+/// first `.assistantText` or `.result` that followed, elided to 60 chars.
+struct ChatOutlineEntry: Hashable {
+    let question: String
+    let response: String?
+}
+
 /// Right-side outline for a chat: lists the user's turns (questions) in
-/// order. Clicking a turn scrolls the transcript web view to that message via a
+/// order, each paired with a one-line summary of the model's response.
+/// Clicking a turn scrolls the transcript web view to that message via a
 /// versioned `ChatScrollRequest`. Mirrors the page outline's shape (divider +
 /// "Outline" header + scrollable list).
 struct ChatOutlineView: View {
-    let turns: [String]
+    let entries: [ChatOutlineEntry]
     let onSelect: (Int) -> Void
 
     @AppStorage("chatOutlineWidth") private var outlineWidth: Double = 240
@@ -940,19 +975,27 @@ struct ChatOutlineView: View {
 
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(turns.enumerated()), id: \.offset) { index, turn in
+                        ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
                             Button {
                                 onSelect(index)
                             } label: {
-                                Text(turn.isEmpty ? "(empty)" : turn)
-                                    .font(.callout)
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.vertical, 4)
-                                    .padding(.horizontal, 8)
-                                    .contentShape(Rectangle())
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(entry.question.isEmpty ? "(empty)" : entry.question)
+                                        .font(.callout)
+                                        .foregroundStyle(.primary)
+                                        .multilineTextAlignment(.leading)
+                                    if let response = entry.response {
+                                        Text(response)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(3)
+                                            .multilineTextAlignment(.leading)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 4)
+                                .padding(.horizontal, 8)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
