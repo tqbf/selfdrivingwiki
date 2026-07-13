@@ -54,7 +54,7 @@ struct ComposerTextView: NSViewRepresentable {
     /// into `clampedHeight`, so the clamp's own `+ verticalInset` term has to
     /// match exactly).
     nonisolated enum Metrics {
-        static let minLines: CGFloat = 1
+        static let minLines: CGFloat = 3
         static let maxLines: CGFloat = 6
         static let verticalInsetPerSide: CGFloat = 4
         static var verticalInset: CGFloat { verticalInsetPerSide * 2 }
