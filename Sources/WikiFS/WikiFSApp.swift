@@ -216,6 +216,10 @@ struct WikiFSApp: App {
         }
         .windowToolbarStyle(.unified)
         .commands {
+            // Suppress the auto-generated File ▸ New Window command (Cmd-N).
+            // This app is single-window per wiki; Cmd-N would open a broken
+            // "No Wikis" empty-state window (issue #396).
+            CommandGroup(replacing: .newItem) { }
             VacuumCommands(sessionManager: sessionManager)
         }
         // Additional wiki windows: value-driven by wiki ID. Opened from the
