@@ -220,6 +220,47 @@ struct ChatView: View {
         return first
     }
 
+    // MARK: - Thinking indicator
+
+    /// An inline "thinking" row shown in the transcript area while the agent is
+    /// generating. Displays an animated spinner and an incrementing elapsed-time
+    /// counter so it's obvious the agent is actively working (issue #384).
+    private var thinkingIndicator: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                if let startedAt = launcher.runStartedAt {
+                    Text("Thinking… \(durationString(context.date.timeIntervalSince(startedAt)))")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Thinking…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+    }
+
+    /// Formats a time interval as a compact duration string (e.g. "7s", "2m 30s").
+    private func durationString(_ interval: TimeInterval) -> String {
+        let seconds = max(0, Int(interval.rounded(.down)))
+        if seconds < 60 {
+            return "\(seconds)s"
+        }
+        let minutes = seconds / 60
+        let remainingSeconds = seconds % 60
+        if minutes < 60 {
+            return remainingSeconds == 0 ? "\(minutes)m" : "\(minutes)m \(remainingSeconds)s"
+        }
+        let hours = minutes / 60
+        let remainingMinutes = minutes % 60
+        return remainingMinutes == 0 ? "\(hours)h" : "\(hours)h \(remainingMinutes)m"
+    }
+
     // MARK: - Content routing
 
     @ViewBuilder
@@ -295,6 +336,11 @@ struct ChatView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.horizontal, PageEditorMetrics.contentInset)
                         .padding(.top, chatSummary != nil ? 0 : ChatMetrics.chatTopInset)
+                    if transcriptIsRunning && launcher.isGenerating {
+                        thinkingIndicator
+                            .padding(.horizontal, PageEditorMetrics.contentInset)
+                            .padding(.bottom, ChatMetrics.sectionSpacing / 2)
+                    }
                     if let pending = livePendingPermission {
                         PermissionApprovalView(permission: pending) { optionId in
                             Task { await launcher.resolvePendingPermission(optionId: optionId) }
