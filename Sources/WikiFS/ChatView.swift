@@ -968,13 +968,14 @@ struct ChatOutlineView: View {
 
 /// Humanize the leading `[[page:…]]` / `[[source:…]]` / `[[chat:…]]`
 /// wikilink lines that `sendMessage` prepends as attachment references, so
-/// the chat outline and transcript WebView show readable names (e.g. "📎 Paper
-/// Title") instead of raw wikilink syntax. The refs are replaced in-place;
-/// the user's actual question below them is left untouched (issue #385).
+/// the chat outline shows readable names instead of raw `[[…]]` syntax.
+/// In the transcript WebView, user text is run through the markdown renderer
+/// so wikilinks render as clickable links there; this helper is only used by
+/// the plain-text outline (issue #385).
 func humanizeAttachmentRefs(in text: String) -> String {
     let pattern = #"\[\[(page|source|chat):([^\]]+)\]\]"#
     let result = text.replacingOccurrences(of: pattern,
-                                            with: "📎 $2",
+                                            with: "$2",
                                             options: .regularExpression)
     return result.trimmingCharacters(in: .whitespacesAndNewlines)
 }
