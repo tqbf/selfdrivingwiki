@@ -26,12 +26,14 @@ final class WikiChangeBridge {
 
     private let registry: WikiRegistryClient
     private let fileProvider: FileProviderSpike
-    /// The active wiki's session (if any). Held weak so a wiki switch that
-    /// creates a new session doesn't keep the old one alive. The app layer
-    /// sets this via `bridge.session = newSession` in the `.onChange(of:
-    /// registry.activeWikiID)` handler. When multi-window lands, this
-    /// becomes a set or a lookup closure.
-    weak var session: WikiSession?
+    /// Returns all live sessions whose `wikiID` matches — injected from the
+    /// app via `SessionManager`. Replaces the former `weak var session`
+    /// (which held a single session). In multi-window, a `wikictl` write to
+    /// wiki A must update every window showing wiki A — the lookup closure
+    /// returns all matching sessions so `flush(wikiID:)` can poke each one's
+    /// bus. The app sets this to `{ wikiID in sessionManager.allSessions.filter
+    /// { $0.wikiID == wikiID } }`.
+    var sessionLookup: @MainActor @Sendable (String) -> [WikiSession] = { _ in [] }
     private var coalescer: ChangeCoalescer?
 
     /// The wiki ids we currently observe, so `refreshObservations()` is
@@ -127,18 +129,19 @@ final class WikiChangeBridge {
     /// One coalesced flush for `wikiID`. Always signals the File Provider for
     /// the changed wiki — a `wikictl` write can land in any wiki's DB, and that
     /// wiki's filesystem projection must refresh regardless of which wiki is on
-    /// screen. Additionally, when the changed wiki IS the active one, emits a
-    /// coarse event into the active session's bus so the on-screen model reloads
-    /// its projections (sidebar, sources, chats). For a non-active wiki there is
-    /// no in-memory store/bus, so only the FP is signaled; the model reads fresh
-    /// data when the user later switches to that wiki (the app layer creates a
-    /// new `WikiSession`).
+    /// screen. Additionally, pokes the bus of EVERY live session whose wikiID
+    /// matches — in multi-window, multiple windows may be showing the changed
+    /// wiki, and each window's on-screen model must reload its projections
+    /// (sidebar, sources, chats, draft). Two windows over the SAME wiki share
+    /// ONE session (one store + one bus), so the lookup typically returns
+    /// exactly one session.
     ///
-    /// Issue #303: the previous either/or structure (bus-OR-FP) meant the active
-    /// wiki's FP was refreshed only transitively via the bus subscriber (which
-    /// adds a second debounce), and in the edge case where the active wiki id
-    /// changed during the coalesce window the model reload was skipped entirely.
-    /// Now both paths fire unconditionally for their respective targets.
+    /// Issue #303: the previous either/or structure (bus-OR-FP) meant the
+    /// active wiki's FP was refreshed only transitively via the bus subscriber
+    /// (which adds a second debounce), and in the edge case where the active
+    /// wiki id changed during the coalesce window the model reload was
+    /// skipped entirely. Now both paths fire unconditionally for their
+    /// respective targets.
     ///
     /// Marked `internal` (not `private`) so `WikiChangeBridgeTests` can call it
     /// directly via `@testable import WikiFS`.
@@ -147,10 +150,10 @@ final class WikiChangeBridge {
         // so the mount is consistent for every wiki the bridge observes.
         Task { await fileProvider.signalChange(forWikiID: wikiID) }
 
-        // If the changed wiki is the one on screen, also poke the bus so the
-        // model rebuilds its projections (sidebar, sources, chats, draft).
-        if wikiID == session?.wikiID, let bus = session?.store.eventBus {
-            bus.emit(ResourceChangeEvent(
+        // Poke ALL sessions whose wikiID matches — a wikictl write to wiki A
+        // must update every window showing wiki A.
+        for session in sessionLookup(wikiID) {
+            session.store.eventBus?.emit(ResourceChangeEvent(
                 wikiID: wikiID, kind: nil, id: "", change: .updated))
         }
     }

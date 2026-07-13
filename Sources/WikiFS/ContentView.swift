@@ -314,7 +314,7 @@ struct ContentView: View {
             // The wiki switcher moves out of the sidebar header into the toolbar,
             // trailing the omnibox (like a browser account / profile control).
             ToolbarItem(placement: .primaryAction) {
-                WikiSwitcher(registry: registry)
+                WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
             }
 
             primaryToolbarItems()

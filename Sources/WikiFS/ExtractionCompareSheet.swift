@@ -3,30 +3,38 @@ import WikiFSCore
 import WikiFSEngine
 
 /// Identifies which source to compare extractions for. Value-driven
-/// `WindowGroup(for:)` identity: `Hashable`/`==` are based on `sourceID` alone,
-/// so opening Compare for a source that already has a window focuses it rather
-/// than spawning a duplicate. `Codable` is required by the value-driven scene.
+/// `WindowGroup(for:)` identity: `Hashable`/`==` are based on `sourceID` +
+/// `wikiID` together, so opening Compare for a source in wiki A and a source
+/// with the same ID in wiki B creates distinct windows, while re-opening
+/// Compare for the same source in the same wiki focuses the existing window.
+/// `Codable` is required by the value-driven scene.
 struct ExtractionCompareContext: Codable, Hashable {
     let sourceID: PageID
     let filename: String
+    let wikiID: String
 
     static func == (lhs: ExtractionCompareContext, rhs: ExtractionCompareContext) -> Bool {
-        lhs.sourceID == rhs.sourceID
+        lhs.sourceID == rhs.sourceID && lhs.wikiID == rhs.wikiID
     }
-    func hash(into hasher: inout Hasher) { hasher.combine(sourceID) }
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(sourceID)
+        hasher.combine(wikiID)
+    }
 }
 
-/// Resolves the active wiki's store for the compare window. `session` is the
-/// same `@State` instance the main window uses, so the window shares the live
-/// `WikiStoreModel` — a "Set Active" nominate here propagates to the detail
-/// view immediately (both read the same `@Observable` model).
+/// Resolves the correct wiki's store for the compare window via the shared
+/// `SessionManager`. In multi-window, the compare window can't assume a single
+/// global session — it must resolve the session for the wiki the source belongs
+/// to (carried in `ExtractionCompareContext.wikiID`). If the session is no
+/// longer alive (all windows for that wiki closed), shows an empty state.
 struct ExtractionCompareWindow: View {
-    let session: WikiSession?
+    let sessionManager: SessionManager
     let context: ExtractionCompareContext?
 
     var body: some View {
-        if let store = session?.store, let ctx = context {
-            ExtractionCompareSheet(store: store, sourceID: ctx.sourceID, filename: ctx.filename)
+        if let ctx = context,
+           let session = sessionManager.sessions[ctx.wikiID] {
+            ExtractionCompareSheet(store: session.store, sourceID: ctx.sourceID, filename: ctx.filename)
         } else {
             ContentUnavailableView {
                 Label("No Source to Compare", systemImage: "doc.questionmark")

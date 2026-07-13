@@ -4,12 +4,14 @@ import SQLite3
 
 /// App-scoped, observable client for the multi-wiki registry
 /// (`plans/llm-wiki.md` Phase 0; reshaped by the manager dissolution
-/// — `plans/dissolve-wikimanager.md`). This type carries ONLY the wiki
-/// registry list, the active-wiki id, and the create / select / rename /
-/// delete / export / import operations. The per-wiki "active store" model +
-/// its launchers/vacuum state now live on the engine-layer ``WikiSession``,
-/// which the app layer creates / destroys on `.onChange(of:
-/// registry.activeWikiID)`.
+/// — `plans/dissolve-wikimanager.md`; multi-window Phase 2b
+/// — `plans/multi-window-ui.md`). This type carries ONLY the wiki
+/// registry list, the active-wiki id (MRU launch + Option+click in-window
+/// switch), and the create / select / rename / delete / export / import
+/// operations. The per-wiki "active store" model + its launchers/vacuum
+/// state live on the engine-layer ``WikiSession``, managed by
+/// ``SessionManager`` which the app layer creates/destroys per-window in
+/// `RootScene`.
 ///
 /// **Identity is the ULID, never the display name** — `WikiDescriptor.dbFileName`
 /// and `.domainIdentifier` both derive from `id`, so a rename never orphans the
@@ -58,14 +60,14 @@ public final class WikiRegistryClient {
     /// Update a wiki domain's user-visible display name. Identity stays the ULID.
     @ObservationIgnored public var renameDomain: ((_ id: String, _ displayName: String) async -> Void)?
 
-    /// Flush any pending autosaves in the *active* wiki's model before the
+    /// Flush any pending autosaves in the named wiki's model before the
     /// registry deletes its DB (``deleteWiki(id:)``) or runs a WAL checkpoint
     /// (``exportWiki(id:to:)``). The app injects this closure to delegate to
-    /// `WikiSession.store.flushPendingSaves()` for whichever wiki is on screen
-    /// — the registry client itself never holds a store, so it cannot flush
-    /// directly. Safe to leave `nil` in tests that never invoke those paths
-    /// against an active wiki.
-    @ObservationIgnored public var flushActiveStore: (() -> Void)?
+    /// `SessionManager.flushSession(for:)` for whichever wiki is being
+    /// exported/deleted — the registry client itself never holds a store, so
+    /// it cannot flush directly. Safe to leave `nil` in tests that never
+    /// invoke those paths against an active wiki.
+    @ObservationIgnored public var flushActiveStore: ((_ wikiID: String) -> Void)?
 
     // MARK: - Init
 
@@ -226,7 +228,7 @@ public final class WikiRegistryClient {
     /// ``flushActiveStore`` closure (this client does not own the store).
     public func exportWiki(id: String, to destinationURL: URL) throws {
         guard descriptorExists(id) else { throw WikiRegistryError.unknownWiki(id) }
-        if id == activeWikiID { flushActiveStore?() }
+        flushActiveStore?(id)
         let sourceURL = databaseURL(forWikiID: id)
         guard sourceURL.standardizedFileURL != destinationURL.standardizedFileURL else {
             throw WikiRegistryError.exportWouldOverwriteSource
@@ -275,10 +277,10 @@ public final class WikiRegistryClient {
     /// one). The app layer's `.onChange(of: activeWikiID)` tears down the old
     /// session and stands up the new one — this client never holds a session.
     public func deleteWiki(id: String) async {
-        // Flush any pending edits in the active store before tearing down, so
-        // we don't strand writes in a DB we're about to delete. The closure
-        // resolves to the live session's store at the app layer; nil-safe.
-        if id == activeWikiID { flushActiveStore?() }
+        // Flush any pending edits in the wiki being deleted, so we don't
+        // strand writes in a DB we're about to delete. The closure resolves
+        // to the live session's store at the app layer; nil-safe.
+        flushActiveStore?(id)
 
         await removeDomain?(id)
 
