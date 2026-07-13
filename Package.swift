@@ -187,7 +187,7 @@ let package = Package(
         ),
         .testTarget(
             name: "WikiFSTests",
-            dependencies: ["WikiFSCore", "WikiCtlCore", "WikiFS", "WikiFSMLX", "WikiFSEngine", "WikiFSFileProvider",
+            dependencies: ["WikiFSCore", "WikiCtlCore", "WikiFS", "WikiFSMLX", "WikiFSEngine", "WikiFSFileProvider", "wikid",
                            // ACP model types for ACPBackendTests (no live subprocess — pure translator tests).
                            .product(name: "ACPModel", package: "swift-acp")],
             path: "Tests/WikiFSTests",

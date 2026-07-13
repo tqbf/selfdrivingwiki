@@ -196,7 +196,6 @@ struct WikiFSApp: App {
         }
         .windowToolbarStyle(.unified)
         .commands {
-            ClaudePromptHelpCommands()
             VacuumCommands(manager: manager)
         }
         .onChange(of: scenePhase) { _, phase in
@@ -218,11 +217,6 @@ struct WikiFSApp: App {
             if isSceneActive { Task { await manager.upgradeActiveStoreSearchIndex() } }
         }
 
-        Window("Claude Prompt Templates", id: "claudePromptHelp") {
-            ClaudePromptHelpView()
-        }
-        .defaultSize(width: 880, height: 680)
-
         // Track C extraction compare: a real, resizable, non-modal window (one
         // per source, opened via `openWindow(value:)` from SourceDetailView).
         // Shares the main window's `manager` so Set Active propagates live.
@@ -240,10 +234,8 @@ struct WikiFSApp: App {
                     .tabItem { Label("Zotero", systemImage: "books.vertical") }
                 ExtractionSettingsView(containerDirectory: containerDirectory, launcher: agentLauncher)
                     .tabItem { Label("Extraction", systemImage: "doc.viewfinder") }
-                AgentCommandSettingsView(containerDirectory: containerDirectory)
-                    .tabItem { Label("Agent", systemImage: "terminal") }
-                AgentProvidersSettingsView(containerDirectory: containerDirectory)
-                    .tabItem { Label("Providers", systemImage: "cpu") }
+                AgentsSettingsView(containerDirectory: containerDirectory)
+                    .tabItem { Label("Agents", systemImage: "cpu") }
             }
             .frame(width: 460, height: 460)
         }

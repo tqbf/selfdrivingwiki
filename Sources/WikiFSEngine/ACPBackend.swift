@@ -4,7 +4,7 @@ import ACPModel
 import WikiFSCore
 
 /// The ACP (Agent Client Protocol) backend — a second `AgentBackend` conformer
-/// (alongside `ClaudeCLIBackend`) per `plans/acp-backend-and-permissions.md`.
+/// per `plans/acp-backend-and-permissions.md`. The app is ACP-only.
 ///
 /// The app is the ACP **client**; it launches any ACP agent subprocess over
 /// JSON-RPC/stdio (`wiedymi/swift-acp`) and consumes per-turn `session/update`
@@ -19,7 +19,7 @@ import WikiFSCore
 /// `session/prompt` **request** returns (carrying `stopReason`). So `send`
 /// synthesizes `.messageStop` from the prompt's completion / `stopReason`
 /// (`.endTurn`/`.maxTokens`/`.refusal`/`.cancelled`/`.maxTurnRequests` →
-/// `.messageStop`), mirroring how `ClaudeCLIBackend` keys turn end off the
+/// `.messageStop`), keying turn end off the
 /// `message_stop` wire line. The launcher releases the generation gate / edit
 /// lock / transcript flush off `AgentEvent.endsGeneration`.
 ///
@@ -37,7 +37,7 @@ import WikiFSCore
 ///   be delivered until the consumer drains, and the consumer can't drain until
 ///   `send` returns the stream).
 /// - The cancellation bridge (`onTermination`) cancels the prompt task and
-///   sends `session/cancel`, mirroring `ClaudeCLIBackend`'s PID-kill path.
+///   sends `session/cancel`.
 /// - `.unbounded` buffering — the `@MainActor` consumer drains promptly and
 ///   tokens must never be dropped (same invariant as the CLI backend).
 ///
@@ -47,10 +47,10 @@ import WikiFSCore
 public actor ACPBackend: AgentBackend {
 
     /// How the configured ACP agent subprocess is spawned. Pluggable (NOT locked
-    /// to the Zed adapter) — the user points at any ACP agent via the dedicated
-    /// `ACPAgentConfig`. Resolved from `BackendProfile` (`providerHints`/`model`)
+    /// to the Zed adapter) — the user points at any ACP agent via `AgentProvider`.
+    /// Resolved from `BackendProfile` (`providerHints`/`model`)
     /// so the path + the auth key stay backend-internal concerns, matching how
-    /// `ClaudeCLIBackend` reads its `CLIProfile`.
+    /// the launcher's `CLIProfile` carries.
     ///
     /// Slice 3: now also carries the configured API key (for agents that require
     /// auth), threaded in via `providerHints["acpAgentApiKey"]`.
@@ -62,17 +62,27 @@ public actor ACPBackend: AgentBackend {
         /// key is configured (→ a `missingCredentials` preflight error IF the
         /// agent advertises `authMethods`).
         let apiKey: String?
+        /// Extra environment merged over the inherited process environment (+ the
+        /// `WIKI_DB`/`WIKI_ROOT`/`WIKICTL`/`PATH` vars `start()` sets from
+        /// `profile.cli`) when spawning the subprocess. Sourced from
+        /// `providerHints`' `env.`-prefixed entries — the same convention
+        /// `AgentProvider.env` is threaded through by
+        /// `AgentBackendFactory.providerHints` (Phase 2,
+        /// `plans/acp-multi-provider.md`). Empty for providers with no extra env.
+        let environment: [String: String]
 
         init(
             executablePath: String,
             arguments: [String] = [],
             workingDirectory: String? = nil,
-            apiKey: String? = nil
+            apiKey: String? = nil,
+            environment: [String: String] = [:]
         ) {
             self.executablePath = executablePath
             self.arguments = arguments
             self.workingDirectory = workingDirectory
             self.apiKey = apiKey
+            self.environment = environment
         }
     }
 
@@ -169,7 +179,7 @@ public actor ACPBackend: AgentBackend {
 
         DebugLog.agent("ACPBackend.start: launching \(spawn.executablePath) \(spawn.arguments.joined(separator: " "))") // TEMP DEBUG (existed; re-tagged)
         // Build the environment so the agent can find wikictl + the wiki DB.
-        // Mirrors what OperationCommand.resolveWikictl does for the CLI backend.
+        // Exports WIKI_DB/WIKI_ROOT/WIKICTL/PATH for the agent's wikictl calls.
         var env = ProcessInfo.processInfo.environment
         if let cli = profile.cli {
             env["WIKI_DB"] = cli.wikiID
@@ -178,9 +188,11 @@ public actor ACPBackend: AgentBackend {
             let existingPath = env["PATH"] ?? "/usr/bin:/bin"
             env["PATH"] = cli.wikictlDirectory + ":" + existingPath
         }
-        // Also add any extra env from the provider config.
-        for (key, value) in profile.providerHints where key.hasPrefix("env.") {
-            env[String(key.dropFirst(4))] = value
+        // Also add any extra env from the provider config (Phase 2: sourced from
+        // `AgentSpawnConfig.environment`, resolved once in `resolveSpawnConfig`
+        // rather than re-scanning `providerHints` here).
+        for (key, value) in spawn.environment {
+            env[key] = value
         }
 
         try await client.launch(
@@ -537,24 +549,32 @@ public actor ACPBackend: AgentBackend {
     /// Resolve the agent spawn config from the profile. The executable path comes
     /// from `providerHints["acpAgentPath"]` (or falls back to `profile.model`),
     /// extra args from `providerHints["acpAgentArgs"]`, and the auth API key from
-    /// `providerHints["acpAgentApiKey"]`. The args string is tokenized with the
-    /// SAME shell-aware whitespace tokenizer the rest of the app uses for
-    /// `AgentCommandConfig.prefixArguments`.
+    /// `providerHints["acpAgentApiKey"]`. The args string is tokenized with
+    /// `ShellArgv.tokenize`, the shell-aware whitespace tokenizer shared with the
+    /// launcher's provider-spawn resolution.
     ///
-    /// Slice 3: these hints are now sourced from the dedicated `ACPAgentConfig`
-    /// (NOT the generic `AgentCommandConfig`) by `AgentBackendFactory`, and the
-    /// key is the Keychain-backed secret. NOT hardcoded to the Zed adapter — the
-    /// user points at any ACP agent. Returns nil if no path is configured
-    /// (→ `noAgentConfigured`).
-    private static func resolveSpawnConfig(from profile: BackendProfile) -> AgentSpawnConfig? {
+    /// These hints are sourced from `AgentProvidersConfig` by
+    /// `AgentBackendFactory`, and the key is the Keychain-backed secret. NOT
+    /// hardcoded to the Zed adapter — the user points at any ACP agent. Returns
+    /// nil if no path is configured (→ `noAgentConfigured`).
+    /// Internal (not `private`) so `resolveSpawnConfig` — including the Phase 2
+    /// `environment` merge from `env.`-prefixed `providerHints` — is directly
+    /// unit-testable from `@testable import WikiFSEngine` without spawning a
+    /// subprocess (`ACPWiringTests`).
+    static func resolveSpawnConfig(from profile: BackendProfile) -> AgentSpawnConfig? {
         let path = profile.providerHints["acpAgentPath"] ?? profile.model
         guard let path, !path.isEmpty else { return nil }
-        let args = AgentCommandConfig.tokenize(profile.providerHints["acpAgentArgs"] ?? "")
+        let args = ShellArgv.tokenize(profile.providerHints["acpAgentArgs"] ?? "")
             .filter { !$0.isEmpty }
         let cwd = profile.scratchDirectory?.path
         let apiKey = profile.providerHints["acpAgentApiKey"]
+        var environment: [String: String] = [:]
+        for (key, value) in profile.providerHints where key.hasPrefix("env.") {
+            environment[String(key.dropFirst(4))] = value
+        }
         return AgentSpawnConfig(
-            executablePath: path, arguments: args, workingDirectory: cwd, apiKey: apiKey)
+            executablePath: path, arguments: args, workingDirectory: cwd, apiKey: apiKey,
+            environment: environment)
     }
 
     /// The events synthesized at `session/prompt` completion (the ACP turn

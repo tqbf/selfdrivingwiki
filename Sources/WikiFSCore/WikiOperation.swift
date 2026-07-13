@@ -86,26 +86,6 @@ public enum WikiOperation: Equatable, Sendable {
     }
   }
 
-  /// The top-level `--model` alias for this operation. ALWAYS `opus`: Opus is the
-  /// curator/writer for both Ingest modes, and Query/Lint are light, single-agent,
-  /// judgement-heavy Opus runs. (Ingest's tiering is in the FAN-OUT — whether it
-  /// forks Sonnet digesters — not in the top-level model.)
-  public var topLevelModelAlias: String {
-    switch self {
-    case .ingest(_, _, _, let plan): plan.topLevelModelAlias
-    case .query, .queryChat, .lint, .lintPage: "opus"
-    }
-  }
-
-  /// The `--agents` JSON for this operation, or nil when it runs single-agent.
-  /// Only a large-source Ingest defines subagents (the Sonnet `source-reader`
-  /// digester); the tiny Ingest, Query, and Lint never do.
-  public var agentsJSON: String? {
-    switch self {
-    case .ingest(_, _, _, let plan): plan.agentsJSON()
-    case .query, .queryChat, .lint, .lintPage: nil
-    }
-  }
 }
 
 extension WikiOperation {
