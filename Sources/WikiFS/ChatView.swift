@@ -414,7 +414,7 @@ struct ChatView: View {
     /// shows only the user's actual question, not the raw wikilinks (issue #385).
     private var chatTurns: [String] {
         displayMessages.compactMap { event in
-            if case .userText(let text) = event { return stripAttachmentRefs(from: text) }
+            if case .userText(let text) = event { return humanizeAttachmentRefs(in: text) }
             return nil
         }
     }
@@ -966,18 +966,15 @@ struct ChatOutlineView: View {
     }
 }
 
-/// Strip leading `[[page:…]]` / `[[source:…]]` / `[[chat:…]]` wikilink
-/// lines that `sendMessage` prepends as attachment references. Used by both
-/// the chat outline (ChatView.chatTurns) and the transcript WebView
-/// (ChatWebView row rendering) so neither shows raw wikilink syntax to the
-/// user (issue #385).
-func stripAttachmentRefs(from text: String) -> String {
-    var remaining = text[...]
-    while let range = remaining.range(of: #"\[\[(?:page|source|chat):[^\]]+\]\]"#,
-                                       options: .regularExpression),
-          range.lowerBound == remaining.startIndex {
-        remaining = remaining[range.upperBound...]
-        if remaining.first == "\n" { remaining = remaining.dropFirst() }
-    }
-    return String(remaining).trimmingCharacters(in: .whitespacesAndNewlines)
+/// Humanize the leading `[[page:…]]` / `[[source:…]]` / `[[chat:…]]`
+/// wikilink lines that `sendMessage` prepends as attachment references, so
+/// the chat outline and transcript WebView show readable names (e.g. "📎 Paper
+/// Title") instead of raw wikilink syntax. The refs are replaced in-place;
+/// the user's actual question below them is left untouched (issue #385).
+func humanizeAttachmentRefs(in text: String) -> String {
+    let pattern = #"\[\[(page|source|chat):([^\]]+)\]\]"#
+    let result = text.replacingOccurrences(of: pattern,
+                                            with: "📎 $2",
+                                            options: .regularExpression)
+    return result.trimmingCharacters(in: .whitespacesAndNewlines)
 }
