@@ -76,6 +76,13 @@ public enum ArgumentParser {
         case workspace(WorkspaceCommand.Action)
         /// Print build version info. Does not require a wiki selection.
         case version(json: Bool)
+        /// `wikictl wiki list/create/delete/rename` — registry operations routed
+        /// through the `wikid` daemon via XPC. These bypass the `--wiki` selector
+        /// requirement (they operate on the registry, not a specific wiki's store).
+        case wikiList
+        case wikiCreate(name: String)
+        case wikiDelete(id: String)
+        case wikiRename(id: String, name: String)
     }
 
     public enum Failure: Error, Equatable, CustomStringConvertible {
@@ -185,6 +192,11 @@ public enum ArgumentParser {
             }
             if first == "--version" || first == "-v" {
                 return Invocation(wikiSelector: "", command: .version(json: false))
+            }
+            // `wiki` subcommands — registry operations via the wikid daemon.
+            // Bypass the --wiki selector requirement (same as `version`).
+            if first == "wiki" {
+                return Invocation(wikiSelector: "", command: try parseWikiCommand(Array(args.dropFirst())))
             }
         }
 
@@ -675,6 +687,40 @@ public enum ArgumentParser {
             case (nil, nil):
                 throw Failure.usage("pass one of --id / --name")
             }
+        }
+    }
+
+    /// `wikictl wiki list/create/delete/rename` — registry operations routed
+    /// through the `wikid` daemon via XPC.
+    private static func parseWikiCommand(_ args: [String]) throws -> Command {
+        guard let sub = args.first else { throw Failure.usage("wiki: missing subcommand (list, create, delete, rename)") }
+        let options = try Options(Array(args.dropFirst()))
+
+        switch sub {
+        case "list":
+            return .wikiList
+
+        case "create":
+            let name = options.value("--name") ?? "Untitled Wiki"
+            return .wikiCreate(name: name)
+
+        case "delete":
+            guard let id = options.value("--id") else {
+                throw Failure.usage("wiki delete: --id is required")
+            }
+            return .wikiDelete(id: id)
+
+        case "rename":
+            guard let id = options.value("--id") else {
+                throw Failure.usage("wiki rename: --id is required")
+            }
+            guard let name = options.value("--name") else {
+                throw Failure.usage("wiki rename: --name is required")
+            }
+            return .wikiRename(id: id, name: name)
+
+        default:
+            throw Failure.usage("wiki: unknown subcommand \(sub.debugDescription) (list, create, delete, rename)")
         }
     }
 }

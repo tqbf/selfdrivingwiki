@@ -13,7 +13,7 @@ import WikiFSCore
 /// Provider itself (single-owner invariant) and NEVER writes the mount.
 ///
 /// Exit codes: 0 success, 2 usage error, 1 runtime error, 3 CAS conflict.
-func run() -> Int32 {
+func run() async -> Int32 {
     let arguments = Array(CommandLine.arguments.dropFirst())
 
     let invocation: ArgumentParser.Invocation
@@ -43,6 +43,21 @@ func run() -> Int32 {
         return 0
     }
 
+    // `wiki` subcommands — registry operations via the wikid daemon.
+    // These don't open a store or need a wiki selector.
+    if case .wikiList = invocation.command {
+        return await runWikiList()
+    }
+    if case .wikiCreate(let name) = invocation.command {
+        return await runWikiCreate(name: name)
+    }
+    if case .wikiDelete(let id) = invocation.command {
+        return await runWikiDelete(id: id)
+    }
+    if case .wikiRename(let id, let name) = invocation.command {
+        return await runWikiRename(id: id, name: name)
+    }
+
     // Phase 7: WIKI_WORKSPACE env var. When set by an isolated ingest run,
     // it auto-applies --workspace to page get/upsert and index set commands
     // that don't already pass --workspace explicitly. This lets the agent
@@ -50,8 +65,18 @@ func run() -> Int32 {
     let command = applyWorkspaceEnv(invocation.command, env: ProcessInfo.processInfo.environment)
 
     do {
+        // Try the daemon first for wiki resolution. If the daemon isn't running,
+        // fall back to direct file access (the existing WikiResolver path).
+        // This makes wikictl the first real XPC client of wikid (Phase 1C).
+        let descriptor: WikiDescriptor?
         let resolver = try WikiResolver.appGroupContainer()
-        guard let descriptor = resolver.descriptor(forSelector: invocation.wikiSelector) else {
+        if let daemon = try? WikiDaemonConnection.connect(),
+           let daemonDesc = try? await daemon.resolveWiki(selector: invocation.wikiSelector) {
+            descriptor = daemonDesc
+        } else {
+            descriptor = resolver.descriptor(forSelector: invocation.wikiSelector)
+        }
+        guard let descriptor else {
             throw PageCommand.Failure.message(
                 "no wiki matching \(invocation.wikiSelector.debugDescription) in the registry")
         }
@@ -208,6 +233,9 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
     case .version:
         // Handled before wiki resolution in `run()` — unreachable here.
         return SourceCommand.Result(payload: .text(""), didCommit: false)
+    case .wikiList, .wikiCreate, .wikiDelete, .wikiRename:
+        // Handled before wiki resolution in `run()` — unreachable here.
+        return SourceCommand.Result(payload: .text(""), didCommit: false)
     }
 }
 
@@ -239,4 +267,63 @@ func readBody(from source: String) throws -> String {
     return try String(contentsOfFile: source, encoding: .utf8)
 }
 
-exit(run())
+// MARK: - wiki subcommands (via wikid daemon XPC)
+
+func runWikiList() async -> Int32 {
+    do {
+        let daemon = try WikiDaemonConnection.connect()
+        let wikis = try await daemon.listWikis()
+        for wiki in wikis {
+            print("\(wiki.id)\t\(wiki.displayName)")
+        }
+        return 0
+    } catch {
+        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        return 1
+    }
+}
+
+func runWikiCreate(name: String) async -> Int32 {
+    do {
+        let daemon = try WikiDaemonConnection.connect()
+        let descriptor = try await daemon.createWiki(name: name)
+        print("\(descriptor.id)\t\(descriptor.displayName)")
+        return 0
+    } catch {
+        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        return 1
+    }
+}
+
+func runWikiDelete(id: String) async -> Int32 {
+    do {
+        let daemon = try WikiDaemonConnection.connect()
+        let success = try await daemon.deleteWiki(id: id)
+        if !success {
+            FileHandle.standardError.write(Data("wikictl: wiki delete failed for \(id)\n".utf8))
+            return 1
+        }
+        return 0
+    } catch {
+        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        return 1
+    }
+}
+
+func runWikiRename(id: String, name: String) async -> Int32 {
+    do {
+        let daemon = try WikiDaemonConnection.connect()
+        let success = try await daemon.renameWiki(id: id, name: name)
+        if !success {
+            FileHandle.standardError.write(Data("wikictl: wiki rename failed for \(id)\n".utf8))
+            return 1
+        }
+        return 0
+    } catch {
+        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        return 1
+    }
+}
+
+// `run()` is async — boot a top-level task and wait for it.
+exit(await run())
