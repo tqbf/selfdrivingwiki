@@ -572,7 +572,6 @@ struct ChatView: View {
         // (issue #385 regression).
         .dropDestination(for: SidebarDragPayloadList.self) { lists, _ in
             let payloads = lists.flatMap(\.items)
-            DebugLog.tabs("[drop] composer drop: received \(lists.count) lists, \(payloads.count) payloads")
             for payload in payloads {
                 let attachment = ChatAttachment(payload: payload, store: store)
                 if !attachments.contains(attachment) {
