@@ -72,7 +72,7 @@ struct ZoteroSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: Metrics.width)
+        .frame(minWidth: Metrics.width)
         .onAppear { load() }
         .alert(
             "Couldn't Connect to Zotero",
