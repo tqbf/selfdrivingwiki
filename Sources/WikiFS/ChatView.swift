@@ -34,10 +34,6 @@ struct ChatView: View {
     @AppStorage("isChatOutlineExpanded") private var chatOutlineExpanded = false
     @State private var outlineScroll: ChatScrollRequest? = nil
     @State private var quoteAnchor: ChatHighlightRequest? = nil
-    /// Whether the ACP backend is enabled (shared with Settings + the launcher).
-    /// Drives the visibility of the always-ask/yolo toggle: the CLI backend has
-    /// no permission channel, so the toggle is meaningless when this is off.
-    @AppStorage(AgentLauncher.useACPBackendKey) private var useACPBackend = false
     /// The chat's always-ask/yolo mode (shared with the launcher, read at spawn).
     /// v1 app-wide, default off (yolo). Applies to the next conversation.
     @AppStorage(AgentLauncher.permissionModeKey) private var permissionModeRaw = PermissionPolicy.bypass.rawValue
