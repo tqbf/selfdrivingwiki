@@ -77,12 +77,15 @@ do {
 
     let delegate = WikiDaemonListenerDelegate(daemon: daemon)
 
-    // For a launchd-managed daemon: launchd starts this process on-demand when a
-    // client connects to the mach service name. `NSXPCListener(machServiceName:)`
-    // registers with launchd.
+    // The daemon is always launched via launchd (the `MachServices` key in the
+    // plist registers the mach service name). `NSXPCListener(machServiceName:)`
+    // registers with launchd so clients connecting via
+    // `NSXPCConnection(machServiceName:)` reach this listener.
     //
-    // For direct-run (development): if launchd hasn't registered the service,
-    // `NSXPCListener(machServiceName:)` still works on a per-process basis.
+    // Direct-run without launchd does NOT work: the mach service isn't
+    // registered, and `NSXPCListenerEndpoint` can't be serialized to a file
+    // (it must pass through an existing XPC connection — a chicken-and-egg
+    // problem). Use `make install-daemon` for both development and production.
     let listener = NSXPCListener(machServiceName: WikiDaemonMachServiceName)
     listener.delegate = delegate
     listener.resume()

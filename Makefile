@@ -342,12 +342,26 @@ WIKID_BIN := $(shell swift build --show-bin-path)/wikid
 WIKID_PLIST := signing/com.selfdrivingwiki.wikid.plist
 WIKID_PLIST_DST := $(HOME)/Library/LaunchAgents/com.selfdrivingwiki.wikid.plist
 
+# Resolve the signing identity from signing/local.config (same as build.sh).
+WIKID_SIGN_IDENTITY := $(shell grep '^DEV_IDENTITY=' signing/local.config 2>/dev/null | sed 's/DEV_IDENTITY=//; s/^"//; s/"$$//' || echo "-")
+WIKID_SIGN_TEAM := $(shell grep '^TEAM_ID=' signing/local.config 2>/dev/null | sed 's/TEAM_ID=//; s/^"//; s/"$$//' || echo "")
+
 .PHONY: install-daemon uninstall-daemon daemon-status
 
 install-daemon: ## Install wikid as a launchd LaunchAgent (auto-starts on first XPC connection)
 install-daemon:
 	@echo "→ Building wikid…"
 	@swift build --target wikid
+	@echo "→ Codesigning wikid (identity: $(WIKID_SIGN_IDENTITY))…"
+	@# Sign the binary with an identifier matching the mach service name so
+	@# macOS TCC doesn't prompt on XPC connections. Falls back to ad-hoc (-).
+	@codesign --force --timestamp=none --identifier com.selfdrivingwiki.wikid \
+		--sign "$(WIKID_SIGN_IDENTITY)" "$(WIKID_BIN)" 2>/dev/null \
+		|| codesign --force --timestamp=none --sign - "$(WIKID_BIN)"
+	@# Also sign wikictl — it's the client connecting to the mach service.
+	@codesign --force --timestamp=none --identifier com.selfdrivingwiki.wikictl \
+		--sign "$(WIKID_SIGN_IDENTITY)" "$(dir $(WIKID_BIN))wikictl" 2>/dev/null \
+		|| codesign --force --timestamp=none --sign - "$(dir $(WIKID_BIN))wikictl"
 	@echo "→ Installing launchd plist…"
 	@mkdir -p $(dir $(WIKID_PLIST_DST))
 	@# Copy the plist template, then inject the binary path into a ProgramArguments array.

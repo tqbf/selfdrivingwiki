@@ -14,8 +14,10 @@
     <true/>
     <key>KeepAlive</key>
     <dict>
-        <key>AfterInitialDemand</key>
+        <key>Crashed</key>
         <true/>
+        <key>SuccessfulExit</key>
+        <false/>
     </dict>
     <key>IdleTimeout</key>
     <integer>300</integer>
