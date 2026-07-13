@@ -18,6 +18,11 @@ import WikiFSCore
 /// frontmost window's `RootScene` observes that and swaps its session.
 struct WikiSwitcher: View {
     @Bindable var registry: WikiRegistryClient
+    /// The wiki ID shown in THIS window (from `session.wikiID`). Replaces
+    /// `registry.activeWikiID` for the label + checkmark — in multi-window,
+    /// `activeWikiID` is the MRU wiki (for launch), not the current window's
+    /// wiki. Each window's switcher reflects its own wiki.
+    let currentWikiID: String?
     @Environment(\.openWindow) private var openWindow
 
     @State private var newWikiName = ""
@@ -131,12 +136,12 @@ struct WikiSwitcher: View {
     }
 
     private var activeDescriptor: WikiDescriptor? {
-        guard let id = registry.activeWikiID else { return nil }
+        guard let id = currentWikiID else { return nil }
         return registry.wikis.first { $0.id == id }
     }
 
     private func checkmark(for wiki: WikiDescriptor) -> String {
-        wiki.id == registry.activeWikiID ? "checkmark" : ""
+        wiki.id == currentWikiID ? "checkmark" : ""
     }
 
     private var renamePresented: Binding<Bool> {
