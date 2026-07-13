@@ -350,9 +350,10 @@ install-daemon:
 	@swift build --target wikid
 	@echo "→ Installing launchd plist…"
 	@mkdir -p $(dir $(WIKID_PLIST_DST))
-	@# Copy the plist, substituting the binary path so launchd knows where wikid lives.
-	@plutil -remove ProgramArguments -o /dev/null $(WIKID_PLIST) 2>/dev/null || true
-	@plutil -insert ProgramArguments.0 -string "$(WIKID_BIN)" -o $(WIKID_PLIST_DST) $(WIKID_PLIST)
+	@# Copy the plist template, then inject the binary path into a ProgramArguments array.
+	@cp $(WIKID_PLIST) $(WIKID_PLIST_DST)
+	@plutil -insert ProgramArguments -array -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST) 2>/dev/null || true
+	@plutil -insert ProgramArguments.0 -string "$(WIKID_BIN)" -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST)
 	@launchctl unload $(WIKID_PLIST_DST) 2>/dev/null || true
 	@launchctl load $(WIKID_PLIST_DST)
 	@echo "✓ wikid installed. It will auto-start when a client connects via XPC."
