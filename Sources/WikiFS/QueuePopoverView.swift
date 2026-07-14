@@ -51,6 +51,8 @@ struct QueuePopoverView: View {
 
     @State private var viewModel = QueueViewModel()
 
+    @Environment(\.openWindow) private var openWindow
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -309,9 +311,7 @@ struct QueuePopoverView: View {
 
     private func openWikiWindow(_ wikiID: String) {
         onClose()
-        // Use the environment's openWindow action to focus the wiki's window.
-        // If the wiki already has a window, it's brought to front; if not,
-        // a new window is opened.
+        openWindow(value: wikiID)
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 

@@ -55,7 +55,11 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
         }
         let launcher = session.agentLauncher
-        let changeSignaler: any ChangeSignaler = fileProviderBox.provider!
+        let changeSignaler: any ChangeSignaler
+        guard let fp = fileProviderBox.provider else {
+            throw QueueIngestionError.spawnFailed("File provider not yet wired — app is still launching")
+        }
+        changeSignaler = fp
 
         guard !sourceIDs.isEmpty else {
             throw QueueIngestionError.noSources

@@ -610,10 +610,6 @@ public final class AgentLauncher {
         generationGate.release(lane)
     }
 
-    // MARK: - Serialized extraction slot (pdf2md only)
-
-    /// The separate, independent lock that serializes `pdf2md` conversions against
-    /// each other. See the "three independent mechanisms" overview above. Held ↔
     /// Run an operation `request` against one wiki. Serializes on the generation gate:
     /// if another `claude -p` run is generating, this `await`s until it finishes (or
     /// this task is cancelled). Returns without spawning if cancelled while queued.
