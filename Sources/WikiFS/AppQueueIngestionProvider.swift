@@ -284,6 +284,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         // Wire the launcher's per-event callback so typed agent events are
         // forwarded to the queue's transcript tracker (for the Activity window).
         // Cleared in `launcher.finish()` / `resetRunArtifacts()`.
+        DebugLog.ingest("AppQueueIngestionProvider.runAgent: setting onAgentEvent, onTranscript is \(onTranscript == nil ? "nil" : "set")")
         launcher.onAgentEvent = onTranscript
 
         await launcher.run(

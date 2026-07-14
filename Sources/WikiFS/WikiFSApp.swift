@@ -221,6 +221,63 @@ struct WikiFSApp: App {
         } catch {
             DebugLog.store("wikid: SMAppService registration failed (expected in dev mode): \(error)")
         }
+
+        // Call bootstrap directly from init.
+        print("SDW: calling bootstrapApp from init")
+        bootstrapApp()
+    }
+
+    /// App-level bootstrap: status item, file provider, activateMostRecent,
+    /// change bridge. Called from BOTH AppDelegate.applicationDidFinishLaunching
+    /// (guaranteed) AND the main WindowGroup's .task (fallback). Idempotent —
+    /// guarded by a static flag.
+    private static var didBootstrap = false
+    @MainActor
+    private func bootstrapApp() {
+        DebugLog.tabs("WikiFSApp: bootstrapApp called, didBootstrap=\(Self.didBootstrap)")
+        guard !Self.didBootstrap else { return }
+        Self.didBootstrap = true
+
+        // Activate most recent wiki NOW (synchronous) so activeWikiID is set
+        // before any RootScene renders.
+        registry.activateMostRecent()
+
+        // File provider + flush wiring (synchronous).
+        fileProviderBox.provider = fileProvider
+        fileProvider.wire(into: registry)
+        registry.flushActiveStore = { [sessionManager] wikiID in
+            sessionManager.flushSession(for: wikiID)
+        }
+
+        // Status item + File Provider setup + change bridge must run AFTER
+        // NSApp is ready. Use DispatchQueue.main.async to defer to the next
+        // run loop tick (after init completes and NSApp is initialized).
+        DispatchQueue.main.async {
+            let statusController = QueueStatusItemController(
+                queueEngine: self.queueEngine,
+                activityTracker: self.activityTracker,
+                sessionManager: self.sessionManager)
+            statusController.start()
+            self.appDelegate.statusItemController = statusController
+
+            Task {
+                if let warning = await FileProviderSetupVerifier.verifyAndRepairInstalledProvider() {
+                    self.fileProviderSetupWarning = warning
+                    self.showingFileProviderSetupWarning = true
+                }
+                await self.fileProvider.migrateDomainsIfNeeded(
+                    wikiIDs: self.registry.wikis.map(\.id))
+                await self.registry.registerAllDomains()
+
+                let bridge = WikiChangeBridge(registry: self.registry, fileProvider: self.fileProvider)
+                bridge.sessionLookup = { [sessionManager = self.sessionManager] wikiID in
+                    sessionManager.allSessions.filter { $0.wikiID == wikiID }
+                }
+                bridge.refreshObservations()
+                self.changeBridge = bridge
+                self.appDelegate.sessionManager = self.sessionManager
+            }
+        }
     }
 
     var body: some Scene {
@@ -273,51 +330,7 @@ struct WikiFSApp: App {
                 changeBridge?.refreshObservations()
             }
             .task {
-                // Start the menu-bar status item ASAP — before any blocking
-                // File Provider setup/migration awaits, so it's visible from
-                // the moment the app launches.
-                let statusController = QueueStatusItemController(
-                    queueEngine: queueEngine,
-                    activityTracker: activityTracker,
-                    sessionManager: sessionManager)
-                statusController.start()
-                appDelegate.statusItemController = statusController
-
-                fileProviderBox.provider = fileProvider
-                fileProvider.wire(into: registry)
-                // Flush a specific wiki's store before export/delete. The
-                // closure receives the wiki ID so the registry can target the
-                // right session.
-                registry.flushActiveStore = { [sessionManager] wikiID in
-                    sessionManager.flushSession(for: wikiID)
-                }
-                // First render already loaded the wiki list (reloadData, no
-                // selection). Now set the active wiki id: only triggers
-                // selectRow (not reloadData), so no NSTableView reentrancy.
-                registry.activateMostRecent()
-                if let warning = await FileProviderSetupVerifier.verifyAndRepairInstalledProvider() {
-                    fileProviderSetupWarning = warning
-                    showingFileProviderSetupWarning = true
-                }
-                await fileProvider.migrateDomainsIfNeeded(
-                    wikiIDs: registry.wikis.map(\.id))
-                await registry.registerAllDomains()
-                // Stand up the change bridge now that the registry is loaded,
-                // then observe every wiki's `wikictl` Darwin notification.
-                let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
-                // Route flushes to all matching sessions — a wikictl write to
-                // wiki A must update every window showing wiki A.
-                bridge.sessionLookup = { [sessionManager] wikiID in
-                    sessionManager.allSessions.filter { $0.wikiID == wikiID }
-                }
-                bridge.refreshObservations()
-                changeBridge = bridge
-                // Give the AppDelegate a reference to the session manager so
-                // it can flush ALL sessions on app background (R3 safety net —
-                // unreleased sessions from closed-but-not-onDisappear'd
-                // windows are drained here, since per-window scenePhase only
-                // flushes active-window sessions).
-                appDelegate.sessionManager = sessionManager
+                bootstrapApp()
             }
         }
         .windowToolbarStyle(.unified)
@@ -342,6 +355,9 @@ struct WikiFSApp: App {
             .appEnvironment(tracker: activityTracker)
             .onAppear {
                 DebugLog.tabs("RootScene wiki-window onAppear: wikiID=\(wikiID ?? "nil")")
+            }
+            .task {
+                bootstrapApp()
             }
         }
 
@@ -383,6 +399,14 @@ struct WikiFSApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor weak var sessionManager: SessionManager?
     @MainActor weak var statusItemController: QueueStatusItemController?
+    @MainActor var bootstrap: (@MainActor () -> Void)?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        DebugLog.tabs("AppDelegate: applicationDidFinishLaunching")
+        MainActor.assumeIsolated {
+            bootstrap?()
+        }
+    }
 
     func applicationWillResignActive(_ notification: Notification) {
         MainActor.assumeIsolated {

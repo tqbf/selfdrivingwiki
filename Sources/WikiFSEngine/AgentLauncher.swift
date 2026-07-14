@@ -1904,7 +1904,11 @@ public final class AgentLauncher {
 
         // Forward to the queue's per-item transcript callback (Activity window).
         // Fired on every event so the tracker gets a live, complete transcript.
-        onAgentEvent?(event)
+        if let onAgentEvent {
+            onAgentEvent(event)
+        } else {
+            DebugLog.agent("mergeOrAppend: onAgentEvent is nil — event not forwarded to tracker")
+        }
     }
 
     /// Append a raw stderr chunk: surface it in `stderr`, mirror to the transcript +

@@ -84,12 +84,20 @@ struct RootScene: View {
                 }
                 .onAppear {
                     DebugLog.tabs("RootScene [No Wikis]: wikiID=nil session=nil registry.wikis.count=\(registry.wikis.count) activeWikiID=\(registry.activeWikiID ?? "nil") isSceneActive=\(isSceneActive)")
-                    // If activeWikiID is already set and we haven't adopted it,
-                    // adopt it now — this covers the state-restoration case
-                    // where a second main-window RootScene starts with nil.
+                    // Only adopt activeWikiID for the main launch window (which
+                    // starts with wikiID==nil from the single-identity WindowGroup).
+                    // Wiki windows (from WindowGroup(for: String.self)) should receive
+                    // their ID from the binding — if they're nil here, it's a state-
+                    // restoration edge case; adopt activeWikiID as a fallback.
                     if wikiID == nil, let activeID = registry.activeWikiID {
                         DebugLog.tabs("RootScene [No Wikis]: adopting activeWikiID=\(activeID)")
                         wikiID = activeID
+                    } else if wikiID == nil, registry.activeWikiID == nil, !registry.wikis.isEmpty {
+                        // The main WindowGroup's .task hasn't run yet (or this
+                        // is a state-restored wiki window). Trigger activateMostRecent
+                        // so activeWikiID gets set, which our onChange will adopt.
+                        DebugLog.tabs("RootScene [No Wikis]: activating most recent")
+                        registry.activateMostRecent()
                     }
                 }
             }
