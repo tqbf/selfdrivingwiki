@@ -51,7 +51,6 @@ public final class AgentLauncher {
     /// it aborts a running `pdf2md` conversion (via its task-cancellation handler).
     /// Held here so `stop()` can cancel the conversion phase, not just the agent
     /// process. Self-clears when done.
-    @ObservationIgnored public var ingestTask: Task<Void, Never>?
     /// True while a spawned `claude -p` process is alive (one-shot runs: from spawn
     /// to finish; interactive sessions: from spawn to session end, across all turns).
     /// Set at spawn commit in `run()` and `startInteractiveQuery()`; cleared in
@@ -615,49 +614,6 @@ public final class AgentLauncher {
 
     /// The separate, independent lock that serializes `pdf2md` conversions against
     /// each other. See the "three independent mechanisms" overview above. Held ↔
-    /// `isExtractionSlotBusy`. Same FIFO + cancellation-safe shape as the generation
-    /// Ingest a single source.  Convenience — delegates to `ingestSources`.
-    func ingestSource(
-        sourceID: PageID,
-        store: WikiStoreModel,
-        wikiID: String,
-        changeSignaler: any ChangeSignaler,
-        wikictlDirectory: String,
-        queueEngine: QueueEngine,
-        extractionProvider: any QueueExtractionProvider
-    ) {
-        ingestSources(sourceIDs: [sourceID], store: store, wikiID: wikiID, changeSignaler: changeSignaler, wikictlDirectory: wikictlDirectory, queueEngine: queueEngine, extractionProvider: extractionProvider)
-    }
-
-    /// Ingest one or more sources.  Single entrypoint for both the detail view
-    /// and the sidebar context menu — handles extraction, staging, agent spawn,
-    /// and UI state tracking.
-    public func ingestSources(
-        sourceIDs: [PageID],
-        store: WikiStoreModel,
-        wikiID: String,
-        changeSignaler: any ChangeSignaler,
-        wikictlDirectory: String,
-        queueEngine: QueueEngine,
-        extractionProvider: any QueueExtractionProvider
-    ) {
-        ingestTask?.cancel()
-        let task = Task {
-            defer { ingestTask = nil }
-            await AgentOperationRunner.runMultiIngest(
-                sourceIDs: sourceIDs,
-                launcher: self,
-                store: store,
-                wikiID: wikiID,
-                changeSignaler: changeSignaler,
-                wikictlDirectory: wikictlDirectory,
-                extractionCoordinator: extractionCoordinator,
-                queueEngine: queueEngine,
-                extractionProvider: extractionProvider)
-        }
-        ingestTask = task
-    }
-
     /// Run an operation `request` against one wiki. Serializes on the generation gate:
     /// if another `claude -p` run is generating, this `await`s until it finishes (or
     /// this task is cancelled). Returns without spawning if cancelled while queued.
@@ -1758,7 +1714,6 @@ public final class AgentLauncher {
             "stopAgent() requested: isRunning=\(isRunning) "
             + "session=\(sessionHandle != nil) "
             + "pid=\(currentProcessID ?? -1)")
-        ingestTask?.cancel()
         // Cancel any pending send (gate wait) so it doesn't fire after the session ends.
         interactiveSendTask?.cancel()
         interactiveSendTask = nil
