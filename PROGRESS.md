@@ -4,6 +4,7 @@ Newest first. To get up to speed: read `PLAN.md` then this file.
 
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 ## 2026-07-14 — Stop committing generated codegen files
 
 `GeneratedVersion.swift` (git SHA → Swift) and `GeneratedPrompts.swift` (prompt
@@ -49,34 +50,37 @@ See [`plans/wikictl-author-provenance.md`](plans/wikictl-author-provenance.md).
 =======
 ## 2026-07-13 — Queue Engine: extraction & ingestion queue (Phases 1–4)
 >>>>>>> c731a17 (docs: consolidate queue engine PROGRESS.md entries (concise))
+=======
+## 2026-07-14 — Queue Engine (Phases 1–4)
+>>>>>>> 1bb6936 (docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines))
 
 A persistent, app-wide extraction/ingestion work queue backed by a new
-`queue.sqlite` in the App Group container. Survives relaunch, schedules across
-wikis with per-provider concurrency limits, and keeps running when no window is
-open. Design plan: `docs/design-plans/2026-07-13-queue-engine.md`.
+`queue.sqlite` in the App Group container. Items survive relaunch, schedule
+across wikis with per-provider concurrency limits, and keep running when no
+window is open.
 
-**Phase 1 — QueueStore (`WikiFSCore`):** `QueueStore` + value types
-(`QueueItem`, `QueueKind`, `QueueItemState`, `QueueItemRequest`, `QueueRunState`).
-SQLite discipline mirrors `SQLiteWikiStore` (WAL, statement cache, method-atomic
-lock, savepoint transactions, versioned migrations, checkpoint-and-close).
-20 tests.
+- **Queue store** — durable SQLite persistence with crash recovery (running
+  items reset to queued on launch), gap-based FIFO ordering, and bounded
+  history pruning.
+- **QueueEngine actor** — event-driven dispatch, per-provider concurrency
+  limits, per-wiki ingestion invariant (one ingest per wiki at a time),
+  pause/resume/halt/cancel/retry, write-through persistence, launch
+  rehydration, `AsyncStream<QueueEvent>` for UI observation.
+- **Event log** — JSONL audit trail. Daily-rotated `queue-YYYY-MM-DD.jsonl`
+  under `Logs/queue/`, 30-day bounded retention.
+- **Extraction through the queue** — all PDF extraction now flows through the
+  engine. `QueueActivityTracker` (`@Observable`) replaces the launcher's
+  extraction slot machinery. `waitForCompletion(of:)` for inline-caller awaits.
 
-**Phase 2 — QueueEngine actor (`WikiFSEngine`):** event-driven dispatch,
-per-provider concurrency limits, per-wiki ingestion invariant, local/remote
-extraction limits, pause/resume/halt/cancel/retry, write-through to `QueueStore`,
-`AsyncStream<QueueEvent>`, launch rehydration. 16 tests.
+Not yet wired into ingestion (Phase 5) or the menu-bar UI (Phases 6–7).
 
-**Phase 3 — QueueEventLog (`WikiFSEngine`):** JSONL audit trail. Daily-rotated
-`queue-YYYY-MM-DD.jsonl` under `Logs/queue/`, 30-day bounded retention, appends
-across relaunches. 16 tests.
+## 2026-07-13 — Chat summary in sidebar
 
-**Phase 4 — Extraction through the queue (`WikiFSEngine`):** `QueueExtractionProvider`
-protocol bridges `@MainActor ExtractionCoordinator` into the headless engine.
-`QueueExtractionWorker` calls `resolveExtraction` → `readiness()` → `convert()` →
-`persistExtraction`. `QueueIngestSignaling` protocol for `isIngestInProgress` timing
-(issue #235). `waitForCompletion(of:)` on the engine for inline-caller awaits.
-`.progress` event for live extraction log. 13 tests.
+The sidebar's recent chat list shows a one-line summary of the model's first
+response under each chat title. Generated on completion, persisted to SQLite
+— available immediately on launch, no recomputation.
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 **Files (1 new + 1 test):**
 - `Sources/WikiFSEngine/QueueEventLog.swift` (new)
@@ -242,374 +246,136 @@ Not yet wired into the app layer (`WikiFS`) — Phase 4 headless components only
 App-layer migration (AgentOperationRunner, SourceDetailView, AgentLauncher
 retirement) is the next step. 65 tests total across all phases.
 >>>>>>> c731a17 (docs: consolidate queue engine PROGRESS.md entries (concise))
+=======
+## 2026-07-13 — Multi-window (Phase 2b of #358)
+>>>>>>> 1bb6936 (docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines))
 
-## 2026-07-13 — Chat Summary (issue #411)
+Open multiple wiki windows simultaneously, each with its own session. A long
+ingest in one wiki's window does not block a query in another's. Two windows
+over the same wiki share one session (one store, one bus, one gate).
 
-**Implemented.** The sidebar's `RecentChatRow` now shows a one-line summary of
-the model's first response under the chat title. The summary is generated once
-on chat completion (`AgentLauncher.finish()`) and persisted to SQLite
-(`chats.summary` + `chats.summary_at`, schema v36), so it's available
-immediately when the history list loads — no recomputation on app launch.
+## 2026-07-13 — WikiManager dissolution (Phase 2a of #358)
 
-**v0 strategy: deterministic first-sentence extract** (no LLM call). The
-schema and rendering are designed so an LLM-based summarizer can be layered on
-later without further migrations.
-
-**What changed:**
-- `Sources/WikiFSCore/SQLiteWikiStore.swift` — schema migration v35→v36
-  (`migrateV35ToV36`), `createChatTablesV23` columns, `createFreshSchemaV20`
-  version stamp, `listChats` / `listAllChatsOrderedByID` SELECT update (NULL-
-  safe reads), new `updateChatSummary` mutator (routes through `mutate()`).
-- `Sources/WikiFSCore/WikiStore.swift` — `updateChatSummary` on the protocol.
-- `Sources/WikiFSCore/ChatModels.swift` — `summary`/`summaryAt` fields on
-  `ChatSummary`, `summaryExtract(from:maxLength:)` pure function.
-- `Sources/WikiFSCore/WikiStoreModel.swift` — `updateChatSummary` wrapper.
-- `Sources/WikiFSEngine/AgentLauncher.swift` — `summarySink` property,
-  `onSummary` parameter on `startInteractiveQuery`, `firstSummaryText(from:)`
-  static function, `generateChatSummary()` method called in `finish()`.
-- `Sources/WikiFSEngine/AgentOperationRunner.swift` — wired `onSummary` at both
-  `startInteractiveQuery` call sites.
-- `Sources/WikiFS/AgentToolsView.swift` — `RecentChatRow` shows summary caption
-  when `!isLive`.
-- Tests: `ChatSummaryTests.swift` (13 tests: pure extract, static event
-  selection, store round-trip, NULL handling, updatedAt bump).
-
-## 2026-07-13 — Multi-window UI — per-wiki windows (Phase 2b of #358)
-
-**Multi-window is implemented.** The plan lives at
-`plans/multi-window-ui.md`. Users can now open multiple wiki windows
-simultaneously, each with its own `WikiSession` — a long ingest in wiki A's
-window does not block a query in wiki B's window. Two windows over the SAME
-wiki share one session (one store, one bus, one gate).
-
-**New types:**
-- **`SessionManager`** (`Sources/WikiFSEngine/SessionManager.swift`) —
-  `@MainActor @Observable`. Owns the `[wikiID: WikiSession]` cache.
-  `session(for:descriptor:)` is create-or-get (same wiki ID returns the
-  existing session). `releaseSession(for:)` flushes + removes.
-  `flushAllSessions()` flushes all active. `frontmostWikiID` /
-  `frontmostSession` for `VacuumCommands` resolution.
-- **`RootScene`** (`Sources/WikiFS/RootScene.swift`) — per-window entry
-  point. Receives `wikiID: String?`, resolves the session via
-  `sessionManager`, owns per-window `scenePhase` (flush-on-background +
-  search-index backfill), vacuum alert, and `.onDisappear` session release.
-
-**What changed:**
-- `@State session` + `SessionRef` → `@State sessionManager: SessionManager`
-- `WindowGroup { RootView(session:) }` → two WindowGroups: single-identity
-  main (launch + MRU wiki) + `WindowGroup(for: String.self)` (additional
-  wiki windows). Both use `RootScene`.
-- `.onChange(of: registry.activeWikiID)` session creation → moved into
-  `RootScene` (per-window via `resolveSession(for:)`).
-- `.onChange(of: scenePhase)` + vacuum `.alert` → moved into `RootScene`.
-- `WikiChangeBridge`: `weak var session` → `var sessionLookup` closure.
-  `flush(wikiID:)` pokes all matching sessions' buses.
-- `FileProviderSpike`: `subscribeActiveStoreBus` (single) →
-  `subscribeBus(for:bus:)` + `unsubscribeBus(for:)` (multi-dict).
-- `WikiSwitcher`: `registry.select(id)` → `openWindow(value: id)` default,
-  `registry.select(id)` Option+click (in-window switch).
-- `VacuumCommands`: `session: WikiSession?` → `sessionManager` (resolves
-  `frontmostSession`).
-- `ExtractionCompareContext` gained `wikiID` field (so the compare window
-  resolves the correct session). `ExtractionCompareWindow` takes
-  `sessionManager` instead of `session`.
-- `WikiRegistryClient.flushActiveStore` signature: `(() -> Void)?` →
-  `((String) -> Void)?` (passes the wiki ID being exported/deleted).
-- `RootView.session`: `WikiSession?` → `WikiSession` (non-optional;
-
-**Files changed (13 total):**
-- 3 new: `SessionManager.swift`, `RootScene.swift`, `SessionManagerTests.swift`
-- 10 modified: `WikiFSApp`, `RootView`, `WikiSwitcher`, `WikiChangeBridge`,
-  `ExtractionCompareSheet`, `FileProviderSpike`, `VacuumCommands`,
-  `SourceDetailView`, `WikiRegistryClient`, `FPIfSubscriberDebounceTests`
-- Tests: `SessionManagerTests` (9 tests) + updated `WikiChangeBridgeTests`
-  (4 tests). All pass. `swift build` clean, fast-tier (2305 tests) green.
-
-**What does NOT change:** the daemon, the File Provider extension, `wikictl`
-store writes, Darwin notification routing, SQLite concurrency invariants,
-agent config, `ExtractionCoordinator`, `settingsLauncher`, `WikiSession`
-itself, `WikiRegistryClient` (except the `flushActiveStore` signature).
-
-## 2026-07-13 — Dissolve `WikiManager` into `WikiRegistryClient` + `WikiSession` (Phase 2a of #358)
-
-**The type split is implemented.** The plan lives at
-`plans/dissolve-wikimanager.md`. `WikiManager` (app-scoped monolith bundling
-registry + active store + side effects) is dissolved into two focused types:
-
-- **`WikiRegistryClient`** (`Sources/WikiFSCore/WikiRegistryClient.swift`) —
-  app-scoped, `@MainActor @Observable`. Owns the wiki list (`wikis`), the
-  active wiki id (`activeWikiID`), and the create/select/delete/rename/
-  export/import operations. Never opens a store itself (no `activeStore`,
-  no `openActive`). FP domain closures (`registerDomain`/`removeDomain`/
-  `renameDomain`) + a `flushActiveStore` closure are injected from the app
-  layer. `WikiManagerError` → `WikiRegistryError` (moved into the same file).
-- **`WikiSession`** (`Sources/WikiFSEngine/WikiSession.swift`) — per-active-wiki,
-  `@MainActor @Observable`. Holds the store (`WikiStoreModel`), per-session
-  `AgentLauncher` pair, per-session `GenerationGate`, shared
-  `ExtractionCoordinator` ref, and the vacuum/GC + search-upgrade state.
-  `init` does what `WikiManager.openActive` did (open store, attach bus,
-  create model, create read pool, create launchers, seed Home page). Each
-  session has its own gate → structural per-wiki isolation (a long ingest in
-  one wiki cannot block a query in another).
-
-**What moved where:**
-- `wikis`/`activeWikiID` → `WikiRegistryClient`
-- `activeStore` → `WikiSession.store`
-- `pendingBlobVacuum`/`pendingVacuumAll` → `WikiSession`
-- `upgradeActiveStoreSearchIndex` → `WikiSession.upgradeSearchIndex()`
-- `openActive` → `WikiSession.init` (called from the app's `.onChange(of:
-  registry.activeWikiID)`)
-- v0 migration, FP domain closures, `registerAllDomains` → `WikiRegistryClient`
-- `WikiManagerError` → `WikiRegistryError`
-
-**Files changed (21 total):**
-- 2 new: `WikiRegistryClient.swift`, `WikiSession.swift`
-- 2 deleted: `WikiManager.swift`, `WikiManagerError.swift`
-- 17 modified: `WikiFSApp`, `RootView`, `ContentView`, `SidebarView`,
-  `WikiSwitcher`, `WikiDetailView`, `PageDetailView`, `ChatView`, `LintView`,
-  `SourcesContainerView`, `SourcesListView`, `PagesContainerView`,
-  `PagesListView`, `ExtractionCompareSheet`, `VacuumCommands`,
-  `WikiChangeBridge`, `WikiStoreModel`
-- Tests: `WikiManagerTests` → `WikiRegistryClientTests` (17 tests) +
-  `WikiSessionTests` (7 tests) + `WikiChangeBridgeTests` (2 tests). All 26 pass.
-
-**What does NOT change:** the daemon (`wikid`), the File Provider extension,
-`wikictl` store writes, Darwin notification routing, the SQLite concurrency
-invariants, agent config, the single `WindowGroup` (multi-window is Phase 2b).
+Split the monolithic `WikiManager` into `WikiRegistryClient` (app-scoped: wiki
+list + active wiki + create/select/delete/export/import) and `WikiSession`
+(per-wiki: store + launchers + gate). Each session has its own
+`GenerationGate` — structural per-wiki isolation. Enables multi-window.
 
 ## 2026-07-12 — wikid XPC daemon + WikiFSEngine extraction (Phase 1 of #358)
 
-**All three phases of the multi-wiki daemon plan are implemented.** The design
-doc lives at `plans/multi-wiki-daemon.md`; the architecture-roadmap §4 fork is
-resolved (daemon-first path chosen).
+Extracted the agent execution engine into a reusable `WikiFSEngine` library.
+A new `wikid` daemon process owns the wiki registry via XPC; `wikictl` is the
+first client (registry ops + wiki resolution through the daemon, with
+graceful fallback to direct resolution when the daemon isn't running).
 
-**Phase 1A: WikiFSEngine extraction (PR #369, merged).** Extracted the agent
-execution engine out of the app target into a new `WikiFSEngine` library. Both
-the app and the future daemon link it. 14 files moved
-(`Sources/WikiFS/` → `Sources/WikiFSEngine/`): `AgentLauncher`, `ACPBackend`,
-`ClaudeCLIBackend`, `AgentOperationRunner`, `GenerationGate`,
-`ExtractionCoordinator`, `AgentBackend`/`Factory`, `OperationRequest`,
-`ACPPermissions`, `PermissionResolving`, `NotificationFanout`,
-`TurnLivenessPolicy`, `ACPAuthResolver`. Protocol seams introduced
-(`EngineProtocols.swift`): `ChangeSignaler` (abstracts `FileProviderSpike`),
-`UnavailablePdf2MarkdownExtractor` (placeholder for the
-`localExtractorFactory` injection). `AgentOperationRunner` signatures changed:
-`manager: WikiManager` → `wikiID: String`, `fileProvider: FileProviderSpike` →
-`changeSignaler: any ChangeSignaler`, `HelpersLocation.wikictlDirectory` →
-`wikictlDirectory: String` (injected). `ExtractionCoordinator`+`AgentLauncher`
-gained factory closures for `PdfExtractionService`/`LocalPdf2MarkdownExtractor`
-(which stay in the app target — AppKit-coupled). `FileProviderSpike` conforms to
-`ChangeSignaler`. All 8 app call sites updated. Fast tier: 2354 tests pass.
+## 2026-07-12 — ACP multi-provider
 
-**Phase 1B: wikid XPC daemon (PR #370, merged).** New `wikid` executable target
-linking `WikiFSCore`. `WikiDaemonProtocol` (`@objc`, JSON-in-`Data` transport)
-in `WikiFSCore` — shared by daemon + clients. `WikiDaemon` holds live
-`WikiRegistry` in-memory (not load-mutate-save per op), holds open
-`SQLiteWikiStore` instances (Sendable, method-atomic), serializes mutations on a
-`DispatchQueue`, seeds a Home page on `createWiki`. `main.swift`:
-`NSXPCListener(machServiceName:)` + `RunLoop.current.run()`. launchd plist
-(`signing/com.selfdrivingwiki.wikid.plist`) with `MachServices`, `RunAtLoad`,
-`KeepAlive`, `IdleTimeout=300s`. Makefile targets: `install-daemon` /
-`uninstall-daemon` / `daemon-status`.
+All agents now use the Agent Client Protocol. Legacy `claude -p` CLI backend,
+agent-command config, and old settings UI removed. Multiple providers
+(Claude, custom) configurable in Settings → Agents.
 
-**Phase 1C: wikictl as first XPC client (PR #370, merged).**
-`WikiDaemonConnection` (in `WikiCtlCore`) — thin async XPC client,
-JSON encode/decode of `WikiDescriptor` over `Data`. `wikictl main.swift`:
-`run()` is now async; wiki resolution tries the daemon first, falls back to
-direct `WikiResolver` if the daemon isn't running (graceful degradation). Four
-new `wikictl wiki` subcommands: `list` / `create --name` / `delete --id` /
-`rename --id --name`, all routed through the daemon via XPC. Store writes still
-direct (`SQLiteWikiStore`) — "sole writer" deferred to Phase 2+ (decision D4).
+## 2026-07-12 — Git SHA versioning
 
-**What does NOT change:** the app stays in-process (`WikiManager` untouched);
-the File Provider extension reads SQLite directly; store writes from `wikictl`
-open their own `SQLiteWikiStore` (WAL + method-atomic store handles
-multi-writer); Darwin notification routing unchanged; all SQLite concurrency
-invariants preserved (`mutate()` write-seam, `StoreEmissionExhaustivenessTests`,
-`WikiReadPool` read-only connections).
-## 2026-07-12 — ACP Multi-Provider: Phase 4 (legacy deletion)
+Each build is identified by commit count + short SHA (e.g. `487-d440699`).
+Visible in the About settings tab and `wikictl version`.
 
-**What shipped.** Phase 4 of `plans/acp-multi-provider.md` — the app is now
-ACP-only. All legacy Claude-CLI code paths, config types, and settings UI were
-deleted. This completes the 4-phase plan (Phases 1–3 shipped in commit
-`50d1c0f`).
+## 2026-07-11 to 07-12 — Multi-writer concurrency
 
-**Deleted (12 files, ~3585 lines of source + tests):**
-- `Sources/WikiFSEngine/ClaudeCLIBackend.swift` — the `claude -p` stream-json
-  backend. `AgentBackendFactory.makeBackend` now always returns `ACPBackend`.
-- `Sources/WikiFSCore/AgentCommandConfig.swift` — `agent-command-config.json`
-  (executable, prefix-args, model override, extra env). The tokenizer + tilde-
-  expansion helpers were extracted to `ShellArgv.swift` (both call sites in
-  `AgentBackendFactory.providerHints` and `AgentLauncher` still need them).
-- `Sources/WikiFSCore/ACPAgentConfig.swift` — `acp-agent-config.json`
-  (dead wiring kept for old tests; the real path was always
-  `AgentProvidersConfig`).
-- `Sources/WikiFSCore/OperationCommand.swift` — the pure-argv assembly type
-  (`OperationCommand.build`). With the CLI backend gone, spawn argv is built
-  directly in `AgentLauncher` from `AgentSpawnConfig`.
-- `Sources/WikiFSCore/ClaudePromptHelp.swift` + `ClaudePromptHelpDocument.swift`
-  + 3 view files (`ClaudePromptHelpView`, `ClaudePromptHelpCommands`,
-  `PromptHelpSectionView`) — the in-app Claude prompt debugger/help feature.
-- `Sources/WikiFS/AgentCommandSettingsView.swift` +
-  `AgentProvidersSettingsView.swift` — the old Agent + Providers settings tabs
-  (replaced by the unified `AgentsSettingsView` in Phase 3).
-- Tests: `ACPConfigTests`, `AgentCommandConfigTests`, `ClaudePromptHelpTests`,
-  `OperationCommandTests`, `SandboxedOperationCommandTests`.
+Speculative ingestion workspaces, real diff3 three-way merge, conflict
+resolution and review, configurable N-throttle, and workspace reaper. CAS
+(compare-and-swap) replaces the old edit-lock mutex — starting a second chat
+while one is running no longer silently fails. `--expect-head` on
+`wikictl page upsert` provides optimistic concurrency control.
 
-**New file:**
-- `Sources/WikiFSCore/ShellArgv.swift` — `tokenize(_:)` (shell-style argv
-  splitting, no shell invoked) + `expandTilde(_:)`. Extracted from
-  `AgentCommandConfig` since `AgentBackendFactory.providerHints` and
-  `AgentLauncher`'s ACP spawn resolution still need both transforms,
-  independent of the deleted CLI config type.
+## 2026-07-08 — Wikilink anchors & citations
 
-**Key model changes:**
-- `AgentProvider.backend` field (`.claudeCLI` / `.acp`) removed — all providers
-  are ACP. The old `claudeDefault` (id `"claude"`, CLI, no command) was replaced
-  by `claudeAcpDefault` (`bun x @agentclientprotocol/claude-agent-acp`).
-- `AgentProvidersConfig` no longer injects `claudeCachedModels` (`["opus",
-  "sonnet", "haiku"]`) — model lists always come from ACP discovery.
-- `IngestPlan` stripped of opus/sonnet tiering (`topLevelModelAlias`,
-  `agentsJSON`, `digesterPrompt`) — it is now a pure source-size predicate.
-  Which provider/model runs each stage is resolved separately via
-  `AgentProvidersConfig.resolvedProvider(for:)`.
-- `AgentBackendFactory.makeBackend(useACPBackend:policy:)` →
-  `makeBackend(policy:)` — no more `useACPBackend` UserDefaults toggle.
-- `AgentBackendFactory.providerHints` removed the `.claudeCLI` branch.
+`[[Page#Section]]` for in-document heading anchors, `[[source:Name#"quoted
+passage"]]` for text-quote citations. Quote highlighting survives PDF
+re-extraction (nothing stored in the source text).
 
-**Gates:** `swift build` clean; fast tier **2268 tests in 190 suites pass**.
-All remaining references to deleted types are in doc comments documenting the
-old architecture — no functional code references remain.
+## 2026-07-08 — Bookmarks sidebar
 
-## 2026-07-12 — Git SHA versioning scheme
+A fourth sidebar tab with a user-defined tree of folders and page/source
+references. Drag-drop reordering, multi-select to bookmark from Pages/Sources
+lists, "Add Bookmark…" on internal wiki links and the address bar.
 
-Replaced the `0.0.0-dev` placeholder versioning with a git-derived scheme so
-every build is uniquely identifiable. The old scheme resolved `VERSION` from a
-tag or `VERSION` file, fell back to `0.0.0-dev`, and wrote the same value into
-both `CFBundleShortVersionString` and `CFBundleVersion` — no SHA, no commit
-count, every dev build indistinguishable.
+## 2026-07-06 to 07-08 — Chat UI + persistence
 
-**Version scheme:** `CFBundleShortVersionString` = SemVer (tag/`VERSION`
-file/`0.0.0`), `CFBundleVersion` = `<commit-count>-<short-sha>` (e.g.
-`487-d440699`). Monotone integer for Apple's build-number expectations, SHA
-baked in for traceability.
+Interactive Claude chat in the sidebar with persistent history across
+launches. Each wiki has independent chat conversations.
 
-**Two codegen paths:**
-1. `tools/versiongen/main.swift` → `Sources/WikiFSCore/GeneratedVersion.swift`
-   (checked-in Swift constants: `appVersion`, `gitSHA`, `gitCommitCount`,
-   `buildVersion`, `fullVersionString`). Mirrors the `promptgen` pattern:
-   `make version` regenerates; `make check-version-gen` is the CI drift gate;
-   the generator only writes when content changes (no spurious recompiles).
-2. `build.sh` resolves `VERSION` + `BUILD_VERSION` + `GIT_SHA` +
-   `GIT_COMMIT_COUNT` and writes them into both Info.plists (app + appex),
-   including custom `WIKIGitSHA` / `WIKIGitCommitCount` / `WIKIBuildVersion`
-   keys for runtime query.
+## 2026-07-06 — Resource change event bus (#129 slice 2a)
 
-**Makefile:** `version` and `check-version-gen` targets added; `build`,
-`check`, `test`, `release` now depend on `version`. `print-version` enhanced
-to show SHA + commit count + build version.
+The store emits change events at the write seam; the File Provider and model
+subscribe — no hand-fired notifications. Every new mutating method routes
+through `mutate()` and emits a `ResourceChangeEvent`.
 
-**wikictl:** `version` / `--version` / `-v` subcommand prints build info (plain
-text or `--json`). Intercepted before wiki selector requirement — no `--wiki`
-needed. Added `.version(json:)` to `ArgumentParser.Command`.
+## 2026-07-06 — Graph model & versioning
 
-**App:** `ACPBackend` now sends `GeneratedVersion.appVersion` as the ACP client
-version (was hardcoded `"1.0.0"`). New `AboutView` added as the first Settings
-tab showing app icon, name, version, build, git SHA, and commit count.
+Git's objects-vs-refs discipline in SQLite:
 
-**Files changed:**
-- `tools/versiongen/main.swift` (new — 120 lines)
-- `Sources/WikiFSCore/GeneratedVersion.swift` (new — generated)
-- `Sources/WikiCtlCore/ArgumentParser.swift` (`.version` case, parse intercept, usage text)
-- `Sources/wikictl/main.swift` (version print + exhaustive switch case)
-- `Sources/WikiFS/ACPBackend.swift` (hardcoded `"1.0.0"` → `GeneratedVersion.appVersion`)
-- `Sources/WikiFS/AboutView.swift` (new)
-- `Sources/WikiFS/WikiFSApp.swift` (About tab in Settings TabView)
-- `Makefile` (versiongen variables, targets, prerequisites, help, print-version)
-- `build.sh` (BUILD_VERSION, GIT_SHA, GIT_COMMIT_COUNT, Info.plist keys)
-- `PLAN.md` (Versioning section)
+- **Content-addressed blobs** + append-only `source_versions` chains
+- **Extraction alternatives** — multiple backends can produce markdown for
+  the same source; compare and nominate the active one
+- **PROV provenance** — agents, activities, and references tracked per write
+- **Source providers** — local file, website, Zotero, markdown folder origins
+  recorded and displayed in source detail
+- **Source roles** — primary vs. media; media filtering in the Sources UI
+- **Embeds** — `![[source:…]]` for inline images, audio, video, and external
+  players (YouTube, Vimeo, Spotify, SoundCloud, Apple Podcasts)
+- **Website snapshots** — ingesting a website downloads page images as media
+  sources
+- **@vN version pinning** — `[[source:X@v3#"quote"]]` pins a quote to a
+  specific extraction so it survives re-extraction
+- **ULID-canonical links** — wiki links normalized to ULID targets at save
+  time; display resolved at render. Renames no longer rewrite link bodies
 
-**Gates:** 2354 tests pass (fast tier). `make check-version-gen` passes. `make
-version` + `make print-version` work. `wikictl version` / `--version` / `-v` /
-`version --json` all produce correct output. `swift build` clean.
+## 2026-07-05 to 07-06 — Apple Podcasts transcript ingest
 
-## 2026-07-12 — Hardening Feedback Fixes (Fable Review)
+Ingest podcast transcripts as sources. Byteless conversion (no large binary
+blob — the player iframe is embedded directly).
 
-Addressed 3 failing tests + 2 latent Phase-7 defects from the Fable review of
-the multi-writer hardening commit (`de539d7`).
+## 2026-07-05 — File Provider projection overhaul (#129 slice 2b)
 
-**3 failing tests (all CI-skipped `SQLiteWikiStoreTests`):**
-1. `changeTokenAdvancesOnEveryMutation` — test expected `refsGenSum` unchanged
-   after `deletePage`, but the hardening commit correctly cascades the page's
-   `page-content` ref on delete. Fixed the test literal + comment.
-2. `migrateV28ToV29RewritesAskChatsToEdit` — v29→v30 refs rebuild queried a
-   `refs` table absent from the chats-only fixture. Added table-existence guard
-   (create fresh if missing), matching the v30 `hasPages` convention.
-3. `migrateV19ToV20_hashesContentIntoBlobsAndDropsContentColumn` — v32→v33's
-   `tableColumnInfo("pages")` and v33→v34's backfill against a sources-only
-   fixture. Added `sqlite_master` existence guards on both steps.
+Generic flat projection (pages + sources), singleton-doc + generated-index
+descriptors, and bookmarks File Provider projection. The File Provider reads
+from the change-token-driven projection, not from hand-fired updates.
 
-**Latent defect 1 (Phase 7): `workspaceWritePage` status guard.** Writes to a
-`merged`/`conflicted`/`abandoned` workspace succeeded silently. Added a
-`status == 'open'` guard (one query) at the top of the transaction. Two tests
-added to `WorkspaceStagingTests`.
+## 2026-07-05 — Show In List (#183)
 
-**Latent defect 2 (Phase 7): `WIKI_WORKSPACE` global `setenv`.** The env var
-was process-global, leaking to chat-edit agents spawned mid-ingest via the
-interactive lane. Replaced `setenv`/`unsetenv` in `AgentOperationRunner` with
-per-spawn environment injection: `workspaceID` threaded through
-`AgentLauncher.run()` → `providerHints["env.WIKI_WORKSPACE"]` →
-`ACPBackend.start` (already handled `env.*` prefix) +
-`ClaudeCLIBackend.start` (added `env.*` expansion). `OperationCommand.environment`
-changed `let` → `var` to enable post-construction injection. This also fixes
-the cancelled-while-queued stale-env-var case (no global state to leave stale).
+"Show in List" button in page and source detail views surfaces the current
+item in the sidebar: opens the sidebar if collapsed, switches to the right
+section, clears search, and scrolls to + selects the row.
 
-All 55 `SQLiteWikiStoreTests` + `WorkspaceStagingTests` pass. Full fast-tier
-CI (2349 tests) passes.
+## 2026-07-05 — Drop routing for .webloc / remote URLs (#163)
 
-## 2026-07-12 — Multi-Writer Hardening: All 7 Phases Complete
+Dragging a `.webloc` file or an `http(s)` URL from a browser now fetches the
+linked page instead of ingesting the raw bytes.
 
-**All 7 phases of the multi-writer hardening plan are implemented.** The
-design doc lives at `docs/design-plans/2026-07-12-multi-writer-hardening.md`;
-the implementation plan is at `plans/multi-writer-hardening.md`.
+## 2026-07-03 — Graph-model Phase 0: concurrency substrate
 
-**Phase 0 (hotfix):** Fixed `vacuum-blobs --apply` data-loss bug —
-`orphanBlobPredicate` was missing `page_versions.blob_hash`, deleting live
-page-history blobs.
+Method-atomic `SQLiteWikiStore` (internal recursive lock + savepoint
+transactions), `WikiReadPool` for off-main reads. The foundation for all
+graph-model work — no statement handle or column pointer crosses a method
+boundary.
 
-**Phase 1: Agent CAS writes.** `page get --json` outputs
-`head_version_id`; `page upsert --expect-head <ver>` CAS-protects writes
-(exit code 3 on conflict). Agent prompts updated with read→expect→retry-once
-discipline. Blind upsert behavior preserved.
+## 2026-07-02 — Sandbox always-on
 
-**Phase 2: Lane-aware generation gate.** `GenerationGate` split into
-`.ingest` (limit 1) and `.interactive` (limit 3) lanes — a long ingest no
-longer blocks chat. Cancellation safety preserved per-lane.
+Agent filesystem writes confined to a macOS seatbelt sandbox. Ingest/Edit
+get a write whitelist; Ask is read-only. No config toggle — always on.
 
-**Phase 3: Head-ref invariant (v34).** Every page now has an explicit
-`page-content` ref from birth (`createPage` seeds root version + ref).
-v34 migration backfills refs for existing pages, seeding root versions
-where needed. MAX(id) fallback demoted to logged assertion.
+## 2026-07-01 — Bookmarks sidebar section
 
-**Phase 4: Autosave amend + version GC.** Same-actor saves within 5s
-coalesce via amend (no new version row). `vacuumPageVersions` deletes
-unreachable versions. Also fixed `orphanActivityPredicate` (missing
-`page_versions.activity_id` edge).
+Folders, page/source references, drag-drop reordering. Schema v16/v17.
 
-**Phase 5: Workspace created-page staging (v35).** `workspace_refs`
-rebuilt with nullable `version_id` + `blob_hash` + `title`. Created pages
-stage as blob+title (no phantom `pages` row, no changeToken movement,
-no abandon residue). Merge mints the `pages` row + root version.
+## 2026-06-30 — MiniLM embeddings on Metal
 
-**Phase 6: Merge completeness.** `workspaceMerge` returns merged page IDs
-for post-merge re-embedding. Wiki-index line-set three-way merge using
-`Diff3`. Ingest-completion log entry appended after successful merge.
+Replaced `NLEmbedding` (512-dim) with MLX `all-MiniLM-L6-v2` (384-dim) on
+Metal/GPU. 100–1000× faster, runs safely off-main (no UI jank).
 
-**Phase 7: Ingest isolation behind flag.** `--workspace W` on `page
-upsert`/`page get`/`index set`; `WIKI_WORKSPACE` env var for the agent
-subprocess. `workspacesEnabled` flag (default off).
-`reapStaleWorkspaces` on app launch (24h TTL).
+## 2026-06-28 to 06-29 — Hybrid search
 
+<<<<<<< HEAD
 **Known issues.** AC7.2 (human edit during isolated ingest) hits a SQLite
 statement-lifecycle error on the same connection — disabled with a note;
 store-layer isolation is correct, needs manual validation (R6).
@@ -3828,2374 +3594,172 @@ and the sidebar context menus for pages and sources.
 - Ingest Selected shows a confirmation dialog when re-ingesting
 - Share and Ingest grouped together (no divider); Rename/Delete below a separator
 - Rename and Delete match the page menu layout
+=======
+FTS5/BM25 keyword search as the backbone, cosine vector similarity for
+reranking, reciprocal rank fusion to combine them. Self-healing — no manual
+reindex. Unified across pages and sources.
+>>>>>>> 1bb6936 (docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines))
 
 ## 2026-06-28 — Share pages and sources
 
-Added Share to every page and source surface.  Single share resolves the
-canonical URL from the daemon via `getUserVisibleURL` (same mechanism as
-`openSource`); batch share resolves all selected item URLs in parallel via
-`withTaskGroup`.  Pages use the `page-by-title:<ulid>` identifier, sources use
-`source-by-name:<ulid>` — both produce human-readable filenames.
-
-**Surfaces:**
-- **Page detail** toolbar — Share button (replaces Copy Path)
-- **Page sidebar** context menu — single Share + batch "Share N Pages"
-- **Source detail** toolbar — Share button (left of Outline toggle)
-- **Source sidebar** context menu — single Share + batch "Share Selected"
-
-**Infrastructure** (landed first on `feature/fileprovider-schema-migration`):
-- Schema version migration: auto-tears-down domains when container names change
-- Cache warming: top-down directory enumeration after domain activation
-- `source-by-name:` identifier prefix shared across app and extension
-
-See `plans/share-pages-and-sources.md` and
-`plans/fileprovider-schema-migration-and-cache-warming.md`.
-
-## 2026-06-27 — Better context menu for links in the reader
-
-Overhauled the right-click context menu for links in `WikiReaderView`. The old menu
-exposed several WebKit built-ins that don't work in this app (new window, download
-linked file) and lacked useful tab/download actions. The new menu:
-
-* **Removed** non-functional WebKit items: "Open Link in New Window",
-  "Download Linked File". Orphaned separators are collapsed automatically.
-* **Open in Background** (wiki links) — opens the target page/source in a new
-  tab without leaving the current page. Backed by a new `openTabInBackground(_:)`
-  method on `WikiStoreModel`.
-* **Download…** (wiki links) — copies the linked file from the File Provider mount
-  (`file://`) to `~/Downloads`, with automatic filename-collision numbering, then
-  reveals it in Finder. (External http/https links download via `URLSession`.)
-* **Find Similar…** moved from the top of the custom section to its own group
-  between the Open/Copy Link items and Share, keeping exploration actions visually
-  separate from navigation/file actions.
-* **Share…** (wiki links) — WebKit's built-in Share item (which would share the
-  raw `wiki://` URL) is replaced with one that passes the File Provider-mounted
-  file to `NSSharingServicePicker`, so recipients get a real file.
-* Removed "Copy as Wiki Link" (was redundant with Copy Link for most workflows).
-
-Pure logic lives in `WikiLinkMenuBuilder` (top `actions(for:)` + new
-`bottomActions(for:)`); AppKit wiring in `WikiLinkMenuNSItems`; menu assembly and
-WebKit item surgery in `WikiReaderWebView.willOpenMenu`.
-
-## 2026-06-27 — Outline Pane
-
-Added an outline pane for the detail views that shows headers in the Markdown document in a tree.
-Clicking on an element takes you to the position of the header in the document.
-
-## 2026-06-27 — Hover tooltips for wiki links in the WKWebView reader
-
-Wiki links in `WikiReaderView` now show human-readable tooltips on hover
-instead of raw `wiki://` URLs. `[[Page]]`, `[[source:Paper#"quote"]]`, and
-same-page anchor links reconstruct their original `[[…]]` notation via the
-existing `WikiLinkMarkdown` helpers; external links show the URL (browser
-default). Change is entirely in `MarkdownHTMLRenderer.visitLink` — a `title`
-attribute generated alongside the existing `href`. Two existing tests updated
-to assert the new attribute. See `plans/hover-wikilink.md`.
-
-## 2026-06-26 — Lint Page, WikilinksFixer
-
-Some links to sources were showing up with "\]]" although they did not throw off the renderer.
-
-* Added WikilinksFixer to the code to find and correct these.
-* Added a "Lint" button to the page and the page context menu.
-* Added some prompt instructions to the agent when linting a single page.
-
-## 2026-06-26 — Vendored design skills (swiftui-pro, macos-design, typography-designer)
-
-Three public Agent Skills vendored into `.polytoken/skills/` (project-level) so
-the `skill` tool can load them — prerequisite for the sidebar→managed-windows
-redesign. All MIT-licensed. Installed verbatim via `git clone --depth 1` + copy
-(`npx skills add` was NOT used — it writes to `.claude/skills/`, not `.polytoken/skills/`).
-
-| Skill | Source repo | Commit SHA | Files | Notes |
-|-------|------------|------------|-------|-------|
-| `swiftui-pro` | https://github.com/twostraws/SwiftUI-Agent-Skill | `be297ff80dddec529af1f9b1f1f114aab6c9d11c` | 1 SKILL + 10 refs + assets | ⚠️ targets iOS 26 / Swift 6.2; app is macOS 15 / Swift 6.0 — filter version-gated guidance |
-| `macos-design` | https://github.com/ceorkm/macos-design-skill | `8f528a2364f996cd42f02a10b1b27198a74ca2a3` | 1 SKILL + 3 refs | CSS/web examples → translate to SwiftUI (`.regularMaterial`, points, `Font`, system faces) |
-| `typography-designer` (upstream `typography`) | https://github.com/petekp/claude-code-setup (`skills/typography/`) | `8355490ec50d174573cbd4cc0663a72a178e55e0` | 1 SKILL + 7 refs | Web-oriented (px/rem/Tailwind) → translate to points / `Font` |
-
-SHA values are git commit SHAs (not file-content SHA256s — these are multi-file
-git artifacts, unlike the single-blob vendored JS). Pinned so updates are a clean
-re-clone.
-
-`CLAUDE.md` updated with a provenance note (sources + install commands + caveats);
-`PLAN.md` Documentation index points to `.polytoken/skills/`.
-
-Skills load at Polytoken startup / config reload. Verify with:
-```
-skill(name: "swiftui-pro")  # should return body
-skill(name: "macos-design")  # should return body
-skill(name: "typography-designer")  # should return body
-```
-
-## 2026-06-26 — Markdown linter (cosmetic auto-fix on save)
-
-Mirrors the `merval` (Mermaid) save-time validation pattern, generalized to
-general markdown. Vendored **markdownlint 0.41.0** + **markdownlint-rule-helpers
-0.31.0** (npm), bundled to a single self-contained IIFE via esbuild
-(`Resources/markdownlint.bundle.js`, SHA256
-`e022302172162c294bcec1a0d3ee44938c765d15afb5b3e230fc48425d499f0e`). Runs in a
-`JavaScriptCore` `JSContext` — **no Node at runtime** (Node was only the build
-tool). `MarkdownLinter` (WikiFSCore) lints and auto-fixes.
-
-**Engine details:** markdownlint 0.41 is ESM-heavy (pulls in micromark + GFM
-extensions + katex). Two build tricks were needed: (1) a targeted esbuild plugin
-swaps only `#node-imports` → the browser shim (avoids Node builtins), keeping
-everything else on default conditions (avoids DOM probes from
-decode-named-character-reference); (2) a minimal `URL` polyfill is installed in
-the JSContext (markdownlint builds rule-info links with `new URL()` at
-load-time; JSC has no `URL` global). `applyFixes` moved from
-`markdownlint-rule-helpers` into the main `markdownlint` package in 0.41.
-
-**Rule set: cosmetic normalization only.** MD009/010/012 (trailing whitespace,
-hard tabs, multiple blanks), MD018–022/023/027/030 (spacing after heading/block-
-quote/list markers), MD031/032 (blanks around fences/lists), MD037–039 (spaces
-in emphasis/code/links), MD047 (single trailing newline), MD058 (blanks around
-tables). Excluded: MD013 (line-length), MD040 (fenced-language), MD041 (first-
-line-H1), MD001/024/025/033. Every enabled rule is auto-fixable.
-
-**Two write surfaces (both mirror merval):**
-- **`wikictl page upsert`** — `fix()` is applied BEFORE the write. Order:
-  markdown-fix → mermaid-validate (block) → `PageUpsert`. Frictionless under the
-  cosmetic-only config (no round-trips).
-- **In-app editor** — `lint()` computes findings on a background `Task` and sets
-  a non-blocking `markdownSaveWarning`; the original text is saved (editor is the
-  human escape hatch). Combined banner with the mermaid warning in
-  `PageDetailView`.
-
-**Scope/limits:** normalizes whitespace and blank-line structure only. Does NOT
-enforce structural rules (heading hierarchy, consistent list markers) or line
-length. Fenced code blocks (including ` ```mermaid `) are never touched inside
-the fence. `[[wiki-links]]` are inert text — no false positives.
-
-**Reproduce:** `cd tools/markdownlint-vendor && npm ci && node build.mjs`. The
-pinned `package-lock.json` is the reproduction recipe; the SHA256 is a best-effort
-drift indicator (esbuild output is not byte-deterministic across runs).
-
-Tests: 28 new (`MarkdownLinterTests` 18, `MarkdownEditorWarningTests` 5, 5 added
-to `WikiCtlCommandTests` incl. the fix→mermaid-validate→upsert composition
-ordering proof). Full suite: 1101 tests pass.
-
-## 2026-06-26 — Mermaid agent knowledge + save-time validation (merval)
-
-Follow-on to the mermaid-rendering work (PR #64). Two things the rendering alone
-didn't cover:
-
-- **The agent now knows how to write mermaid.** Added a distilled Mermaid
-  authoring section to `SystemPrompt.defaultBody` (stolen from
-  `awesome-skills/mermaid-syntax-skill`): supported diagram types, and the
-  high-value error-prevention rules (quote special-char labels, reserved words
-  like `end`/`default` aren't node IDs, avoid `o`/`x`-leading IDs, `%%` comments,
-  `#59;` for sequence semicolons). Note: `defaultBody` only seeds NEW wikis —
-  existing wikis keep their co-evolved prompt (edit in-app to add it).
-- **Save-time validation via merval.** Vendored `merval.bundle.js` (merval 1.0.7,
-  a zero-dependency Mermaid syntax validator, bundled to a single IIFE with
-  esbuild — SHA256 `3babe2220c3a247719ef769017152fc7960011e693c8407391cbc3cea4833c0b`).
-  Runs in a `JavaScriptCore` `JSContext` — **no Node at runtime** (Node was only
-  the build tool that produced the vendored file). `MermaidValidator` (WikiFSCore)
-  extracts ` ```mermaid ` blocks and validates each.
-  - **`wikictl page upsert` blocks** a save on an invalid block (prints the error
-    to stderr, non-zero exit — the agent fixes and re-saves).
-  - **The in-app editor warns** (non-blocking) via an orange banner; the save
-    still succeeds so the editor is the human escape from wikictl's hard block.
-
-**Scope/limits:** merval catches *structural* errors (missing arrows, dangling
-edges, malformed brackets), NOT mermaid's semantic gotchas (reserved words,
-unquoted special chars) — the prompt rules cover those. merval is validated
-against Mermaid v11.12.0 while the reader renders 10.9.6; rare v10/v11 divergences
-may slip through. Tests: 15 new (`MermaidValidatorTests`, incl. command-level
-abort behavior). Full suite 1065 pass. Vendored blob integrity recorded above.
-
-## 2026-06-26 — Mermaid diagram support in the markdown reader
-
-` ```mermaid ` fenced code blocks now render as live inline SVG diagrams in the
-`WikiReaderView` WKWebView reader, matching light/dark appearance, with no network
-dependency. Diagram-free pages pay no cost.
-
-- **Vendored Mermaid 10.9.6 (UMD build)** at `Resources/mermaid.min.js` (3.3 MB);
-  `build.sh` copies it into `Contents/Resources/mermaid.js`. Pinned to v10 because
-  v11's ESM build exposes no clean `window.mermaid` global for a single inline
-  `<script>`. SHA256 `eda3a0ad572bbe69a318c1be0163e8233dd824f3f12939e5168feba207767151`.
-- **Conditional embed:** `documentHTML(_:)` inlines the library + a bootstrap
-  `<script>` at the end of `<body>` ONLY when the body contains a mermaid block
-  AND the library is bundled (`mermaidLib`, a one-shot `Bundle.main` loader that
-  returns nil unbundled → graceful no-op under `swift test` / dev `swift run`).
-- **Bootstrap JS** initializes mermaid with `securityLevel:'strict'` + the
-  `prefers-color-scheme` theme, converts each `<pre><code class="language-mermaid">`
-  → `<div class="mermaid">` via `textContent` (un-escaping the renderer's
-  `&lt;`/`&gt;`), then `mermaid.run`. One bad diagram logs but never breaks the page.
-- No change to `MarkdownHTMLRenderer` (it already emitted the right class).
-- Tests: `mermaidFenceEmitsLanguageClassAndEscaping` + `documentHTMLEmbedsNoScriptWhenLibAbsent`
-  (pins graceful degradation). Full suite: 1050 tests pass. Read-only review subagent:
-  no Critical/High findings.
-
-**Known limitation:** diagrams theme once at load; toggling System Settings
-appearance updates the page chrome via CSS but the baked SVG lags until reload
-(documented non-goal — a `matchMedia('change')` re-render is a follow-up).
-
-## 2026-06-25 — Fix query/ingestion-agent review findings (per-turn lock, dead code, tests)
-
-Addressed every issue from the code review of the query/ingestion-agent
-separation.
-
-**Per-turn edit lock is now launcher-owned (HIGH).** The per-turn
-`store.isAgentRunning` toggle lived in `QueryConversationView`'s
-`.onChange(of: launcher.isGenerating)`, which never fires while the view is
-unmounted — so navigating to a Page mid-session stranded the lock (editor stayed
-read-only, ingestion stayed blocked) until session end. Moved the toggle into
-`AgentLauncher`:
-- Added `setGenerating(_:)` — the SINGLE mutation point for `isGenerating`. Every
-  assignment now routes through it; it fires an `onTurnBoundaryHandler` callback
-  only on a real transition. One-shot runs never install the handler (no-op).
-- `startInteractiveQuery` accepts an `onTurnBoundary` callback; the runner
-  installs `{ if allowWikiEdits { store.setAgentRunning($0) } }`. The lock now
-  releases between turns even when the Query view is off-screen.
-- Removed the view-side `.onChange`. `setAgentRunning` now has exactly one caller
-  (the runner callback); no View mutates lock state.
-
-**Deleted dead `EditLock`.** The per-wiki refcounting `EditLock` class had zero
-production references (the app uses the single-bool `store.isAgentRunning`).
-Deleted `Sources/WikiFSCore/EditLock.swift` + `Tests/WikiFSTests/EditLockTests.swift`.
-
-**Single lock owner.** Consolidated `WikiStoreModel`'s three mutation paths
-(`beginAgentRun` / `endAgentRun` / `setAgentRunning`) behind one private
-`mutateAgentRunning(_:reload:)`. The three public methods are now thin
-intent-named wrappers.
-
-**Send-while-generating guard.** `QueryConversationView.canSend` requires
-`!launcher.isGenerating` (composer disables during a response); added a defensive
-`guard !isGenerating` in `sendInteractiveMessage`; help text now reads "Wait for
-the response before sending the next message".
-
-> **Regression caught live + fixed.** The `guard !isGenerating` initially dropped
-> the FIRST message: `startInteractiveQuery` set `isGenerating=true` in
-> spawn-commit, so the `sendInteractiveMessage(firstMessage)` call right after hit
-> the new guard and returned early — claude spawned, waited on stdin forever, and
-> the Query page spun with zero events (confirmed via `DebugLog` heartbeats:
-> `pid=… procAlive=true events=0 idleSec` climbing). Fix: the first-turn
-> `isGenerating(true)` transition is now owned by `sendInteractiveMessage` itself
-> (spawn-commit no longer pre-sets it), so the guard passes for the first send and
-> still blocks follow-up sends while a turn is in flight.
-
-**Testable + tested.** Extracted two pure predicates so the new behavior is unit-
-covered: `AgentEvent.endsGeneration(_:)` (the `.result`/`.messageStop` rule) and
-`AgentLauncher.selectQuerySandbox(…)`. Tests: `messageStop` parse +
-`isInternalTranscriptEvent`, `endsGeneration` matrix, and the read-only-wins
-sandbox invariant (read-only returned even when a non-nil edit sandbox is set).
-
-**Copy/docs.** Banner now reads "Editing enabled — ingestion is paused while the
-agent is responding." (it releases between turns). Added a security/trust-surface
-note to `plans/query-conversation.md`.
-
-**Edit-mode is now switchable mid-session (restart-on-toggle).** "Allow wiki
-edits" was locked once a session started (`.disabled(isInteractiveSession)`),
-which frustrated users — but the lock was *necessary*: edit mode is baked into the
-spawned claude process (its seatbelt sandbox + system prompt), so a running process
-can't change it. Fix: the checkbox is now always tappable; flipping it mid-session
-calls `AgentOperationRunner.restartQueryConversation`, which **stops the current
-session and relaunches in the new mode**, re-feeding the prior transcript as
-opening context (`transcriptContextMessage`) so the new process keeps continuity.
-Switching to edit mode while an ingest holds the lock is refused without tearing
-down the read-only session (clear preflight error). Added `QueryRestartTests` for
-the context formatting (5 tests).
-
-## 2026-06-25 — Separate query agent from ingestion agent + opt-in edit lock
-
-Split the single `AgentLauncher` singleton into two independent instances so
-ingest and query can run concurrently, with a physical read-only boundary when
-the query agent shouldn't write.
-
-**Problem.** The query tool reused the same `AgentLauncher` as ingestion: (1) stale
-ingest text appeared in the query conversation view after switching tabs, (2) a
-single spawn slot prevented ingest and query from running concurrently, and (3)
-the prompt always included write instructions, so the agent wrote to the wiki
-regardless of user intent.
-
-**Two-launcher architecture.** `WikiFSApp` now creates a second `AgentLauncher`
-instance (`queryLauncher`) dedicated to query operations only, with its own spawn
-slot, events array, and process state. The existing `agentLauncher` remains for
-ingest and lint. Threaded through `RootView` → `ContentView` → `WikiDetailView`
-→ `QueryConversationView` (5 files, parameter-only changes).
-
-**Opt-in edit lock.** A new **"Allow wiki edits"** checkbox (`.toggleStyle(.checkbox)`)
-in the query composer. When checked:
-- The query agent takes `store.isAgentRunning` (the edit lock), blocking
-  ingestion and page editing — mirrored in the UI: the ingest button greys out
-  (`isEditLockedExternally` on `SourceDetailView`) and an orange **"Editing
-  enabled — ingestion is paused"** banner appears above the transcript.
-- `AgentOperationRunner.startQueryConversation` checks `store.isAgentRunning`
-  before starting — if ingest already holds the lock, it shows a preflight error:
-  "An ingestion is updating the wiki. Wait for it to finish, or uncheck 'Allow
-  wiki edits' to start a read-only query."
-- Conversely, `run()` (ingest/lint) checks `store.isAgentRunning` before taking
-  the lock — if the query agent holds it, it shows a preflight error: "The query
-  agent is currently editing the wiki."
-
-**Physical read-only enforcement.** When the checkbox is OFF:
-- A **read-only seatbelt sandbox** (`SandboxProfile.readOnlyInvocation`) is
-  always applied (regardless of global sandbox settings), allowing scratch writes
-  but denying writes to the wiki DB — `wikictl page upsert` physically fails at
-  the OS level.
-- The prompt is split into two variants in `WikiOperation`:
-  `queryConversationReadOnlyPrompt` (no `IngestWriteRule.writes`, no write
-  commands, explicit "You CANNOT create, update, or modify any wiki content") vs
-  `queryConversationReadWritePrompt` (current behavior, full write instructions).
-
-**Files changed (12):** `WikiFSApp.swift`, `RootView.swift`, `ContentView.swift`,
-`WikiDetailView.swift`, `QueryConversationView.swift`, `AgentLauncher.swift`,
-`AgentOperationRunner.swift`, `SourceDetailView.swift`, `SandboxProfile.swift`,
-`WikiOperation.swift`, plus test updates in `OperationCommandTests.swift` and
-`SandboxedOperationCommandTests.swift`.
-
-**Tests.** 1041 pass, 77 suites, 0 failures. `swift build` clean.
-
-## 2026-06-25 — Fix quote-link highlight across inline elements (WKWebView reader)
-
-A clicked `[[source:Name#"quote"]]` no longer silently failed to
-highlight/scroll when the quoted passage spanned an inline element in the
-source (a markdown link, bold, etc.). Diagnosed by reading the wiki's SQLite
-DB directly: the real quote ("AI is an amplifier. It magnifies…struggling
-ones.") had its first sentence as a hyperlink, so after HTML render it lived in
-two text nodes separated by an `<a>`.
-
-- **Root cause.** `WikiReaderRep.highlightJS` searched for the quote within a
-  *single* text node (plus an unreliable `window.find` first attempt), so any
-  quote crossing an element boundary was never matched → no `<mark>`, no scroll.
-- **Fix.** Rewrote `highlightJS` to walk every text node under `<body>`, build a
-  whitespace-collapsed/lowercased index map over the whole document, find the
-  quote there, build a Range across the nodes it spans, and wrap each
-  intersecting text segment in `<mark class="sdwhl">` (preserving inline elements
-  like the link). `window.find` removed.
-- **Tests.** Added `QuoteHighlightWebViewTests` that EXECUTE the JS in a real
-  headless `WKWebView` (made it work in `swift test` by creating
-  `NSApplication.shared` + the completion-handler `evaluateJavaScript` bridge).
-  Covers: single-node, whitespace-collapsed, the full markdown pipeline, a
-  cross-element quote, the **verbatim source prose** from the DB, re-highlight
-  clearing, plus a hosted `NSHostingController` lifecycle test driving the real
-  `selectSource(byDisplayName:anchor:)` seam. Updated `QuoteHighlightJSTests`
-  for the new whole-document approach. 1041 tests pass.
-
-## 2026-06-25 — Replace vendored Textual reader with WKWebView everywhere
-
-Implemented `plans/textual-to-wkwebview.md`. Removed the app's only large vendored
-dependency (the ~193-file Textual fork in `Packages/Textual/`) by consolidating
-every markdown reader onto the WKWebView + `MarkdownHTMLRenderer` path. One
-reader stack instead of two; whole-link selection + a native context menu for
-free (the fork existed solely to get those inside Textual).
-
-- **`WikiReaderView` (renamed from `SourceWebView`).** The web reader is now the
-  only reader — used by pages, sources, system prompt, changelog. The
-  `SourceDetailView` size threshold (`reader.webThresholdKB`) is gone; the web
-  reader is faster at every size. `SourceDetailWebView` → `WikiReaderWebView`,
-  the private `WebViewRep` → `WikiReaderRep` (now `internal` so the quote-highlight
-  JS is unit-testable).
-- **Ghost links + zoom (the two gaps).** Missing `[[Ghost]]` links now render red
-  via a single CSS rule (`a[href^="wiki://missing"]`); the off-main convert
-  resolves links against page/source existence sets computed on the main actor
-  before the `Task.detached` (mirrors `resolveSourceByName` — display name OR
-  filename, case-insensitive). ⌘+/⌘−/⌘0/⌘scroll zoom works via
-  `WKWebView.pageZoom`, fed from the existing `@AppStorage("reader.zoom")`.
-- **Fixed the `wiki://` routing bug.** `route(_:)` read `comps.path`, which is `""`
-  for the query-encoded `wiki://page?title=…` URLs the linkifier emits — so every
-  wiki-link click silently no-op'd. Replaced with the proven query-based helpers
-  (`WikiLinkMarkdown.target/fragment/resolvedKind/isSamePageAnchor`), extracted as
-  a pure `linkRoute(for:)` classifier (8 `WikiReaderRoutingTests`). External
-  http(s) links now also open in the browser instead of navigating the reader.
-- **Custom context menus (no fork).** `WikiReaderWebView.willOpenMenu` prepends
-  the custom items (Suggest / Find Similar / Copy as Wiki Link / Copy File Path
-  for wiki links, Add as Source for http(s)) on top of WKWebView's native
-  Copy / Copy Link / Look Up / Share. WKWebView gives no synchronous DOM query, so
-  the hovered `<a>` href is tracked via an injected `mouseover` listener →
-  `WKScriptMessageHandler` and read in `willOpenMenu`. `WikiLinkMenuNSItems`
-  (renamed from `WikiLinkContextMenu`/`LinkContextMenuItems`) returns `[NSMenuItem]`
-  from the pure `WikiLinkMenuBuilder`, via a closure→selector target retained on
-  the item's `representedObject`.
-- **Agent transcript `[[wiki-links]]` (the original task).** Assistant/result rows
-  now run through `ReaderMarkdown.prepared` so `[[Page]]` renders as a clickable
-  `wiki://` link; user text stays literal. An `onWikiLink: ((URL) -> Void)?` is
-  built where the store lives (`ContentView`, `LintView`, `QueryConversationView`)
-  and threaded unchanged through `AgentTranscriptSidebar` → `AgentActivityView` →
-  `AgentTranscriptWebView` (and the Query `QueryTranscriptView` path). `wiki://`
-  clicks route to `selectPage`/`selectSource` and `.cancel` (never load into the
-  web view).
-- **Removed:** `MarkdownPreview.swift`, `WikiLinkStylingParser.swift`,
-  `NumberedParagraphStyle.swift`, `Packages/Textual/`, the Textual
-  dependency/product in `Package.swift`, and the "Vendored Textual fork" ISSUES.md
-  entry. The 17 `QuoteHighlightTests` + 10 `WikiLinkStylingParserTests` (both
-  Textual-dependent) were retired; `QuoteHighlightJSTests` (11) and
-  `AgentTranscriptLinkifyTests` (7) replace them at the new seams.
-
-**Tests.** 1022 pass, 75 suites, 0 failures (`swift build` + `swift test` clean).
-The retired `ReaderRenderPerfTests` benchmark was rewritten to measure the
-surviving web-render path only (preprocess 174 ms + render 59 ms on 513 KB).
-
-**Manual gates pending:** AC.3 (transcript `[[wiki-link]]` click navigates),
-AC.5 (zoom), AC.6 (right-click custom + native menu), AC.7 (find/quote/anchor in
-the unified reader) — live-WKWebView interactivity not unit-testable. On branch
-`feature/textual-to-wkwebview`.
-
-## 2026-06-25 — Agent activity sidebar: full-height panel, turn-aware spinner/banner, edit-lock release fix
-
-Reworked the agent activity surface and run lifecycle so "done" actually reads as
-done, and the trailing panel behaves like the leading sidebar.
-
-- **Toolbar centering.** The "add" buttons (Add from Zotero / Add from URL / Import
-  Markdown) and New Page moved to `.principal` (center of the toolbar); the
-  transcript toggle stays on the right.
-- **Transcript sidebar layout.** The panel now lives **inside the detail column** as
-  a full-height sibling of `(TabBarView + content)`, so opening it compresses the
-  content **inward** — exactly how the leading navigation sidebar subdivides the
-  window — instead of growing the window. (An earlier `.inspector` attempt popped
-  the window outward; reverted.) Rounded the inner (leading) corners via
-  `UnevenRoundedRectangle` (`PageEditorMetrics.panelCornerRadius`) and restored the
-  leading-edge drag-to-resize handle.
-- **Turn-aware activity (`AgentLauncher.isGenerating`).** New flag, set on send /
-  spawn and cleared on the terminal `.result` event (plus `finish()` /
-  `resetRunArtifacts()`). Every spinner / debug cluster now keys off it instead of
-  `isRunning`, so an **idle interactive session no longer shows a perpetual
-  spinner**. For one-shot runs it mirrors `isRunning`. `showsQueryDebugControls`
-  and its unit test switched to `isGenerating`.
-- **Interactive completion watchdog.** `startInteractiveQuery` now arms
-  `startCompletionWatchdog()` like `run()`, so a `claude` process that dies without
-  firing its `terminationHandler` is reconciled within ~3s instead of spinning
-  forever. (The live `run.jsonl`/`log show` diagnosis showed the process gone but
-  `isRunning` stuck.)
-- **Edit-lock release fix.** `onUnlock` is now stored (`onUnlockHandler`) and
-  released from `finish()` via an idempotent `releaseEditLock()` — so the watchdog
-  and `stopAgent()` release `store.isAgentRunning` too. Previously only the
-  `terminationHandler` released the edit lock, so a missed handler stranded it
-  (and the "Agent is updating the wiki" banner) forever.
-- **Operation-aware banner.** Query → "Agent is searching your wiki…", ingest →
-  "updating", lint → "checking" (was hardcoded "updating" for all). On the query
-  page the banner tracks `isGenerating`; elsewhere `store.isAgentRunning`.
-- **"Claude" → "Agent".** User-facing conversational strings (banner, composer
-  placeholder, waiting text, sidebar tooltip, send-error). The Anthropic PDF-
-  extraction backend and the Claude CLI / prompt-help references stay "Claude"
-  (they name the actual product).
-- **Status consolidation.** `AgentRunBanner` moved into the activity sidebar's
-  Agent Activity section (under its label, display-only and turn-aware via
-  `isAgentActive = isGenerating`); the Stop button lives in that section, gated on
-  `isRunning` so an idle interactive session can still be ended. Per-page banners
-  above each detail surface were removed. (A toolbar status-button experiment was
-  tried and reverted.)
-- **Edit-button reason.** The disabled Edit button on the page / system-prompt
-  surfaces now reads "Agent updating wiki…" while a run holds the edit lock, so
-  it's clear why editing is paused (was a bare disabled "Edit").
-
-**Tests.** 1030 pass, 74 suites, 0 failures (`debugClusterPredicate…` updated for
-`isGenerating`; `swift build` clean). On branch `feature/selectable-agent-activity`.
-
-## 2026-06-24 — Find bar (⌘F) with next/prev navigation + match highlight
-
-Added a native macOS-style find bar (driven by a `FindModel` `@Observable`)
-overlaid at the top of every reader: search field, live match count
-("2 of 14"), case-sensitivity toggle, prev/next arrows, and ⌘F / Enter /
-Shift+Enter / Esc. It works in both the native `MarkdownPreview` reader and the
-`SourceWebView` (WKWebView) large-source reader, plus both detail views
-(`PageDetailView`, `SourceDetailView`).
-
-**State (`FindModel`).** Holds `query`, `caseSensitive`, `isShowing`, and the
-search results: `matches: [Range<String.Index>]` found by walking the content
-with `range(of:options:)` (case-insensitive by default), plus a 1-based
-`currentMatchIndex`. `nextMatch`/`previousMatch` wrap with modular arithmetic.
-Both detail views feed `content` (the rendered markdown) into the model and
-re-run `search()` on query / case-sensitivity / content changes.
-
-**The bug — forward arrow didn't advance.** The renderers were passed only the
-matched *substring* (`findText`), never *which* occurrence. So:
-- **Native reader:** `resolveAnchor` used `blocks.first(where:)` → always the
-  first block; the highlight (`WikiLinkStylingParser.quoteRange`) always picked
-  the first occurrence (`normalizedHaystack.range(of:)`).
-- **Web reader:** `applyFind` cleared the prior `<mark>` (collapsing the
-  selection) then called `window.find()` once → always re-found the first match.
-
-`currentMatchIndex` was computed correctly but discarded.
-
-**The fix — thread the occurrence index end to end.** Added `findOccurrence`
-(= `currentMatchIndex`) through `PageDetailView` / `SourceDetailView` → both
-readers:
-- **`AnchorBlock.resolveAnchor(_:occurrence:in:)`** (new) walks blocks in
-  document order counting non-overlapping case-insensitive matches, landing on
-  the block holding the Nth (with a fallback to the first matching block if the
-  count overshoots). The single-match `resolveAnchor` is unchanged for
-  URL/quote-anchor callers.
-- **`WikiLinkStylingParser.quoteRange(_:in:occurrence:)`** (new param) finds the
-  Nth non-overlapping occurrence; the parser stores `highlightOccurrence`.
-  `MarkdownPreview` tracks `highlightOccurrence` in `@State`, set alongside
-  `highlightQuote` in the find task.
-- **`SourceWebView.applyFind`** resets the selection to the document start and
-  advances `window.find()` N times so each click steps to a distinct match, with
-  a `surroundContents` fallback for matches spanning element boundaries.
-
-**Tests.** +12 (977 total, 71 suites, 0 failures): occurrence selection in
-`quoteRange` (2nd/3rd/beyond/zero/default), parser highlights the Nth occurrence,
-and occurrence-aware `resolveAnchor` (first, same-block repeat, step-to-next-block,
-zero→nil, beyond-count fallback). On branch `feature/find-bar`.
-## 2026-06-24 — Agent runs without the File Provider mount
-
-The agent (Ingest / Query / Lint + interactive Query) no longer hard-requires a
-mounted File Provider. `fileProvider.path` was a hard gate for Query/Lint/interactive
-(the query conversation bailed with "File Provider is not mounted. Open a wiki
-first."), even though the prompts route ALL reads through `wikictl` (SQLite via
-`WIKI_DB`) and label the mount **reference-only**. Ingest already tolerated a missing
-mount.
-
-- `AgentOperationRunner.run` and `startQueryConversation` now pass
-  `fileProvider.path ?? ""` for every operation (no bail). The mount is still used
-  when available; it's just no longer load-bearing for the agent to start.
-- The closing `WIKI_ROOT` prompt line is now adaptive: when the mount is down it says
-  "File Provider mount is not available for this run — read pages and raw sources via
-  `wikictl` only" (was a dangling empty path). So the agent knows not to read a
-  non-existent mount.
-- Diagnosed live: a `build/`-located app instance can't mount (FP only reliably
-  mounts from the `/Applications` install), which silently blocked every agent op
-  even though the app otherwise worked. This removes that failure mode.
-- Tests: 2 new (`promptsNoteWhenTheMountIsUnavailable`,
-  `promptsKeepTheResolvedMountPathWhenAvailable`); 967 pass.
-
-## 2026-06-24 — Agent seatbelt sandbox (write whitelist)
-
-Implemented `plans/sandbox-agent.md`. Opt-in (off by default) confinement of the
-spawned agent process's filesystem **writes** to a strict allowlist via the macOS
-seatbelt (`/usr/bin/sandbox-exec`). Provider-agnostic; macOS 15+.
-
-- **What's fenced:** when enabled, every agent spawn (Ingest / Query / Lint +
-  interactive Query) runs so the agent AND every child it spawns (`wikictl`, `node`,
-  bash) can write ONLY the per-run scratch dir + the active wiki's `<ulid>.sqlite`
-  (+ `-wal`/`-shm`/`-journal`). Reads, all network, and process exec stay OPEN (the
-  provider still reaches its LLM API and runs `wikictl` unchanged). Default-deny writes
-  → no backdoors/credential-tampering, and cross-wiki DB confinement for free.
-- **Why seatbelt, not Apple Container:** Apple Container needs macOS 26 AND runs a
-  Linux container where the macOS `wikictl` binary cannot run. The seatbelt keeps
-  everything native macOS and is inherited across fork/exec.
-- **Composes around the provider:** the seatbelt wraps whatever
-  `AgentCommandConfig` executable is set (`sandbox-exec -p <profile> -D HOME=… -D
-  SCRATCH_DIR=… -D WIKI_DB=… -- <provider> …`); swapping providers needs no profile
-  change. The profile is **generated in Swift** (`SandboxProfile.generate`, pure) and
-  passed via `sandbox-exec -p`.
-- **Provider self-writes relocated** into the scratch dir (`CLAUDE_CONFIG_DIR`,
-  `TMPDIR`) so the allowlist stays tiny. `WIKI_DB` is NOT conflated: the `-D
-  WIKI_DB=<path>` is a profile param (not in the child env); the `WIKI_DB=<ulid>` env
-  var `wikictl` reads is unchanged.
-- **Byte-identical when off:** `OperationCommand.build`/`buildInteractiveQuery` gained
-  an optional `sandbox: SandboxInvocation? = nil`; nil reproduces today's argv/env
-  exactly. New `SandboxConfig` (`sandbox-config.json`) + `SandboxProfile` mirror the
-  `AgentCommandConfig` config pattern. Settings → Agent has a new "Sandbox" section;
-  Help → Command Template reflects the sandbox when on (profile abbreviated).
-- **Tests:** 19 new (`SandboxConfigTests`, `SandboxProfileTests`,
-  `SandboxedOperationCommandTests` — config round-trip/missing/corrupt, profile
-  skeleton + sidecars + extra-path splicing/tilde/drop, AC.1/AC.2 argv, relocation env
-  present-on/absent-off, prefix-args-after-`--`). 989 tests pass.
-- **Live AC.6 verified:** ran the real generated profile through `/usr/bin/sandbox-exec`
-  — writes inside the scratch dir + to the DB path are ALLOWED; writes to `~/.zshrc` and
-  unrelated dirs are DENIED. This also surfaced and fixed the **symlink trap**: seatbelt
-  `subpath`/`literal` match the canonical path, so a symlinked path (e.g. `/tmp` →
-  `/private/tmp`) makes the allow silently fail. The core layer (`SandboxProfile.invocation`)
-  now canonicalizes the scratch dir, DB path, and every user extra-allowed path with
-  `realpath(3)` — the kernel's own resolver (Foundation's `URL.resolvingSymlinksInPath()`
-  is unreliable and does NOT resolve `/tmp`); 2 regression tests guard it.
-- **Review:** post-hoc `plan-reviewer` pass (on `glm-5.2`, which avoids the thinking-mode
-  `tool_choice` failure that blocked earlier reviews) — no critical/high findings. Fixed:
-  documented `CLAUDE_CONFIG_DIR`/`TMPDIR` as app-owned when sandbox on (Medium); moved
-  symlink resolution into the tested core layer + added tests (Low); added a `WIKI_DB`
-  env-var-not-clobbered assertion (Low). Rebutted the `-D` value-escaping note as latent
-  (app-controlled paths can't contain bad chars; user paths are escaped).
-- **Manual gate pending:** AC.5 — a live `make run` with the sandbox toggled on,
-  confirming a Query completes (scratch + `wikictl` DB writes work end-to-end in-app).
-
-## 2026-06-24 — SourceWebView (WKWebView) gets the same "Add as Source" menu
-
-Extended `plans/url-context-menu-add.md` to the WKWebView large-source reader,
-which the first cut had deferred. Now right-clicking an external http(s) link in
-`SourceWebView` leads the context menu with **Add as Source** too, opening the
-same pre-filled "Add from URL" sheet via the same `\.addURLHandler` env value.
-
-- **Why it's a different mechanism:** `WKUIDelegate`'s `contextMenuConfiguration…`
-  family is **iOS/visionOS-only** (confirmed in WebKit's `WKUIDelegate.h`) — macOS
-  gives no public API to customize WKWebView's context menu. So a
-  `SourceDetailWebView: WKWebView` subclass overrides `NSView.willOpenMenu(_:with:)`.
-- **The menu:** prepend **Add as Source** + a separator only when WebKit's menu
-  contains a link item (`WKMenuItemIdentifierCopyLink`), so it never appears for
-  plain text / images.
-- **Getting the URL:** WebKit's menu items carry no URL, so on selection we
-  hit-test the captured right-click point in the DOM (`document.elementFromPoint`
-  → walk to the `<a>`) and keep only http(s) `href`s (matching the native
-  reader's `.addAsSource` gate). Cleaner than the iCab `createWebViewWith`
-  hijack: no `WKUIDelegate`/pending-action state machine, all in the view.
-- **Pure + tested:** the AppKit→CSS coordinate flip + clamp (`cssHitTestPoint`)
-  and the hit-test JS (`linkHrefAtJS`, POSIX-decimal numbers) are `nonisolated
-  static` helpers — 7 `SourceDetailWebViewMenuTests`. The menu wiring + JS exec
-  run inside WKWebView and are covered manually. 965 tests pass.
-
-## 2026-06-24 — Right-click external link → Add as Source
-
-Implemented `plans/url-context-menu-add.md`. Right-clicking an external
-**http(s)** link in any native reader now leads the context menu with **Add as
-Source**, which opens the existing "Add from URL" sheet pre-filled with the URL
-— the same Fetch + `store.ingestURL` path as the toolbar button (chosen over
-fire-and-forget ingest so the user gets the sheet's inline progress + error row
-and a confirm step before a network write).
-
-- **Pure layer:** new `WikiLinkAction.addAsSource`; the external-link branch in
-  `WikiLinkMenuBuilder.actions(for:)` returns `[.addAsSource, .openInBrowser,
-  .copyLink]` for **http/https only**. `mailto:` (and other non-http schemes)
-  stay `[.openInBrowser, .copyLink]` — `URLIngestService.normalizeURL` rejects
-  them, so the item would dead-end on a disabled Fetch button.
-- **Wiring + reach:** `WikiLinkContextMenu.items(...addURL:)` calls
-  `addURL(url.absoluteString)` (guard-skipped when nil, like `.copyFilePath`).
-  The sheet is presented by `ContentView` but the menu lives deep in
-  `MarkdownPreview`, so a single `@Entry` env value `\.addURLHandler`
-  carries the closure down — no threading through the four detail views, and the
-  item works uniformly in every reader. Mirrors `MarkdownPreview`'s existing
-  `\.openURL` override.
-- **Pre-fill:** `AddFromURLSheet(store:initialURL:)` seeds the `@State` field in
-  a custom init (populated on first paint, not a racy `.onAppear`). `ContentView`
-  switched from `.sheet(isPresented:)` Bool to `.sheet(item: $pendingAddURL)`
-  (`Identifiable` `PendingAddURL`) so presentation carries the pre-fill URL and
-  auto-clears on dismiss. Dropped the now-redundant `showingAddFromURL` binding;
-  the empty-state button in `WikiDetailView` calls `addURLHandler?("")`.
-
-**Out of scope:** `SourceWebView` (WKWebView large-doc reader) uses its own
-native context menu — follow-up. **Tests:** 2 new `WikiLinkMenuBuilderTests`
-cases (http, https); mailto unchanged. 935 tests pass.
-
-## 2026-06-23 — Source web reader (fixes large-source render freeze)
-
-Implemented `plans/source-web-reader.md`. Large sources (500 KB+) beachballed
-the native Textual reader (~10 s) because it lays out the whole document
-synchronously with no virtualization. Added a `WKWebView` reader
-(`SourceWebView`) used **automatically above a size threshold** (default 96 KB,
-`@AppStorage reader.webThresholdKB`); small docs/pages keep the native reader.
-
-**Rendering.** `MarkdownHTMLRenderer` walks a swift-markdown `Document`
-(`MarkupVisitor` → HTML) — headings with GFM-slug ids, tables, footnotes, code,
-lists, blockquotes; ~24 ms on 513 KB. The footnote-expand + wiki-link-linkify
-pre-pass is extracted into `ReaderMarkdown`, shared with `MarkdownPreview` so
-both readers behave identically. The convert runs off the main actor; the page
-chrome appears immediately with a spinner, then `loadHTMLString` fires on main.
-
-**Anchors + highlight (Phase 2).** `SourceWebView` consumes the store's pending
-anchor — `[[source:Name#Section]]` scrolls to the heading slug id; `[[source:Name#"quote"]]`
-runs `window.find` + `<mark>` + scroll (with a whitespace-tolerant TreeWalker
-fallback). Resolution is a pure `nonisolated` `resolveScrollTarget`, unit-tested.
-
-**Theme + gate (Phases 3–4).** CSS mirrors the native reader (760pt column +
-12pt inset via `PageEditorMetrics`, system font, light/dark via CSS variables,
-left-aligned). `SourceDetailView.markdownContent` gates on
-`head.content.utf8.count > webThresholdKB * 1024`. Sources don't reference each
-other via wiki links, so ghost-link coloring is N/A.
-
-**Measured.** `appear-to-painted` ~130–280 ms on a 480 KB source vs ~10 s native.
-A headless benchmark (`ReaderRenderPerfTests`) confirmed the freeze is layout,
-not parsing (preprocess + parse ≈ 260 ms on 513 KB). 934 tests pass
-(15 `MarkdownHTMLRendererTests`, 5 `SourceWebAnchorTests`, 2 `AnchorBlockTests`
-parity).
-
-## 2026-06-22 — Quote Highlight + Scroll-to-Quote for Source Links
-
-Implemented `plans/quote-highlight-and-scroll.md`. When a
-`[[source:Name#"quoted passage"]]` (or `[[Page#"…"]]`) link is clicked, the
-destination document now **highlights the exact passage and scrolls to it** —
-for both markdown and PDF.
-
-**Markdown.** `WikiLinkStylingParser` gets a `highlightQuote` parameter; the
-pure `quoteRange(_:in:)` does whitespace-tolerant (collapsed, trimmed) first-match
-substring search against the `AttributedString` and sets `.backgroundColor` to
-a dynamic highlight color that adapts to light/dark mode. `MarkdownPreview` holds
-`@State highlightQuote`, keys its `.task` on `RenderKey(markdown, pendingScrollAnchorVersion)`,
-and scrolls first (while the view hierarchy is stable) before setting highlight
-state. Trailing newlines keyed to `highlightVersion` trigger `StructuredText`
-re-parse without changing view identity, keeping `ScrollViewProxy` valid.
-
-**Re-click reactivity.** `WikiStoreModel.pendingScrollAnchorVersion` is
-incremented in `selectPage`/`selectSource` whenever `pendingScrollAnchor` is
-assigned, so repeat quote clicks to the same open document re-fire both scroll
-and highlight.
-
-**PDF.** `PDFViewWrapper` gains `highlightQuote` + a `Coordinator` with
-`lastSearchedQuote`; `updateNSView` runs `PDFDocument.findString` and sets
-`currentSelection` + `scrollSelectionToVisible`. `SourceDetailView` adds a
-pdf-only consume task keyed on `PDFTaskKey(sourceID, anchorVersion)` and only
-fires when `isPDF && !hasMarkdown` (the markdown side handles extracted PDFs).
-
-**Tests.** 17 new `QuoteHighlightTests` (pure `quoteRange` edge cases +
-integration via `WikiLinkStylingParser(highlightQuote:)`) and 2 regression tests
-in `AnchorBlockTests`. 911 total tests pass.
-
-**Builds on:** markdown-anchors (render-time block ids, `selectSource(anchor:)`,
-`pendingScrollAnchor`), phase-b-source-wikilinks (`wiki://source` scheme).
-
-## 2026-06-22 — Zotero settings auto-save
-
-Removed the explicit "Save" button from `ZoteroSettingsView`. API key, library ID,
-and directory override now persist immediately via `.onChange(of:)` on each field
-— no data can be lost on window close (`⌘W` / red button). Also removed the
-redundant save calls from `testConnection()`.
-
-## 2026-06-22 — Pluggable PDF→Markdown extraction backends (Claude, Gemini, Docling Serve)
-
-Implemented `plans/pdf-extraction-backends.md`. PDF→Markdown extraction is no
-longer hardwired to the local pdf2md subprocess: a `MarkdownExtractor` protocol +
-`ExtractionCoordinator` let it run via **local pdf2md** (default), **Claude**
-(Anthropic Messages API), **Gemini** (Google AI `generateContent`), or a
-self-hosted **Docling Serve**. All four write the same `source_markdown_versions`
-row (origin `"extraction"`) — **no schema change**. Both extraction call sites
-(`AgentOperationRunner.runMultiIngest`, `SourceDetailView.runExtraction`)
-dispatch through `readiness()` / `convert()` instead of `PdfExtractionService`
-directly.
-
-**The abstraction (`WikiFSCore`).** `MarkdownExtractor` (PID-free — only the
-subprocess has one, funneled via `onProgress`), `ExtractionBackend`, and
-`ExtractionReadiness`. Three fetcher-injected value-type clients with pure
-`build` / `decode` / `checkStatus` helpers + a `verifyConnection` probe:
-`AnthropicExtractionClient` (base64 PDF `document` block; 24 MB guard; handles
-`stop_reason: refusal` / empty / `max_tokens`), `GeminiExtractionClient` (base64
-PDF `inline_data` part; 48 MB guard; handles `promptFeedback.blockReason` /
-blocking `finishReason` / `MAX_TOKENS`; uses the stable `generateContent`
-endpoint, not the beta Interactions API), and `DoclingServeClient` (multipart
-`POST /v1/convert/file`; pulls `document.md_content`; surfaces `errors[]` only
-when there's no usable markdown). The two model clients share one transcription
-prompt (`ExtractionPrompts`) so their output is consistent.
-
-**Config + secrets (mirrors Zotero).** `ExtractionConfig` is the single source of
-truth for non-secret prefs (backend, per-backend model + base-URL overrides,
-Docling endpoint) — resilient `Codable` (an unknown backend value degrades to
-local). Secrets (Anthropic + Gemini API keys, Docling token) live in Keychain via
-`ExtractionCredentialStore`, never the JSON file. `ExtractionCoordinator`
-(`@MainActor @Observable`) resolves the configured backend fresh each call.
-
-**Settings.** A new Settings tab (`ExtractionSettingsView`) alongside Zotero.
-Auto-saves on change (no Save button — closing the window can't drop a typed
-value), shows only the selected backend's config section, and **locks itself
-while an extraction is running** (`launcher.extractingSourceIDs` non-empty) so a
-mid-conversion backend/key change can't derail it.
-
-**Defaults.** Extraction is transcription, not reasoning — Claude
-`claude-sonnet-4-6`, Gemini `gemini-3.5-flash` (both user-overridable to cheaper
-Haiku / Flash-Lite or more-capable Opus / Pro tiers).
-
-**Tests.** +43 **892 tests**, 65 suites, 0 failures. `swift build` + `make check` clean.
-
-PR #47. On branch `feature/extraction-backends`.
-
-## 2026-06-22 — Right-click link context menus + whole-link selection
-
-Implemented `plans/link-context-menus.md`. Right-clicking **any** link (wiki or
-external) in a markdown preview now **selects the whole link run** (not just the
-word under the cursor) and shows a **link-specific context menu**. Previously a
-right-click on e.g. `Modern` inside `Spinellis's "Modern Debugging"` (from
-`[[Modern Debugging (study)|Spinellis's "Modern Debugging"]]`) selected only
-`Modern` and offered Share/Copy of that word.
-
-**The Textual fork.** Textual is now a vendored in-repo path dependency
-(`Packages/Textual/`, upstream `textual` 0.5.0 rev `01b5187`) so we could touch
-its `internal` text-interaction layer (its `NSTextInteractionView` owns
-right-click + the menu, and the `model.url(for:)` hit-test / selection model are
-`internal` — no public seam). Three localized edits:
-- Public `LinkMenuItem` + `LinkContextMenuBuilder` + a `linkContextMenu`
-  `EnvironmentValues` entry and `.textual.linkContextMenu(_:)` modifier
-  (`LinkContextMenu.swift`, `View+Textual.swift`).
-- `TextSelectionModel.linkRange(for:)` (+ a layout helper) — expands from the
-  clicked run slice over adjacent slices whose run shares the same URL, bounded
-  to one layout so two same-URL links in neighboring paragraphs never merge.
-- `NSTextInteractionView` right-click: `updateSelectionForContextMenu` selects
-  the whole `linkRange` when on a link (word-range otherwise), and
-  `makeContextMenu` builds link items from the builder (then Share/Copy of the
-  selected link text). The env value threads through `AppKitTextInteractionOverlay`
-  exactly like `openURL`. See `ISSUES.md` ("Vendored Textual fork") for re-sync.
-
-**Menu items.** The pure `WikiLinkMenuBuilder` (`WikiFSCore`, no Textual dep)
-classifies a link URL → `[WikiLinkAction]`; the view layer `WikiLinkContextMenu`
-(`WikiFS`) wires them to closures in `MarkdownPreview` via
-`.textual.linkContextMenu`:
-- Missing wiki link → **Suggest…** (semantic-search submenu → navigate) + **Copy
-  as Wiki Link** (`[[Target]]`).
-- Resolved page/source link → **Find Similar…** + **Copy as Wiki Link**
-  (`[[Target]]` / `[[source:Name]]`, `#fragment` preserved) + **Copy File Path**
-  (the target's File Provider mount path — `pages/by-title/…` / `sources/by-id/…`,
-  resolved async if the mount root isn't cached). Only page previews pass the
-  spike, so it's offered there; the filename uses the page's canonical title.
-- External link → **Open in Browser** + **Copy Link**.
-
-**Not implemented (future).** **Edit Link** (enter edit mode + select the link
-source) was deferred — it needs edit-mode plumbing and source-span selection, and
-its behavior is an open question in the plan. It's not scaffolded in
-`WikiLinkAction`.
-
-**Tests.** 16 `WikiLinkMenuBuilderTests` (per-URL-kind action classification +
-`[[…]]` reconstruction incl. fragments and percent-encoded titles). Full
-`swift test` — 776 tests, 58 suites, 0 failures. `make check` clean.
-
-On branch `feature/link-context-menus`.
-
-## 2026-06-22 — Red missing wiki-links + context-menu design doc
-
-Unresolved `[[Ghost Page]]` wiki links now render **red** in every markdown
-preview, so dangling references are obvious at a glance. Resolved page/source
-links, external links, and same-page anchors keep the standard link color and
-behave exactly as before.
-
-**How.** `WikiLinkMarkdown.linkified` already encodes resolution into the URL
-host (`wiki://missing?title=…` for an unresolved target). A new custom Textual
-`MarkupParser` — `WikiLinkStylingParser` (in `Sources/WikiFS`, since only WikiFS
-depends on Textual) — wraps the default markdown parser and, after parsing,
-recolors each `.link` run: `wiki://missing…` → `Color.red`, every other link →
-the system link color (`NSColor.linkColor`, self-adapting). `MarkdownPreview`
-switched `StructuredText(markdown: rendered)` →
-`StructuredText(rendered, parser: WikiLinkStylingParser())` and adds
-`.textual.inlineStyle(InlineStyle.default.link())` to neutralize Textual's
-style-level link color: `WithInlineStyle` otherwise re-applies `InlineStyle.link`
-to every `.link` run with a `keepNew` merge and would override the parser's
-per-run colors. `.link` is kept on all runs, so missing links remain
-hit-testable/forward-compatible. The change lives entirely inside
-`MarkdownPreview`, so all four call sites (`PageDetailView`,
-`SourceDetailView`, `ChangeLogDetailView`, `SystemPromptDetailView`) get it for
-free.
-
-**Why the system link color, not `DynamicColor.link`.** Textual's
-`DynamicColor.link` can't be resolved inside the parser (it needs a color
-environment the parser doesn't receive); `NSColor.linkColor` is the adaptive
-semantic link color and is visually equivalent. (During implementation we hit
-`Color.link` is a `ShapeStyle`, not a `Color` — fixed by using
-`Color(NSColor.linkColor)`.)
-
-**Also:** wrote `plans/link-context-menus.md` — the design doc for the
-follow-on right-click link context-menu feature (Suggest for missing links,
-Find Similar for any link, Copy as wiki-link / file path, Open in Browser +
-Edit Link). It documents the blocker (Textual's `NSTextInteractionView` owns
-right-click + the context menu internally; the `model.url(for:)` hit-test seam
-is internal; no public API) and the operator-approved decision to vendor Textual
-in-repo for that future PR. No context-menu code shipped here. Added a
-`PLAN.md` doc-index row.
-
-**Tests.** 10 new `WikiLinkStylingParserTests` (per-link-kind colors, external
-links colored, non-link/code-span runs untouched, end-to-end via the linkifier).
-`swift test` — 760 tests, 57 suites, 0 failures. `swift build` clean.
-
-## 2026-06-21 — Configurable Agent Command (Settings → Agent tab)
-
-Implemented `plans/agent-command-settings.md`. The hardcoded `claude -p` dependency
-is replaced with app-wide configurable settings: executable, prefix arguments, model
-override, and extra environment variables. Default config reproduces today's
-invocation exactly.
-
-**Changes:**
-- **`AgentCommandConfig`** (new): `Codable` value type mirroring `ZoteroConfig`
-  pattern — `load(from:)`/`save(to:)` with atomic JSON in App Group container,
-  corrupt→default, `expandTilde(_:)` for `~`-prefixed executables, `parsedExtraEnv()`
-  for `KEY=VALUE` parsing, `tokenize(_:)` for shell-style argv splitting (quotes,
-  escapes, no shell invocation).
-- **`OperationCommand.build` / `buildInteractiveQuery`:** Replace `claudeExecutable`
-  with `resolvedExecutable` (PATH-preflighted) + `command: AgentCommandConfig`.
-  User env merged first, app-owned `WIKI_ROOT`/`WIKI_DB` authoritative, user `PATH`
-  preserved with `wikictl` prepended. Prefix args inserted before standard flags.
-  Model override replaces per-op alias when non-empty.
-- **`AgentLauncher`:** Loads config fresh at spawn time (not cached) so Settings
-  changes apply without restart. `containerDirectory` property (nil → App Group
-  fallback). PATH preflight now resolves the configured executable.
-- **`AgentCommandSettingsView`** (new): Settings → Agent tab — TextFields for
-  executable / prefix args / model override, TextEditor for extra env, resolved
-  preview, explicit Save, Reset to Default.
-- **`WikiFSApp`:** Settings scene converted to `TabView` (Zotero + Agent tabs).
-- **`ClaudePromptHelp`:** `renderCommand` / `shellQuoted` promoted to `public`
-  for Settings preview reuse.
-
-**Tests.** 770 tests, 57 suites, 0 failures (+23: 23 AgentCommandConfigTests covering
-load/save round-trip, missing→default, corrupt→default, tokenize edge cases,
-tilde expansion, env parsing).
-
-On branch `feature/agent-command-settings`.
-
-## 2026-06-21 — Phase D: Editable Display Names + Rename Propagation
-
-Implemented `plans/phase-d-display-names-rename.md`. Sources can now be renamed
-(`wikictl source rename --id <id> --to "New Name"`), and all `[[source:<old>…]]`
-links in linking pages are automatically rewritten. Fragments (`#"quote"`) and
-aliases (`|text`) are preserved byte-for-byte; code spans/fences are skipped.
-
-**Architecture.** `WikiLinkRewriter.rewriteSourceBase` finds `[[source:Old…]]` spans
-via the shared `WikiLinkSpan` regex, classifies them to ensure they're source links,
-then structurally splices the bare-target byte range (everything between `source:`
-and the first `#`/`|`) with the new name — not `replaceOccurrences`, so
-`source:  old base#"q"` correctly matches and replaces only the base. The rename
-drives the scan off `source_links` (O(linked-pages), zero false positives).
-
-**Changes:**
-- **`WikiLinkSpan`** (new): Shared `[[…]]` regex + `protectedCodeRanges`, extracted
-  from `WikiLinkMarkdown` and `WikiFootnoteMarkdown` (they were copy-pasted).
-  Both now delegate to `WikiLinkSpan`.
-- **`WikiLinkRewriter`** (new): `rewriteSourceBase(in:matching:to:)` — pure helper,
-  structurally splices the bare target, returns nil if no match.
-- **`SQLiteWikiStore`:** `renameSource(id:to:)` updates `display_name` + bumps
-  `version`, then iterates `sourceLinkingPages(to:)` to rewrite each linking page
-  via `updatePage` + `replaceLinks`. `sourceLinkingPages(to:)` is a new read helper
-  (one query: `SELECT DISTINCT from_page_id FROM source_links WHERE to_source_id = ?`).
-- **`WikiStore` protocol:** Added `renameSource` method.
-- **`WikiStoreModel`:** `renameSource(id:to:)` thin wrapper — calls store, refreshes
-  summaries, updates open tab titles.
-- **`sources.jsonl` `name` field:** Now `displayName ?? filename`.
-- **By-name projection** (`Projection.swift`): `sourceNode`/`sourceMarkdownNode` now
-  use `displayName ?? filename` for by-name names; `metadataVersion` bifurcated
-  (by-name keys on display name, by-id stays filename-keyed).
-- **CLI:** `wikictl source rename <selector> --to "<name>"` — resolves selector,
-  calls `store.renameSource`, returns confirmation. Wired in `ArgumentParser.Command`,
-  `SourceCommand.Action`, and `main.swift` dispatch.
-- **`SystemPrompt`:** Documents `wikictl source rename` + auto-rewrite so the agent
-  knows renames never orphan citations.
-- **Tests:** 17 `WikiLinkRewriterTests` (basic swap, case-insensitive, whitespace-
-  collapsed, fragment preservation, alias preservation, fragment+alias combined,
-  code-span/fence skip, non-source links unchanged, multiple occurrences).
-  5 store tests (`sourceLinkingPages`, `renameSource` update + rewrite + no-op).
-
-**Tests.** 747 tests, 56 suites, 0 failures (+22 new).
-
-On branch `feature/phase-d-display-names-rename`.
-
-## 2026-06-21 — Markdown Anchors: section/passage links + footnote citations
-
-Implemented `plans/markdown-anchors.md`. Wiki links can now point at a *place inside*
-a document:
-
-- `[[Page#Section]]` — navigate to page, scroll to heading
-- `[[source:Paper#"quote"]]` — navigate to source, scroll to quoted passage
-- `[[#"quote"]]` / `[[#Section]]` — scroll within current page
-- All of the above work inside **footnotes** (`[^id]` + `[^id]: definition`)
-
-**Architecture.** Pages cite by heading slug (Textual already applies `.id(slug)` to
-headings); sources cite by quoted passage (render-time ids, nothing stored — extraction-safe).
-`AnchorBlock.parse()` walks rendered markdown and builds an ordered block list;
-`resolveAnchor()` resolves fragments slug-first then quote-first. `ScrollViewReader`
-+ `proxy.scrollTo(id)` drives the scroll; `NumberedParagraphStyle` assigns sequential
-`p1/p2/…` ids to paragraphs for quote-level precision. Navigation stashes a
-`pendingScrollAnchor` tagged with target selection so a stale anchor can't misfire.
-
-**Changes:**
-- **`WikiLinkParser`:** `ParsedLink` gains `fragment: String?`. `splitFragment(_:)` splits
-  raw target on first `#` before classification. Same-page anchors (empty base) are
-  skipped in `parse()` but rendered in `linkified`.
-- **`WikiLinkMarkdown`:** `markdownLink` gains `fragment:` param; `markdownAnchorLink`
-  builds `wiki://anchor#…` for same-page. `fragment(from:)` decodes fragments from URLs.
-  `isSamePageAnchor(_:)` identifies anchor-host URLs. `fragmentAllowed` character set
-  encodes `#`, `"`, space, `%` in fragment. `resolvedKind(from:)` recognizes `"anchor"`
-  host (returns nil — same-page is not a navigation).
-- **`AnchorBlock`** (new): Struct with `Kind` (heading/paragraph), `id`, `text`.
-  `parse(_:)` walks rendered markdown in document order, skipping lists/code/tables/
-  blockquotes. `makeSlug(_:counts:)` does GFM-style slug generation with `-1/-2` dedup.
-  `resolveAnchor(_:in:)` — pure function: slug-match first, then quote substring match.
-- **`NumberedParagraphStyle`** (new): Custom Textual `ParagraphStyle` that applies
-  `.id("p\(n)")` sequentially. Counter resets before each render.
-- **`MarkdownPreview`:** Wrapped in `ScrollViewReader`; `NumberedParagraphStyle` applied
-  to `StructuredText`; block list built after render; `OpenURLAction` dispatches
-  same-page anchors locally and passes fragment through to `selectPage`/`selectSource`;
-  `.task` consumes `pendingScrollAnchor` with 50ms layout-delay scroll.
-- **`WikiStoreModel`:** `selectPage(byTitle:anchor:)` / `selectSource(byDisplayName:anchor:)`
-  stash a `pendingScrollAnchor` tagged with target `WikiSelection`.
-  `consumePendingScrollAnchor(for:)` atomically reads and clears it.
-- **`SystemPrompt`:** Documented footnote grammar, cite-by-quote, page-section anchors,
-  slug rules, same-page anchors, and a worked footnote example.
-- All `MarkdownPreview` call sites (`PageDetailView`, `SourceDetailView`,
-  `ChangeLogDetailView`, `SystemPromptDetailView`) pass `currentSelection: store.selection`.
-
-**Tests.** 725 tests, 55 suites, 0 failures (41 new: 14 parser #-split, 11 linkified
-fragment, 16 AnchorBlock).
-
-On branch `feature/markdown-anchors`.
-
-## 2026-06-21 — Deferred MarkdownPreview rendering
-
-`MarkdownPreview` now shows a `ProgressView` spinner immediately and defers regex
-preprocessing (footnote expansion + wiki-link linkification) via `Task.yield()`, so the
-view shell appears instantly and the rendered text fills in after. For large markdown
-documents this avoids blocking the main thread during body evaluation.
-
-**Changes:**
-
-- **`MarkdownPreview`:** Replaced the synchronous `renderedMarkdown` computed property
-  with `@State private var renderedBody: String?` and `.task(id: markdown)`. The task
-  yields first so the `ProgressView` renders, then runs the preprocessing on the main
-  actor, then yields again so the frame commits. A task key prevents stale renders
-  when the markdown changes mid-processing.
-
-**Tests.** `swift test` — 684 tests, 54 suites, 0 failures.
-
-On branch `feature/deferred-markdown-rendering`.
-
-## 2026-06-21 — Phase C: source markdown in the File Provider
-
-Implemented `plans/phase-c-source-markdown-projection.md`. PDFs with extraction output now
-project a `.md` sibling alongside the verbatim file in both `sources/by-id/` and
-`sources/by-name/`. The change bridge now sees chain edits, so extraction / edit / revert
-refresh the mount without a relaunch. Every source gets a chain: markdown-native sources
-self-seed v1 from verbatim bytes (origin `"source"`), PDFs seed from extraction.
-
-**Changes:**
-
-- **Change bridge (`SQLiteWikiStore`):** `sourceMarkdownVersionCount()` helper added
-  (resilient `COUNT(*)` over `source_markdown_versions`, mirrors `logRowCount`).
-  `changeToken()` gains an 8th component (`smvCount`), so any append to the versions
-  table advances the File Provider sync anchor. Previously `appendProcessedMarkdown`
-  and `revertProcessedMarkdown` left the token unchanged.
-
-- **Projection (`Projection`):** `sourceMarkdownByID` / `sourceMarkdownByName` identity
-  prefixes with constructors and a `sourceMarkdownULID` parser (parity with verbatim
-  source identity). `sourceMarkdownNode(for:source:head:)` versions the sibling off the
-  HEAD row (`contentVersion = Data(head.id.rawValue.utf8)`), naturally distinct from
-  the verbatim node's version. `sourceNodes(byName:)` fetches all HEADs in one query
-  (`processedMarkdownHeadsBySource()`) and emits a sibling only for non-markdown-native
-  sources with a chain — markdown-native sources don't need a sibling (the verbatim
-  `<id>.md` is the content). `contents(for:)` serves HEAD content for sibling ids.
-
-- **One-query HEAD read (`SQLiteWikiStore`):** `processedMarkdownHeadsBySource()` joins
-  `source_markdown_versions` against `MAX(id) GROUP BY file_id` in a single query.
-  Returns `[String: SourceMarkdownVersion]` keyed by source id; empty dict on failure.
-
-- **Self-seed, MIME-keyed (`WikiStoreModel`):** `processedMarkdownHead(for:)` self-seeds
-  v1 from verbatim bytes for markdown-native sources (`mimeType.hasPrefix("text/")`,
-  not `file.ext`). Origin `"source"` (distinct from `"extraction"` and `"user"`).
-  Double-seed guard prevents duplicates. `headVersion` is never nil — every source has
-  a chain, and the original content is always available as the baseline.
-
-- **CLI (`wikictl source edit-markdown`):** New subcommand appends a `"user"` version
-  to an existing chain. Accepts `--content` or `--file`. Refuses with a clear error
-  when no extraction baseline exists (exit 1). `signalChange()` so the mount refreshes.
-
-- **Index (`IndexGenerators`):** `SourceIndexRow` gains `has_markdown: Bool`.
-  `sourcesJSONL` emits it in fixed key order (`id, name, path, size, mime, has_markdown`).
-  True for every source (all have chains after self-seed). The agent uses `mime` to
-  distinguish PDFs (have a `.md` sibling) from markdown-native sources (verbatim is content).
-
-- **Agent prompt (`SystemPrompt`):** One line documenting the `.md` sibling convention.
-
-**Tests.** `swift test` — 684 tests, 54 suites, 0 failures.
-
-On branch `feature/phase-c-source-markdown-projection`.
-
-## 2026-06-21 — Reader and editor zoom (⌘+ / ⌘− / ⌘0)
-
-Implemented `plans/reader-editor-zoom.md`. Safari-style text zoom for the page reader
-and both monospace editors (page + source), keyboard-only, persisted globally.
-
-- **`ZoomScale` (WikiFSCore)** — pure value type: bounds `0.5...3.0`, ×/÷1.1 step,
-  default `1.0`, non-finite input coerced to default. 15 `ZoomScaleTests` covering
-  clamping at both bounds, round-trip symmetry, reset, and non-finite coercion.
-- **Reader scale** — `MarkdownPreview` reads `@AppStorage("reader.zoom")` and applies
-  `.textual.fontScale(readerZoom)` to `StructuredText`; headings and spacing scale
-  proportionally. Both the page reader and the source viewer scale from this
-  one edit.
-- **Editor scale** — `PageDetailView` and `SourceDetailView` read
-  `@AppStorage("editor.zoom")` and size the monospace `TextEditor` via
-  `.system(size: 13 * editorZoom, design: .monospaced)`. At `1.0` the size is
-  identical to the previous `.body` default at the standard text size (the fixed
-  13 pt no longer tracks Dynamic Type, a deliberate trade-off per the plan).
-- **`ZoomShortcuts` (WikiFS)** — `.zoomShortcuts(_:)` view modifier injects hidden,
-  zero-size `Button`s for ⌘+, ⌘=, ⌘−, and ⌘0. Wired per-mode in both detail views:
-  reader-mode buttons mutate `reader.zoom`, editor-mode buttons mutate `editor.zoom`.
-  No menu items added.
-- **`@AppStorage` keys** — `reader.zoom` and `editor.zoom` are the first `AppStorage`
-  keys in the app; both default `1.0`, shared across views, persisted across launches.
-
-**Tests.** `swift test` — 650 tests, 0 failures (+15 `ZoomScaleTests`).
-
-## 2026-06-21 — Content-type over extension
-
-Implemented `plans/content-type-over-extension.md` — made `mime_type` content-authoritative
-rather than extension-derived. This closes the circularity bug where a PDF renamed `.txt`
-was mis-typed and skipped extraction.
-
-**Changes:**
-
-- **`ContentSniff` (new):** Extracted `URLIngestService.sniffContentType` into a pure
-  `WikiFSCore` helper (`mimeType(of:)`) shared by all ingest paths.
-- **`addSource` MIME-first:** Added `mimeType:` parameter to the protocol and
-  `SQLiteWikiStore`. Priority: explicit param → magic-byte sniff → ext fallback. A PDF
-  named `.txt` now stores `application/pdf`.
-- **`WikiFSItem.contentType` MIME-first:** Added `mimeType: String?` to `ProjectedNode`;
-  `sourceNode` carries `file.mimeType`; `WikiFSItem.contentType` prefers
-  `UTType(mimeType:)` over `UTType(filenameExtension:)`.
-- **Zotero `isIngestable`:** Prefers API `contentType` (`application/pdf`, `text/*`) over
-  filename extension; extension check remains as fallback.
-- **Stale comment fix:** `AgentOperationRunner:130` comment now matches the MIME-based
-  guard it annotates.
-- **Grep guard:** `ExtensionCheckGuardTests` fails if a new behavioral extension check
-  appears outside the allowlisted files.
-
-**Tests.** `swift test` — 653 tests, 53 suites, 0 failures.
-
-On branch `feature/content-type-over-extension`.
-
-## 2026-06-21 — Phase C review + content-type + Phase C plans
-
-Reviewed Phase C ("Source Markdown in the File Provider") of `plans/sources-redesign.md`
-against the post-Phase-B tree. Two load-bearing assumptions in the parent design are false
-in the code: (1) the change bridge can't see processed-markdown edits — `changeToken()`
-(`SQLiteWikiStore.swift:564`) folds `COUNT`/`SUM(version)` over `sources` but not
-`source_markdown_versions`, and `appendProcessedMarkdown`/`revertProcessedMarkdown` don't
-bump `sources.version`, so extraction/edit/revert don't move the sync anchor and the
-projected `.md` sibling never refreshes; (2) markdown sources *do* get chains today via the
-lazy-seed in `WikiStoreModel.processedMarkdownHead(for:)` (`:865-877`), which contradicts
-the intended model (only PDFs have chains) and would project a colliding `<id>.md` sibling.
-Design intent confirmed: the chain is a git-lite history of PDF→markdown conversions
-(revert shipped, compare future); only HEAD is projected; the agent sees the latest only.
-
-Also surfaced the root extension-check bug: `addSource` (`SQLiteWikiStore.swift:861`)
-derives `mime_type` from the filename extension, making every downstream "trust MIME" check
-circular (a PDF named `.txt` is mis-typed and skips extraction). `URLIngestService` already
-content-sniffs but the result is discarded and re-derived from ext.
-
-Wrote three plans (all indexed in `PLAN.md`):
-
-- **`plans/content-type-over-extension.md`** — cross-cutting fix making `mime_type`
-  content-authoritative: extract a `ContentSniff` helper, `addSource` sniffs bytes,
-  MIME-first `WikiFSItem.contentType`, Zotero filter, and a grep guard. Standalone; Phase C
-  depends on it.
-- **`plans/phase-c-source-markdown-projection.md`** — Phase C re-grounded. Folds
-  `source_markdown_versions` into `changeToken()` + versions the sibling off the HEAD row;
-  removes the markdown lazy-seed; projects the `.md` sibling in by-id and by-name with
-  proper identity prefixes; one-query HEAD read to avoid N+1; `wikictl source edit-markdown`
-  (appends a `user` version, requires an existing extraction baseline). Defers all
-  MIME-authority work to the content-type plan (no duplicated edits between the two).
-
-No code changed — planning only, on branch `feature/source-wikilinks`.
-
-## 2026-06-21 — Reader and editor zoom (⌘+ / ⌘− / ⌘0)
-
-Implemented `plans/reader-editor-zoom.md`. Safari-style text zoom for the page reader
-and both monospace editors (page + source) via keyboard (⌘+/⌘=/⌘−/⌘0) and ⌘+scroll,
-persisted globally.
-
-- **`ZoomScale` (WikiFSCore)** — pure value type: bounds `0.5...3.0`, ×/÷1.1 step,
-  default `1.0`, non-finite input coerced to default. Plus `scrollSteps(accumulated:
-  threshold:)`, which converts an accumulated ⌘+scroll delta into whole zoom steps
-  and a carry remainder. 21 `ZoomScaleTests` covering clamping at both bounds,
-  round-trip symmetry, reset, non-finite coercion, and scroll-step accumulation.
-- **Reader scale** — `MarkdownPreview` reads `@AppStorage("reader.zoom")` and applies
-  `.textual.fontScale(readerZoom)` to `StructuredText`; headings and spacing scale
-  proportionally. Both the page reader and the source viewer scale from this
-  one edit.
-- **Editor scale** — `PageDetailView` and `SourceDetailView` read
-  `@AppStorage("editor.zoom")` and size the monospace `TextEditor` via
-  `.system(size: 13 * editorZoom, design: .monospaced)`. At `1.0` the size is
-  identical to the previous `.body` default at the standard text size (the fixed
-  13 pt no longer tracks Dynamic Type, a deliberate trade-off per the plan).
-- **`ZoomShortcuts` (WikiFS)** — `.zoomShortcuts(_:)` view modifier injects
-  invisible, zero-size `Button`s for ⌘+, ⌘=, ⌘−, and ⌘0. Wired per-mode in both
-  detail views: reader-mode buttons mutate `reader.zoom`, editor-mode buttons mutate
-  `editor.zoom`. No menu items added. The buttons use `.opacity(0)`, **not**
-  `.hidden()`: a hidden view leaves the responder chain, which silently stops its
-  `.keyboardShortcut` from firing (PR #35 review finding).
-- **`ZoomScroll` (WikiFS)** — `.zoomScroll(_:)` view modifier adds ⌘+scroll zoom,
-  scoped to the hovered subtree (reader vs. editor) the same way the chords are. A
-  local `.scrollWheel` `NSEvent` monitor accumulates ⌘+scroll deltas, steps via
-  `ZoomScale.scrollSteps`, and swallows handled events so the page doesn't also
-  scroll. Scroll up zooms in, down zooms out.
-- **`@AppStorage` keys** — `reader.zoom` and `editor.zoom` are the first `AppStorage`
-  keys in the app; both default `1.0`, shared across views, persisted across launches.
-
-**Tests.** `swift test` — 674 tests, 0 failures (+21 `ZoomScaleTests`).
-## 2026-06-21 — Phase B: `[[source:display-name]]` wikilinks
-
-Wiki pages can now link to sources with `[[source:display-name]]` syntax. Clicking a
-source link in the preview navigates to that source's detail view — the same seam
-page links use. Source links render as `wiki://source?title=<display-name>`
-(mirroring `wiki://page?title=…`), resolution happens at click time via
-`selectSource(byDisplayName:)`, and a single `(String, LinkType) -> Bool` closure
-serves both link kinds.
-
-**Changes:**
-
-- **Parser (`WikiLinkParser`):** `ParsedLink` gains a `LinkType` enum (`.page` /
-  `.source`) with a `.page` default so every existing call site compiles unchanged.
-  A new `classify()` method extracts the `source:` / `page:` prefix and re-normalizes
-  the remainder (`[[source: X]]` → target `"X"`). `parse()` deduplicates per
-  `(kind, target)`; `[[source:]]` (empty prefix target) is skipped as a non-link.
-  The `page:` prefix is an explicit escape: `[[page:source:foo]]` links to a page
-  literally titled "source:foo".
-
-- **Shared normalizer (`WikiText`):** `WikiText.normalized()` replaces three private
-  `collapseWhitespace` copies (in `WikiLinkParser`, `WikiLinkMarkdown`,
-  `HTMLToMarkdown`). One source of truth for whitespace collapsing across the wiki
-  subsystem.
-
-- **Renderer (`WikiLinkMarkdown`):** `linkified` closure signature changed to
-  `(String, LinkType) -> Bool`; source links render as
-  `wiki://source?title=<display-name>` when resolved, `wiki://missing?title=…` when
-  not. `markdownLink` is now kind-aware; `resolvedKind(from:)` returns `.page` /
-  `.source` / `nil` for the click handler. `isEmptyPrefix()` skips `[[source:]]`
-  in both parser and renderer.
-
-- **Resolution (`SQLiteWikiStore`):** `resolveTitleToID` is now case-insensitive
-  (`COLLATE NOCASE`) for parity with source resolution. `resolveSourceByName`
-  matches `display_name` first, falling back to `filename`; multi-match tiebreak
-  by `updated_at DESC`. `WikiStore` protocol extended with `resolveSourceByName`.
-
-- **Navigation (`WikiStoreModel`):** `sourceExists(displayName:)` mirrors
-  `pageExists(title:)` for the render closure. `selectSource(byDisplayName:)`
-  mirrors `selectPage(byTitle:)` line for line — resolves display name → ULID,
-  records navigation history, opens the source's tab (reusing an already-open
-  tab). `MarkdownPreview`'s `OpenURLAction` dispatches by kind.
-
-- **Persistence (`SQLiteWikiStore.replaceLinks`):** extended to write BOTH
-  `page_links` and `source_links` in ONE `BEGIN IMMEDIATE` transaction. Wipes
-  both tables for the page, then re-inserts resolved subsets atomically.
-  `listAllSourceLinks()` added with `type: "source"`.
-
-- **Index (`IndexGenerators`, `Projection`):** `LinkRow` gains `type: String`
-  (default `"page"`). `linksJSONL` emits `type` in fixed key order
-  (`from, to, link_text, type`). The File Provider projection merges
-  `listAllLinks()` + `listAllSourceLinks()` — page rows first, then source rows,
-  each sorted by `(from, to)`.
-
-- **Agent prompts:** `SystemPrompt` cheatsheet now lists `wikictl source` commands
-  and documents the `type` field in `links.jsonl`. `WikiOperation` Ingest/Query
-  prompts updated from `wikictl file` to `wikictl source`. `wikictl --help`
-  usage string updated in `ArgumentParser`.
-
-- **Stale help text + prompt references fixed:** `ArgumentParser` usage string,
-  `main.swift` comment, `WikiOperation` Ingest/Query prompts, and `SystemPrompt`
-  cheatsheet all said `wikictl file` instead of `wikictl source`. The agent was
-  running `wikictl file` from its prompt instructions and getting "unknown
-  command". Three commits pushed to the PR to stamp this out.
-
-**Tests.** `swift test` — 635 tests, 50 suites, 0 failures.
-
-On branch `feature/phase-b-source-wikilinks`. PR #33.
-
-## 2026-06-21 — Phase A: rename "ingested file" → "source" throughout (PR #31)
-
-Full rename across database, types, UI, CLI, File Provider, and agent prompts. v10
-migration renames `ingested_files` → `sources` and `file_markdown_versions` →
-`source_markdown_versions`; adds `display_name` column (backfilled from `filename`);
-creates `source_links` table. All Swift types renamed (`IngestedFileSummary` →
-`SourceSummary`, etc.), all views renamed (`IngestedFileDetailView` →
-`SourceDetailView`, `IngestedFileRow` → `SourceRow`, `FilesSectionView` →
-`SourcesSectionView`), CLI renamed (`wikictl file` → `wikictl source`), mount paths
-renamed (`files/` → `sources/`), agent prompts updated. Six extension-check bugs
-fixed (use `mimeType` instead of `ext` for behavioral decisions). 596 tests green.
-
-Branches `feature/sources-redesign` (PR #31) → `feature/phase-b-source-wikilinks` (PR #33).
-
-## 2026-06-20 — Standalone Extract Markdown fixes + Stop-button overhaul
-
-The standalone "Extract Markdown" button in `IngestedFileDetailView` had two bugs
-from its divergence with the ingest-path extraction in `AgentOperationRunner`:
-
-1. **Sidebar PDF Conversion box never appeared.** `runExtraction()` used its own local
-   `@State` variables (`isExtracting`, `extractionLog`), but
-   `AgentTranscriptSidebar.showsConversion` checked `launcher.isExtracting` and
-   `launcher.extractionLog` — which were never set by the standalone path. The sidebar
-   auto-expanded (because `extractingFileIDs` was inserted), but showed only an empty
-   Agent Activity section.
-2. **Stop button was a no-op.** The extraction `Task` was created inline
-   (`Task { await runExtraction() }`) and never stored. `AgentLauncher.stop()` cancelled
-   only `ingestTask` and `process`, both `nil` during standalone extraction.
-
-Additional improvements found during the fix pass:
-
-4. **Ingest button stayed active during extraction.** The "Ingest into Wiki" button was
-   not disabled while the same file was mid-extraction, risking a double operation.
-5. **Ingest-path always re-extracted PDFs.** `runMultiIngest` ran pdf2md for every PDF
-   even when markdown had already been extracted via the standalone button — wasting a
-   heavy conversion and taking the extraction slot unnecessarily.
-6. **Single Stop button conflated two independent operations.** The sidebar had one
-   shared Stop button that called `launcher.stop()` (kill everything). Two distinct
-   buttons now match the two independent locks: Stop Conversion (extraction slot only)
-   and Stop Agent (spawn slot only).
-
-**Changes:**
-
-- **`IngestedFileDetailView.runExtraction()`** now sets `launcher.isExtracting`,
-  `launcher.extractionPID`, and `launcher.extractionLog` (with `onProgress`/`onStart`
-  callbacks to `PdfExtractionService.convert`) so the sidebar's PDF Conversion box
-  renders with live progress. The local `@State extractionLog` is removed — all log
-  output goes to `launcher.extractionLog`; the detail view header keeps only a minimal
-  "Extracting…" spinner driven by `isThisFileExtracting`.
-- **`extractTask`** added to `AgentLauncher` (mirrors `ingestTask` for the standalone
-  path). Stored/cleared by the Extract button action; cancelled by `stopExtraction()`.
-  `PdfExtractionService.run()`'s `onCancel` handler terminates the pdf2md subprocess.
-- **Ingest button disabled during extraction** — `|| isThisFileExtracting` added to the
-  `.disabled()` guard in `IngestedFileDetailView`.
-- **`AgentOperationRunner.runMultiIngest`** now checks `store.processedMarkdownHead(for:
-  file)` before running pdf2md. If markdown was already extracted (via the standalone
-  button or a prior ingest), it reuses the existing content and skips extraction
-  entirely — no extraction slot taken, no subprocess spawned.
-- **`AgentLauncher` split into three stop methods:**
-  - `stopExtraction()` — cancels `extractTask` (or `ingestTask` during ingest-path
-    extraction phase), clears `isExtracting` / `extractionPID` / `extractingFileIDs` /
-    `extractionLog`. Never touches the agent process.
-  - `stopAgent()` — cancels `ingestTask`, terminates the claude process, calls
-    `finish()`. Never touches extraction flags.
-  - `stop()` — convenience that calls both (preserved for surfaces that still want a
-    kill-everything affordance).
-- **`AgentTranscriptSidebar`** header simplified to just the "Transcript" label. The
-  PDF Conversion box now has its own red Stop button (visible when
-  `launcher.isExtracting`). The Agent Activity section has its own red Stop button
-  (visible when `launcher.isRunning` or `!launcher.ingestingFileIDs.isEmpty`).
-
-**Tests.** `swift test` — 596 tests, 50 suites, 0 failures (+10 from the prior
-baseline of 586):
-- `AgentExtractionLockTests` (+7: `stopCancelsExtractTask`,
-  `stopWithNoExtractTaskIsNoOp`, `isExtractingFlagExposedByLauncher`,
-  `stopExtractionCancelsExtractTask`, `stopExtractionClearsExtractionFlags`,
-  `stopExtractionWithNoTaskIsSafe`, `stopAgentDoesNotClearExtractionFlags`)
-- `ProcessedMarkdownTests` (+3: `pdfHeadNilBeforeExtraction`,
-  `seedPdfMarkdownCreatesHead`, `seedPdfMarkdownDoubleSeedReturnsExisting`)
-
-## 2026-06-20 — Serialized claude spawn slot + separate extraction lock
-
-The shared `AgentLauncher` silently dropped a second run (`guard !isRunning`), and
-one `ingestingFileIDs` set fused the pdf2md extraction phase with the agent-
-ingestion phase — so a pure extraction mislabeled rows "Ingesting…" and greyed out
-other files' Ingest buttons even though the slot was free. Two independent locks now
-replace the single `isRunning` guard; the phase flags are split. See
-`plans/extraction-vs-ingestion-lock.md` (Option B).
-
-- **Spawn slot (`AgentLauncher`):** all `claude -p` spawns (ingest/query/lint)
-  serialize through a FIFO, cancellation-aware slot (`awaitSpawnSlot` /
-  `releaseSpawnSlot`); the silent-drop guard is gone, so a queued run waits and
-  runs after the current one. `run`/`startInteractiveQuery` are `async`; preflight
-  and staging run after the slot is acquired so every early-return releases it.
-- **Separate extraction lock:** pdf2md conversions serialize on a *distinct*
-  `awaitExtractionSlot`/`releaseExtractionSlot` (same shape, independent state) that
-  never touches the spawn slot or the edit lock — so a query runs during an
-  extraction and editing stays unlocked while a PDF converts. Both the ingest-path
-  conversion and the standalone `Extract Markdown` action take it.
-- **Phase-flag split:** `ingestingFileIDs` (set only at agent-spawn commit via a new
-  `run` param, cleared in `finish()`) is now distinct from `extractingFileIDs`
-  (pdf2md phase). `runMultiIngest` no longer pre-sets `ingestingFileIDs`. Rows show
-  "Extracting…" vs "Ingesting…" (pure `rowStatus` predicate); the cross-file Ingest
-  greyout (`isAnyFileIngesting = !ingestingFileIDs.isEmpty`) is now extraction-free.
-- **Query page:** mounts the orange `AgentRunBanner` and scopes its debug cluster to
-  active query runs only (`showsQueryDebugControls`); resets to the conversation
-  when idle. The toolbar glow / transcript auto-open now key off `extractingFileIDs`
-  so a pure extraction still surfaces the transcript.
-
-**Cancellation.** A file is marked ingested only by the agent's `wikictl log append
---kind ingest`; an ingest interrupted before the agent spawns marks nothing
-(`hasBeenIngested` stays `false`), and extracted markdown seeded before the agent
-run survives a later cancel.
-
-**Verified.** `swift build` clean (no warnings). `swift test` — 586 tests, 50
-suites, 0 failures (+10 `AgentExtractionLockTests`, +6 `AgentSpawnSlotTests`).
-
-## 2026-06-20 — Grey out Ingest/Extract buttons during any file ingest
-
-The "Ingest into Wiki" and "Extract Markdown" buttons in
-`IngestedFileDetailView` were only disabled when the agent was running or
-the same file was being ingested. During the PDF-conversion phase (before
-agent launch), both buttons were still active — a second ingest could be
-started concurrently.
-
-- **`IngestedFileDetailView`:** added `isAnyFileIngesting` parameter
-  (true when any ingest is in flight, not just this file's). Both buttons
-  now include it in their `.disabled()` guards.
-- **`WikiDetailView`:** plumbed `isAnyFileIngesting` from
-  `!launcher.ingestingFileIDs.isEmpty`.
-
-**Verified.** `swift build` clean. PR #28.
-
-## 2026-06-20 — Fix transcript sidebar disappearing on tab switch
-
-The `AgentTranscriptSidebar` had Query-specific suppression that forced
-`isTranscriptExpanded = false` when entering the Query tab and guarded
-visibility/auto-open/toggle-enable with `!isQuerySelected`. This caused the
-sidebar to collapse on entry to Query and stay collapsed when switching back to
-other tabs — the state didn't recover.
-
-- **`ContentView`:** removed `!isQuerySelected` from the sidebar visibility
-  guard, the auto-open-on-agent-start guard, the auto-open-on-ingest guard,
-  and `canShowTranscript`. Removed the forced `isTranscriptExpanded = false`
-  in `onChange(of: store.selection)`. Removed the now-unused
-  `isQuerySelected` computed property. (-16/+8)
-
-The sidebar now persists across all tab switches and works consistently
-regardless of which detail view is active.
-
-**Verified.** `swift build` clean; `swift test` — 570 tests, 48 suites, 0
-failures. PR #27.
-
-## 2026-06-20 — Fix Zotero "View in Zotero" link + PageDetailView markdown alignment
-
-Fixed two bugs found in live use after the Zotero source-link feature landed:
-
-**"View in Zotero" link 404s.** The detail view constructed
-`https://www.zotero.org/users/<numericLibraryID>/items/<itemKey>/`, but
-Zotero's web library uses username slugs in URLs, not numeric IDs — the
-numeric ID only works on the API host (`api.zotero.org`). Confirmed this is
-the same root cause as [Zutilo #268](https://github.com/wshanks/Zutilo/issues/268).
-Switched to the `zotero://select/library/items/<key>` URI scheme, which
-opens items directly in the Zotero desktop app and needs no library ID at all.
-
-- **`IngestedFileDetailView`:** removed the `zoteroLibraryID` parameter
-  (no longer needed); `zoteroItemURL` now builds
-  `zotero://select/library/items/<key>` instead of the broken web URL.
-- **`WikiDetailView` / `ContentView`:** removed the `zoteroLibraryID`
-  plumbing — the property was only threaded for this one link.
-
-**Markdown preview appears centered.** `MarkdownPreview`'s VStack inside its
-`ScrollView` was centered by default (SwiftUI `ScrollView` centers its
-content). Added `.frame(maxWidth: .infinity, alignment: .leading)` after
-the VStack's padding so content left-aligns within the scroll area.
-
-**Page editor inset mismatch.** The `PageDetailView` editor used
-`contentInset - 5` (7pt) while the header used 12pt; the markdown preview
-was passed `contentInset: false` (0pt). Changed both to 12pt so the text
-lines up with the header title and Edit button.
-
-**Verified.** `swift build` clean; `swift test` — 570 tests, 48 suites, 0
-failures.
-
-## 2026-06-20 — Zotero source link on ingested files
-
-Implemented `plans/zotero-source-link.md`. Files ingested from Zotero now carry
-their parent library item's key + title as provenance, so the **Ingested File
-Detail View** shows a "Zotero" tag with the item title and a "View in Zotero"
-link back to the web library (`zotero.org/users/<id>/items/<key>/`).
-
-- **Schema v8→v9:** two nullable TEXT columns (`zotero_item_key`,
-  `zotero_item_title`) on `ingested_files`. NULL for drag-drop / URL /
-  folder-import (no provenance).
-- **`IngestedFileSummary`** grew `zoteroItemKey` / `zoteroItemTitle` (defaulted
-  `nil` so existing callers compile).
-- **Write seam:** `WikiStore.ingestFile` gained defaulted
-  `zoteroItemKey`/`zoteroItemTitle` params; only `ingestFromZotero` passes
-  non-nil. `WikiStoreModel.ingestFromZotero(_:parentItem:zoteroDir:)` now takes
-  the parent `ZoteroItem`; `AddFromZoteroSheet.addSelected()` passes
-  `selectedItem`.
-- **Read path:** `listIngestedFiles`, `getIngestedFile`, and the
-  `ingestedSummary` decoder extended for the two new columns (NULL→nil). The
-  `listAllIngestedFilesOrderedByID` projection (files.jsonl / File Provider
-  mount) is intentionally left unchanged for v1 — provenance is UI-only.
-- **Detail view:** a small `zoteroOriginRow` in `headerSection` (Zotero tag +
-  title + borderless "View in Zotero" button via `NSWorkspace.shared.open`).
-  Library ID plumbed `ContentView → WikiDetailView → IngestedFileDetailView`
-  from `ZoteroConfig`. Non-Zotero files show nothing (clean header).
-
-Open questions resolved with the plan's recommended defaults: **web URL** link
-target (universal, no Zotero install needed), **no** neutral "Imported" tag
-for non-Zotero files, **UI-only** for v1 (no files.jsonl change).
-
-3 new tests (NULL round-trip, Zotero-seam write, Zotero-seam threads key+title)
-+ updated the 4 `ingestFromZotero` call sites in
-`WikiStoreModelZoteroIngestTests`; bumped the 5 `user_version`-to-head
-assertions across the suite to 9. Full `swift test` — 570 tests, 48 suites, 0
-failures. `make check` compiles.
-
-## 2026-06-20 — PR2: File browsing/editing + git-lite versioned processed markdown
-
-Implemented `plans/file-versioned-editing.md`. Added a `file_markdown_versions`
-append-only version chain (v7→v8 migration) so ingested files have editable processed
-markdown while source bytes stay immutable. The version store (`FileMarkdownVersion`
-model, 5 `WikiStore` methods, lazy seeding for native md/txt) is testable against a
-temp DB with table-absent fallbacks for pre-v8 read connections.
-
-Reworked `IngestedFileDetailView` to render markdown (MarkdownPreview) and PDFs
-(PDFKit NSViewRepresentable) inline, with a tabbed Markdown⇄PDF view when extraction
-output exists. Inline Save/Cancel buttons in the view (not toolbar) for all three
-editor surfaces: ingested files, pages, and system prompt. Removed the toolbar Edit
-buttons from `PageDetailView` and `SystemPromptDetailView` in favor of inline ones.
-`PageReaderView` now shows the last-updated date and a Copy Path button (only when
-the File Provider mount is available).
-
-Moved all sidebar toolbar buttons (ingest, Zotero, New Page, Reindex Search) to the
-main toolbar. Removed `OperationsView`; Query and Lint are now sidebar items (added
-`.lint` to `WikiSelection` with a new `LintView`). Moved the System section below
-Files. The empty-state view now shows Add-from-URL/Import/Zotero buttons
-horizontally.
-
-`AgentOperationRunner` now persists `PdfExtractionService` output as v1 (double-seed
-guard); standalone "Extract Markdown" action in the detail view.
-
-15 new `ProcessedMarkdownTests` (migration, version chain, revert, cascade, source
-immutability, seeding, fallback). Full `swift test` — 567 tests, 48 suites, 0
-failures.
-
-## 2026-06-20 — `wikictl file` command family
-
-Implemented `plans/wikictl-file-reads.md`. Added `wikictl file list|cat|export` so the
-agent reads raw ingested files from SQLite instead of the File Provider mount during
-Query. `cat` writes raw bytes via `FileHandle` (binary-safe); `--json` list output is
-byte-identical to `indexes/files.jsonl`. Name resolution rejects ambiguity by listing
-the matching ids. The Query and QueryConversation prompts now route raw-file reads
-through `wikictl file` instead of `$WIKI_ROOT/files/...`.
-
-19 new parser + execution tests in `WikiCtlCommandTests`; updated
-`OperationCommandTests` prompt assertions. Full `swift test` — 552 tests, 0 failures.
-
-## 2026-06-19 — Tab system rebuild: ID-based active tab + right-click context menu
-
-Rebuilt the multi-tab system from scratch (plan:
-`plans/tab-context-menu-rebuild.md`) to fix architectural defects in the merged
-version and add the right-click context menu it lacked.
-
-**What was broken in the merged system:**
-- `activeTabIndex: Int` as the source of truth forced fragile index arithmetic
-  (`min(index, count-1)`, `index < activeTabIndex ? -= 1`) in every close path —
-  the root of the off-by-one / "wrong tab activates" bugs.
-- `isSwitchingTab` re-entrancy guard was duplicated around every programmatic
-  `selection = …` / `loadDrafts` pair (easy to miss one site).
-- The uncommitted context menu used an `NSViewRepresentable` overlay setting
-  `NSView.menu`, which fought SwiftUI's responder/gesture system (the "severe
-  bugs"). Close button used insert-on-hover, reflowing tab width on hover.
-
-**The rebuild (`WikiStoreModel`):**
-- **`activeTabID: UUID?`** is now the single source of truth; `activeTabIndex` /
-  `activeTab` are computed view-layer conveniences (never stored, can't go stale).
-- **`setActiveTab(_:)`** is the one seam every switch routes through: flush →
-  set `activeTabID` → mirror `selection` → `loadDrafts`, under a single
-  `isApplyingTabSelection` guard (replaces the scattered `isSwitchingTab`).
-- One intent per method: `openTab` (focus existing tab for any selection, else
-  create new — see post-rebuild fix below),
-  `selectTab(id:)`, `closeTab(id:)`, `closeOtherTabs(id:)`, `closeTabsAfter(id:)`,
-  `closeAllTabs()`, `reopenLastClosedTab()`. `handleSelectionChange` /
-  `select` / `applyHistorySelection` share one `syncActiveTabMetadata(to:)`
-  helper for in-tab navigation.
-- `delete` / `deleteIngestedFile` close affected tabs by ID.
-
-**The rebuild (`WikiFS` views):**
-- `TabBarItemView` uses native SwiftUI **`.contextMenu`** (Close / Close Others
-  / Close Tabs After / Close All) — the `NSViewRepresentable` `TabContextMenu` is
-  gone. Close button is always-present with **opacity-fade** (`.opacity` +
-  `.allowsHitTesting`), not insert-on-hover (SWIFTUI-RULES §4.5). Tap handled via
-  `.onTapGesture` so the nested close `Button` and context menu coexist cleanly.
-- `TabBarView` iterates `store.tabs` by `id`, `isActive` = `tab.id ==
-  activeTabID`. `ContentView` Cmd+W / Cmd+1–9 use the ID-based API.
-
-**Post-rebuild fixes (same day, from live testing):**
-- **Duplicate tab on tab click.** Clicking a tab set `store.selection`, which the
-  sidebar's `.onChange(of: store.selection)` mirrored into `listSelection`, which
-  re-fired `selectionDidChange` → `openTab` → a phantom tab to the right. Fixed in
-  `SidebarView.selectionDidChange`: skip `openTab` when the clicked selection
-  already equals `store.activeTab?.selection` (it's a programmatic sync, not a
-  fresh click).
-- **Tabs never reused.** `openTab` only de-duped the singleton types; pages/files
-  always spawned a new tab (the plan's "Obsidian always-new" rule). Per operator
-  request, `openTab` now **focuses an existing tab for any selection** if one is
-  open, else creates a new one. `selectPage(byTitle:)` (`[[wiki-link]]` clicks)
-  now routes through `openTab` (records history first, then reuses/creates) so
-  clicking a link to an already-open page returns to its tab.
-- Logging: added a `tabs` category to `DebugLog` (subsystem
-  `com.selfdrivingwiki.debug`) used in `SidebarView`; `print("[tabs] …")` traces
-  in `WikiStoreModel.openTab`.
-- **Responsive tab strip.** Replaced the horizontal `ScrollView` (tabs ran past
-  the window edge) with a `GeometryReader`-driven layout: tabs share the
-  available width evenly, shrinking from 200pt toward 110pt as more open; past
-  that they spill into a `⌄` overflow menu (a full tab switcher listing every
-  open tab, active one checkmarked). The **active tab is always kept visible** —
-  pinned into the last visible slot if it would otherwise overflow. The
-  fit/overflow arithmetic is a pure `TabBarLayout.compute` in Core with 7 unit
-  tests (`TabBarLayoutTests`); `TabBarItemView` now takes a uniform `width` and
-  truncates its title within.
-
-Shared-draft model retained (per-tab drafts remain an explicit non-goal).
-**43 `EditorTabTests`** (was 31) cover the ID-based API plus the three new
-close-variants and edge cases (leftmost-active close, anchor-active
-`closeTabsAfter`, kept-non-active `closeOtherTabs`, recently-closed cap at 10),
-plus tab-reuse coverage (`openTabForExistingPageReusesTab`, and
-`WikiLinkNavigationTests` reuse/new-tab cases for `selectPage`).
-Full suite green (531 tests, incl. 7 `TabBarLayoutTests`); `make check` clean;
-signed bundle builds. Design
-skills (swiftui-pro / macos-design / typography-designer) were not installed in
-the build session — SWIFTUI-RULES applied inline.
-
-## 2026-06-19 — Multi-tab editor space (Obsidian-style)
-
-Added a multi-tab editor space: a horizontal tab bar above the detail pane lets
-users keep multiple pages, Query, Instructions, and Activity open simultaneously.
-Obsidian-style — clicking a page in the sidebar opens it in a new tab.
-
-- **EditorTab** (`WikiFSCore/EditorTab.swift`) — `Identifiable, Hashable, Sendable`
-  value type holding a `UUID` identity, a `WikiSelection`, and a display `title`.
-  Plus `WikiStoreModel` helpers `tabTitle(for:)` and `tabIcon(for:)` that derive
-  labels/icons from the live summaries/ingestedFiles arrays.
-- **Tab management** on `WikiStoreModel`:
-  - `tabs: [EditorTab]`, `activeTabIndex: Int`, `recentlyClosedTabs: [EditorTab]`
-  - `openTab(_:title:)` — create or focus a tab. Singleton types (`.query`,
-    `.systemPrompt`, `.changeLog`) reuse existing; pages/files always create new
-    (Obsidian-style).
-  - `selectTab(at:)` — switch tabs, flushing outgoing drafts
-  - `closeTab(at:)` — close tab, push to recently-closed stack, activate neighbor
-  - `reopenLastClosedTab()` — Cmd+Shift+T support
-  - `newPageInNewTab(title:)` — create page + open in new tab
-  - `handleSelectionChange`, `delete`, `deleteIngestedFile`, `rename`, `newPage`,
-    `select`, `selectPage`, `applyHistorySelection` all updated for tab awareness
-- **TabBarView** (`WikiFS/TabBarView.swift`) — horizontal `ScrollView` tab strip
-  with `.regularMaterial` background, 34pt height
-- **TabBarItemView** (`WikiFS/TabBarItemView.swift`) — icon + truncated title +
-  hover-revealed close button; active tab: accent underline + control background;
-  inactive: subtle hover highlight. Semantic typography (`.caption`, `.semibold`).
-- **ContentView** — tab bar integrated above detail content; hidden keyboard
-  shortcut buttons (Cmd+W close, Cmd+Shift+T reopen, Cmd+1–9 switch, Cmd+N new
-  page); New Tab toolbar menu (New Page / Query / Instructions / Activity)
-- **SidebarView** — single-click calls `store.openTab(_:)` (Obsidian-style)
-
-**Tests** — `EditorTabTests` (31 tests): initial state, tab creation, open/close/
-switch/reopen, singleton reuse, delete-page-closes-tab, rename-updates-title,
-ingested-file-tab-close, history-preserves-tab-metadata, tabTitle/tabIcon helpers.
-
-**Verified.** `make check` clean; `swift test` **510/510** green (31 new, 0
-regressions); `make` produces a clean signed bundle.
-
-**Post-merge fix:** Opening a file (switching tabs) was bumping `updated_at` on the
-outgoing page because `flushPendingSaves()` called `save()` unconditionally, and
-`PageUpsert.upsert` always writes. Added `isDraftDirty` / `isSystemPromptDirty`
-flags — set by `didSet` on `draftTitle`/`draftBody`/`draftSystemPrompt` (and by
-`bodyChanged`/`titleChanged`/`systemPromptChanged`), cleared by `loadDrafts` and
-after a successful save. `flushPendingSave()` and `flushPendingSystemPromptSave()`
-now skip the save when the draft is clean, so viewing a page without editing no
-longer touches its timestamp.
-
-## 2026-06-19 — File filter + native multi-select + batch ingest in single agent run
-
-Added a filter picker and native multi-select to the Files section, and generalized
-the ingest pipeline so multiple selected files are staged and processed in a single
-agent run.
-
-- **Filter picker** (All / Ready / Ingested) in the Files header
-- **Native List multi-select** — Shift+Arrow, Shift+Click, Command+Click select
-  multiple files; selected files highlight and show "Ingest Selected" button
-- **Multi-source ingest** — selected files staged together as `source-1.md`,
-  `source-2.pdf`, … in ONE agent run so the agent cross-references holistically
-- **ProgressView spinner** on file rows while being ingested
-- **`ingestingFileID` → `ingestingFileIDs: Set<PageID>`** to track multiple files
-- **Right-click → "Ingest Selected"** on a selected file in the context menu
-
-**Changed — Core pipeline (WikiFSCore)**
-- `WikiOperation.ingest` generalized from one source to N: `sourcePath`→`sourcePaths`,
-  `stagedSourcePath`→`stagedSourcePaths`. Prompt builders list all sources and
-  instruct the agent to cross-reference and log each source ID.
-- `AgentStaging` gained `stageSources(_:in:)` (stages `source-1.<ext>`, …) and
-  `sourceFileName(ext:index:)`. `IngestWriteRule.dontRediscover` takes `[String]`.
-- `AgentOperationRunner.runMultiIngest(fileIDs:)` reads all files, converts PDFs,
-  builds `[StagedSource]`, stages together, launches one agent run.
-
-**Changed — App (WikiFS)**
-- `OperationRequest.ingest` takes `sources: [StagedSource]` (bytes, ext, displayPath).
-- `SidebarView`: `listSelection: Set<WikiSelection>` bridges native multi-select to
-  single-item detail navigation. "Ingest Selected" appears when file IDs are selected.
-- `IngestedFileRow`: simplified — no custom checkboxes; shows spinner when ingesting;
-  context menu has "Ingest Selected" on selected files.
-- Removed all custom checkbox / batch-mode toggle code.
-
-**Tests**
-- Updated `OperationCommandTests`, `ClaudePromptHelpTests` for new signatures.
-- `AgentStagingTests`: `sourceFileNameWithIndex`, `stagesMultipleSourcesIntoScratch`,
-  `stagesEmptySourcesListReturnsEmpty`.
-
-**Verified.** `make check` clean; `swift test` **479/479** green; `make` produces a
-clean signed bundle. PR #16.
-
-See `plans/markdown-folder-import.md`.
-
-## 2026-06-19 — Import Markdown Folder (Obsidian, LogSeq, general .md directories)
-
-Added a one-shot "Import Markdown Folder…" action that recursively walks a directory
-of Markdown files and lands them in `ingested_files` for the agent to curate via
-Ingest. Works with Obsidian vaults, LogSeq graphs, and any folder of `.md` files.
-Hidden files/directories are skipped; duplicate filenames get a disambiguating suffix.
-
-**Added — Core (WikiFSCore)**
-- `MarkdownFolderReader` — pure, testable recursive walk with injectable `FileOperations`
-  protocol (production: `FileManagerFileOperations`). Filters `.md` / `.markdown`,
-  skips hidden entries, deduplicates filenames, collects per-file read errors.
-  `WalkResult`, `MarkdownFile`, `WalkError` (conforms to `LocalizedError`).
-
-**Added — Model (WikiStoreModel)**
-- `importFromMarkdownFolder(directory:) async -> (imported: Int, errors: [String])`
-  — walks off the main actor via `Task.detached`, stores each file via the shared
-  `store.ingestFile(filename:data:)` seam, returns import count + error messages.
-
-**Added — UI (WikiFS)**
-- `ImportMarkdownSheet` — follows `AddFromURLSheet`'s phase-enum pattern: idle →
-  scanning → ready(count) → importing → done(imported, errors) → failed. Directory
-  picker via `WikiFilePanels.chooseDirectory`. Progress + results summary.
-- Toolbar + Files section header buttons ("Import Markdown Folder…") in `SidebarView`,
-  always shown (no configuration gate). Sheet binding alongside existing URL/Zotero
-  sheets.
-
-**Tests**
-- `MarkdownFolderReaderTests` — 14 unit tests with `FakeFileOperations` test double
-  (recursive walk, .md/.markdown filter, non-markdown exclusion, hidden file/dir
-  skip, filename dedup, read error collection, empty/no-markdown directory,
-  byte-identical content, Equatable conformance).
-- `WikiStoreModelMarkdownImportTests` — 12 integration tests with real SQLiteStore +
-  temp directory fixtures (all files land in ingested_files, filenames match,
-  content byte-identical, non-markdown ignored, signal fires, empty dir handled,
-  dedup works, YAML/wikilinks/callouts preserved, hidden dirs skipped, idempotent
-  second import, .markdown extension handled).
-
-**Skill pass.** Before and after code: `swiftui-pro` kept the sheet as a thin leaf
-surface with a phase-enum state machine; `macos-design` placed the action in the
-toolbar and Files section header alongside the existing URL/Zotero buttons;
-`typography-designer` used semantic system fonts (`.headline`, `.subheadline`,
-`.callout`, `.caption`).
-
-**Verified.** `make check` clean; `swift test` passes (**476/476** — 26 new tests,
-no regressions). Full build (debug) produces a clean signed bundle.
-
-See `plans/markdown-folder-import.md`.
-
-## 2026-06-19 — Parameterized signing for any Apple Developer account
-
-Signing was hardcoded to one developer's team. Bundle ids and App Groups are
-globally unique across App Store Connect, so nobody who clones can reuse them —
-signing is now parameterized, with per-developer values kept out of git. Full
-design + the asc/keychain runbook in `plans/signing.md` (§ Multi-developer
-signing).
-
-**Added**
-
-- `signing/local.config` (gitignored) + `signing/local.config.example` — single
-  source of truth for `TEAM_ID`/`DEV_IDENTITY`/`BUNDLE_ID`/`EXT_BUNDLE_ID`/
-  `APP_GROUP`. Absent → upstream defaults, so a fresh clone still builds +
-  ad-hoc signs unchanged.
-- `signing/setup.sh` — `asc`-driven provisioning (mint/discover cert, register
-  this Mac, create bundle ids + App Groups capability, create + download
-  profiles, write `local.config`). Pauses for the one portal step the API can't
-  do — creating + binding the App Group. Idempotent.
-- `Sources/WikiFSCore/WikiIdentifiers.swift` — resolves the ids at runtime
-  (env → `Bundle.main` Info.plist → `wiki-identifiers.env` sidecar → default),
-  so the app, the sandboxed extension, and the bundle-less `wikictl` all agree.
-
-**Changed**
-
-- `build.sh` sources `local.config`, generates both `.entitlements` into
-  `build/`, injects the ids into the Info.plists + the `wikictl` sidecar, and
-  signs with `SIGN_IDENTITY` → `DEV_IDENTITY` → ad-hoc. `Makefile` reads the
-  config via a `cfg` helper. `DatabaseLocation`/`FileProviderSetupVerifier`
-  delegate to `WikiIdentifiers`. Removed the committed `WikiFS/*.entitlements`
-  (now generated — they baked in one team).
-
-**Verified**
-
-- `swift test` → all 450 pass. End-to-end on a real paid account: `make run`
-  builds + signs with a dev cert, the File Provider extension loads, registers,
-  and its mount appears with projected pages. Requires full Xcode (not just the
-  Command Line Tools — the app's `swiftui-math` macros need Xcode.app).
-
-**Fixes found during bring-up**
-
-- The bundled `pdf2md` script wasn't signed in the real-signing path (only the
-  ad-hoc path was), so codesign rejected the unsigned file. Now signed.
-- The `wiki-identifiers.env` sidecar must live in `Contents/Resources/`, not the
-  code-only `Contents/Helpers/`.
-
-## 2026-06-18 — Semantic search via sqlite-vec + NLEmbedding
-
-Added meaning-based search over wiki pages. sqlite-vec ranks by cosine similarity
-inside SQLite; Apple NLEmbedding generates 512‑dim embeddings at save time. The
-sidebar has a search bar (debounced 300ms); `wikictl search --query "…"` gives
-the agent the same capability. Falls back to LIKE title match when the extension
-or model is unavailable — never a hard dependency. v7 migration. 16 files, 472+.
-
-See `plans/semantic-search.md`.
-
-## 2026-06-18 — Collapsible sidebar sections + page sort order
-
-All four sidebar sections (Tools, System, Pages, Files) are now collapsible via
-chevron toggles. The Pages section gains a sort Picker: Last Updated, Newest
-First, Title A–Z. `WikiPageSummary` now carries `createdAt`. `WikiStore.listPages()`
-accepts a `PageSortOrder` parameter; `WikiStoreModel` holds the user's preference
-and `currentStateSnapshot()` always passes `.lastUpdated` so the agent prompt is
-stable regardless of sidebar sort. 441 tests green. PR #12.
-
-## 2026-06-18 — PDF extraction pipeline: PdfExtractionService + pdf2md integration
-
-Add pdf2md to integrate docling/granite-docling VLM/spacy pipeline to convert PDF to markdown without going through Claude.  Refactor the ingestion UI to show PDF conversion and ingestion results.
-
-**Added — PdfExtractionService (WikiFS)**
-
-- `PdfExtractionService` — spawns `pdf2md` as a subprocess, matching the existing
-  `wikictl`/`claude` subprocess pattern. Converts PDF bytes → Markdown via a temp
-  file; streams stderr progress; returns the extracted markdown.
-- `PdfExtractionService.preDownload()` — two-phase pre-download (uv packages then
-  HuggingFace model weights), with streaming progress. `probeReady()` uses `uv run
-  --offline` for a fast cached-probe without triggering downloads.
-- `PdfExtractionService.OutputBuffer` — thread-safe byte accumulator for pipe
-  draining off the main actor. `ProcessRegistry` — tracks live subprocesses for
-  app-termination cleanup.
-- Continuous stdout/stderr pipe draining via `readabilityHandler` — pipes are
-  drained as data arrives, never allowed to fill the 64 KB kernel buffer. Spawns
-  `pdf2md` as a subprocess, matching the existing `wikictl`/`claude` pattern.
-
-**Fixed**
-
-- `run()` termination handler now drains the pipe tail (`readToEnd()`) after
-  nil'ing the readability handler, preventing data loss at the kernel buffer
-  boundary.
-- `streamProcess()` now buffers stderr via `OutputBuffer` so error messages
-  actually contain the failure output (was always empty — the handler had already
-  consumed the data by the time `readDataToEndOfFile()` ran).
-
-**Added — UI (WikiFS)**
-
-- `PdfExtractionView` — inline readiness probe + download progress + live
-  conversion log, shown above the agent activity feed during ingest.
-- `AgentTranscriptSidebar` — draggable horizontal grippy between PDF conversion
-  and agent activity sections, letting the user resize both.
-- `IngestSheetView` — button label shortened to "Ingest", centered.
-- `AgentOperationRunner.runIngest()` — runs PDF conversion BEFORE the agent
-  launch; passes extracted markdown as a staged sibling file so the agent
-  prefers it over the raw PDF.
-
-**Tests added**
-
-- `PdfExtractionServiceTests` — `OutputBufferTests` (5, incl. 500-write × 10-task
-  concurrent safety) + `PipeDrainingTests` (5, incl. 256 KB stdout drain proving
-  the subprocess doesn't block) + the existing ProcessRegistry / error-description
-  / resolveScript suites. **22 tests.**
-- `pdf2md` integration tests — `TestCLIStdout` (4, covering the stdout code path
-  `PdfExtractionService` exercises), `TestErrorOutput` (2), `TestCLIWithMinimalPdf`
-  (3) + a `minimal_pdf` fixture (538-byte hand-crafted valid PDF for fast,
-  hang-proof tests). **67 total (48 unit + 19 integration).**
-
-**Skill pass.** Before and after code: `swiftui-pro` kept service/process state in
-`@MainActor @Observable` types and the views as thin leaf surfaces; `macos-design`
-kept the transcript sidebar as a quiet inspector with native split-drag controls;
-`typography-designer` kept semantic system fonts (`.subheadline`, `.caption`,
-monospaced logs).
-
-**Verified.** `make check` clean; full `swift test` passes (**435/435**). Python
-tests pass but are not in CI (manual):
-`uv run pytest tests/test_pdf2md.py tests/test_integration.py -v` **(60/60 green)**;
-`uv run pytest tests/test_vlm.py -v` (VLM pipeline, run on demand — requires
-~2 GB model download + a real PDF fixture).
-
-**Carry-forward.** The `pdf2md` VLM pipeline (`--pipeline vlm`) is not tested in
-CI (requires model download). `--json -o` ignoring the `-o` flag is existing
-behaviour (documented in tests, not yet changed).
-
-## 2026-06-17 — Dedicated interactive Query page
-
-- Added a first-class Query destination in the sidebar, separate from individual
-  page readers, so asking questions is a wiki-level workspace.
-- Replaced the page-bottom one-shot query composer with `QueryConversationView`:
-  an output-first chat transcript, Start/Send composer, Stop, and Activity log
-  access.
-- Extended the Claude launcher with a stdin-backed stream-json session for Query
-  conversations. The first prompt starts the session; follow-ups are written to
-  stdin while the same process remains alive.
-- Added a specialized interactive Query prompt: answer in chat by default, follow
-  wiki pages/raw-source footnotes as needed, and write via `wikictl` only when the
-  user explicitly asks to persist an update. The prompt now also tells the agent
-  to do wiki/source inspection silently rather than narrating setup steps.
-- Suppressed the trailing transcript inspector while the Query page is selected,
-  because the page itself is already the transcript surface.
-- Transcript surfaces now default to output-only, with a default-off "Show
-  internals" checkbox that reveals tool calls, status, diagnostics, and raw agent
-  events for debugging.
-- Removed explicit Answer/Update mode controls from Query. The composer now sends
-  exactly what the user types; users can ask Claude to update the wiki in plain
-  language when they want persistence.
-- Removed the File Provider path chip from the Query header after the chat
-  surface stabilized; the mount is still used as a run precondition, but it no
-  longer competes with the conversation.
-- Tightened the Query typography pass: the empty state is centered and stronger,
-  the composer input uses body text, and the internals checkbox only appears once
-  there is a run/debug state.
-- Reworked Query around ChatGPT-style states: empty state is a centered greeting
-  with a floating pill composer; after the first turn, messages occupy the page
-  and the same composer docks at the bottom. User turns render as right-aligned
-  pills; Claude turns render as unboxed prose.
-- Centered the conversation in a shared chat column so user turns, Claude prose,
-  and the composer align with each other instead of spreading across the full
-  window. Collapsed Query debug controls into a small Activity menu; running
-  state now shows only a quiet spinner plus Stop.
-- Split the sidebar's top controls into Tools and System sections, leaving pages
-  and files as content lists rather than mixing them with app-level destinations.
-- Documented the design in `plans/query-conversation.md` and added command /
-  navigation regression coverage.
-
-**Skill pass.** Before code: `swiftui-pro` led to a singleton navigation
-destination and kept process/session state in the existing `@MainActor
-@Observable` launcher; `macos-design` kept Query as a quiet utility workspace
-with visible status and standard controls; `typography-designer` kept semantic
-system fonts (`.largeTitle`, `.callout`, `.caption`) rather than fixed sizes.
-After code: the new view is a focused leaf with distinct empty/conversation
-states, the prompt/command contract is pure and tested, page reading no longer
-carries unrelated query chrome, and the operations/sidebar transcript views
-share the same default-off internals control.
-
-**Verified.** `make check` passes and `swift test` passes (**351/351**).
-
-## 2026-06-16 — Agent transcript prose renders as Markdown
-
-- Added a reusable `AgentMarkdownText` leaf view that renders Claude-authored
-  transcript prose with Textual's `StructuredText(markdown:)`.
-- Updated the shared agent activity feed used by the transcript sidebar and the
-  Ingest/Query/Lint operation sheet so assistant prose and final results preserve
-  Markdown blocks such as headings, lists, links, and code fences.
-- Kept tool-use, tool-result, diagnostics, and raw-event rows in compact
-  monospaced/log styling so the operation log remains scannable.
-
-**Skill pass.** Before code: `swiftui-pro` pointed to a small extracted leaf view
-instead of expanding the activity row, `macos-design` kept the transcript as a
-quiet inspector/log surface, and `typography-designer` favored Textual/system
-Markdown typography over hard-coded sizes. After code: the change is localized to
-Claude prose/result rows and reuses the same Markdown renderer dependency already
-accepted for the page reader.
-
-**Verified.** `make check` passes and `swift test` passes (**348/348**).
+Share button on every page/source surface (detail toolbar + sidebar context
+menu). Batch share resolves all selected item URLs in parallel.
+
+## 2026-06-28 — Page body contract
+
+`body_markdown` stores clean body only (no H1, no frontmatter). The file
+provider generates both on the fly, so the H1 always matches the page title.
+
+## 2026-06-28 — Dirty-editor protection
+
+Outline toggle in edit mode, per-tab edit-mode persistence, and close-tab
+confirmation so ⌘W while editing cannot silently discard edits.
+
+## 2026-06-28 — Reveal in Finder
+
+Reveal in Finder for pages and sources.
+
+## 2026-06-27 — Outline pane
+
+Document outline in the reader, with heading-based navigation.
+
+## 2026-06-27 — Hover tooltips for wiki links
+
+Wiki links in the reader show human-readable title tooltips on hover.
+
+## 2026-06-26 — Mermaid diagram support
+
+`mermaid` fenced blocks render as inline SVG in the reader (no network).
+Vendored Mermaid 10.9.6 UMD build. Save-time validation (`merval`).
+
+## 2026-06-26 — Markdown linter
+
+Cosmetic auto-fix on save (whitespace, blank-line spacing, trailing newline).
+Runs in JavaScriptCore — no Node at runtime. Wikilink fixer corrects
+LLM-hallucinated `[[link\]]` bracket escapes.
+
+## 2026-06-25 — WKWebView reader everywhere
+
+Replaced the vendored Textual reader with WKWebView across every reader
+surface (pages, sources, system prompt, changelog, agent transcript).
+Ghost-link coloring, ⌘+zoom, and `wiki://` routing. Mermaid support.
+
+## 2026-06-25 — Agent activity sidebar
+
+Full-height activity panel with turn-aware spinner/banner and inline stop
+control.
+
+## 2026-06-25 — Separate query and ingest agents
+
+Read-only Ask (always sandboxed) vs. write-capable Edit. Two independent
+persistent sessions, both open at once, no mode-switch restart.
+
+## 2026-06-20 — wikictl file commands
+
+`wikictl file list` / `cat` / `export` — read raw ingested files from SQLite
+instead of the File Provider mount.
+
+## 2026-06-20 — Source versioning
+
+Git-lite versioned processed markdown for sources. Extraction history visible
+with compare/nominate UI.
+
+## 2026-06-20 — Zotero source links
+
+Zotero item key + title stamped on ingested files. "View in Zotero" link in
+source detail.
+
+## 2026-06-19 — Multi-tab editor
+
+Obsidian-style multi-tab editor with ID-based active tab, right-click context
+menu (Close / Close Others / Close Tabs After / Close All), opacity-fade close
+button, responsive shrink-to-fit strip with overflow menu.
+
+## 2026-06-19 — Import Markdown Folder
+
+Import an entire folder of Markdown files (Obsidian vault, LogSeq graph, or
+any `.md` directory) as source material. Recursive walk, `.md` filter,
+filename dedup.
+
+## 2026-06-19 — Batch multi-select ingest
+
+Select multiple files and ingest them in a single agent run. Native
+multi-select in the sources list.
+
+## 2026-06-19 — Parameterized signing
+
+Sign the app for any Apple Developer account via `signing/local.config`.
+
+## 2026-06-18 — PDF extraction pipeline
+
+`pdf2md` converts PDFs to markdown at ingest time (docling/granite-docling
+VLM pipeline). Extracted markdown stored as a sibling source; agent prefers
+`.md` siblings, falls back to `Read` on the original PDF.
+
+## 2026-06-18 — Collapsible sidebar sections
+
+All sidebar sections collapsible via chevron toggles. Pages section gains
+sort order: Last Updated, Newest First, Title A–Z.
+
+## 2026-06-18 — Semantic search
+
+Meaning-based search over wiki pages using sqlite-vec + Apple NLEmbedding.
+Sidebar search bar; `wikictl search` for the agent. (Superseded by hybrid
+search, 2026-06-28.)
 
 ## 2026-06-17 — Zotero integration
 
-Branch `zotero-integration` (PR #9). See `plans/zotero-integration.md` for the
-full design (why, research findings, decisions, architecture). Delivered as a
-single branch — both the core library and the settings/picker UI, rather than
-two separate PRs.
+Browse a Zotero library from inside the app, ingest PDF/Markdown attachments
+through the existing ingest pipeline.
 
-**Added — Core (`WikiFSCore`, pure/testable, no UI)**
+## 2026-06-17 — Interactive query page
 
-- `ZoteroClient` — talks to `api.zotero.org` for search/browse; mirrors
-  `URLIngestService`'s testable-fetcher + pure-dispatch shape (`RequestFetcher`
-  protocol, `decodeItems`/`decodeAttachments`/`buildSearchRequest`/
-  `buildChildrenRequest` statics). `searchItems`, `childAttachments`,
-  `verifyConnection`. Production fetcher `URLSessionZoteroFetcher`.
-- `ZoteroLocalStorage` — resolves an attachment to
-  `~/Zotero/storage/<key>/<filename>` (pure path composition + injectable
-  existence check, mirrors `PathPreflight`). Confirmed via direct research
-  against Zotero's own open-source sync client that this path is safe to read
-  directly (single atomic `OS.File.move` commits a download — never a torn
-  file for the plain PDF/Markdown case this feature targets).
-- `ZoteroConfig` — non-secret app-wide config (library ID, Zotero-dir
-  override), JSON load/save following `WikiRegistry`'s pattern
-  (`zotero-config.json`, sibling to `wikis.json`).
-- `ZoteroCredentialStore` — the API key (a secret) behind a protocol:
-  `KeychainZoteroCredentialStore` (generic-password Keychain item, no
-  entitlement needed — the app has no App Sandbox) and
-  `InMemoryZoteroCredentialStore` for tests.
-- `WikiStoreModel.ingestFromZotero(_:zoteroDir:)` — resolves the attachment,
-  reads bytes off the main actor, and lands them through the EXISTING public
-  `ingestFile(filename:data:)` seam (the same one drag-ingest uses) — no new
-  storage path, no schema change. Throws `ZoteroIngestError.unavailable` for
-  an attachment not yet synced locally (no network-download fallback in v1).
+Dedicated sidebar page for interactive Claude conversations.
 
-**Added — Settings + picker UI (`WikiFS`)**
+## 2026-06-16 — URL ingest
 
-- `ZoteroSettingsView` — the app's first Settings scene (`⌘,`): API key
-  (`SecureField`, Keychain-backed), library ID, an optional Zotero data
-  directory override (`NSOpenPanel`), and a "Test Connection" button that
-  surfaces failures via `.alert`, matching `WikiFSApp`'s existing warning
-  pattern. Save is an explicit action (not implicit on-blur/on-submit) so a
-  window-closed-via-red-button edit is never silently dropped.
-- `AddFromZoteroSheet` — mirrors `AddFromURLSheet`'s `Phase`/`Metrics` shape:
-  debounced live search → item list → checkbox multi-select of an item's PDF
-  and/or `.md` attachments → "Add Selected" calls `ingestFromZotero` per
-  selection, collect-and-continue on per-item failure. Two-level: search
-  results, then drill-down into the selected item's attachments.
-- `SidebarView` — "Add from Zotero…" button (toolbar + Files section header)
-  next to "Add from URL…", shown only when `ZoteroConfig` has a library ID and
-  the Keychain has an API key. Both buttons kept as always-mounted views
-  (§SWIFTUI-RULES 1.1).
-- `WikiFSApp` — Settings scene wired in, container directory plumbed through.
-- `WikiFilePanels` — `chooseDirectory` helper for the Zotero-dir override.
-- Extracted `ZoteroAttachment.isIngestable` (`.pdf`/`.md` extension check,
-  case-insensitive) and `ZoteroItem.subtitle` ("Ito, K. · 2016") as pure
-  value-type properties in `WikiFSCore` so the picker UI stays thin.
+Ingest a resource by URL. Share-link normalization + content sniffing so the
+right MIME type is always used.
 
-**Tests**
+## 2026-06-16 — Wiki management
 
-- 5 test files (35 tests): `ZoteroClientTests`, `ZoteroLocalStorageTests`,
-  `ZoteroConfigTests`, `ZoteroCredentialStoreTests`,
-  `WikiStoreModelZoteroIngestTests` — all fakeable, no real network or Keychain
-  access in CI.
-- +24 additional tests after gap analysis: `isIngestable` extension filtering
-  (5), `subtitle` formatting (5), decode/status boundary edge cases (7), config
-  empty-override + nil round-trip (2), multi-ingest + `ZoteroIngestError`
-  conformance (3). Total: **410 green** (59 Zotero-specific across 5 files).
-- `KeychainZoteroCredentialStore` is NOT covered by automated tests (would
-  pollute the test runner's Keychain) — gets a manual smoke test instead.
-  Same for the live-API path (real search/ingest against the user's library).
+Create, rename, backup/restore wikis. Multiple wikis, each with its own
+SQLite database and File Provider domain.
 
-**Verified**
+## 2026-06-16 — Agent operations
 
-- `make check` compiles clean; `make` produces a clean signed (ad-hoc) bundle.
-- `swift test`: 410 tests green, no regressions.
-- Rebased onto `main` (2026-06-17) — resolved a single conflict in
-  `PROGRESS.md`.
+Ingest (drag-to-ingest files or URLs), Query (interactive chat), and Lint
+(markdown auto-fix + wikilink validation). Footnote-based source citations in
+agent prompts.
 
-**Decisions** (confirmed with the user before implementation)
+## 2026-06-16 — Reader-first page detail
 
-- No network-download fallback in v1 — unsynced attachments error clearly
-  instead.
-- Zotero credentials are app-wide, not per-wiki.
-- Search is live/debounced against the API, no session cache.
-- Multi-select ingest: check a PDF + its converted `.md` and ingest both in
-  one action.
-
-**Gate**
-
-- A live-account manual smoke test against the user's real Zotero library:
-  search, ingest both a PDF and its converted `.md`, confirm byte-identical,
-  exercise "Test Connection" with a deliberately wrong key.
-
-## 2026-06-16 — Wiki rename plus SQLite backup/restore
-
-- Added wiki-level management actions to the switcher menu: rename the active
-  wiki, export it as a `.sqlite` backup, and import a `.sqlite` backup as a new
-  wiki with a new display name.
-- `WikiManager.exportWiki(id:to:)` flushes pending active edits, checkpoints the
-  WAL into the main DB, copies a single portable SQLite file, and refuses to
-  overwrite the source backing database.
-- `WikiManager.importWiki(from:displayName:)` copies the selected SQLite file to
-  a fresh ULID-backed DB, opens it once to validate/migrate the schema, adds it
-  to the registry, registers its File Provider domain, and selects it.
-- Rename remains identity-stable (`<ulid>.sqlite` unchanged) and now refreshes
-  the File Provider domain display name so Finder can pick up the new label.
-- Added native macOS open/save panels for choosing backup files, plus an import
-  naming sheet that uses the existing compact `.headline`/body hierarchy.
-
-**Skill pass.** Before code: `swiftui-pro` kept stateful backup/restore logic in
-the existing `@MainActor @Observable` manager and left the switcher as a thin UI
-surface; `macos-design` put the actions in the wiki/account menu and used system
-file panels; `typography-designer` kept semantic system type rather than adding a
-new scale. After code: import/export are covered by manager tests, the UI uses
-native controls and SF Symbols, and rename/delete/import remain progressive
-wiki-level actions rather than page chrome.
-
-**Verified.** Full `swift test` passes (**341/341**) and `make check` passes.
-
-## 2026-06-16 — Agent runs show quiet-live status and can be stopped inline
-
-- Diagnosed a Query run that appeared hung: the spawned `claude -p` process was
-  still alive, but `run.jsonl` had not changed since the last tool result, so the
-  transcript only showed a spinner with no heartbeat.
-- `AgentLauncher` now records run start time, last stdout/stderr activity, and
-  the child process ID for the current run.
-- The operation transcript and inline transcript sidebar now show a live status
-  line such as "Running · last output 12s ago · elapsed 1m 4s · pid 12345"; after
-  60 seconds without output it explicitly says the process is still running but
-  quiet.
-- Added a Stop button to the inline transcript header, matching the modal sheet's
-  existing stop control, so a wedged inline query can be terminated without
-  leaving the page.
-- Fixed a follow-on beachball when collapsing the transcript sidebar. The sidebar
-  had been kept alive at width 0, leaving selectable transcript text and live
-  timeline/status views in a zero-width layout loop. Collapsing now removes the
-  transcript subtree entirely; visible sidebars use a stable fixed width.
-
-**Verified.** `make check` passes, `swift test` passes (**337/337**), and
-`make install` installs the fixed app into `/Applications`.
-
-## 2026-06-16 — Reader renders full Markdown blocks with Textual
-
-- Replaced the reader's inline-only Markdown preview with
-  `gonzalezreal/textual`'s `StructuredText(markdown:)`, so page bodies render
-  headings, paragraphs, lists, dividers, code blocks, and links as actual
-  Markdown blocks.
-- Kept the app's wiki-specific preprocessing: `[[wiki-links]]` are still
-  rewritten to private `wiki://` links before rendering, footnote references
-  remain generated local note links, and extracted footnotes are appended as an
-  ordered Markdown notes section.
-- Bumped the package platform to macOS 15 because Textual 0.5.0 requires it.
-
-**Skill pass.** Before and after code: `swiftui-pro` kept the renderer isolated
-in the existing leaf preview view and left parsing/link transforms in pure core
-helpers; `macos-design` and `typography-designer` favored Textual's native
-SwiftUI/system text rendering and document spacing rather than custom fixed type.
-
-**Verified.** `make check` passes and `swift test` passes (**337/337**).
-
-## 2026-06-16 — File Provider install path is enforced
-
-- Diagnosed the unavailable mount: `pluginkit` had multiple enabled
-  `org.sockpuppet.WikiFS.FileProvider` records from old `WikiFS.app`, temp
-  bundles, and the build product, and `fileproviderctl dump` showed the daemon
-  binding domains to stale/unreachable app-extension records instead of the
-  current installed app.
-- Changed `make run` to go through `make install`, so local launches use
-  `/Applications/Self Driving Wiki.app` rather than the `build/` copy.
-- `make install` now prunes stale provider registrations for old dev paths,
-  copies the app into `/Applications`, registers it with LaunchServices, and
-  explicitly registers/enables the nested File Provider with `pluginkit`; it
-  fails if `pluginkit` does not report the provider at the installed path.
-- Added a launch-location warning in the app: if the bundle is not running from
-  `/Applications/Self Driving Wiki.app`, it alerts that File Provider mounts may
-  be unavailable and offers to open the installed copy or reveal the current one.
-- Added a startup File Provider setup verifier. It checks `pluginkit` for
-  `org.sockpuppet.WikiFS.FileProvider`, attempts to register/enable the installed
-  `.appex` if the path is wrong or missing, and alerts if the provider still is
-  not registered to `/Applications/Self Driving Wiki.app`.
-
-## 2026-06-16 — Ingest sheet no longer waits on a broken File Provider mount
-
-- The Maintain Wiki sheet now auto-selects the newest ingested source when the
-  Ingest tab opens, so the magic-wand path does not strand the user on
-  "Choose a file..." with a disabled Run button.
-- The file-detail "Ingest into Wiki" action opens the same sheet with that file
-  preselected, keeping the operation visible and making the selected source
-  explicit before launch.
-- `AgentOperationRunner` no longer signals the File Provider before an Ingest
-  run. Ingest stages source bytes and `WIKI_STATE.md` from SQLite and writes via
-  `wikictl`, so a daemon/provider registration failure must not delay or block
-  the agent start. Query and Lint still signal/use the mount.
-- Verified with `make check`, `swift test`, and a signed `make` build.
-
-## 2026-06-16 — Mount resolution no longer hangs the agent run UI
-
-Fixed a fresh-wiki failure where Ingest/Query/Lint could become nonresponsive in
-the Maintain Wiki sheet: `NSFileProviderManager.getUserVisibleURL` could hang
-forever while resolving a newly-created File Provider domain, leaving the UI stuck
-at "Resolving mount..." and the Run button disabled.
-
-**Changed**
-- Added bounded mount URL resolution in `FileProviderSpike`; if File Provider
-  does not return a root URL within 5 seconds, the app retries domain
-  registration/enumeration once and then surfaces a real status instead of
-  looking permanently busy.
-- Allowed Ingest to run without a resolved mount because the app already stages
-  the source bytes and `WIKI_STATE.md` directly from SQLite; Query/Lint still
-  require the mount because they may need raw-file reads.
-- Bounded File Provider enumerator signals so pre-run refresh cannot hang before
-  launch.
-- Added explicit `isResolvingPath` state so `OperationsView` can distinguish
-  active progress from a failed/unavailable mount and show the underlying status.
-- Reused the bounded resolver when opening ingested files so file opens also fail
-  visibly instead of waiting indefinitely on File Provider.
-
-**Skill pass.** Before and after code: `swiftui-pro` kept shared state in the
-existing `@MainActor @Observable` model, kept File Provider access main-actor
-isolated, and left the view as a small status presentation change.
-
-**Verified.** `make check` passes and `swift test` passes (**333/333**).
-
-## 2026-06-16 — Query can follow footnotes to raw files
-
-Updated Query orientation so an agent answering from the wiki can use the new
-source-location footnotes instead of stopping at the synthesized wiki page.
-
-**Changed**
-- Added a root-level `WIKI-STRUCTURE.md` projection that serves the same layout
-  map as the legacy `TREE.md` alias, and updated the renderer/schema/README to
-  name `WIKI-STRUCTURE.md` first.
-- Expanded the Query prompt to name `WIKI-STRUCTURE.md`, pull fresh page content
-  with `wikictl page get`, inspect Markdown footnote definitions, resolve cited
-  source files through `files/by-name`, `files/by-id`, or `indexes/files.jsonl`,
-  and read raw sources from the mount with `Read` or shell tools such as
-  `pdftotext`.
-- Added regression assertions for the Query prompt's footnote-following workflow
-  and the new layout-map name.
-
-**Skill pass.** Before and after code: `swiftui-pro` kept this in pure prompt /
-projection code with focused tests; no SwiftUI layout or typography changes were
-needed.
-
-**Verified.** `make check` passes and `swift test` passes (**333/333**).
-
-## 2026-06-16 — Ingest prompts ask for source-location footnotes
-
-Updated the Opus Ingest prompts so wiki pages written during Ingest should
-footnote synthesized conclusions, interpretations, and non-obvious facts using
-Markdown footnotes. The requested provenance is intentionally lightweight: source
-file name plus page number, section, heading, line range, or chunk range; no real
-links required.
-
-**Changed**
-- Added a shared "FOOTNOTE CONCLUSIONS" prompt fragment used by both tiny
-  single-Opus Ingest and large Opus-curator Ingest.
-- Kept the instruction out of Query/Lint prompts and out of the Sonnet
-  `source-reader` digester prompt, because only Opus writes pages during Ingest.
-- Added regression assertions in `OperationCommandTests` for the ingest-only
-  footnote rule and digester exclusion.
-
-**Skill pass.** Before and after code: `swiftui-pro` kept the prompt logic pure,
-shared, and unit-tested; no SwiftUI layout or typography changes were needed.
-
-**Verified.** `make check` passes and `swift test` passes (**332/332**).
-
-## 2026-06-16 — Wiki footnotes render in the reader
-
-Verified the prior renderer could not render Markdown-style wiki footnotes:
-Foundation's `AttributedString(markdown:)` left `[^id]` references and
-`[^id]: ...` definitions as literal text.
-
-**Changed**
-- Added a pure `WikiFootnoteMarkdown` transform in `WikiFSCore` that extracts
-  `[^id]: ...` definitions, numbers referenced notes by first use, rewrites
-  in-body references to local note links, and leaves unknown references literal.
-- Updated `MarkdownPreview` to run the footnote pass before block rendering and
-  show extracted definitions as a secondary `.footnote` notes section below the
-  article body. Wiki source in SQLite / the File Provider projection remains
-  unchanged.
-- Added regression coverage for numbering, repeated references, continuation
-  lines, unknown references, and code-span/fence protection.
-
-**Skill pass.** Before code: `swiftui-pro` pointed toward keeping parsing out of
-SwiftUI and covering it with unit tests; `macos-design` and
-`typography-designer` kept the reader as the content focus with semantic system
-type. Post-code review kept the view small, used `.body` / `.footnote` rather
-than custom sizes, and handled generated note links locally.
-
-**Verified.** `make check` passes and `swift test` passes (**330/330**).
-
-## 2026-06-16 — Prompt help made navigable
-
-Changed the Claude Prompt Templates Help window from one long scroll into a
-sidebar/detail view listing each prompt artifact directly: Command, Ingest
-variants, Query, Lint, Agents, and appended System Prompt. The window now defaults
-to **Query -p Prompt**, so Query is visible immediately instead of buried below
-the long ingest prompt. The detail body still renders from `ClaudePromptHelp`,
-which renders from the production prompt builders.
-
-**Verified.** `make check` passes and `swift test` passes (**325/325**).
-
-## 2026-06-16 — Fan-out prompt names Sonnet for raw ingestion
-
-Tightened the large-source Ingest curator prompt so it explicitly tells Opus to
-use **Sonnet `source-reader` workers, not Opus**, for raw source ingestion. Opus
-still curates/synthesizes and writes pages/index/log; Sonnet handles the bulk
-read/digest work. Added a regression assertion in `OperationCommandTests`, and
-the Help-menu prompt reference picks this up automatically from the production
-`WikiOperation` builder.
-
-**Verified.** `make check` passes and `swift test` passes (**325/325**).
-
-## 2026-06-16 — Claude prompt templates added to Help
-
-Added a secondary Help-menu reference for the actual `claude -p` command surface:
-the argv/env/cwd template, each operation's `-p` prompt, the large-ingest
-`--agents` JSON, and a pointer to the active wiki's editable System Prompt body.
-
-**Changed**
-- Added `ClaudePromptHelp` in `WikiFSCore`, rendering Help documents from the
-  production `OperationCommand`, `WikiOperation`, and `IngestPlan` builders using
-  placeholder paths/inputs so the reference tracks the real launch payload.
-- Added a **Help → Claude Prompt Templates** window with selectable monospaced
-  prompt blocks. The window is secondary UI, separate from the main wiki/editor
-  flow.
-- Added `ClaudePromptHelpTests` to assert the Help reference includes command,
-  operation, subagent, and system-prompt sections and that the operation prompt
-  bodies come from the production builders.
-
-**Skill pass.** Before and after code: `swiftui-pro` kept the renderer pure and
-the SwiftUI views split into leaf types; `macos-design` placed the reference in
-the Help menu rather than primary navigation; `typography-designer` kept semantic
-system styles for prose and monospaced body text only for literal prompt/code
-content.
-
-**Verified.** `make check` passes and `swift test` passes (**325/325**).
-
-## 2026-06-16 — Change Log surfaced in the sidebar
-
-Surfaced the append-only operation log in the app UI, next to the other pinned
-wiki-level documents.
-
-**Changed**
-- Added a pinned **Change Log** row beside **System Prompt** in the sidebar.
-- Added `WikiSelection.changeLog` and a read-only `ChangeLogDetailView` that renders
-  the same markdown body as projected `log.md`, including query answers and agent
-  notes.
-- Added `WikiStoreModel.currentLogMarkdown()` as the app-side seam over the existing
-  `LogRenderer`, so the UI and File Provider projection share one formatter.
-
-**Skill pass.** Before and after code: `swiftui-pro` kept the log as a separate
-leaf view with a small model seam; `macos-design` placed it as a pinned sidebar
-document alongside System Prompt; `typography-designer` kept the detail view on
-the existing reader scale (`.largeTitle`, `.callout`, rendered markdown body).
-
-**Verified.** `make check` passes and `make test` passes (**322/322**). Added a
-core regression test that `WikiStoreModel.currentLogMarkdown()` includes query log
-notes via the projection renderer.
-
-## 2026-06-16 — Inline agent transcript inspector
-
-Added an expandable trailing transcript sidebar for inline Query/Ingest runs, so
-the page can remain visible while the wiki is edit-locked and the user can still
-see what the agent is doing.
-
-**Changed**
-- `ContentView` now hosts a trailing inspector pane beside the selected detail
-  content. It auto-expands when an agent run starts and can be toggled from the
-  toolbar or collapsed from inside the pane.
-- `AgentTranscriptSidebar` reuses `AgentActivityView`, the same live transcript
-  renderer used by the dedicated Maintain Wiki sheet, so tool calls, subagent rows,
-  assistant text, diagnostics, and results render consistently.
-- Split selected-detail rendering into `WikiDetailView`, keeping the app shell
-  focused on navigation/chrome and avoiding a growing monolithic view body.
-
-**Skill pass.** Before and after code: `swiftui-pro` favored extracting the detail
-switch and reusing the existing activity view; `macos-design` pointed to a trailing
-inspector rather than a modal; `typography-designer` kept the panel on existing
-semantic macOS styles (`.headline`, `.callout`, `.caption`, monospaced transcript
-rows). The toggle and collapse controls keep text labels for accessibility even
-when rendered as icons.
-
-**Verified.** `make check` passes and `make test` passes (**321/321**).
-
-## 2026-06-16 — Ingestion and query affordances moved into the content flow
-
-Made Ingest and Query discoverable where the user is already working instead of
-requiring the toolbar's Maintain Wiki sheet.
-
-**Changed**
-- The Files list remains most-recently-added first and now shows a per-file status
-  badge: a green check when an ingest log matches that source, otherwise a dashed
-  "ready" indicator.
-- Files are selectable sidebar items. Selecting one opens a file detail pane with
-  **Ingest into Wiki** and **Open File** actions, so a raw source can be processed
-  on the spot.
-- Added a shared `AgentOperationRunner` so the existing operations sheet, the file
-  detail pane, and page-level queries all use the same mount refresh, staging, and
-  edit-lock launch path.
-- Every page reader now has a compact query field pinned below the rendered page,
-  launching the same Query operation without opening the operations sheet.
-
-**Skill pass.** Before code: `swiftui-pro`, `macos-design`, and
-`typography-designer` pointed toward semantic Dynamic Type, standard macOS list
-selection/detail behavior, labeled icon buttons, and progressive disclosure in the
-content area. Post-code review checked the new views against SwiftUI design,
-accessibility, and hygiene guidance: controls keep text labels for VoiceOver, type
-uses system styles, and status is icon+color rather than color-only.
-
-**Verified.** `make check` passes and `make test` passes (**321/321**). Added a
-core regression test for the ingested-file status derived from log entries.
+Page detail is reader-first because the agent maintains wiki content. Manual
+source editing is an explicit, rare mode. Markdown rendering with wiki links,
+footnotes, and change log.
 
 ## 2026-06-16 — Product rename to Self Driving Wiki
 
-Renamed app-facing product copy from WikiFS to **Self Driving Wiki** while leaving
-bundle identifiers, SwiftPM target/module names, signing assets, and legacy
-database filenames intact.
+Renamed from the internal codename.
 
-**Changed**
-- `build.sh` and `Makefile` now produce/install `Self Driving Wiki.app`, with the
-  SwiftPM executable target still built from `WikiFS` and copied into the renamed
-  bundle.
-- App/File Provider display strings, projection README/root labels, default legacy
-  wiki display name, manifest product name, agent scratch/log cache directory, and
-  the read-only error now say Self Driving Wiki.
-- `README.md` and `PLAN.md` now present Self Driving Wiki as the product name while
-  keeping technical identifiers such as `WikiFSCore`, `WikiFSFileProvider`, and
-  `org.sockpuppet.WikiFS` explicit where they remain true.
+## 2026-06-15 — v0 shipped
 
-**Skill pass.** Before code: `swiftui-pro`, `macos-design`, and
-`typography-designer` pointed toward preserving semantic SwiftUI text and native
-macOS naming surfaces rather than adding custom typography or visual treatment.
-Post-code review kept the rename to visible strings/build metadata only, with no
-new UI layout or type-scale changes.
+All four bring-up phases complete: local SQLite wiki, File Provider
+projection, agent operations (Ingest/Query/Lint), and the agent-facing wiki
+(`CLAUDE.md` + `AGENTS.md` + `TREE.md` at the root).
 
-## 2026-06-16 — Reader-first page detail UI
+## 2026-06-15 — File Provider proven end-to-end
 
-Started correcting the app's main interface: page selection now defaults to a
-rendered reader instead of an always-visible markdown editor + preview split. The
-product principle is that Self Driving Wiki is agent-maintained first; users should rarely
-need manual source editing.
+File Provider extension mirrors SQLite content read-only onto the filesystem
+under `~/Library/CloudStorage/Self Driving Wiki-<name>`. Five hard-won gotchas
+documented (entry-point recursion, entitlements⊆profile, user-enable toggle,
+/Applications, keychain).
 
-**Changed**
-- `PageDetailView` now owns an explicit read/edit mode and a toolbar action:
-  **Edit Page** / **Done Editing** (`Command-E`).
-- `PageReaderView` is the default page surface: title plus rendered markdown in a
-  readable column. It suppresses a duplicate leading `# Title` when the body starts
-  with the same heading.
-- `PageEditorView` is the rare manual mode: title field + markdown `TextEditor`,
-  using the existing draft buffers and debounced autosave path.
-- `MarkdownPreview` now constrains rendered blocks to the same readable width.
-- Added `plans/page-reader-ui.md` and linked it from `PLAN.md`.
+## 2026-06-15 — Apple provisioning
 
-**Skill pass.** Before code: `swiftui-pro`, `macos-design`, and
-`typography-designer` pointed toward progressive disclosure, reader-first content,
-semantic Dynamic Type styles, and a restrained macOS article column rather than a
-permanent edit/preview split. Post-code review found the view split aligned with
-SwiftUI guidance: `PageDetailView` stays small, leaf views are separate files,
-semantic fonts are used, and the editor reuses the existing model autosave seam.
+Cert, App Group, and File Provider provisioning done up front (pre-Phase 2).
 
+<<<<<<< HEAD
 **Verified.** `make check` passes, `make test` passes (**320/320**), and the
 user-provided appshot shows the selected page in reader mode with the manual edit
 button tucked into the toolbar.
@@ -7922,3 +5486,9 @@ PdfExtractionView, ExtractionSettingsView, AgentActivitySidebar, SidebarView.
 **Build/tests:** `swift build` clean; 78 queue tests pass across 4 suites.
 
 >>>>>>> 2313993 (docs: update PROGRESS.md with Phase 3 + Phase 4 completion records)
+=======
+## 2026-06-15 — Milestone 0: app skeleton
+
+macOS SwiftUI app skeleton with SwiftPM build, SQLite store, and
+`make`/`build.sh` tooling.
+>>>>>>> 1bb6936 (docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines))
