@@ -268,6 +268,11 @@ struct ActivityWindowView: View {
         let events = activityTracker.transcript(for: itemID)
         let progressText = activityTracker.progressLog(for: itemID)
 
+        // Determine if this item is terminal (completed/failed/cancelled) —
+        // terminal items rehydrated from the DB won't have in-memory transcripts.
+        let isTerminal = viewModel.snapshot.recentItems.contains { $0.id == itemID }
+            && !viewModel.snapshot.activeItems.contains { $0.id == itemID }
+
         if !events.isEmpty {
             ChatWebView(events: events, style: .activityFeed, showsInternals: false)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -280,11 +285,29 @@ struct ActivityWindowView: View {
                     .textSelection(.enabled)
                     .padding(8)
             }
+        } else if isTerminal {
+            // Terminal item with no in-memory transcript (rehydrated from DB
+            // after app relaunch — transcripts are in-memory only).
+            VStack(spacing: 8) {
+                Image(systemName: "checkmark.circle")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                Text("Transcript not available")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text("This item completed in a previous session. Transcripts are only kept while the app is running.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 300)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
+            // Active or queued item — transcript will arrive as events flow.
             VStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
-                Text("No transcript yet")
+                Text("Waiting for output…")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
