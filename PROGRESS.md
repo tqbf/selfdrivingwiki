@@ -2,6 +2,7 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+<<<<<<< HEAD
 ## 2026-07-14 — Stop committing generated codegen files
 
 `GeneratedVersion.swift` (git SHA → Swift) and `GeneratedPrompts.swift` (prompt
@@ -42,6 +43,76 @@ Source-ingestion provenance is out of scope (#397's "consider" item). The 9
 unrelated to this change.
 
 See [`plans/wikictl-author-provenance.md`](plans/wikictl-author-provenance.md).
+=======
+## 2026-07-13 — Queue Engine Phase 3: Machine-readable event log
+
+**Phase 3 is implemented.** The design plan lives at
+`docs/design-plans/2026-07-13-queue-engine.md` (Phase 3 section). This phase
+adds `QueueEventLog` — a JSONL audit trail that subscribes to the engine's
+`AsyncStream<QueueEvent>` and appends each event as a valid JSON line to a
+daily-rotated log file under `Logs/queue/` with bounded retention. Not wired
+into the app yet (Phase 4 will wire it alongside extraction workers).
+
+**New file (`Sources/WikiFSEngine/QueueEventLog.swift`):**
+- **`QueueEventLog`** — an `actor` that consumes the engine's event stream and
+  writes each event as a JSONL line. Daily rotation (`queue-YYYY-MM-DD.jsonl`),
+  bounded retention (default 30 days, pruned on rotation), create-if-not-exists
+  file handling (appends across relaunches, never truncates), injectable
+  `dateProvider` for testable rotation/retention. `stop()` is async (cancels
+  the stream task, awaits completion, sets a `stopped` flag so post-stop writes
+  are no-ops). All file I/O is best-effort (`try?`); errors go to `DebugLog`.
+- **`QueueLogRecord`** — `Codable + Sendable` struct for one JSONL line.
+  Fields: `timestamp` (log time), `eventType`, `itemID`, `queue`, `wikiID`,
+  `providerID`, `itemState` (QueueItemState), `runState` (QueueRunState —
+  separate field, no ambiguity), `orderingKey`, `attempt`, `error` (truncated
+  to 4096 chars), `startedAt`/`finishedAt` (item's own timestamps),
+  `durationMs` (derived for completed/failed), `runLogPath` (reserved for
+  Phase 4). Encoded with `.sortedKeys` for greppable JSONL. Built from
+  `QueueEvent` via pattern matching (the `.failed` case uses the associated
+  error value, not `item.error`).
+
+**Tests** (`Tests/WikiFSTests/QueueEventLogTests.swift`): 16 tests, all pass
+in 0.35s. Covers:
+- JSONL validity (4 events enqueued/started/completed/cancelled — each line
+  parses as valid JSON with correct fields)
+- Failed event includes error + durationMs
+- Completed event includes duration
+- Cancelled event logged correctly
+- `runStateChanged` has no item fields (uses `runState`, not `itemState`)
+- Run state resumed variant
+- Record includes item timestamps (startedAt/finishedAt)
+- Record includes provider + queue + itemState
+- Files under `Logs/queue/` directory with correct filename pattern
+- Daily rotation (injectable dateProvider, two days → two files)
+- Prune old files (40-day-old deleted, 10-day-old kept)
+- Append to existing file across instances (relaunch appends, doesn't truncate)
+- Stop drops subsequent writes (no-op, no crash)
+- Unwritable directory drops events (no crash)
+- Headless isolation source-scan (no AppKit/SwiftUI imports)
+- Real engine integration (QueueEngine + QueueEventLog, enqueue + complete →
+  log contains enqueued/started/completed)
+
+**Acceptance criteria covered:**
+- AC6.1 (every queue event as valid JSON line with item/wiki/provider IDs +
+  timestamps) ✓
+- AC6.2 (daily rotation under `Logs/queue/` with bounded retention) ✓
+- AC6.3 (completed/failed include duration; `runLogPath` field reserved for
+  Phase 4) ✓
+
+**Plan review:** Dispatched `plan-reviewer` subagent. One HIGH finding
+(`FileHandle(forWritingTo:)` throws on non-existent files — fixed with
+create-if-not-exists). Six MEDIUM findings addressed: actor instead of lock
+(eliminates stop race + `@unchecked Sendable`), `itemState`/`runState` split
+(no ambiguity), `startedAt`/`finishedAt` added to record, async `stop()` with
+`stopped` flag, cancelled event test, headless isolation test. Four LOW
+findings addressed: error truncation, start idempotency, `.sortedKeys`
+encoding, error source documented.
+
+**Files (1 new + 1 test):**
+- `Sources/WikiFSEngine/QueueEventLog.swift` (new)
+- `Tests/WikiFSTests/QueueEventLogTests.swift` (new, 16 tests)
+
+>>>>>>> 2d15131 (feat: Queue Engine Phase 3 — QueueEventLog JSONL audit trail)
 ## 2026-07-13 — Queue Engine Phase 2: QueueEngine actor
 
 **Phase 2 is implemented.** The design plan lives at
