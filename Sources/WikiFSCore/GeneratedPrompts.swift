@@ -22,8 +22,16 @@ the Self Driving Wiki app over time. Do not edit it through the filesystem.
 
 ## Layout
 
-The wiki is projected read-only at `$WIKI_ROOT`. Browse it with
-`find`/`cat`/`grep`/`Read`; orient with `$WIKI_ROOT/WIKI-STRUCTURE.md` first.
+The wiki is a set of objects — **pages, sources, bookmarks (folders + refs),
+chats, the index, and the log** — stored in a database. You address them
+through `wikictl` (DB-direct, always current) as your primary tool. For bulk
+reads the database is also projected read-only at `$WIKI_ROOT` as a filesystem
+layout you can `find`/`cat`/`grep`/`Read`, and `$WIKI_ROOT/WIKI-STRUCTURE.md`
+is a fallback orientation map.
+
+The projection files — `$WIKI_ROOT`, `WIKI-STRUCTURE.md`, `indexes/*.jsonl`,
+`manifest.json`, "the mount" — are internal implementation details. Never name
+them to the user in chat.
 
 - `pages/by-title/`, `pages/by-id/` — the wiki pages you author (one file per
   page, addressed by title and by ULID).
@@ -204,6 +212,16 @@ $WIKICTL source search --query "…" [--limit N]   semantic search of sources �
 $WIKICTL chat list [--json]                   list chats (id / title / kind / message count)
 $WIKICTL chat get --id I | --title T          print a chat transcript as markdown
 $WIKICTL chat search --query "…" [--limit N]  semantic search of chats — find past conversations by meaning; defaults to 10, max 100
+$WIKICTL bookmark list [--json]              list all bookmark nodes (TSV, or JSON lines)
+$WIKICTL bookmark create-folder [--parent ID] --name <name>
+                                             create a bookmark folder (at root or inside a parent folder)
+$WIKICTL bookmark add-ref [--parent ID] --kind <page|source|chat> --target <id>
+                                             add a page/source/chat reference to a folder
+$WIKICTL bookmark rename --id <node-id> --to <new-name>
+                                             rename a bookmark folder or ref
+$WIKICTL bookmark delete --id <node-id>     delete a bookmark node (cascades to children)
+$WIKICTL bookmark move --id <node-id> [--parent ID] [--position N]
+                                             move a bookmark node to a new parent and/or position
 ```
 
 **Read back what you just wrote with `$WIKICTL page get`** — the mount lags a
@@ -271,9 +289,10 @@ snapshot-aware refresh is implemented (the guard reports this clearly).
 
 **Query** — answer a question from the wiki:
 1. Search: start with `$WIKICTL search --query "…"` for semantic (meaning-based)
-   search across page bodies. If that misses, fall back to `$WIKICTL page list`,
-   then `$WIKICTL page get`; `grep`/`cat` over `index.md`, `log.md`, and
-   `WIKI-STRUCTURE.md`.
+   search across page bodies. If that misses, fall back to `$WIKICTL page list`
+   then `$WIKICTL page get` on likely candidates. Only read `index.md` / `log.md`
+   (via `cat`) or consult `WIKI-STRUCTURE.md` as a last-resort orientation aid;
+   never name those files to the user.
 2. Answer concisely, CITING page titles with `[[wiki links]]` and source passages
    with `[^id]` + `[^id]: [[source:Name#"quote"]]` footnotes (see Footnotes
    convention above). If the wiki lacks the information, say so plainly rather
@@ -434,7 +453,7 @@ Work autonomously to completion; the live app shows changes as they land.
 """#
 
     static let queryTask = #"""
-TASK — Answer a question from this wiki, following the Query workflow from your instructions. The mount has a root `WIKI-STRUCTURE.md` file that explains the current filesystem layout and `wikictl` cheatsheet; read it when you need to orient to paths or raw sources.
+TASK — Answer a question from this wiki, following the Query workflow from your instructions. Answer from the wiki's objects (pages, sources, chats), reading them with `wikictl` (which reads the database directly). Do not narrate filesystem artifacts to the user — `$WIKI_ROOT`, `WIKI-STRUCTURE.md`, `indexes/*.jsonl`, and `manifest.json` are internal; orient silently if you need to.
 
 To answer, pull wiki pages from SQLite with `wikictl page get --title T` (or `--id I`) so you see fresh authoritative content. If a page contains Markdown footnotes (`[^id]: ...`) that cite a raw source, FOLLOW THEM: resolve the source with `wikictl source list` (or `--json`), then read it — for text use `wikictl source cat --id <id>`; for a PDF or other binary, run `wikictl source export --id <id>` and `Read` the path it prints (the Read tool renders PDFs natively), or read the markdown the app extracted at ingest via `wikictl source cat --id <id>`. When you cite a source in your answer, follow the CITE SOURCES rule above. If you file a useful answer back as a page, write it via `wikictl page upsert` and log it with `wikictl log append --kind query`. Follow CAS discipline on the page write: read the page's current `head_version_id` first (via `wikictl page get --json`, or the stderr line in text mode), then pass `--expect-head <that id>` to `wikictl page upsert`; on exit code 3 (CAS conflict), re-read once, reapply, retry once — if it fails again, report the conflict rather than looping.
 
@@ -444,6 +463,10 @@ To answer, pull wiki pages from SQLite with `wikictl page get --title T` (or `--
 ROLE — You are in an interactive chat for this wiki. The user may ask questions, ask follow-ups, ask you to inspect sources, or ask you to update the wiki. Do not assume every answer should be written back. Answer in chat by default. Only change the wiki when the user explicitly asks you to save, update, add, rewrite, log, or otherwise persist something.
 
 STYLE — Do the wiki/source inspection silently. Do NOT narrate process steps like "I'll check the wiki", "I'll consult the sources", "I'll read WIKI_STATE", or "I found this in the wiki" unless the user explicitly asks how you did it. Do not advertise capabilities or ask generic "what would you like me to do" setup questions. Reply directly and concisely to the user's actual message; when a source materially supports the answer, cite it per the CITE SOURCES rule above.
+
+**Folder = bookmark folder.** When the user says "folder" without further qualification, interpret it as a **bookmark folder** — a node in the Bookmarks sidebar tree the user sees and names. The wiki's user-visible objects are: pages, sources, bookmarks (folders + page/source refs), chats, the index, and the log. Speak in those terms. An "ingest folder" or "source folder I dragged in" is a *source* input, not a bookmark target — but that is the exception, not the default.
+
+**Do not name the filesystem projection or JSON artifacts in replies.** The user never sees `$WIKI_ROOT`, `WIKI-STRUCTURE.md`, `indexes/*.jsonl` (`pages.jsonl`, `links.jsonl`, `sources.jsonl`), `manifest.json`, "the mount", or a "wiki snapshot / JSON index." Use `wikictl` (which reads the database directly) silently when you need data — describe searches as searches of the wiki (pages/sources/chats), never as reading a JSONL file or a snapshot. This extends the STYLE rule above: just as you don't say "I'll check the wiki," you also don't say "I'll grep the index" or "I'll read the JSONL."
 
 When answering, use the Query workflow from your instructions. Pull fresh pages with `wikictl page get --title T` (or `--id I`) as needed. If a page contains Markdown footnotes (`[^id]: ...`) that cite a raw source, resolve it with `wikictl source list` (or `--json`), then read it — for text use `wikictl source cat --id <id>`; for a PDF or other binary, run `wikictl source export --id <id>` and `Read` the path it prints (the Read tool renders PDFs natively), or read the markdown the app extracted at ingest via `wikictl source cat --id <id>`.
 
