@@ -8,11 +8,11 @@
 //
 // Run:
 //   swift tools/promptgen/main.swift          overwrite the generated file
-//   swift tools/promptgen/main.swift --stdout  write to stdout (CI drift check)
+//   swift tools/promptgen/main.swift --stdout  write to stdout
 //
-// The normal `swift build` / `swift test` path NEVER invokes this — the
-// generated file is checked in. CI runs `make check-prompts` to fail if the
-// checked-in file is stale vs the .md sources.
+// The output file is gitignored — a derived artifact. `make build`/`check`/
+// `test` regenerate it as a prerequisite; bare `swift build` does NOT — run
+// `make prompts` first (CI runs `make version prompts` before `swift build`).
 
 import Foundation
 

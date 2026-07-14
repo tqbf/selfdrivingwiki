@@ -23,3 +23,12 @@ Resources/mlx.metallib
 .xcodebuildmcp/
 tmp/
 :memory:*
+
+# Generated codegen outputs — derived artifacts, NEVER committed.
+# Regenerated at build time by `make version` (git state → GeneratedVersion.swift)
+# and `make prompts` (prompts/*.md → GeneratedPrompts.swift); both are
+# prerequisites of build/check/test/release. Bare `swift build` on a fresh
+# clone won't find these — run `make version prompts` first, or use
+# `make check`/`make build`/`make test`. See tools/versiongen + tools/promptgen.
+Sources/WikiFSCore/GeneratedVersion.swift
+Sources/WikiFSCore/GeneratedPrompts.swift

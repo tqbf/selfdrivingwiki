@@ -197,8 +197,8 @@ moves the token through the page `version` sum). Phase 6 is **code-only**.
 
 - `prompts/system-prompt-default.md`: a short "Version pins" note — authoring stays
   `[[source:Name@v3#"quote"]]`; `@vN` pins the Nth extraction (oldest = v1) so a quote survives
-  re-extraction. Run `make prompts` → regenerate `GeneratedPrompts.swift` (CI `check-prompts`
-  fails on drift).
+  re-extraction. Run `make prompts` → regenerate `GeneratedPrompts.swift` (gitignored;
+  `make build`/`check`/`test` regen it as a prereq).
 - `plans/graph-model-and-versioning.md` §12 Phase 6 row: footnote "implemented".
 - `PLAN.md` status + doc-index row; `PROGRESS.md` entry.
 
@@ -287,7 +287,7 @@ JS highlight itself would slip to manual. Flagged in Risks.
 ## Documentation Strategy
 
 - Agent-facing: `prompts/system-prompt-default.md` "Version pins" note + `make prompts`
-  regen (CI `check-prompts` gate).
+  regen (`GeneratedPrompts.swift` is gitignored; `make build`/`check`/`test` regen it).
 - Design of record: `graph-model-and-versioning.md` §12 Phase 6 footnote; new
   `plans/phase-6-pinning.md` (this doc) indexed in `PLAN.md`; `PROGRESS.md` entry.
 - No user-facing docs surface beyond the app (the feature is transparent: authoring is
