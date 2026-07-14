@@ -30,10 +30,41 @@ public protocol QueueIngestionProvider: Sendable {
     ///   - sourceIDs: The source IDs to ingest.
     ///   - onProgress: Called with progress lines (agent stdout/stderr) to
     ///     emit as `.progress` events.
+    ///   - onTranscript: Called with each typed agent event for this item,
+    ///     so the tracker can build a per-item transcript for the Activity
+    ///     window. `nil` for callers that don't need transcript forwarding.
     func runIngestion(
         wikiID: String,
         sourceIDs: [PageID],
-        onProgress: @escaping @Sendable (String) -> Void
+        onProgress: @escaping @Sendable (String) -> Void,
+        onTranscript: (@Sendable (AgentEvent) -> Void)?
+    ) async throws
+
+    /// Run a whole-wiki lint health-check. Returns when the agent finishes.
+    ///
+    /// - Parameters:
+    ///   - wikiID: The wiki to lint.
+    ///   - onProgress: Called with progress lines to emit as `.progress` events.
+    ///   - onTranscript: Called with each typed agent event for this item.
+    func runLint(
+        wikiID: String,
+        onProgress: @escaping @Sendable (String) -> Void,
+        onTranscript: (@Sendable (AgentEvent) -> Void)?
+    ) async throws
+
+    /// Run a page-level lint health-check for the given pages. Returns when
+    /// the agent finishes.
+    ///
+    /// - Parameters:
+    ///   - wikiID: The wiki to lint.
+    ///   - pageIDs: The page IDs to lint.
+    ///   - onProgress: Called with progress lines to emit as `.progress` events.
+    ///   - onTranscript: Called with each typed agent event for this item.
+    func runLintPages(
+        wikiID: String,
+        pageIDs: [PageID],
+        onProgress: @escaping @Sendable (String) -> Void,
+        onTranscript: (@Sendable (AgentEvent) -> Void)?
     ) async throws
 }
 
@@ -64,13 +95,16 @@ public enum QueueIngestionError: Error, LocalizedError {
 public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
     private let provider: any QueueIngestionProvider
     private let emitProgress: @Sendable (QueueItem.ID, String) -> Void
+    private let emitTranscript: @Sendable (QueueItem.ID, AgentEvent) -> Void
 
     public init(
         provider: any QueueIngestionProvider,
-        emitProgress: @escaping @Sendable (QueueItem.ID, String) -> Void
+        emitProgress: @escaping @Sendable (QueueItem.ID, String) -> Void,
+        emitTranscript: @escaping @Sendable (QueueItem.ID, AgentEvent) -> Void
     ) {
         self.provider = provider
         self.emitProgress = emitProgress
+        self.emitTranscript = emitTranscript
     }
 
     public func providerID(for item: QueueItem) async -> String? {
@@ -87,7 +121,7 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
     }
 
     public func worker(for item: QueueItem) async throws -> any QueueWorker {
-        QueueIngestionWorker(provider: provider, emitProgress: emitProgress)
+        QueueIngestionWorker(provider: provider, emitProgress: emitProgress, emitTranscript: emitTranscript)
     }
 }
 
@@ -104,18 +138,40 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
 struct QueueIngestionWorker: QueueWorker {
     let provider: any QueueIngestionProvider
     let emitProgress: @Sendable (QueueItem.ID, String) -> Void
+    let emitTranscript: @Sendable (QueueItem.ID, AgentEvent) -> Void
 
     func execute(_ item: QueueItem) async throws {
-        let sourceIDs = item.payload.sourceIDs
-        guard !sourceIDs.isEmpty else {
-            throw QueueIngestionError.noSources
+        let onTranscript: (@Sendable (AgentEvent) -> Void)? = { [itemID = item.id] event in
+            emitTranscript(itemID, event)
         }
 
-        try await provider.runIngestion(
-            wikiID: item.wikiID,
-            sourceIDs: sourceIDs
-        ) { [itemID = item.id] line in
-            emitProgress(itemID, line)
+        if let pageIDs = item.payload.lintPageIDs, !pageIDs.isEmpty {
+            // Page-level lint.
+            try await provider.runLintPages(
+                wikiID: item.wikiID,
+                pageIDs: pageIDs,
+                onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
+                onTranscript: onTranscript
+            )
+        } else if item.payload.lintPageIDs != nil {
+            // lintPageIDs is non-nil but empty → whole-wiki lint.
+            try await provider.runLint(
+                wikiID: item.wikiID,
+                onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
+                onTranscript: onTranscript
+            )
+        } else {
+            // Normal ingestion.
+            let sourceIDs = item.payload.sourceIDs
+            guard !sourceIDs.isEmpty else {
+                throw QueueIngestionError.noSources
+            }
+            try await provider.runIngestion(
+                wikiID: item.wikiID,
+                sourceIDs: sourceIDs,
+                onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
+                onTranscript: onTranscript
+            )
         }
     }
 }

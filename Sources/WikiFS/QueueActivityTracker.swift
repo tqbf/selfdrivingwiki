@@ -10,6 +10,13 @@ final class ProgressEmitBox: @unchecked Sendable {
     var emit: (@Sendable (QueueItem.ID, String) -> Void)?
 }
 
+/// A mutable box for a `@Sendable` transcript-emit closure. Same pattern as
+/// `ProgressEmitBox` — breaks the circular dependency between the ingestion
+/// worker factory (needs the closure) and the engine (provides it).
+final class TranscriptEmitBox: @unchecked Sendable {
+    var emit: (@Sendable (QueueItem.ID, AgentEvent) -> Void)?
+}
+
 /// Observes `QueueEngine.events` and maintains `@Observable` UI state for
 /// extraction activity. Replaces the launcher's extraction slot machinery
 /// (`isExtracting`, `extractionLog`, `extractionPID`,
@@ -43,11 +50,26 @@ final class QueueActivityTracker {
     /// Ingest button disable. Replaces `launcher.ingestingSourceIDs`.
     private(set) var ingestingSourceIDs: Set<PageID> = []
 
+    /// Queue item IDs currently running a lint (`.ingestion` items with
+    /// `lintPageIDs != nil`). Lint items have empty `sourceIDs`, so they
+    /// don't show up in `ingestingSourceIDs` — this set ensures
+    /// `isIngesting` covers lint-only runs.
+    private(set) var lintingItemIDs: Set<QueueItem.ID> = []
+
     /// True while any extraction is running. Drives the sidebar spinner.
     var isExtracting: Bool { !extractingSourceIDs.isEmpty }
 
-    /// True while any ingestion is running.
-    var isIngesting: Bool { !ingestingSourceIDs.isEmpty }
+    /// True while any ingestion or lint is running.
+    var isIngesting: Bool { !ingestingSourceIDs.isEmpty || !lintingItemIDs.isEmpty }
+
+    /// Per-item typed agent events, for the Activity window's transcript view.
+    /// Bounded — pruned only when items are pruned from history (not on
+    /// terminal state, so users can view completed/failed/cancelled transcripts).
+    private(set) var transcripts: [QueueItem.ID: [AgentEvent]] = [:]
+
+    /// Per-item accumulated progress text (for extraction items that produce
+    /// progress strings, not typed `AgentEvent`s). Keyed by item ID.
+    private(set) var progressLogs: [QueueItem.ID: String] = [:]
 
     /// Accumulated progress log for the most recent extraction. Cleared on
     /// `.started`, appended on `.progress`. Drives the sidebar log text.
@@ -58,6 +80,15 @@ final class QueueActivityTracker {
     private(set) var extractionPID: Int32? = nil
 
     // MARK: - Internal tracking
+
+    /// Maximum number of typed events to retain per item. Older events are
+    /// dropped beyond this bound to keep memory bounded.
+    private let maxTranscriptEvents = 1000
+
+    /// Maximum number of items to retain transcripts for. When exceeded, the
+    /// oldest item's transcript is pruned. This prevents unbounded growth when
+    /// many items accumulate over a long session.
+    private let maxTrackedItems = 200
 
     /// Maps queue item ID → source IDs, so we can remove source IDs from
     /// `extractingSourceIDs` when items finish.
@@ -102,10 +133,13 @@ final class QueueActivityTracker {
         queueEngine = nil
         extractingSourceIDs = []
         ingestingSourceIDs = []
+        lintingItemIDs = []
         extractionLog = ""
         extractionPID = nil
         currentExtractionItemID = nil
         itemToSourceIDs.removeAll()
+        transcripts.removeAll()
+        progressLogs.removeAll()
     }
 
     // MARK: - Public API
@@ -123,6 +157,47 @@ final class QueueActivityTracker {
     /// extraction slot (local pdf2md is limit 1).
     func isSlotBusyForOtherSource(_ id: PageID) -> Bool {
         !extractingSourceIDs.isEmpty && !extractingSourceIDs.contains(id)
+    }
+
+    /// Append a typed event to the transcript for a queue item. Called from
+    /// the `.transcript` event handler. Bounded — drops oldest events beyond
+    /// `maxTranscriptEvents` per item, and prunes oldest items beyond
+    /// `maxTrackedItems`.
+    func appendTranscriptEvent(itemID: QueueItem.ID, event: AgentEvent) {
+        var arr = transcripts[itemID, default: []]
+        arr.append(event)
+        if arr.count > maxTranscriptEvents {
+            arr.removeFirst(arr.count - maxTranscriptEvents)
+        }
+        transcripts[itemID] = arr
+
+        // Bound the number of tracked items — prune oldest (first inserted).
+        if transcripts.count > maxTrackedItems {
+            let toRemove = transcripts.count - maxTrackedItems
+            let oldestIDs = Array(transcripts.keys.prefix(toRemove))
+            for id in oldestIDs {
+                transcripts.removeValue(forKey: id)
+                progressLogs.removeValue(forKey: id)
+            }
+        }
+    }
+
+    /// Prune the transcript + progress log for an item. Called when items are
+    /// pruned from history (the bounded-recent-items path), NOT on terminal
+    /// state — so users can view completed/failed/cancelled transcripts.
+    func pruneTranscripts(for itemID: QueueItem.ID) {
+        transcripts.removeValue(forKey: itemID)
+        progressLogs.removeValue(forKey: itemID)
+    }
+
+    /// The transcript for a given item ID (may be empty / nil).
+    func transcript(for itemID: QueueItem.ID) -> [AgentEvent] {
+        transcripts[itemID] ?? []
+    }
+
+    /// The accumulated progress log for a given item ID (may be empty).
+    func progressLog(for itemID: QueueItem.ID) -> String {
+        progressLogs[itemID] ?? ""
     }
 
     // MARK: - Event handling
@@ -144,12 +219,28 @@ final class QueueActivityTracker {
                 extractionLog = ""
                 extractionPID = nil
                 currentExtractionItemID = item.id
+                progressLogs[item.id] = ""
             case .ingestion:
-                ingestingSourceIDs.formUnion(sourceIDs)
+                if item.payload.lintPageIDs != nil {
+                    // Lint item — track separately (empty sourceIDs).
+                    lintingItemIDs.insert(item.id)
+                } else {
+                    ingestingSourceIDs.formUnion(sourceIDs)
+                }
             }
 
+        case .transcript(let id, let agentEvent):
+            appendTranscriptEvent(itemID: id, event: agentEvent)
+
         case .progress(let id, let line):
-            // Only accumulate for extraction items we know about.
+            // Accumulate per-item progress (for extraction items and any
+            // item that emits progress lines).
+            if let existing = progressLogs[id] {
+                progressLogs[id] = existing.isEmpty ? line : "\(existing)\n\(line)"
+            } else {
+                progressLogs[id] = line
+            }
+            // Also feed the legacy extractionLog for backward compat.
             if itemToSourceIDs[id] != nil {
                 if extractionLog.isEmpty {
                     extractionLog = line
@@ -187,6 +278,8 @@ final class QueueActivityTracker {
                 ingestingSourceIDs.subtract(sourceIDs)
             }
         }
+        // Lint items are tracked separately — always remove on terminal state.
+        lintingItemIDs.remove(item.id)
         if currentExtractionItemID == item.id {
             currentExtractionItemID = nil
         }

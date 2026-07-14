@@ -3,20 +3,20 @@ import SwiftUI
 import WikiFSCore
 import WikiFSEngine
 
-/// Controls the menu-bar status item and popover for the queue engine.
+/// Controls the menu-bar status item and Activity window for the queue engine.
 ///
 /// The status item icon reflects the engine's state:
 /// - **idle** (circle) — no active items, queue running
-/// - **working** (circle.fill with pulsing) — items running
+/// - **working** (circle.fill) — items running
 /// - **paused** (circle.dashed) — a queue is paused
 /// - **attention** (exclamationmark.circle) — failed items need attention
 ///
-/// Clicking the status item toggles a popover showing `QueuePopoverView`,
-/// which lists active/recent items across all wikis, with per-queue
-/// pause/resume/halt controls and per-row cancel/retry.
+/// Clicking the status item toggles the Activity window, which lists
+/// active/recent items across all wikis with per-item agent transcripts,
+/// per-queue pause/resume/halt controls, and per-row cancel/retry.
 ///
-/// Lives in `WikiFS` because it uses AppKit (`NSStatusItem`, `NSPopover`)
-/// and SwiftUI for the popover content. The engine itself stays headless.
+/// Lives in `WikiFS` because it uses AppKit (`NSStatusItem`, `NSWindow`)
+/// and SwiftUI for the window content. The engine itself stays headless.
 @MainActor
 final class QueueStatusItemController {
 
@@ -29,7 +29,7 @@ final class QueueStatusItemController {
     // MARK: - AppKit
 
     private var statusItem: NSStatusItem?
-    private var popover: NSPopover?
+    private var activityWindow: NSWindow?
 
     // MARK: - State tracking
 
@@ -62,23 +62,10 @@ final class QueueStatusItemController {
         if let button = item.button {
             button.image = statusIcon(for: .idle)
             button.image?.isTemplate = true
-            button.action = #selector(togglePopover(_:))
+            button.action = #selector(toggleActivityWindow(_:))
             button.target = self
-            button.toolTip = "Self Driving Wiki — Queue"
+            button.toolTip = "Self Driving Wiki — Activity"
         }
-
-        // Create the popover with SwiftUI content.
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.contentSize = NSSize(width: 380, height: 440)
-        let popoverView = QueuePopoverView(
-            queueEngine: queueEngine,
-            activityTracker: activityTracker,
-            sessionManager: sessionManager,
-            onClose: { [weak self] in self?.closePopover() }
-        )
-        popover.contentViewController = NSHostingController(rootView: popoverView)
-        self.popover = popover
 
         // Observe engine events to update the icon.
         streamTask = Task { @MainActor [weak self] in
@@ -93,27 +80,48 @@ final class QueueStatusItemController {
     func stop() {
         streamTask?.cancel()
         streamTask = nil
-        closePopover()
+        closeActivityWindow()
         if let item = statusItem {
             NSStatusBar.system.removeStatusItem(item)
             statusItem = nil
         }
-        popover = nil
     }
 
-    // MARK: - Popover
+    // MARK: - Activity window
 
-    @objc private func togglePopover(_ sender: AnyObject?) {
-        guard let button = statusItem?.button else { return }
-        if let popover, popover.isShown {
-            popover.performClose(sender)
+    @objc private func toggleActivityWindow(_ sender: AnyObject?) {
+        if let window = activityWindow, window.isVisible {
+            window.orderOut(nil)
         } else {
-            popover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            showActivityWindow()
         }
     }
 
-    func closePopover() {
-        popover?.performClose(nil)
+    private func showActivityWindow() {
+        if activityWindow == nil {
+            let contentView = ActivityWindowView(
+                queueEngine: queueEngine,
+                activityTracker: activityTracker,
+                sessionManager: sessionManager
+            )
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 720, height: 480),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "Activity"
+            window.contentView = NSHostingView(rootView: contentView)
+            window.isReleasedWhenClosed = false
+            window.center()
+            activityWindow = window
+        }
+        activityWindow?.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    func closeActivityWindow() {
+        activityWindow?.orderOut(nil)
     }
 
     // MARK: - Icon management

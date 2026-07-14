@@ -1092,7 +1092,7 @@ public final class WikiStoreModel {
         mermaidSaveWarning = nil
         var restoredFromPendingDraft = false
         switch newValue {
-        case .newChat, .lint, .bookmark, .chat:
+        case .newChat, .bookmark, .chat:
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
@@ -2778,7 +2778,7 @@ public final class WikiStoreModel {
             sourceIDs.contains(id)
         case .chat(let id):
             chatIDs.contains(id)
-        case .newChat, .systemPrompt, .changeLog, .lint, .bookmark:
+        case .newChat, .systemPrompt, .changeLog, .bookmark:
             true
         }
     }

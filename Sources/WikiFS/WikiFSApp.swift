@@ -137,12 +137,14 @@ struct WikiFSApp: App {
         // constructed (breaking the circular dependency: factory needs the
         // closure, engine needs the factory).
         let progressBox = ProgressEmitBox()
+        let transcriptBox = TranscriptEmitBox()
         let extractionFactory = QueueExtractionWorkerFactory(
             provider: extractionProvider,
             emitProgress: { id, line in progressBox.emit?(id, line) })
         let ingestionFactory = QueueIngestionWorkerFactory(
             provider: ingestionProvider,
-            emitProgress: { id, line in progressBox.emit?(id, line) })
+            emitProgress: { id, line in progressBox.emit?(id, line) },
+            emitTranscript: { id, event in transcriptBox.emit?(id, event) })
         let workerFactory = CompositeWorkerFactory(factories: [
             .extraction: extractionFactory,
             .ingestion: ingestionFactory
@@ -154,6 +156,7 @@ struct WikiFSApp: App {
         // this resolves simply drop progress lines (rare — the engine hasn't
         // dispatched yet at this point in init).
         Task { progressBox.emit = await queueEngine.makeEmitProgress() }
+        Task { transcriptBox.emit = await queueEngine.makeEmitTranscript() }
         // Start the engine (rehydrate + crash recovery + initial dispatch).
         // Detached so the app's init isn't blocked; the engine is an actor so
         // `start()` is safe to call concurrently.

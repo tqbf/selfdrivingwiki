@@ -7979,6 +7979,7 @@ writes are safe — the store detects the version mismatch.
 **Build/tests:** `swift build` clean; fast tier — 2187 tests pass.
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 ---
 
 ## Queue Engine — Phase 3: QueueEventLog JSONL Audit Trail (2026-07-14)
@@ -8043,3 +8044,69 @@ macOS SwiftUI app skeleton with SwiftPM build, SQLite store, and
 >>>>>>> f02ca31 (Revert "docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines)")
 =======
 >>>>>>> bd2f1ba (docs: consolidate queue engine PROGRESS.md entries, remove duplicates)
+=======
+## Lint Queue Migration + Activity Window
+
+Migrated the Lint operation (`runLint` + `runLintPages`) from the per-session
+`GenerationGate`'s `.ingest` lane onto the central `QueueEngine`'s `.ingestion`
+queue. Lint is now a payload variant of `.ingestion` (not a separate
+`QueueKind`) — the `QueueItemPayload.lintPageIDs` field distinguishes lint
+from ingestion. Both share the same per-wiki serialization invariant
+(`activeIngestionWikis`), per-provider capacity, and pause/resume/halt
+controls. Replaced the menu-bar popover with a unified Activity window.
+
+### Changes
+
+- **`QueueTypes.swift`:** Added `lintPageIDs: [PageID]?` to
+  `QueueItemPayload`. Removed `case lint` from `QueueKind` (was partially
+  added earlier). Backward-compatible Codable (old JSON decodes to `nil`).
+- **`WikiSelection.swift` / `EditorTab.swift`:** Removed `.lint` case —
+  the Lint tab is gone from the sidebar/editor.
+- **`WikiStoreModel.swift` / `AddressBarView.swift` / `VacuumCommands.swift` /
+  `WikiDetailView.swift`:** Removed all `.lint` references (tab switches,
+  address bar rendering, vacuum commands menu).
+- **`QueueIngestionProvider.swift` (protocol):** Added `runLint` /
+  `runLintPages` methods + `onTranscript` parameter to all three methods.
+  `QueueIngestionWorker.execute` branches on `lintPageIDs`: page-level lint,
+  whole-wiki lint, or normal ingestion.
+- **`QueueWorker.swift`:** Added `.transcript(QueueItem.ID, AgentEvent)` to
+  `QueueEvent`. Updated `QueueEvent.item` computed property.
+- **`QueueEngine.swift`:** Added `makeEmitTranscript()` (mirrors
+  `makeEmitProgress()`).
+- **`QueueEventLog.swift`:** Added `.transcript` case to the switch + skip
+  in `write()` (high-volume, not logged to JSONL).
+- **`AgentLauncher.swift`:** Added `onAgentEvent` property — a per-event
+  callback fired from `mergeOrAppend` so typed `AgentEvent`s are forwarded
+  to the queue's transcript tracker. Cleared in `finish()` and
+  `resetRunArtifacts()`.
+- **`AppQueueIngestionProvider.swift`:** Implemented `runLint` /
+  `runLintPages` (calls `AgentOperationRunner.runLint` /
+  `runLintPages`-equivalent logic). Added `runLintAgent` private helper.
+  All agent runs now set `launcher.onAgentEvent` for transcript forwarding.
+  `WikiFSApp.swift` wires `TranscriptEmitBox` for the factory.
+- **`LintView.swift`:** Deleted. "Run Lint" button moved to
+  `PageDetailView` toolbar. Per-page Lint button and `PagesContainerView`
+  `onLint` callback now enqueue `.ingestion` items with `lintPageIDs`.
+- **`QueueActivityTracker.swift`:** Added per-item transcript model
+  (`transcripts: [QueueItem.ID: [AgentEvent]]`), ` appendTranscriptEvent`,
+  `lintingItemIDs` set (lint items have empty `sourceIDs` — tracked
+  separately so `isIngesting` covers lint-only runs), per-item progress
+  accumulation (`progressLogs`), transcript lifecycle (pruned only on
+  history pruning, not on terminal state).
+- **`ActivityWindowView.swift` (new):** SwiftUI `NavigationSplitView`-based
+  window replacing `QueuePopoverView`. Shows active + recent items across
+  all wikis, grouped by kind, with state badges, cancel/retry controls, and
+  expandable per-item transcripts via `ChatWebView`.
+- **`QueueStatusItemController.swift`:** Replaced `NSPopover` with `NSWindow`
+  hosting `ActivityWindowView`. Clicking the status item toggles the
+  Activity window.
+- **Tests:** Added `LintIngestionDispatchTests` (AC.1: page-level lint
+  → `runLintPages`, whole-wiki lint → `runLint`, nil → `runIngestion`),
+  serialization tests in `QueueEngineTests` (AC.3/4/6: per-wiki
+  serialization, cross-wiki concurrency, pause), and
+  `QueueActivityTrackerTranscriptTests` (AC.9/10: transcript forwarding,
+  lint-only `isIngesting`).
+
+**Build/tests:** `swift build` clean; fast tier — 2379 tests pass.
+
+>>>>>>> 3d27d6c (feat: lint queue migration + Activity window)

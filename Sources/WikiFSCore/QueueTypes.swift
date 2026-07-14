@@ -8,7 +8,9 @@ import Foundation
 public enum QueueKind: String, Codable, Sendable {
     /// PDF / document extraction (source → extracted markdown).
     case extraction
-    /// Content ingestion (extracted markdown → wiki pages).
+    /// Content ingestion (extracted markdown → wiki pages). Also covers
+    /// lint operations — a `.ingestion` item with `lintPageIDs` in its
+    /// payload runs lint instead of ingestion.
     case ingestion
 }
 
@@ -59,14 +61,22 @@ public struct QueueItemPayload: Codable, Sendable {
     /// `nil` for standalone items.
     public var chainedItemID: String?
 
+    /// For `.ingestion` queue items: when non-nil, this item is a lint
+    /// operation (not a regular ingestion). An empty array means whole-wiki
+    /// lint; a non-empty array means page-level lint for those pages.
+    /// `nil` means normal ingestion. Ignored for extraction items.
+    public var lintPageIDs: [PageID]?
+
     public init(
         sourceIDs: [PageID],
         stageRouting: [String: String]? = nil,
-        chainedItemID: String? = nil
+        chainedItemID: String? = nil,
+        lintPageIDs: [PageID]? = nil
     ) {
         self.sourceIDs = sourceIDs
         self.stageRouting = stageRouting
         self.chainedItemID = chainedItemID
+        self.lintPageIDs = lintPageIDs
     }
 }
 

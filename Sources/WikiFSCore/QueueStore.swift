@@ -166,6 +166,11 @@ public final class QueueStore: @unchecked Sendable {
             return
         }
         try migrate(from: &version)
+        // Defensive cleanup: remove any rows persisted with the now-removed
+        // `queue = 'lint'` kind from a partial earlier execution. The enum
+        // case was reverted — lint is a payload variant of `.ingestion`.
+        // Safe + idempotent (no-op if no such rows exist).
+        try exec("DELETE FROM queue_items WHERE queue = 'lint';")
     }
 
     /// Stepwise migration ladder. No steps beyond v1 yet, but the structure is

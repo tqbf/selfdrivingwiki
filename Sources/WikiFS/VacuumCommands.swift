@@ -28,9 +28,6 @@ struct VacuumCommands: Commands {
 
             Divider()
 
-            Button("Lint Wiki") {
-                sessionManager.frontmostSession?.store.openTab(.lint)
-            }
             Button("Agent Instructions") {
                 sessionManager.frontmostSession?.store.openTab(.systemPrompt)
             }

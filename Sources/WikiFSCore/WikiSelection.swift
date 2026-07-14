@@ -9,8 +9,6 @@ public enum WikiSelection: Hashable, Sendable {
     case systemPrompt
     /// The append-only operation log (`log.md`).
     case changeLog
-    /// Run a lint health-check on the wiki.
-    case lint
     /// A wiki page, by id.
     case page(PageID)
     /// A raw source stored in the wiki, by id.

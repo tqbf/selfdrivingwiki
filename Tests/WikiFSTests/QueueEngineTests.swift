@@ -648,6 +648,115 @@ struct QueueEngineTests {
 
         store.close()
     }
+
+    // MARK: - Lint per-wiki serialization + cross-wiki concurrency
+
+    private func lintPayload() -> QueueItemPayload {
+        QueueItemPayload(sourceIDs: [], lintPageIDs: [])
+    }
+
+    @Test func testLintAndIngestSerializePerWiki() async throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+
+        let gate = CountDownLatch(count: 1)
+        let recorder = FakeWorkerRecorder()
+
+        let factory = FakeWorkerFactory(
+            providerID: { _ in "p1" },
+            worker: { item in
+                recorder.record(item.id)
+                await gate.wait()
+            }
+        )
+        let config = QueueEngineConfig(ingestionLimits: ["p1": 2])
+        let engine = QueueEngine(store: store, config: config, workerFactory: factory)
+
+        // Enqueue a lint item and an ingestion item for the SAME wiki.
+        _ = try await engine.enqueue(
+            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: lintPayload()))
+        _ = try await engine.enqueue(
+            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
+
+        await engine.start()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        // Only the first should be running — same wiki invariant blocks the second.
+        #expect(recorder.executedIDs.count == 1)
+
+        gate.release()
+        try await recorder.waitForCount(2, timeoutSeconds: 5)
+
+        store.close()
+    }
+
+    @Test func testCrossWikiLintConcurrency() async throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+
+        let recorder = FakeWorkerRecorder()
+        let gate = CountDownLatch(count: 1)
+
+        let factory = FakeWorkerFactory(
+            providerID: { _ in "p1" },
+            worker: { item in
+                recorder.record(item.id)
+                await gate.wait()
+            }
+        )
+        let config = QueueEngineConfig(ingestionLimits: ["p1": 2])
+        let engine = QueueEngine(store: store, config: config, workerFactory: factory)
+
+        _ = try await engine.enqueue(
+            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: lintPayload()))
+        _ = try await engine.enqueue(
+            QueueItemRequest(queue: .ingestion, wikiID: "w2", payload: lintPayload()))
+
+        await engine.start()
+
+        // Both should start (different wikis).
+        try await recorder.waitForCount(2, timeoutSeconds: 5)
+
+        gate.release()
+        store.close()
+    }
+
+    @Test func testPauseStopsLintDispatch() async throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+
+        let gate = CountDownLatch(count: 1)
+        let recorder = FakeWorkerRecorder()
+
+        let factory = FakeWorkerFactory(
+            providerID: { _ in "p1" },
+            worker: { item in
+                recorder.record(item.id)
+                await gate.wait()
+            }
+        )
+        let config = QueueEngineConfig(ingestionLimits: ["p1": 2])
+        let engine = QueueEngine(store: store, config: config, workerFactory: factory)
+
+        // Both on the SAME wiki so the per-wiki invariant keeps the second queued
+        // until the first finishes. Then pause stops the second from dispatching.
+        let id1 = try await engine.enqueue(
+            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: lintPayload()))
+        _ = try await engine.enqueue(
+            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: lintPayload()))
+
+        await engine.start()
+        try await recorder.waitForCount(1, timeoutSeconds: 5)
+        await engine.pause(.ingestion)
+
+        gate.release()
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        // Only the first should have started — the queue is paused.
+        #expect(recorder.executedIDs == [id1])
+
+        await engine.resume(.ingestion)
+        try await recorder.waitForCount(2, timeoutSeconds: 5)
+
+        store.close()
+    }
 }
 
 // MARK: - Fake worker infrastructure

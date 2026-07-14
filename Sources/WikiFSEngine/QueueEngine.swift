@@ -290,6 +290,19 @@ public actor QueueEngine {
         }
     }
 
+    /// A `Sendable` closure the worker factory captures to yield `.transcript`
+    /// events onto the engine's `AsyncStream.Continuation` (bypassing `emit()`
+    /// which is actor-isolated). The continuation is `Sendable`, so this is
+    /// safe to call from the worker's detached `Task`.
+    public func makeEmitTranscript() -> @Sendable (QueueItem.ID, AgentEvent) -> Void {
+        guard let continuation = eventContinuation else {
+            return { _, _ in }
+        }
+        return { id, event in
+            continuation.yield(.transcript(id, event))
+        }
+    }
+
     // MARK: - Dispatch (internal)
 
     /// Event-driven dispatch scan: walk each running queue in `orderingKey`

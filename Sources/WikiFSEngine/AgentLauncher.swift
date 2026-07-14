@@ -29,6 +29,15 @@ public final class AgentLauncher {
     /// visible" via `@testable import WikiFS`, without requiring a real spawned
     /// process.
     public var events: [AgentEvent] = []
+
+    /// Per-event callback set by the queue ingestion provider before calling
+    /// `launcher.run(...)`. Fires once per typed agent event that is appended
+    /// to `events` via `mergeOrAppend`, so the queue's Activity tracker can
+    /// build a per-item transcript for the Activity window — decoupled from
+    /// the launcher instance (which may be in a different wiki window).
+    /// `nil` for interactive chat paths (the chat transcript is rendered
+    /// inline via `events`). Cleared in `finish()`.
+    @ObservationIgnored public var onAgentEvent: (@Sendable (AgentEvent) -> Void)?
     /// The raw combined transcript (raw stream-json stdout + stderr) kept alongside
     /// the typed `events`, so the UI / a debugger can see exactly what the CLI
     /// emitted. This is the in-memory mirror of the on-disk `run.jsonl`.
@@ -1892,6 +1901,10 @@ public final class AgentLauncher {
             events.append(event)
             isStreamingAssistantRow = false
         }
+
+        // Forward to the queue's per-item transcript callback (Activity window).
+        // Fired on every event so the tracker gets a live, complete transcript.
+        onAgentEvent?(event)
     }
 
     /// Append a raw stderr chunk: surface it in `stderr`, mirror to the transcript +
@@ -1926,6 +1939,7 @@ public final class AgentLauncher {
         generateChatSummary()
         transcriptSink = nil
         summarySink = nil
+        onAgentEvent = nil
         // D2 flip-timing: clear activeChatID AFTER flushTranscript() has
         // committed the final tail. flushTranscript() is synchronous — it calls
         // transcriptSink?(tail) which runs store.appendChatEvents on the main
@@ -2003,6 +2017,7 @@ public final class AgentLauncher {
         // session's events (issue #119).
         transcriptSink = nil
         summarySink = nil
+        onAgentEvent = nil
         summaryGenerated = false
         persistedEventCount = 0
         firstMessagePrePersisted = false

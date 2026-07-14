@@ -342,3 +342,39 @@ New patterns introduced: persistent job queue (no precedent in codebase; schema 
 **Second session-lifecycle path (considered, harmless):** besides `RootScene.onDisappear`, `AppDelegate.applicationWillResignActive` calls `sessionManager.flushAllSessions()` (`Sources/WikiFS/WikiFSApp.swift:271-274`). It flushes pending saves only — no cache eviction — so it cannot tear down a session a queue worker is using. No change needed; noted so implementation doesn't "fix" it.
 
 **Future extensibility (doors held open, not built):** the engine's async-actor surface + serializable events permit XPC/HTTP fronting (wikid hosting, MCP server, OpenAPI service); gap-based ordering keys permit drag-to-reorder; the schema's state machine permits lease/heartbeat columns if the queue ever becomes multi-process.
+
+## Lint Queue Migration + Activity Window
+
+Lint has been migrated from the per-session `GenerationGate`'s `.ingest` lane
+onto the central `QueueEngine`'s `.ingestion` queue. Lint is a **payload
+variant** of `.ingestion` — not a separate `QueueKind`. The
+`QueueItemPayload.lintPageIDs` field distinguishes lint from ingestion:
+- `nil` → normal ingestion
+- `[]` (empty) → whole-wiki lint
+- `[id, ...]` (non-empty) → page-level lint for those pages
+
+Both share the same per-wiki serialization invariant
+(`activeIngestionWikis`), per-provider capacity, and pause/resume/halt
+controls. The menu-bar popover has been replaced with a unified **Activity
+window** — a real `NSWindow` (not transient) that shows all queue items
+across all wikis, grouped by kind, with expandable per-item agent
+transcripts.
+
+### Transcript architecture
+
+`AgentLauncher` now has an `onAgentEvent` callback that fires per-event from
+`mergeOrAppend`. The ingestion provider sets this before calling `launcher.run`
+and clears it after. Events flow: launcher → `onAgentEvent` →
+`QueueEngine.makeEmitTranscript()` → `QueueEvent.transcript(id, event)` →
+`QueueActivityTracker.transcripts[itemID]`. The Activity window reads
+transcripts from the tracker, decoupled from the launcher instance (works
+across all wikis). Transcripts are pruned only on history pruning, not on
+terminal state, so users can view completed/failed/cancelled transcripts.
+
+### LintView removal
+
+The `LintView` tab is gone — `.lint` removed from `WikiSelection`,
+`EditorTab`, `WikiDetailView`, `AddressBarView`, `WikiStoreModel`, and
+`VacuumCommands`. The "Run Lint" button moved to the `PageDetailView`
+toolbar. Per-page and per-wiki lint both enqueue `.ingestion` items with
+`lintPageIDs`.

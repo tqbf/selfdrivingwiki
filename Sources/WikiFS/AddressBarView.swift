@@ -448,8 +448,6 @@ struct AddressBarView: View {
             return "[[log]]"
         case .newChat:
             return "[[chat]]"
-        case .lint:
-            return "[[lint]]"
         case .bookmark:
             return ""
         case .chat(let id):

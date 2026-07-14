@@ -140,12 +140,6 @@ struct WikiDetailView: View {
             SystemPromptDetailView(store: store)
         case .changeLog:
             ChangeLogDetailView(store: store)
-        case .lint:
-            LintView(
-                launcher: launcher,
-                store: store,
-                session: session,
-                fileProvider: fileProvider)
         case .page:
             PageDetailView(
                 store: store,

@@ -76,6 +76,10 @@ public enum QueueEvent: Sendable {
     /// Progress line from a running worker (e.g. extraction log output).
     /// Carries the item ID + the progress text line.
     case progress(QueueItem.ID, line: String)
+    /// A typed agent event forwarded from a running ingestion/lint worker.
+    /// Carries the item ID + the event. Used by the Activity window to
+    /// build per-item transcripts (decoupled from the launcher instance).
+    case transcript(QueueItem.ID, AgentEvent)
     /// An item transitioned to `.completed`.
     case completed(QueueItem)
     /// An item transitioned to `.failed`. Carries the error message.
@@ -93,7 +97,7 @@ public enum QueueEvent: Sendable {
             return i
         case .failed(let i, _):
             return i
-        case .progress, .runStateChanged:
+        case .progress, .transcript, .runStateChanged:
             return nil
         }
     }

@@ -38,7 +38,6 @@ extension WikiStoreModel {
         case .newChat: return "Chat"
         case .systemPrompt: return "Instructions"
         case .changeLog: return "Activity"
-        case .lint: return "Lint"
         case .page(let id):
             return summaries.first { $0.id == id }?.title
                 .nonEmpty ?? "Untitled"
@@ -58,7 +57,6 @@ extension WikiStoreModel {
         case .newChat: return "bubble.left.and.bubble.right"
         case .systemPrompt: return "sparkles"
         case .changeLog: return "clock.arrow.circlepath"
-        case .lint: return "checkmark.shield"
         case .page: return "doc.text"
         case .source(let id):
             guard let source = sources.first(where: { $0.id == id }) else {
