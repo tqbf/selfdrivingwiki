@@ -16,7 +16,9 @@ public enum AgentOperationRunner {
         wikiID: String,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String,
-        extractionCoordinator: ExtractionCoordinator
+        extractionCoordinator: ExtractionCoordinator,
+        queueEngine: QueueEngine,
+        extractionProvider: any QueueExtractionProvider
     ) async {
         await runMultiIngest(
             sourceIDs: [sourceID],
@@ -25,7 +27,9 @@ public enum AgentOperationRunner {
             wikiID: wikiID,
             changeSignaler: changeSignaler,
             wikictlDirectory: wikictlDirectory,
-            extractionCoordinator: extractionCoordinator)
+            extractionCoordinator: extractionCoordinator,
+            queueEngine: queueEngine,
+            extractionProvider: extractionProvider)
     }
 
     /// Ingest multiple files in a SINGLE agent run. All sources are staged together
@@ -38,7 +42,9 @@ public enum AgentOperationRunner {
         wikiID: String,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String,
-        extractionCoordinator: ExtractionCoordinator
+        extractionCoordinator: ExtractionCoordinator,
+        queueEngine: QueueEngine,
+        extractionProvider: any QueueExtractionProvider
     ) async {
         guard !sourceIDs.isEmpty else { return }
         DebugLog.ingest("runMultiIngest: begin count=\(sourceIDs.count)")
@@ -60,11 +66,12 @@ public enum AgentOperationRunner {
         // flag (`extractingSourceIDs`) is set around the pdf2md block below.
         let stateMarkdown = store.currentStateSnapshot().renderStateFile()
 
-        // Resolve the selected backend once — it won't change mid-run. Every
-        // backend (local pdf2md / Claude / Docling Serve) goes through the same
-        // `readiness()` + `convert()` contract, so this path is backend-agnostic.
-        let extractor = extractionCoordinator.current()
-        DebugLog.ingest("runMultiIngest: backend=\(extractor.displayName)")
+        // The extraction coordinator is retained in the signature for legacy
+        // paths (seedPdfMarkdown fallback) but the queue engine now drives
+        // extraction via `extractionProvider` — the provider resolves the
+        // extractor + readiness + convert + persistence off-main.
+        let backendName = extractionCoordinator.config.backend
+        DebugLog.ingest("runMultiIngest: backend=\(backendName)")
 
         var sources: [OperationRequest.StagedSource] = []
         for sourceID in sourceIDs {
@@ -84,75 +91,39 @@ public enum AgentOperationRunner {
             // pdf2md. Only extract when no processed markdown exists yet.
             if source.mimeType == "application/pdf" {
                 if let head = store.processedMarkdownHead(for: source) {
-                    // Already extracted — use existing markdown, skip pdf2md entirely.
+                    // Already extracted — use existing markdown, skip extraction entirely.
                     sourceBytes = head.content.data(using: .utf8) ?? bytes
                     sourceExt = "md"
                     DebugLog.extraction("runMultiIngest: reusing existing markdown for \(source.filename) — \(head.content.count) chars")
                 } else {
-                let acquired = await launcher.awaitExtractionSlot()
-                guard acquired, !Task.isCancelled else {
-                    // Cancelled while queued for the extraction slot (or never
-                    // acquired) — own nothing, just bail this ingest.
-                    if acquired { launcher.releaseExtractionSlot() }
-                    return
-                }
-                launcher.extractingSourceIDs.insert(source.id)
-                defer {
-                    launcher.extractingSourceIDs.remove(source.id)
-                    launcher.releaseExtractionSlot()
-                }
-                switch await extractor.readiness() {
-                case .ready:
-                    DebugLog.extraction("readiness: ready — converting \(source.filename) via \(extractor.displayName)")
-                    launcher.isExtracting = true
-                    launcher.extractionPID = nil
-                    launcher.extractionLog = ""
-                    defer {
-                        launcher.isExtracting = false
-                        launcher.extractionPID = nil
-                    }
+                    // No existing markdown → enqueue extraction via the queue engine.
+                    // The worker resolves the extractor, checks readiness, converts,
+                    // and persists (seedPdfMarkdown) — all off-main. We wait for
+                    // completion; on failure we fall through with the raw PDF,
+                    // matching today's graceful-fallback behavior.
+                    let request = QueueItemRequest(
+                        queue: .extraction,
+                        wikiID: wikiID,
+                        payload: QueueItemPayload(sourceIDs: [source.id]))
                     do {
-                        // No `onStart(pid:)` here — the protocol is PID-free.
-                        // Only the local backend has a PID, and it reports it via
-                        // the `onProgress` line; remote/model backends have none,
-                        // so the sidebar just shows "Converting…".
-                        let markdown = try await extractor.convert(
-                            pdfData: bytes,
-                            filename: source.filename,
-                            onProgress: { line in
-                                Task { @MainActor in launcher.extractionLog.append(line) }
-                            })
-                        sourceBytes = markdown.data(using: .utf8) ?? bytes
-                        sourceExt = "md"
-                        DebugLog.extraction("convert: done — \(markdown.count) chars")
-                        launcher.extractionLog.append("PDF conversion done — \(markdown.count) chars extracted.\n")
-                        // Persist extracted markdown as v1 in the version chain.
-                        // Double-seed guard: if a head already exists, reuse it.
-                        let cfg = extractionCoordinator.config
-                        store.seedPdfMarkdown(
-                            for: source.id, content: markdown,
-                            backend: cfg.backend, modelVersion: cfg.currentModelVersion)
-                    } catch {
-                        if Task.isCancelled {
-                            DebugLog.extraction("convert: CANCELLED")
-                            // The `defer` above removes this file's id and releases
-                            // the slot; also clear the whole set as a belt-and-
-                            // suspenders (the slot serializes, so it holds at most
-                            // this one id) to preserve the old cancel-clears-state
-                            // behavior.
-                            launcher.extractingSourceIDs = []
-                            return
+                        let itemID = try await queueEngine.enqueue(request)
+                        let result = await queueEngine.waitForCompletion(of: itemID)
+                        switch result {
+                        case .success:
+                            DebugLog.extraction("runMultiIngest: extraction completed for \(source.filename)")
+                            // Re-read the extracted markdown head now that the
+                            // worker has persisted it. If it landed, use it; if
+                            // not (edge case), fall through with raw PDF.
+                            if let head = store.processedMarkdownHead(for: source) {
+                                sourceBytes = head.content.data(using: .utf8) ?? bytes
+                                sourceExt = "md"
+                            }
+                        case .failure(let error):
+                            DebugLog.extraction("runMultiIngest: extraction failed for \(source.filename) — \(error.localizedDescription), using raw PDF")
                         }
-                        DebugLog.extraction("convert: FAILED — \(error.localizedDescription)")
-                        launcher.extractionLog.append("PDF conversion: \(error.localizedDescription)\n")
+                    } catch {
+                        DebugLog.extraction("runMultiIngest: enqueue failed for \(source.filename) — \(error.localizedDescription), using raw PDF")
                     }
-                case .needsSetup(let message), .notInstalled(let message):
-                    // Backend unconfigured (no API key / endpoint) or the local
-                    // deps aren't installed — show the reason and fall through so
-                    // the raw PDF is sent to the agent as-is.
-                    DebugLog.extraction("readiness: not ready — \(message)")
-                    launcher.extractionLog = message
-                }
                 } // end else (no existing markdown → extract)
             } // end if source.mimeType == "application/pdf"
 

@@ -782,9 +782,11 @@ public final class AgentLauncher {
         store: WikiStoreModel,
         wikiID: String,
         changeSignaler: any ChangeSignaler,
-        wikictlDirectory: String
+        wikictlDirectory: String,
+        queueEngine: QueueEngine,
+        extractionProvider: any QueueExtractionProvider
     ) {
-        ingestSources(sourceIDs: [sourceID], store: store, wikiID: wikiID, changeSignaler: changeSignaler, wikictlDirectory: wikictlDirectory)
+        ingestSources(sourceIDs: [sourceID], store: store, wikiID: wikiID, changeSignaler: changeSignaler, wikictlDirectory: wikictlDirectory, queueEngine: queueEngine, extractionProvider: extractionProvider)
     }
 
     /// Ingest one or more sources.  Single entrypoint for both the detail view
@@ -795,7 +797,9 @@ public final class AgentLauncher {
         store: WikiStoreModel,
         wikiID: String,
         changeSignaler: any ChangeSignaler,
-        wikictlDirectory: String
+        wikictlDirectory: String,
+        queueEngine: QueueEngine,
+        extractionProvider: any QueueExtractionProvider
     ) {
         ingestTask?.cancel()
         let task = Task {
@@ -807,7 +811,9 @@ public final class AgentLauncher {
                 wikiID: wikiID,
                 changeSignaler: changeSignaler,
                 wikictlDirectory: wikictlDirectory,
-                extractionCoordinator: extractionCoordinator)
+                extractionCoordinator: extractionCoordinator,
+                queueEngine: queueEngine,
+                extractionProvider: extractionProvider)
         }
         ingestTask = task
     }

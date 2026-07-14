@@ -35,6 +35,13 @@ struct WikiFSApp: App {
     /// Serve). Threaded like `settingsLauncher` — one instance, owned by the app,
     /// shared as a ref into each `WikiSession` (it carries no per-wiki state).
     @State private var extractionCoordinator: ExtractionCoordinator
+    /// App-wide queue engine. Owns the persistent `queue.sqlite` store; drives
+    /// extraction/ingestion workers off-main. One instance, shared across
+    /// sessions via `WikiSession`.
+    @State private var queueEngine: QueueEngine
+    /// App-wide extraction provider. Bridges the headless queue engine to the
+    /// `@MainActor` `ExtractionCoordinator` + `WikiStoreModel`.
+    @State private var extractionProvider: any QueueExtractionProvider
     @State private var showingLaunchLocationWarning: Bool
     @State private var fileProviderSetupWarning: FileProviderSetupWarning?
     @State private var showingFileProviderSetupWarning = false
@@ -90,11 +97,50 @@ struct WikiFSApp: App {
             containerDirectory: directory,
             localExtractorFactory: { LocalPdf2MarkdownExtractor() })
         _extractionCoordinator = State(initialValue: coordinator)
-        _sessionManager = State(initialValue: SessionManager(
+
+        // Queue engine construction. Order matters (factory needs provider;
+        // provider needs a session-lookup box; session manager needs engine +
+        // provider). The box starts returning nil (no sessions yet) and is
+        // wired to the real session manager after construction.
+        let queueDBURL = (try? DatabaseLocation.queueDatabaseURL())
+            ?? directory.appendingPathComponent("queue.sqlite", isDirectory: false)
+        let queueStore: QueueStore
+        do {
+            queueStore = try QueueStore(databaseURL: queueDBURL)
+        } catch {
+            DebugLog.store("QueueEngine: failed to open queue.sqlite — using in-memory: \(error)")
+            // swiftlint:disable:next force_try
+            queueStore = try! QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+        }
+        let sessionBox = SessionLookupBox()
+        let extractionProvider = AppQueueExtractionProvider(
+            extractionCoordinator: coordinator,
+            sessionBox: sessionBox)
+        let workerFactory = QueueExtractionWorkerFactory(
+            provider: extractionProvider,
+            emitProgress: { _, _ in })  // TODO Phase 7: wire to engine stream for UI progress
+        let queueEngine = QueueEngine(store: queueStore, workerFactory: workerFactory)
+        // Start the engine (rehydrate + crash recovery + initial dispatch).
+        // Detached so the app's init isn't blocked; the engine is an actor so
+        // `start()` is safe to call concurrently.
+        Task { await queueEngine.start() }
+        _queueEngine = State(initialValue: queueEngine)
+        _extractionProvider = State(initialValue: extractionProvider)
+
+        let sm = SessionManager(
             containerDirectory: directory,
             extractionCoordinator: coordinator,
+            queueEngine: queueEngine,
+            extractionProvider: extractionProvider,
             pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path }
-        ))
+        )
+        _sessionManager = State(initialValue: sm)
+        // Wire the session-lookup box to the real session manager now that
+        // it's constructed. The provider (already captured by the factory)
+        // sees live sessions through the box.
+        sessionBox.setLookup { [weak sm] wikiID in
+            sm?.sessions[wikiID]?.store
+        }
         // Settings-only launcher (D5): its own gate, independent of any
         // session's gate. Used for "Test Connection" + backend config only.
         let settingsGate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])

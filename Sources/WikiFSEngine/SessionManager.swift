@@ -39,6 +39,13 @@ public final class SessionManager {
     /// avoids re-reading the same config file per session.
     public let extractionCoordinator: ExtractionCoordinator
 
+    /// Shared, app-wide queue engine. One instance serves every session.
+    public let queueEngine: QueueEngine
+
+    /// Shared, app-wide extraction provider. The app-layer bridge from the
+    /// headless queue engine to `@MainActor` types.
+    public let extractionProvider: any QueueExtractionProvider
+
     /// The App Group container directory holding every `<ulid>.sqlite`.
     public let containerDirectory: URL
 
@@ -49,10 +56,14 @@ public final class SessionManager {
     public init(
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
+        queueEngine: QueueEngine,
+        extractionProvider: any QueueExtractionProvider,
         pdf2mdScriptPathResolver: @escaping () -> String?
     ) {
         self.containerDirectory = containerDirectory
         self.extractionCoordinator = extractionCoordinator
+        self.queueEngine = queueEngine
+        self.extractionProvider = extractionProvider
         self.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
     }
 
@@ -73,6 +84,8 @@ public final class SessionManager {
             descriptor: descriptor,
             containerDirectory: containerDirectory,
             extractionCoordinator: extractionCoordinator,
+            queueEngine: queueEngine,
+            extractionProvider: extractionProvider,
             pdf2mdScriptPathResolver: pdf2mdScriptPathResolver
         )
         sessions[wikiID] = newSession

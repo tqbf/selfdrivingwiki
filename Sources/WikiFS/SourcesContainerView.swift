@@ -14,6 +14,8 @@ struct SourcesContainerView: View {
     /// The per-active-wiki session (store + launchers + descriptor).
     var session: WikiSession
     let launcher: AgentLauncher
+    let queueEngine: QueueEngine
+    let extractionProvider: any QueueExtractionProvider
     var ingestingSourceIDs: Set<PageID> = []
     var extractingSourceIDs: Set<PageID> = []
 
@@ -87,7 +89,9 @@ struct SourcesContainerView: View {
                 launcher.ingestSources(sourceIDs: pendingBatchIngestIDs,
                     store: store, wikiID: session.wikiID,
                     changeSignaler: fileProvider,
-                    wikictlDirectory: HelpersLocation.wikictlDirectory)
+                    wikictlDirectory: HelpersLocation.wikictlDirectory,
+                    queueEngine: queueEngine,
+                    extractionProvider: extractionProvider)
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -213,7 +217,9 @@ struct SourcesContainerView: View {
                 launcher.ingestSources(sourceIDs: ids, store: store,
                                        wikiID: session.wikiID,
                                        changeSignaler: fileProvider,
-                                       wikictlDirectory: HelpersLocation.wikictlDirectory)
+                                       wikictlDirectory: HelpersLocation.wikictlDirectory,
+                                       queueEngine: queueEngine,
+                                       extractionProvider: extractionProvider)
             },
             onIngestNeedsConfirmation: { ids, names in
                 pendingBatchIngestIDs = ids

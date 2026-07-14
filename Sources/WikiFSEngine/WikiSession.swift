@@ -63,6 +63,17 @@ public final class WikiSession {
     /// one instance serves every session.
     public let extractionCoordinator: ExtractionCoordinator
 
+    /// Shared, app-wide queue engine. One instance serves every session —
+    /// the engine routes extraction work off-main via workers, and serializes
+    /// via the persistent `queue.sqlite` store. Session views access it to
+    /// enqueue extraction + await completion during ingest.
+    public let queueEngine: QueueEngine
+
+    /// Shared, app-wide extraction provider. The app-layer bridge from the
+    /// headless queue engine to the `@MainActor` `ExtractionCoordinator` +
+    /// `WikiStoreModel`. One instance serves every session.
+    public let extractionProvider: any QueueExtractionProvider
+
     /// Per-session generation gate. Each `WikiSession` owns its own so
     /// cross-wiki isolation is structural: a held gate on session A does not
     /// block session B. Lane limits match the app-wide gate the launchers
@@ -109,11 +120,15 @@ public final class WikiSession {
         descriptor: WikiDescriptor,
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
+        queueEngine: QueueEngine,
+        extractionProvider: any QueueExtractionProvider,
         makeStore: @escaping (URL) throws -> WikiStore = { try SQLiteWikiStore(databaseURL: $0) },
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil }
     ) {
         self.wikiID = wikiID
         self.extractionCoordinator = extractionCoordinator
+        self.queueEngine = queueEngine
+        self.extractionProvider = extractionProvider
 
         // `var` so the Home-page seeding below can set `homePageID` before it
         // is committed to `self.descriptor`.

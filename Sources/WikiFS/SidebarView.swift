@@ -172,6 +172,8 @@ struct SidebarView: View {
         case .sources:
             SourcesContainerView(store: store, fileProvider: fileProvider,
                                  session: session, launcher: launcher,
+                                 queueEngine: session.queueEngine,
+                                 extractionProvider: session.extractionProvider,
                                  ingestingSourceIDs: ingestingSourceIDs,
                                  extractingSourceIDs: extractingSourceIDs,
                                  showingAddFromZotero: $showingAddFromZotero,

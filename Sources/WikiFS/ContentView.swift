@@ -16,6 +16,8 @@ struct ContentView: View {
     @Bindable var agentLauncher: AgentLauncher
     let chatLauncher: AgentLauncher
     let extractionCoordinator: ExtractionCoordinator
+    let queueEngine: QueueEngine
+    let extractionProvider: any QueueExtractionProvider
     @State private var isTranscriptExpanded = false
     /// Driven by `.dropDestination`'s `isTargeted` callback to fade in a subtle
     /// accent border while a drag hovers the window (set via the closure param —
@@ -359,7 +361,9 @@ struct ContentView: View {
                 wikiID: session.wikiID,
                 changeSignaler: fileProvider,
                 wikictlDirectory: HelpersLocation.wikictlDirectory,
-                extractionCoordinator: extractionCoordinator)
+                extractionCoordinator: extractionCoordinator,
+                queueEngine: queueEngine,
+                extractionProvider: extractionProvider)
         }
         agentLauncher.ingestTask = task
     }
