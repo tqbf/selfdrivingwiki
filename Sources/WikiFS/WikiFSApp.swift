@@ -235,7 +235,7 @@ struct WikiFSApp: App {
                 sessionManager: sessionManager,
                 fileProvider: fileProvider
             )
-            .environment(activityTracker)
+            .appEnvironment(tracker: activityTracker)
             .alert(
                 "Install Self Driving Wiki in Applications",
                 isPresented: $showingLaunchLocationWarning,
@@ -337,7 +337,7 @@ struct WikiFSApp: App {
                 sessionManager: sessionManager,
                 fileProvider: fileProvider
             )
-            .environment(activityTracker)
+            .appEnvironment(tracker: activityTracker)
         }
 
         // Extraction compare: a real, resizable, non-modal window (one per
@@ -361,7 +361,7 @@ struct WikiFSApp: App {
                 AgentsSettingsView(containerDirectory: containerDirectory)
                     .tabItem { Label("Agents", systemImage: "cpu") }
             }
-            .environment(activityTracker)
+            .appEnvironment(tracker: activityTracker)
             .frame(minWidth: 560, minHeight: 520)
         }
         .windowResizability(.contentMinSize)
@@ -453,5 +453,23 @@ extension FileProviderSpike {
         registry.renameDomain = { [weak self] id, name in
             await self?.renameDomain(id: id, displayName: name)
         }
+    }
+}
+
+// MARK: - App environment injection
+
+/// Centralizes all required `@Environment` injections for app scenes. Every
+/// `WindowGroup` and `Settings` scene MUST use this modifier — if a new
+/// `@Environment`-dependent type is added, add it here so no scene can forget.
+///
+/// The assert catches missing injections at debug-build runtime (fitness for
+/// `@Environment`-dependent views like `WikiDetailView` and
+/// `ExtractionSettingsView`).
+extension View {
+    @MainActor
+    func appEnvironment(tracker: QueueActivityTracker) -> some View {
+        assert(tracker.isAttachedToEngine, "QueueActivityTracker must be attached to a QueueEngine before injecting into a scene")
+        return self
+            .environment(tracker)
     }
 }

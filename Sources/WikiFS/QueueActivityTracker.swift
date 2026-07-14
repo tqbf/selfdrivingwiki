@@ -152,6 +152,12 @@ final class QueueActivityTracker {
         await engine.cancelItem(itemID)
     }
 
+    /// True if the tracker has been attached to a queue engine's event stream.
+    /// Used by `appEnvironment` to assert the tracker is live before injection.
+    var isAttachedToEngine: Bool {
+        streamTask != nil
+    }
+
     /// True if an extraction is running but NOT for this specific source.
     /// Used to disable the Extract button when another file holds the
     /// extraction slot (local pdf2md is limit 1).
