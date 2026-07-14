@@ -42,6 +42,10 @@ struct WikiFSApp: App {
     /// App-wide extraction provider. Bridges the headless queue engine to the
     /// `@MainActor` `ExtractionCoordinator` + `WikiStoreModel`.
     @State private var extractionProvider: any QueueExtractionProvider
+    /// App-wide queue-activity tracker. Observes `QueueEngine.events` and
+    /// exposes `@Observable` extraction state (extractingSourceIDs, progress
+    /// log, etc.) that replaces the launcher's slot machinery.
+    @State private var activityTracker: QueueActivityTracker
     @State private var showingLaunchLocationWarning: Bool
     @State private var fileProviderSetupWarning: FileProviderSetupWarning?
     @State private var showingFileProviderSetupWarning = false
@@ -116,16 +120,33 @@ struct WikiFSApp: App {
         let extractionProvider = AppQueueExtractionProvider(
             extractionCoordinator: coordinator,
             sessionBox: sessionBox)
+        // Create a progress-emit box — the closure starts as a no-op and is
+        // replaced with the engine's continuation after the engine is
+        // constructed (breaking the circular dependency: factory needs the
+        // closure, engine needs the factory).
+        let progressBox = ProgressEmitBox()
         let workerFactory = QueueExtractionWorkerFactory(
             provider: extractionProvider,
-            emitProgress: { _, _ in })  // TODO Phase 7: wire to engine stream for UI progress
+            emitProgress: { id, line in progressBox.emit?(id, line) })
         let queueEngine = QueueEngine(store: queueStore, workerFactory: workerFactory)
+        // Wire the progress emit box to the engine's event continuation.
+        // This is an actor-isolated call — use `await` to hop to the actor.
+        // The box starts with a nil emit (no-op), so workers spawned before
+        // this resolves simply drop progress lines (rare — the engine hasn't
+        // dispatched yet at this point in init).
+        Task { progressBox.emit = await queueEngine.makeEmitProgress() }
         // Start the engine (rehydrate + crash recovery + initial dispatch).
         // Detached so the app's init isn't blocked; the engine is an actor so
         // `start()` is safe to call concurrently.
         Task { await queueEngine.start() }
+        // Create the activity tracker and attach it to the engine's event
+        // stream. The tracker is @Observable @MainActor so views can read
+        // extraction state directly via @Environment.
+        let activityTracker = QueueActivityTracker()
+        activityTracker.attach(engine: queueEngine)
         _queueEngine = State(initialValue: queueEngine)
         _extractionProvider = State(initialValue: extractionProvider)
+        _activityTracker = State(initialValue: activityTracker)
 
         let sm = SessionManager(
             containerDirectory: directory,
@@ -187,6 +208,7 @@ struct WikiFSApp: App {
                 sessionManager: sessionManager,
                 fileProvider: fileProvider
             )
+            .environment(activityTracker)
             .alert(
                 "Install Self Driving Wiki in Applications",
                 isPresented: $showingLaunchLocationWarning,

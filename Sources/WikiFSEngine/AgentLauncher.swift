@@ -42,40 +42,16 @@ public final class AgentLauncher {
     /// Exposed without `private(set)` so tests can simulate pre-existing stderr
     /// state via `@testable import WikiFS`.
     public var stderr = ""
-    public var extractionLog = ""
-    /// True while a local `pdf2md` conversion subprocess is running (before the
-    /// agent itself starts). Drives the PDF-extraction spinner / Cancel affordance.
-    public var isExtracting = false
-    /// PID of the running `pdf2md` conversion subprocess, surfaced in the UI so a
-    /// stuck conversion can be identified (and killed) by the user.
-    public var extractionPID: Int32?
     /// The ingested-file ids whose **agent run** is in flight — set only once the
     /// claude spawn is actually committed (around `onLock`), and cleared in
     /// `finish()`. Drives the per-file "Ingesting…" row label and the cross-file
-    /// `isAnySourceIngesting` Ingest-button greyout. This is the **agent phase**
-    /// flag; it is NOT set during the pdf2md extraction phase that precedes the
-    /// spawn (see `extractingSourceIDs`), so a pure extraction no longer mislabels
-    /// a row as "Ingesting…" or greys out another file's Ingest button.
+    /// `isAnySourceIngesting` Ingest-button greyout.
     public var ingestingSourceIDs: Set<PageID> = []
-    /// The ingested-file ids whose **pdf2md conversion** is in flight — set around
-    /// the pdf2md block of EITHER extraction path (the ingest-path conversion in
-    /// `AgentOperationRunner.runMultiIngest`, and the standalone
-    /// `SourceDetailView.runExtraction`), and cleared when the conversion ends
-    /// (success or failure). Drives the per-file "Extracting…" row label and the
-    /// standalone Extract button's per-file disable. This is the **extraction
-    /// phase** flag; it never feeds the cross-file Ingest greyout (that is
-    /// `ingestingSourceIDs` only) and never touches the generation gate or edit lock.
-    public var extractingSourceIDs: Set<PageID> = []
     /// The in-flight ingest operation Task (set by `IngestSheetView`). Cancelling
     /// it aborts a running `pdf2md` conversion (via its task-cancellation handler).
-    /// Held here so `stop()` — driven from the transcript sidebar too — can cancel
-    /// the conversion phase, not just the agent process. Self-clears when done.
+    /// Held here so `stop()` can cancel the conversion phase, not just the agent
+    /// process. Self-clears when done.
     @ObservationIgnored public var ingestTask: Task<Void, Never>?
-    /// The in-flight standalone extraction Task (set by the Extract Markdown button
-    /// in `SourceDetailView`). Mirror of `ingestTask` for the standalone
-    /// extract path — cancelled by `stop()` so the pdf2md subprocess is terminated
-    /// via `PdfExtractionService`'s `onCancel` handler. Self-clears when done.
-    @ObservationIgnored public var extractTask: Task<Void, Never>?
     /// True while a spawned `claude -p` process is alive (one-shot runs: from spawn
     /// to finish; interactive sessions: from spawn to session end, across all turns).
     /// Set at spawn commit in `run()` and `startInteractiveQuery()`; cleared in
@@ -640,142 +616,6 @@ public final class AgentLauncher {
     /// The separate, independent lock that serializes `pdf2md` conversions against
     /// each other. See the "three independent mechanisms" overview above. Held ↔
     /// `isExtractionSlotBusy`. Same FIFO + cancellation-safe shape as the generation
-    /// gate, but with its OWN state — it never touches `isRunning`, `isExtracting`,
-    /// `onLock`/`onUnlock`, or the generation gate. A `claude` query run starting
-    /// while an extraction holds this lock still acquires the generation gate
-    /// immediately.
-    private var extractionWaiters: [ExtractionWaiter] = []
-
-    /// One queued extraction request. Same shape and rationale as `GenerationWaiter`:
-    /// a class so the cancellation handler can identify its waiter by reference and
-    /// self-remove it from `extractionWaiters` — a cancelled waiter must never be
-    /// handed the slot. `@unchecked Sendable` because it is only ever touched on the
-    /// main actor.
-    private final class ExtractionWaiter: @unchecked Sendable {
-        var continuation: CheckedContinuation<Void, Never>?
-        var didReceiveSlot = false
-        var didCancel = false
-    }
-
-    /// True while a pdf2md conversion holds the extraction lock. Independent of
-    /// `isRunning` (generation gate) and `store.agentRunCount` (agent-run lifecycle).
-    public private(set) var isExtractionSlotBusy = false
-
-    /// The number of extraction requests currently queued for the slot (test seam).
-    var extractionSlotWaiterCount: Int { extractionWaiters.count }
-
-    /// Wait for the extraction slot, returning `true` iff this caller acquired it
-    /// (and `isExtractionSlotBusy` is now `true`). Returns `false` if the wait was
-    /// cancelled before the slot was handed over — in that case the caller owns
-    /// nothing and must simply return (no release). Cancellation-safe: a cancelled
-    /// waiter self-removes from the queue and is never handed the slot. Does NOT
-    /// set `isRunning`, `isExtracting`, or fire `onLock` — fully independent of the
-    /// generation gate and agent-run lifecycle.
-    public func awaitExtractionSlot() async -> Bool {
-        // Fast path: slot free and nobody queued — acquire atomically. No
-        // suspension point, so no other main-actor task can interleave.
-        if !isExtractionSlotBusy && extractionWaiters.isEmpty {
-            isExtractionSlotBusy = true
-            return true
-        }
-        let waiter = ExtractionWaiter()
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-                if waiter.didCancel {
-                    // Cancelled before we could register — resume immediately, don't
-                    // enqueue. The caller will see `didReceiveSlot == false`.
-                    c.resume()
-                    return
-                }
-                waiter.continuation = c
-                extractionWaiters.append(waiter)
-            }
-        } onCancel: {
-            // Hop to the main actor to self-remove. A cancelled waiter must not be
-            // handed the slot; if it already was (race with `releaseExtractionSlot`),
-            // do nothing — the woken caller will see `Task.isCancelled` and bail,
-            // releasing the slot it was handed.
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                waiter.didCancel = true
-                if let idx = self.extractionWaiters.firstIndex(where: { $0 === waiter }),
-                   let c = waiter.continuation {
-                    self.extractionWaiters.remove(at: idx)
-                    c.resume()
-                }
-            }
-        }
-        return waiter.didReceiveSlot
-    }
-
-    /// Release the extraction slot, handing it to the next live waiter (FIFO) or
-    /// freeing it. Called by both extraction paths in a `defer` once the conversion
-    /// ends (success or failure). `isExtractionSlotBusy` stays `true` on a handoff
-    /// so the transfer is atomic.
-    public func releaseExtractionSlot() {
-        while let head = extractionWaiters.first {
-            extractionWaiters.removeFirst()
-            if head.didCancel {
-                // Already resumed by its cancel handler; don't hand the slot to a
-                // dead task.
-                continue
-            }
-            head.didReceiveSlot = true
-            head.continuation?.resume()
-            return
-        }
-        // No live waiters: free the slot.
-        isExtractionSlotBusy = false
-    }
-
-    /// Extract markdown from a PDF source, serialising through the extraction
-    /// slot and updating UI state.  Same code path whether triggered from the
-    /// detail view or the sidebar context menu.
-    public func extractPDF(store: WikiStoreModel, id: PageID, filename: String, data: Data) async {
-        // Wait for the extraction slot (serialises pdf2md conversions).
-        let acquired = await awaitExtractionSlot()
-        guard acquired, !Task.isCancelled else {
-            if acquired { releaseExtractionSlot() }
-            return
-        }
-        isExtracting = true
-        extractingSourceIDs.insert(id)
-        extractionLog = ""
-        defer {
-            isExtracting = false
-            extractingSourceIDs.remove(id)
-            releaseExtractionSlot()
-        }
-
-        let extractor = extractionCoordinator.current()
-        switch await extractor.readiness() {
-        case .ready:
-            do {
-                let markdown = try await extractor.convert(
-                    pdfData: data, filename: filename,
-                    onProgress: { line in
-                        Task { @MainActor in self.extractionLog.append(line) }
-                    })
-                let cfg = extractionCoordinator.config
-                _ = store.seedPdfMarkdown(
-                    for: id, content: markdown,
-                    backend: cfg.backend, modelVersion: cfg.currentModelVersion)
-                extractionLog = "Markdown extracted — \(markdown.count) chars."
-                DebugLog.extraction("Extracted \(filename): \(markdown.count) chars")
-            } catch {
-                if Task.isCancelled {
-                    extractionLog = "Extraction cancelled."
-                } else {
-                    extractionLog = "Extraction failed: \(error.localizedDescription)"
-                }
-                DebugLog.extraction("Extract failed for \(filename): \(error.localizedDescription)")
-            }
-        case .needsSetup(let message), .notInstalled(let message):
-            extractionLog = message
-            DebugLog.extraction("Extract backend not ready for \(filename): \(message)")
-        }
-    }
-
     /// Ingest a single source.  Convenience — delegates to `ingestSources`.
     func ingestSource(
         sourceID: PageID,
@@ -1910,33 +1750,6 @@ public final class AgentLauncher {
             && !isGenerating && !isAwaitingGenerationSlot
     }
 
-    /// Cancel ONLY the pdf2md conversion (standalone or ingest-path extraction
-    /// phase). Does NOT touch the agent process — a running claude query/ingest
-    /// is left alone. Cancels whichever task owns the extraction, then clears
-    /// the extraction-phase flags so the sidebar dismisses the conversion box.
-    public func stopExtraction() {
-        DebugLog.agent(
-            "stopExtraction() requested: isExtracting=\(isExtracting) "
-            + "extractTask=\(extractTask != nil) ingestTask=\(ingestTask != nil)")
-        if extractTask != nil {
-            // Standalone "Extract Markdown" — the task's cancellation handler
-            // terminates pdf2md via PdfExtractionService.onCancel.
-            extractTask?.cancel()
-        } else if !isRunning && isExtracting {
-            // Ingest-path extraction phase (before agent spawn): cancel the
-            // ingest task so AgentOperationRunner.runMultiIngest bails out via
-            // its Task.isCancelled check.
-            ingestTask?.cancel()
-        }
-        // If extraction is somehow busy without a task (shouldn't happen), clear
-        // flags anyway so the UI doesn't hang.
-        if !isExtracting && extractingSourceIDs.isEmpty { return }
-        isExtracting = false
-        extractionPID = nil
-        extractingSourceIDs = []
-        extractionLog = ""
-    }
-
     /// Stop ONLY the agent process (claude -p). Does NOT touch a running pdf2md
     /// conversion — a standalone extract running alongside a query continues.
     /// Also cancels any in-flight send task (generation gate wait).
@@ -1965,8 +1778,9 @@ public final class AgentLauncher {
 
     /// Terminate EVERYTHING — extraction + agent process. Convenience for the
     /// few surfaces that don't distinguish (e.g. app termination cleanup).
+    /// Extraction is now managed by `QueueActivityTracker` + `QueueEngine` —
+    /// `stop()` only needs to stop the agent.
     func stop() {
-        stopExtraction()
         stopAgent()
     }
 

@@ -25,9 +25,6 @@ struct SidebarView: View {
     /// Files whose agent run is in flight (agent phase) — shows the
     /// "Ingesting…" spinner on those rows.
     var ingestingSourceIDs: Set<PageID> = []
-    /// Files whose pdf2md conversion is in flight (extraction phase) — shows the
-    /// "Extracting…" spinner on those rows. Independent of `ingestingSourceIDs`.
-    var extractingSourceIDs: Set<PageID> = []
 
     @Binding var showingAddFromZotero: Bool
     @Binding var showingImportMarkdown: Bool
@@ -175,7 +172,6 @@ struct SidebarView: View {
                                  queueEngine: session.queueEngine,
                                  extractionProvider: session.extractionProvider,
                                  ingestingSourceIDs: ingestingSourceIDs,
-                                 extractingSourceIDs: extractingSourceIDs,
                                  showingAddFromZotero: $showingAddFromZotero,
                                  showingImportMarkdown: $showingImportMarkdown,
                                  onAddFromURL: onAddFromURL,

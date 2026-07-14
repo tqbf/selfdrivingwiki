@@ -13,11 +13,11 @@ struct SourcesContainerView: View {
     let fileProvider: FileProviderSpike
     /// The per-active-wiki session (store + launchers + descriptor).
     var session: WikiSession
+    @Environment(QueueActivityTracker.self) private var tracker
     let launcher: AgentLauncher
     let queueEngine: QueueEngine
     let extractionProvider: any QueueExtractionProvider
     var ingestingSourceIDs: Set<PageID> = []
-    var extractingSourceIDs: Set<PageID> = []
 
     @Binding var showingAddFromZotero: Bool
     @Binding var showingImportMarkdown: Bool
@@ -65,7 +65,7 @@ struct SourcesContainerView: View {
                 SourcesListView(store: store, fileProvider: fileProvider,
                                 session: session, launcher: launcher,
                                 ingestingSourceIDs: ingestingSourceIDs,
-                                extractingSourceIDs: extractingSourceIDs,
+                                extractingSourceIDs: tracker.extractingSourceIDs,
                                 sources: visibleSources,
                                 callbacks: callbacks)
                 if visibleSources.isEmpty && !store.sourceSearchQuery.isEmpty {
@@ -229,8 +229,16 @@ struct SourcesContainerView: View {
             onExtract: { items in
                 Task {
                     for item in items {
-                        await launcher.extractPDF(store: store, id: item.id,
-                                                  filename: item.filename, data: item.data)
+                        do {
+                            let request = QueueItemRequest(
+                                queue: .extraction,
+                                wikiID: session.wikiID,
+                                payload: QueueItemPayload(sourceIDs: [item.id]))
+                            let itemID = try await queueEngine.enqueue(request)
+                            _ = await queueEngine.waitForCompletion(of: itemID)
+                        } catch {
+                            DebugLog.extraction("SourcesContainerView onExtract failed for \(item.filename): \(error.localizedDescription)")
+                        }
                     }
                 }
             },

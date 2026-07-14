@@ -13,6 +13,9 @@ struct WikiDetailView: View {
     var session: WikiSession
     let fileProvider: FileProviderSpike
     let extractionCoordinator: ExtractionCoordinator
+    @Environment(QueueActivityTracker.self) private var tracker
+    let queueEngine: QueueEngine
+    let extractionProvider: any QueueExtractionProvider
     let runIngest: (PageID) -> Void
     @Binding var showingImportMarkdown: Bool
     @Binding var showingAddFromZotero: Bool
@@ -162,12 +165,14 @@ struct WikiDetailView: View {
                     // into `extractingSourceIDs`, so this is now extraction-phase
                     // driven rather than the old `isExtracting &&
                     // ingestingSourceIDs.contains` overload.
-                    isThisFileExtracting: launcher.extractingSourceIDs.contains(file.id),
+                    isThisFileExtracting: tracker.extractingSourceIDs.contains(file.id),
                     // No edit lock — CAS prevents data races. Only extraction locks editing.
                     isEditLockedExternally: false,
                     runIngest: runIngest,
                     launcher: launcher,
                     extractionCoordinator: extractionCoordinator,
+                    queueEngine: queueEngine,
+                    extractionProvider: extractionProvider,
                     fileProvider: fileProvider,
                     store: store
                 )

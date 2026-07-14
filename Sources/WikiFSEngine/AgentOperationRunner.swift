@@ -204,7 +204,6 @@ public enum AgentOperationRunner {
         // Already-extracted markdown was seeded before this call and is preserved.
         if Task.isCancelled {
             launcher.ingestingSourceIDs = []
-            launcher.extractingSourceIDs = []
             return
         }
 

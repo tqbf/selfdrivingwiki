@@ -8,6 +8,7 @@ import WikiFSEngine
 /// output exists). Cmd-E flips between reader and editor for processed markdown;
 /// source bytes are never modified.
 struct SourceDetailView: View {
+    @Environment(QueueActivityTracker.self) private var tracker
     let file: SourceSummary
     let hasBeenIngested: Bool
     let isIngesting: Bool
@@ -34,6 +35,8 @@ struct SourceDetailView: View {
     /// Resolves the selected extraction backend (local pdf2md / Claude / Docling
     /// Serve) for the standalone Extract button.
     let extractionCoordinator: ExtractionCoordinator
+    let queueEngine: QueueEngine
+    let extractionProvider: any QueueExtractionProvider
     let fileProvider: FileProviderSpike
     @Bindable var store: WikiStoreModel
 
@@ -384,11 +387,9 @@ struct SourceDetailView: View {
                             // secondary until there's markdown worth ingesting.
                             Button(isExtracting ? "Extracting…" : "Extract",
                                    systemImage: "doc.plaintext") {
-                                let task = Task {
-                                    defer { launcher.extractTask = nil }
+                                Task {
                                     await runExtraction()
                                 }
-                                launcher.extractTask = task
                             }
                             .buttonStyle(.borderedProminent)
                             .disabled(isExtracting
@@ -396,8 +397,7 @@ struct SourceDetailView: View {
                                       // Another file currently holds the extraction
                                       // slot — this extract would await it, so show
                                       // it as busy rather than letting the tap hang.
-                                      || (launcher.isExtractionSlotBusy
-                                          && !launcher.extractingSourceIDs.contains(file.id)))
+                                      || tracker.isSlotBusyForOtherSource(file.id))
                         }
                         ingestButton
                         // The source's content affordance is one-per-source: an
@@ -731,60 +731,34 @@ struct SourceDetailView: View {
 
     /// Extraction progress is shown in the transcript sidebar's PDF Conversion
     /// box — the detail view keeps only a minimal Extracting… spinner in the
-    /// header. All log output writes to `launcher.extractionLog`.
+    /// header. The queue engine's `.progress` events drive the tracker's log.
     private func runExtraction() async {
         isExtracting = true
-        launcher.isExtracting = true
-        launcher.extractionPID = nil
-        launcher.extractionLog = ""
         defer {
             isExtracting = false
-            launcher.isExtracting = false
-            launcher.extractionPID = nil
         }
-        let acquired = await launcher.awaitExtractionSlot()
-        guard acquired, !Task.isCancelled else {
-            if acquired { launcher.releaseExtractionSlot() }
-            launcher.extractionLog = "Extraction cancelled."
-            return
-        }
-        launcher.extractingSourceIDs.insert(file.id)
-        defer {
-            launcher.extractingSourceIDs.remove(file.id)
-            launcher.releaseExtractionSlot()
-        }
-        let extractor = extractionCoordinator.current()
-        switch await extractor.readiness() {
-        case .ready:
-            guard let data = store.sourceBytes(id: file.id) else {
-                launcher.extractionLog = "Could not read source bytes."
-                return
-            }
-            do {
-                // PID-less protocol: the local backend reports its pid via
-                // onProgress; remote/model backends have none.
-                let markdown = try await extractor.convert(
-                    pdfData: data,
-                    filename: file.filename,
-                    onProgress: { line in
-                        Task { @MainActor in launcher.extractionLog.append(line) }
-                    })
-                if let version = store.seedPdfMarkdown(
-                    for: file.id, content: markdown,
-                    backend: extractionCoordinator.config.backend,
-                    modelVersion: extractionCoordinator.config.currentModelVersion) {
-                    headVersion = version
-                    launcher.extractionLog = "Markdown extracted — \(markdown.count) chars."
+
+        // Route extraction through the queue engine instead of the old
+        // inline slot machinery. The engine handles serialization (local
+        // pdf2md limit 1), readiness checks, and progress reporting.
+        do {
+            let request = QueueItemRequest(
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? "",
+                payload: QueueItemPayload(sourceIDs: [file.id]))
+            let itemID = try await queueEngine.enqueue(request)
+            let result = await queueEngine.waitForCompletion(of: itemID)
+
+            switch result {
+            case .success:
+                // The worker persisted the markdown; refresh the head version.
+                if let head = store.processedMarkdownHead(for: file) {
+                    headVersion = head
                 }
-            } catch {
-                if Task.isCancelled {
-                    launcher.extractionLog = "Extraction cancelled."
-                } else {
-                    launcher.extractionLog = "Extraction failed: \(error.localizedDescription)"
-                }
+            case .failure:
+                break  // Tracker records the error from queue events
             }
-        case .needsSetup(let message), .notInstalled(let message):
-            launcher.extractionLog = message
+        } catch {
+            // Enqueue error — tracker not updated (no queue event). No-op.
         }
     }
 
@@ -833,15 +807,12 @@ struct SourceDetailView: View {
             Section("Re-extract with") {
                 ForEach(ExtractionBackend.allCases, id: \.self) { backend in
                     Button(backend.displayName) {
-                        let task = Task {
-                            defer { launcher.extractTask = nil }
+                        Task {
                             await runReExtraction(with: backend)
                         }
-                        launcher.extractTask = task
                     }
                     .disabled(isThisFileExtracting
-                              || (launcher.isExtractionSlotBusy
-                                  && !launcher.extractingSourceIDs.contains(file.id)))
+                              || tracker.isSlotBusyForOtherSource(file.id))
                 }
             }
         } label: {
@@ -882,43 +853,33 @@ struct SourceDetailView: View {
     /// alternative (does not clobber the current head). Mirrors `runExtraction`
     /// but always appends via `reExtractMarkdown`.
     private func runReExtraction(with backend: ExtractionBackend) async {
-        let cfg = extractionCoordinator.config
-        let extractor = extractorFor(backend: backend, config: cfg)
-        let acquired = await launcher.awaitExtractionSlot()
-        guard acquired, !Task.isCancelled else {
-            if acquired { launcher.releaseExtractionSlot() }
-            launcher.extractionLog = "Re-extraction cancelled."
-            return
-        }
-        launcher.extractingSourceIDs.insert(file.id)
+        isExtracting = true
         defer {
-            launcher.extractingSourceIDs.remove(file.id)
-            launcher.releaseExtractionSlot()
+            isExtracting = false
         }
-        switch await extractor.readiness() {
-        case .ready:
-            launcher.isExtracting = true
-            launcher.extractionPID = nil
-            launcher.extractionLog = "Re-extracting with \(backend.displayName)…"
-            defer {
-                launcher.isExtracting = false
-                launcher.extractionPID = nil
+
+        // Route re-extraction through the queue engine with a backend override.
+        // The override is passed via stageRouting so the worker resolves the
+        // chosen backend instead of the configured default.
+        do {
+            let request = QueueItemRequest(
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? "",
+                payload: QueueItemPayload(
+                    sourceIDs: [file.id],
+                    stageRouting: ["backend": backend.rawValue]))
+            let itemID = try await queueEngine.enqueue(request)
+            let result = await queueEngine.waitForCompletion(of: itemID)
+
+            switch result {
+            case .success:
+                if let head = store.processedMarkdownHead(for: file) {
+                    headVersion = head
+                }
+            case .failure:
+                break  // Tracker records the error from queue events
             }
-            let onProgress: (@Sendable (String) -> Void) = { line in
-                Task { @MainActor in launcher.extractionLog.append(line) }
-            }
-            if let version = await store.reExtractMarkdown(
-                for: file.id, filename: file.filename,
-                using: extractor, backend: backend,
-                modelVersion: modelVersionFor(backend: backend, config: cfg),
-                onProgress: onProgress) {
-                headVersion = version
-                launcher.extractionLog = "Re-extracted with \(backend.displayName) — \(version.content.count) chars."
-            } else {
-                launcher.extractionLog = "Re-extraction failed."
-            }
-        case .needsSetup(let message), .notInstalled(let message):
-            launcher.extractionLog = message
+        } catch {
+            // Enqueue error — tracker not updated (no queue event). No-op.
         }
     }
 

@@ -7,6 +7,7 @@ import WikiFSCore
 /// designed empty state (§7.1 ContentUnavailableView). Hosted by `RootView`,
 /// which swaps it wholesale (via `.id`) when the user switches wikis.
 struct ContentView: View {
+    @Environment(QueueActivityTracker.self) private var tracker
     @Bindable var store: WikiStoreModel
     /// The per-active-wiki session (store + launchers + gate + descriptor).
     var session: WikiSession
@@ -105,7 +106,7 @@ struct ContentView: View {
         .onChange(of: agentLauncher.ingestingSourceIDs) { _, newValue in
             if !newValue.isEmpty { isTranscriptExpanded = true }
         }
-        .onChange(of: agentLauncher.extractingSourceIDs) { _, newValue in
+        .onChange(of: tracker.extractingSourceIDs) { _, newValue in
             if !newValue.isEmpty { isTranscriptExpanded = true }
         }
         // Close-while-editing guard: fires for any tab with isEditing set.
@@ -159,7 +160,6 @@ struct ContentView: View {
                         launcher: agentLauncher,
                         chatLauncher: chatLauncher,
                         ingestingSourceIDs: agentLauncher.ingestingSourceIDs,
-                        extractingSourceIDs: agentLauncher.extractingSourceIDs,
                         showingAddFromZotero: $showingAddFromZotero,
                         showingImportMarkdown: $showingImportMarkdown,
                         onAddFromURL: { pendingAddURL = PendingAddURL(url: "") },
@@ -208,7 +208,7 @@ struct ContentView: View {
     private var agentBusy: Bool {
         agentLauncher.isGenerating
             || !agentLauncher.ingestingSourceIDs.isEmpty
-            || !agentLauncher.extractingSourceIDs.isEmpty
+            || !tracker.extractingSourceIDs.isEmpty
     }
 
     private var zoteroContainerDirectory: URL {
@@ -223,7 +223,7 @@ struct ContentView: View {
     private var canShowTranscript: Bool {
         agentLauncher.isRunning
             || !agentLauncher.ingestingSourceIDs.isEmpty
-            || !agentLauncher.extractingSourceIDs.isEmpty
+            || !tracker.extractingSourceIDs.isEmpty
             || !agentLauncher.events.isEmpty
             || agentLauncher.preflightError != nil
             || !agentLauncher.stderr.isEmpty
@@ -341,7 +341,9 @@ struct ContentView: View {
             session: session,
             fileProvider: fileProvider,
             extractionCoordinator: extractionCoordinator,
-            runIngest: runIngest,
+            queueEngine: queueEngine,
+            extractionProvider: extractionProvider,
+            runIngest: { id in runIngest(sourceID: id) },
             showingImportMarkdown: $showingImportMarkdown,
             showingAddFromZotero: $showingAddFromZotero,
             isZoteroConfigured: isZoteroConfigured

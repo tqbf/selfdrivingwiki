@@ -9,6 +9,10 @@ import WikiFSCore
 /// silent lock state.
 struct AgentActivitySidebar: View {
     @Bindable var launcher: AgentLauncher
+    /// Queue-activity tracker — observes `QueueEngine.events` and exposes
+    /// extraction state (isExtracting, extractionLog, extractionPID,
+    /// cancelExtraction) that replaces the launcher's slot machinery.
+    @Environment(QueueActivityTracker.self) private var tracker
     /// Forwards wiki-link clicks in the transcript to the detail column. Built
     /// where the store lives (the owning `ContentView` / `LintView`) and
     /// forwarded unchanged to the activity view.
@@ -64,7 +68,7 @@ struct AgentActivitySidebar: View {
                     style: .continuous))
             .clipped()
         }
-        .onChange(of: launcher.isExtracting) { _, newValue in
+        .onChange(of: tracker.isExtracting) { _, newValue in
             if newValue {
                 selectedSection = .extraction
             }
@@ -75,7 +79,7 @@ struct AgentActivitySidebar: View {
             }
         }
         .onAppear {
-            if launcher.isExtracting {
+            if tracker.isExtracting {
                 selectedSection = .extraction
             } else if launcher.isRunning {
                 selectedSection = .activity
@@ -158,15 +162,15 @@ struct AgentActivitySidebar: View {
                     .font(.subheadline)
                     .fontWeight(.medium)
                 Spacer()
-                if launcher.isExtracting {
+                if tracker.isExtracting {
                     ProgressView().controlSize(.small)
-                    if let pid = launcher.extractionPID {
+                    if let pid = tracker.extractionPID {
                         Text("pid \(pid)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Button("Stop Conversion", systemImage: "stop.fill") {
-                        launcher.stopExtraction()
+                        Task { await tracker.cancelExtraction() }
                     }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
@@ -176,14 +180,14 @@ struct AgentActivitySidebar: View {
             }
             ScrollViewReader { proxy in
                 ScrollView {
-                    Text(launcher.extractionLog.isEmpty ? "Converting…" : launcher.extractionLog)
+                    Text(tracker.extractionLog.isEmpty ? "Converting…" : tracker.extractionLog)
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
                     Color.clear.frame(height: 1).id(Self.conversionBottom)
                 }
-                .onChange(of: launcher.extractionLog) {
+                .onChange(of: tracker.extractionLog) {
                     withAnimation(.linear(duration: 0.12)) {
                         proxy.scrollTo(Self.conversionBottom, anchor: .bottom)
                     }

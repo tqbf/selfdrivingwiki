@@ -11,9 +11,10 @@ import WikiFSEngine
 /// granite model, torch). This view owns that lifecycle: it probes readiness on
 /// appear, warns and offers a visible download when the dependencies are
 /// missing, streams the download progress, and once ready shows the live
-/// conversion log (`launcher.extractionLog`).
+/// conversion log (via `QueueActivityTracker`).
 struct PdfExtractionView: View {
     @Bindable var launcher: AgentLauncher
+    @Environment(QueueActivityTracker.self) private var tracker
     /// Whether the source being ingested is a PDF. When false the whole section is
     /// greyed out — the source (e.g. Markdown) is sent to the agent as-is and there
     /// is nothing to extract.
@@ -88,18 +89,18 @@ struct PdfExtractionView: View {
 
         case .ready:
             VStack(alignment: .leading, spacing: 6) {
-                if launcher.isExtracting {
+                if tracker.isExtracting {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
-                        Text(launcher.extractionPID.map { "Converting… (pid \($0))" } ?? "Converting…")
+                        Text(tracker.extractionPID.map { "Converting… (pid \($0))" } ?? "Converting…")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
-                logBox(launcher.extractionLog.isEmpty
+                logBox(tracker.extractionLog.isEmpty
                        ? "Dependencies ready. pdf2md output appears here when you run the ingest."
-                       : launcher.extractionLog,
-                       isPlaceholder: launcher.extractionLog.isEmpty)
+                       : tracker.extractionLog,
+                       isPlaceholder: tracker.extractionLog.isEmpty)
             }
 
         case .failed(let message):
