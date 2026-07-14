@@ -361,6 +361,7 @@ struct WikiFSApp: App {
                 AgentsSettingsView(containerDirectory: containerDirectory)
                     .tabItem { Label("Agents", systemImage: "cpu") }
             }
+            .environment(activityTracker)
             .frame(minWidth: 560, minHeight: 520)
         }
         .windowResizability(.contentMinSize)
