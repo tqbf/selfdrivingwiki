@@ -7742,3 +7742,183 @@ hello-world WikiFS SwiftUI app building, signing, and launching.
 - Begin SQLite store + page model (Milestone 0 deliverables in `plans/INITIAL.md`
   also include persistence; the build skeleton is done, the data layer is not).
 
+<<<<<<< HEAD
+=======
+## #163 — Drop routing for .webloc / remote URLs (2026-07-05)
+
+**Problem:** dragging a `.webloc` file or an `http(s)` URL from a browser onto
+the window hit the generic file-drop path (`addFiles`), ingesting the
+`.webloc` plist's raw bytes instead of fetching the linked page.
+
+**Fix**
+- `WikiStoreModel.addDroppedURLs(_:fetcher:)` — partitions dropped URLs:
+  `http(s)` URLs and `.webloc` shortcuts (resolved to their target) route through
+  `addURL` (the "Add from URL" fetch + HTML→Markdown path); other `file://`
+  URLs still ingest as raw bytes via `addFiles`. Supports multi-URL drops;
+  an unresolvable `.webloc` is skipped (its bytes aren't a useful source).
+  Named `add*` (not `ingest*`) since it only adds a source — agent ingestion
+  (read source → generate pages) is a separate `AgentLauncher` phase.
+- `WikiStoreModel.resolveWeblocURL(_:)` — reads the plist (XML or binary) off the
+  main actor via `PropertyListSerialization`.
+- `ContentView` `.dropDestination` now calls `store.addDroppedURLs(_:)`.
+
+**Tests:** `WikiStoreModelDropRoutingTests` (5) — webloc→md, http url→md, local
+txt→verbatim, mixed batch, unresolvable webloc skipped. All pass; existing
+`WikiStoreModelAddURLTests` still green.
+
+## #183 — "Show In List" sidebar reveal for pages & sources
+
+A "Show in List" button (next to "Reveal in Finder") in `PageDetailView` and
+`SourceDetailView` that surfaces the current page/source in the sidebar: opens
+the sidebar if collapsed, switches to the right section, clears a search that
+would hide the row, then scrolls to + selects it.
+
+**Mechanism** — mirrors the existing `pendingScrollAnchor` "set once, consume
+once" cross-view signal (issue #183 design):
+
+- `WikiStoreModel` — `pendingSidebarReveal: WikiSelection?` +
+  `pendingSidebarRevealVersion: Int` (monotonic, observed via `.onChange` so a
+  repeat request re-fires even when the value is unchanged), with
+  `requestSidebarReveal(_:)` (producer) and `consumePendingSidebarReveal()`
+  (consumer, called by the list view after scroll+select).
+- `ContentView` — `.onChange(of: pendingSidebarRevealVersion)` un-collapses the
+  sidebar (`columnVisibility = .all`) when it's `.detailOnly`, so the target
+  section's list is actually mounted.
+- `SidebarView` — `.onChange(of: pendingSidebarRevealVersion)` sets
+  `selectedSection` to `.pages`/`.sources` from the `WikiSelection` case and
+  clears the section's search query (`searchQuery`/`sourceSearchQuery`) only
+  when the target isn't in the filtered results (clearing resets
+  `searchResults`/`sourceSearchResults` synchronously, so the full list is
+  visible for row lookup).
+- `PagesListViewController` / `SourcesListViewController` — new
+  `revealAndSelect(id:)`: looks up the row, selects it (bypassing the
+  `reconcileHighlight` multi-select guard — an explicit user action wins over a
+  Cmd/Shift selection), and `scrollRowToVisible(_:)`. Driven from
+  `updateNSViewController`, which reads `pendingSidebarReveal` (also registers
+  the observation so the method re-runs on change), then consumes.
+- `PageDetailView` / `SourceDetailView` — `Button("Show in List",
+  systemImage: "sidebar.left")` calling `requestSidebarReveal(.page(id))` /
+  `.source(id)`. Works without a mounted File Provider (unlike Reveal in Finder).
+
+**Build/tests:** `swift build` clean; `swift test` — 1466 tests pass.
+
+---
+
+### Issue #229 — PDF source add by URL can fail "database is locked" (PR #247)
+
+**Problem.** `DisplayNameResolver.resolve()` — which invokes PDFKit's
+whole-file parse for PDFs — ran **inside** `SQLiteWikiStore.addSource`'s
+`mutate()` closure, under the recursive lock and before the write transaction
+opened. For a large PDF this parse can take seconds, delaying the `BEGIN` long
+enough for another writer (File Provider, daemon, concurrent write) to hold the
+DB write lock past the 5 s `busy_timeout`, surfacing as "database is locked".
+
+**Fix.** Two-part:
+1. **Out of the locked path:** `addSource` (and `addSnapshotImage`) now compute
+   `ext` / `mime` / `displayName` **before** `mutate()` acquires the recursive
+   lock. The locked body keeps only the dup-check SELECT + INSERT transaction.
+   Added a `resolvedDisplayName: String??` parameter to `addSource` (and a
+   `WikiStore` protocol-extension convenience overload since protocol methods
+   can't have default args) so callers can skip the in-method parse entirely.
+2. **Off the main actor:** `WikiStoreModel.preResolveDisplayName()` runs
+   `DisplayNameResolver.resolve()` on a `Task.detached` for **PDFs only**
+   (non-PDFs return `nil` → resolve inline). Wired into `addURLViaWebsite`,
+   `addFiles`, and `ingestFromZotero`.
+
+**Key files:** `SQLiteWikiStore.swift` (`addSource` / `addSnapshotImage`),
+`WikiStore.swift` (protocol + extension), `WikiStoreModel.swift`
+(`preResolveDisplayName`, `storeMaterialized`, three ingest paths).
+
+**Build/tests:** `swift build` clean; `swift test` — 1930 tests pass
+(1927 existing + 3 new for the `resolvedDisplayName` tri-state bypass).
+
+## Remove edit locks — CAS replaces the mutex (2026-07-11)
+
+**Problem:** Starting a second chat while Chat 1 was running silently failed —
+the second chat didn't even display the user's question. The root cause was
+`store.isAgentRunning`, a process-wide mutex that blocked `startChat`/
+`continueChat` at the preflight guard (`shouldBlockEditStart`), failing before
+the chat row was created or the message was shown.
+
+**Why the mutex existed:** Pre-CAS, it prevented last-writer-wins data races —
+the in-app autosave could clobber the agent's `wikictl` writes. It paused
+autosave, disabled editing UI, and blocked new chat starts.
+
+**Why it's safe to remove now:** W0 (PR #342) introduced page versions + CAS
+save (`PageUpsert.upsert` with `expectedHeadVersionID`). `WikiStoreModel.save()`
+catches `PageConflictError` and surfaces a "Page Was Updated" dialog. Concurrent
+writes are safe — the store detects the version mismatch.
+
+**Changes:**
+- **WikiStoreModel:** Replaced `isAgentRunning: Bool` with `agentRunCount: Int`
+  (ref-counted). `agentRunStarted()` increments + flushes drafts; `agentRunEnded()`
+  decrements + reloads from store when count hits 0. Removed autosave pause guards
+  in `scheduleAutosave()` and `systemPromptChanged()` — CAS handles it.
+- **AgentOperationRunner:** `shouldBlockEditStart` now only checks
+  `isIngestInProgress` (extraction is resource-intensive, not a data-race concern).
+  Removed `takeEditLock` parameter entirely. Callbacks now
+  `agentRunStarted()`/`agentRunEnded()` (session lifecycle, not mutex).
+- **AgentLauncher:** Removed `onTurnBoundary` parameter and handler (was the
+  per-turn edit lock toggle). Renamed `releaseEditLock()` → `releaseRunLifecycle()`.
+  Kept `isGenerating` (independent — drives ChatView banner + send guard) and
+  the generation gate (FIFO, N=1 by default).
+- **UI views:** Removed all `.disabled(store.isAgentRunning)`, `.onChange(of:
+  store.isAgentRunning)`, and "Agent updating wiki…" labels from PageDetailView,
+  SourceDetailView, SystemPromptDetailView, PagesListView, WikiDetailView.
+- **Tests:** Updated `Issue235IngestExtractionLockTests` (predicate now 1-arg)
+  and `AgentGenerationSlotTests` (ref-count assertions).
+
+**Build/tests:** `swift build` clean; fast tier — 2187 tests pass.
+
+---
+
+## Queue Engine — Phase 3: QueueEventLog JSONL Audit Trail (2026-07-14)
+
+**Status:** Complete. All 16 tests pass (0.35s), 52 total across all 3 phases.
+
+**What:** `QueueEventLog` actor writes every `QueueEvent` as a JSONL line to
+daily-rotated `queue-YYYY-MM-DD.jsonl` files under `Logs/queue/` in the App
+Group container, with bounded retention (30-day default). Daily rotation is
+date-driven (no timer); prune-on-rotate. Progress events are high-volume and
+skipped from the audit trail (consumed live by the UI via the event stream).
+
+**Files:** `Sources/WikiFSEngine/QueueEventLog.swift` (QueueLogRecord +
+QueueEventLog actor), `Tests/WikiFSTests/QueueEventLogTests.swift`.
+
+**Build/tests:** `swift build` clean; 52 queue tests pass across 4 suites.
+
+---
+
+## Queue Engine — Phase 4: Extraction Through the Queue (2026-07-14)
+
+**Status:** Complete. All 78 queue tests pass across 4 suites. Build clean.
+
+**What:** All PDF extraction flows through the central extraction queue.
+The `QueueExtractionWorkerFactory` + `QueueExtractionWorker` resolve the
+extractor + PDF bytes via the `QueueExtractionProvider` protocol, check
+`readiness()`, call `convert()` with progress reporting, and persist the
+result. `waitForCompletion(of:)` lets callers (AgentOperationRunner,
+SourceDetailView) await extraction results synchronously.
+
+**QueueActivityTracker:** `@Observable @MainActor` class that observes
+`QueueEngine.events` and replaces the launcher's extraction slot machinery
+(`isExtracting`, `extractionLog`, `extractionPID`, `extractingSourceIDs`,
+`extractTask`, `stopExtraction`). Injected via `.environment()`.
+
+**Retired from AgentLauncher:** `awaitExtractionSlot`,
+`releaseExtractionSlot`, `isExtractionSlotBusy`, `extractionWaiters`,
+`ExtractionWaiter`, `extractPDF`, `stopExtraction`, `extractionLog`,
+`isExtracting`, `extractionPID`, `extractingSourceIDs`, `extractTask`.
+Local-pdf2md limit-1 is now enforced by the engine's capacity config, not
+the slot.
+
+**Files:** `Sources/WikiFSEngine/QueueExtractionProvider.swift`,
+`Sources/WikiFSEngine/QueueExtractionWorker.swift`,
+`Sources/WikiFS/QueueActivityTracker.swift`,
+`Sources/WikiFS/WikiFSApp.swift` (wiring), view migrations across
+SourceDetailView, SourcesContainerView, ContentView, WikiDetailView,
+PdfExtractionView, ExtractionSettingsView, AgentActivitySidebar, SidebarView.
+
+**Build/tests:** `swift build` clean; 78 queue tests pass across 4 suites.
+
+>>>>>>> 2313993 (docs: update PROGRESS.md with Phase 3 + Phase 4 completion records)
