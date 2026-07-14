@@ -437,6 +437,8 @@ struct ChatWebView: NSViewRepresentable {
                 """
             case .messageStop, .assistantTextDelta:
                 return ""  // internal — not rendered (deltas are merged into `.assistantText` upstream)
+            case .turnFailed(let reason):
+                return turnFailedBannerHTML(reason: reason)
             case .raw(let line):
                 return "<pre class=\"row row-raw\">\(escape(line))</pre>"
             }
@@ -470,6 +472,8 @@ struct ChatWebView: NSViewRepresentable {
                 return chatToolRowHTML(name: nil, summary: summary, isError: true)
             case .systemInit, .subagent, .messageStop, .raw, .assistantTextDelta:
                 return ""
+            case .turnFailed(let reason):
+                return turnFailedBannerHTML(reason: reason)
             }
         }
 
@@ -506,6 +510,19 @@ struct ChatWebView: NSViewRepresentable {
             <details class="row chat-row chat-tool\(isError ? " is-error" : "")">\
             <summary>\(nameHTML)\(summaryHTML)</summary>\
             <pre class="chat-tool-detail\">\(escape(body))</pre></details>
+            """
+        }
+
+        /// A styled amber banner for a turn failure (timeout, ceiling, agent
+        /// error). Distinct from `.row-raw` (plain `<pre>`) and `.row-result`
+        /// (final answer): this is a scannable inline banner with an icon and
+        /// plain-English reason. (#422)
+        private static func turnFailedBannerHTML(reason: TurnFailureReason) -> String {
+            """
+            <div class="row row-turn-failed">\
+            <span class="row-turn-failed-icon">⚠︎</span>\
+            <div class="row-turn-failed-body">\
+            <strong>\(escape(reason.label))</strong> \(escape(reason.description))</div></div>
             """
         }
 
@@ -620,6 +637,15 @@ struct ChatWebView: NSViewRepresentable {
             font-size: 11px; color: var(--muted); margin: 0 0 8px;
             white-space: pre-wrap; word-break: break-word;
           }
+          .row-turn-failed {
+            display: flex; align-items: baseline; gap: 6px;
+            margin: 0 0 14px; padding: 8px 12px;
+            background: rgba(255, 159, 10, 0.12);
+            border-left: 3px solid #ff9f0a;
+            border-radius: 6px; font-size: 12px; color: var(--text);
+          }
+          .row-turn-failed-icon { font-size: 14px; line-height: 1; }
+          .row-turn-failed-body strong { font-weight: 600; color: #ff9f0a; }
           .chat-row { display: flex; margin: 0 0 14px; }
           .chat-user { justify-content: flex-end; }
           .chat-assistant { justify-content: flex-start; }

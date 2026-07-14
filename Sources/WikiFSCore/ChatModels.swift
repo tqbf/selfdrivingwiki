@@ -145,7 +145,7 @@ extension AgentEvent {
     public var isPersistable: Bool {
         switch self {
         case .userText, .systemInit, .assistantText, .toolUse, .toolResult,
-             .subagent, .result:
+             .subagent, .result, .turnFailed:
             return true
         case .assistantTextDelta, .messageStop, .raw:
             return false
@@ -163,7 +163,7 @@ extension AgentEvent {
             return "assistant"
         case .toolUse, .toolResult, .subagent:
             return "tool"
-        case .systemInit, .messageStop, .raw:
+        case .systemInit, .messageStop, .raw, .turnFailed:
             return "system"
         }
     }

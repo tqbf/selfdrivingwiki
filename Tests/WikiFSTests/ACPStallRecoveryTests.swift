@@ -104,20 +104,23 @@ import WikiFSEngine
     }
 
     /// `turnEndEvents` with a stall error produces the expected sequence:
-    /// a `.raw` line carrying the message, then `.messageStop` — the exact
-    /// sequence the watchdog yields to end a stalled turn. This reuses the
-    /// existing synthesis path, so the consumer's `for await` exits, the
-    /// generation gate releases, and the user sees an error line.
+    /// a `.turnFailed(.stalled)` banner, then `.messageStop` — the exact
+    /// sequence the watchdog yields to end a stalled turn. The structured
+    /// reason persists and renders as an amber banner in the UI. (#422)
     @Test func turnEndEventsForStallSynthesizeMessageStop() {
         let error = ACPBackendError.turnStalled(idleSeconds: 120)
         let events = ACPBackend.turnEndEvents(error: error)
 
         #expect(events.count == 2)
-        // First: a raw line carrying the error message.
-        if case .raw(let text) = events[0] {
-            #expect(text.contains("stalled"))
+        // First: a .turnFailed carrying the idle seconds.
+        if case .turnFailed(let reason) = events[0] {
+            if case .stalled(let idle) = reason {
+                #expect(idle == 120)
+            } else {
+                Issue.record("expected .stalled reason, got \(reason)")
+            }
         } else {
-            Issue.record("expected .raw event, got \(events[0])")
+            Issue.record("expected .turnFailed event, got \(events[0])")
         }
         // Second: .messageStop (the generation-ending event).
         #expect(events[1] == .messageStop)
@@ -130,10 +133,14 @@ import WikiFSEngine
         let events = ACPBackend.turnEndEvents(error: error)
 
         #expect(events.count == 2)
-        if case .raw(let text) = events[0] {
-            #expect(text.contains("maximum"))
+        if case .turnFailed(let reason) = events[0] {
+            if case .ceilingExceeded(let total) = reason {
+                #expect(total == 1800)
+            } else {
+                Issue.record("expected .ceilingExceeded reason, got \(reason)")
+            }
         } else {
-            Issue.record("expected .raw event, got \(events[0])")
+            Issue.record("expected .turnFailed event, got \(events[0])")
         }
         #expect(events[1] == .messageStop)
         #expect(AgentEvent.endsGeneration(events[1]) == true)

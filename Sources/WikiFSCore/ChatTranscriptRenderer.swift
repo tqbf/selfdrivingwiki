@@ -63,6 +63,8 @@ public enum ChatTranscriptRenderer {
             return (header, body)
         case .assistantTextDelta, .messageStop, .raw:
             return ("", "")
+        case .turnFailed(let reason):
+            return ("Turn Failed", reason.description)
         }
     }
 
