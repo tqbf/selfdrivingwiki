@@ -69,6 +69,18 @@ struct ChatTranscriptFilterTests {
         #expect(events.transcriptVisible.isEmpty)
     }
 
+    @Test func thinkingDeltaIsDropped() {
+        let events: [AgentEvent] = [.thinkingDelta("partial thought")]
+        #expect(events.transcriptVisible.isEmpty)
+    }
+
+    @Test func thinkingIsVisible() {
+        // .thinking is surfaced as a collapsible box (issue #391) — visible in
+        // the transcript, distinct from .raw (which is debug residue).
+        let events: [AgentEvent] = [.thinking("Considering options\u{2026}")]
+        #expect(events.transcriptVisible == events)
+    }
+
     @Test func rawIsDropped() {
         let events: [AgentEvent] = [.raw("{\"type\":\"unknown\"}")]
         #expect(events.transcriptVisible.isEmpty)

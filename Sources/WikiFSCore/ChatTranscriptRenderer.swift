@@ -61,10 +61,12 @@ public enum ChatTranscriptRenderer {
             let header = isError ? "Failed" : "Result"
             let body = text.isEmpty ? header : text
             return (header, body)
-        case .assistantTextDelta, .messageStop, .raw:
+        case .assistantTextDelta, .thinkingDelta, .messageStop, .raw:
             return ("", "")
         case .turnFailed(let reason):
             return ("Turn Failed", reason.description)
+        case .thinking(let text):
+            return ("Thinking", text)
         }
     }
 

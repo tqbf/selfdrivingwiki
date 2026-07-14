@@ -414,14 +414,13 @@ struct ChatWebView: NSViewRepresentable {
                 return "<div class=\"row row-meta\">Started · \(escape(model))</div>"
             case .assistantText(let text):
                 return "<div class=\"row row-assistant\">\(renderedMarkdown(text, context: context, isFinal: isFinal))</div>"
+            case .thinking(let text):
+                return thinkingRowHTML(text: text, context: context, isFinal: isFinal)
             case .toolUse(let name, let summary):
-                let summaryHTML = summary.isEmpty ? "" : "<span class=\"row-tool-summary\">\(escape(summary))</span>"
-                return """
-                <div class="row row-tool"><span class="row-tool-name">\(escape(name))</span>\(summaryHTML)</div>
-                """
+                return feedToolRowHTML(name: name, summary: summary, isError: false)
             case .toolResult(let isError, let summary):
                 let body = summary.isEmpty ? (isError ? "(error)" : "(ok)") : summary
-                return "<div class=\"row row-tool-result\(isError ? " is-error" : "")\">\(escape(body))</div>"
+                return feedToolRowHTML(name: nil, summary: body, isError: isError)
             case .subagent(let subagentType, let description, let isCompletion):
                 let verb = isCompletion ? "digested" : "reading"
                 let descHTML = description.isEmpty ? "" : " — \(escape(description))"
@@ -439,6 +438,8 @@ struct ChatWebView: NSViewRepresentable {
                 return ""  // internal — not rendered (deltas are merged into `.assistantText` upstream)
             case .turnFailed(let reason):
                 return turnFailedBannerHTML(reason: reason)
+            case .messageStop, .assistantTextDelta, .thinkingDelta:
+                return ""  // internal — not rendered (deltas are merged upstream)
             case .raw(let line):
                 return "<pre class=\"row row-raw\">\(escape(line))</pre>"
             }
@@ -460,6 +461,8 @@ struct ChatWebView: NSViewRepresentable {
                 """
             case .assistantText(let text):
                 return assistantBubbleHTML(text: text, context: context, isFinal: isFinal)
+            case .thinking(let text):
+                return thinkingRowHTML(text: text, context: context, isFinal: isFinal)
             case .result(_, let text):
                 guard !text.isEmpty else { return "" }
                 return assistantBubbleHTML(text: text, context: context, isFinal: isFinal)
@@ -470,7 +473,7 @@ struct ChatWebView: NSViewRepresentable {
                 // filtered out upstream in `ChatTranscriptView.visibleEvents`).
                 guard isError else { return "" }
                 return chatToolRowHTML(name: nil, summary: summary, isError: true)
-            case .systemInit, .subagent, .messageStop, .raw, .assistantTextDelta:
+            case .systemInit, .subagent, .messageStop, .raw, .assistantTextDelta, .thinkingDelta:
                 return ""
             case .turnFailed(let reason):
                 return turnFailedBannerHTML(reason: reason)
@@ -523,6 +526,38 @@ struct ChatWebView: NSViewRepresentable {
             <span class="row-turn-failed-icon">⚠︎</span>\
             <div class="row-turn-failed-body">\
             <strong>\(escape(reason.label))</strong> \(escape(reason.description))</div></div>
+        /// An activity-feed tool row: a collapsible `<details>` box showing the
+        /// tool name + summary in the header (collapsed), and the full text in
+        /// an expandable body. Used by both `.toolUse` and `.toolResult` in
+        /// `feedRowHTML` (the inspector/internals view) - issue #391.
+        /// `name` is nil for tool results; `summary` carries the command/output text.
+        private static func feedToolRowHTML(name: String?, summary: String, isError: Bool) -> String {
+            let nameHTML = name.map { "<span class=\"row-tool-name\">\(escape($0))</span>" } ?? ""
+            let summaryHTML = summary.isEmpty ? "" : "<span class=\"row-tool-summary\">\(escape(summary))</span>"
+            if summary.isEmpty {
+                return "<div class=\"row row-tool\(isError ? " is-error" : "")\">\(nameHTML)\(summaryHTML)</div>"
+            }
+            return """
+            <details class="row row-tool collapsible\(isError ? " is-error" : "")">\
+            <summary>\(nameHTML)\(summaryHTML)</summary>\
+            <pre class="collapsible-detail">\(escape(summary))</pre></details>
+            """
+        }
+
+        /// A collapsible, dimmed/italic "thinking" box - the agent's
+        /// chain-of-thought reasoning (issue #391). Uses a `<details>` element
+        /// so the reasoning text is hidden by default and expanded on click.
+        /// The summary shows a "Thinking" label + a truncated preview; the body
+        /// renders the full text (markdown, same as assistant prose).
+        private static func thinkingRowHTML(text: String, context: WikiRenderContext?, isFinal: Bool) -> String {
+            let preview = String(text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
+            let previewShort = preview.count > 80 ? String(preview.prefix(80)) + "\u{2026}" : preview
+            let bodyHTML = renderedMarkdown(text, context: context, isFinal: isFinal)
+            return """
+            <details class="row row-thinking collapsible">\
+            <summary><span class="row-thinking-label">Thinking</span> \
+            <span class="row-thinking-preview">\(escape(previewShort))</span></summary>\
+            <div class="row-thinking-body">\(bodyHTML)</div></details>
             """
         }
 
@@ -634,6 +669,37 @@ struct ChatWebView: NSViewRepresentable {
           }
           .row-tool-summary { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
           .row-tool-result.is-error { color: #ff453a; }
+          .row-tool.is-error { color: #ff453a; }
+          /* Collapsible rows (issue #391): <details> elements for tool calls
+             + thinking. The summary is the visible header; the body expands
+             on click. Shared styling, distinct from chat-tool's older CSS. */
+          .collapsible > summary { list-style: none; cursor: pointer; }
+          .collapsible > summary::-webkit-details-marker { display: none; }
+          .collapsible[open] > summary::before {
+            content: "\\25BE "; opacity: 0.5;
+          }
+          .collapsible:not([open]) > summary::before {
+            content: "\\25B8 "; opacity: 0.5;
+          }
+          .collapsible-detail {
+            margin: 4px 0 0; padding: 6px 8px; font-size: 11px;
+            background: var(--code-bg); border-radius: 4px;
+            white-space: pre-wrap; word-break: break-word;
+            max-height: 300px; overflow-y: auto;
+          }
+          /* Thinking rows: dimmed + italic, visually subordinate to the
+             conversation (issue #391). */
+          .row-thinking { font-size: 11.5px; color: var(--muted); margin: 0 0 8px; }
+          .row-thinking > summary { font-style: italic; }
+          .row-thinking-label { font-weight: 600; color: var(--muted); }
+          .row-thinking-preview { opacity: 0.7; }
+          .row-thinking-body {
+            margin: 4px 0 0; padding: 6px 10px; font-style: italic;
+            font-size: 11.5px; color: var(--muted);
+            background: var(--code-bg); border-radius: 4px;
+            border-left: 2px solid var(--border);
+            max-height: 400px; overflow-y: auto;
+          }
           .row-result .row-label { font-weight: 600; font-size: 12px; color: var(--text); }
           .row-result.is-error .row-label { color: #ff453a; }
           .row-raw {

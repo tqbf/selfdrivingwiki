@@ -29,6 +29,16 @@ struct AgentEventParserTests {
         #expect(AgentEventParser.parse(line: line) == .assistantText("I'll run that command."))
     }
 
+    @Test func assistantThinkingBlockBecomesThinking() {
+        let line = #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","text":"Considering the best approach…"}]}}"#
+        #expect(AgentEventParser.parse(line: line) == .thinking("Considering the best approach…"))
+    }
+
+    @Test func emptyThinkingBlockIsSkipped() {
+        let line = #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","text":"  "}]}}"#
+        #expect(AgentEventParser.parse(line: line) == nil)
+    }
+
     @Test func assistantToolUseBlockSummarizesBashCommand() {
         let line = #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"echo hello from wikifs","description":"Print hello"}}]}}"#
         #expect(
@@ -130,6 +140,16 @@ struct AgentEventParserTests {
     @Test func contentBlockTextDeltaBecomesAssistantTextDelta() {
         let line = #"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"he"}}}"#
         #expect(AgentEventParser.parse(line: line) == .assistantTextDelta("he"))
+    }
+
+    @Test func thinkingDeltaStreamEventBecomesThinkingDelta() {
+        let line = #"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","text":"reasoning"}}}"#
+        #expect(AgentEventParser.parse(line: line) == .thinkingDelta("reasoning"))
+    }
+
+    @Test func emptyThinkingDeltaIsSkipped() {
+        let line = #"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","text":""}}}"#
+        #expect(AgentEventParser.parse(line: line) == nil)
     }
 
     @Test func emptyTextDeltaIsSkipped() {

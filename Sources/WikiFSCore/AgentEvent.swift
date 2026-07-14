@@ -61,6 +61,21 @@ public enum AgentEvent: Equatable, Sendable, Codable {
     /// A block of assistant prose (`assistant` message → `text` content block).
     case assistantText(String)
 
+    /// A block of agent reasoning/"thinking" — the model's chain-of-thought,
+    /// distinct from regular assistant prose. Surfaced from ACP's
+    /// `agentThoughtChunk` (issue #391) and from the CLI's `thinking` content
+    /// blocks. Rendered as a collapsible, dimmed/italic box in the transcript
+    /// so it's visible without dominating the conversation flow.
+    case thinking(String)
+
+    /// One incremental chunk of agent reasoning (`stream_event` →
+    /// `content_block_delta` → `thinking_delta`, or ACP `agentThoughtChunk`).
+    /// Never stored in `AgentLauncher.events` directly — `AgentLauncher` merges
+    /// each delta into the in-progress `.thinking` row (or starts one), mirroring
+    /// the `.assistantTextDelta` → `.assistantText` coalescing (issue #121).
+    /// Not rendered on its own; treated as internal like `.assistantTextDelta`.
+    case thinkingDelta(String)
+
     /// One incremental chunk of assistant prose (`stream_event` →
     /// `content_block_delta` → `text_delta`), emitted only when the run requests
     /// `--include-partial-messages`. Never stored in `AgentLauncher.events` directly —
@@ -130,6 +145,10 @@ public enum AgentEvent: Equatable, Sendable, Codable {
             return "Started · \(model)"
         case .assistantText(let text):
             return text
+        case .thinking(let text):
+            return "Thinking:\n\(text)"
+        case .thinkingDelta:
+            return ""  // internal — merged into `.thinking` before it's rendered
         case .assistantTextDelta:
             return ""  // internal — merged into `.assistantText` before it's rendered
         case .toolUse(let name, let inputSummary):
@@ -190,7 +209,8 @@ public enum AgentEvent: Equatable, Sendable, Codable {
     /// Fold a stream of raw events into display rows: consecutive
     /// `.assistantTextDelta` chunks accumulate into ONE `.assistantText` row,
     /// and the final `.assistantText` for a streamed block replaces the
-    /// accumulated row instead of duplicating it. This is the same merge
+    /// accumulated row instead of duplicating it; thinking deltas are
+    /// coalesced the same way. This is the same merge
     /// `AgentLauncher.mergeOrAppend` applies to its live `events` array —
     /// any OTHER consumer of the raw stream (queue transcripts, rehydrated
     /// histories) must apply it too, or a streamed reply renders as one row
@@ -198,6 +218,7 @@ public enum AgentEvent: Equatable, Sendable, Codable {
     public static func mergingStreamDeltas(_ events: [AgentEvent]) -> [AgentEvent] {
         var merged: [AgentEvent] = []
         var isStreamingRow = false
+        var isStreamingThinkingRow = false
         for event in events {
             switch event {
             case .assistantTextDelta(let delta):
@@ -207,6 +228,7 @@ public enum AgentEvent: Equatable, Sendable, Codable {
                     merged.append(.assistantText(delta))
                     isStreamingRow = true
                 }
+                isStreamingThinkingRow = false
             case .assistantText:
                 if isStreamingRow, case .assistantText = merged.last {
                     merged[merged.count - 1] = event
@@ -214,9 +236,27 @@ public enum AgentEvent: Equatable, Sendable, Codable {
                     merged.append(event)
                 }
                 isStreamingRow = false
+                isStreamingThinkingRow = false
+            case .thinkingDelta(let delta):
+                if isStreamingThinkingRow, case .thinking(let existing) = merged.last {
+                    merged[merged.count - 1] = .thinking(existing + delta)
+                } else {
+                    merged.append(.thinking(delta))
+                    isStreamingThinkingRow = true
+                }
+                isStreamingRow = false
+            case .thinking:
+                if isStreamingThinkingRow, case .thinking = merged.last {
+                    merged[merged.count - 1] = event
+                } else {
+                    merged.append(event)
+                }
+                isStreamingThinkingRow = false
+                isStreamingRow = false
             default:
                 merged.append(event)
                 isStreamingRow = false
+                isStreamingThinkingRow = false
             }
         }
         return merged
@@ -299,17 +339,25 @@ public enum AgentEventParser {
         }
     }
 
-    /// Map a `stream_event` envelope to a text delta. Only `content_block_delta` →
-    /// `text_delta` is modeled — other inner event kinds (`message_start`,
-    /// `content_block_start`/`_stop`, `input_json_delta` for streamed tool input,
-    /// `message_delta`) carry nothing the transcript renders, so they fall through
-    /// to `nil` same as any other unmodeled line.
+    /// Map a `stream_event` envelope to a text or thinking delta. Only
+    /// `content_block_delta` → `text_delta` and `thinking_delta` are modeled —
+    /// other inner event kinds (`message_start`, `content_block_start`/`_stop`,
+    /// `input_json_delta` for streamed tool input, `message_delta`) carry nothing
+    /// the transcript renders, so they fall through to `nil` same as any other
+    /// unmodeled line.
     private static func streamEventDelta(from envelope: Envelope) -> AgentEvent? {
         guard let inner = envelope.event, inner.type == "content_block_delta",
-              let delta = inner.delta, delta.type == "text_delta",
+              let delta = inner.delta,
               let text = delta.text, !text.isEmpty
         else { return nil }
-        return .assistantTextDelta(text)
+        switch delta.type {
+        case "text_delta":
+            return .assistantTextDelta(text)
+        case "thinking_delta":
+            return .thinkingDelta(text)
+        default:
+            return nil
+        }
     }
 
     // MARK: - Content-block mapping
@@ -325,6 +373,15 @@ public enum AgentEventParser {
                 let text = (block.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { continue }
                 return .assistantText(text)
+
+            case "thinking":
+                // The model's chain-of-thought reasoning (extended thinking /
+                // interleaved thinking). Surfaced as `.thinking` for a collapsible
+                // dimmed rendering (issue #391). `thinking` blocks carry their text
+                // in the same `text` field as regular prose.
+                let text = (block.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { continue }
+                return .thinking(text)
 
             case "tool_use":
                 let name = block.name ?? "tool"

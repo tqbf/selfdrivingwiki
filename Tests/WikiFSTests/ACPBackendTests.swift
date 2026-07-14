@@ -38,13 +38,13 @@ import ACPModel
         #expect(translator.translate(update) == [])
     }
 
-    /// Agent reasoning (thought chunks) surfaces verbatim as `.raw` so it isn't
-    /// silently dropped (no dedicated `AgentEvent` case yet).
-    @Test func agentThoughtChunkSurfacesAsRaw() {
+    /// Agent reasoning (thought chunks) maps to `.thinkingDelta` so the launcher
+    /// can coalesce chunks into a `.thinking` row (issue #391).
+    @Test func agentThoughtChunkMapsToThinkingDelta() {
         let translator = ACPEventTranslator()
-        let update = SessionUpdate.agentThoughtChunk(.text(TextContent(text: "Considering options…")))
+        let update = SessionUpdate.agentThoughtChunk(.text(TextContent(text: "Considering options\u{2026}")))
         let events = translator.translate(update)
-        #expect(events == [.raw("Considering options…")])
+        #expect(events == [.thinkingDelta("Considering options\u{2026}")])
     }
 
     /// A tool invocation (`tool_call`) with `kind: .execute` + `rawInput`

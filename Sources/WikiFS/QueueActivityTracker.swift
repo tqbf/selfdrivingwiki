@@ -100,6 +100,11 @@ final class QueueActivityTracker {
     /// this, a streamed reply renders as one row per word-fragment).
     private var streamingTranscriptItemIDs: Set<QueueItem.ID> = []
 
+    /// Items whose transcript's last row is an in-progress streamed thinking
+    /// block — the next `.thinkingDelta` grows that row in place instead of
+    /// appending a new one (mirrors `streamingTranscriptItemIDs` for assistant text).
+    private var streamingThinkingItemIDs: Set<QueueItem.ID> = []
+
     /// The currently running extraction item ID, for cancellation via
     /// `cancelExtraction()`.
     private var currentExtractionItemID: QueueItem.ID?
@@ -147,6 +152,7 @@ final class QueueActivityTracker {
         transcripts.removeAll()
         progressLogs.removeAll()
         streamingTranscriptItemIDs.removeAll()
+        streamingThinkingItemIDs.removeAll()
     }
 
     // MARK: - Public API
@@ -189,6 +195,7 @@ final class QueueActivityTracker {
                 arr.append(.assistantText(delta))
                 streamingTranscriptItemIDs.insert(itemID)
             }
+            streamingThinkingItemIDs.remove(itemID)
         case .assistantText:
             // Authoritative full text for a block already being streamed —
             // replace the accumulated row rather than duplicating it.
@@ -199,9 +206,31 @@ final class QueueActivityTracker {
                 arr.append(event)
             }
             streamingTranscriptItemIDs.remove(itemID)
+            streamingThinkingItemIDs.remove(itemID)
+        case .thinkingDelta(let delta):
+            if streamingThinkingItemIDs.contains(itemID),
+               case .thinking(let existing) = arr.last {
+                arr[arr.count - 1] = .thinking(existing + delta)
+            } else {
+                arr.append(.thinking(delta))
+                streamingThinkingItemIDs.insert(itemID)
+            }
+            streamingTranscriptItemIDs.remove(itemID)
+        case .thinking:
+            // Authoritative full text for a thinking block already being
+            // streamed — replace the accumulated row rather than duplicating it.
+            if streamingThinkingItemIDs.contains(itemID),
+               case .thinking = arr.last {
+                arr[arr.count - 1] = event
+            } else {
+                arr.append(event)
+            }
+            streamingThinkingItemIDs.remove(itemID)
+            streamingTranscriptItemIDs.remove(itemID)
         default:
             arr.append(event)
             streamingTranscriptItemIDs.remove(itemID)
+            streamingThinkingItemIDs.remove(itemID)
         }
         if arr.count > maxTranscriptEvents {
             arr.removeFirst(arr.count - maxTranscriptEvents)
@@ -226,6 +255,7 @@ final class QueueActivityTracker {
         transcripts.removeValue(forKey: itemID)
         progressLogs.removeValue(forKey: itemID)
         streamingTranscriptItemIDs.remove(itemID)
+        streamingThinkingItemIDs.remove(itemID)
     }
 
     /// The transcript for a given item ID (may be empty / nil).
