@@ -1,10 +1,11 @@
 // tools/versiongen/main.swift
 //
 // Generates Sources/WikiFSCore/GeneratedVersion.swift from git state at build
-// time. Mirrors tools/promptgen/main.swift: the generated file is checked in so
-// bare `swift build` works, and `make version` (a prerequisite of build/check/
-// test/release) regenerates it. CI runs `make check-version-gen` to fail if the
-// checked-in file is stale.
+// time. Mirrors tools/promptgen/main.swift: the output is gitignored — a derived
+// artifact (git is already the source of truth, so a committed snapshot would
+// drift on every commit). `make version` (a prerequisite of build/check/test/
+// release) regenerates it; bare `swift build` does NOT — run `make version`
+// first (CI runs `make version prompts` before `swift build`).
 //
 // Version scheme:
 //   appVersion     — SemVer from an exact vX.Y.Z tag at HEAD, or the VERSION
@@ -15,7 +16,7 @@
 //
 // Run:
 //   swift tools/versiongen/main.swift          overwrite the generated file
-//   swift tools/versiongen/main.swift --stdout  write to stdout (CI drift check)
+//   swift tools/versiongen/main.swift --stdout  write to stdout
 //
 // The script only writes the file if content actually changed, so making it a
 // .PHONY prerequisite of `build`/`check`/`test` doesn't force recompilation on

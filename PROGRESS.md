@@ -7628,3 +7628,39 @@ writes are safe — the store detects the version mismatch.
 
 **Build/tests:** `swift build` clean; fast tier — 2187 tests pass.
 
+## Stop committing generated codegen files (2026-07-14)
+
+**Problem:** `GeneratedVersion.swift` (git state → Swift) and
+`GeneratedPrompts.swift` (prompts/*.md → Swift) were checked into git as
+"derived artifacts." The version file embedded the git SHA + commit count, so
+it drifted on **every commit** — the moment you committed, the committed
+snapshot pointed at the *previous* SHA. This produced constant `git add`
+noise, spurious diffs, and merge conflicts on a file whose content is, by
+definition, derived from git itself.
+
+**Fix:** Both generated files are now **gitignored** (kept on disk locally,
+regenerated at build time). Removed the CI drift gates (`make check-prompts`,
+`make check-version-gen`) — there's no committed file to drift against. The
+Makefile's existing prereqs (`version`/`prompts` run before
+`build`/`check`/`test`/`release`) are unchanged, so `make build/check/test`
+always produce fresh files with no `git add` needed. CI now runs `make version
+prompts` before `swift build` (replacing the old `make check-prompts` step) in
+both Swift jobs.
+
+**Tradeoff:** bare `swift build` on a fresh clone no longer finds the
+gitignored files until `make version prompts` runs. This matches the existing
+documented contract for prompts ("run `make prompts` after editing a .md if
+you're driving swift directly"); canonical paths (`make build/check/test`) are
+unaffected.
+
+**Files:**
+- `.gitignore` — added both `Generated*.swift` paths with an explanatory block.
+- `Makefile` — dropped `check-prompts`/`check-version-gen` targets + `.PHONY` +
+  help entries; updated header/section comments to "gitignored, build-time-gen."
+- `.github/workflows/ci.yml` — replaced `make check-prompts` with
+  `make version prompts` before `swift build` in both `swift` + `swift-integration`.
+- `AGENTS.md` / `PLAN.md` / `plans/phase-6-pinning.md` — updated prose.
+- `tools/promptgen/main.swift` + `tools/versiongen/main.swift` — updated header
+  comments.
+- `git rm --cached` both `.swift` files (working copies kept on disk).
+
