@@ -96,7 +96,7 @@ Queue store, scheduler, and workers live in `WikiFSCore`/`WikiFSEngine` with zer
 - **ULID**: A Universally Unique Lexicographically sortable Identifier — like a UUID but sortable by generation time — used here as the primary key for queue items.
 - **JSONL (JSON Lines)**: A log/file format where each line is an independent, valid JSON object, making the file both streamable and greppable; used for the queue's machine-readable audit log.
 - **`WikiEventBus`**: Existing app-wide event propagation mechanism that notifies interested parties (e.g., UI) of wiki state changes; this design preserves its existing behavior unchanged.
-- **`isIngestInProgress`**: An existing store-level flag used to block chat interactions while an ingest is running on a wiki; preserved unchanged by this design.
+- **`isIngestInProgress`**: An existing flag on `WikiStoreModel` (the `@MainActor` model wrapping the raw store, not `SQLiteWikiStore` itself) used to block chat interactions while an ingest is running on a wiki; behavior preserved by this design, set/cleared via an injected signaling protocol.
 - **Workspace auto-merge**: Existing behavior where a wiki's isolated ingest workspace is automatically merged back into the main store on completion; preserved unchanged by this design.
 - **XPC**: Apple's inter-process communication mechanism, used to let separate processes on the same Mac call into each other's APIs; mentioned as a future option for hosting the engine outside the GUI process.
 - **`wikid`**: A hypothetical/future headless daemon process for hosting the engine outside the GUI app, referenced as an out-of-scope future direction this design's architecture keeps open.
@@ -132,7 +132,20 @@ actor QueueEngine {
 }
 ```
 
-- `QueueWorker` — a `Task` spawned by the engine per claimed item. Extraction items call `ExtractionCoordinator`; ingestion items run the existing planner→executor→finalizer pipeline through a `SessionManager`-provided `WikiSession`.
+- `QueueWorker` — a `Task` spawned by the engine per claimed item. Extraction items call the shared `ExtractionCoordinator` (app-scoped, no per-wiki state — injected into the engine at construction, not resolved per-session); ingestion items run the existing planner→executor→finalizer pipeline through a resolved `WikiSession`.
+- **Main-actor decoupling seam:** `SessionManager`, `WikiSession`, and `WikiStoreModel` are all `@MainActor @Observable`. The engine must never name them directly, or it inherits a GUI-run-loop assumption that breaks the headless constraint. Instead the app injects at engine construction:
+
+```swift
+protocol QueueSessionResolving: Sendable {
+    func session(for wikiID: String) async throws -> QueueWikiSession   // engine-facing facade
+}
+protocol QueueIngestSignaling: Sendable {
+    func ingestBegan(wikiID: String) async    // app impl sets WikiStoreModel.isIngestInProgress
+    func ingestEnded(wikiID: String) async
+}
+```
+
+The app's implementations hop to the main actor internally; the engine sees only these protocols. In a future headless host, non-GUI implementations satisfy the same contracts.
 - `QueueEventLog` — JSONL append-only log of every `QueueEvent` (daily files under `Logs/queue/` in the App Group container, bounded retention).
 
 **`WikiFS` (app — UI only):**
@@ -183,9 +196,9 @@ Event-driven dispatch (no polling): any change that could unblock work — enque
 
 1. UI action (Ingest button, drag-drop, multi-select) calls `AgentOperationRunner`, which now enqueues and returns immediately.
 2. PDF sources become **two chained items**: an extraction item whose completion enqueues the linked ingestion item. Non-PDF sources enqueue straight to ingestion.
-3. Workers resolve wikis via `SessionManager.session(for:)` (already works without a window; sessions are cached app-wide).
+3. Workers resolve wikis via the injected `QueueSessionResolving` facade (backed by `SessionManager.session(for:)`, which already works without a window; sessions are cached app-wide). Workers never touch `@MainActor` types directly.
 4. `GenerationGate`'s ingest lane is **deleted**; the engine's provider slots + per-wiki invariant replace it. The interactive lane stays — chat turns remain per-session, outside the queue.
-5. Unchanged: `store.isIngestInProgress` chat-blocking, workspace isolation + auto-merge, `WikiEventBus` propagation.
+5. Unchanged behavior: `isIngestInProgress` chat-blocking (a `WikiStoreModel` flag, set via the injected `QueueIngestSignaling`), workspace isolation + auto-merge, `WikiEventBus` propagation. **Flag timing:** for a chained PDF pair, `ingestBegan` fires when the *extraction* item starts — today the flag is set at the top of `runMultiIngest` before extraction (see `WikiStoreModel.swift:213-218`), and setting it only at ingestion start would regress the Edit-preflight blocking window (issue #235).
 6. Session release (`RootScene.onDisappear`) becomes conditional: sessions with queued/running work are retained by the engine and released when their work drains.
 
 ## Existing Patterns
@@ -253,7 +266,8 @@ New patterns introduced: persistent job queue (no precedent in codebase; schema 
 **Goal:** All PDF extraction flows through the central extraction queue.
 
 **Components:**
-- Extraction `QueueWorker` in `Sources/WikiFSEngine/` calling `ExtractionCoordinator` (`Sources/WikiFSCore/ExtractionCoordinator.swift`)
+- Extraction `QueueWorker` in `Sources/WikiFSEngine/` calling the shared `ExtractionCoordinator` (`Sources/WikiFSEngine/ExtractionCoordinator.swift`; app-scoped instance from `SessionManager.extractionCoordinator`, injected at engine construction)
+- Ingest-flag timing preserved: for chained PDF pairs, `QueueIngestSignaling.ingestBegan` fires at extraction start (matches current `runMultiIngest` behavior; guards issue #235)
 - `AgentOperationRunner` (`Sources/WikiFSEngine/AgentOperationRunner.swift`) extraction paths become enqueues; standalone "Extract Markdown" (`Sources/WikiFS/SourceDetailView.swift`) enqueues too
 - PDF→ingestion chaining: extraction completion enqueues the linked ingestion item
 - Retire `AgentLauncher` extraction slot machinery (`awaitExtractionSlot`/`releaseExtractionSlot`/`extractionWaiters` in `Sources/WikiFSEngine/AgentLauncher.swift`); local-pdf2md limit-1 enforced by engine capacity
@@ -271,11 +285,12 @@ New patterns introduced: persistent job queue (no precedent in codebase; schema 
 **Goal:** All ingestion flows through the central queue; per-wiki ingest lanes retired.
 
 **Components:**
-- Ingestion `QueueWorker` running planner→executor→finalizer via `SessionManager`-provided sessions (`Sources/WikiFSEngine/SessionManager.swift`), preserving `store.isIngestInProgress`, workspace auto-merge, `WikiEventBus` behavior
+- Ingestion `QueueWorker` running planner→executor→finalizer via the injected `QueueSessionResolving` facade (app implementation backed by `Sources/WikiFSEngine/SessionManager.swift`), preserving `isIngestInProgress` via `QueueIngestSignaling`, workspace lifecycle (create + auto-merge, currently driven inside `AgentOperationRunner.runMultiIngest` — the worker takes over this flow, honoring `WikiStoreModel.workspacesEnabled`), and `WikiEventBus` behavior
+- App-side implementations of `QueueSessionResolving` and `QueueIngestSignaling` (main-actor hops internal)
 - Delete ingest lane from `GenerationGate` (`Sources/WikiFSEngine/GenerationGate.swift`); interactive lane remains
 - All ingest call sites enqueue: `ContentView.swift:351-365`, `SourceDetailView.swift:1014`, `SourcesContainerView.swift` multi-ingest, drag-drop path in `ContentView.swift:173-174`
 - Conditional session release in `RootScene.onDisappear` (`Sources/WikiFS/RootScene.swift`): engine retains sessions with pending work
-- "Ingesting…" row status derives from queue events
+- "Ingesting…" row status derives from queue events — replaces **both** `launcher.ingestingSourceIDs` and any remaining `launcher.extractingSourceIDs` consumers (`Sources/WikiFS/SourcesListView.swift`, `SourcesContainerView.swift`)
 
 **Dependencies:** Phase 4.
 
@@ -321,5 +336,9 @@ New patterns introduced: persistent job queue (no precedent in codebase; schema 
 **Error handling:** Worker failures are contained per item — state → `failed`, error recorded in DB and JSONL, provider slot freed, dispatch continues. Engine-level failures (queue DB unwritable) surface as the status item's attention state. Enqueue validates upfront (wiki exists, provider configured) so doomed items never enter the queue.
 
 **Quit semantics:** Quit from the popover (or Cmd-Q) with active work prompts to confirm; on confirm, in-flight items are cancelled and return to `queued` (same path as halt), so relaunch resumes cleanly.
+
+**Main-actor boundary:** `SessionManager`, `WikiSession`, and `WikiStoreModel` are `@MainActor @Observable`. The engine reaches them only through the injected `QueueSessionResolving` / `QueueIngestSignaling` protocols (see Architecture); implementation plans must not have engine code import or name these types directly. In-app this costs a main-actor hop per session resolution and flag toggle — acceptable, since the main run loop runs even in accessory mode.
+
+**Second session-lifecycle path (considered, harmless):** besides `RootScene.onDisappear`, `AppDelegate.applicationWillResignActive` calls `sessionManager.flushAllSessions()` (`Sources/WikiFS/WikiFSApp.swift:271-274`). It flushes pending saves only — no cache eviction — so it cannot tear down a session a queue worker is using. No change needed; noted so implementation doesn't "fix" it.
 
 **Future extensibility (doors held open, not built):** the engine's async-actor surface + serializable events permit XPC/HTTP fronting (wikid hosting, MCP server, OpenAPI service); gap-based ordering keys permit drag-to-reorder; the schema's state machine permits lease/heartbeat columns if the queue ever becomes multi-process.
