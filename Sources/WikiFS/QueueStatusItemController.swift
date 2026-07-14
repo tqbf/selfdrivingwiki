@@ -36,6 +36,7 @@ final class QueueStatusItemController {
     private var streamTask: Task<Void, Never>?
     private var hasFailedItems = false
     private var isPaused = false
+    private var lastSnapshot: QueueSnapshot = QueueSnapshot()
 
     // MARK: - Init
 
@@ -58,16 +59,18 @@ final class QueueStatusItemController {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem = item
 
-        // Set up the button.
+        // Set up the button — clicking shows a menu (not a window toggle).
         if let button = item.button {
             button.image = statusIcon(for: .idle)
             button.image?.isTemplate = true
-            button.action = #selector(toggleActivityWindow(_:))
+            button.action = #selector(showMenu(_:))
             button.target = self
             button.toolTip = "Self Driving Wiki — Activity"
+            // Menu on left-click, not on mouse-down (feels more natural).
+            button.sendAction(on: [.leftMouseUp])
         }
 
-        // Observe engine events to update the icon.
+        // Observe engine events to update the icon + menu.
         streamTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await event in self.queueEngine.events {
@@ -87,15 +90,110 @@ final class QueueStatusItemController {
         }
     }
 
-    // MARK: - Activity window
+    // MARK: - Menu
 
-    @objc private func toggleActivityWindow(_ sender: AnyObject?) {
-        if let window = activityWindow, window.isVisible {
-            window.orderOut(nil)
-        } else {
-            showActivityWindow()
-        }
+    @objc private func showMenu(_ sender: AnyObject?) {
+        let menu = NSMenu()
+        buildMenu(menu, snapshot: lastSnapshot)
+        statusItem?.menu = menu
     }
+
+    private func buildMenu(_ menu: NSMenu, snapshot: QueueSnapshot) {
+        let activeCount = snapshot.activeItems.count
+        let recentCount = snapshot.recentItems.count
+
+        // Header: queue counts.
+        let headerItem = NSMenuItem(
+            title: activeCount == 0
+                ? recentCount == 0 ? "No activity" : "\(recentCount) recent"
+                : "\(activeCount) active • \(recentCount) recent",
+            action: nil, keyEquivalent: "")
+        headerItem.isEnabled = false
+        menu.addItem(headerItem)
+
+        // Active items (clickable → opens Activity window).
+        if !snapshot.activeItems.isEmpty {
+            menu.addItem(.separator())
+            let sectionItem = NSMenuItem(
+                title: "Active", action: nil, keyEquivalent: "")
+            sectionItem.isEnabled = false
+            menu.addItem(sectionItem)
+
+            for item in snapshot.activeItems.prefix(5) {
+                let title = menuItemTitle(for: item)
+                let menuItem = NSMenuItem(
+                    title: title, action: #selector(openActivityWindow(_:)),
+                    keyEquivalent: "")
+                menuItem.target = self
+                menuItem.representedObject = item.id
+                menu.addItem(menuItem)
+            }
+        }
+
+        // Recent items (clickable → opens Activity window).
+        if !snapshot.recentItems.isEmpty {
+            menu.addItem(.separator())
+            let sectionItem = NSMenuItem(
+                title: "Recent", action: nil, keyEquivalent: "")
+            sectionItem.isEnabled = false
+            menu.addItem(sectionItem)
+
+            for item in snapshot.recentItems.prefix(5) {
+                let title = menuItemTitle(for: item)
+                let menuItem = NSMenuItem(
+                    title: title, action: #selector(openActivityWindow(_:)),
+                    keyEquivalent: "")
+                menuItem.target = self
+                menuItem.representedObject = item.id
+                menu.addItem(menuItem)
+            }
+        }
+
+        menu.addItem(.separator())
+
+        // Open Activity window.
+        let openItem = NSMenuItem(
+            title: "Open Activity…",
+            action: #selector(openActivityWindow(_:)),
+            keyEquivalent: "a")
+        openItem.target = self
+        menu.addItem(openItem)
+
+        menu.addItem(.separator())
+
+        // Quit.
+        let quitItem = NSMenuItem(
+            title: "Quit Self Driving Wiki",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q")
+        menu.addItem(quitItem)
+    }
+
+    private func menuItemTitle(for item: QueueItem) -> String {
+        let wikiName = sessionManager?.sessions[item.wikiID]?.descriptor.displayName
+            ?? String(item.wikiID.prefix(8))
+        let kindLabel: String
+        if item.payload.lintPageIDs != nil {
+            kindLabel = "Lint"
+        } else {
+            kindLabel = item.queue == .extraction ? "Extraction" : "Ingestion"
+        }
+        let stateLabel: String
+        switch item.state {
+        case .running: stateLabel = "Running"
+        case .queued: stateLabel = "Queued"
+        case .completed: stateLabel = "Completed"
+        case .failed: stateLabel = "Failed"
+        case .cancelled: stateLabel = "Cancelled"
+        }
+        return "\(wikiName) — \(kindLabel) (\(stateLabel))"
+    }
+
+    @objc private func openActivityWindow(_ sender: NSMenuItem?) {
+        showActivityWindow()
+    }
+
+    // MARK: - Activity window
 
     private func showActivityWindow() {
         if activityWindow == nil {
@@ -178,10 +276,10 @@ final class QueueStatusItemController {
             if state == .paused {
                 isPaused = true
             } else {
-                // Check if both queues are running.
                 Task {
                     let snapshot = await queueEngine.snapshot()
                     isPaused = snapshot.runStates.values.contains(.paused)
+                    lastSnapshot = snapshot
                     updateIcon()
                 }
                 return
@@ -189,17 +287,25 @@ final class QueueStatusItemController {
         case .failed:
             hasFailedItems = true
         case .completed, .cancelled:
-            // Re-check failed status from snapshot.
             Task {
                 let snapshot = await queueEngine.snapshot()
                 hasFailedItems = snapshot.recentItems.contains {
                     $0.state == .failed
                 }
+                lastSnapshot = snapshot
                 updateIcon()
             }
             return
+        case .enqueued, .started:
+            // Refresh snapshot for menu accuracy.
+            Task {
+                lastSnapshot = await queueEngine.snapshot()
+            }
         default:
             break
+        }
+        Task {
+            lastSnapshot = await queueEngine.snapshot()
         }
         updateIcon()
     }
