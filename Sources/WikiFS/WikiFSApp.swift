@@ -337,6 +337,7 @@ struct WikiFSApp: App {
                 sessionManager: sessionManager,
                 fileProvider: fileProvider
             )
+            .environment(activityTracker)
         }
 
         // Extraction compare: a real, resizable, non-modal window (one per
