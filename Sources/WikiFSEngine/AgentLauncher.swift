@@ -441,8 +441,14 @@ public final class AgentLauncher {
         guard isGenerating != value else { return }
         isGenerating = value
         if value {
+            // Anchor the thinking timer at the start of each generation phase
+            // (each interactive turn, one-shot run, etc.) so the timer resets
+            // to 0s per turn rather than accumulating across the session
+            // (issue #405).
+            runStartedAt = Date()
             startPendingPermissionPoller()
         } else {
+            runStartedAt = nil
             stopPendingPermissionPoller()
         }
     }
@@ -925,9 +931,9 @@ public final class AgentLauncher {
         if sandbox != nil { createSandboxTmpDir(in: scratch) }
 
         // RESERVE per-run metadata. isRunning is already `true` (set above).
+        // Note: runStartedAt is set inside setGenerating(true) below.
         let now = Date()
         runningKind = operation.kind
-        runStartedAt = now
         lastActivityAt = now
         openLogFiles(in: scratch)
         // A one-shot run is "generating" for its whole duration. The edit lock
@@ -1636,10 +1642,10 @@ public final class AgentLauncher {
         if sandbox != nil { createSandboxTmpDir(in: scratch) }
 
         // RESERVE per-run metadata. isRunning will be set at spawn commit below
-        // (after backend.start succeeds).
+        // (after backend.start succeeds). runStartedAt is set inside
+        // setGenerating(true) at spawn commit.
         let now = Date()
         runningKind = operation.kind
-        runStartedAt = now
         lastActivityAt = now
         openLogFiles(in: scratch)
         // SPAWN COMMIT: a query chat never ingests, so the agent-phase flag
