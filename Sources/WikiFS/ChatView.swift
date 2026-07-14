@@ -27,7 +27,6 @@ struct ChatView: View {
     var session: WikiSession
     let fileProvider: FileProviderSpike
 
-    @State private var draftMessage = ""
     @State private var showsInternals = false
     @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: ChatMetrics.composerFont)
     @State private var persistedMessages: [ChatMessage] = []
@@ -35,7 +34,11 @@ struct ChatView: View {
     /// context for the next message (issue #385).
     @State private var attachments: [ChatAttachment] = []
     @AppStorage("chat.zoom") private var chatZoom = Double(ZoomScale.defaultScale)
-    @AppStorage("isChatOutlineExpanded") private var chatOutlineExpanded = false
+    /// Outline starts collapsed on every new chat view instance — not a
+    /// persisted global toggle (was @AppStorage). Each time you switch to a
+    /// chat tab the outline is closed by default; the user can expand it
+    /// within that view's lifetime.
+    @State private var chatOutlineExpanded = false
     /// Persisted toggle to hide tool-call rows from the chat transcript
     /// (issue #381). Independent of "Show internals" which gates the full
     /// raw activity feed.
@@ -134,7 +137,7 @@ struct ChatView: View {
                 // auto-send it. This starts a new chat with the question.
                 if let question = store.pendingChatQuestion {
                     store.pendingChatQuestion = nil
-                    draftMessage = question
+                    store.draftChatMessage = question
                 }
             }
         }
@@ -553,7 +556,7 @@ struct ChatView: View {
                 attachmentChips
             }
             ComposerTextView(
-                text: $draftMessage,
+                text: $store.draftChatMessage,
                 isEditable: enabled,
                 font: composerFont,
                 onSubmit: sendMessage,
@@ -563,7 +566,7 @@ struct ChatView: View {
                 .frame(height: composerHeight)
                 .frame(maxWidth: .infinity)
                 .overlay(alignment: .topLeading) {
-                    if draftMessage.isEmpty {
+                    if store.draftChatMessage.isEmpty {
                         Text("Ask a question, or ask to update the wiki…")
                             .font(.body)
                             .foregroundStyle(.secondary)
@@ -684,7 +687,7 @@ struct ChatView: View {
     /// True once the composer holds non-whitespace text — drives the send
     /// button's visibility (paseo shows no glyph until you type).
     private var hasDraftText: Bool {
-        !draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Green when the message can be sent, a muted grey while it can't (e.g. a
@@ -702,9 +705,9 @@ struct ChatView: View {
         // being silently dropped (issue #380). The draft is preserved so the
         // user can send it once the agent finishes.
         guard canSend else { return }
-        let message = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
-        draftMessage = ""
+        store.clearActiveChatDraft()
         // Build the wire message: prepend attachment references so the agent
         // has context about the dragged-in pages/sources (issue #385).
         let wireMessage: String
@@ -811,7 +814,7 @@ struct ChatView: View {
             && canType
             && !launcher.isGenerating
             && !launcher.isAwaitingGenerationSlot
-            && !draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var sendButtonTitle: String {
