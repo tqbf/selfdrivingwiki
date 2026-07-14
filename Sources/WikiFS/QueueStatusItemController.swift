@@ -6,10 +6,10 @@ import WikiFSEngine
 /// Controls the menu-bar status item and Activity window for the queue engine.
 ///
 /// The status item icon reflects the engine's state:
-/// - **idle** (circle) — no active items, queue running
-/// - **working** (circle.fill) — items running
-/// - **paused** (circle.dashed) — a queue is paused
-/// - **attention** (exclamationmark.circle) — failed items need attention
+/// - **idle** (books.vertical) — no active items, queue running
+/// - **working** (books.vertical.fill) — items running
+/// - **paused** (pause.fill) — a queue is paused
+/// - **attention** (exclamationmark.triangle.fill) — failed items need attention
 ///
 /// Clicking the status item toggles the Activity window, which lists
 /// active/recent items across all wikis with per-item agent transcripts,
@@ -136,10 +136,10 @@ final class QueueStatusItemController {
     private func statusIcon(for state: IconState) -> NSImage? {
         let name: String
         switch state {
-        case .idle: name = "circle"
-        case .working: name = "circle.fill"
-        case .paused: name = "pause.circle"
-        case .attention: name = "exclamationmark.circle"
+        case .idle: name = "books.vertical"
+        case .working: name = "books.vertical.fill"
+        case .paused: name = "pause.fill"
+        case .attention: name = "exclamationmark.triangle.fill"
         }
         let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
         return NSImage(systemSymbolName: name, accessibilityDescription: nil)?
