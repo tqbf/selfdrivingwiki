@@ -286,11 +286,13 @@ snapshot-aware refresh is implemented (the guard reports this clearly).
      list` then `$WIKICTL page get` on likely candidates. Only read `index.md` /
      `log.md` (via `cat`) or consult `WIKI-STRUCTURE.md` as a last-resort
      orientation aid; never name those files to the user.
-   - **(1b) A named title is a source search.** If the user names a paper or
-     source by title, run `$WIKICTL source search --query "<title>"` — and
-     `$WIKICTL search` for pages by that name — regardless of whether you think
-     it's in the wiki: the user most likely ingested it as a source. Read a hit
-     with `$WIKICTL source cat` / `source export`.
+   - **(1b) A named title triggers both searches.** If the user names a paper
+     or source by title, run `$WIKICTL search --query "<title>"` (pages) AND
+     `$WIKICTL source search --query "<title>"` (sources) — regardless of
+     whether you think it's in the wiki: the title could be a page, an ingested
+     source, or both, and the user most likely ingested it as a source. Read a
+     page hit with `$WIKICTL page get`; read a source hit with `$WIKICTL source
+     cat` / `source export`.
    - **(1c) Web tools are a fallback, not a default.** Reach for
      `websearch`/`webfetch` only AFTER the internal searches (pages, sources,
      chats) come up empty, and only when the user has agreed (or explicitly
