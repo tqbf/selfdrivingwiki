@@ -6,6 +6,7 @@ Newest first. To get up to speed: read `PLAN.md` then this file.
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 ## 2026-07-14 — Stop committing generated codegen files
 
 `GeneratedVersion.swift` (git SHA → Swift) and `GeneratedPrompts.swift` (prompt
@@ -57,18 +58,24 @@ See [`plans/wikictl-author-provenance.md`](plans/wikictl-author-provenance.md).
 =======
 ## 2026-07-13 — Queue Engine: extraction & ingestion queue (Phases 1–4)
 >>>>>>> f02ca31 (Revert "docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines)")
+=======
+## 2026-07-14 — Queue Engine: extraction through the queue (Phases 1–4)
+>>>>>>> bd2f1ba (docs: consolidate queue engine PROGRESS.md entries, remove duplicates)
 
-A persistent, app-wide extraction/ingestion work queue backed by a new
-`queue.sqlite` in the App Group container. Survives relaunch, schedules across
-wikis with per-provider concurrency limits, and keeps running when no window is
-open. Design plan: `docs/design-plans/2026-07-13-queue-engine.md`.
+A persistent, app-wide extraction work queue backed by a new `queue.sqlite`
+in the App Group container. Items survive relaunch, schedule across wikis with
+per-provider concurrency limits, and keep running when no window is open.
+Design plan: `docs/design-plans/2026-07-13-queue-engine.md`.
 
-**Phase 1 — QueueStore (`WikiFSCore`):** `QueueStore` + value types
-(`QueueItem`, `QueueKind`, `QueueItemState`, `QueueItemRequest`, `QueueRunState`).
-SQLite discipline mirrors `SQLiteWikiStore` (WAL, statement cache, method-atomic
-lock, savepoint transactions, versioned migrations, checkpoint-and-close).
-20 tests.
+**What's done:** Durable queue store with crash recovery (running items reset to
+queued on launch), event-driven dispatch with per-provider concurrency limits and
+per-wiki ingestion invariant (one ingest per wiki at a time), pause/resume/halt/
+cancel/retry controls, a JSONL audit trail (daily-rotated, 30-day retention), and
+all PDF extraction now routed through the engine. The `QueueActivityTracker`
+replaces the launcher's extraction slot machinery — extraction status and control
+live in the UI via the tracker, not internal launcher state.
 
+<<<<<<< HEAD
 **Phase 2 — QueueEngine actor (`WikiFSEngine`):** event-driven dispatch,
 per-provider concurrency limits, per-wiki ingestion invariant, local/remote
 extraction limits, pause/resume/halt/cancel/retry, write-through to `QueueStore`,
@@ -260,6 +267,10 @@ Not yet wired into the app layer (`WikiFS`) — Phase 4 headless components only
 App-layer migration (AgentOperationRunner, SourceDetailView, AgentLauncher
 retirement) is the next step. 65 tests total across all phases.
 >>>>>>> f02ca31 (Revert "docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines)")
+=======
+**Not yet done:** Ingestion routing through the queue (Phase 5), menu-bar
+background mode UI (Phase 6), and sidebar removal (Phase 7).
+>>>>>>> bd2f1ba (docs: consolidate queue engine PROGRESS.md entries, remove duplicates)
 
 ## 2026-07-13 — Chat Summary (issue #411)
 
@@ -7916,6 +7927,7 @@ writes are safe — the store detects the version mismatch.
 
 **Build/tests:** `swift build` clean; fast tier — 2187 tests pass.
 
+<<<<<<< HEAD
 ---
 
 ## Queue Engine — Phase 3: QueueEventLog JSONL Audit Trail (2026-07-14)
@@ -7978,3 +7990,5 @@ macOS SwiftUI app skeleton with SwiftPM build, SQLite store, and
 =======
 
 >>>>>>> f02ca31 (Revert "docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines)")
+=======
+>>>>>>> bd2f1ba (docs: consolidate queue engine PROGRESS.md entries, remove duplicates)
