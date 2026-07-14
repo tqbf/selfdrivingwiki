@@ -64,10 +64,15 @@ struct RootScene: View {
                 // The wiki ID is known but the session isn't resolved yet.
                 ProgressView("Opening wiki…")
                     .onAppear { resolveSession(for: wikiID) }
+                    .onAppear {
+                        DebugLog.tabs("RootScene [Opening wiki…]: wikiID=\(wikiID)")
+                    }
             } else {
-                // No wiki ID yet (launch, before activateMostRecent) or no
-                // wikis exist at all. Show the empty-state CTA so the user
-                // can create their first wiki.
+                // No wiki ID from the WindowGroup binding AND no activeWikiID
+                // adoption yet. This happens when the main WindowGroup creates
+                // a RootScene before activateMostRecent() runs, or when state
+                // restoration opens an extra main window. Try to adopt the
+                // activeWikiID immediately — if it's already set, use it.
                 ContentUnavailableView {
                     Label("No Wikis", systemImage: "books.vertical")
                 } description: {
@@ -77,7 +82,23 @@ struct RootScene: View {
                         Task { await registry.createWiki(displayName: "My Wiki") }
                     }
                 }
+                .onAppear {
+                    DebugLog.tabs("RootScene [No Wikis]: wikiID=nil session=nil registry.wikis.count=\(registry.wikis.count) activeWikiID=\(registry.activeWikiID ?? "nil") isSceneActive=\(isSceneActive)")
+                    // If activeWikiID is already set and we haven't adopted it,
+                    // adopt it now — this covers the state-restoration case
+                    // where a second main-window RootScene starts with nil.
+                    if wikiID == nil, let activeID = registry.activeWikiID {
+                        DebugLog.tabs("RootScene [No Wikis]: adopting activeWikiID=\(activeID)")
+                        wikiID = activeID
+                    }
+                }
             }
+        }
+        .onAppear {
+            DebugLog.tabs("RootScene body onAppear: wikiID=\(wikiID ?? "nil") session=\(session != nil ? "set" : "nil")")
+        }
+        .onChange(of: wikiID) { old, new in
+            DebugLog.tabs("RootScene wikiID changed: old=\(old ?? "nil") new=\(new ?? "nil")")
         }
         // Observe activeWikiID for two purposes:
         // 1. Launch: activateMostRecent() sets activeWikiID → adopt it as

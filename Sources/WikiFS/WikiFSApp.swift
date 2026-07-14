@@ -273,6 +273,16 @@ struct WikiFSApp: App {
                 changeBridge?.refreshObservations()
             }
             .task {
+                // Start the menu-bar status item ASAP — before any blocking
+                // File Provider setup/migration awaits, so it's visible from
+                // the moment the app launches.
+                let statusController = QueueStatusItemController(
+                    queueEngine: queueEngine,
+                    activityTracker: activityTracker,
+                    sessionManager: sessionManager)
+                statusController.start()
+                appDelegate.statusItemController = statusController
+
                 fileProviderBox.provider = fileProvider
                 fileProvider.wire(into: registry)
                 // Flush a specific wiki's store before export/delete. The
@@ -308,14 +318,6 @@ struct WikiFSApp: App {
                 // windows are drained here, since per-window scenePhase only
                 // flushes active-window sessions).
                 appDelegate.sessionManager = sessionManager
-
-                // Create and start the queue status item (menu-bar presence).
-                let statusController = QueueStatusItemController(
-                    queueEngine: queueEngine,
-                    activityTracker: activityTracker,
-                    sessionManager: sessionManager)
-                statusController.start()
-                appDelegate.statusItemController = statusController
             }
         }
         .windowToolbarStyle(.unified)
@@ -338,6 +340,9 @@ struct WikiFSApp: App {
                 fileProvider: fileProvider
             )
             .appEnvironment(tracker: activityTracker)
+            .onAppear {
+                DebugLog.tabs("RootScene wiki-window onAppear: wikiID=\(wikiID ?? "nil")")
+            }
         }
 
         // Extraction compare: a real, resizable, non-modal window (one per
