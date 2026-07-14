@@ -60,12 +60,19 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
     /// disabled provider is dropped rather than silently resolved elsewhere.
     public var stageAssignments: [IngestStage: StageAssignment]
 
+    /// Per-provider concurrent ingestion limits for the `QueueEngine`
+    /// (Phase 2). Keyed by `AgentProvider.id`. A missing key (or 0) means the
+    /// engine uses its default limit of 1. Forward-compatible: a pre-Phase-2
+    /// `agent-providers.json` without this key decodes to `[:]`.
+    public var maxConcurrent: [String: Int]
+
     public init(
         providers: [AgentProvider] = [AgentProvider.claudeAcpDefault],
         providerModels: [String: [CachedModelInfo]] = [:],
         selectedModelIds: [String: String] = [:],
         favoriteModelIds: [String: [String]] = [:],
-        stageAssignments: [IngestStage: StageAssignment] = [:]
+        stageAssignments: [IngestStage: StageAssignment] = [:],
+        maxConcurrent: [String: Int] = [:]
     ) {
         let normalizedProviders = AgentProvidersConfig.normalized(providers)
         self.providers = normalizedProviders
@@ -77,6 +84,7 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         self.stageAssignments = stageAssignments.filter { _, assignment in
             normalizedProviders.contains(where: { $0.id == assignment.providerId && $0.enabled })
         }
+        self.maxConcurrent = maxConcurrent
     }
 
     // MARK: - Coding (forward-compatible: old files without model caches decode)
@@ -87,6 +95,7 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         case selectedModelIds
         case favoriteModelIds
         case stageAssignments
+        case maxConcurrent
     }
 
     public init(from decoder: Decoder) throws {
@@ -106,6 +115,8 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         self.stageAssignments = decodedAssignments.filter { _, assignment in
             normalizedProviders.contains(where: { $0.id == assignment.providerId && $0.enabled })
         }
+        // Forward-compatible: pre-Phase-2 files have no `maxConcurrent` key.
+        self.maxConcurrent = try c.decodeIfPresent([String: Int].self, forKey: .maxConcurrent) ?? [:]
     }
 
     /// JSON filename in the App Group container. Distinct from
@@ -189,7 +200,8 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
             providerModels: providerModels,
             selectedModelIds: selectedModelIds,
             favoriteModelIds: favoriteModelIds,
-            stageAssignments: stageAssignments)
+            stageAssignments: stageAssignments,
+            maxConcurrent: maxConcurrent)
     }
 
     /// The list of providers the selector surfaces: enabled ones only (the
@@ -235,7 +247,8 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
             providerModels: cache,
             selectedModelIds: selectedModelIds,
             favoriteModelIds: favoriteModelIds,
-            stageAssignments: stageAssignments)
+            stageAssignments: stageAssignments,
+            maxConcurrent: maxConcurrent)
     }
 
     /// A PURE mutator: returns a NEW config with the user's model selection for
@@ -255,7 +268,8 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
             providerModels: providerModels,
             selectedModelIds: selections,
             favoriteModelIds: favoriteModelIds,
-            stageAssignments: stageAssignments)
+            stageAssignments: stageAssignments,
+            maxConcurrent: maxConcurrent)
     }
 
     // MARK: - Favorites (#favorites — display-only, paseo per-row star)
@@ -292,7 +306,8 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
             providerModels: providerModels,
             selectedModelIds: selectedModelIds,
             favoriteModelIds: favorites,
-            stageAssignments: stageAssignments)
+            stageAssignments: stageAssignments,
+            maxConcurrent: maxConcurrent)
     }
 
     // MARK: - Ingestion stage routing (Phase 1 — core model only)
@@ -344,7 +359,8 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
                 providerModels: config.providerModels,
                 selectedModelIds: config.selectedModelIds,
                 favoriteModelIds: config.favoriteModelIds,
-                stageAssignments: config.stageAssignments)
+                stageAssignments: config.stageAssignments,
+                maxConcurrent: config.maxConcurrent)
         }
         // Missing / corrupt / empty → seed + persist.
         DebugLog.store("AgentProvidersConfig.loadOrSeed: SEED (file missing/corrupt/empty)") // TEMP DEBUG

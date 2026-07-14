@@ -247,33 +247,33 @@ struct QueueStoreTests {
     // MARK: - AC.4: No external references (source-scan)
 
     @Test func testNoExternalReferencesToQueueStore() throws {
+        // Phase 2: WikiFSEngine now legitimately references queue types
+        // (QueueEngine.swift). The app layer (WikiFS) still should NOT —
+        // Phase 4+ will wire the engine into the app. This test guards
+        // that no premature wiring happens.
         let testFile = URL(fileURLWithPath: #filePath)
         let root = testFile.deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
 
-        let dirs = [
-            root.appendingPathComponent("Sources/WikiFSEngine"),
-            root.appendingPathComponent("Sources/WikiFS"),
-        ]
+        let dir = root.appendingPathComponent("Sources/WikiFS")
 
         let symbols: Set<String> = [
             "QueueStore", "QueueItem", "QueueKind", "QueueItemState",
             "QueueItemRequest", "QueueItemPayload", "QueueRunState",
+            "QueueEngine", "QueueEvent", "QueueSnapshot",
         ]
 
-        for dir in dirs {
-            let files = try FileManager.default.contentsOfDirectory(
-                at: dir, includingPropertiesForKeys: nil)
-                .filter { $0.pathExtension == "swift" }
+        let files = try FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" }
 
-            for fileURL in files {
-                let source = try String(contentsOf: fileURL, encoding: .utf8)
-                for symbol in symbols {
-                    #expect(
-                        !source.contains(symbol),
-                        "\(fileURL.lastPathComponent) must not reference \(symbol)")
-                }
+        for fileURL in files {
+            let source = try String(contentsOf: fileURL, encoding: .utf8)
+            for symbol in symbols {
+                #expect(
+                    !source.contains(symbol),
+                    "\(fileURL.lastPathComponent) must not reference \(symbol)")
             }
         }
     }
