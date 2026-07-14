@@ -74,6 +74,13 @@ struct ChatTranscriptFilterTests {
         #expect(events.transcriptVisible.isEmpty)
     }
 
+    @Test func turnFailedIsVisible() {
+        // .turnFailed is a structured failure the user must see — unlike .raw
+        // (undecodable residue), it survives the transcript filter. (#422)
+        let events: [AgentEvent] = [.turnFailed(reason: .stalled(idleSeconds: 130))]
+        #expect(events.transcriptVisible == events)
+    }
+
     @Test func systemInitIsDropped() {
         // isInternalTranscriptEvent: true — pinned so a future change to that
         // predicate is caught here too, not just in AgentActivityView.

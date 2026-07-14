@@ -585,10 +585,21 @@ public actor ACPBackend: AgentBackend {
     /// launcher's generation gate releases. PURE + unit-tested directly
     /// (`ACPBackendTests.turnEndSynthesis*`) — the spike left this untested.
     static func turnEndEvents(error: Error?) -> [AgentEvent] {
-        if let error {
-            return [.raw("ACP agent error: \(error.localizedDescription)"), .messageStop]
+        guard let error else { return [.messageStop] }
+        let reason: TurnFailureReason
+        if let acpError = error as? ACPBackendError {
+            switch acpError {
+            case .turnStalled(let idle):
+                reason = .stalled(idleSeconds: idle)
+            case .turnCeilingExceeded(let total):
+                reason = .ceilingExceeded(totalSeconds: total)
+            default:
+                reason = .agentError(error.localizedDescription)
+            }
+        } else {
+            reason = .agentError(error.localizedDescription)
         }
-        return [.messageStop]
+        return [.turnFailed(reason: reason), .messageStop]
     }
 
     /// Decode a `session/update` notification's `params` (`AnyCodable`) into a

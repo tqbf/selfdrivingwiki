@@ -123,7 +123,7 @@ extension AgentEvent {
         switch self {
         case .systemInit, .toolUse, .toolResult, .subagent, .raw, .messageStop, .assistantTextDelta:
             true
-        case .userText, .assistantText, .result:
+        case .userText, .assistantText, .result, .turnFailed:
             false
         }
     }

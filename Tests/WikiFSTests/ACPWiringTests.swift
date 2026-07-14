@@ -104,19 +104,23 @@ import ACPModel
         #expect(ACPBackend.turnEndEvents(error: nil) == [.messageStop])
     }
 
-    /// A failed prompt synthesizes a `.raw` error line THEN `.messageStop`, so
+    /// A failed prompt synthesizes a `.turnFailed` event THEN `.messageStop`, so
     /// the consumer's for-await still exits and the generation gate releases
-    /// (an error is also a turn boundary).
+    /// (an error is also a turn boundary). The `.turnFailed` carries a
+    /// structured `TurnFailureReason` that persists and renders as a banner. (#422)
     @Test func turnEndSynthesisOnError() {
         struct Boom: Error {}
         let events = ACPBackend.turnEndEvents(error: Boom())
         #expect(events.count == 2)
-        // First event is a `.raw` line carrying the error (exact wording is
-        // locale/Swift-version dependent, so assert by case + prefix).
-        if case .raw(let text)? = events.first {
-            #expect(text.hasPrefix("ACP agent error:"))
+        // First event is a `.turnFailed` carrying the error as `.agentError`.
+        if case .turnFailed(let reason)? = events.first {
+            if case .agentError(let message) = reason {
+                #expect(!message.isEmpty)
+            } else {
+                Issue.record("expected .agentError reason, got \(reason)")
+            }
         } else {
-            Issue.record("expected a .raw error line first, got \(String(describing: events.first))")
+            Issue.record("expected a .turnFailed event first, got \(String(describing: events.first))")
         }
         // Last event is always the turn-boundary marker.
         #expect(events.last == .messageStop)

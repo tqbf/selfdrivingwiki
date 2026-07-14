@@ -1,5 +1,43 @@
 import Foundation
 
+/// The structured reason a turn failed — surfaced to the user via
+/// `AgentEvent.turnFailed` and persisted in `chat_messages.event_json` so it
+/// survives reload. (`ACPBackendError` is the engine-layer error that gets
+/// mapped into this at the `turnEndEvents` seam.) (#422)
+public enum TurnFailureReason: Sendable, Equatable, Codable {
+    /// The turn went silent — no `session/update` notification arrived for
+    /// `idleSeconds`. The turn was cancelled; the user can retry.
+    case stalled(idleSeconds: TimeInterval)
+    /// The turn exceeded the hard ceiling duration. The turn was cancelled.
+    case ceilingExceeded(totalSeconds: TimeInterval)
+    /// The ACP subprocess returned an error (prompt failure, auth, etc.).
+    case agentError(String)
+
+    /// A plain-English description for the UI banner and `plainText` rendering.
+    public var description: String {
+        switch self {
+        case .stalled(let idle):
+            return "The agent was idle for \(Int(idle))s and was cancelled."
+        case .ceilingExceeded(let total):
+            return "The agent exceeded the maximum turn duration (\(Int(total))s) and was cancelled."
+        case .agentError(let message):
+            return message
+        }
+    }
+
+    /// A short label for the banner's `<strong>` heading.
+    public var label: String {
+        switch self {
+        case .stalled:
+            return "Turn timed out."
+        case .ceilingExceeded:
+            return "Turn ceiling exceeded."
+        case .agentError:
+            return "Agent error."
+        }
+    }
+}
+
 /// One rendered line of a `claude -p --output-format stream-json` run
 /// (`plans/llm-wiki.md` Phase C — "`claude -p` orchestration", which anticipates
 /// `stream-json` "for a richer tool-call view"). The UI renders an ordered list of
@@ -69,6 +107,13 @@ public enum AgentEvent: Equatable, Sendable, Codable {
     /// Not rendered in the transcript (filtered by `isInternalTranscriptEvent`).
     case messageStop
 
+    /// A turn ended abnormally — timed out, hit the ceiling, or the ACP
+    /// subprocess returned an error. Distinct from `.raw` (undecodable debug
+    /// residue): this is a structured failure the user needs to see and that
+    /// must survive reload. The companion `.messageStop` that follows it
+    /// releases the generation gate. (#422)
+    case turnFailed(reason: TurnFailureReason)
+
     /// A line we didn't model (an unrecognized event type, or a malformed/partial
     /// line). Carries the raw text verbatim so nothing is silently swallowed.
     case raw(String)
@@ -102,6 +147,8 @@ public enum AgentEvent: Equatable, Sendable, Codable {
             return text.isEmpty ? label : "\(label):\n\(text)"
         case .messageStop:
             return ""  // internal — not rendered
+        case .turnFailed(let reason):
+            return "\(reason.label) \(reason.description)"
         case .raw(let line):
             return line
         }

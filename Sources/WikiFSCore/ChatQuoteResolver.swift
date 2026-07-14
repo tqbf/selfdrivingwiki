@@ -48,6 +48,8 @@ public enum ChatQuoteResolver {
             return summary
         case .systemInit, .subagent, .assistantTextDelta, .messageStop, .raw:
             return ""
+        case .turnFailed(let reason):
+            return reason.description
         }
     }
 

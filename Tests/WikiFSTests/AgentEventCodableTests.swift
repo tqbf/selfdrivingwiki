@@ -65,4 +65,19 @@ import Foundation
         let event = AgentEvent.raw("{\"type\":\"unknown\"}")
         #expect(try roundTrip(event) == event)
     }
+
+    @Test func turnFailedStalledRoundTrips() throws {
+        let event = AgentEvent.turnFailed(reason: .stalled(idleSeconds: 130))
+        #expect(try roundTrip(event) == event)
+    }
+
+    @Test func turnFailedCeilingRoundTrips() throws {
+        let event = AgentEvent.turnFailed(reason: .ceilingExceeded(totalSeconds: 1800))
+        #expect(try roundTrip(event) == event)
+    }
+
+    @Test func turnFailedAgentErrorRoundTrips() throws {
+        let event = AgentEvent.turnFailed(reason: .agentError("connection refused"))
+        #expect(try roundTrip(event) == event)
+    }
 }
