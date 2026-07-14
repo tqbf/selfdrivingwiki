@@ -142,6 +142,25 @@ struct QueueLogRecord: Codable, Sendable {
             self.finishedAt = i.finishedAt
             self.durationMs = nil
 
+        case .progress:
+            // Progress events are high-volume (extraction log lines). They are
+            // consumed live by the UI via the event stream, but NOT individually
+            // logged to the JSONL audit trail (which records state transitions
+            // only). The write() method skips this case.
+            self.eventType = "progress"
+            self.itemID = nil
+            self.queue = nil
+            self.wikiID = nil
+            self.providerID = nil
+            self.itemState = nil
+            self.runState = nil
+            self.orderingKey = nil
+            self.attempt = nil
+            self.error = nil
+            self.startedAt = nil
+            self.finishedAt = nil
+            self.durationMs = nil
+
         case .runStateChanged(let queue, let state):
             self.eventType = "runStateChanged"
             self.itemID = nil
@@ -257,6 +276,11 @@ public actor QueueEventLog {
     /// Accessible to tests via `writeEventForTest`.
     func write(_ event: QueueEvent) {
         guard !stopped else { return }
+
+        // Progress events are high-volume (extraction log lines). Skip them
+        // in the JSONL audit trail — it records state transitions only. The
+        // UI consumes progress lines live via the event stream.
+        if case .progress = event { return }
 
         ensureOpenForToday()
         guard let handle = fileHandle else { return }

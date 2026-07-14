@@ -63,6 +63,10 @@ public actor QueueEngine {
     /// Whether the engine has been initialized (rehydration + initial dispatch).
     private var didStart = false
 
+    /// Pending `waitForCompletion` waiters, keyed by item ID. Resumed by
+    /// `handleWorkerFinished` when the item reaches a terminal state.
+    private var completionWaiters: [QueueItem.ID: [CheckedContinuation<Result<Void, Error>, Never>]] = [:]
+
     // MARK: - Init
 
     /// Create the engine. Does NOT start dispatching — call ``start()``
@@ -116,6 +120,11 @@ public actor QueueEngine {
     /// `.enqueued` event, and triggers a dispatch scan. Returns the item's ID.
     @discardableResult
     public func enqueue(_ request: QueueItemRequest) async throws -> QueueItem.ID {
+        // Synchronous shape validation (AC4.2): reject empty wikiID before the
+        // store write so doomed items never enter the queue.
+        guard !request.wikiID.trimmingCharacters(in: .whitespaces).isEmpty else {
+            throw QueueStoreError.invalidRequest("wikiID must not be empty")
+        }
         let item = try store.enqueue(request)
         emit(.enqueued(item))
         await dispatchScan()
@@ -224,6 +233,51 @@ public actor QueueEngine {
             providerCounts: providerActiveCounts,
             activeIngestionWikis: activeIngestionWikis
         )
+    }
+
+    // MARK: - Wait for completion
+
+    /// Await the completion of a specific item. Returns `.success` on
+    /// `.completed`, `.failure` on `.failed` or `.cancelled`.
+    ///
+    /// FIRST checks the current state via `store.getItem(id)` — if the item is
+    /// already terminal (e.g. the worker finished fast before this call),
+    /// returns the corresponding Result synchronously without registering a
+    /// continuation (so fast-completing items don't leak a continuation).
+    /// Otherwise registers a `CheckedContinuation` keyed by item ID;
+    /// `handleWorkerFinished` resumes all waiters for the item and empties
+    /// the waiters array.
+    public func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error> {
+        // Check if already terminal.
+        if let item = try? store.getItem(id), item.state == .completed {
+            return .success(())
+        }
+        if let item = try? store.getItem(id), item.state == .failed {
+            return .failure(QueueExtractionError.notReady(item.error ?? "unknown"))
+        }
+        if let item = try? store.getItem(id), item.state == .cancelled {
+            return .failure(CancellationError())
+        }
+
+        // Register a waiter.
+        return await withCheckedContinuation { c in
+            completionWaiters[id, default: []].append(c)
+        }
+    }
+
+    // MARK: - Emit progress (for worker factory)
+
+    /// A `Sendable` closure the worker factory captures to yield `.progress`
+    /// events onto the engine's `AsyncStream.Continuation` (bypassing `emit()`
+    /// which is actor-isolated). The continuation is `Sendable`, so this is
+    /// safe to call from the worker's detached `Task`.
+    public func makeEmitProgress() -> @Sendable (QueueItem.ID, String) -> Void {
+        guard let continuation = eventContinuation else {
+            return { _, _ in }
+        }
+        return { id, line in
+            continuation.yield(.progress(id, line: line))
+        }
     }
 
     // MARK: - Dispatch (internal)
@@ -415,8 +469,20 @@ public actor QueueEngine {
             }
         }
 
+        // Resume any `waitForCompletion` waiters for this item.
+        resumeWaiters(for: item.id, result: result)
+
         // Trigger dispatch for potentially unblocked items.
         await dispatchScan()
+    }
+
+    /// Resume all `waitForCompletion` waiters for an item with the given result
+    /// and clear the waiters array.
+    private func resumeWaiters(for id: QueueItem.ID, result: Result<Void, Error>) {
+        guard let waiters = completionWaiters.removeValue(forKey: id) else { return }
+        for w in waiters {
+            w.resume(returning: result)
+        }
     }
 
     // MARK: - In-memory state management

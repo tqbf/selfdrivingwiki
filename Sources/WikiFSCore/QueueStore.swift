@@ -16,6 +16,8 @@ public enum QueueStoreError: Error, CustomStringConvertible, LocalizedError {
     /// A state transition was attempted that is not valid from the item's
     /// current state (e.g. `completed` → `running`).
     case invalidStateTransition(from: QueueItemState, to: QueueItemState)
+    /// The request was malformed (e.g. empty wikiID — AC4.2).
+    case invalidRequest(String)
 
     public var description: String {
         switch self {
@@ -24,6 +26,7 @@ public enum QueueStoreError: Error, CustomStringConvertible, LocalizedError {
         case .notFound(let id): return "Queue item not found: \(id)"
         case .invalidStateTransition(let from, let to):
             return "Invalid queue state transition: \(from.rawValue) → \(to.rawValue)"
+        case .invalidRequest(let m): return "Invalid request: \(m)"
         }
     }
 

@@ -44,6 +44,9 @@ public enum QueueEvent: Sendable {
     case enqueued(QueueItem)
     /// An item transitioned to `.running` — a worker started executing it.
     case started(QueueItem)
+    /// Progress line from a running worker (e.g. extraction log output).
+    /// Carries the item ID + the progress text line.
+    case progress(QueueItem.ID, line: String)
     /// An item transitioned to `.completed`.
     case completed(QueueItem)
     /// An item transitioned to `.failed`. Carries the error message.
@@ -61,7 +64,7 @@ public enum QueueEvent: Sendable {
             return i
         case .failed(let i, _):
             return i
-        case .runStateChanged:
+        case .progress, .runStateChanged:
             return nil
         }
     }
