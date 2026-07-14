@@ -288,11 +288,25 @@ snapshot-aware refresh is implemented (the guard reports this clearly).
    file Ingested in the app — always pass it on a successful ingest.
 
 **Query** — answer a question from the wiki:
-1. Search: start with `$WIKICTL search --query "…"` for semantic (meaning-based)
-   search across page bodies. If that misses, fall back to `$WIKICTL page list`
-   then `$WIKICTL page get` on likely candidates. Only read `index.md` / `log.md`
-   (via `cat`) or consult `WIKI-STRUCTURE.md` as a last-resort orientation aid;
-   never name those files to the user.
+1. Search — internal first, web last:
+   - **(1a) Internal search first.** `$WIKICTL search --query "…"` for semantic
+     (meaning-based) search across page bodies; `$WIKICTL source search --query
+     "…"` for raw sources; `$WIKICTL chat search --query "…"` for past
+     conversations. If a page hit misses the mark, fall back to `$WIKICTL page
+     list` then `$WIKICTL page get` on likely candidates. Only read `index.md` /
+     `log.md` (via `cat`) or consult `WIKI-STRUCTURE.md` as a last-resort
+     orientation aid; never name those files to the user.
+   - **(1b) A named title is a source search.** If the user names a paper or
+     source by title, run `$WIKICTL source search --query "<title>"` — and
+     `$WIKICTL search` for pages by that name — regardless of whether you think
+     it's in the wiki: the user most likely ingested it as a source. Read a hit
+     with `$WIKICTL source cat` / `source export`.
+   - **(1c) Web tools are a fallback, not a default.** Reach for
+     `websearch`/`webfetch` only AFTER the internal searches (pages, sources,
+     chats) come up empty, and only when the user has agreed (or explicitly
+     asked to "search the web" / "look this up online" — that request is an
+     opt-out from this default). Before any web lookup, say so plainly ("not in
+     the wiki; searching the web") rather than silently hopping.
 2. Answer concisely, CITING page titles with `[[wiki links]]` and source passages
    with `[^id]` + `[^id]: [[source:Name#"quote"]]` footnotes (see Footnotes
    convention above). If the wiki lacks the information, say so plainly rather
@@ -455,6 +469,8 @@ Work autonomously to completion; the live app shows changes as they land.
     static let queryTask = #"""
 TASK — Answer a question from this wiki, following the Query workflow from your instructions. Answer from the wiki's objects (pages, sources, chats), reading them with `wikictl` (which reads the database directly). Do not narrate filesystem artifacts to the user — `$WIKI_ROOT`, `WIKI-STRUCTURE.md`, `indexes/*.jsonl`, and `manifest.json` are internal; orient silently if you need to.
 
+**Wikictl first, web last.** Search the wiki itself before any web tool: `$WIKICTL search` (pages), `$WIKICTL source search` (sources), `$WIKICTL chat search` (past conversations). If the user names a paper or source by title, run `$WIKICTL source search --query "<title>"` first — the user most likely ingested it as a source. Only reach for `websearch`/`webfetch` after the internal searches come up empty, and say so plainly ("not in the wiki; searching the web") before hopping. An explicit "search the web" / "look this up online" request is an opt-out from this default.
+
 To answer, pull wiki pages from SQLite with `wikictl page get --title T` (or `--id I`) so you see fresh authoritative content. If a page contains Markdown footnotes (`[^id]: ...`) that cite a raw source, FOLLOW THEM: resolve the source with `wikictl source list` (or `--json`), then read it — for text use `wikictl source cat --id <id>`; for a PDF or other binary, run `wikictl source export --id <id>` and `Read` the path it prints (the Read tool renders PDFs natively), or read the markdown the app extracted at ingest via `wikictl source cat --id <id>`. When you cite a source in your answer, follow the CITE SOURCES rule above. If you file a useful answer back as a page, write it via `wikictl page upsert` and log it with `wikictl log append --kind query`. Follow CAS discipline on the page write: read the page's current `head_version_id` first (via `wikictl page get --json`, or the stderr line in text mode), then pass `--expect-head <that id>` to `wikictl page upsert`; on exit code 3 (CAS conflict), re-read once, reapply, retry once — if it fails again, report the conflict rather than looping.
 
 """#
@@ -467,6 +483,8 @@ STYLE — Do the wiki/source inspection silently. Do NOT narrate process steps l
 **Folder = bookmark folder.** When the user says "folder" without further qualification, interpret it as a **bookmark folder** — a node in the Bookmarks sidebar tree the user sees and names. The wiki's user-visible objects are: pages, sources, bookmarks (folders + page/source refs), chats, the index, and the log. Speak in those terms. An "ingest folder" or "source folder I dragged in" is a *source* input, not a bookmark target — but that is the exception, not the default.
 
 **Do not name the filesystem projection or JSON artifacts in replies.** The user never sees `$WIKI_ROOT`, `WIKI-STRUCTURE.md`, `indexes/*.jsonl` (`pages.jsonl`, `links.jsonl`, `sources.jsonl`), `manifest.json`, "the mount", or a "wiki snapshot / JSON index." Use `wikictl` (which reads the database directly) silently when you need data — describe searches as searches of the wiki (pages/sources/chats), never as reading a JSONL file or a snapshot. This extends the STYLE rule above: just as you don't say "I'll check the wiki," you also don't say "I'll grep the index" or "I'll read the JSONL."
+
+**Wikictl first, web last.** Before reaching for `websearch` or `webfetch`, search the wiki itself: `$WIKICTL search` (pages), `$WIKICTL source search` (raw sources), `$WIKICTL chat search` (past conversations). When the user names a paper or source by title, run `$WIKICTL source search --query "<title>"` FIRST — the user most likely ingested it as a source. Only if the internal searches come up empty should you use `websearch`/`webfetch`, and even then say so plainly ("not in the wiki; searching the web") rather than silently hopping. If the user explicitly asks to "search the web" / "look this up online", that's an opt-out from this default.
 
 When answering, use the Query workflow from your instructions. Pull fresh pages with `wikictl page get --title T` (or `--id I`) as needed. If a page contains Markdown footnotes (`[^id]: ...`) that cite a raw source, resolve it with `wikictl source list` (or `--json`), then read it — for text use `wikictl source cat --id <id>`; for a PDF or other binary, run `wikictl source export --id <id>` and `Read` the path it prints (the Read tool renders PDFs natively), or read the markdown the app extracted at ingest via `wikictl source cat --id <id>`.
 

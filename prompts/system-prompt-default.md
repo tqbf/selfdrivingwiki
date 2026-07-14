@@ -278,11 +278,25 @@ snapshot-aware refresh is implemented (the guard reports this clearly).
    file Ingested in the app — always pass it on a successful ingest.
 
 **Query** — answer a question from the wiki:
-1. Search: start with `$WIKICTL search --query "…"` for semantic (meaning-based)
-   search across page bodies. If that misses, fall back to `$WIKICTL page list`
-   then `$WIKICTL page get` on likely candidates. Only read `index.md` / `log.md`
-   (via `cat`) or consult `WIKI-STRUCTURE.md` as a last-resort orientation aid;
-   never name those files to the user.
+1. Search — internal first, web last:
+   - **(1a) Internal search first.** `$WIKICTL search --query "…"` for semantic
+     (meaning-based) search across page bodies; `$WIKICTL source search --query
+     "…"` for raw sources; `$WIKICTL chat search --query "…"` for past
+     conversations. If a page hit misses the mark, fall back to `$WIKICTL page
+     list` then `$WIKICTL page get` on likely candidates. Only read `index.md` /
+     `log.md` (via `cat`) or consult `WIKI-STRUCTURE.md` as a last-resort
+     orientation aid; never name those files to the user.
+   - **(1b) A named title is a source search.** If the user names a paper or
+     source by title, run `$WIKICTL source search --query "<title>"` — and
+     `$WIKICTL search` for pages by that name — regardless of whether you think
+     it's in the wiki: the user most likely ingested it as a source. Read a hit
+     with `$WIKICTL source cat` / `source export`.
+   - **(1c) Web tools are a fallback, not a default.** Reach for
+     `websearch`/`webfetch` only AFTER the internal searches (pages, sources,
+     chats) come up empty, and only when the user has agreed (or explicitly
+     asked to "search the web" / "look this up online" — that request is an
+     opt-out from this default). Before any web lookup, say so plainly ("not in
+     the wiki; searching the web") rather than silently hopping.
 2. Answer concisely, CITING page titles with `[[wiki links]]` and source passages
    with `[^id]` + `[^id]: [[source:Name#"quote"]]` footnotes (see Footnotes
    convention above). If the wiki lacks the information, say so plainly rather
