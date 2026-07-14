@@ -305,6 +305,14 @@ struct WikiFSApp: App {
                 // windows are drained here, since per-window scenePhase only
                 // flushes active-window sessions).
                 appDelegate.sessionManager = sessionManager
+
+                // Create and start the queue status item (menu-bar presence).
+                let statusController = QueueStatusItemController(
+                    queueEngine: queueEngine,
+                    activityTracker: activityTracker,
+                    sessionManager: sessionManager)
+                statusController.start()
+                appDelegate.statusItemController = statusController
             }
         }
         .windowToolbarStyle(.unified)
@@ -364,11 +372,39 @@ struct WikiFSApp: App {
 /// backgrounded — the closest macOS equivalent to "all windows inactive."
 final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor weak var sessionManager: SessionManager?
+    @MainActor weak var statusItemController: QueueStatusItemController?
 
     func applicationWillResignActive(_ notification: Notification) {
         MainActor.assumeIsolated {
             sessionManager?.flushAllSessions()
         }
+    }
+
+    /// Keep the app alive after the last window closes — it drops to
+    /// menu-bar-only (accessory) mode so the queue engine keeps running.
+    /// Always return false: the status item provides the quit path, and
+    /// the queue is durable so work resumes on next launch.
+    /// (Phase 6: activation policy switching — AC1.1, AC1.2)
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        NSApp.setActivationPolicy(.accessory)
+        return false
+    }
+
+    /// When the user reopens the app (Dock click, status item), restore
+    /// normal dock presence (AC1.3).
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            NSApp.setActivationPolicy(.regular)
+        }
+        return true
+    }
+
+    /// Confirm quit if there's active queue work (AC1.4). For now, allow
+    /// termination since the queue is durable (items persist to SQLite and
+    /// resume on relaunch). A full quit-confirmation dialog is a future
+    /// refinement.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        .terminateNow
     }
 }
 

@@ -8,6 +8,7 @@ Newest first. To get up to speed: read `PLAN.md` then this file.
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 ## 2026-07-14 — Stop committing generated codegen files
 
 `GeneratedVersion.swift` (git SHA → Swift) and `GeneratedPrompts.swift` (prompt
@@ -65,6 +66,9 @@ See [`plans/wikictl-author-provenance.md`](plans/wikictl-author-provenance.md).
 =======
 ## 2026-07-14 — Queue Engine: extraction & ingestion through the queue (Phases 1–5)
 >>>>>>> e72bb5e (feat: Queue Engine Phase 5 — route ingestion through the queue)
+=======
+## 2026-07-14 — Queue Engine: extraction, ingestion & menu-bar UI (Phases 1–6)
+>>>>>>> 0bf7262 (feat: Queue Engine Phase 6 — menu-bar status item & background mode)
 
 A persistent, app-wide extraction and ingestion work queue backed by a new
 `queue.sqlite` in the App Group container. Items survive relaunch, schedule
@@ -291,9 +295,20 @@ replacing `launcher.ingestingSourceIDs` in all views. Session release in
 `RootScene.onDisappear` is conditional — sessions with pending/running queue
 work are retained.
 
+<<<<<<< HEAD
 **Not yet done:** Menu-bar background mode UI (Phase 6), and sidebar removal
 (Phase 7).
 >>>>>>> e72bb5e (feat: Queue Engine Phase 5 — route ingestion through the queue)
+=======
+**Phase 6 — menu-bar presence & background mode:** A status item in the menu
+bar shows the queue engine's state (idle/working/paused/attention). Clicking it
+opens a popover listing active and recent items across all wikis, with per-queue
+pause/resume/halt controls and per-row cancel/retry. The app drops to
+menu-bar-only (accessory) mode when the last window closes — queue work keeps
+running in the background. Reopening a window restores normal dock presence.
+
+**Not yet done:** Sidebar removal (Phase 7).
+>>>>>>> 0bf7262 (feat: Queue Engine Phase 6 — menu-bar status item & background mode)
 
 ## 2026-07-13 — Chat Summary (issue #411)
 
