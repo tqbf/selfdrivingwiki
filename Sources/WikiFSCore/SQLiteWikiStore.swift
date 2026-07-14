@@ -21,6 +21,13 @@ import CryptoKit
 /// See `plans/graph-model-and-versioning.md` §8 and
 /// `.claude/skills/sqlite-concurrency/SKILL.md`.
 public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
+
+    /// The latest schema version stamped by `createFreshSchemaV20()` and the
+    /// final step of `migrate(from:)`. Tests reference this instead of
+    /// hardcoding a magic number, so a schema bump doesn't require updating
+    /// every test file.
+    public static let currentSchemaVersion = 36
+
     private let db: OpaquePointer
     /// Prepared-statement cache keyed by SQL text; reused via `reset()`.
     private var statements: [String: SQLiteStatement] = [:]
@@ -567,7 +574,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // columns on `chats` for the one-line model-response summary shown in
         // the sidebar. A fresh DB gets the columns via `createChatTablesV23`
         // above; existing DBs get them via the v35→36 ALTER migration.
-        try exec("PRAGMA user_version=36;")
+        try exec("PRAGMA user_version=\(Self.currentSchemaVersion);")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -1502,10 +1509,10 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // and `summary_at` columns to `chats` so the sidebar can show a
         // one-line summary of the model's first response. Simple ALTER — no
         // table rebuild needed for nullable columns.
-        if version < 36 {
+        if version < Self.currentSchemaVersion {
             try migrateV35ToV36()
-            try exec("PRAGMA user_version=36;")
-            version = 36
+            try exec("PRAGMA user_version=\(Self.currentSchemaVersion);")
+            version = Self.currentSchemaVersion
         }
     }
 
