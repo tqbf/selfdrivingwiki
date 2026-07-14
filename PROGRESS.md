@@ -2,6 +2,15 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-14 — Stop committing generated codegen files
+
+`GeneratedVersion.swift` (git SHA → Swift) and `GeneratedPrompts.swift` (prompt
+markdown → Swift) are now gitignored — regenerated at build time by `make
+version` / `make prompts`. Previously they were checked in, causing constant
+diff noise: the version file embedded the git SHA, so it drifted on every commit
+(the committed snapshot always pointed at the *previous* SHA). CI now runs
+`make version prompts` before `swift build` instead of gating on drift.
+
 ## 2026-07-13 — wikictl author provenance (issue #397)
 
 **Implemented.** `wikictl page upsert` now records agent/chat provenance on
@@ -450,6 +459,15 @@ state is fully consistent (embeddings, structural index, log entry).
 - All 6 tests pass; `StoreEmissionExhaustivenessTests` passes (new method
   correctly in NO-EMIT partition); existing `WorkspaceTests` +
   `WorkspaceStagingTests` all pass.
+
+## 2026-07-11 — Remove edit locks — CAS replaces the mutex
+
+Starting a second chat while one was running silently failed — a process-wide
+mutex (`store.isAgentRunning`) blocked the second chat at the preflight guard.
+Removed the mutex entirely: W0 (PR #342) introduced page versioning + CAS save
+with conflict detection, so concurrent writes are safe. Replaced
+`isAgentRunning: Bool` with a ref-counted `agentRunCount` for lifecycle, dropped
+all "Agent updating wiki…" UI states, and removed the per-turn edit lock toggle.
 
 ## 2026-07-11 — W4: Concurrency at scale (PR #312)
 
@@ -1821,6 +1839,13 @@ flat resources. **Behavior byte-identical.**
 **Next:** Phase D — bookmarks projection (#125) via `NestedResourceProjection`,
 the nested-shape capstone.
 
+## 2026-07-08 — PDF source add by URL can fail "database is locked" (#229)
+
+PDFKit's whole-file parse for extracting a PDF display name was running inside
+the store's lock, delaying the write transaction long enough for concurrent
+writers to exceed the busy timeout. Fix: resolve the display name before
+acquiring the lock, and for PDFs run that resolution off the main actor.
+
 ## 2026-07-07 — Graph-model v26: derived markdown is CAS-only (drop `source_markdown_versions.content`)
 
 **Shipped (on `fix/finish-smv-cas-drop`; tests green).** Completes the
@@ -2761,6 +2786,21 @@ bar selected all sidebar rows instead of the omnibox text. Fixes
 - **`SidebarSelectAllShortcutTests`** — pure-predicate coverage plus integration
   regression guards: with an omnibox `NSTextField` holding focus (field editor
   first responder), neither table consumes Cmd+A, and non-Cmd+A keys always defer.
+
+## 2026-07-05 — "Show in List" sidebar reveal for pages & sources (#183)
+
+A "Show in List" button (next to "Reveal in Finder") in page and source detail
+views that surfaces the current item in the sidebar: opens the sidebar if
+collapsed, switches to the right section, clears a search that would hide the
+row, then scrolls to and selects it. Works without a mounted File Provider.
+
+## 2026-07-05 — Drop routing for .webloc / remote URLs (#163)
+
+Dragging a `.webloc` file or an HTTP URL onto the window previously hit the
+generic file-drop path, ingesting the `.webloc` plist's raw bytes instead of
+fetching the linked page. Fixed: HTTP(S) URLs and resolved `.webloc` shortcuts
+now route through the "Add from URL" fetch path; local `file://` URLs still
+ingest as raw bytes.
 
 ## 2026-07-04 — Multi-select pages/sources → bookmark them all into a chosen folder (#151)
 
@@ -7501,166 +7541,4 @@ hello-world WikiFS SwiftUI app building, signing, and launching.
 - Add a `WikiFSTests` target so `make test` does something.
 - Begin SQLite store + page model (Milestone 0 deliverables in `plans/INITIAL.md`
   also include persistence; the build skeleton is done, the data layer is not).
-
-## #163 — Drop routing for .webloc / remote URLs (2026-07-05)
-
-**Problem:** dragging a `.webloc` file or an `http(s)` URL from a browser onto
-the window hit the generic file-drop path (`addFiles`), ingesting the
-`.webloc` plist's raw bytes instead of fetching the linked page.
-
-**Fix**
-- `WikiStoreModel.addDroppedURLs(_:fetcher:)` — partitions dropped URLs:
-  `http(s)` URLs and `.webloc` shortcuts (resolved to their target) route through
-  `addURL` (the "Add from URL" fetch + HTML→Markdown path); other `file://`
-  URLs still ingest as raw bytes via `addFiles`. Supports multi-URL drops;
-  an unresolvable `.webloc` is skipped (its bytes aren't a useful source).
-  Named `add*` (not `ingest*`) since it only adds a source — agent ingestion
-  (read source → generate pages) is a separate `AgentLauncher` phase.
-- `WikiStoreModel.resolveWeblocURL(_:)` — reads the plist (XML or binary) off the
-  main actor via `PropertyListSerialization`.
-- `ContentView` `.dropDestination` now calls `store.addDroppedURLs(_:)`.
-
-**Tests:** `WikiStoreModelDropRoutingTests` (5) — webloc→md, http url→md, local
-txt→verbatim, mixed batch, unresolvable webloc skipped. All pass; existing
-`WikiStoreModelAddURLTests` still green.
-
-## #183 — "Show In List" sidebar reveal for pages & sources
-
-A "Show in List" button (next to "Reveal in Finder") in `PageDetailView` and
-`SourceDetailView` that surfaces the current page/source in the sidebar: opens
-the sidebar if collapsed, switches to the right section, clears a search that
-would hide the row, then scrolls to + selects it.
-
-**Mechanism** — mirrors the existing `pendingScrollAnchor` "set once, consume
-once" cross-view signal (issue #183 design):
-
-- `WikiStoreModel` — `pendingSidebarReveal: WikiSelection?` +
-  `pendingSidebarRevealVersion: Int` (monotonic, observed via `.onChange` so a
-  repeat request re-fires even when the value is unchanged), with
-  `requestSidebarReveal(_:)` (producer) and `consumePendingSidebarReveal()`
-  (consumer, called by the list view after scroll+select).
-- `ContentView` — `.onChange(of: pendingSidebarRevealVersion)` un-collapses the
-  sidebar (`columnVisibility = .all`) when it's `.detailOnly`, so the target
-  section's list is actually mounted.
-- `SidebarView` — `.onChange(of: pendingSidebarRevealVersion)` sets
-  `selectedSection` to `.pages`/`.sources` from the `WikiSelection` case and
-  clears the section's search query (`searchQuery`/`sourceSearchQuery`) only
-  when the target isn't in the filtered results (clearing resets
-  `searchResults`/`sourceSearchResults` synchronously, so the full list is
-  visible for row lookup).
-- `PagesListViewController` / `SourcesListViewController` — new
-  `revealAndSelect(id:)`: looks up the row, selects it (bypassing the
-  `reconcileHighlight` multi-select guard — an explicit user action wins over a
-  Cmd/Shift selection), and `scrollRowToVisible(_:)`. Driven from
-  `updateNSViewController`, which reads `pendingSidebarReveal` (also registers
-  the observation so the method re-runs on change), then consumes.
-- `PageDetailView` / `SourceDetailView` — `Button("Show in List",
-  systemImage: "sidebar.left")` calling `requestSidebarReveal(.page(id))` /
-  `.source(id)`. Works without a mounted File Provider (unlike Reveal in Finder).
-
-**Build/tests:** `swift build` clean; `swift test` — 1466 tests pass.
-
----
-
-### Issue #229 — PDF source add by URL can fail "database is locked" (PR #247)
-
-**Problem.** `DisplayNameResolver.resolve()` — which invokes PDFKit's
-whole-file parse for PDFs — ran **inside** `SQLiteWikiStore.addSource`'s
-`mutate()` closure, under the recursive lock and before the write transaction
-opened. For a large PDF this parse can take seconds, delaying the `BEGIN` long
-enough for another writer (File Provider, daemon, concurrent write) to hold the
-DB write lock past the 5 s `busy_timeout`, surfacing as "database is locked".
-
-**Fix.** Two-part:
-1. **Out of the locked path:** `addSource` (and `addSnapshotImage`) now compute
-   `ext` / `mime` / `displayName` **before** `mutate()` acquires the recursive
-   lock. The locked body keeps only the dup-check SELECT + INSERT transaction.
-   Added a `resolvedDisplayName: String??` parameter to `addSource` (and a
-   `WikiStore` protocol-extension convenience overload since protocol methods
-   can't have default args) so callers can skip the in-method parse entirely.
-2. **Off the main actor:** `WikiStoreModel.preResolveDisplayName()` runs
-   `DisplayNameResolver.resolve()` on a `Task.detached` for **PDFs only**
-   (non-PDFs return `nil` → resolve inline). Wired into `addURLViaWebsite`,
-   `addFiles`, and `ingestFromZotero`.
-
-**Key files:** `SQLiteWikiStore.swift` (`addSource` / `addSnapshotImage`),
-`WikiStore.swift` (protocol + extension), `WikiStoreModel.swift`
-(`preResolveDisplayName`, `storeMaterialized`, three ingest paths).
-
-**Build/tests:** `swift build` clean; `swift test` — 1930 tests pass
-(1927 existing + 3 new for the `resolvedDisplayName` tri-state bypass).
-
-## Remove edit locks — CAS replaces the mutex (2026-07-11)
-
-**Problem:** Starting a second chat while Chat 1 was running silently failed —
-the second chat didn't even display the user's question. The root cause was
-`store.isAgentRunning`, a process-wide mutex that blocked `startChat`/
-`continueChat` at the preflight guard (`shouldBlockEditStart`), failing before
-the chat row was created or the message was shown.
-
-**Why the mutex existed:** Pre-CAS, it prevented last-writer-wins data races —
-the in-app autosave could clobber the agent's `wikictl` writes. It paused
-autosave, disabled editing UI, and blocked new chat starts.
-
-**Why it's safe to remove now:** W0 (PR #342) introduced page versions + CAS
-save (`PageUpsert.upsert` with `expectedHeadVersionID`). `WikiStoreModel.save()`
-catches `PageConflictError` and surfaces a "Page Was Updated" dialog. Concurrent
-writes are safe — the store detects the version mismatch.
-
-**Changes:**
-- **WikiStoreModel:** Replaced `isAgentRunning: Bool` with `agentRunCount: Int`
-  (ref-counted). `agentRunStarted()` increments + flushes drafts; `agentRunEnded()`
-  decrements + reloads from store when count hits 0. Removed autosave pause guards
-  in `scheduleAutosave()` and `systemPromptChanged()` — CAS handles it.
-- **AgentOperationRunner:** `shouldBlockEditStart` now only checks
-  `isIngestInProgress` (extraction is resource-intensive, not a data-race concern).
-  Removed `takeEditLock` parameter entirely. Callbacks now
-  `agentRunStarted()`/`agentRunEnded()` (session lifecycle, not mutex).
-- **AgentLauncher:** Removed `onTurnBoundary` parameter and handler (was the
-  per-turn edit lock toggle). Renamed `releaseEditLock()` → `releaseRunLifecycle()`.
-  Kept `isGenerating` (independent — drives ChatView banner + send guard) and
-  the generation gate (FIFO, N=1 by default).
-- **UI views:** Removed all `.disabled(store.isAgentRunning)`, `.onChange(of:
-  store.isAgentRunning)`, and "Agent updating wiki…" labels from PageDetailView,
-  SourceDetailView, SystemPromptDetailView, PagesListView, WikiDetailView.
-- **Tests:** Updated `Issue235IngestExtractionLockTests` (predicate now 1-arg)
-  and `AgentGenerationSlotTests` (ref-count assertions).
-
-**Build/tests:** `swift build` clean; fast tier — 2187 tests pass.
-
-## Stop committing generated codegen files (2026-07-14)
-
-**Problem:** `GeneratedVersion.swift` (git state → Swift) and
-`GeneratedPrompts.swift` (prompts/*.md → Swift) were checked into git as
-"derived artifacts." The version file embedded the git SHA + commit count, so
-it drifted on **every commit** — the moment you committed, the committed
-snapshot pointed at the *previous* SHA. This produced constant `git add`
-noise, spurious diffs, and merge conflicts on a file whose content is, by
-definition, derived from git itself.
-
-**Fix:** Both generated files are now **gitignored** (kept on disk locally,
-regenerated at build time). Removed the CI drift gates (`make check-prompts`,
-`make check-version-gen`) — there's no committed file to drift against. The
-Makefile's existing prereqs (`version`/`prompts` run before
-`build`/`check`/`test`/`release`) are unchanged, so `make build/check/test`
-always produce fresh files with no `git add` needed. CI now runs `make version
-prompts` before `swift build` (replacing the old `make check-prompts` step) in
-both Swift jobs.
-
-**Tradeoff:** bare `swift build` on a fresh clone no longer finds the
-gitignored files until `make version prompts` runs. This matches the existing
-documented contract for prompts ("run `make prompts` after editing a .md if
-you're driving swift directly"); canonical paths (`make build/check/test`) are
-unaffected.
-
-**Files:**
-- `.gitignore` — added both `Generated*.swift` paths with an explanatory block.
-- `Makefile` — dropped `check-prompts`/`check-version-gen` targets + `.PHONY` +
-  help entries; updated header/section comments to "gitignored, build-time-gen."
-- `.github/workflows/ci.yml` — replaced `make check-prompts` with
-  `make version prompts` before `swift build` in both `swift` + `swift-integration`.
-- `AGENTS.md` / `PLAN.md` / `plans/phase-6-pinning.md` — updated prose.
-- `tools/promptgen/main.swift` + `tools/versiongen/main.swift` — updated header
-  comments.
-- `git rm --cached` both `.swift` files (working copies kept on disk).
 
