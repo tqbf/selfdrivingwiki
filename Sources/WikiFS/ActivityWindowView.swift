@@ -280,6 +280,10 @@ struct ActivityWindowView: View {
         let events = inMemoryEvents.isEmpty ? loadedEvents : inMemoryEvents
         let progressText = activityTracker.progressLog(for: itemID)
 
+        // Determine if this item is terminal (completed/failed/cancelled).
+        let isTerminal = viewModel.snapshot.recentItems.contains { $0.id == itemID }
+            && !viewModel.snapshot.activeItems.contains { $0.id == itemID }
+
         if !events.isEmpty {
             ChatWebView(events: events, style: .activityFeed, showsInternals: false)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -292,6 +296,17 @@ struct ActivityWindowView: View {
                     .textSelection(.enabled)
                     .padding(8)
             }
+        } else if isTerminal {
+            // Terminal item with no transcript at all (no in-memory, no persisted).
+            VStack(spacing: 8) {
+                Image(systemName: "checkmark.circle")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                Text("No transcript recorded")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             // Active/queued item — transcript will arrive as events flow.
             VStack(spacing: 8) {
