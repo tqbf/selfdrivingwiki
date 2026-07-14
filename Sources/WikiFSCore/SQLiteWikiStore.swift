@@ -203,7 +203,54 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try createFreshSchemaV20()
             return
         }
-        try migrate(from: &version)
+        do {
+            #if DEBUG
+            // Test hook: simulate a corrupt FTS index tripping the first
+            // migration write with SQLITE_CORRUPT (see `bootstrapSchema` catch).
+            // Fires once, then clears itself so the retry proceeds normally.
+            if let fault = Self.migrationCorruptFaultForTesting {
+                Self.migrationCorruptFaultForTesting = nil
+                throw WikiStoreError.sqlite(code: SQLITE_CORRUPT,
+                    message: fault.isEmpty ? "database disk image is malformed" : fault)
+            }
+            #endif
+            try migrate(from: &version)
+        } catch let WikiStoreError.sqlite(code, message) where code == SQLITE_CORRUPT {
+            // A migration step that writes to `pages`/`sources` (e.g. the v22→23
+            // link-canonicalization sweep) fires the external-content FTS5 sync
+            // triggers. A cross-host copy (rsync) can corrupt an FTS5 shadow
+            // index in a way `PRAGMA integrity_check` misses — it validates the
+            // main tables, not FTS5 shadow b-trees — so the corruption only
+            // surfaces as SQLITE_CORRUPT ("database disk image is malformed")
+            // when the trigger writes the index. The content tables are intact,
+            // so rebuild the FTS indexes from them and retry the migration once.
+            // Idempotent and cheap on a healthy DB (this path only runs on the
+            // corrupt-write failure).
+            DebugLog.store("bootstrapSchema: migration hit SQLITE_CORRUPT (\(message)); rebuilding FTS indexes and retrying")
+            healCorruptFTSIndexes()
+            var retryVersion = Int(try queryScalarText("PRAGMA user_version;")) ?? 0
+            try migrate(from: &retryVersion)
+        }
+    }
+
+    /// Rebuild the FTS5 external-content indexes from their content tables.
+    /// Called when a migration write trips `SQLITE_CORRUPT` on a shadow index
+    /// (see `bootstrapSchema`). The `'rebuild'` command drops and re-derives the
+    /// index from `pages`/`sources`, so a corrupt shadow b-tree is replaced by a
+    /// consistent one. Best-effort per index: a missing table (minimal fixture)
+    /// or an already-healthy index is a harmless no-op. Not locked — callers run
+    /// inside the open path, which already holds the connection exclusively.
+    private func healCorruptFTSIndexes() {
+        for table in ["pages_fts", "sources_fts", "chats_fts"] {
+            let exists = (try? queryScalarText(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='\(table)';")) != "0"
+            guard exists else { continue }
+            do {
+                try exec("INSERT INTO \(table)(\(table)) VALUES ('rebuild');")
+            } catch {
+                DebugLog.store("healCorruptFTSIndexes: \(table) rebuild failed — \(error)")
+            }
+        }
     }
 
     /// Build the complete current (v20) schema for a fresh database in one
@@ -2463,6 +2510,14 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// The semantic cosine path still can't RANK under `swift test` (NLEmbedding
     /// is app-gated), but this confirms the scalar functions are available.
     var vecRegisteredForTesting: Bool { isVecAvailable() }
+
+    /// Test hook: when non-nil, the next `bootstrapSchema` migration throws
+    /// `SQLITE_CORRUPT` (with this message) before running any step, simulating a
+    /// corrupt FTS shadow index tripping a migration write. The hook clears
+    /// itself so the catch's rebuild-and-retry proceeds normally. Lets the
+    /// `MigrationFTSSelfHealTests` exercise the heal path deterministically,
+    /// without depending on fragile synthetic FTS5 byte corruption.
+    nonisolated(unsafe) static var migrationCorruptFaultForTesting: String?
     #endif
 
     // MARK: - WikiStore

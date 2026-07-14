@@ -149,9 +149,21 @@ public final class WikiSession {
                 model.readPool = WikiReadPool(databaseURL: url)
             }
         } catch {
+            // Opening the on-disk store failed (e.g. a corrupt DB the migration
+            // self-heal couldn't repair). Degrade to an ephemeral in-memory
+            // store so the app stays usable — the user sees an empty wiki rather
+            // than a crash, and the on-disk file is left untouched for recovery.
             DebugLog.store("WikiSession: failed to open wiki \(wikiID), using in-memory: \(error)")
-            // swiftlint:disable:next force_try
-            let memory = try! SQLiteWikiStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+            let memory: SQLiteWikiStore
+            do {
+                memory = try SQLiteWikiStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+            } catch {
+                // A fresh in-memory store builds only the current schema (no
+                // ladder, no existing data), so this is unreachable in practice.
+                // If it ever fails the process is unrecoverable — surface an
+                // actionable message instead of an opaque `try!` trap.
+                fatalError("WikiSession: in-memory fallback store failed to open for wiki \(wikiID): \(error)")
+            }
             memory.eventBus = WikiEventBus(wikiID: wikiID)
             model = WikiStoreModel(store: memory)
         }
