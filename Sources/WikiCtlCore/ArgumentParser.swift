@@ -36,7 +36,7 @@ public enum ArgumentParser {
         /// The body source is `-` for stdin or a file path; `main` reads it and
         /// builds the final `PageCommand.Action`. `expectHead` carries the CAS
         /// expectation for Phase 1 agent writes (nil = blind write).
-        case upsert(id: PageID?, title: String, bodyFile: String, expectHead: String? = nil, workspace: String? = nil)
+        case upsert(id: PageID?, title: String, bodyFile: String, expectHead: String? = nil, workspace: String? = nil, author: String? = nil)
         case delete(id: PageID)
         /// Phase B: append one dated log row. Carries its values directly (no
         /// deferred I/O) — the note is optional. `source` is the ingested-file id
@@ -107,10 +107,11 @@ public enum ArgumentParser {
       page get  (--title X | --id Y) [--json] [--workspace W]
                                              print a page body; --json adds head_version_id;
                                              --workspace W reads the staged version
-      page upsert --title X [--id Y] --body-file <path|-> [--expect-head <ver>] [--workspace W]
-                                             create-or-update a page;
-                                             --expect-head enables CAS (exit 3 on conflict);
-                                             --workspace W writes into workspace W
+      page upsert --title X [--id Y] --body-file <path|-> [--expect-head <ver>] [--workspace W] [--author <who>]
+                                              create-or-update a page;
+                                              --expect-head enables CAS (exit 3 on conflict);
+                                              --workspace W writes into workspace W;
+                                              --author <who> stamps created_by/last_edited_by (defaults to WIKI_AUTHOR env)
       page delete --id Y                     delete a page
       page history (--title X | --id Y)       show version history (W0)
       page revert (--title X | --id Y) --version V
@@ -261,7 +262,8 @@ public enum ArgumentParser {
             let id = options.value("--id").map { PageID(rawValue: $0) }
             let expectHead = options.value("--expect-head")
             let workspace = options.value("--workspace")
-            return .upsert(id: id, title: title, bodyFile: bodyFile, expectHead: expectHead, workspace: workspace)
+            let author = options.value("--author")
+            return .upsert(id: id, title: title, bodyFile: bodyFile, expectHead: expectHead, workspace: workspace, author: author)
 
         case "delete":
             guard let id = options.value("--id") else {
@@ -721,6 +723,45 @@ public enum ArgumentParser {
 
         default:
             throw Failure.usage("wiki: unknown subcommand \(sub.debugDescription) (list, create, delete, rename)")
+        }
+    }
+
+    /// Apply per-spawn environment variables to commands that support them but
+    /// don't already have them set explicitly. This lets the agent subprocess
+    /// use plain `wikictl page get/upsert` / `index set` commands and have them
+    /// automatically routed — the runner sets the env var before launching the
+    /// agent process.
+    ///
+    /// - `WIKI_WORKSPACE`: routes writes/reads to the ingest's workspace
+    ///   (only when `--workspace` isn't already passed).
+    /// - `WIKI_AUTHOR`: stamps `created_by`/`last_edited_by` provenance (#397)
+    ///   so agent-written pages are distinguishable from human-written ones. The
+    ///   launcher injects `chat:<chatID>` (chat-driven) or `agent:<kind>` (one-shot
+    ///   ingest/lint/query). An explicit `--author` flag always wins over the env.
+    public static func applyEnv(
+        _ command: Command, env: [String: String]
+    ) -> Command {
+        let workspaceID = env["WIKI_WORKSPACE"]
+        let author = env["WIKI_AUTHOR"]
+        switch command {
+        case .get(let selector, let json, let workspace)
+            where workspace == nil && workspaceID?.isEmpty == false:
+            return .get(selector, json: json, workspace: workspaceID)
+        case .upsert(let id, let title, let bodyFile, let expectHead, let workspace, let existingAuthor)
+            where workspace == nil && workspaceID?.isEmpty == false:
+            return .upsert(id: id, title: title, bodyFile: bodyFile,
+                           expectHead: expectHead, workspace: workspaceID,
+                           author: existingAuthor ?? author)
+        case .upsert(let id, let title, let bodyFile, let expectHead, let workspace, let existingAuthor)
+            where existingAuthor == nil && author?.isEmpty == false:
+            return .upsert(id: id, title: title, bodyFile: bodyFile,
+                           expectHead: expectHead, workspace: workspace,
+                           author: author)
+        case .indexSet(let bodyFile, let workspace)
+            where workspace == nil && workspaceID?.isEmpty == false:
+            return .indexSet(bodyFile: bodyFile, workspace: workspaceID)
+        default:
+            return command
         }
     }
 }
