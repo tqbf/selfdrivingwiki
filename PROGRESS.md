@@ -3,6 +3,7 @@
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 ## 2026-07-14 — Stop committing generated codegen files
 
 `GeneratedVersion.swift` (git SHA → Swift) and `GeneratedPrompts.swift` (prompt
@@ -45,69 +46,38 @@ unrelated to this change.
 See [`plans/wikictl-author-provenance.md`](plans/wikictl-author-provenance.md).
 =======
 ## 2026-07-13 — Queue Engine Phase 3: Machine-readable event log
+=======
+## 2026-07-13 — Queue Engine: extraction & ingestion queue (Phases 1–4)
+>>>>>>> c731a17 (docs: consolidate queue engine PROGRESS.md entries (concise))
 
-**Phase 3 is implemented.** The design plan lives at
-`docs/design-plans/2026-07-13-queue-engine.md` (Phase 3 section). This phase
-adds `QueueEventLog` — a JSONL audit trail that subscribes to the engine's
-`AsyncStream<QueueEvent>` and appends each event as a valid JSON line to a
-daily-rotated log file under `Logs/queue/` with bounded retention. Not wired
-into the app yet (Phase 4 will wire it alongside extraction workers).
+A persistent, app-wide extraction/ingestion work queue backed by a new
+`queue.sqlite` in the App Group container. Survives relaunch, schedules across
+wikis with per-provider concurrency limits, and keeps running when no window is
+open. Design plan: `docs/design-plans/2026-07-13-queue-engine.md`.
 
-**New file (`Sources/WikiFSEngine/QueueEventLog.swift`):**
-- **`QueueEventLog`** — an `actor` that consumes the engine's event stream and
-  writes each event as a JSONL line. Daily rotation (`queue-YYYY-MM-DD.jsonl`),
-  bounded retention (default 30 days, pruned on rotation), create-if-not-exists
-  file handling (appends across relaunches, never truncates), injectable
-  `dateProvider` for testable rotation/retention. `stop()` is async (cancels
-  the stream task, awaits completion, sets a `stopped` flag so post-stop writes
-  are no-ops). All file I/O is best-effort (`try?`); errors go to `DebugLog`.
-- **`QueueLogRecord`** — `Codable + Sendable` struct for one JSONL line.
-  Fields: `timestamp` (log time), `eventType`, `itemID`, `queue`, `wikiID`,
-  `providerID`, `itemState` (QueueItemState), `runState` (QueueRunState —
-  separate field, no ambiguity), `orderingKey`, `attempt`, `error` (truncated
-  to 4096 chars), `startedAt`/`finishedAt` (item's own timestamps),
-  `durationMs` (derived for completed/failed), `runLogPath` (reserved for
-  Phase 4). Encoded with `.sortedKeys` for greppable JSONL. Built from
-  `QueueEvent` via pattern matching (the `.failed` case uses the associated
-  error value, not `item.error`).
+**Phase 1 — QueueStore (`WikiFSCore`):** `QueueStore` + value types
+(`QueueItem`, `QueueKind`, `QueueItemState`, `QueueItemRequest`, `QueueRunState`).
+SQLite discipline mirrors `SQLiteWikiStore` (WAL, statement cache, method-atomic
+lock, savepoint transactions, versioned migrations, checkpoint-and-close).
+20 tests.
 
-**Tests** (`Tests/WikiFSTests/QueueEventLogTests.swift`): 16 tests, all pass
-in 0.35s. Covers:
-- JSONL validity (4 events enqueued/started/completed/cancelled — each line
-  parses as valid JSON with correct fields)
-- Failed event includes error + durationMs
-- Completed event includes duration
-- Cancelled event logged correctly
-- `runStateChanged` has no item fields (uses `runState`, not `itemState`)
-- Run state resumed variant
-- Record includes item timestamps (startedAt/finishedAt)
-- Record includes provider + queue + itemState
-- Files under `Logs/queue/` directory with correct filename pattern
-- Daily rotation (injectable dateProvider, two days → two files)
-- Prune old files (40-day-old deleted, 10-day-old kept)
-- Append to existing file across instances (relaunch appends, doesn't truncate)
-- Stop drops subsequent writes (no-op, no crash)
-- Unwritable directory drops events (no crash)
-- Headless isolation source-scan (no AppKit/SwiftUI imports)
-- Real engine integration (QueueEngine + QueueEventLog, enqueue + complete →
-  log contains enqueued/started/completed)
+**Phase 2 — QueueEngine actor (`WikiFSEngine`):** event-driven dispatch,
+per-provider concurrency limits, per-wiki ingestion invariant, local/remote
+extraction limits, pause/resume/halt/cancel/retry, write-through to `QueueStore`,
+`AsyncStream<QueueEvent>`, launch rehydration. 16 tests.
 
-**Acceptance criteria covered:**
-- AC6.1 (every queue event as valid JSON line with item/wiki/provider IDs +
-  timestamps) ✓
-- AC6.2 (daily rotation under `Logs/queue/` with bounded retention) ✓
-- AC6.3 (completed/failed include duration; `runLogPath` field reserved for
-  Phase 4) ✓
+**Phase 3 — QueueEventLog (`WikiFSEngine`):** JSONL audit trail. Daily-rotated
+`queue-YYYY-MM-DD.jsonl` under `Logs/queue/`, 30-day bounded retention, appends
+across relaunches. 16 tests.
 
-**Plan review:** Dispatched `plan-reviewer` subagent. One HIGH finding
-(`FileHandle(forWritingTo:)` throws on non-existent files — fixed with
-create-if-not-exists). Six MEDIUM findings addressed: actor instead of lock
-(eliminates stop race + `@unchecked Sendable`), `itemState`/`runState` split
-(no ambiguity), `startedAt`/`finishedAt` added to record, async `stop()` with
-`stopped` flag, cancelled event test, headless isolation test. Four LOW
-findings addressed: error truncation, start idempotency, `.sortedKeys`
-encoding, error source documented.
+**Phase 4 — Extraction through the queue (`WikiFSEngine`):** `QueueExtractionProvider`
+protocol bridges `@MainActor ExtractionCoordinator` into the headless engine.
+`QueueExtractionWorker` calls `resolveExtraction` → `readiness()` → `convert()` →
+`persistExtraction`. `QueueIngestSignaling` protocol for `isIngestInProgress` timing
+(issue #235). `waitForCompletion(of:)` on the engine for inline-caller awaits.
+`.progress` event for live extraction log. 13 tests.
 
+<<<<<<< HEAD
 **Files (1 new + 1 test):**
 - `Sources/WikiFSEngine/QueueEventLog.swift` (new)
 - `Tests/WikiFSTests/QueueEventLogTests.swift` (new, 16 tests)
@@ -267,6 +237,11 @@ Two MEDIUM findings fixed:
 - `Sources/WikiFSCore/DatabaseLocation.swift` (modified — added `queueDatabaseURL()`)
 - `Tests/WikiFSTests/QueueStoreTests.swift` (new)
 - `PLAN.md` (doc index updated)
+=======
+Not yet wired into the app layer (`WikiFS`) — Phase 4 headless components only.
+App-layer migration (AgentOperationRunner, SourceDetailView, AgentLauncher
+retirement) is the next step. 65 tests total across all phases.
+>>>>>>> c731a17 (docs: consolidate queue engine PROGRESS.md entries (concise))
 
 ## 2026-07-13 — Chat Summary (issue #411)
 
