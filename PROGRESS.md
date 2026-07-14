@@ -78,7 +78,7 @@ A persistent, app-wide extraction and ingestion work queue backed by a new
 `queue.sqlite` in the App Group container. Items survive relaunch, schedule
 across wikis with per-provider concurrency limits, and keep running when no
 window is open.
-Design plan: `docs/design-plans/2026-07-13-queue-engine.md`.
+Design plan: `plans/queue-engine.md`.
 
 **What's done:** Durable queue store with crash recovery (running items reset to
 queued on launch), event-driven dispatch with per-provider concurrency limits and
