@@ -28,6 +28,17 @@ struct VacuumCommands: Commands {
 
             Divider()
 
+            Button("Lint Wiki") {
+                Task {
+                    if let session = sessionManager.frontmostSession {
+                        try? await session.queueEngine.enqueue(QueueItemRequest(
+                            queue: .ingestion,
+                            wikiID: session.wikiID,
+                            payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [])
+                        ))
+                    }
+                }
+            }
             Button("Agent Instructions") {
                 sessionManager.frontmostSession?.store.openTab(.systemPrompt)
             }

@@ -91,16 +91,6 @@ struct PageDetailView: View {
                             }
                             .help("Fix [[wiki-link]] syntax and run LLM lint on this page")
                         }
-                        Button("Run Lint", systemImage: "checkmark.shield") {
-                            Task {
-                                try? await session.queueEngine.enqueue(QueueItemRequest(
-                                    queue: .ingestion,
-                                    wikiID: session.wikiID,
-                                    payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [])
-                                ))
-                            }
-                        }
-                        .help("Run a whole-wiki health-check lint")
                         if case .page(let pageID) = store.selection {
                             Button("Show in List", systemImage: "sidebar.left") {
                                 store.requestSidebarReveal(.page(pageID))
