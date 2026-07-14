@@ -220,6 +220,22 @@ public final class QueueStore: @unchecked Sendable {
         try exec("INSERT INTO queue_state(queue, state) VALUES ('extraction', 'running');")
         try exec("INSERT INTO queue_state(queue, state) VALUES ('ingestion', 'running');")
 
+        try exec("""
+        CREATE TABLE queue_item_events (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id       TEXT NOT NULL,
+            seq           INTEGER NOT NULL,
+            event_json    TEXT NOT NULL,
+            created_at    INTEGER NOT NULL,
+            FOREIGN KEY (item_id) REFERENCES queue_items(id) ON DELETE CASCADE
+        );
+        """)
+
+        try exec("""
+        CREATE INDEX idx_queue_item_events
+            ON queue_item_events(item_id, seq);
+        """)
+
         try exec("PRAGMA user_version=\(Self.currentSchemaVersion);")
     }
 
@@ -806,6 +822,67 @@ public final class QueueStore: @unchecked Sendable {
                 _ = try stmt.step()
             }
         }
+    }
+
+    // MARK: - Public API: Item events (transcripts)
+
+    /// Append a typed agent event to the persisted transcript for a queue item.
+    /// Events are stored in insertion order (seq is auto-incremented by SQLite).
+    /// Safe to call from a background thread — the store has an internal lock.
+    public func appendItemEvent(itemID: QueueItem.ID, event: AgentEvent) throws {
+        lock.lock(); defer { lock.unlock() }
+
+        let data = try JSONEncoder().encode(event)
+        let json = String(data: data, encoding: .utf8) ?? "{}"
+        let now = Self.nowMillis()
+
+        let sql = """
+        INSERT INTO queue_item_events (item_id, seq, event_json, created_at)
+        VALUES (?1, COALESCE((SELECT MAX(seq) FROM queue_item_events WHERE item_id = ?1), -1) + 1, ?2, ?3);
+        """
+        let stmt = try statement(sql)
+        defer { stmt.reset() }
+        try stmt.bind(itemID, at: 1)
+        try stmt.bind(json, at: 2)
+        try stmt.bind(now, at: 3)
+        _ = try stmt.step()
+    }
+
+    /// Load all persisted agent events for a queue item, ordered by seq.
+    public func loadItemEvents(itemID: QueueItem.ID) throws -> [AgentEvent] {
+        lock.lock(); defer { lock.unlock() }
+
+        let sql = """
+        SELECT event_json FROM queue_item_events
+        WHERE item_id = ?1
+        ORDER BY seq;
+        """
+        // Use a fresh statement (not cached) so we can step through multiple rows
+        // without interfering with cached single-row statements.
+        let stmt = try SQLiteStatement(db: db, sql: sql)
+        defer { stmt.reset() }
+        try stmt.bind(itemID, at: 1)
+
+        var events: [AgentEvent] = []
+        while try stmt.step() {
+            let json = stmt.text(at: 0)
+            guard let data = json.data(using: String.Encoding.utf8) else { continue }
+            if let event = try? JSONDecoder().decode(AgentEvent.self, from: data) {
+                events.append(event)
+            }
+        }
+        return events
+    }
+
+    /// Delete all persisted events for an item (e.g. on retry — clears the old transcript).
+    public func deleteItemEvents(itemID: QueueItem.ID) throws {
+        lock.lock(); defer { lock.unlock() }
+
+        let sql = "DELETE FROM queue_item_events WHERE item_id = ?1;"
+        let stmt = try statement(sql)
+        defer { stmt.reset() }
+        try stmt.bind(itemID, at: 1)
+        _ = try stmt.step()
     }
 
     // MARK: - Internal transition helpers

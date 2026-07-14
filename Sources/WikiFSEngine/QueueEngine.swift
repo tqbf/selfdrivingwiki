@@ -298,9 +298,23 @@ public actor QueueEngine {
         guard let continuation = eventContinuation else {
             return { _, _ in }
         }
-        return { id, event in
+        return { [store] id, event in
             continuation.yield(.transcript(id, event))
+            // Persist to SQLite for cross-session transcript survival.
+            try? store.appendItemEvent(itemID: id, event: event)
         }
+    }
+
+    /// Load persisted agent events (transcript) for a queue item from the DB.
+    /// Used by the Activity tracker to show transcripts for items rehydrated
+    /// from a previous session.
+    public func loadTranscript(for itemID: QueueItem.ID) async -> [AgentEvent] {
+        (try? store.loadItemEvents(itemID: itemID)) ?? []
+    }
+
+    /// Delete persisted events for an item (e.g. on retry).
+    public func clearTranscript(for itemID: QueueItem.ID) async {
+        try? store.deleteItemEvents(itemID: itemID)
     }
 
     // MARK: - Dispatch (internal)

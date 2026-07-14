@@ -26,6 +26,7 @@ struct ActivityWindowView: View {
 
     @State private var viewModel = QueueViewModel()
     @State private var selectedItemID: QueueItem.ID?
+    @State private var loadedEvents: [AgentEvent] = []
 
     var body: some View {
         NavigationSplitView {
@@ -250,6 +251,15 @@ struct ActivityWindowView: View {
     private var detailPane: some View {
         if let itemID = selectedItemID {
             detailContent(for: itemID)
+                .task(id: itemID) {
+                    // If the tracker has no in-memory events for this item,
+                    // try loading persisted events from the DB.
+                    if activityTracker.transcript(for: itemID).isEmpty {
+                        loadedEvents = await queueEngine.loadTranscript(for: itemID)
+                    } else {
+                        loadedEvents = []
+                    }
+                }
         } else {
             VStack(spacing: 8) {
                 Image(systemName: "sidebar.left")
@@ -265,13 +275,10 @@ struct ActivityWindowView: View {
 
     @ViewBuilder
     private func detailContent(for itemID: QueueItem.ID) -> some View {
-        let events = activityTracker.transcript(for: itemID)
+        // Prefer in-memory events (live); fall back to persisted (rehydrated).
+        let inMemoryEvents = activityTracker.transcript(for: itemID)
+        let events = inMemoryEvents.isEmpty ? loadedEvents : inMemoryEvents
         let progressText = activityTracker.progressLog(for: itemID)
-
-        // Determine if this item is terminal (completed/failed/cancelled) —
-        // terminal items rehydrated from the DB won't have in-memory transcripts.
-        let isTerminal = viewModel.snapshot.recentItems.contains { $0.id == itemID }
-            && !viewModel.snapshot.activeItems.contains { $0.id == itemID }
 
         if !events.isEmpty {
             ChatWebView(events: events, style: .activityFeed, showsInternals: false)
@@ -285,25 +292,8 @@ struct ActivityWindowView: View {
                     .textSelection(.enabled)
                     .padding(8)
             }
-        } else if isTerminal {
-            // Terminal item with no in-memory transcript (rehydrated from DB
-            // after app relaunch — transcripts are in-memory only).
-            VStack(spacing: 8) {
-                Image(systemName: "checkmark.circle")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-                Text("Transcript not available")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Text("This item completed in a previous session. Transcripts are only kept while the app is running.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 300)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            // Active or queued item — transcript will arrive as events flow.
+            // Active/queued item — transcript will arrive as events flow.
             VStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
