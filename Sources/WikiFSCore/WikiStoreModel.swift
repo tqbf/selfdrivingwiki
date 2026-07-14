@@ -2373,6 +2373,7 @@ public final class WikiStoreModel {
         reloadSummaries()
         reloadSources()
         reloadChats()
+        reloadBookmarkNodes()
         pruneHistoryToCurrentStore()
         reloadCurrentDraftIfClean()
     }
