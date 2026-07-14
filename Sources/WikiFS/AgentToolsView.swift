@@ -225,6 +225,11 @@ private struct RecentChatRow: View {
                     }
                     .lineLimit(1)
                     .accessibilityLabel("Chat is responding")
+                } else if let summary = chat.summary {
+                    Text(summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 } else {
                     Text(chat.updatedAt, format: .relative(presentation: .named))
                         .font(.caption)

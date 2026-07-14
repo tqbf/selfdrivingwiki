@@ -76,6 +76,7 @@ struct StoreEmissionExhaustivenessTests {
         "moveBookmarkNode", "appendProcessedMarkdown", "recordMarkdownExtraction",
         "revertProcessedMarkdown", "setActiveMarkdown",
         "createChat", "appendChatMessages", "renameChat", "deleteChat",
+        "updateChatSummary",
     ]
 
     private let noEmit: Set<String> = [

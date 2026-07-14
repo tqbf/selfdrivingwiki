@@ -84,7 +84,9 @@ CREATE TABLE chats (
     kind       TEXT NOT NULL,         -- 'ask' | 'edit'
     title      TEXT NOT NULL,         -- auto-derived from first user message
     created_at REAL NOT NULL,
-    updated_at REAL NOT NULL
+    updated_at REAL NOT NULL,
+    summary    TEXT,                  -- one-line model-response summary (issue #411)
+    summary_at REAL                   -- when the summary was written
 );
 CREATE INDEX chats_updated ON chats(updated_at);
 
@@ -137,6 +139,31 @@ main separately.
   A `persistedEventCount` cursor makes flushes incremental and idempotent.
 - The sink captures `WikiStoreModel` **weakly**: a wiki switch mid-session
   degrades to a no-op instead of writing into the wrong wiki.
+
+### Chat summary (issue #411, schema v36)
+
+The `chats` table gained two nullable columns — `summary TEXT` and
+`summary_at REAL` — for a one-line model-response summary shown in the sidebar
+under each `RecentChatRow`. The summary is generated **once** (one-shot guard
+via `summaryGenerated`) at the first turn boundary — when
+`AgentEvent.endsGeneration` fires (`.messageStop` or `.result`) in
+`sendInteractiveMessage`, after `flushTranscript()`. A safety-net call also
+exists in `finish()` (for session teardown). The extraction uses
+`AgentLauncher.firstSummaryText(from:)`, which extracts the first sentence of
+the first `.assistantText` or `.result` event using
+`ChatSummary.summaryExtract(from:maxLength:)` (deterministic first-sentence
+extract, elided to 60 chars — no LLM call). The result is handed to a
+`summarySink` closure wired by `AgentOperationRunner` →
+`WikiStoreModel.updateChatSummary(chatID:summary:)`, which routes through
+`mutate()` (emitting a `ResourceChangeEvent`) and bumps `updated_at`.
+
+- Existing chats after migration have `NULL` for both columns; the sidebar
+  falls back to the relative timestamp.
+- When a chat is live (`isLive`), the "responding…" indicator takes precedence
+  over the summary.
+- The schema and rendering are designed so an LLM-based summarizer can be
+  layered on later without further migrations: replace `firstSummaryText` with
+  an agent one-shot and write the result through the same `summarySink`.
 
 ### Read path
 

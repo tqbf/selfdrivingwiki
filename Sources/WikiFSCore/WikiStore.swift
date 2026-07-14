@@ -588,6 +588,10 @@ public protocol WikiStore: Sendable {
     /// `id` doesn't exist.
     func deleteChat(id: PageID) throws
 
+    /// Write the one-line summary of the model's first response (issue #411),
+    /// bumping `updated_at`. Throws `.notFound` if no chat has `id`.
+    func updateChatSummary(chatID: PageID, summary: String) throws
+
     /// All chat summaries ordered by ULID (creation order) — for the File
     /// Provider projection. Mirrors `listAllPagesOrderedByID()`.
     func listAllChatsOrderedByID() throws -> [ChatSummary]

@@ -562,6 +562,12 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // `pages` row. A fresh DB has no workspaces, so this is a version
         // stamp only — `createWorkspacesV31` above already uses the new shape.
         try exec("PRAGMA user_version=35;")
+
+        // v36 (issue #411 — chat summary): nullable `summary` and `summary_at`
+        // columns on `chats` for the one-line model-response summary shown in
+        // the sidebar. A fresh DB gets the columns via `createChatTablesV23`
+        // above; existing DBs get them via the v35→36 ALTER migration.
+        try exec("PRAGMA user_version=36;")
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -737,7 +743,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             kind       TEXT NOT NULL,
             title      TEXT NOT NULL,
             created_at REAL NOT NULL,
-            updated_at REAL NOT NULL
+            updated_at REAL NOT NULL,
+            summary    TEXT,
+            summary_at REAL
         );
         """)
         try exec("CREATE INDEX IF NOT EXISTS chats_updated ON chats(updated_at);")
@@ -1488,6 +1496,16 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try migrateV34ToV35()
             try exec("PRAGMA user_version=35;")
             version = 35
+        }
+
+        // Step 35 → 36 (issue #411 — chat summary): adds nullable `summary`
+        // and `summary_at` columns to `chats` so the sidebar can show a
+        // one-line summary of the model's first response. Simple ALTER — no
+        // table rebuild needed for nullable columns.
+        if version < 36 {
+            try migrateV35ToV36()
+            try exec("PRAGMA user_version=36;")
+            version = 36
         }
     }
 
@@ -2293,6 +2311,21 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
             // 4. Rename the new table into place.
             try exec("ALTER TABLE _workspace_refs_new RENAME TO workspace_refs;")
+        }
+    }
+
+    /// The v35→36 migration step (issue #411 — chat summary). Adds nullable
+    /// `summary` and `summary_at` columns to `chats` so the sidebar can show
+    /// a one-line summary of the model's first response. Simple ALTER — no
+    /// table rebuild needed for nullable columns. Idempotent: if `summary`
+    /// already exists, the migration is a no-op (re-running on a v36 DB).
+    private func migrateV35ToV36() throws {
+        let columns = try tableColumnInfo("chats")
+        guard !columns.contains("summary") else { return }
+
+        try withTransaction {
+            try exec("ALTER TABLE chats ADD COLUMN summary TEXT;")
+            try exec("ALTER TABLE chats ADD COLUMN summary_at REAL;")
         }
     }
 
@@ -7111,20 +7144,25 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
-               (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id)
+               (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id),
+               c.summary, c.summary_at
         FROM chats c
         ORDER BY c.updated_at DESC, c.rowid DESC;
         """)
         defer { stmt.reset() }
         var out: [ChatSummary] = []
         while try stmt.step() {
+            let summaryIsNull = sqlite3_column_type(stmt.handle, 6) == SQLITE_NULL
+            let summaryAtIsNull = sqlite3_column_type(stmt.handle, 7) == SQLITE_NULL
             out.append(ChatSummary(
                 id: PageID(rawValue: stmt.text(at: 0)),
                 kind: ChatKind(rawValue: stmt.text(at: 1)) ?? .edit,
                 title: stmt.text(at: 2),
                 createdAt: Date(timeIntervalSince1970: stmt.double(at: 3)),
                 updatedAt: Date(timeIntervalSince1970: stmt.double(at: 4)),
-                messageCount: Int(stmt.int(at: 5))
+                messageCount: Int(stmt.int(at: 5)),
+                summary: summaryIsNull ? nil : stmt.text(at: 6),
+                summaryAt: summaryAtIsNull ? nil : Date(timeIntervalSince1970: stmt.double(at: 7))
             ))
         }
         return out
@@ -7194,6 +7232,30 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    /// Write the one-line summary of the model's first response (issue #411),
+    /// bumping `updated_at` so the chat moves to the top of the recent list
+    /// (matching `renameChat`). Throws `.notFound` if no chat has `id`.
+    public func updateChatSummary(chatID: PageID, summary: String) throws {
+        try mutate(event: { _ in localEvent(.chat, id: chatID.rawValue, change: .updated) }) {
+        try withTransaction {
+            let exists = try statement("SELECT 1 FROM chats WHERE id = ?1;")
+            defer { exists.reset() }
+            try exists.bind(chatID.rawValue, at: 1)
+            guard try exists.step() else {
+                throw WikiStoreError.notFound(chatID)
+            }
+            let now = Date().timeIntervalSince1970
+            let upd = try statement("UPDATE chats SET summary = ?2, summary_at = ?3, updated_at = ?4 WHERE id = ?1;")
+            upd.reset()
+            try upd.bind(chatID.rawValue, at: 1)
+            try upd.bind(summary, at: 2)
+            try upd.bind(now, at: 3)
+            try upd.bind(now, at: 4)
+            _ = try upd.step()
+        }
+        }
+    }
+
     /// All chat summaries ordered by ULID (creation order) — for the File
     /// Provider projection, which needs stable creation-order enumeration (not
     /// the sidebar's most-recently-updated-first). Mirrors
@@ -7202,20 +7264,25 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
-               (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id)
+               (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id),
+               c.summary, c.summary_at
         FROM chats c
         ORDER BY c.id ASC;
         """)
         defer { stmt.reset() }
         var out: [ChatSummary] = []
         while try stmt.step() {
+            let summaryIsNull = sqlite3_column_type(stmt.handle, 6) == SQLITE_NULL
+            let summaryAtIsNull = sqlite3_column_type(stmt.handle, 7) == SQLITE_NULL
             out.append(ChatSummary(
                 id: PageID(rawValue: stmt.text(at: 0)),
                 kind: ChatKind(rawValue: stmt.text(at: 1)) ?? .edit,
                 title: stmt.text(at: 2),
                 createdAt: Date(timeIntervalSince1970: stmt.double(at: 3)),
                 updatedAt: Date(timeIntervalSince1970: stmt.double(at: 4)),
-                messageCount: Int(stmt.int(at: 5))
+                messageCount: Int(stmt.int(at: 5)),
+                summary: summaryIsNull ? nil : stmt.text(at: 6),
+                summaryAt: summaryAtIsNull ? nil : Date(timeIntervalSince1970: stmt.double(at: 7))
             ))
         }
         return out
