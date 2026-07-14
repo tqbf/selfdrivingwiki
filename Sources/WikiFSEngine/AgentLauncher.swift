@@ -396,6 +396,11 @@ public final class AgentLauncher {
     /// any other event (a tool call, a turn boundary, …) so unrelated `.assistantText`
     /// rows are never merged together.
     private var isStreamingAssistantRow = false
+    /// True while the last row in `events` is an in-progress `.thinking` row
+    /// being grown by streamed `.thinkingDelta` chunks (issue #391). Mirrors
+    /// `isStreamingAssistantRow` — reset by any other event so unrelated
+    /// `.thinking` rows are never merged together.
+    private var isStreamingThinkingRow = false
     /// Append-only handle to the per-run `run.jsonl` (raw stream-json).
     private var logHandle: FileHandle?
     /// Append-only handle to the per-run `run.stderr.log`.
@@ -1980,6 +1985,7 @@ public final class AgentLauncher {
         }
         events = []
         isStreamingAssistantRow = false
+        isStreamingThinkingRow = false
         rawTranscript = ""
         stderr = ""
         exitStatus = nil
@@ -2093,9 +2099,30 @@ public final class AgentLauncher {
             }
             isStreamingAssistantRow = false
 
+        case .thinkingDelta(let delta):
+            // Streamed reasoning chunk — coalesce into the in-progress `.thinking`
+            // row, mirroring `.assistantTextDelta` → `.assistantText` (issue #391).
+            if isStreamingThinkingRow, case .thinking(let existing) = events.last {
+                events[events.count - 1] = .thinking(existing + delta)
+            } else {
+                events.append(.thinking(delta))
+                isStreamingThinkingRow = true
+            }
+
+        case .thinking:
+            // The complete/final thought text for a block already being streamed —
+            // replace with the authoritative full text. Mirrors `.assistantText`.
+            if isStreamingThinkingRow, case .thinking = events.last {
+                events[events.count - 1] = event
+            } else {
+                events.append(event)
+            }
+            isStreamingThinkingRow = false
+
         default:
             events.append(event)
             isStreamingAssistantRow = false
+            isStreamingThinkingRow = false
         }
     }
 
@@ -2192,6 +2219,7 @@ public final class AgentLauncher {
         watchdogHasEscalated = false
         events = []
         isStreamingAssistantRow = false
+        isStreamingThinkingRow = false
         rawTranscript = ""
         stderr = ""
         exitStatus = nil

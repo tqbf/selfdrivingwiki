@@ -114,4 +114,23 @@ import WikiFSCore
         #expect(sectionHeaders.count == 1)
         #expect(sectionHeaders.first == "## User")
     }
+
+    @Test func thinkingRendersAsThinkingSection() {
+        let rendered = ChatTranscriptRenderer.render(
+            summary: summary(messageCount: 1),
+            messages: [
+                message(.thinking("Let me reason about this"), seq: 0),
+            ])
+        #expect(rendered.contains("## Thinking\n\nLet me reason about this") == true)
+    }
+
+    @Test func thinkingDeltaIsSkipped() {
+        let rendered = ChatTranscriptRenderer.render(
+            summary: summary(messageCount: 1),
+            messages: [
+                message(.thinkingDelta("partial"), seq: 0),
+            ])
+        let sectionHeaders = rendered.split(separator: "\n").filter { $0.hasPrefix("## ") }
+        #expect(sectionHeaders.count == 0)
+    }
 }

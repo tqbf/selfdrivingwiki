@@ -102,8 +102,8 @@ enum ToolCallRendering {
 ///
 /// - `agentMessageChunk(.text)` → `.assistantTextDelta` (streamed prose; the
 ///   launcher merges deltas into one `.assistantText` row, issue #121).
-/// - `agentThoughtChunk(.text)` → `.raw` (reasoning; no dedicated case yet —
-///   surfaced verbatim so nothing is swallowed, same fallback as `AgentEventParser`).
+/// - `agentThoughtChunk(.text)` → `.thinkingDelta` (streamed reasoning; the
+///   launcher merges deltas into one `.thinking` row, issue #391).
 /// - `toolCall` / `toolCallUpdate` → `.toolUse` (start) / `.toolResult` (done).
 ///   ACP folds a tool's whole lifecycle into status updates (`pending` →
 ///   `in_progress` → `completed`/`failed`); we map the *call* to `.toolUse` and
@@ -130,10 +130,12 @@ struct ACPEventTranslator: Sendable {
             return []
 
         case .agentThoughtChunk(let block):
-            // Agent reasoning. No dedicated AgentEvent; surface verbatim so the
-            // chunk isn't silently dropped (mirrors `.raw` fallback in the parser).
+            // Agent reasoning/thinking. Mapped to `.thinkingDelta` (issue #391)
+            // so the launcher can coalesce chunks into a `.thinking` row and the
+            // transcript renderer can display it as a collapsible, dimmed box —
+            // distinct from regular assistant prose and tool calls.
             if let text = Self.text(from: block), !text.isEmpty {
-                return [.raw(text)]
+                return [.thinkingDelta(text)]
             }
             return []
 
