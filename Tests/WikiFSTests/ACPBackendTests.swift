@@ -47,32 +47,79 @@ import ACPModel
         #expect(events == [.raw("Considering options…")])
     }
 
-    /// A tool invocation (`tool_call`) maps to `.toolUse` with a one-liner
-    /// summary from the tool's location/path.
+    /// A tool invocation (`tool_call`) with `kind: .execute` + `rawInput`
+    /// carrying the command line maps to `.toolUse(name: "Bash", …)` with the
+    /// actual command as the summary — not "Run command" with a bare path (AC.1, issue #426).
     @Test func toolCallMapsToToolUse() {
         let translator = ACPEventTranslator()
         let update = SessionUpdate.toolCall(ToolCallUpdate(
             toolCallId: "tc1",
             status: .pending,
-            title: "Edit file",
-            kind: .edit,
-            locations: [ToolLocation(path: "/wiki/Foo.md", line: 10)]
+            title: nil,
+            kind: .execute,
+            rawInput: AnyCodable(["command": "$WIKICTL page upsert --title Foo"])
         ))
         let events = translator.translate(update)
-        #expect(events == [.toolUse(name: "Edit file", inputSummary: "/wiki/Foo.md")])
+        #expect(events == [.toolUse(name: "Bash", inputSummary: "$WIKICTL page upsert --title Foo")])
     }
 
-    /// A tool call's title is the primary name; `kind` is the fallback.
+    /// A tool call's `kind` is the fallback name when `title` is nil. Uses
+    /// `.read` (→ "Read") since `.execute` now maps to the stable "Bash" (issue #426).
     @Test func toolCallFallsBackToKindWhenNoTitle() {
         let translator = ACPEventTranslator()
         let update = SessionUpdate.toolCall(ToolCallUpdate(
             toolCallId: "tc2",
             status: .pending,
             title: nil,
-            kind: .execute
+            kind: .read
         ))
         let events = translator.translate(update)
-        #expect(events == [.toolUse(name: "Execute", inputSummary: "")])
+        #expect(events == [.toolUse(name: "Read", inputSummary: "")])
+    }
+
+    /// `.fetch` + `rawInput: ["url": "https://example.com"]` →
+    /// `.toolUse(name: "webfetch", inputSummary: "https://example.com")` (AC.2).
+    @Test func webFetchToolCallRenderedAsWebfetch() {
+        let translator = ACPEventTranslator()
+        let update = SessionUpdate.toolCall(ToolCallUpdate(
+            toolCallId: "tc-fetch",
+            status: .pending,
+            title: "Fetch",
+            kind: .fetch,
+            rawInput: AnyCodable(["url": "https://example.com"])
+        ))
+        let events = translator.translate(update)
+        #expect(events == [.toolUse(name: "webfetch", inputSummary: "https://example.com")])
+    }
+
+    /// `.search` + `rawInput: ["query": "active learning"]` →
+    /// `.toolUse(name: "search", inputSummary: "active learning")` (AC.3).
+    @Test func searchToolCallRenderedAsSearch() {
+        let translator = ACPEventTranslator()
+        let update = SessionUpdate.toolCall(ToolCallUpdate(
+            toolCallId: "tc-search",
+            status: .pending,
+            title: "Search",
+            kind: .search,
+            rawInput: AnyCodable(["query": "active learning"])
+        ))
+        let events = translator.translate(update)
+        #expect(events == [.toolUse(name: "search", inputSummary: "active learning")])
+    }
+
+    /// `.edit` with no `rawInput` falls back to `locations.first.path` —
+    /// regression guard for agents that populate locations but not rawInput (AC.4).
+    @Test func toolCallWithoutRawInputFallsBackToLocations() {
+        let translator = ACPEventTranslator()
+        let update = SessionUpdate.toolCall(ToolCallUpdate(
+            toolCallId: "tc-edit-noraw",
+            status: .pending,
+            kind: .edit,
+            locations: [ToolLocation(path: "/wiki/Foo.md")],
+            rawInput: nil
+        ))
+        let events = translator.translate(update)
+        #expect(events == [.toolUse(name: "Edit", inputSummary: "/wiki/Foo.md")])
     }
 
     /// A completed `tool_call_update` with output text maps to `.toolResult`
