@@ -116,8 +116,10 @@ public final class AgentLauncher {
     /// active" (e.g. `.ingest`) via `@testable import WikiFS`, without requiring a
     /// real spawned process.
     public var runningKind: WikiOperation.Kind?
-    /// The per-run `run.jsonl` backend log on disk (raw stream-json), so the UI can
-    /// offer a "Reveal log" affordance. Its sibling `run.stderr.log` holds stderr.
+    /// The per-run `run.jsonl` backend log on disk (raw JSON-RPC notifications
+    /// in the ACP path; was raw stream-json in the old CLI path). Its sibling
+    /// `run.stderr.log` holds the agent's stderr. The UI offers a "Reveal Log"
+    /// affordance via `logFileURL`.
     public private(set) var logFileURL: URL?
     /// Wall-clock start time for the current/last run. Used by the UI to show a
     /// heartbeat instead of a context-free spinner.
@@ -1733,7 +1735,16 @@ public final class AgentLauncher {
             captureProcessID(session: session)
             DebugLog.agent("startInteractiveQuery: spawned") // TEMP DEBUG (existed; re-tagged)
             // Start the first turn — this acquires the generation gate for turn 1.
-            sendInteractiveMessage(firstMessage, displayText: firstMessageDisplay)
+            // Compose the full task prompt (chat.md, write rules, citation rules,
+            // don't-rediscover directive) + the user's message — same composition
+            // the non-interactive path uses via `operation.prompt(wikiRoot:)`.
+            // Without this, the first turn is the raw user message with no task
+            // steering, and the agent defaults to its built-in behavior (e.g.
+            // websearch before wikictl). The `displayText` stays as the user's
+            // raw message so the transcript shows what the user typed.
+            let taskPrompt = operation.prompt(wikiRoot: wikiRoot)
+            let composedFirstMessage = "\(taskPrompt)\n\n# USER MESSAGE\n\(firstMessage)"
+            sendInteractiveMessage(composedFirstMessage, displayText: firstMessageDisplay ?? firstMessage)
             // Mirror `run()`: arm the completion watchdog so a process that exits
             // without a reconciling `onExit` still clears `isRunning`.
             // Interactive sessions stay alive between turns; the watchdog only acts

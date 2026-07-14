@@ -10,26 +10,49 @@ You read this document at the start of every run: it is projected read-only at
 the wiki root as both `CLAUDE.md` and `AGENTS.md`. The user co-evolves it in
 the Self Driving Wiki app over time. Do not edit it through the filesystem.
 
+## User-facing style
+
+Do the work silently, then answer the user. **Never narrate process steps** —
+don't say "Let me check the wiki", "I'll explore the structure", "Let me search
+the sources", or "I'll read the state file". Just do it and reply with the
+result. **Never expose internal artifacts** to the user — don't mention
+`wikictl`, `$WIKI_ROOT`, file paths like `sources/by-id/…`, `WIKI_STATE.md`,
+`WIKI-STRUCTURE.md`, `indexes/*.jsonl`, or `manifest.json`. The user sees wiki
+objects — pages, sources, bookmarks, chats — not database plumbing or tool
+syntax. If the user asks how you did something, you can explain briefly;
+otherwise, just answer.
+
 ## Layout
 
 The wiki is a set of objects — **pages, sources, bookmarks (folders + refs),
 chats, the index, and the log** — stored in a database. You address them
-through `wikictl` (DB-direct, always current) as your primary tool. For bulk
-reads the database is also projected read-only at `$WIKI_ROOT` as a filesystem
-layout you can `find`/`cat`/`grep`/`Read`, and `$WIKI_ROOT/WIKI-STRUCTURE.md`
-is a fallback orientation map.
+through `wikictl` (DB-direct, always current) as your primary tool.
+
+**Start by reading `WIKI_STATE.md` from your current working directory.** It
+contains the wiki's current page titles, the `index.md` body, and a recent log
+tail — a live snapshot staged for you so you do NOT need to run `wikictl page
+list` or re-read `index.md`/`log.md` to orient. Read it first, then proceed.
+
+If `$WIKI_ROOT` is set, the database is also projected read-only as a
+filesystem layout you can `find`/`cat`/`grep`/`Read`, and
+`$WIKI_ROOT/WIKI-STRUCTURE.md` is a fallback orientation map. The projection is
+optional — in some builds `$WIKI_ROOT` is not available, and that is fine:
+`wikictl` and `WIKI_STATE.md` are sufficient.
 
 The projection files — `$WIKI_ROOT`, `WIKI-STRUCTURE.md`, `indexes/*.jsonl`,
 `manifest.json`, "the mount" — are internal implementation details. Never name
 them to the user in chat.
 
+- `WIKI_STATE.md` — **in your cwd** — the staged live snapshot: current page
+  titles, `index.md` body, recent log tail. Read this first for orientation.
 - `pages/by-title/`, `pages/by-id/` — the wiki pages you author (one file per
   page, addressed by title and by ULID).
 - `sources/by-name/`, `sources/by-id/` — raw sources, IMMUTABLE and
   verbatim (the bytes the user added). Cite a source by its `sources/…` path.
 - `index.md` — the curated catalog you maintain (rewritten wholesale on ingest).
 - `log.md` — the append-only chronological log of ingests/queries/lints.
-- `WIKI-STRUCTURE.md` — an orientation map of this layout plus live page/file counts.
+- `WIKI-STRUCTURE.md` — an orientation map of this layout plus live page/file
+  counts (only if the projection is available).
 - `TREE.md` — legacy alias for `WIKI-STRUCTURE.md`.
 - `indexes/*.jsonl` — machine-readable indexes (`pages.jsonl`, `links.jsonl`,
   `sources.jsonl`) for cheap programmatic navigation. `links.jsonl` has a
@@ -284,7 +307,7 @@ snapshot-aware refresh is implemented (the guard reports this clearly).
      "…"` for raw sources; `$WIKICTL chat search --query "…"` for past
      conversations. If a page hit misses the mark, fall back to `$WIKICTL page
      list` then `$WIKICTL page get` on likely candidates. Only read `index.md` /
-     `log.md` (via `cat`) or consult `WIKI-STRUCTURE.md` as a last-resort
+     `log.md` (via `cat`) or consult `WIKI_STATE.md` (in your cwd) as a last-resort
      orientation aid; never name those files to the user.
    - **(1b) A named title triggers both searches.** If the user names a paper
      or source by title, run `$WIKICTL search --query "<title>"` (pages) AND
