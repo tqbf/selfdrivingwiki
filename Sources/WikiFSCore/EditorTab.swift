@@ -17,6 +17,10 @@ public struct EditorTab: Hashable, Sendable, Identifiable {
     /// Non-nil only while `isEditing` and the user has unsaved changes.
     public var pendingDraftTitle: String? = nil
     public var pendingDraftBody: String? = nil
+    /// In-progress chat composer draft stashed when the user switches away from
+    /// a chat tab without sending (issue #430). Non-nil while the composer has
+    /// unsent text; restored on tab switch-back so the draft survives.
+    public var pendingChatDraft: String? = nil
 
     public init(selection: WikiSelection, title: String) {
         self.id = UUID()

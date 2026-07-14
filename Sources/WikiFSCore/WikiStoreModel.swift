@@ -202,6 +202,13 @@ public final class WikiStoreModel {
         didSet { if draftSystemPrompt != oldValue { isSystemPromptDirty = true } }
     }
 
+    /// Live chat composer buffer — the single source of in-flight chat text.
+    /// Stashed per-tab via `EditorTab.pendingChatDraft` (like draftTitle/draftBody
+    /// for pages) so switching tabs and back preserves unsent composer text
+    /// (issue #430). ChatView binds ComposerTextView to `$store.draftChatMessage`
+    /// instead of local @State, which would be lost on view recreation.
+    public var draftChatMessage: String = ""
+
     /// Number of concurrent agent runs (interactive sessions or one-shot
     /// `claude -p` operations) currently writing to THIS wiki. When the LAST
     /// run ends, the model reloads from the store so the sidebar reflects the
@@ -657,6 +664,17 @@ public final class WikiStoreModel {
 
     // MARK: - Chat link resolution
 
+    /// Clears the active chat tab's composer draft — both the live
+    /// `draftChatMessage` buffer and the stashed `pendingChatDraft`. Called by
+    /// `ChatView.sendMessage` after a message is sent so the text doesn't
+    /// reappear on tab switch-back (issue #430).
+    public func clearActiveChatDraft() {
+        draftChatMessage = ""
+        if let tabID = activeTabID, let i = tabs.firstIndex(where: { $0.id == tabID }) {
+            tabs[i].pendingChatDraft = nil
+        }
+    }
+
     /// Navigate to the chat with `id` from a clicked canonical
     /// `wiki://chat?id=<ULID>` link. A direct selection — no title resolution,
     /// so it is stable across renames. Returns `false` when the id names no
@@ -790,6 +808,18 @@ public final class WikiStoreModel {
            tabs[i].isEditing {
             tabs[i].pendingDraftTitle = draftTitle
             tabs[i].pendingDraftBody = draftBody
+        }
+        // Stash the outgoing chat tab's composer draft so it survives the
+        // switch-back (issue #430). Unconditional — the composer is always
+        // "drafting"; there's no edit-mode gate like the page editor.
+        if let outgoingID = activeTabID,
+           let i = tabs.firstIndex(where: { $0.id == outgoingID }) {
+            switch tabs[i].selection {
+            case .newChat, .chat:
+                tabs[i].pendingChatDraft = draftChatMessage
+            default:
+                break
+            }
         }
         isApplyingTabSelection = true
         activeTabID = id
@@ -965,6 +995,7 @@ public final class WikiStoreModel {
         // Discard any stashed draft (user chose to close without saving).
         tabs[index].pendingDraftTitle = nil
         tabs[index].pendingDraftBody = nil
+        tabs[index].pendingChatDraft = nil
         pendingCloseTabID = nil
         applyCloseTab(id: id, at: index)
     }
@@ -980,6 +1011,7 @@ public final class WikiStoreModel {
         guard let i = tabs.firstIndex(where: { $0.id == tabID }) else { return }
         tabs[i].pendingDraftTitle = nil
         tabs[i].pendingDraftBody = nil
+        tabs[i].pendingChatDraft = nil
         loadDrafts(for: selection)
     }
 
@@ -1107,6 +1139,16 @@ public final class WikiStoreModel {
             draftBody = ""
             loadedPage = nil
             loadedPageHeadVersionID = nil
+        }
+        // Restore the incoming tab's stashed chat composer draft (issue #430).
+        // For chat tabs (.newChat/.chat) this restores unsent text; for all
+        // other tab types pendingChatDraft is nil, so the composer is cleared.
+        if let tabID = activeTabID,
+           let i = tabs.firstIndex(where: { $0.id == tabID }),
+           let pending = tabs[i].pendingChatDraft {
+            draftChatMessage = pending
+        } else {
+            draftChatMessage = ""
         }
         isDraftDirty = restoredFromPendingDraft
         isSystemPromptDirty = false
