@@ -151,6 +151,23 @@ final class QueueStatusItemController {
 
         menu.addItem(.separator())
 
+        // Wiki maintenance actions.
+        let lintItem = NSMenuItem(
+            title: "Lint Wiki",
+            action: #selector(lintWiki(_:)),
+            keyEquivalent: "")
+        lintItem.target = self
+        menu.addItem(lintItem)
+
+        let vacuumItem = NSMenuItem(
+            title: "Vacuum All…",
+            action: #selector(vacuumAll(_:)),
+            keyEquivalent: "")
+        vacuumItem.target = self
+        menu.addItem(vacuumItem)
+
+        menu.addItem(.separator())
+
         // Open Activity window.
         let openItem = NSMenuItem(
             title: "Open Activity…",
@@ -158,6 +175,23 @@ final class QueueStatusItemController {
             keyEquivalent: "a")
         openItem.target = self
         menu.addItem(openItem)
+
+        menu.addItem(.separator())
+
+        // Navigation items (moved from Help menu).
+        let instructionsItem = NSMenuItem(
+            title: "Agent Instructions",
+            action: #selector(openAgentInstructions(_:)),
+            keyEquivalent: "")
+        instructionsItem.target = self
+        menu.addItem(instructionsItem)
+
+        let logItem = NSMenuItem(
+            title: "Activity Log",
+            action: #selector(openActivityLog(_:)),
+            keyEquivalent: "")
+        logItem.target = self
+        menu.addItem(logItem)
 
         menu.addItem(.separator())
 
@@ -191,6 +225,29 @@ final class QueueStatusItemController {
 
     @objc private func openActivityWindow(_ sender: NSMenuItem?) {
         showActivityWindow()
+    }
+
+    @objc private func lintWiki(_ sender: NSMenuItem?) {
+        guard let session = sessionManager?.frontmostSession else { return }
+        Task {
+            try? await session.queueEngine.enqueue(QueueItemRequest(
+                queue: .ingestion,
+                wikiID: session.wikiID,
+                payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [])
+            ))
+        }
+    }
+
+    @objc private func vacuumAll(_ sender: NSMenuItem?) {
+        sessionManager?.frontmostSession?.previewVacuumAll()
+    }
+
+    @objc private func openAgentInstructions(_ sender: NSMenuItem?) {
+        sessionManager?.frontmostSession?.store.openTab(.systemPrompt)
+    }
+
+    @objc private func openActivityLog(_ sender: NSMenuItem?) {
+        sessionManager?.frontmostSession?.store.openTab(.changeLog)
     }
 
     // MARK: - Activity window
