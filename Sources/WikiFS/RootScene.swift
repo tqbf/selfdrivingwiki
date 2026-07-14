@@ -119,16 +119,23 @@ struct RootScene: View {
             if phase == .active { Task { await session?.upgradeSearchIndex() } }
         }
         .onDisappear {
-            // Release the session when the window closes. If another window
-            // has the same wiki open, the session is still in the cache (the
-            // other window's RootScene will re-resolve it). Note: macOS may
-            // not call .onDisappear on window close — unreleased sessions
-            // linger harmlessly in the SessionManager cache and are drained
-            // by AppDelegate.applicationWillResignActive →
+            // Release the session when the window closes — but only if the
+            // queue engine has no pending/running work for this wiki. If
+            // extraction or ingestion is in progress, the session must stay
+            // alive so the worker can access the store + launcher.
+            // Note: macOS may not call .onDisappear on window close —
+            // unreleased sessions linger harmlessly in the SessionManager
+            // cache and are drained by
+            // AppDelegate.applicationWillResignActive →
             // flushAllSessions() on app background (plan R3).
             if let wikiID {
-                sessionManager.releaseSession(for: wikiID)
-                fileProvider.unsubscribeBus(for: wikiID)
+                Task {
+                    let hasWork = await session?.queueEngine.hasActiveWork(for: wikiID) ?? false
+                    if !hasWork {
+                        sessionManager.releaseSession(for: wikiID)
+                        fileProvider.unsubscribeBus(for: wikiID)
+                    }
+                }
             }
         }
     }

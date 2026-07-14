@@ -103,7 +103,7 @@ struct ContentView: View {
         // conversion box is visible. The extraction phase now lives in
         // `extractingSourceIDs` (distinct from the agent-phase `ingestingSourceIDs`),
         // so observe both: a pure extraction should also surface the transcript.
-        .onChange(of: agentLauncher.ingestingSourceIDs) { _, newValue in
+        .onChange(of: tracker.ingestingSourceIDs) { _, newValue in
             if !newValue.isEmpty { isTranscriptExpanded = true }
         }
         .onChange(of: tracker.extractingSourceIDs) { _, newValue in
@@ -159,7 +159,7 @@ struct ContentView: View {
             SidebarView(store: store, registry: registry, session: session, fileProvider: fileProvider,
                         launcher: agentLauncher,
                         chatLauncher: chatLauncher,
-                        ingestingSourceIDs: agentLauncher.ingestingSourceIDs,
+                        ingestingSourceIDs: tracker.ingestingSourceIDs,
                         showingAddFromZotero: $showingAddFromZotero,
                         showingImportMarkdown: $showingImportMarkdown,
                         onAddFromURL: { pendingAddURL = PendingAddURL(url: "") },
@@ -207,7 +207,7 @@ struct ContentView: View {
     /// here (that is `isAnySourceIngesting` = `!ingestingSourceIDs.isEmpty` only).
     private var agentBusy: Bool {
         agentLauncher.isGenerating
-            || !agentLauncher.ingestingSourceIDs.isEmpty
+            || !tracker.ingestingSourceIDs.isEmpty
             || !tracker.extractingSourceIDs.isEmpty
     }
 
@@ -222,7 +222,7 @@ struct ContentView: View {
 
     private var canShowTranscript: Bool {
         agentLauncher.isRunning
-            || !agentLauncher.ingestingSourceIDs.isEmpty
+            || !tracker.ingestingSourceIDs.isEmpty
             || !tracker.extractingSourceIDs.isEmpty
             || !agentLauncher.events.isEmpty
             || agentLauncher.preflightError != nil
@@ -354,20 +354,14 @@ struct ContentView: View {
 
     private func runIngest(sourceID: PageID) {
         DebugLog.ingest("ContentView.runIngest: user pressed Ingest (sourceID=\(sourceID.rawValue))")
-        let task = Task {
-            defer { agentLauncher.ingestTask = nil }
-            await AgentOperationRunner.runIngest(
-                sourceID: sourceID,
-                launcher: agentLauncher,
+        Task {
+            await store.flushPendingSaves()
+            await enqueueIngestion(
+                sourceIDs: [sourceID],
                 store: store,
                 wikiID: session.wikiID,
-                changeSignaler: fileProvider,
-                wikictlDirectory: HelpersLocation.wikictlDirectory,
-                extractionCoordinator: extractionCoordinator,
-                queueEngine: queueEngine,
-                extractionProvider: extractionProvider)
+                queueEngine: queueEngine)
         }
-        agentLauncher.ingestTask = task
     }
 
     // MARK: - Keyboard shortcuts

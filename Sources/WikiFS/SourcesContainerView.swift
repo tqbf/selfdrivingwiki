@@ -86,12 +86,14 @@ struct SourcesContainerView: View {
             titleVisibility: .visible
         ) {
             Button("Ingest Again", role: .destructive) {
-                launcher.ingestSources(sourceIDs: pendingBatchIngestIDs,
-                    store: store, wikiID: session.wikiID,
-                    changeSignaler: fileProvider,
-                    wikictlDirectory: HelpersLocation.wikictlDirectory,
-                    queueEngine: queueEngine,
-                    extractionProvider: extractionProvider)
+                Task {
+                    await store.flushPendingSaves()
+                    await enqueueIngestion(
+                        sourceIDs: pendingBatchIngestIDs,
+                        store: store,
+                        wikiID: session.wikiID,
+                        queueEngine: queueEngine)
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -214,12 +216,14 @@ struct SourcesContainerView: View {
                 Task { await fileProvider.revealSourceInFinder(id: id) }
             },
             onIngest: { ids in
-                launcher.ingestSources(sourceIDs: ids, store: store,
-                                       wikiID: session.wikiID,
-                                       changeSignaler: fileProvider,
-                                       wikictlDirectory: HelpersLocation.wikictlDirectory,
-                                       queueEngine: queueEngine,
-                                       extractionProvider: extractionProvider)
+                Task {
+                    await store.flushPendingSaves()
+                    await enqueueIngestion(
+                        sourceIDs: ids,
+                        store: store,
+                        wikiID: session.wikiID,
+                        queueEngine: queueEngine)
+                }
             },
             onIngestNeedsConfirmation: { ids, names in
                 pendingBatchIngestIDs = ids

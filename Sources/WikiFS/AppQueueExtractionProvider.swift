@@ -16,6 +16,16 @@ import WikiFSEngine
 /// The box starts with a closure that returns nil (no sessions yet). After the
 /// session manager is constructed, the box is updated to look up real sessions.
 /// The provider captures the box (a reference type), so it sees the update.
+
+/// A mutable, `@MainActor`-isolated box for a `FileProviderSpike` reference.
+/// Used by `AppQueueIngestionProvider` to access the file provider without
+/// needing it at construction time (the app's `@State fileProvider` is
+/// initialized via its property initializer, not in `init()`).
+@MainActor
+final class FileProviderBox: @unchecked Sendable {
+    var provider: FileProviderSpike?
+}
+
 @MainActor
 final class SessionLookupBox: @unchecked Sendable {
     /// Returns the live `WikiStoreModel` for a wikiID, or nil if no session is
@@ -23,10 +33,15 @@ final class SessionLookupBox: @unchecked Sendable {
     /// `@MainActor`-isolated provider.
     private var lookup: @MainActor @Sendable (String) -> WikiStoreModel?
 
+    /// Returns the live `WikiSession` for a wikiID, or nil if no session is
+    /// open. Used by the ingestion provider to access the session's launcher.
+    private var sessionLookup: @MainActor @Sendable (String) -> WikiSession?
+
     init() {
         // No sessions exist yet — return nil. Replaced after SessionManager
         // construction.
         self.lookup = { _ in nil }
+        self.sessionLookup = { _ in nil }
     }
 
     /// Synchronous resolution (caller must be on the main actor).
@@ -34,9 +49,19 @@ final class SessionLookupBox: @unchecked Sendable {
         lookup(wikiID)
     }
 
+    /// Synchronous session resolution (caller must be on the main actor).
+    func resolveSession(for wikiID: String) -> WikiSession? {
+        sessionLookup(wikiID)
+    }
+
     /// Wire the box to the real session manager (called after construction).
     func setLookup(_ lookup: @escaping @MainActor @Sendable (String) -> WikiStoreModel?) {
         self.lookup = lookup
+    }
+
+    /// Wire the session-lookup closure to the real session manager.
+    func setSessionLookup(_ lookup: @escaping @MainActor @Sendable (String) -> WikiSession?) {
+        self.sessionLookup = lookup
     }
 }
 

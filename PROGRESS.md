@@ -7,6 +7,7 @@ Newest first. To get up to speed: read `PLAN.md` then this file.
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 ## 2026-07-14 — Stop committing generated codegen files
 
 `GeneratedVersion.swift` (git SHA → Swift) and `GeneratedPrompts.swift` (prompt
@@ -61,10 +62,14 @@ See [`plans/wikictl-author-provenance.md`](plans/wikictl-author-provenance.md).
 =======
 ## 2026-07-14 — Queue Engine: extraction through the queue (Phases 1–4)
 >>>>>>> bd2f1ba (docs: consolidate queue engine PROGRESS.md entries, remove duplicates)
+=======
+## 2026-07-14 — Queue Engine: extraction & ingestion through the queue (Phases 1–5)
+>>>>>>> e72bb5e (feat: Queue Engine Phase 5 — route ingestion through the queue)
 
-A persistent, app-wide extraction work queue backed by a new `queue.sqlite`
-in the App Group container. Items survive relaunch, schedule across wikis with
-per-provider concurrency limits, and keep running when no window is open.
+A persistent, app-wide extraction and ingestion work queue backed by a new
+`queue.sqlite` in the App Group container. Items survive relaunch, schedule
+across wikis with per-provider concurrency limits, and keep running when no
+window is open.
 Design plan: `docs/design-plans/2026-07-13-queue-engine.md`.
 
 **What's done:** Durable queue store with crash recovery (running items reset to
@@ -75,6 +80,7 @@ all PDF extraction now routed through the engine. The `QueueActivityTracker`
 replaces the launcher's extraction slot machinery — extraction status and control
 live in the UI via the tracker, not internal launcher state.
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 **Phase 2 — QueueEngine actor (`WikiFSEngine`):** event-driven dispatch,
 per-provider concurrency limits, per-wiki ingestion invariant, local/remote
@@ -271,6 +277,23 @@ retirement) is the next step. 65 tests total across all phases.
 **Not yet done:** Ingestion routing through the queue (Phase 5), menu-bar
 background mode UI (Phase 6), and sidebar removal (Phase 7).
 >>>>>>> bd2f1ba (docs: consolidate queue engine PROGRESS.md entries, remove duplicates)
+=======
+**Phase 5 — ingestion through the queue:** All ingestion now flows through the
+queue engine. An ingestion `QueueWorker` calls `AppQueueIngestionProvider` which
+runs the full planner→executor→finalizer pipeline (source staging, workspace
+create/merge, agent spawn). A `CompositeWorkerFactory` routes extraction vs
+ingestion items to their respective sub-factories. All ingest call sites
+(`ContentView`, `SourcesContainerView`, `SourceDetailView`) now enqueue
+instead of calling `launcher.ingestSources` directly — they return
+immediately and the engine dispatches when a slot is free. The
+`QueueActivityTracker` tracks `ingestingSourceIDs` from queue events,
+replacing `launcher.ingestingSourceIDs` in all views. Session release in
+`RootScene.onDisappear` is conditional — sessions with pending/running queue
+work are retained.
+
+**Not yet done:** Menu-bar background mode UI (Phase 6), and sidebar removal
+(Phase 7).
+>>>>>>> e72bb5e (feat: Queue Engine Phase 5 — route ingestion through the queue)
 
 ## 2026-07-13 — Chat Summary (issue #411)
 

@@ -38,8 +38,16 @@ final class QueueActivityTracker {
     /// standalone Extract button's per-file disable.
     private(set) var extractingSourceIDs: Set<PageID> = []
 
+    /// Source IDs currently being ingested (any ingestion queue item in
+    /// `.running` state). Drives per-file "Ingesting…" labels and cross-file
+    /// Ingest button disable. Replaces `launcher.ingestingSourceIDs`.
+    private(set) var ingestingSourceIDs: Set<PageID> = []
+
     /// True while any extraction is running. Drives the sidebar spinner.
     var isExtracting: Bool { !extractingSourceIDs.isEmpty }
+
+    /// True while any ingestion is running.
+    var isIngesting: Bool { !ingestingSourceIDs.isEmpty }
 
     /// Accumulated progress log for the most recent extraction. Cleared on
     /// `.started`, appended on `.progress`. Drives the sidebar log text.
@@ -93,6 +101,7 @@ final class QueueActivityTracker {
         streamTask = nil
         queueEngine = nil
         extractingSourceIDs = []
+        ingestingSourceIDs = []
         extractionLog = ""
         extractionPID = nil
         currentExtractionItemID = nil
@@ -118,23 +127,25 @@ final class QueueActivityTracker {
 
     // MARK: - Event handling
 
-    private func handle(_ event: QueueEvent) {
+    @MainActor
+    func handle(_ event: QueueEvent) {
         switch event {
         case .enqueued(let item):
             // Track the mapping so we can clean up on completion.
-            if item.queue == .extraction {
-                let sourceIDs = Set(item.payload.sourceIDs)
-                itemToSourceIDs[item.id] = sourceIDs
-            }
+            let sourceIDs = Set(item.payload.sourceIDs)
+            itemToSourceIDs[item.id] = sourceIDs
 
         case .started(let item):
-            if item.queue == .extraction {
-                let sourceIDs = Set(item.payload.sourceIDs)
-                itemToSourceIDs[item.id] = sourceIDs
+            let sourceIDs = Set(item.payload.sourceIDs)
+            itemToSourceIDs[item.id] = sourceIDs
+            switch item.queue {
+            case .extraction:
                 extractingSourceIDs.formUnion(sourceIDs)
                 extractionLog = ""
                 extractionPID = nil
                 currentExtractionItemID = item.id
+            case .ingestion:
+                ingestingSourceIDs.formUnion(sourceIDs)
             }
 
         case .progress(let id, let line):
@@ -149,25 +160,19 @@ final class QueueActivityTracker {
             }
 
         case .completed(let item):
-            if item.queue == .extraction {
-                removeItem(item)
-            }
+            removeItem(item)
 
         case .failed(let item, let error):
-            if item.queue == .extraction {
-                removeItem(item)
-                if extractionLog.isEmpty {
-                    extractionLog = "Extraction failed: \(error)"
-                }
+            removeItem(item)
+            if item.queue == .extraction, extractionLog.isEmpty {
+                extractionLog = "Extraction failed: \(error)"
             }
 
         case .cancelled(let item):
-            if item.queue == .extraction {
-                removeItem(item)
-            }
+            removeItem(item)
 
         case .runStateChanged:
-            // Not relevant to extraction-activity tracking.
+            // Not relevant to activity tracking.
             break
         }
     }
@@ -175,7 +180,12 @@ final class QueueActivityTracker {
     /// Remove an item from the active set and clean up its mapping.
     private func removeItem(_ item: QueueItem) {
         if let sourceIDs = itemToSourceIDs.removeValue(forKey: item.id) {
-            extractingSourceIDs.subtract(sourceIDs)
+            switch item.queue {
+            case .extraction:
+                extractingSourceIDs.subtract(sourceIDs)
+            case .ingestion:
+                ingestingSourceIDs.subtract(sourceIDs)
+            }
         }
         if currentExtractionItemID == item.id {
             currentExtractionItemID = nil

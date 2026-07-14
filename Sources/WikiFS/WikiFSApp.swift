@@ -42,6 +42,13 @@ struct WikiFSApp: App {
     /// App-wide extraction provider. Bridges the headless queue engine to the
     /// `@MainActor` `ExtractionCoordinator` + `WikiStoreModel`.
     @State private var extractionProvider: any QueueExtractionProvider
+    /// App-wide ingestion provider. Bridges the headless queue engine to the
+    /// `@MainActor` `AgentLauncher` + `WikiStoreModel` for ingestion.
+    @State private var ingestionProvider: any QueueIngestionProvider
+    /// Mutable box for the file provider reference — the ingestion provider
+    /// uses it to access the `FileProviderSpike` which is only available
+    /// after the `@State` property is initialized by SwiftUI.
+    @State private var fileProviderBox: FileProviderBox
     /// App-wide queue-activity tracker. Observes `QueueEngine.events` and
     /// exposes `@Observable` extraction state (extractingSourceIDs, progress
     /// log, etc.) that replaces the launcher's slot machinery.
@@ -120,14 +127,26 @@ struct WikiFSApp: App {
         let extractionProvider = AppQueueExtractionProvider(
             extractionCoordinator: coordinator,
             sessionBox: sessionBox)
+        let fileProviderBox = FileProviderBox()
+        let ingestionProvider = AppQueueIngestionProvider(
+            sessionBox: sessionBox,
+            fileProviderBox: fileProviderBox,
+            wikictlDirectory: HelpersLocation.wikictlDirectory)
         // Create a progress-emit box — the closure starts as a no-op and is
         // replaced with the engine's continuation after the engine is
         // constructed (breaking the circular dependency: factory needs the
         // closure, engine needs the factory).
         let progressBox = ProgressEmitBox()
-        let workerFactory = QueueExtractionWorkerFactory(
+        let extractionFactory = QueueExtractionWorkerFactory(
             provider: extractionProvider,
             emitProgress: { id, line in progressBox.emit?(id, line) })
+        let ingestionFactory = QueueIngestionWorkerFactory(
+            provider: ingestionProvider,
+            emitProgress: { id, line in progressBox.emit?(id, line) })
+        let workerFactory = CompositeWorkerFactory(factories: [
+            .extraction: extractionFactory,
+            .ingestion: ingestionFactory
+        ])
         let queueEngine = QueueEngine(store: queueStore, workerFactory: workerFactory)
         // Wire the progress emit box to the engine's event continuation.
         // This is an actor-isolated call — use `await` to hop to the actor.
@@ -146,6 +165,8 @@ struct WikiFSApp: App {
         activityTracker.attach(engine: queueEngine)
         _queueEngine = State(initialValue: queueEngine)
         _extractionProvider = State(initialValue: extractionProvider)
+        _ingestionProvider = State(initialValue: ingestionProvider)
+        _fileProviderBox = State(initialValue: fileProviderBox)
         _activityTracker = State(initialValue: activityTracker)
 
         let sm = SessionManager(
@@ -161,6 +182,9 @@ struct WikiFSApp: App {
         // sees live sessions through the box.
         sessionBox.setLookup { [weak sm] wikiID in
             sm?.sessions[wikiID]?.store
+        }
+        sessionBox.setSessionLookup { [weak sm] wikiID in
+            sm?.sessions[wikiID]
         }
         // Settings-only launcher (D5): its own gate, independent of any
         // session's gate. Used for "Test Connection" + backend config only.
@@ -246,6 +270,7 @@ struct WikiFSApp: App {
                 changeBridge?.refreshObservations()
             }
             .task {
+                fileProviderBox.provider = fileProvider
                 fileProvider.wire(into: registry)
                 // Flush a specific wiki's store before export/delete. The
                 // closure receives the wiki ID so the registry can target the

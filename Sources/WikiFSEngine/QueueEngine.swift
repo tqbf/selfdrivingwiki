@@ -215,6 +215,16 @@ public actor QueueEngine {
         await dispatchScan()
     }
 
+    // MARK: - Has active work
+
+    /// Whether the engine has any queued or running items for the given wiki.
+    /// Used by `RootScene.onDisappear` to decide whether to retain a session
+    /// (if work is pending) or release it.
+    public func hasActiveWork(for wikiID: String) -> Bool {
+        let active = (try? store.loadActive()) ?? []
+        return active.contains { $0.wikiID == wikiID }
+    }
+
     // MARK: - Snapshot
 
     /// A point-in-time view of the engine's full state, for UI bootstrap and

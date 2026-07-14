@@ -1,6 +1,35 @@
 import Foundation
 import WikiFSCore
 
+// MARK: - CompositeWorkerFactory
+
+/// A `QueueWorkerFactory` that delegates to per-queue-kind sub-factories.
+/// The engine has a single `workerFactory`, so this composite routes
+/// extraction items to the extraction factory and ingestion items to the
+/// ingestion factory based on `item.queue`.
+public struct CompositeWorkerFactory: QueueWorkerFactory {
+    private let factories: [QueueKind: any QueueWorkerFactory]
+
+    /// - Parameter factories: A mapping from queue kind to its worker factory.
+    ///   Every `QueueKind` must have an entry; a missing entry causes
+    ///   `providerID(for:)` to return `nil` (item stays queued).
+    public init(factories: [QueueKind: any QueueWorkerFactory]) {
+        self.factories = factories
+    }
+
+    public func providerID(for item: QueueItem) async -> String? {
+        guard let factory = factories[item.queue] else { return nil }
+        return await factory.providerID(for: item)
+    }
+
+    public func worker(for item: QueueItem) async throws -> any QueueWorker {
+        guard let factory = factories[item.queue] else {
+            throw QueueIngestionError.noSources
+        }
+        return try await factory.worker(for: item)
+    }
+}
+
 // MARK: - QueueWorker
 
 /// A worker that executes a single `QueueItem`. The engine spawns a `Task`

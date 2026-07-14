@@ -157,9 +157,9 @@ struct WikiDetailView: View {
                 SourceDetailView(
                     file: file,
                     hasBeenIngested: store.isSourceIngested(file),
-                    isIngesting: launcher.ingestingSourceIDs.contains(file.id),
+                    isIngesting: tracker.ingestingSourceIDs.contains(file.id),
                     isRunning: launcher.isRunning,
-                    isAnySourceIngesting: !launcher.ingestingSourceIDs.isEmpty,
+                    isAnySourceIngesting: !tracker.ingestingSourceIDs.isEmpty,
                     // This file is mid-extraction via EITHER path (the ingest-path
                     // pdf2md step or the standalone runExtraction) — both insert
                     // into `extractingSourceIDs`, so this is now extraction-phase

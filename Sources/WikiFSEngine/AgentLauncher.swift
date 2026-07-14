@@ -685,7 +685,7 @@ public final class AgentLauncher {
     ///   pure extraction or a queued ingest never sets it. Empty for query/lint
     ///   runs (the default), which keeps the flag clear and the cross-file Ingest
     ///   greyout unblocked. Cleared in `finish()`.
-    func run(
+    public func run(
         request: OperationRequest,
         wikiID: String,
         wikiRoot: String,
