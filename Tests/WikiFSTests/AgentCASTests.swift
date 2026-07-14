@@ -125,7 +125,7 @@ struct AgentCASTests {
             ["--wiki", "test", "page", "upsert", "--title", "Test",
              "--body-file", "-", "--expect-head", "01ABC123"],
             env: { _ in nil })
-        guard case .upsert(_, let title, _, let expectHead, _) = invocation.command else {
+        guard case .upsert(_, let title, _, let expectHead, _, _) = invocation.command else {
             Issue.record("expected .upsert")
             return
         }
@@ -160,7 +160,7 @@ struct AgentCASTests {
             ["--wiki", "test", "page", "upsert", "--title", "Test",
              "--body-file", "-"],
             env: { _ in nil })
-        guard case .upsert(_, _, _, let expectHead, _) = invocation.command else {
+        guard case .upsert(_, _, _, let expectHead, _, _) = invocation.command else {
             Issue.record("expected .upsert")
             return
         }

@@ -4,6 +4,91 @@ import ACP
 import ACPModel
 import WikiFSCore
 
+// MARK: - Shared tool-call rendering
+
+/// Renders a stable tool name + one-liner input summary from an ACP
+/// `ToolCallUpdate`. Shared by `ACPEventTranslator` (the event stream) and
+/// `ACPPermissionDelegate` (the permission prompt) so both see identical
+/// rendering — issue #426.
+///
+/// **Why `kind`-derived names:** ACP agents pick their own `title` ("Run
+/// command", "Bash", "Edit file", …) so downstream consumers that key off the
+/// tool name (`ToolInputSummary.summarize`, the transcript renderer, the #420
+/// eval harness) see different strings per agent. `kind` is a stable
+/// discriminant the SDK already decodes — we map it to the same canonical names
+/// the Claude-CLI path uses (`Bash`, `webfetch`, `search`) so the two backends
+/// converge. Falls back to `title` then `kind.rawValue.capitalized` when `kind`
+/// is `nil` (preserves existing behavior for agents that omit it).
+///
+/// **Why `rawInput`:** ACP carries structured tool args in `rawInput` (an
+/// `AnyCodable` boxing a dictionary). For `.execute` it's `{"command": "…"}`;
+/// for `.fetch`, `{"url": "…"}`; for `.search`, `{"query": "…"}`; for file
+/// ops, `{"file_path"|"path": "…"}`. We extract the substantive arg based on
+/// `kind`, mirroring `ToolInputSummary.summarize` (AgentEvent.swift:404-447).
+enum ToolCallRendering {
+
+    /// A stable, renderable tool name derived from `kind`, falling back to
+    /// `title` then `kind.rawValue.capitalized`, then `"tool"`.
+    static func toolName(for call: ToolCallUpdate) -> String {
+        // Prefer kind-derived stable names so downstream ToolInputSummary logic
+        // works uniformly across ACP agents (each agent picks its own title —
+        // "Run command", "Bash", etc. — but kind is stable).
+        if let kind = call.kind {
+            switch kind {
+            case .execute: return "Bash"
+            case .fetch:   return "webfetch"
+            case .search:  return "search"
+            default: break
+            }
+        }
+        if let title = call.title, !title.isEmpty { return title }
+        if let kind = call.kind { return kind.rawValue.capitalized }
+        return "tool"
+    }
+
+    /// A one-liner input summary: the substantive arg from `rawInput` keyed by
+    /// `kind`, falling back to the first location's path, then empty string.
+    static func toolSummary(for call: ToolCallUpdate) -> String {
+        // rawInput carries the structured args (command/url/query/path). Pull
+        // the substantive one based on kind, mirroring ToolInputSummary.summarize.
+        if let kind = call.kind, let input = call.rawInput {
+            switch kind {
+            case .execute:
+                if let s = Self.stringField(input, keys: ["command"]) { return s }
+            case .fetch:
+                if let s = Self.stringField(input, keys: ["url"]) { return s }
+            case .search:
+                if let s = Self.stringField(input, keys: ["query", "pattern"]) { return s }
+            case .read, .edit, .delete, .move:
+                if let s = Self.stringField(input, keys: ["file_path", "path"]) { return s }
+            default: break
+            }
+        }
+        // Fall back to the first location's path (preserves existing behavior
+        // for agents that populate locations but not rawInput).
+        if let path = call.locations?.first?.path, !path.isEmpty {
+            return path
+        }
+        return ""
+    }
+
+    /// Extract a string field from an `AnyCodable` regardless of how the SDK
+    /// boxed the dictionary. AnyCodable.value may be `[String: any Sendable]`
+    /// (from a dict literal) or a JSON-decoded form — we round-trip through
+    /// JSON to get a `[String: Any]` we can subscript safely. No force-casts;
+    /// returns nil for missing keys or non-string values.
+    private static func stringField(_ raw: AnyCodable, keys: [String]) -> String? {
+        guard let data = try? JSONEncoder().encode(raw),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        for key in keys {
+            if let s = object[key] as? String { return s }
+        }
+        return nil
+    }
+}
+
 // MARK: - Pure translator: ACP SessionUpdate → AgentEvent
 
 /// Pure, I/O-free translator from ACP `SessionUpdate` values into the
@@ -91,23 +176,19 @@ struct ACPEventTranslator: Sendable {
         return nil
     }
 
-    /// A renderable tool name. Prefers the ACP `title`; falls back to the
-    /// `kind` (capitalized), then a generic "tool".
+    /// A renderable tool name. Delegates to `ToolCallRendering` (shared with
+    /// `ACPPermissionDelegate`) — see issue #426 for why `kind`-derived stable
+    /// names matter.
     private static func toolName(for call: ToolCallUpdate) -> String {
-        if let title = call.title, !title.isEmpty { return title }
-        if let kind = call.kind { return kind.rawValue.capitalized }
-        return "tool"
+        ToolCallRendering.toolName(for: call)
     }
 
-    /// A one-liner input summary for a tool call. ACP carries locations (file
-    /// paths) rather than a structured `input` map like Claude's `tool_use`, so
-    /// render the first location's path (e.g. `Edit  /path/to/file.swift`),
-    /// falling back to the tool kind/title.
+    /// A one-liner input summary for a tool call. Delegates to
+    /// `ToolCallRendering` — extracts the substantive arg from `rawInput`
+    /// (command/url/query/path) keyed by `kind`, falling back to the first
+    /// location's path.
     private static func toolSummary(for call: ToolCallUpdate) -> String {
-        if let path = call.locations?.first?.path, !path.isEmpty {
-            return path
-        }
-        return ""
+        ToolCallRendering.toolSummary(for: call)
     }
 
     /// Extract a tool's output text (the `.toolResult` body) from a
@@ -435,22 +516,20 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
 
     // MARK: - Helpers
 
-    /// A renderable tool name for a permission request. Prefers the ACP
-    /// `title`; falls back to the `kind` (capitalized), then a generic "tool".
-    /// Same logic as `ACPEventTranslator.toolName(for:)`.
+    /// A renderable tool name for a permission request. Delegates to
+    /// `ToolCallRendering` (shared with `ACPEventTranslator`) — issue #426.
+    /// Returns nil when rendering produces nothing (the delegate's Pending
+    /// struct uses String? for these optional display fields).
     private static func toolName(for call: ToolCallUpdate) -> String? {
-        if let title = call.title, !title.isEmpty { return title }
-        if let kind = call.kind { return kind.rawValue.capitalized }
-        return nil
+        let name = ToolCallRendering.toolName(for: call)
+        return name.isEmpty ? nil : name
     }
 
-    /// A one-liner summary for a permission request — the file path being
-    /// changed. Same logic as `ACPEventTranslator.toolSummary(for:)`.
+    /// A one-liner summary for a permission request — the file path or command
+    /// being changed. Delegates to `ToolCallRendering` — issue #426.
     private static func toolSummary(for call: ToolCallUpdate) -> String? {
-        if let path = call.locations?.first?.path, !path.isEmpty {
-            return path
-        }
-        return nil
+        let summary = ToolCallRendering.toolSummary(for: call)
+        return summary.isEmpty ? nil : summary
     }
 
     /// Pick the "allow" option from a permission request's options. An allow

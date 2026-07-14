@@ -47,32 +47,79 @@ import ACPModel
         #expect(events == [.raw("Considering options…")])
     }
 
-    /// A tool invocation (`tool_call`) maps to `.toolUse` with a one-liner
-    /// summary from the tool's location/path.
+    /// A tool invocation (`tool_call`) with `kind: .execute` + `rawInput`
+    /// carrying the command line maps to `.toolUse(name: "Bash", …)` with the
+    /// actual command as the summary — not "Run command" with a bare path (AC.1, issue #426).
     @Test func toolCallMapsToToolUse() {
         let translator = ACPEventTranslator()
         let update = SessionUpdate.toolCall(ToolCallUpdate(
             toolCallId: "tc1",
             status: .pending,
-            title: "Edit file",
-            kind: .edit,
-            locations: [ToolLocation(path: "/wiki/Foo.md", line: 10)]
+            title: nil,
+            kind: .execute,
+            rawInput: AnyCodable(["command": "$WIKICTL page upsert --title Foo"])
         ))
         let events = translator.translate(update)
-        #expect(events == [.toolUse(name: "Edit file", inputSummary: "/wiki/Foo.md")])
+        #expect(events == [.toolUse(name: "Bash", inputSummary: "$WIKICTL page upsert --title Foo")])
     }
 
-    /// A tool call's title is the primary name; `kind` is the fallback.
+    /// A tool call's `kind` is the fallback name when `title` is nil. Uses
+    /// `.read` (→ "Read") since `.execute` now maps to the stable "Bash" (issue #426).
     @Test func toolCallFallsBackToKindWhenNoTitle() {
         let translator = ACPEventTranslator()
         let update = SessionUpdate.toolCall(ToolCallUpdate(
             toolCallId: "tc2",
             status: .pending,
             title: nil,
-            kind: .execute
+            kind: .read
         ))
         let events = translator.translate(update)
-        #expect(events == [.toolUse(name: "Execute", inputSummary: "")])
+        #expect(events == [.toolUse(name: "Read", inputSummary: "")])
+    }
+
+    /// `.fetch` + `rawInput: ["url": "https://example.com"]` →
+    /// `.toolUse(name: "webfetch", inputSummary: "https://example.com")` (AC.2).
+    @Test func webFetchToolCallRenderedAsWebfetch() {
+        let translator = ACPEventTranslator()
+        let update = SessionUpdate.toolCall(ToolCallUpdate(
+            toolCallId: "tc-fetch",
+            status: .pending,
+            title: "Fetch",
+            kind: .fetch,
+            rawInput: AnyCodable(["url": "https://example.com"])
+        ))
+        let events = translator.translate(update)
+        #expect(events == [.toolUse(name: "webfetch", inputSummary: "https://example.com")])
+    }
+
+    /// `.search` + `rawInput: ["query": "active learning"]` →
+    /// `.toolUse(name: "search", inputSummary: "active learning")` (AC.3).
+    @Test func searchToolCallRenderedAsSearch() {
+        let translator = ACPEventTranslator()
+        let update = SessionUpdate.toolCall(ToolCallUpdate(
+            toolCallId: "tc-search",
+            status: .pending,
+            title: "Search",
+            kind: .search,
+            rawInput: AnyCodable(["query": "active learning"])
+        ))
+        let events = translator.translate(update)
+        #expect(events == [.toolUse(name: "search", inputSummary: "active learning")])
+    }
+
+    /// `.edit` with no `rawInput` falls back to `locations.first.path` —
+    /// regression guard for agents that populate locations but not rawInput (AC.4).
+    @Test func toolCallWithoutRawInputFallsBackToLocations() {
+        let translator = ACPEventTranslator()
+        let update = SessionUpdate.toolCall(ToolCallUpdate(
+            toolCallId: "tc-edit-noraw",
+            status: .pending,
+            kind: .edit,
+            locations: [ToolLocation(path: "/wiki/Foo.md")],
+            rawInput: nil
+        ))
+        let events = translator.translate(update)
+        #expect(events == [.toolUse(name: "Edit", inputSummary: "/wiki/Foo.md")])
     }
 
     /// A completed `tool_call_update` with output text maps to `.toolResult`
@@ -312,5 +359,126 @@ import ACPModel
             .usageUpdate(UsageUpdate(used: 1, size: 1)),
             .currentModeUpdate("agent"),
         ]
+    }
+
+    // MARK: - System prompt delivery (issue #427)
+
+    /// A non-empty system prompt is written to the working directory as both
+    /// `CLAUDE.md` and `AGENTS.md` with the exact contents (spec-compliant
+    /// delivery — ACP's NewSessionRequest has no systemPrompt field).
+    @Test
+    func deliverSystemPromptWritesBothFiles() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-prompt-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let prompt = "You are a wiki maintainer. Use wikictl first."
+        ACPBackend.deliverSystemPrompt(prompt, to: dir.path)
+
+        let claude = try String(contentsOf: dir.appendingPathComponent("CLAUDE.md"), encoding: .utf8)
+        let agents = try String(contentsOf: dir.appendingPathComponent("AGENTS.md"), encoding: .utf8)
+        #expect(claude == prompt)
+        #expect(agents == prompt)
+    }
+
+    /// An empty system prompt writes nothing — preserves the caller-relying-on-
+    /// projection-alone behavior (AC.1 skip-silently requirement).
+    @Test
+    func deliverSystemPromptEmptyWritesNothing() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-prompt-empty-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        ACPBackend.deliverSystemPrompt("", to: dir.path)
+
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("CLAUDE.md").path))
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("AGENTS.md").path))
+    }
+
+    /// Both files are byte-identical — catches drift from divergent code paths.
+    @Test
+    func deliverSystemPromptFilesAreIdentical() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-prompt-identical-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let prompt = "# Wiki Instructions\n\nUse wikictl.\nCite sources.\n"
+        ACPBackend.deliverSystemPrompt(prompt, to: dir.path)
+
+        let claude = try Data(contentsOf: dir.appendingPathComponent("CLAUDE.md"))
+        let agents = try Data(contentsOf: dir.appendingPathComponent("AGENTS.md"))
+        #expect(claude == agents)
+    }
+
+    /// Pre-existing stale files are overwritten — covers the scratch-dir-reuse
+    /// case (a scratch dir that already has an old CLAUDE.md from a prior run).
+    @Test
+    func deliverSystemPromptOverwritesStaleFiles() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-prompt-overwrite-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // Write a stale old prompt.
+        try "OLD STALE PROMPT".write(to: dir.appendingPathComponent("CLAUDE.md"), atomically: true, encoding: .utf8)
+        try "OLD STALE PROMPT".write(to: dir.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)
+
+        let newPrompt = "NEW FRESH PROMPT"
+        ACPBackend.deliverSystemPrompt(newPrompt, to: dir.path)
+
+        let claude = try String(contentsOf: dir.appendingPathComponent("CLAUDE.md"), encoding: .utf8)
+        let agents = try String(contentsOf: dir.appendingPathComponent("AGENTS.md"), encoding: .utf8)
+        #expect(claude == newPrompt)
+        #expect(agents == newPrompt)
+    }
+
+    // MARK: - System prompt injection (issue #427, agent-agnostic delivery)
+
+    /// A non-empty system prompt is prepended to the user text with a delimiter
+    /// so the agent can distinguish steering from the actual task.
+    @Test
+    func injectSystemPromptPrependsPrompt() {
+        let result = ACPBackend.injectSystemPrompt(
+            "Use wikictl first, web last.",
+            into: "Find pages about photosynthesis"
+        )
+        #expect(result.contains("Use wikictl first, web last."))
+        #expect(result.contains("Find pages about photosynthesis"))
+        // System prompt comes before the user text.
+        let promptRange = result.range(of: "Use wikictl first")
+        let userRange = result.range(of: "Find pages about")
+        #expect(promptRange!.lowerBound < userRange!.lowerBound)
+        // A delimiter separates the two.
+        #expect(result.contains("---"))
+        #expect(result.contains("# YOUR TASK"))
+    }
+
+    /// An empty system prompt passes the user text through unchanged — no
+    /// injection when the caller has no system prompt.
+    @Test
+    func injectSystemPromptEmptyReturnsUserTextUnchanged() {
+        let userText = "What is the Calvin cycle?"
+        let result = ACPBackend.injectSystemPrompt("", into: userText)
+        #expect(result == userText)
+    }
+
+    /// The injection preserves the full system prompt content verbatim — a
+    /// multi-line prompt with special characters survives intact.
+    @Test
+    func injectSystemPromptPreservesMultilinePrompt() {
+        let prompt = """
+        # Wiki Maintainer Instructions
+
+        Use `wikictl` to read and write.
+        Cite sources with [[source:Name#"quote"]].
+        Never edit through the filesystem.
+        """
+        let result = ACPBackend.injectSystemPrompt(prompt, into: "Ingest this paper")
+        #expect(result.hasPrefix("# Wiki Maintainer Instructions"))
+        #expect(result.contains("Use `wikictl` to read and write."))
+        #expect(result.contains("Ingest this paper"))
     }
 }

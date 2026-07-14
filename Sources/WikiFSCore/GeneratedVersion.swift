@@ -17,7 +17,7 @@ public enum GeneratedVersion {
     public static let appVersion = "0.0.0"
 
     /// Short git SHA (e.g. "abc1234"). Goes into the WIKIGitSHA Info.plist key.
-    public static let gitSHA = "c6335c4"
+    public static let gitSHA = "911a76e"
 
     /// Git commit count — a monotone integer (e.g. "423"). Goes into
     /// WIKIGitCommitCount.
@@ -25,8 +25,8 @@ public enum GeneratedVersion {
 
     /// Build identifier: "<count>-<sha>" (e.g. "423-abc1234"). Goes into
     /// CFBundleVersion.
-    public static let buildVersion = "518-c6335c4"
+    public static let buildVersion = "518-911a76e"
 
     /// Full display string: "<appVersion> (<buildVersion>)" — e.g. "0.5.0 (423-abc1234)".
-    public static let fullVersionString = "0.0.0 (518-c6335c4)"
+    public static let fullVersionString = "0.0.0 (518-911a76e)"
 }

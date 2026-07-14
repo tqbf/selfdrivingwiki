@@ -107,6 +107,14 @@ public actor ACPBackend: AgentBackend {
         /// The session-lifetime drain task (owns the single `client.notifications`
         /// iterator). Cancelled in `cancel`.
         let drainTask: Task<Void, Never>?
+        /// The system prompt, injected into the first turn's user message so it
+        /// reaches the agent regardless of whether it reads CLAUDE.md/AGENTS.md
+        /// from cwd (Claude Code does; OpenCode, Hermes, Pi may not). The file
+        /// writes in `deliverSystemPrompt` are the complementary delivery path.
+        let systemPrompt: String
+        /// Flipped after the first `send` injects `systemPrompt`. ACP sessions
+        /// carry context across turns, so one injection suffices.
+        var systemPromptInjected: Bool
     }
 
     private var sessions: [String: ACPSession] = [:]
@@ -238,6 +246,13 @@ public actor ACPBackend: AgentBackend {
         }
 
         let workingDir = profile.scratchDirectory?.path ?? spawn.workingDirectory ?? FileManager.default.currentDirectoryPath
+        // Deliver the system prompt via the spec-compliant on-disk mechanism
+        // (issue #427). ACP's NewSessionRequest has no systemPrompt field — the
+        // spec models system context as CLAUDE.md/AGENTS.md in the cwd. The File
+        // Provider projection is the production default but is OPTIONAL for
+        // unsigned dev builds; this makes delivery reliable regardless. Both
+        // files match the projection (same `currentSystemPromptBody()` source).
+        Self.deliverSystemPrompt(systemPrompt, to: workingDir)
         DebugLog.agent("ACPBackend.start: newSession cwd=\(workingDir)") // TEMP DEBUG (existed; re-tagged)
         let session = try await client.newSession(workingDirectory: workingDir)
         let sessionId = session.sessionId
@@ -276,6 +291,13 @@ public actor ACPBackend: AgentBackend {
             }
         }
 
+        // Capture the CLI profile's log callbacks so ACP stderr and notifications
+        // flow into run.stderr.log / run.jsonl (same hooks the old CLI backend used
+        // via onStdoutChunk/onStderrChunk). Without this the log files stay empty
+        // and "Reveal Log" opens a blank file.
+        let onStdoutChunk = profile.cli?.onStdoutChunk
+        let onStderrChunk = profile.cli?.onStderrChunk
+
         // Session-lifetime notification drain (cause 6 fix,
         // `plans/acp-stall-recovery.md` §1b). Acquire `client.notifications`
         // ONCE here and fan events into a per-session `NotificationFanout`.
@@ -283,23 +305,30 @@ public actor ACPBackend: AgentBackend {
         // stream (AsyncStream is single-consumer — two concurrent iterators
         // split elements, silently dropping notifications).
         let fanout = NotificationFanout()
-        let drainTask = Task { [client, fanout] in
+        let drainTask = Task { [client, fanout, onStdoutChunk] in
             let notifications = await client.notifications
             for await notification in notifications {
                 if Task.isCancelled { break }
+                // Mirror raw JSON-RPC notification to run.jsonl for debugging.
+                if let onStdoutChunk {
+                    let line = "{\"method\":\"\(notification.method)\"}\n"
+                    onStdoutChunk(line)
+                }
                 fanout.yield(notification)
             }
             fanout.finish()
         }
         DebugLog.agent("ACPBackend.start: session-lifetime notification drain started") // TEMP DEBUG (existed; re-tagged)
 
-        // Forward agent stderr to DebugLog.agent (SDK fork Fix 3). Best-effort:
-        // the stream finishes on terminate, so this task exits naturally.
-        Task { [client] in
+        // Forward agent stderr to DebugLog.agent + run.stderr.log (via the CLI
+        // profile's onStderrChunk callback). Best-effort: the stream finishes
+        // on terminate, so this task exits naturally.
+        Task { [client, onStderrChunk] in
             guard let stderrStream = await client.stderrLines() else { return }
             for await line in stderrStream {
                 if Task.isCancelled { break }
                 DebugLog.agent("ACP stderr: \(line)")
+                onStderrChunk?(line + "\n")
             }
         }
 
@@ -310,7 +339,9 @@ public actor ACPBackend: AgentBackend {
             permissionDelegate: permissionDelegate,
             modelsInfo: modelsInfo,
             notificationFanout: fanout,
-            drainTask: drainTask
+            drainTask: drainTask,
+            systemPrompt: systemPrompt,
+            systemPromptInjected: false
         )
 
         // Wire onExit to the agent process termination. `Client.terminate()` is
@@ -324,10 +355,22 @@ public actor ACPBackend: AgentBackend {
     }
 
     public func send(_ turn: TurnInput, into handle: SessionHandle) async -> AsyncStream<AgentEvent> {
-        guard let session = sessions[handle.id] else {
+        guard var session = sessions[handle.id] else {
             // Session gone (cancelled/finished) — return an empty, finished stream.
             DebugLog.agent("ACPBackend.send: no session for handle \(handle.id) — empty stream") // TEMP DEBUG (existed; re-tagged)
             return AsyncStream { $0.finish() }
+        }
+        // Inject the system prompt into the first turn's user text — agent-agnostic
+        // delivery (issue #427). The file writes (CLAUDE.md/AGENTS.md in cwd) are
+        // the complementary path for agents that read them (Claude Code); this
+        // injection guarantees delivery for agents that don't (OpenCode, Hermes,
+        // Pi). ACP sessions carry context across turns, so one injection suffices.
+        var promptText = turn.userText
+        if !session.systemPromptInjected && !session.systemPrompt.isEmpty {
+            promptText = Self.injectSystemPrompt(session.systemPrompt, into: turn.userText)
+            session.systemPromptInjected = true
+            sessions[handle.id] = session
+            DebugLog.agent("ACPBackend.send: injected system prompt (\(session.systemPrompt.count) chars) into first turn")
         }
         DebugLog.agent("ACPBackend.send: turn=\"\(turn.userText.prefix(80))\" handle=\(handle.id)") // TEMP DEBUG (existed; re-tagged)
 
@@ -397,7 +440,7 @@ public actor ACPBackend: AgentBackend {
             // stopReason), while notifications stream in via the fanout
             // subscription. The prompt task and watchdog are both cancelled on
             // consumer termination.
-            let promptTask = Task { [client, sessionId, fanout, completionFlag] in
+            let promptTask = Task { [client, sessionId, fanout, completionFlag, promptText] in
                 // Subscribe to the session-lifetime fanout (NOT the SDK's
                 // `client.notifications` — that's single-consumer; re-acquiring
                 // it per turn was cause 6). Turns are serialized by the
@@ -418,10 +461,10 @@ public actor ACPBackend: AgentBackend {
                 defer { drainTask.cancel() }
 
                 do {
-                    DebugLog.agent("ACPBackend: sending session/prompt (\(turn.userText.count) chars)") // TEMP DEBUG (existed; re-tagged)
+                    DebugLog.agent("ACPBackend: sending session/prompt (\(promptText.count) chars)") // TEMP DEBUG (existed; re-tagged)
                     let response = try await client.sendPrompt(
                         sessionId: sessionId,
-                        content: [.text(TextContent(text: turn.userText))]
+                        content: [.text(TextContent(text: promptText))]
                     )
                     // If the watchdog already resolved the turn (e.g. it fired
                     // just as sendPrompt returned), skip — continuation is done.
@@ -575,6 +618,52 @@ public actor ACPBackend: AgentBackend {
         return AgentSpawnConfig(
             executablePath: path, arguments: args, workingDirectory: cwd, apiKey: apiKey,
             environment: environment)
+    }
+
+    /// Writes the system prompt to the agent's working directory as both
+    /// `CLAUDE.md` and `AGENTS.md` — the spec-compliant delivery mechanism.
+    ///
+    /// ACP's `NewSessionRequest` has no `systemPrompt` field; the spec models
+    /// system context as a `CLAUDE.md` in the cwd (the same path the File
+    /// Provider projection uses at the wiki root, but the projection is
+    /// optional for unsigned dev builds). Both filenames are written because
+    /// the maintainability schema (`plans/llm-wiki.md` Phase D) projects both;
+    /// reading from either works.
+    ///
+    /// No-op when `systemPrompt` is empty (preserves the caller-relying-on-
+    /// projection-alone behavior). Internal so it is directly unit-testable
+    /// from `@testable import WikiFSEngine` without spawning a subprocess.
+    static func deliverSystemPrompt(_ systemPrompt: String, to workingDir: String) {
+        guard !systemPrompt.isEmpty else { return }
+        let dirURL = URL(fileURLWithPath: workingDir)
+        for filename in ["CLAUDE.md", "AGENTS.md"] {
+            let url = dirURL.appendingPathComponent(filename)
+            do {
+                try systemPrompt.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                DebugLog.agent("ACPBackend.deliverSystemPrompt: failed to write \(filename) to scratch dir: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Injects the system prompt into the first user message text — agent-agnostic
+    /// delivery (issue #427). Unlike the file writes (`deliverSystemPrompt`),
+    /// which require the agent to read `CLAUDE.md`/`AGENTS.md` from cwd (Claude
+    /// Code does; OpenCode, Hermes, Pi may not), every ACP agent processes the
+    /// `session/prompt` user text, so this is deterministic.
+    ///
+    /// The system prompt is prepended with a clear delimiter so the agent can
+    /// distinguish the steering from the actual user request. Internal so it is
+    /// directly unit-testable.
+    static func injectSystemPrompt(_ systemPrompt: String, into userText: String) -> String {
+        guard !systemPrompt.isEmpty else { return userText }
+        return """
+        \(systemPrompt)
+
+        ---
+        # YOUR TASK
+        \(userText)
+        """
     }
 
     /// The events synthesized at `session/prompt` completion (the ACP turn

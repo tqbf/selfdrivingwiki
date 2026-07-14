@@ -36,7 +36,7 @@ public enum PageCommand {
         /// (the `head_version_id` the caller read before editing); when non-nil,
         /// the upsert routes through `appendPageVersion` and a mismatch throws
         /// `PageConflictError` (Phase 1: agent CAS writes).
-        case upsert(id: PageID?, title: String, body: String, expectHead: String? = nil, workspace: String? = nil)
+        case upsert(id: PageID?, title: String, body: String, expectHead: String? = nil, workspace: String? = nil, author: String? = nil)
         case delete(id: PageID)
         /// Semantic search: find pages by meaning (cosine similarity via
         /// sqlite-vec), falling back to LIKE title match.
@@ -78,8 +78,8 @@ public enum PageCommand {
             return try list(in: store, json: json)
         case .get(let selector, let json, let workspace):
             return try get(selector, in: store, json: json, workspace: workspace)
-        case .upsert(let id, let title, let body, let expectHead, let workspace):
-            return try upsert(id: id, title: title, body: body, expectHead: expectHead, workspace: workspace, in: store, validator: validator, linter: linter)
+        case .upsert(let id, let title, let body, let expectHead, let workspace, let author):
+            return try upsert(id: id, title: title, body: body, expectHead: expectHead, workspace: workspace, author: author, in: store, validator: validator, linter: linter)
         case .delete(let id):
             return try delete(id: id, in: store)
         case .search(let query, let limit):
@@ -213,6 +213,7 @@ public enum PageCommand {
         body: String,
         expectHead: String? = nil,
         workspace: String? = nil,
+        author: String? = nil,
         in store: WikiStore,
         validator: MermaidValidator?,
         linter: MarkdownLinter?
@@ -262,7 +263,7 @@ public enum PageCommand {
         //    the in-app editor, so the link graph stays consistent across both
         //    writers.
         let outcome = try PageUpsert.upsert(in: store, id: id, title: title, body: fixed,
-                                             expectedHeadVersionID: expectHead)
+                                             expectedHeadVersionID: expectHead, author: author)
         return Result(output: outcome.id.rawValue, didCommit: true)
     }
 
