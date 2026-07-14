@@ -985,15 +985,14 @@ public final class AgentLauncher {
                 resolvedCommand: resolvedACPCommand,
                 apiKey: acpAPIKey,
                 selectedModelId: providersConfig().selectedModelId(forProvider: provider.id))
-        // Phase 7: inject the workspace ID as a per-spawn env var (NOT
-        // process-global setenv — which would leak to chat-edit agents spawned
-        // mid-ingest via the interactive lane). The `env.` prefix is the
-        // established convention: `ACPBackend.start` expands env.* keys into
-        // the child process environment. Non-workspace runs pass nil → no
-        // injection.
         if let wsID = workspaceID {
             providerHints["env.WIKI_WORKSPACE"] = wsID
         }
+        // #397: inject the author provenance into the child env so agent-written
+        // pages carry created_by/last_edited_by "for free" — no agent action needed.
+        // The launcher resolves it from the operation kind (one-shot runs) or the
+        // chatID (interactive runs). An explicit `--author` on wikictl still wins.
+        providerHints["env.WIKI_AUTHOR"] = Self.authorForRun(kind: operation.kind, chatID: nil)
         let profile = BackendProfile(
             providerHints: providerHints,
             scratchDirectory: scratch,
@@ -1541,6 +1540,16 @@ public final class AgentLauncher {
         return errno == EPERM
     }
 
+    /// Resolve the `created_by`/`last_edited_by` provenance string stamped on
+    /// agent-written pages (#397). Chat-driven writes get `chat:<chatID>` so the
+    /// provenance links back to the originating conversation; standalone one-shot
+    /// runs (ingest/lint/query) get `agent:<kind>`. The `WIKI_AUTHOR` env var
+    /// carries this into `wikictl`, where an explicit `--author` flag overrides it.
+    static func authorForRun(kind: WikiOperation.Kind, chatID: String?) -> String {
+        if let chatID { return "chat:\(chatID)" }
+        return "agent:\(kind.rawValue)"
+    }
+
     /// Start a stdin-backed query chat. The first user message is sent
     /// immediately after the process launches (via `sendInteractiveMessage`, which
     /// acquires the generation gate for that first turn). Later turns use
@@ -1692,11 +1701,21 @@ public final class AgentLauncher {
                 Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
             })
         let profile = BackendProfile(
-            providerHints: AgentBackendFactory.providerHints(
-                provider: provider,
-                resolvedCommand: resolvedACPCommand,
-                apiKey: acpAPIKey,
-                selectedModelId: providersConfig().selectedModelId(forProvider: provider.id)),
+            providerHints: {
+                var hints = AgentBackendFactory.providerHints(
+                    provider: provider,
+                    resolvedCommand: resolvedACPCommand,
+                    apiKey: acpAPIKey,
+                    selectedModelId: providersConfig().selectedModelId(forProvider: provider.id))
+                // #397: chat-driven writes carry `chat:<chatID>` as their author
+                // provenance so created_by/last_edited_by points back to the
+                // originating conversation (resolvable via [[chat:…]]). An explicit
+                // `--author` on `wikictl page upsert` overrides this.
+                if let chatID {
+                    hints["env.WIKI_AUTHOR"] = "chat:\(chatID)"
+                }
+                return hints
+            }(),
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: cli)

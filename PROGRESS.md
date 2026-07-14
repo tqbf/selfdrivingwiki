@@ -2,6 +2,38 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-13 — wikictl author provenance (issue #397)
+
+**Implemented.** `wikictl page upsert` now records agent/chat provenance on
+every write — `created_by`/`last_edited_by` are no longer `nil` for
+agent-written pages.
+
+- **`--author <who>` flag** on `wikictl page upsert`, threaded through
+  `PageCommand.Action.upsert` → `PageUpsert.upsert(author:)` →
+  `createPage(createdBy:)` / `updatePage(lastEditedBy:)`.
+- **`WIKI_AUTHOR` env var** auto-applies when `--author` isn't passed (mirrors
+  the existing `WIKI_WORKSPACE` injection). The launcher sets it "for free" so
+  agents never have to remember: chat-driven writes get `chat:<chatID>`,
+  one-shot runs get `agent:<kind>` (ingest/lint/query). Explicit `--author`
+  always wins. Moved `applyEnv` from `wikictl/main.swift` into
+  `ArgumentParser.applyEnv` (now `public`, testable).
+- **`AgentLauncher`** injects `env.WIKI_AUTHOR` into `providerHints` at both
+  spawn paths (`run` one-shot, `startInteractiveQuery` chat).
+
+**Tests added** (105 in WikiCtlCommandTests + AgentCASTests all green):
+`--author` parsing; `WIKI_AUTHOR` env routing (stamps when absent, explicit
+flag wins, ignored when env empty); end-to-end provenance on create + update
+(create sets both, update sets only `last_edited_by`).
+
+**Scope notes.** Workspace writes (`--workspace`) stage to `page_versions`
+without `last_edited_by` (provenance flows to `pages` on merge — deferred).
+Source-ingestion provenance is out of scope (#397's "consider" item). The 9
+`user_version == 36` failures in the fast tier pre-exist (schema was bumped to
+36 by the chat-summary #411 commit; those test expectations weren't updated) —
+unrelated to this change.
+
+See [`plans/wikictl-author-provenance.md`](plans/wikictl-author-provenance.md).
+
 ## 2026-07-13 — Chat Summary (issue #411)
 
 **Implemented.** The sidebar's `RecentChatRow` now shows a one-line summary of

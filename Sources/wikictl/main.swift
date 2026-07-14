@@ -62,7 +62,7 @@ func run() async -> Int32 {
     // it auto-applies --workspace to page get/upsert and index set commands
     // that don't already pass --workspace explicitly. This lets the agent
     // subprocess use plain `wikictl` commands without knowing the workspace ID.
-    let command = applyWorkspaceEnv(invocation.command, env: ProcessInfo.processInfo.environment)
+    let command = ArgumentParser.applyEnv(invocation.command, env: ProcessInfo.processInfo.environment)
 
     do {
         // Try the daemon first for wiki resolution. If the daemon isn't running,
@@ -121,27 +121,6 @@ func run() async -> Int32 {
     }
 }
 
-/// Phase 7: Apply the `WIKI_WORKSPACE` environment variable to commands that
-/// support `--workspace` but don't already have one set. This lets the agent
-/// subprocess use plain `wikictl page get/upsert` / `index set` commands and
-/// have them automatically routed to the ingest's workspace — the runner sets
-/// the env var before launching the agent process.
-func applyWorkspaceEnv(_ command: ArgumentParser.Command, env: [String: String]) -> ArgumentParser.Command {
-    guard let workspaceID = env["WIKI_WORKSPACE"], !workspaceID.isEmpty else {
-        return command
-    }
-    switch command {
-    case .get(let selector, let json, let workspace) where workspace == nil:
-        return .get(selector, json: json, workspace: workspaceID)
-    case .upsert(let id, let title, let bodyFile, let expectHead, let workspace) where workspace == nil:
-        return .upsert(id: id, title: title, bodyFile: bodyFile, expectHead: expectHead, workspace: workspaceID)
-    case .indexSet(let bodyFile, let workspace) where workspace == nil:
-        return .indexSet(bodyFile: bodyFile, workspace: workspaceID)
-    default:
-        return command
-    }
-}
-
 /// Execute a parsed `Command`, dispatching to `PageCommand` (the `page …` family),
 /// `LogIndexCommand` (the Phase-B `log append` / `index set`), or `SourceCommand`
 /// (the `source …` family for raw source reads). The deferred body read (`-` = stdin,
@@ -157,9 +136,9 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
     case .delete(let id):
         let r = try PageCommand.run(.delete(id: id), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
-    case .upsert(let id, let title, let bodyFile, let expectHead, let workspace):
+    case .upsert(let id, let title, let bodyFile, let expectHead, let workspace, let author):
         let body = try readBody(from: bodyFile)
-        let r = try PageCommand.run(.upsert(id: id, title: title, body: body, expectHead: expectHead, workspace: workspace), in: store)
+        let r = try PageCommand.run(.upsert(id: id, title: title, body: body, expectHead: expectHead, workspace: workspace, author: author), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .logAppend(let kind, let title, let note, let source):
         let r = try LogIndexCommand.run(.logAppend(kind: kind, title: title, note: note, source: source), in: store)

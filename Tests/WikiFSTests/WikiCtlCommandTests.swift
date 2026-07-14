@@ -70,12 +70,12 @@ struct WikiCtlCommandTests {
     @Test func parsesUpsertWithAndWithoutID() throws {
         let create = try ArgumentParser.parse(
             ["--wiki", "W", "page", "upsert", "--title", "T", "--body-file", "-"], env: noEnv)
-        #expect(create.command == .upsert(id: nil, title: "T", bodyFile: "-"))
+        #expect(create.command == .upsert(id: nil, title: "T", bodyFile: "-", author: nil))
 
         let update = try ArgumentParser.parse(
             ["--wiki", "W", "page", "upsert", "--title", "T", "--id", "01X", "--body-file", "body.md"],
             env: noEnv)
-        #expect(update.command == .upsert(id: PageID(rawValue: "01X"), title: "T", bodyFile: "body.md"))
+        #expect(update.command == .upsert(id: PageID(rawValue: "01X"), title: "T", bodyFile: "body.md", author: nil))
     }
 
     @Test func upsertRequiresTitleAndBodyFile() {
@@ -87,6 +87,59 @@ struct WikiCtlCommandTests {
             try ArgumentParser.parse(
                 ["--wiki", "W", "page", "upsert", "--title", "T"], env: noEnv)
         }
+    }
+
+    @Test func parsesUpsertAuthorFlag() throws {
+        let inv = try ArgumentParser.parse(
+            ["--wiki", "W", "page", "upsert", "--title", "T", "--body-file", "-",
+             "--author", "chat:01ABC"],
+            env: noEnv)
+        guard case .upsert(_, _, _, _, _, let author) = inv.command else {
+            Issue.record("expected .upsert")
+            return
+        }
+        #expect(author == "chat:01ABC")
+    }
+
+    // MARK: - WIKI_AUTHOR env var routing (#397)
+
+    @Test func wikiAuthorEnvStampsProvenanceWhenFlagAbsent() throws {
+        let inv = try ArgumentParser.parse(
+            ["--wiki", "W", "page", "upsert", "--title", "T", "--body-file", "-"],
+            env: { _ in nil })
+        let applied = ArgumentParser.applyEnv(
+            inv.command, env: ["WIKI_AUTHOR": "chat:01DEF"])
+        guard case .upsert(_, _, _, _, _, let author) = applied else {
+            Issue.record("expected .upsert")
+            return
+        }
+        #expect(author == "chat:01DEF")
+    }
+
+    @Test func explicitAuthorFlagWinsOverEnv() throws {
+        let inv = try ArgumentParser.parse(
+            ["--wiki", "W", "page", "upsert", "--title", "T", "--body-file", "-",
+             "--author", "agent:ingest"],
+            env: { _ in nil })
+        let applied = ArgumentParser.applyEnv(
+            inv.command, env: ["WIKI_AUTHOR": "chat:01DEF"])
+        guard case .upsert(_, _, _, _, _, let author) = applied else {
+            Issue.record("expected .upsert")
+            return
+        }
+        #expect(author == "agent:ingest")
+    }
+
+    @Test func wikiAuthorEnvIgnoredWhenAbsent() throws {
+        let inv = try ArgumentParser.parse(
+            ["--wiki", "W", "page", "upsert", "--title", "T", "--body-file", "-"],
+            env: { _ in nil })
+        let applied = ArgumentParser.applyEnv(inv.command, env: [:])
+        guard case .upsert(_, _, _, _, _, let author) = applied else {
+            Issue.record("expected .upsert")
+            return
+        }
+        #expect(author == nil)
     }
 
     @Test func parsesDelete() throws {
@@ -144,6 +197,38 @@ struct WikiCtlCommandTests {
         let resolvedID = try store.resolveTitleToID("Created")?.rawValue
         #expect(result.output == resolvedID)
         #expect(try store.getPage(id: PageID(rawValue: result.output)).bodyMarkdown == "hello")
+    }
+
+    @Test func upsertWithoutAuthorLeavesProvenanceNil() throws {
+        let store = try tempStore()
+        let result = try PageCommand.run(
+            .upsert(id: nil, title: "NoProv", body: "hi"), in: store)
+        let page = try store.getPage(id: PageID(rawValue: result.output))
+        #expect(page.createdBy == nil)
+        #expect(page.lastEditedBy == nil)
+    }
+
+    @Test func upsertWithAuthorStampsCreatedAndLastEditedBy() throws {
+        let store = try tempStore()
+        let result = try PageCommand.run(
+            .upsert(id: nil, title: "Prov", body: "v1",
+                    author: "chat:01ABC"), in: store)
+        let page = try store.getPage(id: PageID(rawValue: result.output))
+        #expect(page.createdBy == "chat:01ABC")
+        #expect(page.lastEditedBy == "chat:01ABC")
+    }
+
+    @Test func upsertWithAuthorOnUpdateSetsLastEditedByOnly() throws {
+        let store = try tempStore()
+        let created = try PageCommand.run(
+            .upsert(id: nil, title: "Edit", body: "v1",
+                    author: "user"), in: store)
+        _ = try PageCommand.run(
+            .upsert(id: PageID(rawValue: created.output), title: "Edit",
+                    body: "v2", author: "chat:01DEF"), in: store)
+        let page = try store.getPage(id: PageID(rawValue: created.output))
+        #expect(page.createdBy == "user")
+        #expect(page.lastEditedBy == "chat:01DEF")
     }
 
     @Test func getReturnsBodyAndDoesNotCommit() throws {
