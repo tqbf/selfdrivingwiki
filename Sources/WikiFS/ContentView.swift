@@ -19,7 +19,7 @@ struct ContentView: View {
     let extractionCoordinator: ExtractionCoordinator
     let queueEngine: QueueEngine
     let extractionProvider: any QueueExtractionProvider
-    @State private var isTranscriptExpanded = false
+    @State private var pendingAddURL: PendingAddURL?
     /// Driven by `.dropDestination`'s `isTargeted` callback to fade in a subtle
     /// accent border while a drag hovers the window (set via the closure param —
     /// no `Binding(get:set:)`).
@@ -28,7 +28,6 @@ struct ContentView: View {
     /// URL pre-fills the field — empty for the toolbar / empty-state buttons,
     /// the absolute URL for the right-click "Add as Source" item (set via the
     /// `\.addURLHandler` environment value).
-    @State private var pendingAddURL: PendingAddURL?
     @State private var showingImportMarkdown = false
     @State private var showingAddFromZotero = false
     @State private var showCloseTabAlert = false
@@ -92,22 +91,6 @@ struct ContentView: View {
             if columnVisibility == .detailOnly {
                 columnVisibility = .all
             }
-        }
-        .onChange(of: agentLauncher.isRunning) { _, isRunning in
-            if isRunning {
-                isTranscriptExpanded = true
-            }
-        }
-        // Auto-open the transcript the moment an ingest starts — even during the
-        // PDF-conversion phase, before the agent process spawns — so the
-        // conversion box is visible. The extraction phase now lives in
-        // `extractingSourceIDs` (distinct from the agent-phase `ingestingSourceIDs`),
-        // so observe both: a pure extraction should also surface the transcript.
-        .onChange(of: tracker.ingestingSourceIDs) { _, newValue in
-            if !newValue.isEmpty { isTranscriptExpanded = true }
-        }
-        .onChange(of: tracker.extractingSourceIDs) { _, newValue in
-            if !newValue.isEmpty { isTranscriptExpanded = true }
         }
         // Close-while-editing guard: fires for any tab with isEditing set.
         .onChange(of: store.pendingCloseTabID) { _, id in
@@ -203,14 +186,6 @@ struct ContentView: View {
     /// The agent is doing work — running, or in a local pdf2md extraction / an
     /// agent-phase ingest (the extraction phase precedes the agent process).
     /// Drives the toolbar glow. Both phase flags are included so the glow stays
-    /// on during a pure extraction; the cross-file Ingest greyout is NOT driven
-    /// here (that is `isAnySourceIngesting` = `!ingestingSourceIDs.isEmpty` only).
-    private var agentBusy: Bool {
-        agentLauncher.isGenerating
-            || !tracker.ingestingSourceIDs.isEmpty
-            || !tracker.extractingSourceIDs.isEmpty
-    }
-
     private var zoteroContainerDirectory: URL {
         (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
     }
@@ -218,19 +193,6 @@ struct ContentView: View {
     private var isZoteroConfigured: Bool {
         ZoteroConfig.load(from: zoteroContainerDirectory).isConfigured
             && KeychainZoteroCredentialStore().apiKey() != nil
-    }
-
-    private var canShowTranscript: Bool {
-        agentLauncher.isRunning
-            || !tracker.ingestingSourceIDs.isEmpty
-            || !tracker.extractingSourceIDs.isEmpty
-            || !agentLauncher.events.isEmpty
-            || agentLauncher.preflightError != nil
-            || !agentLauncher.stderr.isEmpty
-    }
-
-    private func toggleTranscript() {
-        isTranscriptExpanded.toggle()
     }
 
     /// The active wiki's display name (as shown in the toolbar's `WikiSwitcher`),
@@ -273,15 +235,8 @@ struct ContentView: View {
                 }
                 wikiDetailPane
             }
-            .animation(.easeInOut(duration: 0.18), value: store.tabs.count > 1)
-
-            if isTranscriptExpanded {
-                Divider()
-                AgentActivitySidebar(launcher: agentLauncher, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isTranscriptExpanded)
+        .animation(.easeInOut(duration: 0.18), value: store.tabs.count > 1)
         // Measure the detail column's width — the span the toolbar covers — and
         // feed it to the omnibox. Measuring here is reliable in every state the
         // field's own leading edge is not: this view never lands in toolbar
@@ -318,8 +273,6 @@ struct ContentView: View {
             ToolbarItem(placement: .primaryAction) {
                 WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
             }
-
-            primaryToolbarItems()
         }
         // Suppress the window title so the omnibox owns the toolbar. `.navigationTitle("")`
         // alone only empties the *text* — the toolbar still reserves ~160pt for the
@@ -399,30 +352,6 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Toolbar
-
-    @ToolbarContentBuilder
-    private func primaryToolbarItems() -> some ToolbarContent {
-        transcriptToolbarItem()
-    }
-
-    @ToolbarContentBuilder
-    private func transcriptToolbarItem() -> some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            Button("Toggle Transcript", systemImage: "sidebar.trailing") {
-                toggleTranscript()
-            }
-            // The panel can ALWAYS be closed when it's open — `canShowTranscript`
-            // only gates OPENING it when closed. Without this, a panel that
-            // auto-expanded during a now-finished extract (no run, no events, no
-            // stderr left) leaves `canShowTranscript == false`, disabling the only
-            // close affordance and stranding the sidebar open.
-            .disabled(!isTranscriptExpanded && !canShowTranscript)
-            .foregroundStyle(agentBusy ? Color.orange : Color.primary)
-            .symbolEffect(.pulse, isActive: agentBusy)
-            .help(isTranscriptExpanded ? "Hide agent transcript" : "Show agent transcript")
-        }
-    }
 }
 
 /// The "Add from URL" sheet's presentation payload: the URL to pre-fill the

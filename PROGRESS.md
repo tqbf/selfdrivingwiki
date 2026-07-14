@@ -9,6 +9,7 @@ Newest first. To get up to speed: read `PLAN.md` then this file.
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 ## 2026-07-14 — Stop committing generated codegen files
 
 `GeneratedVersion.swift` (git SHA → Swift) and `GeneratedPrompts.swift` (prompt
@@ -69,6 +70,9 @@ See [`plans/wikictl-author-provenance.md`](plans/wikictl-author-provenance.md).
 =======
 ## 2026-07-14 — Queue Engine: extraction, ingestion & menu-bar UI (Phases 1–6)
 >>>>>>> 0bf7262 (feat: Queue Engine Phase 6 — menu-bar status item & background mode)
+=======
+## 2026-07-14 — Queue Engine: full implementation (Phases 1–7)
+>>>>>>> 803644d (feat: Queue Engine Phase 7 — remove AgentActivitySidebar)
 
 A persistent, app-wide extraction and ingestion work queue backed by a new
 `queue.sqlite` in the App Group container. Items survive relaunch, schedule
@@ -307,8 +311,17 @@ pause/resume/halt controls and per-row cancel/retry. The app drops to
 menu-bar-only (accessory) mode when the last window closes — queue work keeps
 running in the background. Reopening a window restores normal dock presence.
 
+<<<<<<< HEAD
 **Not yet done:** Sidebar removal (Phase 7).
 >>>>>>> 0bf7262 (feat: Queue Engine Phase 6 — menu-bar status item & background mode)
+=======
+**Phase 7 — sidebar removal:** Deleted `AgentActivitySidebar`, `AgentRunBanner`,
+and `PdfExtractionView` — their duties are now served by the menu-bar popover
+(queue state + controls), the `QueueActivityTracker` (source row status), and
+`ChatView`'s inline stop control. `LintView` now shows the agent transcript
+inline instead of in a sidebar. The transcript toggle toolbar button and
+`isTranscriptExpanded` state are removed from `ContentView`.
+>>>>>>> 803644d (feat: Queue Engine Phase 7 — remove AgentActivitySidebar)
 
 ## 2026-07-13 — Chat Summary (issue #411)
 

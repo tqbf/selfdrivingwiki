@@ -39,7 +39,29 @@ struct LintView: View {
 
             Divider().opacity(PageEditorMetrics.dividerOpacity)
 
-            AgentActivitySidebar(launcher: launcher, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
+            // Inline agent transcript (sidebar removed in Phase 7).
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Label("Agent Activity", systemImage: "sparkles")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                    Spacer()
+                    if launcher.isRunning {
+                        Button("Stop Agent", systemImage: "stop.fill") {
+                            launcher.stopAgent()
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.red)
+                        .help("Stop the agent run")
+                    }
+                }
+                AgentActivityView(
+                    launcher: launcher,
+                    showsInternals: false,
+                    onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
+            }
+            .padding(PageEditorMetrics.contentInset)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .textBackgroundColor))
