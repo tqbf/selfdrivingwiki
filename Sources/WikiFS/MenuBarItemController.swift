@@ -222,7 +222,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             let window = NSWindow(contentViewController: NSHostingController(rootView: contentView))
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.toolbarStyle = .unified
-            window.title = queue == .extraction ? "Extraction" : "Ingestion"
+            window.titleVisibility = .hidden
             window.setContentSize(NSSize(width: 760, height: 500))
             window.isReleasedWhenClosed = false
             // Center first; the autosave name then restores any saved frame
@@ -231,7 +231,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             // per queue so the two windows keep independent frames.
             window.center()
             window.setFrameAutosaveName(
-                queue == .extraction ? "ExtractionActivityWindow" : "IngestionActivityWindow")
+                queue == .extraction ? "ExtractionQueueWindow" : "AgentQueueWindow")
             queueWindows[queue] = window
         }
         queueWindows[queue]?.makeKeyAndOrderFront(nil)
