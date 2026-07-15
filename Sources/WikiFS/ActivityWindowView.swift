@@ -389,12 +389,14 @@ struct ActivityWindowView: View {
                 } description: {
                     Text("Output will appear when this item starts.")
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             default:
                 ContentUnavailableView {
                     Label("No Transcript", systemImage: "doc.plaintext")
                 } description: {
                     Text("No output was recorded for this item.")
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
