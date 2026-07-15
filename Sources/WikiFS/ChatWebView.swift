@@ -533,13 +533,27 @@ struct ChatWebView: NSViewRepresentable {
         /// `name` is nil for tool results; `summary` carries the command/output text.
         private static func feedToolRowHTML(name: String?, summary: String, isError: Bool) -> String {
             let nameHTML = name.map { "<span class=\"row-tool-name\">\(escape($0))</span>" } ?? ""
-            let summaryHTML = summary.isEmpty ? "" : "<span class=\"row-tool-summary\">\(escape(summary))</span>"
             if summary.isEmpty {
-                return "<div class=\"row row-tool\(isError ? " is-error" : "")\">\(nameHTML)\(summaryHTML)</div>"
+                return "<div class=\"row row-tool\(isError ? " is-error" : "")\">\(nameHTML)</div>"
+            }
+            // The collapsed header shows ONLY a truncated first line — putting
+            // the whole summary in <summary> renders the full multi-line text
+            // even while "collapsed", with the expandable body a duplicate.
+            let firstLine = String(summary.split(separator: "\n", maxSplits: 1,
+                                                 omittingEmptySubsequences: false).first ?? "")
+            let truncated = summary.contains("\n") || firstLine.count > 120
+            let preview = firstLine.count > 120
+                ? String(firstLine.prefix(120)) + "\u{2026}"
+                : firstLine + (summary.contains("\n") ? " \u{2026}" : "")
+            let previewHTML = "<span class=\"row-tool-summary\">\(escape(preview))</span>"
+            // Short single-line summaries have nothing to expand into — render
+            // a flat row instead of a pointless disclosure triangle.
+            guard truncated else {
+                return "<div class=\"row row-tool\(isError ? " is-error" : "")\">\(nameHTML)\(previewHTML)</div>"
             }
             return """
             <details class="row row-tool collapsible\(isError ? " is-error" : "")">\
-            <summary>\(nameHTML)\(summaryHTML)</summary>\
+            <summary>\(nameHTML)\(previewHTML)</summary>\
             <pre class="collapsible-detail">\(escape(summary))</pre></details>
             """
         }
