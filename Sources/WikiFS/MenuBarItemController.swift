@@ -114,22 +114,6 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     }
 
     private func buildMenu(_ menu: NSMenu, snapshot: QueueSnapshot) {
-        let activeCount = snapshot.activeItems.count
-        let recentCount = snapshot.recentItems.count
-
-        // Header: queue counts. (Individual items live in the per-queue
-        // windows, not the menu — a dropdown of truncated item rows was
-        // noise, and clicking any of them opened the same window anyway.)
-        let headerItem = NSMenuItem(
-            title: activeCount == 0
-                ? recentCount == 0 ? "No activity" : "\(recentCount) recent"
-                : "\(activeCount) active • \(recentCount) recent",
-            action: nil, keyEquivalent: "")
-        headerItem.isEnabled = false
-        menu.addItem(headerItem)
-
-        menu.addItem(.separator())
-
         // Per-queue windows.
         let ingestionItem = NSMenuItem(
             title: "Agent Queue…",
