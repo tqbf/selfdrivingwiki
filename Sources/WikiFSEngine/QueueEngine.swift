@@ -297,16 +297,22 @@ public actor QueueEngine {
     public func makeEmitTranscript() -> @Sendable (QueueItem.ID, AgentEvent) -> Void {
         return { [broadcaster, store] id, event in
             broadcaster.yield(.transcript(id, event))
-            // Persist to SQLite for cross-session transcript survival.
+            // Persist to SQLite for cross-session transcript survival —
+            // final events only. Streaming deltas / turn boundaries are
+            // display plumbing; the final `.assistantText` carries the full
+            // text, so persisting every delta bloats rows AND rehydrates as
+            // one row per word-fragment.
+            guard event.isPersistable else { return }
             try? store.appendItemEvent(itemID: id, event: event)
         }
     }
 
     /// Load persisted agent events (transcript) for a queue item from the DB.
     /// Used by the Activity tracker to show transcripts for items rehydrated
-    /// from a previous session.
+    /// from a previous session. Deltas are folded into whole rows on the way
+    /// out — rows persisted before deltas were filtered contain fragments.
     public func loadTranscript(for itemID: QueueItem.ID) async -> [AgentEvent] {
-        (try? store.loadItemEvents(itemID: itemID)) ?? []
+        AgentEvent.mergingStreamDeltas((try? store.loadItemEvents(itemID: itemID)) ?? [])
     }
 
     /// Delete persisted events for an item (e.g. on retry).

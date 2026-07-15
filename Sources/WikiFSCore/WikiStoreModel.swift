@@ -112,6 +112,12 @@ public final class WikiStoreModel {
 
     /// The sidebar selection: a page, the system-prompt document, or nothing.
     public var selection: WikiSelection?
+
+    /// Whether the trailing change-log sidebar (`log.md`) is shown in this
+    /// wiki's window. Hidden by default; toggled from the window toolbar.
+    /// Lives on the store (not view `@State`) so the sidebar's own close
+    /// button and the toolbar toggle share one source of truth.
+    public var isChangeLogSidebarVisible = false
     public private(set) var backStack: [WikiSelection] = []
     public private(set) var forwardStack: [WikiSelection] = []
 

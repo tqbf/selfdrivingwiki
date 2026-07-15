@@ -186,6 +186,41 @@ public enum AgentEvent: Equatable, Sendable, Codable {
         default: return false
         }
     }
+
+    /// Fold a stream of raw events into display rows: consecutive
+    /// `.assistantTextDelta` chunks accumulate into ONE `.assistantText` row,
+    /// and the final `.assistantText` for a streamed block replaces the
+    /// accumulated row instead of duplicating it. This is the same merge
+    /// `AgentLauncher.mergeOrAppend` applies to its live `events` array —
+    /// any OTHER consumer of the raw stream (queue transcripts, rehydrated
+    /// histories) must apply it too, or a streamed reply renders as one row
+    /// per word-fragment.
+    public static func mergingStreamDeltas(_ events: [AgentEvent]) -> [AgentEvent] {
+        var merged: [AgentEvent] = []
+        var isStreamingRow = false
+        for event in events {
+            switch event {
+            case .assistantTextDelta(let delta):
+                if isStreamingRow, case .assistantText(let existing) = merged.last {
+                    merged[merged.count - 1] = .assistantText(existing + delta)
+                } else {
+                    merged.append(.assistantText(delta))
+                    isStreamingRow = true
+                }
+            case .assistantText:
+                if isStreamingRow, case .assistantText = merged.last {
+                    merged[merged.count - 1] = event
+                } else {
+                    merged.append(event)
+                }
+                isStreamingRow = false
+            default:
+                merged.append(event)
+                isStreamingRow = false
+            }
+        }
+        return merged
+    }
 }
 
 /// Tolerant line-at-a-time parser for `claude -p --output-format stream-json`

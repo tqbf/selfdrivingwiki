@@ -235,8 +235,19 @@ struct ContentView: View {
                 }
                 wikiDetailPane
             }
+
+            // Trailing change-log sidebar (hidden by default; toggled from the
+            // toolbar). Same in-column pattern as the transcript above: the
+            // content compresses inwards rather than the window growing.
+            if store.isChangeLogSidebarVisible {
+                Divider()
+                ChangeLogDetailView(store: store, compact: true)
+                    .frame(width: 340)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .animation(.easeInOut(duration: 0.18), value: store.tabs.count > 1)
+        .animation(.easeInOut(duration: 0.18), value: store.isChangeLogSidebarVisible)
         // Measure the detail column's width — the span the toolbar covers — and
         // feed it to the omnibox. Measuring here is reliable in every state the
         // field's own leading edge is not: this view never lands in toolbar
@@ -272,6 +283,18 @@ struct ContentView: View {
             // trailing the omnibox (like a browser account / profile control).
             ToolbarItem(placement: .primaryAction) {
                 WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
+            }
+
+            // Change-log sidebar toggle, trailing the switcher — the standard
+            // inspector-toggle position (rightmost, like Notes/Freeform).
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    store.isChangeLogSidebarVisible.toggle()
+                } label: {
+                    Label("Change Log", systemImage: "sidebar.trailing")
+                }
+                .help(store.isChangeLogSidebarVisible
+                    ? "Hide Change Log" : "Show Change Log")
             }
         }
         // Suppress the window title so the omnibox owns the toolbar. `.navigationTitle("")`

@@ -281,11 +281,10 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         await changeSignaler.signalChange()
         let root = changeSignaler.path ?? ""
 
-        // Wire the launcher's per-event callback so typed agent events are
-        // forwarded to the queue's transcript tracker (for the Activity window).
-        // Cleared in `launcher.finish()` / `resetRunArtifacts()`.
-        DebugLog.ingest("AppQueueIngestionProvider.runAgent: setting onAgentEvent, onTranscript is \(onTranscript == nil ? "nil" : "set")")
-        launcher.onAgentEvent = onTranscript
+        // Forward typed agent events to the queue's transcript tracker via the
+        // run parameter — assigning `launcher.onAgentEvent` here is a bug:
+        // `run()` clears that property in `resetRunArtifacts()` before spawning.
+        DebugLog.ingest("AppQueueIngestionProvider.runAgent: onTranscript is \(onTranscript == nil ? "nil" : "set")")
 
         await launcher.run(
             request: request,
@@ -295,6 +294,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             wikictlDirectory: wikictlDirectory,
             ingestingSourceIDs: ingestingSourceIDs,
             workspaceID: workspaceID,
+            onEvent: onTranscript,
             onLock: { store.agentRunStarted() },
             onUnlock: {
                 store.agentRunEnded()
@@ -319,8 +319,6 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         await changeSignaler.signalChange()
         let root = changeSignaler.path ?? ""
 
-        launcher.onAgentEvent = onTranscript
-
         await launcher.run(
             request: request,
             wikiID: wikiID,
@@ -329,6 +327,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             wikictlDirectory: wikictlDirectory,
             ingestingSourceIDs: [],
             workspaceID: nil,
+            onEvent: onTranscript,
             onLock: { store.agentRunStarted() },
             onUnlock: { store.agentRunEnded() }
         )

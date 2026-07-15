@@ -646,6 +646,10 @@ public final class AgentLauncher {
     ///   pure extraction or a queued ingest never sets it. Empty for query/lint
     ///   runs (the default), which keeps the flag clear and the cross-file Ingest
     ///   greyout unblocked. Cleared in `finish()`.
+    /// - `onEvent` is the per-event transcript callback for THIS run (Activity
+    ///   window). It MUST be passed here — not assigned to `onAgentEvent`
+    ///   before calling — because `resetRunArtifacts()` clears the property at
+    ///   the top of every run; the launcher installs it after the reset.
     public func run(
         request: OperationRequest,
         wikiID: String,
@@ -654,6 +658,7 @@ public final class AgentLauncher {
         wikictlDirectory: String,
         ingestingSourceIDs: Set<PageID> = [],
         workspaceID: String? = nil,
+        onEvent: (@Sendable (AgentEvent) -> Void)? = nil,
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void
     ) async {
@@ -685,6 +690,11 @@ public final class AgentLauncher {
         // fires only on a successful spawn, so a preflight/staging failure
         // does not increment the run counter.
         resetRunArtifacts()
+
+        // Install the per-run transcript callback AFTER the reset (which nils
+        // the property to keep a stale callback from receiving a new run's
+        // events).
+        onAgentEvent = onEvent
 
         // Resolved fresh at spawn time so Settings changes apply without a
         // restart.

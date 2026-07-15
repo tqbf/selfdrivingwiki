@@ -94,6 +94,12 @@ final class QueueActivityTracker {
     /// `extractingSourceIDs` when items finish.
     private var itemToSourceIDs: [QueueItem.ID: Set<PageID>] = [:]
 
+    /// Items whose transcript's last row is an in-progress streamed assistant
+    /// reply — the next `.assistantTextDelta` grows that row in place instead
+    /// of appending a new one (mirrors `AgentLauncher.mergeOrAppend`; without
+    /// this, a streamed reply renders as one row per word-fragment).
+    private var streamingTranscriptItemIDs: Set<QueueItem.ID> = []
+
     /// The currently running extraction item ID, for cancellation via
     /// `cancelExtraction()`.
     private var currentExtractionItemID: QueueItem.ID?
@@ -140,6 +146,7 @@ final class QueueActivityTracker {
         itemToSourceIDs.removeAll()
         transcripts.removeAll()
         progressLogs.removeAll()
+        streamingTranscriptItemIDs.removeAll()
     }
 
     // MARK: - Public API
@@ -166,12 +173,36 @@ final class QueueActivityTracker {
     }
 
     /// Append a typed event to the transcript for a queue item. Called from
-    /// the `.transcript` event handler. Bounded — drops oldest events beyond
-    /// `maxTranscriptEvents` per item, and prunes oldest items beyond
-    /// `maxTrackedItems`.
+    /// the `.transcript` event handler. Streamed `.assistantTextDelta` chunks
+    /// grow the last row in place (mirroring `AgentLauncher.mergeOrAppend`) —
+    /// appending them raw renders one row per word-fragment. Bounded — drops
+    /// oldest events beyond `maxTranscriptEvents` per item, and prunes oldest
+    /// items beyond `maxTrackedItems`.
     func appendTranscriptEvent(itemID: QueueItem.ID, event: AgentEvent) {
         var arr = transcripts[itemID, default: []]
-        arr.append(event)
+        switch event {
+        case .assistantTextDelta(let delta):
+            if streamingTranscriptItemIDs.contains(itemID),
+               case .assistantText(let existing) = arr.last {
+                arr[arr.count - 1] = .assistantText(existing + delta)
+            } else {
+                arr.append(.assistantText(delta))
+                streamingTranscriptItemIDs.insert(itemID)
+            }
+        case .assistantText:
+            // Authoritative full text for a block already being streamed —
+            // replace the accumulated row rather than duplicating it.
+            if streamingTranscriptItemIDs.contains(itemID),
+               case .assistantText = arr.last {
+                arr[arr.count - 1] = event
+            } else {
+                arr.append(event)
+            }
+            streamingTranscriptItemIDs.remove(itemID)
+        default:
+            arr.append(event)
+            streamingTranscriptItemIDs.remove(itemID)
+        }
         if arr.count > maxTranscriptEvents {
             arr.removeFirst(arr.count - maxTranscriptEvents)
         }
@@ -194,6 +225,7 @@ final class QueueActivityTracker {
     func pruneTranscripts(for itemID: QueueItem.ID) {
         transcripts.removeValue(forKey: itemID)
         progressLogs.removeValue(forKey: itemID)
+        streamingTranscriptItemIDs.remove(itemID)
     }
 
     /// The transcript for a given item ID (may be empty / nil).

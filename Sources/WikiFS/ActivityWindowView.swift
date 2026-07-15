@@ -2,25 +2,30 @@ import SwiftUI
 import WikiFSCore
 import WikiFSEngine
 
-/// The unified Activity window — replaces the menu-bar popover. A real
-/// `NSWindow` (not transient) that shows all queue items across all wikis,
-/// with expandable agent transcripts.
+/// A per-queue activity window — one instance shows the Ingestion queue, the
+/// other the Extraction queue, so the two pipelines read as the separate
+/// systems they are. A real `NSWindow` (not transient) listing this queue's
+/// items across all wikis, with expandable agent transcripts.
 ///
 /// **Sidebar (left):** A native `List` (keyboard navigation, real selection)
-/// with Active + Recent sections. Rows show the item kind, wiki, state, and a
-/// relative timestamp; running/queued rows get an inline Cancel, failed rows
-/// an inline Retry, and every row a context menu.
+/// with Active + Recent sections. Rows lead with the source filenames being
+/// processed (the thing the user recognizes), with wiki + relative time
+/// below; running/queued rows get an inline Cancel, failed rows an inline
+/// Retry, and every row a context menu.
 ///
-/// **Detail (right):** A header (kind, wiki, state, error, primary action)
+/// **Detail (right):** A header (sources, wiki, state, error, primary action)
 /// over the selected item's transcript — rendered via `ChatWebView` fed from
 /// `activityTracker.transcripts[itemID]`. For extraction items (which produce
 /// progress strings, not typed `AgentEvent`s), falls back to the accumulated
 /// progress text.
 ///
-/// **Toolbar:** Per-queue pause/resume/halt menus (global actions live in the
-/// top bar, per the macOS layout formula). Since lint runs on `.ingestion`,
-/// the Ingestion menu covers lint too.
+/// **Toolbar:** This queue's pause/resume/halt menu (global actions live in
+/// the top bar, per the macOS layout formula). Since lint runs on
+/// `.ingestion`, the Ingestion window covers lint too.
 struct ActivityWindowView: View {
+    /// Which queue this window shows. Items from the other queue are
+    /// filtered out of every snapshot read.
+    let queue: QueueKind
     let queueEngine: QueueEngine
     @Bindable var activityTracker: QueueActivityTracker
     weak var sessionManager: SessionManager?
@@ -30,6 +35,18 @@ struct ActivityWindowView: View {
     @State private var loadedEvents: [AgentEvent] = []
     @State private var didAutoSelect = false
 
+    private var queueTitle: String {
+        queue == .extraction ? "Extraction" : "Ingestion"
+    }
+
+    private var activeItems: [QueueItem] {
+        viewModel.snapshot.activeItems.filter { $0.queue == queue }
+    }
+
+    private var recentItems: [QueueItem] {
+        viewModel.snapshot.recentItems.filter { $0.queue == queue }
+    }
+
     var body: some View {
         NavigationSplitView {
             sidebar
@@ -38,29 +55,28 @@ struct ActivityWindowView: View {
             detailPane
         }
         .frame(minWidth: 640, minHeight: 400)
-        .navigationTitle("Activity")
+        .navigationTitle(queueTitle)
         .navigationSubtitle(subtitle)
         .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                queueControlMenu(.extraction)
-                queueControlMenu(.ingestion)
+            ToolbarItem(placement: .primaryAction) {
+                queueControlMenu
             }
         }
         .onAppear { viewModel.attach(engine: queueEngine) }
         .onDisappear { viewModel.detach() }
         // Auto-select the most interesting item once, when the first snapshot
         // lands — a window opened from "1 running" should show that run.
-        .onChange(of: viewModel.snapshot.activeItems.map(\.id)) { _, _ in
+        .onChange(of: activeItems.map(\.id)) { _, _ in
             autoSelectIfNeeded()
         }
-        .onChange(of: viewModel.snapshot.recentItems.map(\.id)) { _, _ in
+        .onChange(of: recentItems.map(\.id)) { _, _ in
             autoSelectIfNeeded()
         }
     }
 
     private var subtitle: String {
-        let active = viewModel.snapshot.activeItems.count
-        let recent = viewModel.snapshot.recentItems.count
+        let active = activeItems.count
+        let recent = recentItems.count
         if active == 0 && recent == 0 { return "" }
         if active == 0 { return "\(recent) recent" }
         return "\(active) active — \(recent) recent"
@@ -68,8 +84,7 @@ struct ActivityWindowView: View {
 
     private func autoSelectIfNeeded() {
         guard !didAutoSelect, selectedItemID == nil else { return }
-        if let first = viewModel.snapshot.activeItems.first
-            ?? viewModel.snapshot.recentItems.first {
+        if let first = activeItems.first ?? recentItems.first {
             selectedItemID = first.id
             didAutoSelect = true
         }
@@ -79,15 +94,11 @@ struct ActivityWindowView: View {
 
     @ViewBuilder
     private var sidebar: some View {
-        let active = viewModel.snapshot.activeItems
-        let recent = Array(viewModel.snapshot.recentItems.prefix(30))
+        let active = activeItems
+        let recent = Array(recentItems.prefix(30))
 
         if active.isEmpty && recent.isEmpty {
-            ContentUnavailableView {
-                Label("No Activity", systemImage: "checkmark.circle")
-            } description: {
-                Text("Extraction and ingestion tasks appear here.")
-            }
+            emptyState
         } else {
             List(selection: $selectedItemID) {
                 if !active.isEmpty {
@@ -111,14 +122,25 @@ struct ActivityWindowView: View {
         }
     }
 
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label("No \(queueTitle) Activity", systemImage: "checkmark.circle")
+        } description: {
+            Text(queue == .extraction
+                ? "PDF extraction tasks appear here as they run."
+                : "Ingestion and lint tasks appear here as they run.")
+        }
+    }
+
     @ViewBuilder
     private func itemRow(_ item: QueueItem) -> some View {
         HStack(spacing: 8) {
             statusView(for: item)
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 1) {
-                Text(kindLabel(for: item))
+                Text(rowTitle(for: item))
                     .lineLimit(1)
+                    .help(targetNames(for: item).joined(separator: "\n"))
                 Text(rowSubtitle(for: item))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -215,36 +237,35 @@ struct ActivityWindowView: View {
 
     // MARK: - Toolbar
 
-    /// Per-queue pause/resume/halt as a toolbar menu — global queue controls
-    /// belong in the top bar, not buried in list section headers.
+    /// This queue's pause/resume/halt as a toolbar menu — global queue
+    /// controls belong in the top bar, not buried in list section headers.
     @ViewBuilder
-    private func queueControlMenu(_ queue: QueueKind) -> some View {
+    private var queueControlMenu: some View {
         let state = viewModel.snapshot.runStates[queue] ?? .running
-        let title = queue == .extraction ? "Extraction" : "Ingestion"
         let icon = queue == .extraction ? "doc.text.magnifyingglass" : "tray.full"
         Menu {
             if state == .running {
-                Button("Pause \(title)", systemImage: "pause.fill") {
+                Button("Pause \(queueTitle)", systemImage: "pause.fill") {
                     Task { await queueEngine.pause(queue) }
                 }
             } else {
-                Button("Resume \(title)", systemImage: "play.fill") {
+                Button("Resume \(queueTitle)", systemImage: "play.fill") {
                     Task { await queueEngine.resume(queue) }
                 }
             }
             Divider()
-            Button("Stop All \(title)", systemImage: "stop.fill", role: .destructive) {
+            Button("Stop All \(queueTitle)", systemImage: "stop.fill", role: .destructive) {
                 Task { await queueEngine.halt(queue) }
             }
         } label: {
-            Label(title, systemImage: state == .paused ? "pause.circle.fill" : icon)
+            Label(queueTitle, systemImage: state == .paused ? "pause.circle.fill" : icon)
         }
         // The unified toolbar shows icon-only labels, and VoiceOver falls
         // back to the SF Symbol's name ("Inbox Full") without this.
-        .accessibilityLabel("\(title) Queue")
+        .accessibilityLabel("\(queueTitle) Queue")
         .help(state == .paused
-            ? "\(title) queue is paused"
-            : "\(title) queue controls")
+            ? "\(queueTitle) queue is paused"
+            : "\(queueTitle) queue controls")
     }
 
     // MARK: - Detail pane
@@ -266,13 +287,8 @@ struct ActivityWindowView: View {
                     loadedEvents = []
                 }
             }
-        } else if viewModel.snapshot.activeItems.isEmpty
-            && viewModel.snapshot.recentItems.isEmpty {
-            ContentUnavailableView {
-                Label("No Activity", systemImage: "checkmark.circle")
-            } description: {
-                Text("Extraction and ingestion tasks appear here as they run.")
-            }
+        } else if activeItems.isEmpty && recentItems.isEmpty {
+            emptyState
         } else {
             ContentUnavailableView {
                 Label("No Selection", systemImage: "sidebar.left")
@@ -284,6 +300,7 @@ struct ActivityWindowView: View {
 
     @ViewBuilder
     private func detailHeader(for item: QueueItem) -> some View {
+        let targets = targetNames(for: item)
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(kindLabel(for: item)) — \(wikiDisplayName(for: item.wikiID))")
@@ -291,6 +308,14 @@ struct ActivityWindowView: View {
                 Text(stateDescription(for: item))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                if !targets.isEmpty {
+                    Text(targetSummary(for: item, names: targets))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .textSelection(.enabled)
+                        .help(targets.joined(separator: "\n"))
+                }
                 if let error = item.error, item.state == .failed {
                     Text(error)
                         .font(.callout)
@@ -367,8 +392,8 @@ struct ActivityWindowView: View {
 
     /// Look up the selected item in the current snapshot (active first).
     private func item(for id: QueueItem.ID) -> QueueItem? {
-        viewModel.snapshot.activeItems.first { $0.id == id }
-            ?? viewModel.snapshot.recentItems.first { $0.id == id }
+        activeItems.first { $0.id == id }
+            ?? recentItems.first { $0.id == id }
     }
 
     private func wikiDisplayName(for id: String) -> String {
@@ -381,6 +406,62 @@ struct ActivityWindowView: View {
         case .extraction: return "Extraction"
         case .ingestion: return "Ingestion"
         }
+    }
+
+    /// Row title: lead with what's being processed (source filenames, lint
+    /// targets) rather than the queue kind — inside a per-queue window, the
+    /// kind is already the window title.
+    private func rowTitle(for item: QueueItem) -> String {
+        if let pageIDs = item.payload.lintPageIDs {
+            if pageIDs.isEmpty { return "Lint \(wikiDisplayName(for: item.wikiID))" }
+            let titles = lintPageTitles(for: item)
+            guard let first = titles.first else { return "Lint \(pageIDs.count) pages" }
+            return titles.count > 1 ? "Lint: \(first) +\(titles.count - 1)" : "Lint: \(first)"
+        }
+        let names = sourceNames(for: item)
+        guard let first = names.first else {
+            let count = item.payload.sourceIDs.count
+            return count > 1 ? "\(count) sources" : kindLabel(for: item)
+        }
+        return names.count > 1 ? "\(first) +\(names.count - 1)" : first
+    }
+
+    /// Resolve the item's source IDs to display filenames via the wiki's
+    /// store. Sources deleted since enqueue (or wikis without a live session)
+    /// resolve to nothing and are dropped.
+    private func sourceNames(for item: QueueItem) -> [String] {
+        guard let store = sessionManager?.sessions[item.wikiID]?.store else { return [] }
+        return item.payload.sourceIDs.compactMap { id in
+            store.sources.first { $0.id == id }?.filename
+        }
+    }
+
+    /// Resolve a lint item's page IDs to page titles via the wiki's store.
+    private func lintPageTitles(for item: QueueItem) -> [String] {
+        guard let pageIDs = item.payload.lintPageIDs,
+              let store = sessionManager?.sessions[item.wikiID]?.store else { return [] }
+        return pageIDs.compactMap { id in
+            store.summaries.first { $0.id == id }?.title
+        }
+    }
+
+    /// What this item operates on, for the detail header: lint targets
+    /// ("Entire wiki" / page titles) or source filenames.
+    private func targetNames(for item: QueueItem) -> [String] {
+        if let pageIDs = item.payload.lintPageIDs {
+            return pageIDs.isEmpty ? ["Entire wiki"] : lintPageTitles(for: item)
+        }
+        return sourceNames(for: item)
+    }
+
+    /// "3 sources: a.pdf, b.md, c.txt" / "2 pages: A, B" — capped so a
+    /// 50-item batch doesn't flood the header (full list in the tooltip).
+    private func targetSummary(for item: QueueItem, names: [String]) -> String {
+        let shown = names.prefix(5).joined(separator: ", ")
+        let suffix = names.count > 5 ? ", …" : ""
+        if names.count == 1 { return shown }
+        let noun = item.payload.lintPageIDs != nil ? "pages" : "sources"
+        return "\(names.count) \(noun): \(shown)\(suffix)"
     }
 
     private func rowSubtitle(for item: QueueItem) -> String {

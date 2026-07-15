@@ -153,7 +153,12 @@ public final class QueueStore: @unchecked Sendable {
     // MARK: - Schema + migrations
 
     /// Current schema version for `queue.sqlite`.
-    private static let currentSchemaVersion = 1
+    /// v2: `queue_item_events` (per-item agent transcripts). The table was
+    /// originally added to the FRESH schema only, without a migration step —
+    /// existing v1 databases silently lacked it, and `try? appendItemEvent`
+    /// swallowed the "no such table" error on every write, so transcripts
+    /// never survived a relaunch.
+    private static let currentSchemaVersion = 2
 
     /// Stepwise, idempotent schema migration keyed on `PRAGMA user_version`.
     /// A fresh DB (version 0) runs `createFreshSchemaV1()`; an existing DB at
@@ -173,15 +178,38 @@ public final class QueueStore: @unchecked Sendable {
         try exec("DELETE FROM queue_items WHERE queue = 'lint';")
     }
 
-    /// Stepwise migration ladder. No steps beyond v1 yet, but the structure is
-    /// ready for future phases. Each `if version < N` block runs one step and
-    /// stamps `user_version = N`.
+    /// Stepwise migration ladder. Each `if version < N` block runs one step
+    /// and stamps `user_version = N`.
     ///
     /// Mirrors `SQLiteWikiStore.migrate(from:)` — versioned, idempotent,
     /// each step runs only when the DB is below that step's target version.
     private func migrate(from version: inout Int) throws {
-        // Future migrations:
-        // if version < 2 { try migrateV1ToV2(); version = 2; try exec("PRAGMA user_version=2;") }
+        if version < 2 {
+            try migrateV1ToV2()
+            version = 2
+            try exec("PRAGMA user_version=2;")
+        }
+    }
+
+    /// v1 → v2: add the per-item transcript table to databases created before
+    /// it existed. `IF NOT EXISTS` keeps this idempotent for fresh databases
+    /// (whose `createFreshSchemaV1()` already built it) and for DBs from a
+    /// partial earlier run.
+    private func migrateV1ToV2() throws {
+        try exec("""
+        CREATE TABLE IF NOT EXISTS queue_item_events (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id       TEXT NOT NULL,
+            seq           INTEGER NOT NULL,
+            event_json    TEXT NOT NULL,
+            created_at    INTEGER NOT NULL,
+            FOREIGN KEY (item_id) REFERENCES queue_items(id) ON DELETE CASCADE
+        );
+        """)
+        try exec("""
+        CREATE INDEX IF NOT EXISTS idx_queue_item_events
+            ON queue_item_events(item_id, seq);
+        """)
     }
 
     /// Build the complete v1 schema for a fresh database and stamp

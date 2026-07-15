@@ -3,17 +3,17 @@ import SwiftUI
 import WikiFSCore
 import WikiFSEngine
 
-/// Controls the menu-bar status item and Activity window for the queue engine.
+/// Controls the menu-bar status item and the per-queue activity windows
+/// (Ingestion + Extraction) for the queue engine.
 ///
-/// The status item icon reflects the engine's state:
-/// - **idle** (books.vertical) — no active items, queue running
-/// - **working** (books.vertical.fill) — items running
-/// - **paused** (pause.fill) — a queue is paused
-/// - **attention** (exclamationmark.triangle.fill) — failed items need attention
+/// The status item icon is ALWAYS the books glyph — books.vertical when idle,
+/// books.vertical.fill while working. Paused/failed states are conveyed by
+/// the tooltip and the windows, never by swapping to an alert symbol (a menu
+/// bar icon that changes shape reads as a different app).
 ///
-/// Clicking the status item toggles the Activity window, which lists
-/// active/recent items across all wikis with per-item agent transcripts,
-/// per-queue pause/resume/halt controls, and per-row cancel/retry.
+/// The status item's menu opens the Ingestion and Extraction windows, which
+/// list that queue's active/recent items across all wikis with per-item agent
+/// transcripts, pause/resume/halt controls, and per-row cancel/retry.
 ///
 /// Lives in `WikiFS` because it uses AppKit (`NSStatusItem`, `NSWindow`)
 /// and SwiftUI for the window content. The engine itself stays headless.
@@ -29,7 +29,7 @@ final class QueueStatusItemController: NSObject, NSMenuDelegate {
     // MARK: - AppKit
 
     private var statusItem: NSStatusItem?
-    private var activityWindow: NSWindow?
+    private var queueWindows: [QueueKind: NSWindow] = [:]
 
     // MARK: - State tracking
 
@@ -107,7 +107,9 @@ final class QueueStatusItemController: NSObject, NSMenuDelegate {
         let activeCount = snapshot.activeItems.count
         let recentCount = snapshot.recentItems.count
 
-        // Header: queue counts.
+        // Header: queue counts. (Individual items live in the per-queue
+        // windows, not the menu — a dropdown of truncated item rows was
+        // noise, and clicking any of them opened the same window anyway.)
         let headerItem = NSMenuItem(
             title: activeCount == 0
                 ? recentCount == 0 ? "No activity" : "\(recentCount) recent"
@@ -116,43 +118,22 @@ final class QueueStatusItemController: NSObject, NSMenuDelegate {
         headerItem.isEnabled = false
         menu.addItem(headerItem)
 
-        // Active items (clickable → opens Activity window).
-        if !snapshot.activeItems.isEmpty {
-            menu.addItem(.separator())
-            let sectionItem = NSMenuItem(
-                title: "Active", action: nil, keyEquivalent: "")
-            sectionItem.isEnabled = false
-            menu.addItem(sectionItem)
+        menu.addItem(.separator())
 
-            for item in snapshot.activeItems.prefix(5) {
-                let title = menuItemTitle(for: item)
-                let menuItem = NSMenuItem(
-                    title: title, action: #selector(openActivityWindow(_:)),
-                    keyEquivalent: "")
-                menuItem.target = self
-                menuItem.representedObject = item.id
-                menu.addItem(menuItem)
-            }
-        }
+        // Per-queue windows.
+        let ingestionItem = NSMenuItem(
+            title: "Ingestion Activity…",
+            action: #selector(openIngestionWindow(_:)),
+            keyEquivalent: "i")
+        ingestionItem.target = self
+        menu.addItem(ingestionItem)
 
-        // Recent items (clickable → opens Activity window).
-        if !snapshot.recentItems.isEmpty {
-            menu.addItem(.separator())
-            let sectionItem = NSMenuItem(
-                title: "Recent", action: nil, keyEquivalent: "")
-            sectionItem.isEnabled = false
-            menu.addItem(sectionItem)
-
-            for item in snapshot.recentItems.prefix(5) {
-                let title = menuItemTitle(for: item)
-                let menuItem = NSMenuItem(
-                    title: title, action: #selector(openActivityWindow(_:)),
-                    keyEquivalent: "")
-                menuItem.target = self
-                menuItem.representedObject = item.id
-                menu.addItem(menuItem)
-            }
-        }
+        let extractionItem = NSMenuItem(
+            title: "Extraction Activity…",
+            action: #selector(openExtractionWindow(_:)),
+            keyEquivalent: "e")
+        extractionItem.target = self
+        menu.addItem(extractionItem)
 
         menu.addItem(.separator())
 
@@ -173,16 +154,6 @@ final class QueueStatusItemController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        // Open Activity window.
-        let openItem = NSMenuItem(
-            title: "Open Activity…",
-            action: #selector(openActivityWindow(_:)),
-            keyEquivalent: "a")
-        openItem.target = self
-        menu.addItem(openItem)
-
-        menu.addItem(.separator())
-
         // Navigation items (moved from Help menu).
         let instructionsItem = NSMenuItem(
             title: "Agent Instructions",
@@ -190,13 +161,6 @@ final class QueueStatusItemController: NSObject, NSMenuDelegate {
             keyEquivalent: "")
         instructionsItem.target = self
         menu.addItem(instructionsItem)
-
-        let logItem = NSMenuItem(
-            title: "Activity Log",
-            action: #selector(openActivityLog(_:)),
-            keyEquivalent: "")
-        logItem.target = self
-        menu.addItem(logItem)
 
         menu.addItem(.separator())
 
@@ -208,32 +172,24 @@ final class QueueStatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(quitItem)
     }
 
-    private func menuItemTitle(for item: QueueItem) -> String {
-        let wikiName = sessionManager?.sessions[item.wikiID]?.descriptor.displayName
-            ?? String(item.wikiID.prefix(8))
-        let kindLabel: String
-        if item.payload.lintPageIDs != nil {
-            kindLabel = "Lint"
-        } else {
-            kindLabel = item.queue == .extraction ? "Extraction" : "Ingestion"
-        }
-        let stateLabel: String
-        switch item.state {
-        case .running: stateLabel = "Running"
-        case .queued: stateLabel = "Queued"
-        case .completed: stateLabel = "Completed"
-        case .failed: stateLabel = "Failed"
-        case .cancelled: stateLabel = "Cancelled"
-        }
-        return "\(wikiName) — \(kindLabel) (\(stateLabel))"
+    @objc private func openIngestionWindow(_ sender: NSMenuItem?) {
+        showQueueWindow(for: .ingestion)
     }
 
-    @objc private func openActivityWindow(_ sender: NSMenuItem?) {
-        showActivityWindow()
+    @objc private func openExtractionWindow(_ sender: NSMenuItem?) {
+        showQueueWindow(for: .extraction)
+    }
+
+    /// The session menu actions target: the frontmost wiki window's session,
+    /// falling back to ANY live session — a status-item menu is reachable
+    /// while no wiki window is key, and a silent `return` there reads as a
+    /// dead menu item.
+    private var targetSession: WikiSession? {
+        sessionManager?.frontmostSession ?? sessionManager?.allSessions.first
     }
 
     @objc private func lintWiki(_ sender: NSMenuItem?) {
-        guard let session = sessionManager?.frontmostSession else { return }
+        guard let session = targetSession else { return }
         Task {
             try? await session.queueEngine.enqueue(QueueItemRequest(
                 queue: .ingestion,
@@ -244,22 +200,37 @@ final class QueueStatusItemController: NSObject, NSMenuDelegate {
     }
 
     @objc private func vacuumAll(_ sender: NSMenuItem?) {
-        sessionManager?.frontmostSession?.previewVacuumAll()
+        targetSession?.previewVacuumAll()
+        activateWikiWindow()
     }
 
     @objc private func openAgentInstructions(_ sender: NSMenuItem?) {
-        sessionManager?.frontmostSession?.store.openTab(.systemPrompt)
+        targetSession?.store.openTab(.systemPrompt)
+        activateWikiWindow()
     }
 
-    @objc private func openActivityLog(_ sender: NSMenuItem?) {
-        sessionManager?.frontmostSession?.store.openTab(.changeLog)
+    /// Bring a wiki window to the front. `openTab` switches the tab inside
+    /// the store, but from the menu bar the app is usually inactive — without
+    /// activation the switch happens in a background window and the click
+    /// looks like it did nothing.
+    private func activateWikiWindow() {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        let ownedWindowIDs = Set(queueWindows.values.map(ObjectIdentifier.init))
+        if let window = NSApplication.shared.windows.first(where: { window in
+            window.isVisible
+                && window.canBecomeMain
+                && !ownedWindowIDs.contains(ObjectIdentifier(window))
+        }) {
+            window.makeKeyAndOrderFront(nil)
+        }
     }
 
-    // MARK: - Activity window
+    // MARK: - Per-queue activity windows
 
-    private func showActivityWindow() {
-        if activityWindow == nil {
+    private func showQueueWindow(for queue: QueueKind) {
+        if queueWindows[queue] == nil {
             let contentView = ActivityWindowView(
+                queue: queue,
                 queueEngine: queueEngine,
                 activityTracker: activityTracker,
                 sessionManager: sessionManager
@@ -269,22 +240,26 @@ final class QueueStatusItemController: NSObject, NSMenuDelegate {
             let window = NSWindow(contentViewController: NSHostingController(rootView: contentView))
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.toolbarStyle = .unified
-            window.title = "Activity"
+            window.title = queue == .extraction ? "Extraction" : "Ingestion"
             window.setContentSize(NSSize(width: 760, height: 500))
             window.isReleasedWhenClosed = false
             // Center first; the autosave name then restores any saved frame
             // over it (remember size/position across opens — set AFTER center
-            // so center() can't clobber the restored frame).
+            // so center() can't clobber the restored frame). Distinct names
+            // per queue so the two windows keep independent frames.
             window.center()
-            window.setFrameAutosaveName("QueueActivityWindow")
-            activityWindow = window
+            window.setFrameAutosaveName(
+                queue == .extraction ? "ExtractionActivityWindow" : "IngestionActivityWindow")
+            queueWindows[queue] = window
         }
-        activityWindow?.makeKeyAndOrderFront(nil)
+        queueWindows[queue]?.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
     func closeActivityWindow() {
-        activityWindow?.orderOut(nil)
+        for window in queueWindows.values {
+            window.orderOut(nil)
+        }
     }
 
     // MARK: - Icon management
@@ -297,12 +272,13 @@ final class QueueStatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func statusIcon(for state: IconState) -> NSImage? {
+        // ALWAYS the books glyph — paused/attention states convey via the
+        // tooltip and the activity windows. A menu bar icon that morphs into
+        // an alert triangle reads as a different app's item.
         let name: String
         switch state {
-        case .idle: name = "books.vertical"
         case .working: name = "books.vertical.fill"
-        case .paused: name = "pause.fill"
-        case .attention: name = "exclamationmark.triangle.fill"
+        case .idle, .paused, .attention: name = "books.vertical"
         }
         let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
         return NSImage(systemSymbolName: name, accessibilityDescription: nil)?
