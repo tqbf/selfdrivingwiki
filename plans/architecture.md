@@ -8,8 +8,7 @@ history, [`INITIAL.md`](INITIAL.md) for the original architecture, and
 limitations live in [`ISSUES.md`](../ISSUES.md).
 
 The one invariant that everything below serves: **the File Provider mount is
-read-only; SQLite is the source of truth; reads go through the mount, writes go
-through `wikictl`.**
+read-only; SQLite is the source of truth; reads and writes go through `wikictl`.**
 
 ---
 
@@ -234,7 +233,7 @@ Key mechanics:
                                    rebuild sidebar (if on-screen) + signalChange(domain)
 ```
 
-- **The mount is the read path; `wikictl` is the only external writer.** It opens
+- **`wikictl` is the read AND write path; the mount is an optional read-only projection.** It opens
   the wiki's DB read-write via the literal App Group path (WAL + `busy_timeout=5000`
   make a second writer process safe), runs one command, prints to stdout, and — only
   after a **committing** call — posts the Darwin notification. It **never** signals
@@ -275,7 +274,6 @@ What a run actually looks like:
 
 ```
 cd <per-run writable scratch dir>          # Claude Code needs a writable cwd; the mount is read-only
-env WIKI_ROOT=<resolved live mount>        # resolved from the FP manager at click time, never hardcoded
     WIKI_DB=<wiki ULID>                    # selects the wiki for wikictl (no --wiki flag needed)
     PATH=<Contents/Helpers>:<inherited>    # so the agent's `wikictl` resolves
 claude -p "<operation prompt>"
@@ -288,19 +286,19 @@ claude -p "<operation prompt>"
 
 Decisions baked in here, each with a hard-won reason:
 
-- **Staging from SQLite, not the mount.** `AgentLauncher` stages a `WIKI_STATE.md`
+- **Staging from SQLite, not the mount.** The agent reads via `wikictl` (DB-direct), not the mount. `AgentLauncher` stages a `WIKI_STATE.md`
   snapshot (page titles + `index.md` + log tail, via `WikiStateSnapshot`) and, for
   Ingest, the raw `source.<ext>` bytes (via `ingestedFileContent`) into scratch —
   read from SQLite, not the ~5 s-laggy mount. The prompt names those absolute paths
   and forbids re-discovery (`IngestWriteRule.dontRediscover`).
 - **The write rule lives in the `-p` prompt, not only the schema.**
   `IngestWriteRule.writes` leads every *writer* prompt with the read-only-by-design
-  rule, "never search for a mutation tool / never test the mount," and the exact
+  rule, "read and write via `wikictl`, never read from the mount," and the exact
   `wikictl` write commands. Phase D had moved this entirely into
   `--append-system-prompt`; a live run showed the agent *under-weighting* it —
   printing "the mount is read-only, there must be a mutation tool, let me search,"
   running ToolSearch, then `echo > pages/by-title/__wikitest__.md` to probe the
-  mount. So the load-bearing rule is back in the `-p` prompt; the broader
+  mount. So the load-bearing rule is in the system prompt; the broader
   layout/conventions stay in the schema (DRY — asserted both ways in
   `OperationCommandTests`). The Sonnet digester never writes, so it carries no write
   rule.
