@@ -138,13 +138,6 @@ final class QueueStatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         // Wiki maintenance actions.
-        let lintItem = NSMenuItem(
-            title: "Lint Wiki",
-            action: #selector(lintWiki(_:)),
-            keyEquivalent: "")
-        lintItem.target = self
-        menu.addItem(lintItem)
-
         let vacuumItem = NSMenuItem(
             title: "Vacuum All…",
             action: #selector(vacuumAll(_:)),
