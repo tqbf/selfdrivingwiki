@@ -211,6 +211,11 @@ struct ActivityWindowView: View {
 
     @ViewBuilder
     private func contextMenu(for item: QueueItem) -> some View {
+        if copyableText(for: item) != nil {
+            Button("Copy Transcript", systemImage: "doc.on.doc") {
+                copyTranscript(for: item)
+            }
+        }
         switch item.state {
         case .running, .queued:
             Button("Cancel") {
@@ -325,6 +330,12 @@ struct ActivityWindowView: View {
                 }
             }
             Spacer()
+            if copyableText(for: item) != nil {
+                Button("Copy Transcript", systemImage: "doc.on.doc") {
+                    copyTranscript(for: item)
+                }
+                .help("Copy transcript as plain text")
+            }
             switch item.state {
             case .running, .queued:
                 Button("Cancel") {
@@ -386,6 +397,32 @@ struct ActivityWindowView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Copy
+
+    /// The plain-text content available to copy for this item, or `nil` if
+    /// there's nothing to copy. Uses the same event/progress-fallback logic as
+    /// `transcriptContent(for:)` so Copy always reflects what's on screen.
+    private func copyableText(for item: QueueItem) -> String? {
+        let inMemoryEvents = activityTracker.transcript(for: item.id)
+        let events = inMemoryEvents.isEmpty ? loadedEvents : inMemoryEvents
+
+        if !events.isEmpty {
+            let lines = events.map(\.plainText).filter { !$0.isEmpty }
+            if lines.isEmpty { return nil }
+            return lines.joined(separator: "\n\n")
+        }
+
+        let progressText = activityTracker.progressLog(for: item.id)
+        return progressText.isEmpty ? nil : progressText
+    }
+
+    /// Copy the selected item's transcript to the pasteboard as plain text.
+    private func copyTranscript(for item: QueueItem) {
+        guard let text = copyableText(for: item) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     // MARK: - Helpers
