@@ -181,17 +181,6 @@ final class QueueStatusItemController: NSObject, NSMenuDelegate {
         sessionManager?.frontmostSession ?? sessionManager?.allSessions.first
     }
 
-    @objc private func lintWiki(_ sender: NSMenuItem?) {
-        guard let session = targetSession else { return }
-        Task {
-            try? await session.queueEngine.enqueue(QueueItemRequest(
-                queue: .ingestion,
-                wikiID: session.wikiID,
-                payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [])
-            ))
-        }
-    }
-
     @objc private func vacuumAll(_ sender: NSMenuItem?) {
         targetSession?.previewVacuumAll()
         activateWikiWindow()
