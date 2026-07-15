@@ -63,7 +63,7 @@ public actor ACPBackend: AgentBackend {
         /// agent advertises `authMethods`).
         let apiKey: String?
         /// Extra environment merged over the inherited process environment (+ the
-        /// `WIKI_DB`/`WIKI_ROOT`/`WIKICTL`/`PATH` vars `start()` sets from
+        /// `WIKI_DB`/`WIKICTL`/`PATH` vars `start()` sets from
         /// `profile.cli`) when spawning the subprocess. Sourced from
         /// `providerHints`' `env.`-prefixed entries — the same convention
         /// `AgentProvider.env` is threaded through by
@@ -187,20 +187,16 @@ public actor ACPBackend: AgentBackend {
 
         DebugLog.agent("ACPBackend.start: launching \(spawn.executablePath) \(spawn.arguments.joined(separator: " "))") // TEMP DEBUG (existed; re-tagged)
         // Build the environment so the agent can find wikictl + the wiki DB.
-        // Exports WIKI_DB/WIKI_ROOT/WIKICTL/PATH for the agent's wikictl calls.
-        var env = ProcessInfo.processInfo.environment
+        // Exports WIKI_DB/WIKICTL/PATH (NOT WIKI_ROOT — mount is optional;
+        // wikictl is the primary read surface, issue #441).
+        let env: [String: String]
         if let cli = profile.cli {
-            env["WIKI_DB"] = cli.wikiID
-            env["WIKI_ROOT"] = cli.wikiRoot
-            env["WIKICTL"] = cli.wikictlDirectory + "/wikictl"
-            let existingPath = env["PATH"] ?? "/usr/bin:/bin"
-            env["PATH"] = cli.wikictlDirectory + ":" + existingPath
-        }
-        // Also add any extra env from the provider config (Phase 2: sourced from
-        // `AgentSpawnConfig.environment`, resolved once in `resolveSpawnConfig`
-        // rather than re-scanning `providerHints` here).
-        for (key, value) in spawn.environment {
-            env[key] = value
+            env = Self.buildAgentEnv(
+                from: cli,
+                baseEnv: ProcessInfo.processInfo.environment,
+                spawnEnvironment: spawn.environment)
+        } else {
+            env = ProcessInfo.processInfo.environment.merging(spawn.environment) { _, new in new }
         }
 
         try await client.launch(
@@ -618,6 +614,29 @@ public actor ACPBackend: AgentBackend {
         return AgentSpawnConfig(
             executablePath: path, arguments: args, workingDirectory: cwd, apiKey: apiKey,
             environment: environment)
+    }
+
+    /// Builds the environment dict for the agent subprocess. Exports `WIKI_DB`,
+    /// `WIKICTL`, and prepends the wikictl directory to `PATH`. `WIKI_ROOT` is
+    /// intentionally NOT exported — the mount is optional; wikictl is the primary
+    /// read surface (issue #441). The task-prompt path (`WikiOperation.wikiRootLine`)
+    /// still gives the agent the resolved mount path inline when available.
+    /// Extracted from `start()` so it is unit-testable without a subprocess.
+    static func buildAgentEnv(
+        from cli: CLIProfile,
+        baseEnv: [String: String],
+        spawnEnvironment: [String: String]
+    ) -> [String: String] {
+        var env = baseEnv
+        env["WIKI_DB"] = cli.wikiID
+        // WIKI_ROOT is intentionally NOT exported — mount is optional; wikictl is the primary read surface (#441).
+        env["WIKICTL"] = cli.wikictlDirectory + "/wikictl"
+        let existingPath = env["PATH"] ?? "/usr/bin:/bin"
+        env["PATH"] = cli.wikictlDirectory + ":" + existingPath
+        for (key, value) in spawnEnvironment {
+            env[key] = value
+        }
+        return env
     }
 
     /// Writes the system prompt to the agent's working directory as both

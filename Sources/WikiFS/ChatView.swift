@@ -810,11 +810,31 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        fileProvider.path != nil
-            && canType
-            && !launcher.isGenerating
-            && !launcher.isAwaitingGenerationSlot
-            && !store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        Self.canSendPredicate(
+            hasMount: fileProvider.path != nil,
+            canType: canType,
+            isGenerating: launcher.isGenerating,
+            isAwaitingSlot: launcher.isAwaitingGenerationSlot,
+            hasDraftText: !store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        )
+    }
+
+    /// Pure predicate for whether the composer can send a message. Extracted as a
+    /// static func so it is unit-testable without a SwiftUI view tree (following
+    /// the `composerCaptionText` pattern). The `hasMount` parameter is accepted
+    /// for API clarity but intentionally ignored — the mount guard was removed
+    /// (issue #441): the agent reads via `wikictl` (DB-direct), not the mount.
+    nonisolated static func canSendPredicate(
+        hasMount: Bool,
+        canType: Bool,
+        isGenerating: Bool,
+        isAwaitingSlot: Bool,
+        hasDraftText: Bool
+    ) -> Bool {
+        canType
+            && !isGenerating
+            && !isAwaitingSlot
+            && hasDraftText
     }
 
     private var sendButtonTitle: String {

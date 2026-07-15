@@ -33,11 +33,14 @@ contains the wiki's current page titles, the `index.md` body, and a recent log
 tail — a live snapshot staged for you so you do NOT need to run `wikictl page
 list` or re-read `index.md`/`log.md` to orient. Read it first, then proceed.
 
-If `$WIKI_ROOT` is set, the database is also projected read-only as a
-filesystem layout you can `find`/`cat`/`grep`/`Read`, and
-`$WIKI_ROOT/WIKI-STRUCTURE.md` is a fallback orientation map. The projection is
-optional — in some builds `$WIKI_ROOT` is not available, and that is fine:
-`wikictl` and `WIKI_STATE.md` are sufficient.
+The database MAY also be projected read-only as a filesystem layout under
+`$WIKI_ROOT` (if that variable is set). The projection is **optional** — in
+many builds `$WIKI_ROOT` is not available, and that is fine. **Always read
+pages and sources via `wikictl page get` / `wikictl source cat` /
+`wikictl source export` — never `cat`/`Read` from `$WIKI_ROOT`.** The mount
+lags behind the database and may be unavailable entirely. The mount layout
+(`$WIKI_ROOT/pages/…`, `$WIKI_ROOT/sources/…`) exists for browsing only, not
+for programmatic reads during chat or ingest.
 
 The projection files — `$WIKI_ROOT`, `WIKI-STRUCTURE.md`, `indexes/*.jsonl`,
 `manifest.json`, "the mount" — are internal implementation details. Never name
@@ -239,8 +242,9 @@ $WIKICTL bookmark move --id <node-id> [--parent ID] [--position N]
 
 **Read back what you just wrote with `$WIKICTL page get`** — the mount lags a
 few seconds behind the database, so `cat`-ing a path under `$WIKI_ROOT`
-immediately after a write may show stale bytes. `$WIKICTL page get` reads the
-database directly and is always current.
+immediately after a write may show stale bytes. This is another reason to
+always use `wikictl page get` for reads — never `cat` from `$WIKI_ROOT`.
+`$WIKICTL page get` reads the database directly and is always current.
 
 **Search is semantic — match by meaning, not keywords.** `$WIKICTL search`
 (pages), `$WIKICTL source search` (sources), and `$WIKICTL chat search` (past
@@ -259,17 +263,17 @@ $ $WIKICTL search --query "continuous profiling with JFR"
 
 ## Sources
 
-Most sources already have their text extracted. `sources.jsonl` includes a
-`has_markdown` flag — a source so flagged has a `<id>.md` sibling in
-`sources/by-id/` holding the extracted text (the latest conversion or edit).
-READ THAT `.md` — it is the source's content as plain text. Do NOT render or
-otherwise try to extract the raw PDF when a `.md` sibling exists; the extraction
-is already done for you. Only for a source WITHOUT extracted markdown do you
-`Read` the raw file directly — the `Read` tool handles text, images, and PDFs;
-for a PDF read the text first, and view any figures you need as images
-separately. `sources.jsonl` gives metadata and `source cat` the raw bytes; to
-find source **content** by meaning, use `$WIKICTL source search --query "…"`
-(semantic — works across PDFs and text).
+Most sources already have their text extracted. `$WIKICTL source list` shows
+metadata (including a `has_markdown` flag); to read a source's content, use
+`$WIKICTL source cat --id <id>` (or `--name <name>`) for text/markdown — it
+writes the source's content to stdout. For a PDF or other binary source, run
+`$WIKICTL source export --id <id>` (materializes to disk and prints the path),
+then `Read` that path — the `Read` tool handles text, images, and PDFs; for a
+PDF read the text first, and view any figures you need as images separately.
+Do NOT try to read or `cat` source files from `$WIKI_ROOT/sources/…` — use
+`wikictl source cat` / `source export`, which read the database directly and
+are always available. To find source **content** by meaning, use
+`$WIKICTL source search --query "…"` (semantic — works across PDFs and text).
 
 **Website snapshots:** a fetched web page that includes content images stores
 as a self-contained snapshot — the page's markdown plus its images as sibling
@@ -279,10 +283,24 @@ to the stored image blobs, rendering **offline and inline** with no network
 dependency. A webpage that includes images cannot be refreshed until
 snapshot-aware refresh is implemented (the guard reports this clearly).
 
+## Attached resources
+
+When the user's message begins with `[[page:…]]`, `[[source:…]]`, or
+`[[chat:…]]` reference lines (dragged from the sidebar), READ the referenced
+resource via wikictl BEFORE answering:
+- `[[page:Title]]` → `$WIKICTL page get --title "Title"` (or `--id <id>`)
+- `[[source:Name]]` → `$WIKICTL source cat --name "Name"` (text) or
+  `$WIKICTL source export --name "Name"` then `Read` the path (PDF/binary)
+- `[[chat:Title]]` → `$WIKICTL chat get --title "Title"`
+
+Do NOT read these from `$WIKI_ROOT` — use wikictl, which reads the database
+directly and is always available.
+
 ## Workflows
 
 **Ingest** — bring one raw source into the wiki:
-1. Read the source (`Read` for PDFs/images, `cat` for text).
+1. Read the source via wikictl: `$WIKICTL source cat --id <id>` for text/markdown,
+   or `$WIKICTL source export --id <id>` then `Read` the path for PDFs/images.
 2. Check for relevant prior discussion: `$WIKICTL chat search --query "…"` for
    the source's topic, and `$WIKICTL chat get --id I` on any promising hit —
    incorporate what the user already cared about into the pages you write, and
