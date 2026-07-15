@@ -151,7 +151,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        // Quit.
+        // About + Quit.
+        let aboutItem = NSMenuItem(
+            title: "About Self Driving Wiki",
+            action: #selector(NSApplication.shared.orderFrontStandardAboutPanel(_:)),
+            keyEquivalent: "")
+        menu.addItem(aboutItem)
+
         let quitItem = NSMenuItem(
             title: "Quit Self Driving Wiki",
             action: #selector(NSApplication.terminate(_:)),
