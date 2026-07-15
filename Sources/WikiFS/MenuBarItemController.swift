@@ -11,14 +11,13 @@ import WikiFSEngine
 /// the tooltip and the windows, never by swapping to an alert symbol (a menu
 /// bar icon that changes shape reads as a different app).
 ///
-/// The status item's menu opens the Ingestion and Extraction windows, which
-/// list that queue's active/recent items across all wikis with per-item agent
-/// transcripts, pause/resume/halt controls, and per-row cancel/retry.
+/// The menu-bar dropdown groups queue windows, a Maintenance submenu
+/// (Vacuum All, Agent Instructions), and Quit.
 ///
 /// Lives in `WikiFS` because it uses AppKit (`NSStatusItem`, `NSWindow`)
 /// and SwiftUI for the window content. The engine itself stays headless.
 @MainActor
-final class QueueStatusItemController: NSObject, NSMenuDelegate {
+final class MenuBarItemController: NSObject, NSMenuDelegate {
 
     // MARK: - Dependencies
 
@@ -55,7 +54,7 @@ final class QueueStatusItemController: NSObject, NSMenuDelegate {
     /// Create the status item and start observing the engine's event stream.
     func start() {
         guard statusItem == nil else { return }
-        DebugLog.tabs("QueueStatusItemController.start: creating status item")
+        DebugLog.tabs("MenuBarItemController.start: creating status item")
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem = item

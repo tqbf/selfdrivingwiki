@@ -261,12 +261,12 @@ struct WikiFSApp: App {
         guard !Self.didStartStatusItem else { return }
         Self.didStartStatusItem = true
 
-        let statusController = QueueStatusItemController(
+        let statusController = MenuBarItemController(
             queueEngine: queueEngine,
             activityTracker: activityTracker,
             sessionManager: sessionManager)
         statusController.start()
-        appDelegate.statusItemController = statusController
+        appDelegate.menuBarItemController = statusController
 
         // File Provider setup + change bridge (async).
         Task {
@@ -418,7 +418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// controller. A weak reference here deallocates the controller the moment
     /// `startStatusItem()` returns, which removes the NSStatusItem from the
     /// menu bar before it ever draws.
-    @MainActor var statusItemController: QueueStatusItemController?
+    @MainActor var menuBarItemController: MenuBarItemController?
     @MainActor var bootstrap: (@MainActor () -> Void)?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
