@@ -238,45 +238,53 @@ struct WikiFSApp: App {
         guard !Self.didBootstrap else { return }
         Self.didBootstrap = true
 
-        // Activate most recent wiki NOW (synchronous) so activeWikiID is set
-        // before any RootScene renders.
+        // Synchronous part: activate most recent + file provider wiring.
         registry.activateMostRecent()
-
-        // File provider + flush wiring (synchronous).
         fileProviderBox.provider = fileProvider
         fileProvider.wire(into: registry)
         registry.flushActiveStore = { [sessionManager] wikiID in
             sessionManager.flushSession(for: wikiID)
         }
 
-        // Status item + File Provider setup + change bridge must run AFTER
-        // NSApp is ready. Use DispatchQueue.main.async to defer to the next
-        // run loop tick (after init completes and NSApp is initialized).
-        DispatchQueue.main.async {
-            let statusController = QueueStatusItemController(
-                queueEngine: self.queueEngine,
-                activityTracker: self.activityTracker,
-                sessionManager: self.sessionManager)
-            statusController.start()
-            self.appDelegate.statusItemController = statusController
+        // Status item + File Provider setup run from .task (on the first
+        // WindowGroup that appears) via bootstrapApp's idempotent guard.
+        // The async Task parts also run from there.
+    }
 
-            Task {
-                if let warning = await FileProviderSetupVerifier.verifyAndRepairInstalledProvider() {
-                    self.fileProviderSetupWarning = warning
-                    self.showingFileProviderSetupWarning = true
-                }
-                await self.fileProvider.migrateDomainsIfNeeded(
-                    wikiIDs: self.registry.wikis.map(\.id))
-                await self.registry.registerAllDomains()
+    /// Create and start the menu-bar status item. Called from .task (runs
+    /// when a window appears — guaranteed even with state restoration).
+    /// Idempotent — guarded by `didStartStatusItem`.
+    @MainActor
+    private static var didStartStatusItem = false
+    @MainActor
+    private func startStatusItem() {
+        guard !Self.didStartStatusItem else { return }
+        Self.didStartStatusItem = true
 
-                let bridge = WikiChangeBridge(registry: self.registry, fileProvider: self.fileProvider)
-                bridge.sessionLookup = { [sessionManager = self.sessionManager] wikiID in
-                    sessionManager.allSessions.filter { $0.wikiID == wikiID }
-                }
-                bridge.refreshObservations()
-                self.changeBridge = bridge
-                self.appDelegate.sessionManager = self.sessionManager
+        let statusController = QueueStatusItemController(
+            queueEngine: queueEngine,
+            activityTracker: activityTracker,
+            sessionManager: sessionManager)
+        statusController.start()
+        appDelegate.statusItemController = statusController
+
+        // File Provider setup + change bridge (async).
+        Task {
+            if let warning = await FileProviderSetupVerifier.verifyAndRepairInstalledProvider() {
+                fileProviderSetupWarning = warning
+                showingFileProviderSetupWarning = true
             }
+            await fileProvider.migrateDomainsIfNeeded(
+                wikiIDs: registry.wikis.map(\.id))
+            await registry.registerAllDomains()
+
+            let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
+            bridge.sessionLookup = { [sessionManager] wikiID in
+                sessionManager.allSessions.filter { $0.wikiID == wikiID }
+            }
+            bridge.refreshObservations()
+            changeBridge = bridge
+            appDelegate.sessionManager = sessionManager
         }
     }
 
@@ -331,6 +339,7 @@ struct WikiFSApp: App {
             }
             .task {
                 bootstrapApp()
+                startStatusItem()
             }
         }
         .windowToolbarStyle(.unified)
@@ -358,7 +367,14 @@ struct WikiFSApp: App {
             }
             .task {
                 bootstrapApp()
+                startStatusItem()
             }
+            // The presented value can arrive AFTER first render (state
+            // restoration) or change in place (openWindow(value:) routing to
+            // an existing window). RootScene copies the value into @State at
+            // creation, so key the whole subtree on it — a changed value must
+            // rebuild RootScene, not be silently ignored.
+            .id(wikiID)
         }
 
         // Extraction compare: a real, resizable, non-modal window (one per
@@ -398,7 +414,11 @@ struct WikiFSApp: App {
 /// backgrounded — the closest macOS equivalent to "all windows inactive."
 final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor weak var sessionManager: SessionManager?
-    @MainActor weak var statusItemController: QueueStatusItemController?
+    /// STRONG on purpose: this is the only long-lived owner of the status-item
+    /// controller. A weak reference here deallocates the controller the moment
+    /// `startStatusItem()` returns, which removes the NSStatusItem from the
+    /// menu bar before it ever draws.
+    @MainActor var statusItemController: QueueStatusItemController?
     @MainActor var bootstrap: (@MainActor () -> Void)?
 
     func applicationDidFinishLaunching(_ notification: Notification) {

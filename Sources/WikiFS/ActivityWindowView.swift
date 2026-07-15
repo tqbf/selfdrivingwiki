@@ -4,21 +4,22 @@ import WikiFSEngine
 
 /// The unified Activity window — replaces the menu-bar popover. A real
 /// `NSWindow` (not transient) that shows all queue items across all wikis,
-/// grouped by kind, with expandable agent transcripts.
+/// with expandable agent transcripts.
 ///
-/// **Sidebar (left):** Active + recent items grouped by kind (extraction,
-/// ingestion), with state badges, wiki names, cancel/retry controls. Ingestion
-/// items that are lints (payload has `lintPageIDs`) are distinguished by
-/// icon/label.
+/// **Sidebar (left):** A native `List` (keyboard navigation, real selection)
+/// with Active + Recent sections. Rows show the item kind, wiki, state, and a
+/// relative timestamp; running/queued rows get an inline Cancel, failed rows
+/// an inline Retry, and every row a context menu.
 ///
-/// **Detail (right):** The selected item's transcript — rendered via
-/// `ChatWebView` fed from `activityTracker.transcripts[itemID]`. For extraction
-/// items (which produce progress strings, not typed `AgentEvent`s), falls back
-/// to the accumulated progress text.
+/// **Detail (right):** A header (kind, wiki, state, error, primary action)
+/// over the selected item's transcript — rendered via `ChatWebView` fed from
+/// `activityTracker.transcripts[itemID]`. For extraction items (which produce
+/// progress strings, not typed `AgentEvent`s), falls back to the accumulated
+/// progress text.
 ///
-/// **Toolbar:** Per-queue pause/resume/halt controls (like the popover had).
-/// Since lint is on `.ingestion`, pause/resume/halt of `.ingestion` covers
-/// lint too.
+/// **Toolbar:** Per-queue pause/resume/halt menus (global actions live in the
+/// top bar, per the macOS layout formula). Since lint runs on `.ingestion`,
+/// the Ingestion menu covers lint too.
 struct ActivityWindowView: View {
     let queueEngine: QueueEngine
     @Bindable var activityTracker: QueueActivityTracker
@@ -27,262 +28,301 @@ struct ActivityWindowView: View {
     @State private var viewModel = QueueViewModel()
     @State private var selectedItemID: QueueItem.ID?
     @State private var loadedEvents: [AgentEvent] = []
+    @State private var didAutoSelect = false
 
     var body: some View {
         NavigationSplitView {
             sidebar
+                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
         } detail: {
             detailPane
         }
-        .frame(minWidth: 600, minHeight: 400)
+        .frame(minWidth: 640, minHeight: 400)
+        .navigationTitle("Activity")
+        .navigationSubtitle(subtitle)
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                queueControlMenu(.extraction)
+                queueControlMenu(.ingestion)
+            }
+        }
         .onAppear { viewModel.attach(engine: queueEngine) }
         .onDisappear { viewModel.detach() }
+        // Auto-select the most interesting item once, when the first snapshot
+        // lands — a window opened from "1 running" should show that run.
+        .onChange(of: viewModel.snapshot.activeItems.map(\.id)) { _, _ in
+            autoSelectIfNeeded()
+        }
+        .onChange(of: viewModel.snapshot.recentItems.map(\.id)) { _, _ in
+            autoSelectIfNeeded()
+        }
+    }
+
+    private var subtitle: String {
+        let active = viewModel.snapshot.activeItems.count
+        let recent = viewModel.snapshot.recentItems.count
+        if active == 0 && recent == 0 { return "" }
+        if active == 0 { return "\(recent) recent" }
+        return "\(active) active — \(recent) recent"
+    }
+
+    private func autoSelectIfNeeded() {
+        guard !didAutoSelect, selectedItemID == nil else { return }
+        if let first = viewModel.snapshot.activeItems.first
+            ?? viewModel.snapshot.recentItems.first {
+            selectedItemID = first.id
+            didAutoSelect = true
+        }
     }
 
     // MARK: - Sidebar
 
+    @ViewBuilder
     private var sidebar: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                Text("Activity")
-                    .font(.headline)
-                Spacer()
-                if activityTracker.isExtracting || activityTracker.isIngesting {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                        .frame(width: 14, height: 14)
-                }
+        let active = viewModel.snapshot.activeItems
+        let recent = Array(viewModel.snapshot.recentItems.prefix(30))
+
+        if active.isEmpty && recent.isEmpty {
+            ContentUnavailableView {
+                Label("No Activity", systemImage: "checkmark.circle")
+            } description: {
+                Text("Extraction and ingestion tasks appear here.")
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-
-            Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if viewModel.snapshot.activeItems.isEmpty
-                        && viewModel.snapshot.recentItems.isEmpty {
-                        emptyState
-                    } else {
-                        activeSection
-                        if !viewModel.snapshot.recentItems.isEmpty {
-                            recentSection
+        } else {
+            List(selection: $selectedItemID) {
+                if !active.isEmpty {
+                    Section("Active") {
+                        ForEach(active) { item in
+                            itemRow(item)
+                                .tag(item.id)
                         }
                     }
                 }
-                .padding(8)
-            }
-        }
-        .frame(minWidth: 240)
-    }
-
-    // MARK: - Empty state
-
-    private var emptyState: some View {
-        VStack(spacing: 6) {
-            Image(systemName: "checkmark.circle")
-                .font(.title2)
-                .foregroundStyle(.secondary)
-            Text("No activity")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 20)
-    }
-
-    // MARK: - Active section
-
-    private var activeSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Active")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-
-            if viewModel.snapshot.activeItems.isEmpty {
-                Text("Nothing active")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 4)
-            } else {
-                let extraction = viewModel.snapshot.activeItems.filter { $0.queue == .extraction }
-                let ingestion = viewModel.snapshot.activeItems.filter { $0.queue == .ingestion }
-
-                if !extraction.isEmpty {
-                    queueHeader(.extraction, items: extraction)
-                }
-                ForEach(extraction) { item in
-                    itemRow(item)
-                }
-                if !ingestion.isEmpty {
-                    queueHeader(.ingestion, items: ingestion)
-                }
-                ForEach(ingestion) { item in
-                    itemRow(item)
+                if !recent.isEmpty {
+                    Section("Recent") {
+                        ForEach(recent) { item in
+                            itemRow(item)
+                                .tag(item.id)
+                        }
+                    }
                 }
             }
+            .listStyle(.sidebar)
         }
-    }
-
-    // MARK: - Recent section
-
-    private var recentSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Recent")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-
-                ForEach(Array(viewModel.snapshot.recentItems.prefix(15))) { item in
-                    recentRow(item)
-                }
-        }
-    }
-
-    // MARK: - Row views
-
-    @ViewBuilder
-    private func queueHeader(_ queue: QueueKind, items: [QueueItem]) -> some View {
-        HStack {
-            Image(systemName: queue == .extraction ? "doc.text.magnifyingglass" : "tray.full")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(queue == .extraction ? "Extraction" : "Ingestion")
-                .font(.caption)
-                .fontWeight(.medium)
-            Spacer()
-            pauseResumeButton(queue)
-            haltButton(queue)
-        }
-        .padding(.top, 4)
     }
 
     @ViewBuilder
     private func itemRow(_ item: QueueItem) -> some View {
-        let isLint = item.payload.lintPageIDs != nil
         HStack(spacing: 8) {
-            Image(systemName: item.state == .running
-                ? "arrow.triangle.2.circlepath"
-                : "clock")
-                .foregroundStyle(item.state == .running ? Color.accentColor : Color.secondary)
-                .frame(width: 14)
+            statusView(for: item)
+                .frame(width: 16)
             VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 4) {
-                    if isLint {
-                        Image(systemName: "checkmark.shield")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(wikiDisplayName(for: item.wikiID))
-                        .font(.caption)
-                        .fontWeight(.medium)
-                }
-                Text(label(for: item))
-                    .font(.caption2)
+                Text(kindLabel(for: item))
+                    .lineLimit(1)
+                Text(rowSubtitle(for: item))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-            Spacer()
-            if item.state == .running || item.state == .queued {
-                Button {
-                    Task { await queueEngine.cancelItem(item.id) }
-                } label: {
-                    Image(systemName: "xmark.circle")
-                        .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if let error = item.error, item.state == .failed {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                        .help(error)
                 }
-                .buttonStyle(.borderless)
-                .help("Cancel")
             }
+            Spacer(minLength: 4)
+            rowAction(for: item)
         }
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            selectedItemID = item.id
-        }
-        .background(selectedItemID == item.id ? Color.accentColor.opacity(0.1) : Color.clear)
+        .padding(.vertical, 1)
+        .contextMenu { contextMenu(for: item) }
     }
 
     @ViewBuilder
-    private func recentRow(_ item: QueueItem) -> some View {
-        let isLint = item.payload.lintPageIDs != nil
-        HStack(spacing: 8) {
-            Image(systemName: statusIcon(for: item.state))
-                .foregroundStyle(statusColor(for: item.state))
-                .frame(width: 14)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 4) {
-                    if isLint {
-                        Image(systemName: "checkmark.shield")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(wikiDisplayName(for: item.wikiID))
-                        .font(.caption)
-                        .fontWeight(.medium)
-                }
-                if let error = item.error {
-                    Text(error)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                        .lineLimit(1)
+    private func statusView(for item: QueueItem) -> some View {
+        switch item.state {
+        case .running:
+            ProgressView()
+                .controlSize(.small)
+        case .queued:
+            Image(systemName: "clock")
+                .foregroundStyle(.secondary)
+        case .completed:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+        case .cancelled:
+            Image(systemName: "xmark.circle")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Trailing inline action: Cancel while pending/running, Retry when
+    /// failed. Borderless so rows stay quiet until needed.
+    @ViewBuilder
+    private func rowAction(for item: QueueItem) -> some View {
+        switch item.state {
+        case .running, .queued:
+            Button {
+                Task { await queueEngine.cancelItem(item.id) }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Cancel")
+        case .failed:
+            Button {
+                Task { try? await queueEngine.retryItem(item.id) }
+            } label: {
+                Image(systemName: "arrow.clockwise.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Retry")
+        default:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func contextMenu(for item: QueueItem) -> some View {
+        switch item.state {
+        case .running, .queued:
+            Button("Cancel") {
+                Task { await queueEngine.cancelItem(item.id) }
+            }
+        case .failed:
+            Button("Retry") {
+                Task { try? await queueEngine.retryItem(item.id) }
+            }
+            if let error = item.error {
+                Button("Copy Error") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(error, forType: .string)
                 }
             }
-            Spacer()
-            if item.state == .failed {
-                Button("Retry") {
-                    Task { try? await queueEngine.retryItem(item.id) }
-                }
-                .buttonStyle(.borderless)
-                .font(.caption)
+        case .cancelled:
+            Button("Retry") {
+                Task { try? await queueEngine.retryItem(item.id) }
             }
+        case .completed:
+            EmptyView()
         }
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            selectedItemID = item.id
+    }
+
+    // MARK: - Toolbar
+
+    /// Per-queue pause/resume/halt as a toolbar menu — global queue controls
+    /// belong in the top bar, not buried in list section headers.
+    @ViewBuilder
+    private func queueControlMenu(_ queue: QueueKind) -> some View {
+        let state = viewModel.snapshot.runStates[queue] ?? .running
+        let title = queue == .extraction ? "Extraction" : "Ingestion"
+        let icon = queue == .extraction ? "doc.text.magnifyingglass" : "tray.full"
+        Menu {
+            if state == .running {
+                Button("Pause \(title)", systemImage: "pause.fill") {
+                    Task { await queueEngine.pause(queue) }
+                }
+            } else {
+                Button("Resume \(title)", systemImage: "play.fill") {
+                    Task { await queueEngine.resume(queue) }
+                }
+            }
+            Divider()
+            Button("Stop All \(title)", systemImage: "stop.fill", role: .destructive) {
+                Task { await queueEngine.halt(queue) }
+            }
+        } label: {
+            Label(title, systemImage: state == .paused ? "pause.circle.fill" : icon)
         }
-        .background(selectedItemID == item.id ? Color.accentColor.opacity(0.1) : Color.clear)
+        // The unified toolbar shows icon-only labels, and VoiceOver falls
+        // back to the SF Symbol's name ("Inbox Full") without this.
+        .accessibilityLabel("\(title) Queue")
+        .help(state == .paused
+            ? "\(title) queue is paused"
+            : "\(title) queue controls")
     }
 
     // MARK: - Detail pane
 
     @ViewBuilder
     private var detailPane: some View {
-        if let itemID = selectedItemID {
-            detailContent(for: itemID)
-                .task(id: itemID) {
-                    // If the tracker has no in-memory events for this item,
-                    // try loading persisted events from the DB.
-                    if activityTracker.transcript(for: itemID).isEmpty {
-                        loadedEvents = await queueEngine.loadTranscript(for: itemID)
-                    } else {
-                        loadedEvents = []
-                    }
-                }
-        } else {
-            VStack(spacing: 8) {
-                Image(systemName: "sidebar.left")
-                    .font(.title)
-                    .foregroundStyle(.secondary)
-                Text("Select an item to view its transcript")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+        if let itemID = selectedItemID, let item = item(for: itemID) {
+            VStack(spacing: 0) {
+                detailHeader(for: item)
+                Divider()
+                transcriptContent(for: item)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .task(id: itemID) {
+                // If the tracker has no in-memory events for this item,
+                // try loading persisted events from the DB.
+                if activityTracker.transcript(for: itemID).isEmpty {
+                    loadedEvents = await queueEngine.loadTranscript(for: itemID)
+                } else {
+                    loadedEvents = []
+                }
+            }
+        } else if viewModel.snapshot.activeItems.isEmpty
+            && viewModel.snapshot.recentItems.isEmpty {
+            ContentUnavailableView {
+                Label("No Activity", systemImage: "checkmark.circle")
+            } description: {
+                Text("Extraction and ingestion tasks appear here as they run.")
+            }
+        } else {
+            ContentUnavailableView {
+                Label("No Selection", systemImage: "sidebar.left")
+            } description: {
+                Text("Select an item to view its transcript.")
+            }
         }
     }
 
     @ViewBuilder
-    private func detailContent(for itemID: QueueItem.ID) -> some View {
-        // Prefer in-memory events (live); fall back to persisted (rehydrated).
-        let inMemoryEvents = activityTracker.transcript(for: itemID)
-        let events = inMemoryEvents.isEmpty ? loadedEvents : inMemoryEvents
-        let progressText = activityTracker.progressLog(for: itemID)
+    private func detailHeader(for item: QueueItem) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(kindLabel(for: item)) — \(wikiDisplayName(for: item.wikiID))")
+                    .font(.headline)
+                Text(stateDescription(for: item))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                if let error = item.error, item.state == .failed {
+                    Text(error)
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                        .lineLimit(4)
+                }
+            }
+            Spacer()
+            switch item.state {
+            case .running, .queued:
+                Button("Cancel") {
+                    Task { await queueEngine.cancelItem(item.id) }
+                }
+            case .failed, .cancelled:
+                Button("Retry") {
+                    Task { try? await queueEngine.retryItem(item.id) }
+                }
+            case .completed:
+                EmptyView()
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
 
-        // Determine if this item is terminal (completed/failed/cancelled).
-        let isTerminal = viewModel.snapshot.recentItems.contains { $0.id == itemID }
-            && !viewModel.snapshot.activeItems.contains { $0.id == itemID }
+    @ViewBuilder
+    private func transcriptContent(for item: QueueItem) -> some View {
+        // Prefer in-memory events (live); fall back to persisted (rehydrated).
+        let inMemoryEvents = activityTracker.transcript(for: item.id)
+        let events = inMemoryEvents.isEmpty ? loadedEvents : inMemoryEvents
+        let progressText = activityTracker.progressLog(for: item.id)
 
         if !events.isEmpty {
             ChatWebView(events: events, style: .activityFeed, showsInternals: false)
@@ -292,107 +332,107 @@ struct ActivityWindowView: View {
                 Text(progressText)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                     .textSelection(.enabled)
-                    .padding(8)
+                    .padding(12)
             }
-        } else if isTerminal {
-            // Terminal item with no transcript at all (no in-memory, no persisted).
-            VStack(spacing: 8) {
-                Image(systemName: "checkmark.circle")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-                Text("No transcript recorded")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            // Active/queued item — transcript will arrive as events flow.
-            VStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Waiting for output…")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            switch item.state {
+            case .running:
+                VStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Waiting for output…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .queued:
+                ContentUnavailableView {
+                    Label("Queued", systemImage: "clock")
+                } description: {
+                    Text("Output will appear when this item starts.")
+                }
+            default:
+                ContentUnavailableView {
+                    Label("No Transcript", systemImage: "doc.plaintext")
+                } description: {
+                    Text("No output was recorded for this item.")
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-    }
-
-    // MARK: - Controls
-
-    @ViewBuilder
-    private func pauseResumeButton(_ queue: QueueKind) -> some View {
-        let state = viewModel.snapshot.runStates[queue] ?? .running
-        if state == .running {
-            Button {
-                Task { await queueEngine.pause(queue) }
-            } label: {
-                Image(systemName: "pause")
-                    .font(.caption)
-            }
-            .buttonStyle(.borderless)
-            .help("Pause \(queue.rawValue)")
-        } else {
-            Button {
-                Task { await queueEngine.resume(queue) }
-            } label: {
-                Image(systemName: "play")
-                    .font(.caption)
-            }
-            .buttonStyle(.borderless)
-            .help("Resume \(queue.rawValue)")
-        }
-    }
-
-    @ViewBuilder
-    private func haltButton(_ queue: QueueKind) -> some View {
-        Button {
-            Task { await queueEngine.halt(queue) }
-        } label: {
-            Image(systemName: "stop")
-                .font(.caption)
-        }
-        .buttonStyle(.borderless)
-        .help("Halt \(queue.rawValue)")
     }
 
     // MARK: - Helpers
+
+    /// Look up the selected item in the current snapshot (active first).
+    private func item(for id: QueueItem.ID) -> QueueItem? {
+        viewModel.snapshot.activeItems.first { $0.id == id }
+            ?? viewModel.snapshot.recentItems.first { $0.id == id }
+    }
 
     private func wikiDisplayName(for id: String) -> String {
         sessionManager?.sessions[id]?.descriptor.displayName ?? String(id.prefix(8))
     }
 
-    private func label(for item: QueueItem) -> String {
-        if item.payload.lintPageIDs != nil {
-            return item.state == .running ? "Linting" : "Queued lint"
-        }
+    private func kindLabel(for item: QueueItem) -> String {
+        if item.payload.lintPageIDs != nil { return "Lint" }
         switch item.queue {
-        case .extraction:
-            return item.state == .running ? "Extracting" : "Queued"
-        case .ingestion:
-            return item.state == .running ? "Ingesting" : "Queued"
+        case .extraction: return "Extraction"
+        case .ingestion: return "Ingestion"
         }
     }
 
-    private func statusIcon(for state: QueueItemState) -> String {
-        switch state {
-        case .completed: "checkmark.circle"
-        case .failed: "exclamationmark.triangle"
-        case .cancelled: "xmark.circle"
-        case .queued: "clock"
-        case .running: "arrow.triangle.2.circlepath"
+    private func rowSubtitle(for item: QueueItem) -> String {
+        let wiki = wikiDisplayName(for: item.wikiID)
+        if let time = relativeTime(for: item) {
+            return "\(wiki) · \(time)"
+        }
+        return wiki
+    }
+
+    private func stateDescription(for item: QueueItem) -> String {
+        switch item.state {
+        case .running:
+            if let started = date(fromMillis: item.startedAt) {
+                return "Running — started \(started.formatted(date: .omitted, time: .shortened))"
+            }
+            return "Running"
+        case .queued:
+            let added = Date(timeIntervalSince1970: Double(item.createdAt) / 1000)
+            return "Queued — added \(added.formatted(date: .omitted, time: .shortened))"
+        case .completed:
+            if let finished = date(fromMillis: item.finishedAt) {
+                return "Completed \(finished.formatted(.relative(presentation: .named)))"
+            }
+            return "Completed"
+        case .failed:
+            if let finished = date(fromMillis: item.finishedAt) {
+                return "Failed \(finished.formatted(.relative(presentation: .named)))"
+            }
+            return "Failed"
+        case .cancelled:
+            if let finished = date(fromMillis: item.finishedAt) {
+                return "Cancelled \(finished.formatted(.relative(presentation: .named)))"
+            }
+            return "Cancelled"
         }
     }
 
-    private func statusColor(for state: QueueItemState) -> Color {
-        switch state {
-        case .completed: .secondary
-        case .failed: .red
-        case .cancelled: .secondary
-        case .queued: .secondary
-        case .running: .accentColor
+    /// Short relative time for sidebar rows ("2 min. ago"), from the most
+    /// meaningful timestamp for the item's state.
+    private func relativeTime(for item: QueueItem) -> String? {
+        let millis: Int64? = switch item.state {
+        case .running: item.startedAt
+        case .queued: item.createdAt
+        default: item.finishedAt ?? item.startedAt
         }
+        guard let date = date(fromMillis: millis) else { return nil }
+        return date.formatted(.relative(presentation: .named))
+    }
+
+    private func date(fromMillis millis: Int64?) -> Date? {
+        guard let millis else { return nil }
+        return Date(timeIntervalSince1970: Double(millis) / 1000)
     }
 }

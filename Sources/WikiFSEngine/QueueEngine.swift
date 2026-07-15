@@ -52,13 +52,22 @@ public actor QueueEngine {
     /// `resume`. Persisted via `QueueStore.setQueueRunState`.
     private var runStates: [QueueKind: QueueRunState] = [:]
 
-    /// The event stream continuation. Events are buffered (capacity 256) so
-    /// a slow consumer doesn't block the engine.
-    private var eventContinuation: AsyncStream<QueueEvent>.Continuation?
-    /// The public event stream. `nonisolated` because `AsyncStream` is
-    /// `Sendable` — the stream is created once in `init` and the continuation
-    /// is the only mutable (actor-isolated) part.
-    public nonisolated let events: AsyncStream<QueueEvent>
+    /// Fan-out for queue events. `AsyncStream` is single-consumer — with
+    /// several `for await` loops on ONE stream, each event is delivered to
+    /// exactly one of them (racily). The engine has multiple UI consumers
+    /// (activity tracker, status item, activity window), so each access of
+    /// ``events`` subscribes a fresh stream and the broadcaster yields every
+    /// event to all live subscribers.
+    private nonisolated let broadcaster = QueueEventBroadcaster()
+
+    /// A fresh event-stream subscription. Every access returns a NEW stream
+    /// that receives all events emitted from this point on — safe for any
+    /// number of concurrent consumers. (Events emitted before subscription
+    /// are not replayed; consumers needing current state should also call
+    /// ``snapshot()``.)
+    public nonisolated var events: AsyncStream<QueueEvent> {
+        broadcaster.subscribe()
+    }
 
     /// Whether the engine has been initialized (rehydration + initial dispatch).
     private var didStart = false
@@ -81,12 +90,6 @@ public actor QueueEngine {
         self.store = store
         self.config = config
         self.workerFactory = workerFactory
-
-        var continuation: AsyncStream<QueueEvent>.Continuation!
-        self.events = AsyncStream<QueueEvent>(bufferingPolicy: .bufferingOldest(256)) { c in
-            continuation = c
-        }
-        self.eventContinuation = continuation
     }
 
     // MARK: - Start (rehydration + initial dispatch)
@@ -278,28 +281,22 @@ public actor QueueEngine {
     // MARK: - Emit progress (for worker factory)
 
     /// A `Sendable` closure the worker factory captures to yield `.progress`
-    /// events onto the engine's `AsyncStream.Continuation` (bypassing `emit()`
-    /// which is actor-isolated). The continuation is `Sendable`, so this is
-    /// safe to call from the worker's detached `Task`.
+    /// events onto the engine's broadcaster (bypassing `emit()` which is
+    /// actor-isolated). The broadcaster is `Sendable`, so this is safe to
+    /// call from the worker's detached `Task`.
     public func makeEmitProgress() -> @Sendable (QueueItem.ID, String) -> Void {
-        guard let continuation = eventContinuation else {
-            return { _, _ in }
-        }
-        return { id, line in
-            continuation.yield(.progress(id, line: line))
+        return { [broadcaster] id, line in
+            broadcaster.yield(.progress(id, line: line))
         }
     }
 
     /// A `Sendable` closure the worker factory captures to yield `.transcript`
-    /// events onto the engine's `AsyncStream.Continuation` (bypassing `emit()`
-    /// which is actor-isolated). The continuation is `Sendable`, so this is
-    /// safe to call from the worker's detached `Task`.
+    /// events onto the engine's broadcaster (bypassing `emit()` which is
+    /// actor-isolated). The broadcaster is `Sendable`, so this is safe to
+    /// call from the worker's detached `Task`.
     public func makeEmitTranscript() -> @Sendable (QueueItem.ID, AgentEvent) -> Void {
-        guard let continuation = eventContinuation else {
-            return { _, _ in }
-        }
-        return { [store] id, event in
-            continuation.yield(.transcript(id, event))
+        return { [broadcaster, store] id, event in
+            broadcaster.yield(.transcript(id, event))
             // Persist to SQLite for cross-session transcript survival.
             try? store.appendItemEvent(itemID: id, event: event)
         }
@@ -559,9 +556,40 @@ public actor QueueEngine {
 
     // MARK: - Event emission
 
-    /// Emit a `QueueEvent` on the `AsyncStream`. Safe to call from any actor
-    /// method (the actor serializes access to `eventContinuation`).
+    /// Emit a `QueueEvent` to all subscribers.
     private func emit(_ event: QueueEvent) {
-        eventContinuation?.yield(event)
+        broadcaster.yield(event)
+    }
+}
+
+// MARK: - QueueEventBroadcaster
+
+/// Thread-safe multicast of ``QueueEvent``s to any number of subscribers.
+///
+/// Each ``subscribe()`` returns an independent `AsyncStream`; ``yield(_:)``
+/// delivers the event to every live subscriber (buffered 256 per subscriber
+/// so a slow consumer doesn't block the engine or starve the others).
+/// Terminated streams (consumer task cancelled / deallocated) unregister
+/// themselves via `onTermination`.
+final class QueueEventBroadcaster: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuations: [UUID: AsyncStream<QueueEvent>.Continuation] = [:]
+
+    func subscribe() -> AsyncStream<QueueEvent> {
+        AsyncStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
+            let id = UUID()
+            lock.withLock { continuations[id] = continuation }
+            continuation.onTermination = { [weak self] _ in
+                guard let self else { return }
+                self.lock.withLock { _ = self.continuations.removeValue(forKey: id) }
+            }
+        }
+    }
+
+    func yield(_ event: QueueEvent) {
+        let targets = lock.withLock { Array(continuations.values) }
+        for continuation in targets {
+            continuation.yield(event)
+        }
     }
 }

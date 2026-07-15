@@ -18,7 +18,7 @@ import WikiFSEngine
 /// Lives in `WikiFS` because it uses AppKit (`NSStatusItem`, `NSWindow`)
 /// and SwiftUI for the window content. The engine itself stays headless.
 @MainActor
-final class QueueStatusItemController {
+final class QueueStatusItemController: NSObject, NSMenuDelegate {
 
     // MARK: - Dependencies
 
@@ -55,20 +55,24 @@ final class QueueStatusItemController {
     /// Create the status item and start observing the engine's event stream.
     func start() {
         guard statusItem == nil else { return }
+        DebugLog.tabs("QueueStatusItemController.start: creating status item")
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem = item
 
-        // Set up the button — clicking shows a menu (not a window toggle).
         if let button = item.button {
             button.image = statusIcon(for: .idle)
             button.image?.isTemplate = true
-            button.action = #selector(showMenu(_:))
-            button.target = self
             button.toolTip = "Self Driving Wiki — Activity"
-            // Menu on left-click, not on mouse-down (feels more natural).
-            button.sendAction(on: [.leftMouseUp])
         }
+
+        // A persistent menu (rebuilt in `menuNeedsUpdate` just before it
+        // opens) — NOT a button action that assigns `item.menu`. Assigning
+        // the menu from inside a click action only arms it for the NEXT
+        // click, so the first click appears to do nothing.
+        let menu = NSMenu()
+        menu.delegate = self
+        item.menu = menu
 
         // Observe engine events to update the icon + menu.
         streamTask = Task { @MainActor [weak self] in
@@ -92,10 +96,11 @@ final class QueueStatusItemController {
 
     // MARK: - Menu
 
-    @objc private func showMenu(_ sender: AnyObject?) {
-        let menu = NSMenu()
+    /// Rebuild the menu from the latest snapshot each time it's about to
+    /// open (NSMenuDelegate).
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
         buildMenu(menu, snapshot: lastSnapshot)
-        statusItem?.menu = menu
     }
 
     private func buildMenu(_ menu: NSMenu, snapshot: QueueSnapshot) {
@@ -259,16 +264,19 @@ final class QueueStatusItemController {
                 activityTracker: activityTracker,
                 sessionManager: sessionManager
             )
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 720, height: 480),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                backing: .buffered,
-                defer: false
-            )
+            // NSHostingController (not a bare NSHostingView) so SwiftUI can
+            // install the window's unified toolbar from the view's `.toolbar`.
+            let window = NSWindow(contentViewController: NSHostingController(rootView: contentView))
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.toolbarStyle = .unified
             window.title = "Activity"
-            window.contentView = NSHostingView(rootView: contentView)
+            window.setContentSize(NSSize(width: 760, height: 500))
             window.isReleasedWhenClosed = false
+            // Center first; the autosave name then restores any saved frame
+            // over it (remember size/position across opens — set AFTER center
+            // so center() can't clobber the restored frame).
             window.center()
+            window.setFrameAutosaveName("QueueActivityWindow")
             activityWindow = window
         }
         activityWindow?.makeKeyAndOrderFront(nil)
@@ -329,7 +337,7 @@ final class QueueStatusItemController {
 
     private func handleEvent(_ event: QueueEvent) {
         switch event {
-        case .runStateChanged(let queue, let state):
+        case .runStateChanged(_, let state):
             if state == .paused {
                 isPaused = true
             } else {
