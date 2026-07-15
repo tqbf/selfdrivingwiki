@@ -617,6 +617,10 @@ struct ChatWebView: NSViewRepresentable {
             font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
             font-size: 13px; line-height: 1.5; color: var(--text);
             padding: 10px 0; -webkit-font-smoothing: antialiased;
+            /* Never let content exceed the web view's width — long tokens/URLs
+               in list items and paragraphs wrap instead of clipping off the
+               right edge or pushing list markers off the left. */
+            overflow-wrap: break-word; word-wrap: break-word;
           }
           .row { margin: 0 0 8px; }
           .row-label { font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 2px; }
@@ -712,8 +716,10 @@ struct ChatWebView: NSViewRepresentable {
             background: var(--code-bg); border-radius: 6px; overflow: auto;
           }
           pre code { background: none; padding: 0; font-size: 0.9em; }
-          ul, ol { padding-left: 1.4em; margin: 0 0 0.6em; }
-          li { margin: 0.1em 0; }
+          /* Slightly larger left padding so multi-digit markers ("10.") sit
+             fully inside the content box and never clip off the left edge. */
+          ul, ol { padding-left: 1.8em; margin: 0 0 0.6em; }
+          li { margin: 0.1em 0; overflow-wrap: break-word; word-wrap: break-word; }
           blockquote {
             margin: 0 0 0.6em; padding: 0 0 0 0.8em;
             border-left: 3px solid var(--border); color: var(--muted);

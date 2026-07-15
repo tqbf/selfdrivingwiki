@@ -325,7 +325,7 @@ struct ProviderSelector: View {
                 .imageScale(.small)
                 .foregroundStyle(.tertiary)
         }
-        .font(.caption)
+        .font(.callout)
         .contentShape(Rectangle())
     }
 
