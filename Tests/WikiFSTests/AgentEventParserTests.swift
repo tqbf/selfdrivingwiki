@@ -4,7 +4,7 @@ import Testing
 @testable import WikiFS
 @testable import WikiFSEngine
 
-/// Tests for the tolerant `claude -p --output-format stream-json` NDJSON parser.
+/// Tests for the tolerant ACP agent NDJSON stream parser.
 /// The fixture lines are REAL shapes captured from the installed CLI (2.1.178), so
 /// the parser is verified against the actual event schema — `system`/`init`,
 /// `assistant` text + `tool_use` blocks, `user`/`tool_result`, the final `result`,

@@ -95,7 +95,7 @@ struct ChatTranscriptFilterTests {
 
     @Test func systemInitIsDropped() {
         // isInternalTranscriptEvent: true — pinned so a future change to that
-        // predicate is caught here too, not just in AgentActivityView.
+        // predicate is caught here too, not just in AgentQueueView.
         let events: [AgentEvent] = [.systemInit(model: "claude-opus")]
         #expect(events.transcriptVisible.isEmpty)
     }

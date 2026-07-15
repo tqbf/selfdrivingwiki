@@ -56,7 +56,7 @@ struct ChatWebView: NSViewRepresentable {
     let style: VisualStyle
     /// A value that, when it changes, forces a full rebuild rather than an
     /// append — for callers whose event→visible-row filtering can change
-    /// retroactively (e.g. `AgentActivityView`'s "Show internals" toggle).
+    /// retroactively (e.g. `AgentQueueView`'s "Show internals" toggle).
     /// Callers whose filtering never changes mid-stream can ignore this.
     var showsInternals: Bool = false
     /// Invoked when the user clicks a `wiki://` link inside the transcript
@@ -71,7 +71,7 @@ struct ChatWebView: NSViewRepresentable {
     /// heal). Built where the store lives and bound to `store.renderContext()`
     /// (the model's memo, `WikiEventBus`-invalidated). `nil` (or a nil return)
     /// keeps the historical constant-`true` resolution — used by
-    /// `AgentActivityView`'s internals feed, where ghost styling is noise.
+    /// `AgentQueueView`'s internals feed, where ghost styling is noise.
     ///
     /// The coordinator resolves this to a `WikiRenderContext?` **value** once
     /// per render pass on the main actor (the provider reads the `@MainActor`
@@ -383,7 +383,7 @@ struct ChatWebView: NSViewRepresentable {
         /// re-renders with embeds once it finalizes.
         ///
         /// nil context keeps the historical constant-`true` resolution (used by
-        /// `AgentActivityView`'s internals feed, where ghost styling is noise).
+        /// `AgentQueueView`'s internals feed, where ghost styling is noise).
         /// User text is intentionally NOT run through this — a user typing
         /// `[[Foo]]` is not a link. `internal` so the linkify behavior is
         /// unit-testable.

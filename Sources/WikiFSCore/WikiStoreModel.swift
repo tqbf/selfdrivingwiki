@@ -216,7 +216,7 @@ public final class WikiStoreModel {
     public var draftChatMessage: String = ""
 
     /// Number of concurrent agent runs (interactive sessions or one-shot
-    /// `claude -p` operations) currently writing to THIS wiki. When the LAST
+    /// one-shot agent operations) currently writing to THIS wiki. When the LAST
     /// run ends, the model reloads from the store so the sidebar reflects the
     /// agent's writes. No longer a mutex — CAS (page versions, W0) prevents
     /// data races so concurrent edits are fine; `save()` catches
@@ -1790,7 +1790,7 @@ public final class WikiStoreModel {
     /// Add a resource by URL as a source: fetch it, convert HTML→Markdown (or
     /// store a PDF / text / binary verbatim), and land it as a source file —
     /// exactly like a drag-dropped file, so the existing **"Ingest into wiki"**
-    /// `claude -p` operation can summarize it afterward. Lands through the SAME
+    /// agent operation can summarize it afterward. Lands through the SAME
     /// `store.addSource` path as `addFiles`, so it appears under Sources +
     /// `sources/by-{id,name}` immediately and is pickable in Operations → Ingest.
     /// Returns the outcome on success; throws a user-readable

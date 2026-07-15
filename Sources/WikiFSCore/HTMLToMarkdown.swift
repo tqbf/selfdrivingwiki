@@ -8,7 +8,7 @@ import Foundation
 /// has no dependency on AppKit/WebKit — so the whole conversion is covered by plain
 /// value-in/value-out unit tests with no view and no network.
 ///
-/// Scope: the converted Markdown is consumed by a `claude -p` agent that summarizes
+/// Scope: the converted Markdown is consumed by the ACP agent that summarizes
 /// it later, so it needn't be a perfect round-trip — it must be *clean and readable*
 /// and it must NEVER crash on malformed / unclosed / weird input. Every loop here is
 /// bounded by the input length; an unterminated tag or entity degrades to literal

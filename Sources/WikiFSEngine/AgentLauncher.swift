@@ -3,10 +3,10 @@ import Observation
 import WikiFSCore
 import ACPModel
 
-/// Runs the three `claude -p` operations — Ingest / Query / Lint — against the
+/// Runs the three ACP agent operations — Ingest / Query / Lint — against the
 /// currently-selected wiki, streaming a live activity feed back into the app
 /// (`plans/llm-wiki.md` Phase C). Generalizes the v0 agent launcher: instead of a
-/// free-form shell command, it spawns a scoped `claude -p` invocation built by the
+/// free-form shell command, it spawns a scoped ACP agent invocation built by the
 /// pure `OperationCommand.build(...)` seam, now with `--output-format stream-json`
 /// so the run is visible as it happens instead of silent until the final result.
 ///
@@ -60,7 +60,7 @@ public final class AgentLauncher {
     /// it aborts a running `pdf2md` conversion (via its task-cancellation handler).
     /// Held here so `stop()` can cancel the conversion phase, not just the agent
     /// process. Self-clears when done.
-    /// True while a spawned `claude -p` process is alive (one-shot runs: from spawn
+    /// True while a spawned agent process is alive (one-shot runs: from spawn
     /// to finish; interactive sessions: from spawn to session end, across all turns).
     /// Set at spawn commit in `run()` and `startInteractiveQuery()`; cleared in
     /// `finish()`. This is NOT coupled to the generation gate — the gate serializes
@@ -625,7 +625,7 @@ public final class AgentLauncher {
     }
 
     /// Run an operation `request` against one wiki. Serializes on the generation gate:
-    /// if another `claude -p` run is generating, this `await`s until it finishes (or
+    /// if another agent run is generating, this `await`s until it finishes (or
     /// this task is cancelled). Returns without spawning if cancelled while queued.
     ///
     /// The launcher OWNS the per-run scratch dir, so it also owns STAGING: it creates
@@ -1726,7 +1726,7 @@ public final class AgentLauncher {
             && !isGenerating && !isAwaitingGenerationSlot
     }
 
-    /// Stop ONLY the agent process (claude -p). Does NOT touch a running pdf2md
+    /// Stop ONLY the agent process. Does NOT touch a running pdf2md
     /// conversion — a standalone extract running alongside a query continues.
     /// Also cancels any in-flight send task (generation gate wait).
     public func stopAgent() {

@@ -6,7 +6,7 @@ import Foundation
 /// chat responsiveness, while still serializing concurrent ingest runs.
 ///
 /// "Active generation" means:
-/// - A one-shot `claude -p` run (ingest / lint) holds the **ingest** lane for
+/// - A one-shot agent run (ingest / lint) holds the **ingest** lane for
 ///   the entire run (spawn to finish).
 /// - An interactive session (Ask / Edit / query) holds the **interactive** lane
 ///   only for the duration of ONE TURN — from when the user's message is

@@ -122,7 +122,7 @@ final class QueueStatusItemController: NSObject, NSMenuDelegate {
 
         // Per-queue windows.
         let ingestionItem = NSMenuItem(
-            title: "Ingestion Activity…",
+            title: "Agent Queue…",
             action: #selector(openIngestionWindow(_:)),
             keyEquivalent: "i")
         ingestionItem.target = self

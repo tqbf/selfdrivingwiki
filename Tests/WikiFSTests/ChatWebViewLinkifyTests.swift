@@ -139,7 +139,7 @@ struct ChatWebViewLinkifyTests {
 
     // MARK: - Phase A.2: nil-context path is behavior-preserving
     //
-    // The historical callers that pass NO context (e.g. AgentActivityView's
+    // The historical callers that pass NO context (e.g. AgentQueueView's
     // internals feed) must keep the constant-`true` resolution: every link
     // renders resolved, nothing ghosts, no embeds.
 

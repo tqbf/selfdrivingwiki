@@ -20,7 +20,7 @@ import WikiFSCore
 /// and `generationSlotWaiterCount`, not via `isRunning`.
 ///
 /// These exercise the slot seam (`awaitGenerationSlot` / `releaseGenerationSlot` /
-/// `generationSlotWaiterCount`) directly, without spawning a real `claude -p` process —
+/// `generationSlotWaiterCount`) directly, without spawning a real agent process —
 /// so they are fast and deterministic.
 @MainActor
 struct AgentGenerationSlotTests {

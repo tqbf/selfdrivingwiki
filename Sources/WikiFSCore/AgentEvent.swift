@@ -40,6 +40,8 @@ public enum TurnFailureReason: Sendable, Equatable, Codable {
 
 /// One rendered line of a `claude -p --output-format stream-json` run
 /// (`plans/llm-wiki.md` Phase C — "`claude -p` orchestration", which anticipates
+/// One rendered line of an ACP agent stream
+/// (`plans/llm-wiki.md` Phase C — agent orchestration, which anticipates
 /// `stream-json` "for a richer tool-call view"). The UI renders an ordered list of
 /// these live, so a run's activity is visible as it happens instead of a silent
 /// panel that "just sits there waiting for claude to do nothing".
@@ -263,8 +265,7 @@ public enum AgentEvent: Equatable, Sendable, Codable {
     }
 }
 
-/// Tolerant line-at-a-time parser for `claude -p --output-format stream-json`
-/// NDJSON. PURE and unit-tested against realistic captured lines: it decodes only
+/// Tolerant line-at-a-time parser for ACP agent NDJSON streams.
 /// the fields the UI renders and falls back to `.raw` for anything it can't map —
 /// a partial flush, a future event type, or outright garbage never throws.
 ///

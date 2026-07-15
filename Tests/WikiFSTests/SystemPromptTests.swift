@@ -31,7 +31,7 @@ struct SystemPromptTests {
 
     // MARK: - The seeded schema documents the maintainer contract (Phase D)
 
-    /// The Phase-D gate requires a fresh `claude -p` to read the seeded schema as
+    /// The Phase-D gate requires a fresh agent to read the seeded schema as
     /// its system prompt and be able to NAME the `wikictl` commands, the layout,
     /// the read-after-write rule, and the workflows. Pin that content here so the
     /// schema can't silently regress to a stub.
