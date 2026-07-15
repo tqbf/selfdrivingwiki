@@ -36,6 +36,8 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     private var hasFailedItems = false
     private var isPaused = false
     private var lastSnapshot: QueueSnapshot = QueueSnapshot()
+    private var hintPopover: NSPopover?
+    private var hintDismissTask: Task<Void, Never>?
 
     // MARK: - Init
 
@@ -73,6 +75,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         menu.delegate = self
         item.menu = menu
 
+        // Fetch initial snapshot so the icon reflects any items already
+        // in the queue (e.g. rehydrated from a previous session).
+        Task {
+            lastSnapshot = await queueEngine.snapshot()
+            updateIcon()
+        }
+
         // Observe engine events to update the icon + menu.
         streamTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -84,6 +93,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
     /// Tear down the status item (e.g. on app termination).
     func stop() {
+        dismissHint()
         streamTask?.cancel()
         streamTask = nil
         closeActivityWindow()
@@ -98,6 +108,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     /// Rebuild the menu from the latest snapshot each time it's about to
     /// open (NSMenuDelegate).
     func menuNeedsUpdate(_ menu: NSMenu) {
+        dismissHint()
         menu.removeAllItems()
         buildMenu(menu, snapshot: lastSnapshot)
     }
@@ -273,7 +284,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             state = .attention
         } else if isPaused {
             state = .paused
-        } else if activityTracker.isExtracting || activityTracker.isIngesting {
+        } else if !lastSnapshot.activeItems.isEmpty {
             state = .working
         } else {
             state = .idle
@@ -284,10 +295,19 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
     private func tooltipText(for state: IconState) -> String {
         switch state {
-        case .idle: "Self Driving Wiki — Idle"
-        case .working: "Self Driving Wiki — Processing"
-        case .paused: "Self Driving Wiki — Paused"
-        case .attention: "Self Driving Wiki — Attention needed"
+        case .idle: return "Self Driving Wiki — Idle"
+        case .working:
+            let running = lastSnapshot.activeItems.filter { $0.state == .running }.count
+            let queued = lastSnapshot.activeItems.filter { $0.state == .queued }.count
+            if running > 0 && queued > 0 {
+                return "Self Driving Wiki — Processing (\(running) active, \(queued) queued)"
+            } else if running > 0 {
+                return "Self Driving Wiki — Processing (\(running) active)"
+            } else {
+                return "Self Driving Wiki — \(queued) item\(queued == 1 ? "" : "s") queued"
+            }
+        case .paused: return "Self Driving Wiki — Paused"
+        case .attention: return "Self Driving Wiki — Attention needed"
         }
     }
 
@@ -319,17 +339,100 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
                 updateIcon()
             }
             return
-        case .enqueued, .started:
-            // Refresh snapshot for menu accuracy.
+        case .enqueued(let item):
+            // Show a transient popover anchored to the status item so the
+            // user gets immediate feedback that their ingest / extraction
+            // was queued — before the icon even updates.
+            showTransientHint(
+                message: item.queue == .ingestion
+                    ? "Ingest queued"
+                    : "Extraction queued",
+                symbol: item.queue == .ingestion
+                    ? "books.vertical.fill"
+                    : "doc.text.magnifyingglass"
+            )
+            // Refresh snapshot + update icon so the menu bar immediately
+            // reflects queued items (not just running ones). Without this,
+            // the icon stays idle when an item is enqueued but hasn't
+            // started yet — giving no feedback that work was queued.
             Task {
                 lastSnapshot = await queueEngine.snapshot()
+                updateIcon()
             }
+            return
+        case .started:
+            // Refresh snapshot + update icon so the menu bar reflects
+            // items that have transitioned to running.
+            Task {
+                lastSnapshot = await queueEngine.snapshot()
+                updateIcon()
+            }
+            return
         default:
             break
         }
         Task {
             lastSnapshot = await queueEngine.snapshot()
+            updateIcon()
         }
         updateIcon()
+    }
+
+    // MARK: - Transient hint
+
+    /// Show a brief popover below the status item, anchored to its button.
+    /// Auto-dismisses after 2.5 seconds, or when the user clicks elsewhere
+    /// (`.transient` behavior), or when the menu opens (`menuNeedsUpdate`
+    /// calls `dismissHint`).
+    private func showTransientHint(message: String, symbol: String) {
+        dismissHint()
+
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentSize = NSSize(width: 220, height: 40)
+        popover.contentViewController = NSHostingController(
+            rootView: QueueHintView(message: message, symbol: symbol)
+        )
+
+        guard let button = statusItem?.button else { return }
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        hintPopover = popover
+
+        hintDismissTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.dismissHint()
+        }
+    }
+
+    /// Close the transient hint popover (if any) and cancel its auto-dismiss.
+    private func dismissHint() {
+        hintDismissTask?.cancel()
+        hintDismissTask = nil
+        hintPopover?.close()
+        hintPopover = nil
+    }
+}
+
+// MARK: - Hint view
+
+/// Compact one-line hint shown in the transient status-item popover.
+private struct QueueHintView: View {
+    let message: String
+    let symbol: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.tint)
+            Text(message)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.primary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(minWidth: 190)
     }
 }
