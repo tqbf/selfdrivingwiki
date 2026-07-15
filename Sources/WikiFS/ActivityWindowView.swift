@@ -36,7 +36,7 @@ struct ActivityWindowView: View {
     @State private var didAutoSelect = false
 
     private var queueTitle: String {
-        queue == .extraction ? "Extraction" : "Ingestion"
+        queue == .extraction ? "Extraction Queue" : "Agent Queue"
     }
 
     private var activeItems: [QueueItem] {

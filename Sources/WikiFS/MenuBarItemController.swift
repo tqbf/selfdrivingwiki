@@ -128,7 +128,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         menu.addItem(ingestionItem)
 
         let extractionItem = NSMenuItem(
-            title: "Extraction Activity…",
+            title: "Extraction Queue…",
             action: #selector(openExtractionWindow(_:)),
             keyEquivalent: "e")
         extractionItem.target = self
