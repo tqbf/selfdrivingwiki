@@ -138,22 +138,17 @@ final class QueueStatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         // Wiki maintenance actions.
-        let vacuumItem = NSMenuItem(
-            title: "Vacuum All…",
-            action: #selector(vacuumAll(_:)),
+        let maintenanceItem = NSMenuItem(
+            title: "Maintenance",
+            action: nil,
             keyEquivalent: "")
-        vacuumItem.target = self
-        menu.addItem(vacuumItem)
-
-        menu.addItem(.separator())
-
-        // Navigation items (moved from Help menu).
-        let instructionsItem = NSMenuItem(
-            title: "Agent Instructions",
-            action: #selector(openAgentInstructions(_:)),
-            keyEquivalent: "")
-        instructionsItem.target = self
-        menu.addItem(instructionsItem)
+        let maintenanceMenu = NSMenu()
+        maintenanceMenu.addItem(withTitle: "Vacuum All…",
+            action: #selector(vacuumAll(_:)), keyEquivalent: "").target = self
+        maintenanceMenu.addItem(withTitle: "Agent Instructions",
+            action: #selector(openAgentInstructions(_:)), keyEquivalent: "").target = self
+        maintenanceItem.submenu = maintenanceMenu
+        menu.addItem(maintenanceItem)
 
         menu.addItem(.separator())
 
