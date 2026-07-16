@@ -8,6 +8,11 @@ import WikiFSEngine
 /// markdown, enqueues extraction first, waits for it, then enqueues the
 /// ingestion item. For non-PDFs or PDFs with existing markdown, enqueues
 /// ingestion directly.
+///
+/// **Deduplication:** before enqueuing, checks the engine's active items
+/// (`.queued` or `.running`) for this wiki. Sources already active in either
+/// the extraction or ingestion queue are skipped — a user tapping Ingest
+/// multiple times on the same source won't create duplicate queue entries.
 @MainActor
 func enqueueIngestion(
     sourceIDs: [PageID],
@@ -17,9 +22,28 @@ func enqueueIngestion(
 ) async {
     guard !sourceIDs.isEmpty else { return }
 
+    // Deduplicate: collect sourceIDs already active (queued or running)
+    // for this wiki in either queue, and skip them.
+    let snapshot = await queueEngine.snapshot()
+    let activeSourceIDs = Set(
+        snapshot.activeItems
+            .filter { $0.wikiID == wikiID }
+            .flatMap { $0.payload.sourceIDs }
+    )
+    let newSourceIDs = sourceIDs.filter { !activeSourceIDs.contains($0) }
+
+    let skipped = sourceIDs.count - newSourceIDs.count
+    if skipped > 0 {
+        DebugLog.ingest("enqueueIngestion: skipped \(skipped) source(s) already in queue")
+    }
+    guard !newSourceIDs.isEmpty else {
+        DebugLog.ingest("enqueueIngestion: all source(s) already in queue — nothing to do")
+        return
+    }
+
     var ingestionSourceIDs: [PageID] = []
 
-    for sourceID in sourceIDs {
+    for sourceID in newSourceIDs {
         // Check if this source needs extraction first.
         if let source = store.sources.first(where: { $0.id == sourceID }),
            source.mimeType == "application/pdf",
