@@ -30,7 +30,6 @@ struct ActivityWindowView: View {
     @Bindable var activityTracker: QueueActivityTracker
     weak var sessionManager: SessionManager?
     let containerDirectory: URL
-    let settingsLauncher: AgentLauncher
 
     @State private var viewModel = QueueViewModel()
     @State private var selectedItemID: QueueItem.ID?

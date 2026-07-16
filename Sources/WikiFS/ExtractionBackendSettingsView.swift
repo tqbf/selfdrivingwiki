@@ -5,13 +5,11 @@ import WikiFSCore
 /// Reusable view for PDF→Markdown extraction backend selection and
 /// configuration — the backend picker (Local pdf2md / Claude / Gemini /
 /// Docling Serve) plus the selected backend's credentials, endpoint, and
-/// Test Connection button. Extracted from `ExtractionSettingsView` so it
-/// can appear both in Settings → Extraction and in the Extraction Queue
-/// activity window's gear button sheet (issue #449).
+/// Test Connection button. Shown in the Extraction Queue activity window's
+/// gear button sheet (issue #449).
 ///
 /// Auto-saves on every edit (every field's `.onChange` calls
-/// `persistAll()`), mirroring the persistence pattern of
-/// `ExtractionSettingsView`. Secrets go through `ExtractionCredentialStore`
+/// `persistAll()`). Secrets go through `ExtractionCredentialStore`
 /// (Keychain), never into the JSON config file.
 ///
 /// Only the selected backend's config section is shown — picking another

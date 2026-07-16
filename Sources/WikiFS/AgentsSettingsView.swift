@@ -36,7 +36,6 @@ struct AgentsSettingsView: View {
     var body: some View {
         Form {
             providersSection
-            IngestionStagesView(containerDirectory: containerDirectory)
             permissionSection
         }
         .formStyle(.grouped)

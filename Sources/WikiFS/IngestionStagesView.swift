@@ -3,8 +3,7 @@ import WikiFSCore
 
 /// Reusable view for configuring ingestion stage assignments — which provider
 /// and model handle each stage (planner / executor / finalizer) of the
-/// ingestion pipeline. Extracted from `AgentsSettingsView` so it can appear
-/// both in Settings → Agents and in the Agent Queue activity window's gear
+/// ingestion pipeline. Shown in the Agent Queue activity window's gear
 /// button sheet (issue #449).
 ///
 /// Loads its own `AgentProvidersConfig` from `containerDirectory` and
