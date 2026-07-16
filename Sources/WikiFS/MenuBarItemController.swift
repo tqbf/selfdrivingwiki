@@ -28,6 +28,14 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     private let queueEngine: QueueEngine
     private let activityTracker: QueueActivityTracker
     private weak var sessionManager: SessionManager?
+    /// The wiki registry — drives the "Open Wiki" menu items. Read fresh each
+    /// time the menu opens (`menuNeedsUpdate`), so newly-created wikis appear
+    /// without a manual refresh.
+    private let registry: WikiRegistryClient
+    /// Bridges to SwiftUI's `openWindow(value:)` so selecting a wiki from the
+    /// status bar menu opens (or focuses) that wiki's window — even in
+    /// accessory mode when no windows are visible.
+    private let openWindowBridge: OpenWindowBridge
 
     // MARK: - AppKit
 
@@ -48,11 +56,15 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     init(
         queueEngine: QueueEngine,
         activityTracker: QueueActivityTracker,
-        sessionManager: SessionManager
+        sessionManager: SessionManager,
+        registry: WikiRegistryClient,
+        openWindowBridge: OpenWindowBridge
     ) {
         self.queueEngine = queueEngine
         self.activityTracker = activityTracker
         self.sessionManager = sessionManager
+        self.registry = registry
+        self.openWindowBridge = openWindowBridge
     }
 
     // MARK: - Lifecycle
@@ -118,6 +130,34 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     }
 
     private func buildMenu(_ menu: NSMenu, snapshot: QueueSnapshot) {
+        // Open Wiki section: lists every wiki so the user can get back to a
+        // window even when all windows are closed (accessory mode). Each item
+        // calls `openWindowBridge.openWiki(wiki.id)` which opens or focuses
+        // that wiki's window via SwiftUI's `WindowGroup(for: String.self)`.
+        if !registry.wikis.isEmpty {
+            for wiki in registry.wikis {
+                let item = NSMenuItem(
+                    title: wiki.displayName,
+                    action: #selector(openWikiWindow(_:)),
+                    keyEquivalent: "")
+                item.target = self
+                item.representedObject = wiki.id
+                // Show a checkmark next to the most-recently-used wiki.
+                item.state = (registry.activeWikiID == wiki.id) ? .on : .off
+                menu.addItem(item)
+            }
+            menu.addItem(.separator())
+        } else {
+            // No wikis exist: offer the main window so the user can create one.
+            let item = NSMenuItem(
+                title: "New Wiki…",
+                action: #selector(openMainWindow(_:)),
+                keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+            menu.addItem(.separator())
+        }
+
         // Per-queue windows.
         let ingestionItem = NSMenuItem(
             title: "Agent Queue…",
@@ -173,6 +213,17 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q")
         menu.addItem(quitItem)
+    }
+
+    @objc private func openWikiWindow(_ sender: NSMenuItem?) {
+        guard let wikiID = sender?.representedObject as? String else { return }
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        openWindowBridge.openWiki?(wikiID)
+    }
+
+    @objc private func openMainWindow(_ sender: NSMenuItem?) {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        openWindowBridge.openMain?()
     }
 
     @objc private func openIngestionWindow(_ sender: NSMenuItem?) {
