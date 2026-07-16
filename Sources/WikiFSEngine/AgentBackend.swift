@@ -59,7 +59,7 @@ public protocol AgentBackend: Sendable {
 /// The launcher resolves app-level concerns (scratch dir, bundled `wikictl`
 /// path, log layout) and passes them in here; `ACPBackend` reads `model`/
 /// `providerHints` for routing and `cli` for the env vars it needs to spawn
-/// (`WIKI_DB`/`WIKI_ROOT`/`WIKICTL`/`PATH`) — see `CLIProfile`.
+/// (`WIKI_DB`/`WIKICTL`/`PATH`) — see `CLIProfile`.
 public struct BackendProfile: Sendable {
     /// The model alias/name to pass to the agent (backend-interpreted).
     public var model: String?
@@ -70,7 +70,7 @@ public struct BackendProfile: Sendable {
     /// Gates Write/Edit tools — read-only interactive sessions pass `false`.
     public var isReadOnly: Bool
     /// The env-var context `ACPBackend.start` reads to spawn the agent with
-    /// `WIKI_DB`/`WIKI_ROOT`/`WIKICTL` visible. nil for sessions that don't
+    /// `WIKI_DB`/`WIKICTL` visible. nil for sessions that don't
     /// need them (none today — every launcher call site sets it).
     public var cli: CLIProfile?
 
@@ -95,7 +95,7 @@ public struct BackendProfile: Sendable {
 public struct CLIProfile: Sendable {
     /// The staged operation (carries its own self-sufficient prompt + agents).
     public var operation: WikiOperation
-    /// The wiki's live File Provider mount path (exported as `WIKI_ROOT`).
+    /// The wiki's live File Provider mount path (used for the task-prompt path (not exported as an env var by default, #441)).
     public var wikiRoot: String
     /// The active wiki's ULID (exported as `WIKI_DB`).
     public var wikiID: String

@@ -6,8 +6,9 @@ A native **macOS SwiftUI wiki**, backed by **SQLite**, mirrored **read-only** on
 the filesystem by a **File Provider extension** — and now a **self-maintaining LLM
 wiki**. A user keeps **many** wikis (a personal one, a research one, a per-book
 one); for each wiki an LLM (`claude -p`, run from the app as **Ingest / Ask /
-Edit / Lint**) authors and maintains the content: it *reads* the wiki through the mount and
-*writes* it through a small CLI, `wikictl`. The human curates sources and asks
+Edit / Lint**) authors and maintains the content: it *reads* the wiki through `wikictl` (DB-direct) and
+*writes* it through the same `wikictl` CLI. The File Provider mount is an optional
+read-only projection — useful for browsing in Finder, but not required for the agent. The human curates sources and asks
 questions; the agent does the bookkeeping (summary/entity/concept pages,
 `[[wiki-links]]`, a curated `index.md`, a chronological `log.md`).
 
@@ -18,20 +19,21 @@ needed to build and run it yourself.
 
 ## The non-negotiable invariant
 
-> **The File Provider mount is READ-ONLY. SQLite is the source of truth.**
-> **Reads go through the mount. Writes go through `wikictl`. Never make the mount
-> writable.**
+> **SQLite is the source of truth. The File Provider mount is READ-ONLY and
+> optional. Both reads and writes go through `wikictl` (DB-direct). Never make
+> the mount writable.**
 
 This is the whole point of the proof-of-concept. The File Provider extension is
-*essential*, not a convenience — do **not** replace it with a plain-folder export,
-even though that would dodge the Apple signing setup. Making the mount writable
+*part of the design*, not a convenience — do **not** replace it with a plain-folder export.
+The agent reads via `wikictl` (DB-direct), so the mount is not required for the agent
+to function; it exists for the UI page reader and Finder integration. Making the mount writable
 (implementing `createItem`/`modifyItem` write-back) would dissolve the invariant
 that the project exists to demonstrate. The split is deliberate:
 
 ```
-  claude -p ──reads──>  WIKI_ROOT mount (read-only)  ──projects──  SQLite
-        │                                                            ▲
-        └──writes──>  wikictl  ──writes──>  SQLite (App Group DB) ───┘
+  claude -p ──reads──>  wikictl  ──reads──>  SQLite (App Group DB)
+        │                                                 │ (optional read-only projection)
+        └──writes──>  wikictl  ──writes──>  SQLite  ──projects──>  File Provider mount
                           │
                           └── Darwin notification ──> app: refresh sidebar + signalChange()
 ```
@@ -85,10 +87,10 @@ These are not optional polish — without them the File Provider half does not w
    re-signed install) fires a Transparency/Consent prompt ("…would like to access
    data from other apps") that *blocks the extension from launching* until you grant
    it. This is recorded in [`ISSUES.md`](ISSUES.md) (and the live-gate memory).
-4. **Read-after-write lag (~5 s).** A `cat` of the mount right after a write can
-   return stale bytes for a few seconds while the File Provider daemon refreshes its
-   replica — it self-heals, no relaunch needed. The agent sidesteps it by reading
-   back through `wikictl page get` (instant SoT). See [`ISSUES.md`](ISSUES.md).
+4. **Read-after-write lag (~5 s).** The File Provider mount lags the database by
+   a few seconds after a write — it self-heals, no relaunch needed. The agent reads via
+   `wikictl page get` (DB-direct, always current), so this never affects the agent. Only
+   Finder browsing sees the lag. See [`ISSUES.md`](ISSUES.md).
 
 For live testing, **create a fresh wiki** rather than reusing a long-lived,
 heavily-churned one (a hammered domain replica can wedge — see `ISSUES.md`).
@@ -131,8 +133,9 @@ A deeper map is in [`plans/architecture.md`](plans/architecture.md); the short v
   never its display name (rename-safe). The extension is instantiated per domain;
   `domain.identifier` *is* the wiki ULID, which selects the DB to open.
 
-- **Read/write split.** The app and agent **read** through the mount. The agent
-  **writes** through `wikictl` (`page upsert/get/list/delete`, `log append`,
+- **Read/write split.** The agent reads and writes through `wikictl` (DB-direct).
+  The File Provider mount is an optional read-only projection for Finder integration
+  and the UI page reader. The agent (`page upsert/get/list/delete`, `log append`,
   `index set`), which writes the App Group SQLite directly and posts a per-wiki
   Darwin notification `org.sockpuppet.wiki.changed.<ulid>`. The app's
   `WikiChangeBridge` observes it, debounces a burst (`ChangeCoalescer`, ~250 ms),
@@ -142,7 +145,7 @@ A deeper map is in [`plans/architecture.md`](plans/architecture.md); the short v
 
 - **The `claude -p` operations.** The app surfaces four operations. **Ingest** and
   **Lint** are one-shot `claude -p` spawns, each launched into a fresh scratch dir
-  with `WIKI_ROOT` (the live mount) and `WIKI_DB` (the wiki ULID) in the environment,
+  with `WIKI_DB` (the wiki ULID) and `WIKICTL` (the wikictl path) in the environment,
   the wiki's schema via `--append-system-prompt`, `--dangerously-skip-permissions`,
   and `--output-format stream-json` (parsed live into an activity panel; also
   written to a backend `run.jsonl`). The in-app editor is **locked** during a run.

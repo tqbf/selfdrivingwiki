@@ -247,4 +247,61 @@ struct ChatViewD2Tests {
         #expect(visible.contains(.userText("hello")))
         #expect(visible.contains(.assistantText("hi there")))
     }
+
+
+    // MARK: - canSendPredicate (issue #441: mount guard removed)
+
+    /// `canSendPredicate` returns true when the agent is idle and there's draft
+    /// text — regardless of whether the mount is available. The mount guard was
+    /// removed because the agent reads via wikictl (DB-direct), not the mount.
+    @Test func canSendPredicateTrueWithDraftTextAndIdleAgent() {
+        #expect(ChatView.canSendPredicate(
+            hasMount: true,
+            canType: true,
+            isGenerating: false,
+            isAwaitingSlot: false,
+            hasDraftText: true) == true)
+    }
+
+    /// `canSendPredicate` returns true even when the mount is NOT available —
+    /// the mount guard was removed (issue #441).
+    @Test func canSendPredicateTrueWithoutMount() {
+        #expect(ChatView.canSendPredicate(
+            hasMount: false,
+            canType: true,
+            isGenerating: false,
+            isAwaitingSlot: false,
+            hasDraftText: true) == true)
+    }
+
+    /// `canSendPredicate` returns false when generating (can't send mid-response).
+    @Test func canSendPredicateFalseWhileGenerating() {
+        #expect(ChatView.canSendPredicate(
+            hasMount: true,
+            canType: true,
+            isGenerating: true,
+            isAwaitingSlot: false,
+            hasDraftText: true) == false)
+    }
+
+    /// `canSendPredicate` returns false when the composer is disabled.
+    @Test func canSendPredicateFalseWhenCannotType() {
+        #expect(ChatView.canSendPredicate(
+            hasMount: true,
+            canType: false,
+            isGenerating: false,
+            isAwaitingSlot: false,
+            hasDraftText: true) == false)
+    }
+
+    /// `canSendPredicate` returns false with no draft text.
+    @Test func canSendPredicateFalseWithNoDraftText() {
+        #expect(ChatView.canSendPredicate(
+            hasMount: true,
+            canType: true,
+            isGenerating: false,
+            isAwaitingSlot: false,
+            hasDraftText: false) == false)
+    }
+
 }

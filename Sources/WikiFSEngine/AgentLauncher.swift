@@ -1171,7 +1171,7 @@ public final class AgentLauncher {
         var stageBackendCache: [String: AgentBackend] = [:]
 
         // Build a shared CLI profile closure (sets the env vars `ACPBackend`
-        // reads: WIKI_DB, WIKI_ROOT, WIKICTL, PATH).
+        // reads: WIKI_DB, WIKICTL, PATH).
         let makeCLIProfile = { (op: WikiOperation) in
             CLIProfile(
                 operation: op,

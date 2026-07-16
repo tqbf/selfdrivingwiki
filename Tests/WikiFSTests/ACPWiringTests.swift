@@ -96,6 +96,41 @@ import ACPModel
         #expect(spawn?.environment.isEmpty == true)
     }
 
+    // MARK: - buildAgentEnv (issue #441: WIKI_ROOT no longer exported)
+
+    /// `buildAgentEnv` exports `WIKI_DB` and `WIKICTL` but NOT `WIKI_ROOT` —
+    /// the mount is optional; wikictl is the primary read surface.
+    @Test func buildAgentEnvDoesNotExportWikiRoot() {
+        let cli = CLIProfile(
+            operation: .queryChat(stateFilePath: "/tmp/state.md"),
+            wikiRoot: "/tmp/fake-mount",
+            wikiID: "FAKEWIKIID",
+            wikictlDirectory: "/tmp/wikictl-bin")
+        let env = ACPBackend.buildAgentEnv(
+            from: cli,
+            baseEnv: ["PATH": "/usr/bin:/bin"],
+            spawnEnvironment: [:])
+        #expect(env["WIKI_ROOT"] == nil)
+        #expect(env["WIKI_DB"] == "FAKEWIKIID")
+        #expect(env["WIKICTL"] == "/tmp/wikictl-bin/wikictl")
+        #expect(env["PATH"] == "/tmp/wikictl-bin:/usr/bin:/bin")
+    }
+
+    /// Spawn environment (provider hints) are merged into the result.
+    @Test func buildAgentEnvMergesSpawnEnvironment() {
+        let cli = CLIProfile(
+            operation: .queryChat(stateFilePath: "/tmp/state.md"),
+            wikiRoot: "/tmp/fake-mount",
+            wikiID: "FAKEWIKIID",
+            wikictlDirectory: "/tmp/wikictl-bin")
+        let env = ACPBackend.buildAgentEnv(
+            from: cli,
+            baseEnv: ["PATH": "/usr/bin:/bin"],
+            spawnEnvironment: ["MY_API_KEY": "secret"])
+        #expect(env["MY_API_KEY"] == "secret")
+        #expect(env["WIKI_ROOT"] == nil)
+    }
+
     // MARK: - Turn-end synthesis (extracted from ACPBackend.send)
 
     /// A successful prompt completion synthesizes exactly `.messageStop` (the
