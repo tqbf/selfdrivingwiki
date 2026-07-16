@@ -60,6 +60,13 @@ public enum ExtractionReadiness: Sendable, Equatable {
 public enum ExtractionBackend: String, Sendable, CaseIterable, Codable {
     /// The bundled `tools/pdf2md` subprocess (docling + granite-docling VLM).
     case localPdf2md
+    /// Delegate PDF extraction to a user-configured ACP provider (Claude,
+    /// Gemini, Hermes, Copilot, …). Reuses the provider's Keychain API key
+    /// from `ACPCredentialStore` — no second secret. The PDF is written to a
+    /// temp file and the configured ACP agent reads it via its native file
+    /// tooling, then returns markdown. This is the recommended backend: it
+    /// works with ANY ACP provider, not just Claude/Gemini.
+    case acp
     /// Claude via the Anthropic Messages API (PDF `document` block + extraction prompt).
     case anthropic
     /// Gemini via the Google AI generateContent API (PDF `inline_data` part).
@@ -71,6 +78,7 @@ public enum ExtractionBackend: String, Sendable, CaseIterable, Codable {
     public var displayName: String {
         switch self {
         case .localPdf2md: return "Local pdf2md"
+        case .acp: return "ACP Provider"
         case .anthropic: return "Claude (Anthropic API)"
         case .gemini: return "Gemini (Google AI)"
         case .doclingServe: return "Docling Serve"
@@ -82,6 +90,8 @@ public enum ExtractionBackend: String, Sendable, CaseIterable, Codable {
         switch self {
         case .localPdf2md:
             return "On-device via the bundled pdf2md (docling + granite VLM). Private; needs a one-time ~2 GB download."
+        case .acp:
+            return "Send the PDF to your configured ACP provider (Claude, Gemini, Hermes, …). Reuses the API key from Settings → Agents — no separate credentials. The PDF leaves your Mac."
         case .anthropic:
             return "Send the PDF to Claude and get markdown back. Needs an Anthropic API key; the PDF leaves your Mac."
         case .gemini:
@@ -97,6 +107,7 @@ public enum ExtractionBackend: String, Sendable, CaseIterable, Codable {
     public var agentName: String {
         switch self {
         case .localPdf2md: return "pdf2md"
+        case .acp: return "acp-extraction"
         case .anthropic:   return "claude"
         case .gemini:      return "gemini"
         case .doclingServe: return "docling-serve"
@@ -109,6 +120,7 @@ public enum ExtractionBackend: String, Sendable, CaseIterable, Codable {
     public static func from(agentName: String) -> ExtractionBackend? {
         switch agentName {
         case ExtractionBackend.localPdf2md.agentName: return .localPdf2md
+        case ExtractionBackend.acp.agentName:          return .acp
         case ExtractionBackend.anthropic.agentName:   return .anthropic
         case ExtractionBackend.gemini.agentName:      return .gemini
         case ExtractionBackend.doclingServe.agentName: return .doclingServe

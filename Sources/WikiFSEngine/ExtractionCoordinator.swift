@@ -19,6 +19,10 @@ import WikiFSCore
 public final class ExtractionCoordinator {
     public let containerDirectory: URL
     public let credentialStore: any ExtractionCredentialStore
+    /// The ACP credential store — used by the `.acp` backend to read the
+    /// provider's API key from Keychain (the SAME key the chat/ingest path
+    /// uses — no second secret). Defaults to the Keychain-backed store.
+    public let acpCredentialStore: any ACPCredentialStore
     /// Shared HTTP fetcher for the remote/model backends (production: a generous
     /// `URLSession`; tests inject a fake).
     public let fetcher: any HTTPRequestFetcher
@@ -33,11 +37,13 @@ public final class ExtractionCoordinator {
     public init(
         containerDirectory: URL,
         credentialStore: any ExtractionCredentialStore = KeychainExtractionCredentialStore(),
+        acpCredentialStore: any ACPCredentialStore = KeychainACPCredentialStore(),
         fetcher: any HTTPRequestFetcher = URLSessionRequestFetcher(),
         localExtractorFactory: @escaping @MainActor () -> any MarkdownExtractor
     ) {
         self.containerDirectory = containerDirectory
         self.credentialStore = credentialStore
+        self.acpCredentialStore = acpCredentialStore
         self.fetcher = fetcher
         self.localExtractorFactory = localExtractorFactory
     }
@@ -58,6 +64,18 @@ public final class ExtractionCoordinator {
         let cfg = config
         switch cfg.backend {
         case .localPdf2md:
+            return localExtractorFactory()
+        case .acp:
+            if let client = ACPExtractionClient.resolveProvider(
+                containerDirectory: containerDirectory,
+                acpProviderId: cfg.acpProviderId,
+                acpCredentialStore: acpCredentialStore) {
+                return client
+            }
+            // Fall back to the local extractor if no ACP provider is configured
+            // — better than crashing. The readiness probe on the ACP client
+            // would surface the real issue, but here we couldn't even build one.
+            DebugLog.config("ExtractionCoordinator: .acp backend but no provider resolvable — falling back to local pdf2md")
             return localExtractorFactory()
         case .anthropic:
             let base = cfg.anthropicBaseURLOverride.flatMap(URL.init(string:))

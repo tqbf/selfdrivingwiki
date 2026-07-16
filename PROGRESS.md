@@ -37,6 +37,87 @@ user-guide pages.
 
 **PLAN.md** documentation index updated with the user-guide entry.
 
+## 2026-07-16 — Fix #477: wiki open blocking on large wikis (branch `fix/477-wiki-open-blocking`)
+
+**Implemented.** Eliminated the frozen "Opening wiki…" spinner when opening
+wikis with 300+ pages. Three changes address the synchronous main-thread
+blocking at different layers of the session-resolution path:
+
+1. **Persist link-reconcile flag in SQLite metadata (v37 migration)** —
+   highest impact. Added a `wiki_metadata` key-value table (schema v37
+   migration). `WikiStoreModel.upgradeSearchIndex` now checks a persisted
+   `link_reconcile_version` key instead of an in-memory `didReconcileLinks`
+   boolean that reset every model recreation. Previously,
+   `LinkReconciler.reconcileAll` ran on every wiki open — 600+ synchronous
+   SQLite read+write ops per page for 300 pages. Now it runs once per
+   resolver version (currently `"1"`) and the flag persists across launches.
+   `getMetadata`/`setMetadata` added to `WikiStore` protocol + `SQLiteWikiStore`
+   (NO_EMIT, routes through `mutate(event: { _ in nil })`).
+
+2. **Skip 10K-row log scan when all sources are marked** (issue #477 §2).
+   `reloadSources()` now short-circuits `recentLogEntries(limit: 10_000)`
+   when there are no un-marked sources (the common case — every source has
+   `ingested_at` stamped). Avoids materializing 10K `LogEntry` structs just
+   to filter them for the legacy ingest-status fallback.
+
+3. **Task-wrap session resolution so spinner animates** (issue #477 §3).
+   `RootScene.resolveSession(for:)` now runs in a `Task` with an initial
+   `Task.yield()`, so the `ProgressView("Opening wiki…")` spinner paints and
+   animates before the synchronous store init + model reloads execute. With
+   fixes 1+2, the remaining init is ~4 lightweight SELECTs + one system-prompt
+   read — single-digit ms even for 300+ pages.
+
+**Files (6 changed):**
+- `Sources/WikiFSCore/SQLiteWikiStore.swift` — v37 migration (`wiki_metadata`
+  table), `getMetadata`/`setMetadata` methods, `createWikiMetadataTable`/
+  `migrateV36ToV37` (fresh schema + stepwise ladder)
+- `Sources/WikiFSCore/WikiStore.swift` — `getMetadata`/`setMetadata` on the
+  protocol
+- `Sources/WikiFSCore/WikiStoreModel.swift` — replaced `didReconcileLinks`
+  with persisted metadata check; `reloadSources` 10K-scan guard
+- `Sources/WikiFS/RootScene.swift` — `resolveSession(for:)` Task-wrapped
+- `Tests/WikiFSTests/StoreEmissionExhaustivenessTests.swift` — `setMetadata`
+  classified NO_EMIT
+- `Tests/WikiFSTests/WikiMetadataTests.swift` (new, 7 tests)
+
+**Gates:** `swift build` clean; fast tier 2415 tests pass; `StoreEmissionTests`
+partition check passes; `FreshSchemaParityTests` v37 schema matches; 7 new
+`WikiMetadataTests` pass. PR #478.
+
+## 2026-07-16 — ACP extraction backend (#453)
+
+**Implemented (branch `bouncy-manatee`).** Added an `.acp` extraction
+backend that delegates PDF→Markdown to a user-configured ACP provider
+(Claude, Gemini, Hermes, Copilot, …) instead of the hardcoded
+`AnthropicExtractionClient` / `GeminiExtractionClient` HTTP clients.
+
+- **New `ACPExtractionClient`** (`Sources/WikiFSEngine/ACPExtractionClient.swift`)
+  — a `MarkdownExtractor` conformer that writes the PDF to a temp file,
+  spawns an ACP session via `ACPBackend` (reusing the provider's
+  `AgentProvidersConfig` + `ACPCredentialStore` Keychain key), sends the
+  extraction prompt referencing the file path, and collects the markdown
+  from the `AgentEvent` stream. Works with ANY ACP provider — no vendor-
+  specific HTTP code, no second Keychain entry.
+- **`ExtractionBackend.acp` case** — added to the enum with
+  `displayName`, `helpText`, and `agentName` ("acp-extraction" for PROV).
+  The old `.anthropic` / `.gemini` cases are retained for backward compat
+  (existing `extraction-config.json` files decode fine).
+- **`ExtractionConfig.acpProviderId`** — new optional field: the provider id
+  to use for extraction. nil = use the app's default provider. Forward-
+  compatible (decodes as nil from old config files).
+- **`ExtractionCoordinator`** — new `acpCredentialStore` property (defaults
+  to `KeychainACPCredentialStore`). The `.acp` case in `current()` resolves
+  the provider via `ACPExtractionClient.resolveProvider`, falling back to
+  the local extractor if no provider resolves.
+- **`ExtractionSettingsView`** — new "ACP Provider" section with a provider
+  picker (populated from `AgentProvidersConfig.enabledProviders`). No
+  credentials to enter — the API key comes from Settings → Agents.
+- **`SourceDetailView` / `QueueExtractionWorker`** — wired the `.acp`
+  case into `extractorFor`, `modelVersionFor`, and the queue capacity map.
+- **Tests** — 5 new tests in `ExtractionConfigTests` (round-trip, forward-
+  compat decode, agent name) and 1 in `ExtractionCoordinatorTests` (falls
+  back to local when no provider resolves).
+
 ## 2026-07-16 — "Worked for Xs" footer with hover-swap (branch `social-dugong`)
 
 **Implemented.** Added a "Worked for Xs" duration footer under assistant

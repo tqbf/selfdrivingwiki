@@ -26,7 +26,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// final step of `migrate(from:)`. Tests reference this instead of
     /// hardcoding a magic number, so a schema bump doesn't require updating
     /// every test file.
-    public static let currentSchemaVersion = 36
+    public static let currentSchemaVersion = 37
 
     private let db: OpaquePointer
     /// Prepared-statement cache keyed by SQL text; reused via `reset()`.
@@ -621,7 +621,32 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // columns on `chats` for the one-line model-response summary shown in
         // the sidebar. A fresh DB gets the columns via `createChatTablesV23`
         // above; existing DBs get them via the v35→36 ALTER migration.
+        try exec("PRAGMA user_version=36;")
+
+        // v37 (issue #477 — wiki metadata): a key-value table for persisting
+        // one-time work flags (e.g. `link_reconcile_version`) so they survive
+        // model recreation between launches. Created here in the fresh path;
+        // existing DBs get it via the v36→37 migration step.
+        try createWikiMetadataTable()
         try exec("PRAGMA user_version=\(Self.currentSchemaVersion);")
+    }
+
+    /// Create the `wiki_metadata` key-value table (v37, issue #477). Stores
+    /// one-time work flags like the link-reconcile version so they survive
+    // model recreation between launches (eliminating repeated reconcile on
+    // every open). `IF NOT EXISTS` — idempotent for DBs rewound in testing.
+    private func createWikiMetadataTable() throws {
+        try exec("""
+        CREATE TABLE IF NOT EXISTS wiki_metadata (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """)
+    }
+
+    /// The v36→37 migration step: creates the `wiki_metadata` key-value table.
+    private func migrateV36ToV37() throws {
+        try createWikiMetadataTable()
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -1556,8 +1581,18 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // and `summary_at` columns to `chats` so the sidebar can show a
         // one-line summary of the model's first response. Simple ALTER — no
         // table rebuild needed for nullable columns.
-        if version < Self.currentSchemaVersion {
+        if version < 36 {
             try migrateV35ToV36()
+            try exec("PRAGMA user_version=36;")
+            version = 36
+        }
+
+        // Step 36 → 37 (issue #477 — wiki metadata): creates a `wiki_metadata`
+        // key-value table for persisting one-time work flags (e.g. the link-
+        // reconcile version) so they survive model recreation between launches.
+        // Purely additive — `CREATE TABLE IF NOT EXISTS`.
+        if version < Self.currentSchemaVersion {
+            try migrateV36ToV37()
             try exec("PRAGMA user_version=\(Self.currentSchemaVersion);")
             version = Self.currentSchemaVersion
         }
@@ -6460,6 +6495,36 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         var ids: Set<String> = []
         while try stmt.step() { ids.insert(stmt.text(at: 0)) }
         return ids
+    }
+
+    // MARK: - Wiki metadata (v37, issue #477)
+
+    /// Read a metadata value for `key`, or `nil` if the key doesn't exist.
+    /// Used to persist one-time work flags (e.g. link-reconcile version) so
+    /// they survive model recreation between launches. NO-EMIT: metadata flags
+    /// don't change projected content.
+    public func getMetadata(_ key: String) throws -> String? {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement("SELECT value FROM wiki_metadata WHERE key = ?1;")
+        defer { stmt.reset() }
+        try stmt.bind(key, at: 1)
+        guard try stmt.step() else { return nil }
+        return stmt.text(at: 0)
+    }
+
+    /// Set a metadata value for `key` (upsert). NO-EMIT: metadata flags don't
+    /// change projected content — they only gate one-time maintenance work.
+    public func setMetadata(_ key: String, value: String) throws {
+        try mutate(event: { _ in nil }) {
+        let stmt = try statement("""
+            INSERT INTO wiki_metadata (key, value) VALUES (?1, ?2)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+            """)
+        defer { stmt.reset() }
+        try stmt.bind(key, at: 1)
+        try stmt.bind(value, at: 2)
+        _ = try stmt.step()
+        }
     }
 
     /// All sources as `IndexGenerators.SourceIndexRow`s, ordered by id (ULID ==

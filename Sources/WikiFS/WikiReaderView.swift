@@ -912,7 +912,14 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     ReaderTiming.point("webview.main-hop", ms: Self.elapsedMs(since: convertDone))
                     ReaderTiming.point("webview.convert", ms: convertMs)
                     self.htmlLoadStart = DispatchTime.now()
-                    webView.loadHTMLString(html, baseURL: URL(string: "about:blank"))
+                    // Load under a real https origin (not about:blank) so embedded
+                    // players that validate the parent origin work — notably the
+                    // YouTube iframe, which 153-errors under an opaque `null` origin
+                    // (issue #206). All in-document links/images use absolute schemes
+                    // (wiki://, wiki-blob://, http[s]://), so base-relative resolution
+                    // is unaffected. Must stay in lock-step with the `?origin=` param
+                    // stamped onto the YouTube embed URL in ExternalEmbed.
+                    webView.loadHTMLString(html, baseURL: WikiReaderOrigin.url)
                 }
             }
         }

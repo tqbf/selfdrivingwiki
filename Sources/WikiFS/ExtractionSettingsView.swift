@@ -26,6 +26,7 @@ struct ExtractionSettingsView: View {
     // Drafts initialized from config + Keychain in `init`; every change is
     // written straight back by `persistAll()`.
     @State private var draftBackend: ExtractionBackend
+    @State private var acpProviderSelection: String
     @State private var anthropicKeyText: String
     @State private var modelText: String
     @State private var baseURLText: String
@@ -60,6 +61,7 @@ struct ExtractionSettingsView: View {
         // where an `.onChange` fires before the loaded values are in place.
         let config = ExtractionConfig.load(from: containerDirectory)
         _draftBackend = State(initialValue: config.backend)
+        _acpProviderSelection = State(initialValue: config.acpProviderId ?? "")
         _anthropicKeyText = State(initialValue: credentialStore.secret(.anthropicAPIKey) ?? "")
         _modelText = State(initialValue: config.anthropicModel == ExtractionConfig.defaultAnthropicModel ? "" : config.anthropicModel)
         _baseURLText = State(initialValue: config.anthropicBaseURLOverride ?? "")
@@ -126,6 +128,7 @@ struct ExtractionSettingsView: View {
     @ViewBuilder private var backendConfigSection: some View {
         switch draftBackend {
         case .localPdf2md: localSection
+        case .acp: acpSection
         case .anthropic: claudeSection
         case .gemini: geminiSection
         case .doclingServe: doclingSection
@@ -140,6 +143,26 @@ struct ExtractionSettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
         } header: {
             Text("Local pdf2md")
+        }
+    }
+
+    // MARK: - ACP Provider section
+
+    @ViewBuilder private var acpSection: some View {
+        Section {
+            Picker("Provider", selection: $acpProviderSelection) {
+                Text("Default (use app's default provider)").tag("")
+                ForEach(launcher.providersConfig().enabledProviders, id: \.id) { provider in
+                    Text(provider.label).tag(provider.id)
+                }
+            }
+            .onChange(of: acpProviderSelection) { persistAll() }
+        } header: {
+            Text("ACP Provider")
+        } footer: {
+            Text("Delegates PDF extraction to your configured ACP provider. Reuses the API key from Settings → Agents — no separate credentials needed. The provider reads the PDF from disk and returns markdown. Choose \"Default\" to use the same provider as chat and ingest.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -268,6 +291,7 @@ struct ExtractionSettingsView: View {
     /// Write every non-secret draft into `config`.
     private func writeConfig(into config: inout ExtractionConfig) {
         config.backend = draftBackend
+        config.acpProviderId = acpProviderSelection.isEmpty ? nil : acpProviderSelection
         let model = modelText.trimmingCharacters(in: .whitespacesAndNewlines)
         config.anthropicModel = model.isEmpty ? ExtractionConfig.defaultAnthropicModel : model
         let baseURL = baseURLText.trimmingCharacters(in: .whitespacesAndNewlines)

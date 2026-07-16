@@ -393,6 +393,15 @@ public enum WikiLinkMarkdown {
             switch target.kind {
             case .iframe:
                 let sizeClass = iframeSizeClass(for: target.url)
+                // YouTube-specific: the player initializes a JS runtime that
+                // 153-errors under `loading="lazy"` (WebKit suspends the frame,
+                // the player inits against a detached/zero-size iframe) and needs
+                // the reader's referrer to be forwarded. Eager-load it and set an
+                // explicit referrer policy. Other providers (Vimeo/Spotify/…) keep
+                // lazy loading unchanged — they render fine as-is (issue #206 non-goal).
+                if target.url.contains("youtube-nocookie.com") || target.url.contains("youtube.com") {
+                    return "<iframe src=\"\(embedEscape(target.url))\" class=\"wiki-embed \(sizeClass)\" allow=\"encrypted-media; picture-in-picture; fullscreen\" referrerpolicy=\"strict-origin-when-cross-origin\" allowfullscreen></iframe>"
+                }
                 return "<iframe src=\"\(embedEscape(target.url))\" class=\"wiki-embed \(sizeClass)\" allow=\"encrypted-media; picture-in-picture; fullscreen\" loading=\"lazy\"></iframe>"
             case .audio:
                 return "<audio src=\"\(embedEscape(target.url))\" controls class=\"wiki-embed\"></audio>"

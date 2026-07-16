@@ -108,7 +108,9 @@ struct BytelessEmbedIntegrationTests {
         // The descriptor yields a YouTube iframe target.
         let target = try #require(ExternalEmbed.target(for: d))
         #expect(target.kind == .iframe)
-        #expect(target.url == "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ")
+        // Embed URL carries the reader origin (issue #206: no origin ⇒ error 153).
+        #expect(target.url.hasPrefix("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?"))
+        #expect(target.url.contains("origin="))
     }
 
     // MARK: - AC.1: provider URL routing (no network)

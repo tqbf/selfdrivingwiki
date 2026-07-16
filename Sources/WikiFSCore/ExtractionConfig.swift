@@ -14,6 +14,11 @@ public struct ExtractionConfig: Codable, Equatable, Sendable {
     /// Which backend `ExtractionCoordinator.current()` resolves to.
     public var backend: ExtractionBackend
 
+    /// For the `.acp` backend: the provider id (from `AgentProvidersConfig`)
+    /// to use for extraction. nil = use the app's default provider. Ignored by
+    /// other backends. Forward-compatible: a missing key decodes to nil.
+    public var acpProviderId: String?
+
     /// The Claude model id for the Anthropic backend. Default `claude-sonnet-4-6`
     /// — extraction is a transcription task, so Sonnet's fidelity/cost balance
     /// beats Opus; user-editable to Haiku 4.5 (cheapest) or Opus (hardest layouts).
@@ -41,6 +46,7 @@ public struct ExtractionConfig: Codable, Equatable, Sendable {
 
     public init(
         backend: ExtractionBackend = .localPdf2md,
+        acpProviderId: String? = nil,
         anthropicModel: String = ExtractionConfig.defaultAnthropicModel,
         anthropicBaseURLOverride: String? = nil,
         geminiModel: String = ExtractionConfig.defaultGeminiModel,
@@ -48,6 +54,7 @@ public struct ExtractionConfig: Codable, Equatable, Sendable {
         doclingServeEndpoint: String? = nil
     ) {
         self.backend = backend
+        self.acpProviderId = acpProviderId
         self.anthropicModel = anthropicModel
         self.anthropicBaseURLOverride = anthropicBaseURLOverride
         self.geminiModel = geminiModel
@@ -73,7 +80,7 @@ public struct ExtractionConfig: Codable, Equatable, Sendable {
         switch backend {
         case .anthropic: return anthropicModel
         case .gemini: return geminiModel
-        case .localPdf2md, .doclingServe: return nil
+        case .acp, .localPdf2md, .doclingServe: return nil
         }
     }
 
@@ -84,7 +91,8 @@ public struct ExtractionConfig: Codable, Equatable, Sendable {
     /// value degrades to the default instead of throwing — same philosophy as
     /// `load`'s corrupt-file handling.
     private enum CodingKeys: String, CodingKey {
-        case backend, anthropicModel, anthropicBaseURLOverride
+        case backend, acpProviderId
+        case anthropicModel, anthropicBaseURLOverride
         case geminiModel, geminiBaseURLOverride
         case doclingServeEndpoint
     }
@@ -92,6 +100,7 @@ public struct ExtractionConfig: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.backend = (try? c.decode(ExtractionBackend.self, forKey: .backend)) ?? .localPdf2md
+        self.acpProviderId = try c.decodeIfPresent(String.self, forKey: .acpProviderId)
         self.anthropicModel = try c.decodeIfPresent(String.self, forKey: .anthropicModel)
             ?? ExtractionConfig.defaultAnthropicModel
         self.anthropicBaseURLOverride = try c.decodeIfPresent(String.self, forKey: .anthropicBaseURLOverride)

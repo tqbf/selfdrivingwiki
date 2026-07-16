@@ -135,6 +135,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         // calls `openWindowBridge.openWiki(wiki.id)` which opens or focuses
         // that wiki's window via SwiftUI's `WindowGroup(for: String.self)`.
         if !registry.wikis.isEmpty {
+            // Nest the wiki list under a "Wikis" submenu to keep the top-level
+            // status menu compact — the list can grow arbitrarily long.
+            let wikisItem = NSMenuItem(
+                title: "Wikis",
+                action: nil,
+                keyEquivalent: "")
+            let wikisMenu = NSMenu()
             for wiki in registry.wikis {
                 let item = NSMenuItem(
                     title: wiki.displayName,
@@ -142,10 +149,23 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
                     keyEquivalent: "")
                 item.target = self
                 item.representedObject = wiki.id
-                // Show a checkmark next to the most-recently-used wiki.
-                item.state = (registry.activeWikiID == wiki.id) ? .on : .off
-                menu.addItem(item)
+                // Show an "open" icon next to wikis whose window is
+                // currently on screen, rather than a checkmark on the
+                // most-recently-used wiki. The MRU wiki can differ from
+                // what's actually loaded: in accessory mode every window
+                // may be closed while `activeWikiID` still holds the last
+                // one. A window's presence is the true "loaded" signal.
+                if windowForWiki(wiki.id) != nil {
+                    let symbol = NSImage(
+                        systemSymbolName: "macwindow",
+                        accessibilityDescription: "Wiki is open")
+                    symbol?.isTemplate = true
+                    item.image = symbol
+                }
+                wikisMenu.addItem(item)
             }
+            wikisItem.submenu = wikisMenu
+            menu.addItem(wikisItem)
             menu.addItem(.separator())
         } else {
             // No wikis exist: offer the main window so the user can create one.
@@ -218,7 +238,27 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     @objc private func openWikiWindow(_ sender: NSMenuItem?) {
         guard let wikiID = sender?.representedObject as? String else { return }
         NSApplication.shared.activate(ignoringOtherApps: true)
+
+        // Focus an already-open window for this wiki rather than opening a
+        // duplicate. `openWindow(value:)` only dedups within the value-driven
+        // WindowGroup; a wiki adopted by the main window is invisible to it,
+        // so we look the window up by the identifier WindowIdentifierTagger
+        // stamps on it.
+        if let existing = windowForWiki(wikiID) {
+            existing.makeKeyAndOrderFront(nil)
+            return
+        }
+
         openWindowBridge.openWiki?(wikiID)
+    }
+
+    /// Returns the on-screen `NSWindow` currently showing the given wiki, if
+    /// any. Used to focus an already-open wiki window (avoiding duplicates in
+    /// `openWikiWindow`) and to show the "open" icon in the Wikis submenu for
+    /// wikis that are loaded.
+    private func windowForWiki(_ wikiID: String) -> NSWindow? {
+        let identifier = NSUserInterfaceItemIdentifier(wikiWindowIdentifierPrefix + wikiID)
+        return NSApplication.shared.windows.first { $0.identifier == identifier }
     }
 
     @objc private func openMainWindow(_ sender: NSMenuItem?) {
