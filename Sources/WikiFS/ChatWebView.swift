@@ -668,7 +668,9 @@ struct ChatWebView: NSViewRepresentable {
           body {
             font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
             font-size: 13px; line-height: 1.5; color: var(--text);
-            padding: 10px 0; -webkit-font-smoothing: antialiased;
+            /* Right-side padding keeps content clear of the WebView's scrollbar
+               so the right margin matches the left (which has no scrollbar). */
+            padding: 10px 12px 10px 0; -webkit-font-smoothing: antialiased;
             /* Never let content exceed the web view's width — long tokens/URLs
                in list items and paragraphs wrap instead of clipping off the
                right edge or pushing list markers off the left. */
