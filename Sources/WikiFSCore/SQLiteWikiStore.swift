@@ -2081,7 +2081,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             // 3. Seed root versions for existing pages. Idempotent: if
             //    page_versions already has rows (a rewound DB), skip.
             let pageCount = try queryScalarText(
-                "SELECT COUNT(*) FROM page_versions;") ?? "0"
+                "SELECT COUNT(*) FROM page_versions;")
             guard pageCount == "0" else { return }
 
             let hasPages = try queryScalarText(
@@ -2106,7 +2106,6 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 _ = try seedAgent.step()
             }
 
-            let now = Date().timeIntervalSince1970
             let select = try statement("""
             SELECT id, title, body_markdown, created_at FROM pages;
             """)
@@ -3345,7 +3344,6 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             guard try target.step() else {
                 throw WikiStoreError.unexpected("version \(versionID) not found for page \(pageID.rawValue)")
             }
-            let blobHash = target.text(at: 0)
             let title = target.text(at: 1)
             let bodyData = target.blob(at: 2)
             let body = String(data: bodyData, encoding: .utf8) ?? ""
