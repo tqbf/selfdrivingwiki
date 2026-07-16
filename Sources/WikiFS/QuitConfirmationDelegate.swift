@@ -18,6 +18,9 @@ import WikiFSEngine
 ///
 /// The confirmation can be toggled in Settings → General (key
 /// `confirmBeforeQuitting`, default **on** so the feature works out of the box).
+/// However, even when the setting is **off**, the app still asks for
+/// confirmation if an extraction, ingestion, or agent operation is in flight —
+/// silent termination during active work could lose data.
 final class QuitConfirmationDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Injected dependencies
@@ -26,9 +29,14 @@ final class QuitConfirmationDelegate: NSObject, NSApplicationDelegate {
     /// Wired in `WikiFSApp.init` after the manager is created.
     var flushPendingSaves: (() -> Void)?
 
-    /// Returns whether any agent (ingest or chat) is actively running. The quit
-    /// dialog message is tailored when operations are in flight.
-    var isAnyAgentRunning: (() -> Bool)?
+    /// Returns a human-readable description of any operation in flight (PDF
+    /// extraction, source ingestion, or an agent run), or `nil` when the app
+    /// is idle. The quit dialog message is tailored based on what's running.
+    ///
+    /// This covers operations that `isRunning` alone misses: `isExtracting`
+    /// (the PDF→Markdown phase before the agent process spawns) and
+    /// non-empty `ingestingSourceIDs` (an agent-phase ingest in progress).
+    var activeOperationDescription: (() -> String?)?
 
     // MARK: - Settings key
 
@@ -50,17 +58,23 @@ final class QuitConfirmationDelegate: NSObject, NSApplicationDelegate {
         // Flush pending saves regardless — don't lose buffered edits on quit.
         flushPendingSaves?()
 
-        guard Self.confirmBeforeQuitting else {
+        let activeOp = activeOperationDescription?()
+
+        // If nothing is running AND the user has disabled confirm-before-quit,
+        // quit now without a dialog.
+        guard activeOp != nil || Self.confirmBeforeQuitting else {
             return .terminateNow
         }
 
+        // Either the user wants confirmation, or there's active work we
+        // shouldn't interrupt silently — show the dialog in both cases.
         let alert = NSAlert()
         alert.alertStyle = .warning
 
-        if isAnyAgentRunning?() == true {
+        if let description = activeOp {
             alert.messageText = "Quit Self Driving Wiki?"
             alert.informativeText =
-                "An agent operation is still running and will be cancelled. "
+                "\(description) is still running and will be cancelled. "
                 + "Are you sure you want to quit?"
         } else {
             alert.messageText = "Quit Self Driving Wiki?"
@@ -110,9 +124,10 @@ final class QuitConfirmationDelegate: NSObject, NSApplicationDelegate {
     /// `confirmBeforeQuitting` setting) is deliberate: it only steers the
     /// *last*-window-close case into the termination flow; whether the user is
     /// actually asked, or the app quits immediately, is decided in
-    /// `applicationShouldTerminate` based on the setting. With the setting off,
-    /// the last window close quits the app right away (no dialog); with it on,
-    /// the dialog appears.
+    /// `applicationShouldTerminate` based on the setting (and whether any work
+    /// is in flight). With the setting off and nothing running, the last
+    /// window close quits the app right away (no dialog); with it on, the
+    /// dialog appears. If work is in flight, the dialog appears regardless.
     func applicationShouldTerminateAfterLastWindowClosed(
         _ sender: NSApplication
     ) -> Bool {
