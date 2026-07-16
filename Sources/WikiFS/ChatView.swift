@@ -452,33 +452,44 @@ struct ChatView: View {
     /// the conversation. Sourced from `displayMessages` (same events as the
     /// transcript). Uses `ChatSummary.summaryExtract` for the response text.
     private var chatOutlineEntries: [ChatOutlineEntry] {
+        let msgs = displayMessages
+        let timestamps = displayTimestamps
         var entries: [ChatOutlineEntry] = []
         var pendingQuestion: String?
-        for event in displayMessages {
+        var pendingQuestionTS: Date?
+        for (i, event) in msgs.enumerated() {
+            let ts = i < timestamps.count ? timestamps[i] : nil
             switch event {
             case .userText(let text):
                 if let q = pendingQuestion {
-                    entries.append(ChatOutlineEntry(question: q, response: nil))
+                    entries.append(ChatOutlineEntry(question: q, response: nil,
+                                                    questionTimestamp: pendingQuestionTS, responseTimestamp: nil))
                 }
                 pendingQuestion = humanizeAttachmentRefs(in: text)
+                pendingQuestionTS = ts
             case .assistantText(let text):
                 if let q = pendingQuestion {
                     let summary = ChatSummary.summaryExtract(from: text, maxLength: 200)
-                    entries.append(ChatOutlineEntry(question: q, response: summary.isEmpty ? nil : summary))
+                    entries.append(ChatOutlineEntry(question: q, response: summary.isEmpty ? nil : summary,
+                                                    questionTimestamp: pendingQuestionTS, responseTimestamp: ts))
                     pendingQuestion = nil
+                    pendingQuestionTS = nil
                 }
             case .result(_, let text):
                 if let q = pendingQuestion {
                     let summary = ChatSummary.summaryExtract(from: text, maxLength: 200)
-                    entries.append(ChatOutlineEntry(question: q, response: summary.isEmpty ? nil : summary))
+                    entries.append(ChatOutlineEntry(question: q, response: summary.isEmpty ? nil : summary,
+                                                    questionTimestamp: pendingQuestionTS, responseTimestamp: ts))
                     pendingQuestion = nil
+                    pendingQuestionTS = nil
                 }
             default:
                 break
             }
         }
         if let q = pendingQuestion {
-            entries.append(ChatOutlineEntry(question: q, response: nil))
+            entries.append(ChatOutlineEntry(question: q, response: nil,
+                                            questionTimestamp: pendingQuestionTS, responseTimestamp: nil))
         }
         return entries
     }
@@ -977,6 +988,8 @@ enum ChatMetrics {
 struct ChatOutlineEntry: Hashable {
     let question: String
     let response: String?
+    let questionTimestamp: Date?
+    let responseTimestamp: Date?
 }
 
 /// Right-side outline for a chat: lists the user's turns (questions) in
@@ -1038,17 +1051,36 @@ struct ChatOutlineView: View {
                             Button {
                                 onSelect(index)
                             } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(entry.question.isEmpty ? "(empty)" : entry.question)
-                                        .font(.callout)
-                                        .foregroundStyle(.primary)
-                                        .multilineTextAlignment(.leading)
-                                    if let response = entry.response {
-                                        Text(response)
+                                VStack(alignment: .leading, spacing: 0) {
+                                    // Timestamp header for the turn
+                                    if let ts = entry.questionTimestamp {
+                                        Text(ts, format: .dateTime.hour().minute())
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                            .padding(.bottom, 2)
+                                    }
+                                    // User question line item
+                                    HStack(alignment: .top, spacing: 4) {
+                                        Text("•")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
-                                            .lineLimit(3)
+                                        Text(entry.question.isEmpty ? "(empty)" : entry.question)
+                                            .font(.callout)
+                                            .foregroundStyle(.primary)
                                             .multilineTextAlignment(.leading)
+                                    }
+                                    // Agent response line item
+                                    if let response = entry.response {
+                                        HStack(alignment: .top, spacing: 4) {
+                                            Text("•")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                            Text(response)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(3)
+                                                .multilineTextAlignment(.leading)
+                                        }
                                     }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
