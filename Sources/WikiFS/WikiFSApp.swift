@@ -139,13 +139,27 @@ struct WikiFSApp: App {
         }
 
         // Wire the quit-confirmation delegate's closures. Flush pending autosaves
-        // (don't lose buffered edits), and report whether any agent is running so
-        // the quit dialog message is tailored when operations are in flight.
+        // (don't lose buffered edits), and report any active operation (extraction,
+        // ingestion, agent run) so the quit dialog message is tailored and the app
+        // won't silently quit mid-work even with the setting off.
         quitDelegate.flushPendingSaves = { [weak manager] in
             manager?.activeStore?.flushPendingSaves()
         }
-        quitDelegate.isAnyAgentRunning = { [weak agentLauncher, weak chatLauncher] in
-            agentLauncher?.isRunning == true || chatLauncher?.isRunning == true
+        quitDelegate.activeOperationDescription = { [weak agentLauncher, weak chatLauncher] in
+            if agentLauncher?.isExtracting == true
+                || chatLauncher?.isExtracting == true {
+                return "A PDF extraction"
+            }
+            if !(agentLauncher?.ingestingSourceIDs.isEmpty ?? true) {
+                return "A source ingestion"
+            }
+            if agentLauncher?.isRunning == true {
+                return "An agent operation"
+            }
+            if chatLauncher?.isRunning == true {
+                return "A chat session"
+            }
+            return nil
         }
     }
 
