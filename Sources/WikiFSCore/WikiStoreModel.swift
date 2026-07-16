@@ -71,7 +71,7 @@ public final class WikiStoreModel {
     /// sees it true and bails. The check-and-set is main-actor and contains no
     /// suspension, so it is atomic against the scenePhase/activeWikiID hooks.
     @ObservationIgnored private var isUpgrading = false
-    @ObservationIgnored private var didReconcileLinks = false
+    @ObservationIgnored private var didReconcileLinksInThisSession = false
 
     /// Live SOURCES search query from the Sources search bar. Debounced 300ms.
     /// Mirrors the page `searchQuery` (semantic cosine, LIKE fallback).
@@ -2522,12 +2522,23 @@ public final class WikiStoreModel {
         // splitting, lenient source-name matching) — or whose target was
         // ingested after the page was last saved — get their link rows without
         // waiting for the page's next edit.
-        if !didReconcileLinks {
-            didReconcileLinks = true
-            let start = DispatchTime.now()
-            let count = (try? await LinkReconciler.reconcileAll(in: store)) ?? 0
-            let ms = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
-            DebugLog.store("LinkReconciler: re-resolved links for \(count) page(s) in \(Int(ms))ms")
+        if !didReconcileLinksInThisSession {
+            didReconcileLinksInThisSession = true
+
+            // Persist the flag in `wiki_metadata` (v37, issue #477) so it
+            // survives model recreation between launches. Previously an
+            // in-memory boolean that reset every open, causing 600+ SQLite
+            // ops on every launch for 300+ page wikis.
+            let reconcileKey = "link_reconcile_version"
+            let currentReconcileVersion = "1"
+            let alreadyReconciled = (try? store.getMetadata(reconcileKey)) ?? ""
+            if alreadyReconciled != currentReconcileVersion {
+                let start = DispatchTime.now()
+                let count = (try? await LinkReconciler.reconcileAll(in: store)) ?? 0
+                let ms = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+                DebugLog.store("LinkReconciler: re-resolved links for \(count) page(s) in \(Int(ms))ms")
+                try? store.setMetadata(reconcileKey, value: currentReconcileVersion)
+            }
         }
 
         guard EmbeddingService.selectedEmbedderIdentifier() == EmbeddingService.miniLMIdentifier else {
@@ -2663,12 +2674,17 @@ public final class WikiStoreModel {
         // Authoritative source: the flag the agent stamps via
         // `wikictl log append --kind ingest --source <id>` on success.
         let markedIDs = (try? store.markedSourceIDs()) ?? []
+
         // Legacy fallback: wikis ingested before the flag existed only have the
-        // free-text log entry, so keep the old best-effort title/path match too.
-        let entries = (try? store.recentLogEntries(limit: 10_000)) ?? []
-        let ingestTexts = entries
-            .filter { $0.kind == .ingest }
-            .map { "\($0.title) \($0.note ?? "")".lowercased() }
+        // free-text log entry, so keep the old best-effort title/path match —
+        // BUT only for sources that are NOT already marked (issue #477: avoid
+        // loading 10K log rows when every source is already flagged).
+        let unmarkedSources = sources.filter { !markedIDs.contains($0.id.rawValue) }
+        let ingestTexts: [String] = unmarkedSources.isEmpty
+            ? []
+            : ((try? store.recentLogEntries(limit: 10_000)) ?? [])
+                .filter { $0.kind == .ingest }
+                .map { "\($0.title) \($0.note ?? "")".lowercased() }
 
         sourceIngestedStatus = Dictionary(uniqueKeysWithValues: sources.map { file in
             if markedIDs.contains(file.id.rawValue) {

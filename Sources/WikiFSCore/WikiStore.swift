@@ -645,6 +645,17 @@ public protocol WikiStore: Sendable {
     /// `ResourceKind` — the served tree is unaffected.
     @discardableResult
     func vacuumPageVersions(dryRun: Bool) throws -> PageVersionVacuumReport
+
+    // MARK: - Wiki metadata (v37, issue #477)
+
+    /// Read a metadata value for `key`, or `nil` if the key doesn't exist.
+    /// Used to persist one-time work flags (e.g. link-reconcile version) so
+    /// they survive model recreation between launches.
+    func getMetadata(_ key: String) throws -> String?
+
+    /// Set a metadata value for `key` (upsert). NO-EMIT: metadata flags don't
+    /// change projected content — they only gate one-time maintenance work.
+    func setMetadata(_ key: String, value: String) throws
 }
 
 // MARK: - addSource default-argument convenience
