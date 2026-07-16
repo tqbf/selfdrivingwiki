@@ -277,6 +277,13 @@ struct WikiFSApp: App {
         statusController.start()
         appDelegate.menuBarItemController = statusController
 
+        // Operation notifier: posts macOS local notifications when extraction,
+        // ingestion, or lint reaches a terminal state. Subscribes to the same
+        // event stream as the tracker and status item (multicast — free).
+        let notifier = OperationNotifier(queueEngine: queueEngine)
+        notifier.start()
+        appDelegate.operationNotifier = notifier
+
         // File Provider setup + change bridge (async).
         Task {
             if let warning = await FileProviderSetupVerifier.verifyAndRepairInstalledProvider() {
@@ -479,6 +486,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `startStatusItem()` returns, which removes the NSStatusItem from the
     /// menu bar before it ever draws.
     @MainActor var menuBarItemController: MenuBarItemController?
+    /// Strong on purpose — the notifier's `streamTask` captures `self` weakly,
+    /// so without a strong owner it deallocates the moment `start()` returns
+    /// (same pattern as `menuBarItemController`).
+    @MainActor var operationNotifier: OperationNotifier?
     @MainActor var bootstrap: (@MainActor () -> Void)?
 
     // MARK: - Quit confirmation (folded in from the former QuitConfirmationDelegate;
