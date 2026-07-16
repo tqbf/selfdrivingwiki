@@ -103,6 +103,9 @@ struct StoreEmissionExhaustivenessTests {
         "workspaceRefresh", "workspaceResolveConflict", "workspaceRetryMerge",
         "setWorkspaceIndexBody",
         "reapStaleWorkspaces",
+        // Wiki metadata (v37, issue #477): metadata flags gate one-time
+        // maintenance work — they don't change projected ResourceKind.
+        "setMetadata",
     ]
 
     /// Every EMIT member must route through `mutate()` (AC.2). A newly added

@@ -177,15 +177,25 @@ struct RootScene: View {
     /// wire the File Provider bus subscription, activate the FP domain, and
     /// reap stale workspaces. Guarded by `session == nil` so calling it twice
     /// is a no-op.
+    ///
+    /// Runs in a `Task` (issue #477) so the `ProgressView("Opening wiki…")`
+    /// spinner can animate while the synchronous store init + model reloads
+    /// execute. The `Task.yield()` between reload phases lets the main run
+    /// loop paint between batches of SQLite work.
     private func resolveSession(for wikiID: String) {
         guard session == nil else { return }
         guard let descriptor = registry.wikis.first(where: { $0.id == wikiID }) else { return }
-        let resolved = sessionManager.session(for: wikiID, descriptor: descriptor)
-        session = resolved
-        // Wire the File Provider bus subscription for this wiki's session.
-        fileProvider.subscribeBus(for: wikiID, bus: resolved.store.eventBus)
-        Task { await fileProvider.activate(id: descriptor.id, displayName: descriptor.displayName) }
-        // Reap stale workspaces for this wiki.
-        _ = try? resolved.store.reapStaleWorkspaces(ttl: 86_400)
+        Task { @MainActor in
+            // Yield first so the spinner paints before the store opens.
+            await Task.yield()
+            guard session == nil else { return }  // re-check after suspension
+            let resolved = sessionManager.session(for: wikiID, descriptor: descriptor)
+            session = resolved
+            // Wire the File Provider bus subscription for this wiki's session.
+            fileProvider.subscribeBus(for: wikiID, bus: resolved.store.eventBus)
+            Task { await fileProvider.activate(id: descriptor.id, displayName: descriptor.displayName) }
+            // Reap stale workspaces for this wiki.
+            _ = try? resolved.store.reapStaleWorkspaces(ttl: 86_400)
+        }
     }
 }
