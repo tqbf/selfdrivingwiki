@@ -79,7 +79,14 @@ jobs:
             echo "SWIFT=swift" >> "$GITHUB_ENV"
           fi
       - name: Test (full suite — integration suites included, issue #364)
-        run: $SWIFT test
+        # `QueueEngineTests` is skipped here (but NOT in the fast `swift` job):
+        # it's a fast, timing-sensitive suite that's fully and reliably covered
+        # by the fast tier. It's fundamentally flaky in THIS tier because the
+        # heavy CPU-bound SQLite suites hog the cooperative thread pool without
+        # yielding, starving the queue engine's worker Tasks (issue #448) — even
+        # a 30s timeout wasn't enough. The fast tier (which skips those heavy
+        # suites) runs it reliably.
+        run: $SWIFT test --skip QueueEngineTests
 
   python:
     runs-on: ubuntu-latest
