@@ -23,27 +23,7 @@ preserved in the database.
 
 ## The chat interface
 
-```
-┌─────────────────────────────────────────────┐
-│  Chat Title              [Show in List] [≡]  │  ← header (title, outline toggle)
-├─────────────────────────────────────────────┤
-│  Outline (optional, right side)              │
-│                                              │
-│        User message (right-aligned bubble)   │
-│                                              │
-│  Agent response (full-width prose)           │
-│  ...streaming markdown...                    │
-│                                              │
-│        [Copy]  Worked for 4s                 │  ← hover for timestamp
-│                                              │
-├─────────────────────────────────────────────┤
-│  [Attachment chips]              │
-│  ┌────────────────────────────────────────┐ │
-│  │ Type a message...                      │ │  ← composer
-│ │  [+] [Provider ▾] [Permission ▾] [↑ Send]│ │
-│  └────────────────────────────────────────┘ │
-└─────────────────────────────────────────────┘
-```
+![Chat window: title, tab strip, agent transcript with a collapsed thinking block and timestamped response, and the composer with model and permission-mode chips at the bottom.](images/chat-window.png)
 
 ### Message layout
 

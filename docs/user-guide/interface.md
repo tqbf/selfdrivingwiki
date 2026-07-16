@@ -8,21 +8,7 @@ you've used Safari or Xcode, the basics are second nature.
 
 ## Window overview
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Toolbar:  [⌘] [⌫] [omnibox search field]     [wiki name ▾] [∥]│
-├──────────┬───────────────────────────────────────────────────┤
-│ Sidebar  │  Tab strip (shown when 2+ tabs open)               │
-│          ├───────────────────────────────────────────────────┤
-│ Pages    │                                                   │
-│ Sources  │            Detail pane                             │
-│ Bookmarks│         (page reader, source detail,               │
-│ Chats    │          chat, or system prompt)                   │
-│          │                                                   │
-│ [search] │                                                   │
-│ [list]   │                                                   │
-└──────────┴───────────────────────────────────────────────────┘
-```
+![Main window: sidebar with the Pages/Sources/Bookmarks/Chats tab strip on the left, the omnibox and wiki switcher in the toolbar, and a page open in the detail pane.](images/interface-main-window.png)
 
 ---
 

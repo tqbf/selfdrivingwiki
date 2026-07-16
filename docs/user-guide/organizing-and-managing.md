@@ -22,6 +22,8 @@ with:
 - **Stale refs** — if a target was deleted, a ⚠️ warning icon appears (the node
   is preserved, not auto-deleted).
 
+![Bookmarks sidebar showing a folder tree with nested subfolders and page references.](images/bookmarks-sidebar.png)
+
 ### Adding bookmarks
 
 | Method | How |
