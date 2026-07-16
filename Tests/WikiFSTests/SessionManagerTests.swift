@@ -33,9 +33,13 @@ struct SessionManagerTests {
         let coordinator = ExtractionCoordinator(
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
+        let queueEngine = try! makeTestQueueEngine()
+        let provider = StubExtractionProvider()
         return SessionManager(
             containerDirectory: dir,
             extractionCoordinator: coordinator,
+            queueEngine: queueEngine,
+            extractionProvider: provider,
             pdf2mdScriptPathResolver: { nil })
     }
 
@@ -208,4 +212,24 @@ private final class StubExtractor: MarkdownExtractor {
         filename: String,
         onProgress: (@Sendable (String) -> Void)?
     ) async throws -> String { "" }
+}
+
+/// A no-op `QueueExtractionProvider` for tests — returns nil (no extraction).
+private struct StubExtractionProvider: QueueExtractionProvider {
+    func resolveExtraction(
+        wikiID: String, sourceID: PageID, backendOverride: ExtractionBackend?
+    ) async throws -> ExtractionResolution? { nil }
+    func persistExtraction(
+        wikiID: String, sourceID: PageID, markdown: String,
+        backend: ExtractionBackend, modelVersion: String?
+    ) async throws {}
+}
+
+/// Creates a `QueueEngine` backed by an in-memory store + stub provider.
+private func makeTestQueueEngine() throws -> QueueEngine {
+    let store = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+    let provider = StubExtractionProvider()
+    let factory = QueueExtractionWorkerFactory(
+        provider: provider, emitProgress: { _, _ in })
+    return QueueEngine(store: store, workerFactory: factory)
 }

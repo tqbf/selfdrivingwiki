@@ -39,7 +39,9 @@ struct WikiSessionTests {
             wikiID: descriptor.id,
             descriptor: descriptor,
             containerDirectory: dir,
-            extractionCoordinator: coordinator)
+            extractionCoordinator: coordinator,
+            queueEngine: try! makeTestQueueEngine(),
+            extractionProvider: StubExtractionProvider())
 
         #expect(session.wikiID == descriptor.id)
         #expect(session.store.eventBus != nil)
@@ -61,12 +63,16 @@ struct WikiSessionTests {
             wikiID: registryA.wikis.first!.id,
             descriptor: registryA.wikis.first!,
             containerDirectory: dirA,
-            extractionCoordinator: coordinator)
+            extractionCoordinator: coordinator,
+            queueEngine: try! makeTestQueueEngine(),
+            extractionProvider: StubExtractionProvider())
         let sessionB = WikiSession(
             wikiID: registryB.wikis.first!.id,
             descriptor: registryB.wikis.first!,
             containerDirectory: dirB,
-            extractionCoordinator: coordinator)
+            extractionCoordinator: coordinator,
+            queueEngine: try! makeTestQueueEngine(),
+            extractionProvider: StubExtractionProvider())
 
         // Two sessions have distinct AgentLauncher instances.
         #expect(sessionA.agentLauncher !== sessionB.agentLauncher)
@@ -93,12 +99,16 @@ struct WikiSessionTests {
             wikiID: registryA.wikis.first!.id,
             descriptor: registryA.wikis.first!,
             containerDirectory: dirA,
-            extractionCoordinator: coordinator)
+            extractionCoordinator: coordinator,
+            queueEngine: try! makeTestQueueEngine(),
+            extractionProvider: StubExtractionProvider())
         let sessionB = WikiSession(
             wikiID: registryB.wikis.first!.id,
             descriptor: registryB.wikis.first!,
             containerDirectory: dirB,
-            extractionCoordinator: coordinator)
+            extractionCoordinator: coordinator,
+            queueEngine: try! makeTestQueueEngine(),
+            extractionProvider: StubExtractionProvider())
 
         // Acquire a slot on session A's gate.
         let acquiredA = await sessionA.generationGate.acquire(.ingest)
@@ -123,7 +133,9 @@ struct WikiSessionTests {
             wikiID: registry.wikis.first!.id,
             descriptor: registry.wikis.first!,
             containerDirectory: dir,
-            extractionCoordinator: coordinator)
+            extractionCoordinator: coordinator,
+            queueEngine: try! makeTestQueueEngine(),
+            extractionProvider: StubExtractionProvider())
 
         session.previewVacuumAll()
         let report = session.pendingVacuumAll
@@ -146,7 +158,9 @@ struct WikiSessionTests {
             wikiID: registry.wikis.first!.id,
             descriptor: registry.wikis.first!,
             containerDirectory: dir,
-            extractionCoordinator: coordinator)
+            extractionCoordinator: coordinator,
+            queueEngine: try! makeTestQueueEngine(),
+            extractionProvider: StubExtractionProvider())
 
         session.previewBlobVacuum()
         let report = session.pendingBlobVacuum
@@ -171,7 +185,9 @@ struct WikiSessionTests {
             wikiID: registry.wikis.first!.id,
             descriptor: registry.wikis.first!,
             containerDirectory: dir,
-            extractionCoordinator: coordinator)
+            extractionCoordinator: coordinator,
+            queueEngine: try! makeTestQueueEngine(),
+            extractionProvider: StubExtractionProvider())
 
         // No app bundle → no MiniLM model → upgradeSearchIndex is a safe no-op.
         await session.upgradeSearchIndex()
@@ -190,4 +206,24 @@ private final class StubExtractor: MarkdownExtractor {
         filename: String,
         onProgress: (@Sendable (String) -> Void)?
     ) async throws -> String { "" }
+}
+
+/// A no-op `QueueExtractionProvider` for tests — returns nil (no extraction).
+private struct StubExtractionProvider: QueueExtractionProvider {
+    func resolveExtraction(
+        wikiID: String, sourceID: PageID, backendOverride: ExtractionBackend?
+    ) async throws -> ExtractionResolution? { nil }
+    func persistExtraction(
+        wikiID: String, sourceID: PageID, markdown: String,
+        backend: ExtractionBackend, modelVersion: String?
+    ) async throws {}
+}
+
+/// Creates a `QueueEngine` backed by an in-memory store + stub provider.
+private func makeTestQueueEngine() throws -> QueueEngine {
+    let store = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+    let provider = StubExtractionProvider()
+    let factory = QueueExtractionWorkerFactory(
+        provider: provider, emitProgress: { _, _ in })
+    return QueueEngine(store: store, workerFactory: factory)
 }

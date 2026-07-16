@@ -35,6 +35,16 @@ import Foundation
         #expect(try roundTrip(event) == event)
     }
 
+    @Test func thinkingRoundTrips() throws {
+        let event = AgentEvent.thinking("Let me reason about this\u{2026}")
+        #expect(try roundTrip(event) == event)
+    }
+
+    @Test func thinkingDeltaRoundTrips() throws {
+        let event = AgentEvent.thinkingDelta("partial thought")
+        #expect(try roundTrip(event) == event)
+    }
+
     @Test func toolUseRoundTrips() throws {
         let event = AgentEvent.toolUse(name: "Bash", inputSummary: "wikictl page upsert --title \"X\"")
         #expect(try roundTrip(event) == event)

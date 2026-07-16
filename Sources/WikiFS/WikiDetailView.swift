@@ -13,6 +13,9 @@ struct WikiDetailView: View {
     var session: WikiSession
     let fileProvider: FileProviderSpike
     let extractionCoordinator: ExtractionCoordinator
+    @Environment(QueueActivityTracker.self) private var tracker
+    let queueEngine: QueueEngine
+    let extractionProvider: any QueueExtractionProvider
     let runIngest: (PageID) -> Void
     @Binding var showingImportMarkdown: Bool
     @Binding var showingAddFromZotero: Bool
@@ -137,12 +140,6 @@ struct WikiDetailView: View {
             SystemPromptDetailView(store: store)
         case .changeLog:
             ChangeLogDetailView(store: store)
-        case .lint:
-            LintView(
-                launcher: launcher,
-                store: store,
-                session: session,
-                fileProvider: fileProvider)
         case .page:
             PageDetailView(
                 store: store,
@@ -154,20 +151,22 @@ struct WikiDetailView: View {
                 SourceDetailView(
                     file: file,
                     hasBeenIngested: store.isSourceIngested(file),
-                    isIngesting: launcher.ingestingSourceIDs.contains(file.id),
+                    isIngesting: tracker.ingestingSourceIDs.contains(file.id),
                     isRunning: launcher.isRunning,
-                    isAnySourceIngesting: !launcher.ingestingSourceIDs.isEmpty,
+                    isAnySourceIngesting: !tracker.ingestingSourceIDs.isEmpty,
                     // This file is mid-extraction via EITHER path (the ingest-path
                     // pdf2md step or the standalone runExtraction) — both insert
                     // into `extractingSourceIDs`, so this is now extraction-phase
                     // driven rather than the old `isExtracting &&
                     // ingestingSourceIDs.contains` overload.
-                    isThisFileExtracting: launcher.extractingSourceIDs.contains(file.id),
+                    isThisFileExtracting: tracker.extractingSourceIDs.contains(file.id),
                     // No edit lock — CAS prevents data races. Only extraction locks editing.
                     isEditLockedExternally: false,
                     runIngest: runIngest,
                     launcher: launcher,
                     extractionCoordinator: extractionCoordinator,
+                    queueEngine: queueEngine,
+                    extractionProvider: extractionProvider,
                     fileProvider: fileProvider,
                     store: store
                 )

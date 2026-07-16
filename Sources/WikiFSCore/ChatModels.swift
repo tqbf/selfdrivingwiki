@@ -144,10 +144,10 @@ extension AgentEvent {
     /// undecodable debug residue.
     public var isPersistable: Bool {
         switch self {
-        case .userText, .systemInit, .assistantText, .toolUse, .toolResult,
+        case .userText, .systemInit, .assistantText, .thinking, .toolUse, .toolResult,
              .subagent, .result, .turnFailed:
             return true
-        case .assistantTextDelta, .messageStop, .raw:
+        case .assistantTextDelta, .thinkingDelta, .messageStop, .raw:
             return false
         }
     }
@@ -159,11 +159,11 @@ extension AgentEvent {
         switch self {
         case .userText:
             return "user"
-        case .assistantText, .assistantTextDelta, .result:
+        case .assistantText, .assistantTextDelta, .thinking, .result:
             return "assistant"
         case .toolUse, .toolResult, .subagent:
             return "tool"
-        case .systemInit, .messageStop, .raw, .turnFailed:
+        case .systemInit, .messageStop, .raw, .thinkingDelta, .turnFailed:
             return "system"
         }
     }

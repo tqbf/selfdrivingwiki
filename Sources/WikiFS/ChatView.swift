@@ -120,7 +120,7 @@ struct ChatView: View {
         .onChange(of: launcher.isRunning) { _, isRunning in
             // Belt-and-suspenders: clear the internals toggle when a run ends so a
             // later ingest/lint run doesn't inherit it and strand the view on
-            // `AgentActivityView`. (AC.1)
+            // `AgentQueueView`. (AC.1)
             if !isRunning { showsInternals = false }
         }
         .task(id: chatID) {
@@ -272,7 +272,7 @@ struct ChatView: View {
     @ViewBuilder
     private var content: some View {
         if showsInternals && launcher.isRunning && launcher.runningKind == .query {
-            AgentActivityView(launcher: launcher, showsResultEvents: false, showsInternals: true, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
+            AgentQueueView(launcher: launcher, showsResultEvents: false, showsInternals: true, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(ChatMetrics.contentInset)
         } else if chatID != nil && !isLiveChat && chatSummary == nil {

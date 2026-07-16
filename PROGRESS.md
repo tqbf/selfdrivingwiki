@@ -2,6 +2,14 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+<<<<<<< HEAD
+<<<<<<< HEAD
+<<<<<<< HEAD
+<<<<<<< HEAD
+<<<<<<< HEAD
+<<<<<<< HEAD
+<<<<<<< HEAD
+<<<<<<< HEAD
 ## 2026-07-14 — Stop committing generated codegen files
 
 `GeneratedVersion.swift` (git SHA → Swift) and `GeneratedPrompts.swift` (prompt
@@ -42,6 +50,278 @@ Source-ingestion provenance is out of scope (#397's "consider" item). The 9
 unrelated to this change.
 
 See [`plans/wikictl-author-provenance.md`](plans/wikictl-author-provenance.md).
+=======
+## 2026-07-13 — Queue Engine Phase 3: Machine-readable event log
+=======
+## 2026-07-13 — Queue Engine: extraction & ingestion queue (Phases 1–4)
+>>>>>>> c731a17 (docs: consolidate queue engine PROGRESS.md entries (concise))
+=======
+## 2026-07-14 — Queue Engine (Phases 1–4)
+>>>>>>> 1bb6936 (docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines))
+=======
+## 2026-07-13 — Queue Engine: extraction & ingestion queue (Phases 1–4)
+>>>>>>> f02ca31 (Revert "docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines)")
+=======
+## 2026-07-14 — Queue Engine: extraction through the queue (Phases 1–4)
+>>>>>>> bd2f1ba (docs: consolidate queue engine PROGRESS.md entries, remove duplicates)
+=======
+## 2026-07-14 — Queue Engine: extraction & ingestion through the queue (Phases 1–5)
+>>>>>>> e72bb5e (feat: Queue Engine Phase 5 — route ingestion through the queue)
+=======
+## 2026-07-14 — Queue Engine: extraction, ingestion & menu-bar UI (Phases 1–6)
+>>>>>>> 0bf7262 (feat: Queue Engine Phase 6 — menu-bar status item & background mode)
+=======
+## 2026-07-14 — Queue Engine: full implementation (Phases 1–7)
+>>>>>>> 803644d (feat: Queue Engine Phase 7 — remove AgentActivitySidebar)
+
+A persistent, app-wide extraction and ingestion work queue backed by a new
+`queue.sqlite` in the App Group container. Items survive relaunch, schedule
+across wikis with per-provider concurrency limits, and keep running when no
+window is open.
+Design plan: `plans/queue-engine.md`.
+
+**What's done:** Durable queue store with crash recovery (running items reset to
+queued on launch), event-driven dispatch with per-provider concurrency limits and
+per-wiki ingestion invariant (one ingest per wiki at a time), pause/resume/halt/
+cancel/retry controls, a JSONL audit trail (daily-rotated, 30-day retention), and
+all PDF extraction now routed through the engine. The `QueueActivityTracker`
+replaces the launcher's extraction slot machinery — extraction status and control
+live in the UI via the tracker, not internal launcher state.
+
+<<<<<<< HEAD
+<<<<<<< HEAD
+**Phase 2 — QueueEngine actor (`WikiFSEngine`):** event-driven dispatch,
+per-provider concurrency limits, per-wiki ingestion invariant, local/remote
+extraction limits, pause/resume/halt/cancel/retry, write-through to `QueueStore`,
+`AsyncStream<QueueEvent>`, launch rehydration. 16 tests.
+
+**Phase 3 — QueueEventLog (`WikiFSEngine`):** JSONL audit trail. Daily-rotated
+`queue-YYYY-MM-DD.jsonl` under `Logs/queue/`, 30-day bounded retention, appends
+across relaunches. 16 tests.
+
+**Phase 4 — Extraction through the queue (`WikiFSEngine`):** `QueueExtractionProvider`
+protocol bridges `@MainActor ExtractionCoordinator` into the headless engine.
+`QueueExtractionWorker` calls `resolveExtraction` → `readiness()` → `convert()` →
+`persistExtraction`. `QueueIngestSignaling` protocol for `isIngestInProgress` timing
+(issue #235). `waitForCompletion(of:)` on the engine for inline-caller awaits.
+`.progress` event for live extraction log. 13 tests.
+
+<<<<<<< HEAD
+<<<<<<< HEAD
+<<<<<<< HEAD
+**Files (1 new + 1 test):**
+- `Sources/WikiFSEngine/QueueEventLog.swift` (new)
+- `Tests/WikiFSTests/QueueEventLogTests.swift` (new, 16 tests)
+
+>>>>>>> 2d15131 (feat: Queue Engine Phase 3 — QueueEventLog JSONL audit trail)
+## 2026-07-13 — Queue Engine Phase 2: QueueEngine actor
+
+**Phase 2 is implemented.** The design plan lives at
+`docs/design-plans/2026-07-13-queue-engine.md`. This phase adds the
+`QueueEngine` actor — the scheduling engine with write-through persistence,
+event-driven dispatch, per-provider concurrency limits, per-wiki ingestion
+invariant, pause/resume/halt/cancel/retry, and an `AsyncStream<QueueEvent>`
+for UI observation. Still no app-layer wiring (that's Phase 4+); the engine
+is fully testable with fake workers.
+
+**New types (all in `Sources/WikiFSEngine/`):**
+- **`QueueEngine`** (`QueueEngine.swift`) — an `actor` that owns all scheduling.
+  Every state change writes through to `QueueStore` before emitting a
+  `QueueEvent`. Event-driven dispatch (no polling): `enqueue`, item finish,
+  `resume`, `retryItem` all trigger `dispatchScan()`. Worker `Task`s are
+  spawned detached so the engine never blocks on a worker.
+- **`QueueWorker.swift`** — supporting types:
+  - `QueueWorker` protocol — `execute(_:)` runs one item.
+  - `QueueWorkerFactory` protocol — resolves a provider ID (capacity check) and
+    produces a worker (execution). Split so the engine checks capacity without
+    committing a worker.
+  - `QueueEvent` enum — `.enqueued`/`.started`/`.completed`/`.failed`/
+    `.cancelled`/`.runStateChanged`. `Sendable` for crossing actor boundaries.
+  - `QueueSnapshot` struct — point-in-time state for UI bootstrap (active
+    items, recent items, run states, provider counts, active ingestion wikis).
+  - `QueueEngineConfig` struct — capacity limits: per-provider ingestion limits,
+    local extraction limit (default 1), remote extraction limit (default 2).
+
+**Modified (in `Sources/WikiFSCore/`):**
+- **`AgentProvidersConfig`** — added `maxConcurrent: [String: Int]` field for
+  per-provider ingestion limits. Forward-compatible (old files decode to `[:]`);
+  all internal constructor calls carry it over.
+
+**Tests** (`Tests/WikiFSTests/QueueEngineTests.swift`): 16 tests with fake
+workers, all pass in 0.77s. Covers:
+- Dispatch order (ordering-key / FIFO)
+- Per-provider concurrency limit (at max, blocks)
+- Different providers run concurrently
+- Per-wiki ingestion invariant (at most 1 per wiki)
+- Local extraction serialized (limit 1)
+- Pause stops new dispatch; resume restarts
+- Pause state persists across reopen
+- Halt cancels in-flight items (requeue preserves ordering key)
+- Failed item records error, frees slot, doesn't block later items
+- Retry re-enqueues with attempt + 1
+- Enqueue returns immediately (UI never awaits slots)
+- Items from multiple wikis in one shared queue
+- Crash recovery / rehydration (running → queued on launch)
+- Event stream emits enqueued/started/completed
+- Snapshot reflects engine state
+- Cancel queued item
+
+Also updated `QueueStoreTests.testNoExternalReferencesToQueueStore` to only
+scan `Sources/WikiFS/` (the app layer) — `WikiFSEngine` now legitimately
+references queue types (Phase 2). The guard now also checks for `QueueEngine`,
+`QueueEvent`, `QueueSnapshot`.
+
+**Acceptance criteria covered:**
+- AC2.1 (multi-wiki items in one queue) ✓
+- AC2.2 (dispatch in ordering-key order) ✓
+- AC2.5 (crash recovery rehydration) ✓ (from Phase 1, re-verified for engine)
+- AC3.1 (different providers run concurrently) ✓
+- AC3.2 (provider at max blocks) ✓
+- AC3.3 (at most one ingestion per wiki) ✓
+- AC3.4 (local pdf2md serialized) ✓
+- AC3.5 (pause/resume persists) ✓
+- AC3.6 (halt cancels in-flight) ✓
+- AC3.7 (failed item records error, frees slot, retry) ✓
+- AC4.1 (enqueue returns immediately) ✓
+
+**Files (2 new + 1 modified + 1 test + 1 test modified):**
+- `Sources/WikiFSEngine/QueueEngine.swift` (new)
+- `Sources/WikiFSEngine/QueueWorker.swift` (new)
+- `Sources/WikiFSCore/AgentProvidersConfig.swift` (modified — `maxConcurrent`)
+- `Tests/WikiFSTests/QueueEngineTests.swift` (new, 16 tests)
+- `Tests/WikiFSTests/QueueStoreTests.swift` (modified — source-scan scope)
+
+## 2026-07-13 — Queue Engine Phase 1: Queue data model and store
+
+**Phase 1 is implemented.** The design plan lives at
+`docs/design-plans/2026-07-13-queue-engine.md`. This phase adds the persistent
+`QueueStore` and its value types to `WikiFSCore` with **no behavior change** —
+nothing in `WikiFSEngine` or `WikiFS` references it yet. It is the dependency-
+free foundation for the `QueueEngine` actor (Phase 2).
+
+**New types (all in `Sources/WikiFSCore/`):**
+- **`QueueStore`** (`QueueStore.swift`) — persistent, durable store for the
+  extraction/ingestion work queue. Owns one serial SQLite connection
+  (`queue.sqlite`) with the same concurrency discipline as `SQLiteWikiStore`:
+  method-atomic `NSRecursiveLock`, statement cache, WAL + busy_timeout, versioned
+  idempotent migrations (`PRAGMA user_version`), `withTransaction` savepoint
+  nesting (never raw `BEGIN`), `#if DEBUG assertNoBusyStatements()` guard, and
+  checkpoint-and-close deinit. No `ResourceChangeEvent` emission (not a
+  `WikiStore`).
+- **`QueueTypes.swift`** — `QueueKind` (extraction/ingestion), `QueueItemState`
+  (queued/running/completed/failed/cancelled), `QueueRunState` (running/paused),
+  `QueueItemPayload` (JSON-encoded `sourceIDs` + `stageRouting` + `chainedItemID`),
+  `QueueItem` (the durable row, `Codable + Sendable + Identifiable`),
+  `QueueItemRequest` (caller-facing enqueue request).
+- **`QueueStoreError`** — dedicated error enum (`.open`, `.sqlite(code:message:)`,
+  `.notFound(QueueItem.ID)`, `.invalidStateTransition(from:to:)`). Does NOT reuse
+  `WikiStoreError` (different `notFound` semantics). `WikiStoreError.sqlite`
+  from `SQLiteStatement` is caught and rewrapped via a private `rewrap` helper.
+
+**API surface:**
+- `enqueue(_:)` → `QueueItem` (ULID ID, next ordering key = max + 1000)
+- `getItem(_:)` → `QueueItem?`
+- State transitions: `markRunning`, `markCompleted`, `markFailed`,
+  `markCancelled`, `requeue`, `retryItem` (each guarded by a state-transition
+  table; invalid transitions throw)
+- Queries: `loadActive(for:)` (non-terminal, by ordering_key), `loadRecent(limit:)`
+  (terminal, newest-first)
+- Crash recovery: `resetRunningToQueued()` → `Int` (resets `.running` → `.queued`,
+  attempt preserved)
+- Queue run state: `queueRunState(for:)`, `setQueueRunState(_:_:)` (persisted)
+- Maintenance: `pruneHistory(maxPerQueue:)` (keeps newest 200 terminal per queue)
+
+**One method added to `DatabaseLocation`:**
+- `queueDatabaseURL()` — returns `…/<appGroup>/queue.sqlite`
+
+**Tests** (`Tests/WikiFSTests/QueueStoreTests.swift`): 20 tests, all pass in
+0.14s. Covers durability (enqueue/state/run-state across reopen), crash recovery
+(running→queued, attempt intact), pruning (250 completed → ≤200, queued
+untouched), headless source-scan (no AppKit/SwiftUI imports), no-external-
+references source-scan (WikiFSEngine/WikiFS don't reference queue types), ordering
+key assignment, all state transitions + invalid-transition throws, retry (new
+ordering key), requeue (preserves ordering key), loadActive/loadRecent filtering,
+and resetRunningToQueued count. Not tagged `.integration` — fast enough for the
+CI fast tier.
+
+**Acceptance criteria met:**
+- AC.1 (durability) ✓ — 3 reopen tests
+- AC.2 (crash recovery) ✓ — `testRunningItemsResetToQueuedOnLaunch`
+- AC.3 (pruning) ✓ — `testHistoryPruningBeyondBound`
+- AC.4 (no behavior change) ✓ — `testNoExternalReferencesToQueueStore` + clean build
+- AC.5 (headless isolation) ✓ — `testQueueStoreFilesAreHeadless` (source-scan)
+
+**Implementation review:** Dispatched a `general-purpose` subagent to review
+against sqlite-concurrency discipline, SQLiteWikiStore pattern fidelity, headless
+imports, Swift Testing conventions, and Sendable correctness. No CRITICAL issues.
+Two MEDIUM findings fixed:
+1. `WikiStoreError` was leaking through `SQLiteStatement` calls — fixed via a
+   `rewrap` helper that catches and rewraps to `QueueStoreError.sqlite`.
+2. `markRunning`/`retryItem` left stale `finished_at` on non-terminal items —
+   fixed by clearing `finished_at = NULL` (and `error = NULL` for `markRunning`)
+   in both transitions. Also added `migrate(from:)` stub (LOW-1) for future-
+   proofing the migration ladder.
+
+**Files (4 new + 1 modified + 1 test):**
+- `Sources/WikiFSCore/QueueTypes.swift` (new)
+- `Sources/WikiFSCore/QueueStore.swift` (new)
+- `Sources/WikiFSCore/DatabaseLocation.swift` (modified — added `queueDatabaseURL()`)
+- `Tests/WikiFSTests/QueueStoreTests.swift` (new)
+- `PLAN.md` (doc index updated)
+=======
+Not yet wired into the app layer (`WikiFS`) — Phase 4 headless components only.
+App-layer migration (AgentOperationRunner, SourceDetailView, AgentLauncher
+retirement) is the next step. 65 tests total across all phases.
+>>>>>>> c731a17 (docs: consolidate queue engine PROGRESS.md entries (concise))
+=======
+## 2026-07-13 — Multi-window (Phase 2b of #358)
+>>>>>>> 1bb6936 (docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines))
+=======
+Not yet wired into the app layer (`WikiFS`) — Phase 4 headless components only.
+App-layer migration (AgentOperationRunner, SourceDetailView, AgentLauncher
+retirement) is the next step. 65 tests total across all phases.
+>>>>>>> f02ca31 (Revert "docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines)")
+=======
+**Not yet done:** Ingestion routing through the queue (Phase 5), menu-bar
+background mode UI (Phase 6), and sidebar removal (Phase 7).
+>>>>>>> bd2f1ba (docs: consolidate queue engine PROGRESS.md entries, remove duplicates)
+=======
+**Phase 5 — ingestion through the queue:** All ingestion now flows through the
+queue engine. An ingestion `QueueWorker` calls `AppQueueIngestionProvider` which
+runs the full planner→executor→finalizer pipeline (source staging, workspace
+create/merge, agent spawn). A `CompositeWorkerFactory` routes extraction vs
+ingestion items to their respective sub-factories. All ingest call sites
+(`ContentView`, `SourcesContainerView`, `SourceDetailView`) now enqueue
+instead of calling `launcher.ingestSources` directly — they return
+immediately and the engine dispatches when a slot is free. The
+`QueueActivityTracker` tracks `ingestingSourceIDs` from queue events,
+replacing `launcher.ingestingSourceIDs` in all views. Session release in
+`RootScene.onDisappear` is conditional — sessions with pending/running queue
+work are retained.
+
+<<<<<<< HEAD
+**Not yet done:** Menu-bar background mode UI (Phase 6), and sidebar removal
+(Phase 7).
+>>>>>>> e72bb5e (feat: Queue Engine Phase 5 — route ingestion through the queue)
+=======
+**Phase 6 — menu-bar presence & background mode:** A status item in the menu
+bar shows the queue engine's state (idle/working/paused/attention). Clicking it
+opens a popover listing active and recent items across all wikis, with per-queue
+pause/resume/halt controls and per-row cancel/retry. The app drops to
+menu-bar-only (accessory) mode when the last window closes — queue work keeps
+running in the background. Reopening a window restores normal dock presence.
+
+<<<<<<< HEAD
+**Not yet done:** Sidebar removal (Phase 7).
+>>>>>>> 0bf7262 (feat: Queue Engine Phase 6 — menu-bar status item & background mode)
+=======
+**Phase 7 — sidebar removal:** Deleted `AgentActivitySidebar`, `AgentRunBanner`,
+and `PdfExtractionView` — their duties are now served by the menu-bar popover
+(queue state + controls), the `QueueActivityTracker` (source row status), and
+`ChatView`'s inline stop control. `LintView` now shows the agent transcript
+inline instead of in a sidebar. The transcript toggle toolbar button and
+`isTranscriptExpanded` state are removed from `ContentView`.
+>>>>>>> 803644d (feat: Queue Engine Phase 7 — remove AgentActivitySidebar)
 
 ## 2026-07-13 — Chat Summary (issue #411)
 
@@ -410,6 +690,10 @@ upsert`/`page get`/`index set`; `WIKI_WORKSPACE` env var for the agent
 subprocess. `workspacesEnabled` flag (default off).
 `reapStaleWorkspaces` on app launch (24h TTL).
 
+<<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> f02ca31 (Revert "docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines)")
 **Known issues.** AC7.2 (human edit during isolated ingest) hits a SQLite
 statement-lifecycle error on the same connection — disabled with a note;
 store-layer isolation is correct, needs manual validation (R6).
@@ -460,6 +744,7 @@ state is fully consistent (embeddings, structural index, log entry).
   correctly in NO-EMIT partition); existing `WorkspaceTests` +
   `WorkspaceStagingTests` all pass.
 
+<<<<<<< HEAD
 ## 2026-07-11 — Remove edit locks — CAS replaces the mutex
 
 Starting a second chat while one was running silently failed — a process-wide
@@ -469,6 +754,8 @@ with conflict detection, so concurrent writes are safe. Replaced
 `isAgentRunning: Bool` with a ref-counted `agentRunCount` for lifecycle, dropped
 all "Agent updating wiki…" UI states, and removed the per-turn edit lock toggle.
 
+=======
+>>>>>>> f02ca31 (Revert "docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines)")
 ## 2026-07-11 — W4: Concurrency at scale (PR #312)
 
 **What shipped.** Phase W4 (final) of the multi-writer concurrency plan:
@@ -1839,6 +2126,7 @@ flat resources. **Behavior byte-identical.**
 **Next:** Phase D — bookmarks projection (#125) via `NestedResourceProjection`,
 the nested-shape capstone.
 
+<<<<<<< HEAD
 ## 2026-07-08 — PDF source add by URL can fail "database is locked" (#229)
 
 PDFKit's whole-file parse for extracting a PDF display name was running inside
@@ -1846,6 +2134,8 @@ the store's lock, delaying the write transaction long enough for concurrent
 writers to exceed the busy timeout. Fix: resolve the display name before
 acquiring the lock, and for PDFs run that resolution off the main actor.
 
+=======
+>>>>>>> f02ca31 (Revert "docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines)")
 ## 2026-07-07 — Graph-model v26: derived markdown is CAS-only (drop `source_markdown_versions.content`)
 
 **Shipped (on `fix/finish-smv-cas-drop`; tests green).** Completes the
@@ -2787,6 +3077,7 @@ bar selected all sidebar rows instead of the omnibox text. Fixes
   regression guards: with an omnibox `NSTextField` holding focus (field editor
   first responder), neither table consumes Cmd+A, and non-Cmd+A keys always defer.
 
+<<<<<<< HEAD
 ## 2026-07-05 — "Show in List" sidebar reveal for pages & sources (#183)
 
 A "Show in List" button (next to "Reveal in Finder") in page and source detail
@@ -2802,6 +3093,8 @@ fetching the linked page. Fixed: HTTP(S) URLs and resolved `.webloc` shortcuts
 now route through the "Add from URL" fetch path; local `file://` URLs still
 ingest as raw bytes.
 
+=======
+>>>>>>> f02ca31 (Revert "docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines)")
 ## 2026-07-04 — Multi-select pages/sources → bookmark them all into a chosen folder (#151)
 
 Bookmarking was folder-first: the only entry point was from inside the Bookmarks
@@ -3628,6 +3921,14 @@ and the sidebar context menus for pages and sources.
 - Ingest Selected shows a confirmation dialog when re-ingesting
 - Share and Ingest grouped together (no divider); Rename/Delete below a separator
 - Rename and Delete match the page menu layout
+<<<<<<< HEAD
+=======
+FTS5/BM25 keyword search as the backbone, cosine vector similarity for
+reranking, reciprocal rank fusion to combine them. Self-healing — no manual
+reindex. Unified across pages and sources.
+>>>>>>> 1bb6936 (docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines))
+=======
+>>>>>>> f02ca31 (Revert "docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines)")
 
 ## 2026-06-28 — Share pages and sources
 
@@ -5996,6 +6297,10 @@ permanent edit/preview split. Post-code review found the view split aligned with
 SwiftUI guidance: `PageDetailView` stays small, leaf views are separate files,
 semantic fonts are used, and the editor reuses the existing model autosave seam.
 
+<<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> f02ca31 (Revert "docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines)")
 **Verified.** `make check` passes, `make test` passes (**320/320**), and the
 user-provided appshot shows the selected page in reader mode with the manual edit
 button tucked into the toolbar.
@@ -7542,3 +7847,266 @@ hello-world WikiFS SwiftUI app building, signing, and launching.
 - Begin SQLite store + page model (Milestone 0 deliverables in `plans/INITIAL.md`
   also include persistence; the build skeleton is done, the data layer is not).
 
+<<<<<<< HEAD
+<<<<<<< HEAD
+=======
+=======
+>>>>>>> f02ca31 (Revert "docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines)")
+## #163 — Drop routing for .webloc / remote URLs (2026-07-05)
+
+**Problem:** dragging a `.webloc` file or an `http(s)` URL from a browser onto
+the window hit the generic file-drop path (`addFiles`), ingesting the
+`.webloc` plist's raw bytes instead of fetching the linked page.
+
+**Fix**
+- `WikiStoreModel.addDroppedURLs(_:fetcher:)` — partitions dropped URLs:
+  `http(s)` URLs and `.webloc` shortcuts (resolved to their target) route through
+  `addURL` (the "Add from URL" fetch + HTML→Markdown path); other `file://`
+  URLs still ingest as raw bytes via `addFiles`. Supports multi-URL drops;
+  an unresolvable `.webloc` is skipped (its bytes aren't a useful source).
+  Named `add*` (not `ingest*`) since it only adds a source — agent ingestion
+  (read source → generate pages) is a separate `AgentLauncher` phase.
+- `WikiStoreModel.resolveWeblocURL(_:)` — reads the plist (XML or binary) off the
+  main actor via `PropertyListSerialization`.
+- `ContentView` `.dropDestination` now calls `store.addDroppedURLs(_:)`.
+
+**Tests:** `WikiStoreModelDropRoutingTests` (5) — webloc→md, http url→md, local
+txt→verbatim, mixed batch, unresolvable webloc skipped. All pass; existing
+`WikiStoreModelAddURLTests` still green.
+
+## #183 — "Show In List" sidebar reveal for pages & sources
+
+A "Show in List" button (next to "Reveal in Finder") in `PageDetailView` and
+`SourceDetailView` that surfaces the current page/source in the sidebar: opens
+the sidebar if collapsed, switches to the right section, clears a search that
+would hide the row, then scrolls to + selects it.
+
+**Mechanism** — mirrors the existing `pendingScrollAnchor` "set once, consume
+once" cross-view signal (issue #183 design):
+
+- `WikiStoreModel` — `pendingSidebarReveal: WikiSelection?` +
+  `pendingSidebarRevealVersion: Int` (monotonic, observed via `.onChange` so a
+  repeat request re-fires even when the value is unchanged), with
+  `requestSidebarReveal(_:)` (producer) and `consumePendingSidebarReveal()`
+  (consumer, called by the list view after scroll+select).
+- `ContentView` — `.onChange(of: pendingSidebarRevealVersion)` un-collapses the
+  sidebar (`columnVisibility = .all`) when it's `.detailOnly`, so the target
+  section's list is actually mounted.
+- `SidebarView` — `.onChange(of: pendingSidebarRevealVersion)` sets
+  `selectedSection` to `.pages`/`.sources` from the `WikiSelection` case and
+  clears the section's search query (`searchQuery`/`sourceSearchQuery`) only
+  when the target isn't in the filtered results (clearing resets
+  `searchResults`/`sourceSearchResults` synchronously, so the full list is
+  visible for row lookup).
+- `PagesListViewController` / `SourcesListViewController` — new
+  `revealAndSelect(id:)`: looks up the row, selects it (bypassing the
+  `reconcileHighlight` multi-select guard — an explicit user action wins over a
+  Cmd/Shift selection), and `scrollRowToVisible(_:)`. Driven from
+  `updateNSViewController`, which reads `pendingSidebarReveal` (also registers
+  the observation so the method re-runs on change), then consumes.
+- `PageDetailView` / `SourceDetailView` — `Button("Show in List",
+  systemImage: "sidebar.left")` calling `requestSidebarReveal(.page(id))` /
+  `.source(id)`. Works without a mounted File Provider (unlike Reveal in Finder).
+
+**Build/tests:** `swift build` clean; `swift test` — 1466 tests pass.
+
+---
+
+### Issue #229 — PDF source add by URL can fail "database is locked" (PR #247)
+
+**Problem.** `DisplayNameResolver.resolve()` — which invokes PDFKit's
+whole-file parse for PDFs — ran **inside** `SQLiteWikiStore.addSource`'s
+`mutate()` closure, under the recursive lock and before the write transaction
+opened. For a large PDF this parse can take seconds, delaying the `BEGIN` long
+enough for another writer (File Provider, daemon, concurrent write) to hold the
+DB write lock past the 5 s `busy_timeout`, surfacing as "database is locked".
+
+**Fix.** Two-part:
+1. **Out of the locked path:** `addSource` (and `addSnapshotImage`) now compute
+   `ext` / `mime` / `displayName` **before** `mutate()` acquires the recursive
+   lock. The locked body keeps only the dup-check SELECT + INSERT transaction.
+   Added a `resolvedDisplayName: String??` parameter to `addSource` (and a
+   `WikiStore` protocol-extension convenience overload since protocol methods
+   can't have default args) so callers can skip the in-method parse entirely.
+2. **Off the main actor:** `WikiStoreModel.preResolveDisplayName()` runs
+   `DisplayNameResolver.resolve()` on a `Task.detached` for **PDFs only**
+   (non-PDFs return `nil` → resolve inline). Wired into `addURLViaWebsite`,
+   `addFiles`, and `ingestFromZotero`.
+
+**Key files:** `SQLiteWikiStore.swift` (`addSource` / `addSnapshotImage`),
+`WikiStore.swift` (protocol + extension), `WikiStoreModel.swift`
+(`preResolveDisplayName`, `storeMaterialized`, three ingest paths).
+
+**Build/tests:** `swift build` clean; `swift test` — 1930 tests pass
+(1927 existing + 3 new for the `resolvedDisplayName` tri-state bypass).
+
+## Remove edit locks — CAS replaces the mutex (2026-07-11)
+
+**Problem:** Starting a second chat while Chat 1 was running silently failed —
+the second chat didn't even display the user's question. The root cause was
+`store.isAgentRunning`, a process-wide mutex that blocked `startChat`/
+`continueChat` at the preflight guard (`shouldBlockEditStart`), failing before
+the chat row was created or the message was shown.
+
+**Why the mutex existed:** Pre-CAS, it prevented last-writer-wins data races —
+the in-app autosave could clobber the agent's `wikictl` writes. It paused
+autosave, disabled editing UI, and blocked new chat starts.
+
+**Why it's safe to remove now:** W0 (PR #342) introduced page versions + CAS
+save (`PageUpsert.upsert` with `expectedHeadVersionID`). `WikiStoreModel.save()`
+catches `PageConflictError` and surfaces a "Page Was Updated" dialog. Concurrent
+writes are safe — the store detects the version mismatch.
+
+**Changes:**
+- **WikiStoreModel:** Replaced `isAgentRunning: Bool` with `agentRunCount: Int`
+  (ref-counted). `agentRunStarted()` increments + flushes drafts; `agentRunEnded()`
+  decrements + reloads from store when count hits 0. Removed autosave pause guards
+  in `scheduleAutosave()` and `systemPromptChanged()` — CAS handles it.
+- **AgentOperationRunner:** `shouldBlockEditStart` now only checks
+  `isIngestInProgress` (extraction is resource-intensive, not a data-race concern).
+  Removed `takeEditLock` parameter entirely. Callbacks now
+  `agentRunStarted()`/`agentRunEnded()` (session lifecycle, not mutex).
+- **AgentLauncher:** Removed `onTurnBoundary` parameter and handler (was the
+  per-turn edit lock toggle). Renamed `releaseEditLock()` → `releaseRunLifecycle()`.
+  Kept `isGenerating` (independent — drives ChatView banner + send guard) and
+  the generation gate (FIFO, N=1 by default).
+- **UI views:** Removed all `.disabled(store.isAgentRunning)`, `.onChange(of:
+  store.isAgentRunning)`, and "Agent updating wiki…" labels from PageDetailView,
+  SourceDetailView, SystemPromptDetailView, PagesListView, WikiDetailView.
+- **Tests:** Updated `Issue235IngestExtractionLockTests` (predicate now 1-arg)
+  and `AgentGenerationSlotTests` (ref-count assertions).
+
+**Build/tests:** `swift build` clean; fast tier — 2187 tests pass.
+
+<<<<<<< HEAD
+<<<<<<< HEAD
+---
+
+## Queue Engine — Phase 3: QueueEventLog JSONL Audit Trail (2026-07-14)
+
+**Status:** Complete. All 16 tests pass (0.35s), 52 total across all 3 phases.
+
+**What:** `QueueEventLog` actor writes every `QueueEvent` as a JSONL line to
+daily-rotated `queue-YYYY-MM-DD.jsonl` files under `Logs/queue/` in the App
+Group container, with bounded retention (30-day default). Daily rotation is
+date-driven (no timer); prune-on-rotate. Progress events are high-volume and
+skipped from the audit trail (consumed live by the UI via the event stream).
+
+**Files:** `Sources/WikiFSEngine/QueueEventLog.swift` (QueueLogRecord +
+QueueEventLog actor), `Tests/WikiFSTests/QueueEventLogTests.swift`.
+
+**Build/tests:** `swift build` clean; 52 queue tests pass across 4 suites.
+
+---
+
+## Queue Engine — Phase 4: Extraction Through the Queue (2026-07-14)
+
+**Status:** Complete. All 78 queue tests pass across 4 suites. Build clean.
+
+**What:** All PDF extraction flows through the central extraction queue.
+The `QueueExtractionWorkerFactory` + `QueueExtractionWorker` resolve the
+extractor + PDF bytes via the `QueueExtractionProvider` protocol, check
+`readiness()`, call `convert()` with progress reporting, and persist the
+result. `waitForCompletion(of:)` lets callers (AgentOperationRunner,
+SourceDetailView) await extraction results synchronously.
+
+**QueueActivityTracker:** `@Observable @MainActor` class that observes
+`QueueEngine.events` and replaces the launcher's extraction slot machinery
+(`isExtracting`, `extractionLog`, `extractionPID`, `extractingSourceIDs`,
+`extractTask`, `stopExtraction`). Injected via `.environment()`.
+
+**Retired from AgentLauncher:** `awaitExtractionSlot`,
+`releaseExtractionSlot`, `isExtractionSlotBusy`, `extractionWaiters`,
+`ExtractionWaiter`, `extractPDF`, `stopExtraction`, `extractionLog`,
+`isExtracting`, `extractionPID`, `extractingSourceIDs`, `extractTask`.
+Local-pdf2md limit-1 is now enforced by the engine's capacity config, not
+the slot.
+
+**Files:** `Sources/WikiFSEngine/QueueExtractionProvider.swift`,
+`Sources/WikiFSEngine/QueueExtractionWorker.swift`,
+`Sources/WikiFS/QueueActivityTracker.swift`,
+`Sources/WikiFS/WikiFSApp.swift` (wiring), view migrations across
+SourceDetailView, SourcesContainerView, ContentView, WikiDetailView,
+PdfExtractionView, ExtractionSettingsView, AgentActivitySidebar, SidebarView.
+
+**Build/tests:** `swift build` clean; 78 queue tests pass across 4 suites.
+<<<<<<< HEAD
+
+>>>>>>> 2313993 (docs: update PROGRESS.md with Phase 3 + Phase 4 completion records)
+=======
+## 2026-06-15 — Milestone 0: app skeleton
+
+macOS SwiftUI app skeleton with SwiftPM build, SQLite store, and
+`make`/`build.sh` tooling.
+>>>>>>> 1bb6936 (docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines))
+=======
+
+>>>>>>> f02ca31 (Revert "docs: rewrite PROGRESS.md — concise, feature-oriented (7682 → 326 lines)")
+=======
+>>>>>>> bd2f1ba (docs: consolidate queue engine PROGRESS.md entries, remove duplicates)
+=======
+## Lint Queue Migration + Activity Window
+
+Migrated the Lint operation (`runLint` + `runLintPages`) from the per-session
+`GenerationGate`'s `.ingest` lane onto the central `QueueEngine`'s `.ingestion`
+queue. Lint is now a payload variant of `.ingestion` (not a separate
+`QueueKind`) — the `QueueItemPayload.lintPageIDs` field distinguishes lint
+from ingestion. Both share the same per-wiki serialization invariant
+(`activeIngestionWikis`), per-provider capacity, and pause/resume/halt
+controls. Replaced the menu-bar popover with a unified Activity window.
+
+### Changes
+
+- **`QueueTypes.swift`:** Added `lintPageIDs: [PageID]?` to
+  `QueueItemPayload`. Removed `case lint` from `QueueKind` (was partially
+  added earlier). Backward-compatible Codable (old JSON decodes to `nil`).
+- **`WikiSelection.swift` / `EditorTab.swift`:** Removed `.lint` case —
+  the Lint tab is gone from the sidebar/editor.
+- **`WikiStoreModel.swift` / `AddressBarView.swift` / `VacuumCommands.swift` /
+  `WikiDetailView.swift`:** Removed all `.lint` references (tab switches,
+  address bar rendering, vacuum commands menu).
+- **`QueueIngestionProvider.swift` (protocol):** Added `runLint` /
+  `runLintPages` methods + `onTranscript` parameter to all three methods.
+  `QueueIngestionWorker.execute` branches on `lintPageIDs`: page-level lint,
+  whole-wiki lint, or normal ingestion.
+- **`QueueWorker.swift`:** Added `.transcript(QueueItem.ID, AgentEvent)` to
+  `QueueEvent`. Updated `QueueEvent.item` computed property.
+- **`QueueEngine.swift`:** Added `makeEmitTranscript()` (mirrors
+  `makeEmitProgress()`).
+- **`QueueEventLog.swift`:** Added `.transcript` case to the switch + skip
+  in `write()` (high-volume, not logged to JSONL).
+- **`AgentLauncher.swift`:** Added `onAgentEvent` property — a per-event
+  callback fired from `mergeOrAppend` so typed `AgentEvent`s are forwarded
+  to the queue's transcript tracker. Cleared in `finish()` and
+  `resetRunArtifacts()`.
+- **`AppQueueIngestionProvider.swift`:** Implemented `runLint` /
+  `runLintPages` (calls `AgentOperationRunner.runLint` /
+  `runLintPages`-equivalent logic). Added `runLintAgent` private helper.
+  All agent runs now set `launcher.onAgentEvent` for transcript forwarding.
+  `WikiFSApp.swift` wires `TranscriptEmitBox` for the factory.
+- **`LintView.swift`:** Deleted. "Run Lint" button moved to
+  `PageDetailView` toolbar. Per-page Lint button and `PagesContainerView`
+  `onLint` callback now enqueue `.ingestion` items with `lintPageIDs`.
+- **`QueueActivityTracker.swift`:** Added per-item transcript model
+  (`transcripts: [QueueItem.ID: [AgentEvent]]`), ` appendTranscriptEvent`,
+  `lintingItemIDs` set (lint items have empty `sourceIDs` — tracked
+  separately so `isIngesting` covers lint-only runs), per-item progress
+  accumulation (`progressLogs`), transcript lifecycle (pruned only on
+  history pruning, not on terminal state).
+- **`ActivityWindowView.swift` (new):** SwiftUI `NavigationSplitView`-based
+  window replacing `QueuePopoverView`. Shows active + recent items across
+  all wikis, grouped by kind, with state badges, cancel/retry controls, and
+  expandable per-item transcripts via `ChatWebView`.
+- **`QueueStatusItemController.swift`:** Replaced `NSPopover` with `NSWindow`
+  hosting `ActivityWindowView`. Clicking the status item toggles the
+  Activity window.
+- **Tests:** Added `LintIngestionDispatchTests` (AC.1: page-level lint
+  → `runLintPages`, whole-wiki lint → `runLint`, nil → `runIngestion`),
+  serialization tests in `QueueEngineTests` (AC.3/4/6: per-wiki
+  serialization, cross-wiki concurrency, pause), and
+  `QueueActivityTrackerTranscriptTests` (AC.9/10: transcript forwarding,
+  lint-only `isIngesting`).
+
+**Build/tests:** `swift build` clean; fast tier — 2379 tests pass.
+
+>>>>>>> 3d27d6c (feat: lint queue migration + Activity window)

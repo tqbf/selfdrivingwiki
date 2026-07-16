@@ -26,7 +26,7 @@ public struct LogEntry: Equatable, Sendable {
     }
 
     /// The operation that produced a log entry. A closed set (the three
-    /// `claude -p` operations) so `wikictl log append --kind …` can validate its
+    /// agent operations) so `wikictl log append --kind …` can validate its
     /// argument and the rendered `log.md` lines are predictable to `grep`.
     public enum Kind: String, Equatable, Sendable, CaseIterable {
         case ingest

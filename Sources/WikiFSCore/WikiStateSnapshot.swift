@@ -1,7 +1,7 @@
 import Foundation
 
 /// A LIVE snapshot of one wiki's CURRENT state, gathered from the active store at
-/// operation-click time and injected into the `claude -p` operation prompt
+/// operation-click time and injected into the agent operation prompt
 /// (`plans/llm-wiki.md` Phase D — "fewer orientation turns").
 ///
 /// **Why this exists.** On the live gate, an Ingest run burned multiple turns

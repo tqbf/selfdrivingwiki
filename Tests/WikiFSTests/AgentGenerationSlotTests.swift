@@ -20,7 +20,7 @@ import WikiFSCore
 /// and `generationSlotWaiterCount`, not via `isRunning`.
 ///
 /// These exercise the slot seam (`awaitGenerationSlot` / `releaseGenerationSlot` /
-/// `generationSlotWaiterCount`) directly, without spawning a real `claude -p` process —
+/// `generationSlotWaiterCount`) directly, without spawning a real agent process —
 /// so they are fast and deterministic.
 @MainActor
 struct AgentGenerationSlotTests {
@@ -283,14 +283,13 @@ struct AgentGenerationSlotTests {
         let store = WikiStoreModel(
             store: try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite")))
 
-        // Extraction phase: isExtracting true, no claude running. Counter is 0.
-        launcher.isExtracting = true
+        // Extraction phase (now managed by QueueActivityTracker, not the launcher):
+        // no claude running. Counter is 0.
         #expect(!launcher.isRunning)
         #expect(store.agentRunCount == 0)
 
         // Generation slot acquired: does NOT set isRunning (Step 6 decoupling).
         // isRunning is set only when the actual process launches (spawn commit).
-        launcher.isExtracting = false
         _ = await launcher.awaitGenerationSlot()
         #expect(!launcher.isRunning)  // gate alone does not mean "process alive"
 

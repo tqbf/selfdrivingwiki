@@ -1,0 +1,370 @@
+import Foundation
+import Observation
+import WikiFSCore
+import WikiFSEngine
+
+/// A mutable box for a `@Sendable` progress-emit closure. Used to break the
+/// circular dependency between `QueueExtractionWorkerFactory` (needs the
+/// closure) and `QueueEngine` (needs the factory but provides the closure).
+final class ProgressEmitBox: @unchecked Sendable {
+    var emit: (@Sendable (QueueItem.ID, String) -> Void)?
+}
+
+/// A mutable box for a `@Sendable` transcript-emit closure. Same pattern as
+/// `ProgressEmitBox` — breaks the circular dependency between the ingestion
+/// worker factory (needs the closure) and the engine (provides it).
+final class TranscriptEmitBox: @unchecked Sendable {
+    var emit: (@Sendable (QueueItem.ID, AgentEvent) -> Void)?
+}
+
+/// Observes `QueueEngine.events` and maintains `@Observable` UI state for
+/// extraction activity. Replaces the launcher's extraction slot machinery
+/// (`isExtracting`, `extractionLog`, `extractionPID`,
+/// `extractingSourceIDs`, `extractTask`, `stopExtraction`) with a
+/// queue-event-driven model.
+///
+/// The tracker maps `QueueItem.ID` → `Set<PageID>` so it knows which source
+/// IDs are being extracted, and exposes:
+/// - `isExtracting` / `extractingSourceIDs` — drives per-row "Extracting…"
+///   labels and the sidebar spinner.
+/// - `extractionLog` — accumulated progress output for the currently-visible
+///   extraction, driven by `.progress` events.
+/// - `cancelExtraction()` — calls `queueEngine.cancelItem(...)` for the
+///   current extraction item (replaces `stopExtraction()`).
+///
+/// Lives in `WikiFS` (not `WikiFSEngine`) because it is SwiftUI-observable UI
+/// state — the engine itself is headless and knows nothing about it.
+@MainActor
+@Observable
+final class QueueActivityTracker {
+
+    // MARK: - Observable state (drives SwiftUI)
+
+    /// Source IDs currently being extracted (any extraction queue item in
+    /// `.running` state). Drives per-file "Extracting…" labels and the
+    /// standalone Extract button's per-file disable.
+    private(set) var extractingSourceIDs: Set<PageID> = []
+
+    /// Source IDs currently being ingested (any ingestion queue item in
+    /// `.running` state). Drives per-file "Ingesting…" labels and cross-file
+    /// Ingest button disable. Replaces `launcher.ingestingSourceIDs`.
+    private(set) var ingestingSourceIDs: Set<PageID> = []
+
+    /// Queue item IDs currently running a lint (`.ingestion` items with
+    /// `lintPageIDs != nil`). Lint items have empty `sourceIDs`, so they
+    /// don't show up in `ingestingSourceIDs` — this set ensures
+    /// `isIngesting` covers lint-only runs.
+    private(set) var lintingItemIDs: Set<QueueItem.ID> = []
+
+    /// True while any extraction is running. Drives the sidebar spinner.
+    var isExtracting: Bool { !extractingSourceIDs.isEmpty }
+
+    /// True while any ingestion or lint is running.
+    var isIngesting: Bool { !ingestingSourceIDs.isEmpty || !lintingItemIDs.isEmpty }
+
+    /// Per-item typed agent events, for the Activity window's transcript view.
+    /// Bounded — pruned only when items are pruned from history (not on
+    /// terminal state, so users can view completed/failed/cancelled transcripts).
+    private(set) var transcripts: [QueueItem.ID: [AgentEvent]] = [:]
+
+    /// Per-item accumulated progress text (for extraction items that produce
+    /// progress strings, not typed `AgentEvent`s). Keyed by item ID.
+    private(set) var progressLogs: [QueueItem.ID: String] = [:]
+
+    /// Accumulated progress log for the most recent extraction. Cleared on
+    /// `.started`, appended on `.progress`. Drives the sidebar log text.
+    private(set) var extractionLog: String = ""
+
+    /// PID of the extraction subprocess (parsed from progress lines if the
+    /// local pdf2md backend reports it). `nil` for remote backends.
+    private(set) var extractionPID: Int32? = nil
+
+    // MARK: - Internal tracking
+
+    /// Maximum number of typed events to retain per item. Older events are
+    /// dropped beyond this bound to keep memory bounded.
+    private let maxTranscriptEvents = 1000
+
+    /// Maximum number of items to retain transcripts for. When exceeded, the
+    /// oldest item's transcript is pruned. This prevents unbounded growth when
+    /// many items accumulate over a long session.
+    private let maxTrackedItems = 200
+
+    /// Maps queue item ID → source IDs, so we can remove source IDs from
+    /// `extractingSourceIDs` when items finish.
+    private var itemToSourceIDs: [QueueItem.ID: Set<PageID>] = [:]
+
+    /// Items whose transcript's last row is an in-progress streamed assistant
+    /// reply — the next `.assistantTextDelta` grows that row in place instead
+    /// of appending a new one (mirrors `AgentLauncher.mergeOrAppend`; without
+    /// this, a streamed reply renders as one row per word-fragment).
+    private var streamingTranscriptItemIDs: Set<QueueItem.ID> = []
+
+    /// Items whose transcript's last row is an in-progress streamed thinking
+    /// block — the next `.thinkingDelta` grows that row in place instead of
+    /// appending a new one (mirrors `streamingTranscriptItemIDs` for assistant text).
+    private var streamingThinkingItemIDs: Set<QueueItem.ID> = []
+
+    /// The currently running extraction item ID, for cancellation via
+    /// `cancelExtraction()`.
+    private var currentExtractionItemID: QueueItem.ID?
+
+    /// The queue engine — held weakly to avoid a retain cycle (the engine
+    /// does not retain the tracker).
+    private weak var queueEngine: QueueEngine?
+
+    /// The stream consumer task.
+    private var streamTask: Task<Void, Never>?
+
+    // MARK: - Lifecycle
+
+    /// Attach to a queue engine and start consuming its events. Idempotent —
+    /// calling again replaces the previous attachment.
+    func attach(engine: QueueEngine) {
+        queueEngine = engine
+        start(events: engine.events)
+    }
+
+    /// Start consuming `events`. Spawns a `@MainActor` Task that iterates the
+    /// stream and dispatches each event to `handle(_:)`.
+    func start(events: AsyncStream<QueueEvent>) {
+        streamTask?.cancel()
+        streamTask = Task { @MainActor [weak self] in
+            for await event in events {
+                guard let self else { return }
+                self.handle(event)
+            }
+        }
+    }
+
+    /// Stop consuming events and clear state.
+    func stop() {
+        streamTask?.cancel()
+        streamTask = nil
+        queueEngine = nil
+        extractingSourceIDs = []
+        ingestingSourceIDs = []
+        lintingItemIDs = []
+        extractionLog = ""
+        extractionPID = nil
+        currentExtractionItemID = nil
+        itemToSourceIDs.removeAll()
+        transcripts.removeAll()
+        progressLogs.removeAll()
+        streamingTranscriptItemIDs.removeAll()
+        streamingThinkingItemIDs.removeAll()
+    }
+
+    // MARK: - Public API
+
+    /// Cancel the currently running extraction (if any). Calls
+    /// `queueEngine.cancelItem(itemID)` which cancels the worker's `Task`
+    /// and transitions the item to `.cancelled`.
+    func cancelExtraction() async {
+        guard let itemID = currentExtractionItemID, let engine = queueEngine else { return }
+        await engine.cancelItem(itemID)
+    }
+
+    /// True if the tracker has been attached to a queue engine's event stream.
+    /// Used by `appEnvironment` to assert the tracker is live before injection.
+    var isAttachedToEngine: Bool {
+        streamTask != nil
+    }
+
+    /// True if an extraction is running but NOT for this specific source.
+    /// Used to disable the Extract button when another file holds the
+    /// extraction slot (local pdf2md is limit 1).
+    func isSlotBusyForOtherSource(_ id: PageID) -> Bool {
+        !extractingSourceIDs.isEmpty && !extractingSourceIDs.contains(id)
+    }
+
+    /// Append a typed event to the transcript for a queue item. Called from
+    /// the `.transcript` event handler. Streamed `.assistantTextDelta` chunks
+    /// grow the last row in place (mirroring `AgentLauncher.mergeOrAppend`) —
+    /// appending them raw renders one row per word-fragment. Bounded — drops
+    /// oldest events beyond `maxTranscriptEvents` per item, and prunes oldest
+    /// items beyond `maxTrackedItems`.
+    func appendTranscriptEvent(itemID: QueueItem.ID, event: AgentEvent) {
+        var arr = transcripts[itemID, default: []]
+        switch event {
+        case .assistantTextDelta(let delta):
+            if streamingTranscriptItemIDs.contains(itemID),
+               case .assistantText(let existing) = arr.last {
+                arr[arr.count - 1] = .assistantText(existing + delta)
+            } else {
+                arr.append(.assistantText(delta))
+                streamingTranscriptItemIDs.insert(itemID)
+            }
+            streamingThinkingItemIDs.remove(itemID)
+        case .assistantText:
+            // Authoritative full text for a block already being streamed —
+            // replace the accumulated row rather than duplicating it.
+            if streamingTranscriptItemIDs.contains(itemID),
+               case .assistantText = arr.last {
+                arr[arr.count - 1] = event
+            } else {
+                arr.append(event)
+            }
+            streamingTranscriptItemIDs.remove(itemID)
+            streamingThinkingItemIDs.remove(itemID)
+        case .thinkingDelta(let delta):
+            if streamingThinkingItemIDs.contains(itemID),
+               case .thinking(let existing) = arr.last {
+                arr[arr.count - 1] = .thinking(existing + delta)
+            } else {
+                arr.append(.thinking(delta))
+                streamingThinkingItemIDs.insert(itemID)
+            }
+            streamingTranscriptItemIDs.remove(itemID)
+        case .thinking:
+            // Authoritative full text for a thinking block already being
+            // streamed — replace the accumulated row rather than duplicating it.
+            if streamingThinkingItemIDs.contains(itemID),
+               case .thinking = arr.last {
+                arr[arr.count - 1] = event
+            } else {
+                arr.append(event)
+            }
+            streamingThinkingItemIDs.remove(itemID)
+            streamingTranscriptItemIDs.remove(itemID)
+        default:
+            arr.append(event)
+            streamingTranscriptItemIDs.remove(itemID)
+            streamingThinkingItemIDs.remove(itemID)
+        }
+        if arr.count > maxTranscriptEvents {
+            arr.removeFirst(arr.count - maxTranscriptEvents)
+        }
+        transcripts[itemID] = arr
+
+        // Bound the number of tracked items — prune oldest (first inserted).
+        if transcripts.count > maxTrackedItems {
+            let toRemove = transcripts.count - maxTrackedItems
+            let oldestIDs = Array(transcripts.keys.prefix(toRemove))
+            for id in oldestIDs {
+                transcripts.removeValue(forKey: id)
+                progressLogs.removeValue(forKey: id)
+            }
+        }
+    }
+
+    /// Prune the transcript + progress log for an item. Called when items are
+    /// pruned from history (the bounded-recent-items path), NOT on terminal
+    /// state — so users can view completed/failed/cancelled transcripts.
+    func pruneTranscripts(for itemID: QueueItem.ID) {
+        transcripts.removeValue(forKey: itemID)
+        progressLogs.removeValue(forKey: itemID)
+        streamingTranscriptItemIDs.remove(itemID)
+        streamingThinkingItemIDs.remove(itemID)
+    }
+
+    /// The transcript for a given item ID (may be empty / nil).
+    func transcript(for itemID: QueueItem.ID) -> [AgentEvent] {
+        transcripts[itemID] ?? []
+    }
+
+    /// The accumulated progress log for a given item ID (may be empty).
+    func progressLog(for itemID: QueueItem.ID) -> String {
+        progressLogs[itemID] ?? ""
+    }
+
+    // MARK: - Event handling
+
+    @MainActor
+    func handle(_ event: QueueEvent) {
+        switch event {
+        case .enqueued(let item):
+            // Track the mapping so we can clean up on completion.
+            let sourceIDs = Set(item.payload.sourceIDs)
+            itemToSourceIDs[item.id] = sourceIDs
+
+        case .started(let item):
+            let sourceIDs = Set(item.payload.sourceIDs)
+            itemToSourceIDs[item.id] = sourceIDs
+            switch item.queue {
+            case .extraction:
+                extractingSourceIDs.formUnion(sourceIDs)
+                extractionLog = ""
+                extractionPID = nil
+                currentExtractionItemID = item.id
+                progressLogs[item.id] = ""
+            case .ingestion:
+                if item.payload.lintPageIDs != nil {
+                    // Lint item — track separately (empty sourceIDs).
+                    lintingItemIDs.insert(item.id)
+                } else {
+                    ingestingSourceIDs.formUnion(sourceIDs)
+                }
+            }
+
+        case .transcript(let id, let agentEvent):
+            appendTranscriptEvent(itemID: id, event: agentEvent)
+
+        case .progress(let id, let line):
+            // Accumulate per-item progress (for extraction items and any
+            // item that emits progress lines).
+            if let existing = progressLogs[id] {
+                progressLogs[id] = existing.isEmpty ? line : "\(existing)\n\(line)"
+            } else {
+                progressLogs[id] = line
+            }
+            // Also feed the legacy extractionLog for backward compat.
+            if itemToSourceIDs[id] != nil {
+                if extractionLog.isEmpty {
+                    extractionLog = line
+                } else {
+                    extractionLog += "\n" + line
+                }
+                parsePIDIfPresent(line)
+            }
+
+        case .completed(let item):
+            removeItem(item)
+
+        case .failed(let item, let error):
+            removeItem(item)
+            if item.queue == .extraction, extractionLog.isEmpty {
+                extractionLog = "Extraction failed: \(error)"
+            }
+
+        case .cancelled(let item):
+            removeItem(item)
+
+        case .runStateChanged:
+            // Not relevant to activity tracking.
+            break
+        case .reordered:
+            // Ordering changed but state is unchanged; the next snapshot
+            // refresh will pick up the new order. No tracker update needed.
+            break
+        }
+    }
+
+    /// Remove an item from the active set and clean up its mapping.
+    private func removeItem(_ item: QueueItem) {
+        if let sourceIDs = itemToSourceIDs.removeValue(forKey: item.id) {
+            switch item.queue {
+            case .extraction:
+                extractingSourceIDs.subtract(sourceIDs)
+            case .ingestion:
+                ingestingSourceIDs.subtract(sourceIDs)
+            }
+        }
+        // Lint items are tracked separately — always remove on terminal state.
+        lintingItemIDs.remove(item.id)
+        if currentExtractionItemID == item.id {
+            currentExtractionItemID = nil
+        }
+    }
+
+    /// Parse a PID from a progress line if the local backend reports one.
+    /// pdf2md reports its PID in a line like `"pid:12345"`.
+    private func parsePIDIfPresent(_ line: String) {
+        guard line.contains("pid:") else { return }
+        let cleaned = line.replacingOccurrences(of: "pid:", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        if let pid = Int32(cleaned) {
+            extractionPID = pid
+        }
+    }
+}

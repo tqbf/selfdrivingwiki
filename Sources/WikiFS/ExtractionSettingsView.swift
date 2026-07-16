@@ -21,6 +21,7 @@ struct ExtractionSettingsView: View {
     /// Observed so the panel can lock itself while a PDF extraction is running —
     /// changing the backend or keys mid-conversion is unsafe.
     let launcher: AgentLauncher
+    @Environment(QueueActivityTracker.self) private var tracker
 
     // Drafts initialized from config + Keychain in `init`; every change is
     // written straight back by `persistAll()`.
@@ -246,7 +247,7 @@ struct ExtractionSettingsView: View {
     /// While busy the whole panel is disabled so a mid-extraction backend or key
     /// change can't derail the running conversion.
     private var extractionInProgress: Bool {
-        !launcher.extractingSourceIDs.isEmpty
+        !tracker.extractingSourceIDs.isEmpty
     }
 
     // MARK: - Auto-save

@@ -95,11 +95,13 @@ extension [AgentEvent] {
             switch event {
             case .result(_, let text):
                 return !hasAssistantText(matching: text)
-            case .toolUse:
+            case .toolUse, .thinking:
                 // A concise one-line progress summary per tool call (issue #173):
                 // lets the user see the agent reading/searching/editing without
                 // opting into the full internals view. Full raw detail still lives
                 // behind "Show internals".
+                // .thinking is surfaced as a collapsible box (issue #391) —
+                // distinct from the full internals feed.
                 return true
             case .toolResult(let isError, _):
                 // Surface failed tool calls (a useful stall/error signal); successes

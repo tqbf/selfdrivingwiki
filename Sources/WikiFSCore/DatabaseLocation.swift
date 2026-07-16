@@ -38,6 +38,15 @@ public enum DatabaseLocation {
         return dir
     }
 
+    /// The central queue database URL (`…/<appGroup>/queue.sqlite`), shared
+    /// app-wide for persistent extraction/ingestion queue state. Mirrors the
+    /// per-wiki `appGroupContainerURL(forWikiID:)` pattern but named for the
+    /// central queue, not one wiki.
+    public static func queueDatabaseURL() throws -> URL {
+        try appGroupContainerDirectory()
+            .appendingPathComponent("queue.sqlite", isDirectory: false)
+    }
+
     /// The legacy single-wiki App Group database URL as seen by the
     /// **un-sandboxed app** (`…/group.org.sockpuppet.wiki/WikiFS.sqlite`). Kept
     /// for the one-time v0→registry migration.

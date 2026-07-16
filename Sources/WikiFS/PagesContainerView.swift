@@ -150,15 +150,11 @@ struct PagesContainerView: View {
             },
             onLint: { ids in
                 Task {
-                    let pages = ids.compactMap { id -> (id: PageID, title: String)? in
-                        guard let s = store.summaries.first(where: { $0.id == id }) else { return nil }
-                        return (id: id, title: s.title)
-                    }
-                    await AgentOperationRunner.runLintPages(
-                        pages: pages, launcher: launcher, store: store,
+                    try? await session.queueEngine.enqueue(QueueItemRequest(
+                        queue: .ingestion,
                         wikiID: session.wikiID,
-                        changeSignaler: fileProvider,
-                        wikictlDirectory: HelpersLocation.wikictlDirectory)
+                        payload: QueueItemPayload(sourceIDs: [], lintPageIDs: ids)
+                    ))
                 }
             },
             onRename: { summary in beginRename(summary) },

@@ -35,9 +35,30 @@ struct WikiFSApp: App {
     /// Serve). Threaded like `settingsLauncher` — one instance, owned by the app,
     /// shared as a ref into each `WikiSession` (it carries no per-wiki state).
     @State private var extractionCoordinator: ExtractionCoordinator
+    /// App-wide queue engine. Owns the persistent `queue.sqlite` store; drives
+    /// extraction/ingestion workers off-main. One instance, shared across
+    /// sessions via `WikiSession`.
+    @State private var queueEngine: QueueEngine
+    /// App-wide extraction provider. Bridges the headless queue engine to the
+    /// `@MainActor` `ExtractionCoordinator` + `WikiStoreModel`.
+    @State private var extractionProvider: any QueueExtractionProvider
+    /// App-wide ingestion provider. Bridges the headless queue engine to the
+    /// `@MainActor` `AgentLauncher` + `WikiStoreModel` for ingestion.
+    @State private var ingestionProvider: any QueueIngestionProvider
+    /// Mutable box for the file provider reference — the ingestion provider
+    /// uses it to access the `FileProviderSpike` which is only available
+    /// after the `@State` property is initialized by SwiftUI.
+    @State private var fileProviderBox: FileProviderBox
+    /// App-wide queue-activity tracker. Observes `QueueEngine.events` and
+    /// exposes `@Observable` extraction state (extractingSourceIDs, progress
+    /// log, etc.) that replaces the launcher's slot machinery.
+    @State private var activityTracker: QueueActivityTracker
     @State private var showingLaunchLocationWarning: Bool
     @State private var fileProviderSetupWarning: FileProviderSetupWarning?
     @State private var showingFileProviderSetupWarning = false
+    /// Drives the Settings TabView selection so the activity windows can open
+    /// Settings on the relevant tab (gear button → extraction/agents config).
+    @AppStorage("settings.selectedTab") private var settingsSelectedTabRaw = SettingsTab.about.rawValue
     /// Built lazily after `bootstrap` (it needs the registered wikis) — see the
     /// `.task` below. The change bridge observes `wikictl`'s Darwin notifications.
     @State private var changeBridge: WikiChangeBridge?
@@ -90,11 +111,87 @@ struct WikiFSApp: App {
             containerDirectory: directory,
             localExtractorFactory: { LocalPdf2MarkdownExtractor() })
         _extractionCoordinator = State(initialValue: coordinator)
-        _sessionManager = State(initialValue: SessionManager(
+
+        // Queue engine construction. Order matters (factory needs provider;
+        // provider needs a session-lookup box; session manager needs engine +
+        // provider). The box starts returning nil (no sessions yet) and is
+        // wired to the real session manager after construction.
+        let queueDBURL = (try? DatabaseLocation.queueDatabaseURL())
+            ?? directory.appendingPathComponent("queue.sqlite", isDirectory: false)
+        let queueStore: QueueStore
+        do {
+            queueStore = try QueueStore(databaseURL: queueDBURL)
+        } catch {
+            DebugLog.store("QueueEngine: failed to open queue.sqlite — using in-memory: \(error)")
+            // swiftlint:disable:next force_try
+            queueStore = try! QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+        }
+        let sessionBox = SessionLookupBox()
+        let extractionProvider = AppQueueExtractionProvider(
+            extractionCoordinator: coordinator,
+            sessionBox: sessionBox)
+        let fileProviderBox = FileProviderBox()
+        let ingestionProvider = AppQueueIngestionProvider(
+            sessionBox: sessionBox,
+            fileProviderBox: fileProviderBox,
+            wikictlDirectory: HelpersLocation.wikictlDirectory)
+        // Create a progress-emit box — the closure starts as a no-op and is
+        // replaced with the engine's continuation after the engine is
+        // constructed (breaking the circular dependency: factory needs the
+        // closure, engine needs the factory).
+        let progressBox = ProgressEmitBox()
+        let transcriptBox = TranscriptEmitBox()
+        let extractionFactory = QueueExtractionWorkerFactory(
+            provider: extractionProvider,
+            emitProgress: { id, line in progressBox.emit?(id, line) })
+        let ingestionFactory = QueueIngestionWorkerFactory(
+            provider: ingestionProvider,
+            emitProgress: { id, line in progressBox.emit?(id, line) },
+            emitTranscript: { id, event in transcriptBox.emit?(id, event) })
+        let workerFactory = CompositeWorkerFactory(factories: [
+            .extraction: extractionFactory,
+            .ingestion: ingestionFactory
+        ])
+        let queueEngine = QueueEngine(store: queueStore, workerFactory: workerFactory)
+        // Wire the progress emit box to the engine's event continuation.
+        // This is an actor-isolated call — use `await` to hop to the actor.
+        // The box starts with a nil emit (no-op), so workers spawned before
+        // this resolves simply drop progress lines (rare — the engine hasn't
+        // dispatched yet at this point in init).
+        Task { progressBox.emit = await queueEngine.makeEmitProgress() }
+        Task { transcriptBox.emit = await queueEngine.makeEmitTranscript() }
+        // Start the engine (rehydrate + crash recovery + initial dispatch).
+        // Detached so the app's init isn't blocked; the engine is an actor so
+        // `start()` is safe to call concurrently.
+        Task { await queueEngine.start() }
+        // Create the activity tracker and attach it to the engine's event
+        // stream. The tracker is @Observable @MainActor so views can read
+        // extraction state directly via @Environment.
+        let activityTracker = QueueActivityTracker()
+        activityTracker.attach(engine: queueEngine)
+        _queueEngine = State(initialValue: queueEngine)
+        _extractionProvider = State(initialValue: extractionProvider)
+        _ingestionProvider = State(initialValue: ingestionProvider)
+        _fileProviderBox = State(initialValue: fileProviderBox)
+        _activityTracker = State(initialValue: activityTracker)
+
+        let sm = SessionManager(
             containerDirectory: directory,
             extractionCoordinator: coordinator,
+            queueEngine: queueEngine,
+            extractionProvider: extractionProvider,
             pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path }
-        ))
+        )
+        _sessionManager = State(initialValue: sm)
+        // Wire the session-lookup box to the real session manager now that
+        // it's constructed. The provider (already captured by the factory)
+        // sees live sessions through the box.
+        sessionBox.setLookup { [weak sm] wikiID in
+            sm?.sessions[wikiID]?.store
+        }
+        sessionBox.setSessionLookup { [weak sm] wikiID in
+            sm?.sessions[wikiID]
+        }
         // Settings-only launcher (D5): its own gate, independent of any
         // session's gate. Used for "Test Connection" + backend config only.
         let settingsGate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
@@ -127,6 +224,71 @@ struct WikiFSApp: App {
         } catch {
             DebugLog.store("wikid: SMAppService registration failed (expected in dev mode): \(error)")
         }
+
+        // Call bootstrap directly from init.
+        print("SDW: calling bootstrapApp from init")
+        bootstrapApp()
+    }
+
+    /// App-level bootstrap: status item, file provider, activateMostRecent,
+    /// change bridge. Called from BOTH AppDelegate.applicationDidFinishLaunching
+    /// (guaranteed) AND the main WindowGroup's .task (fallback). Idempotent —
+    /// guarded by a static flag.
+    private static var didBootstrap = false
+    @MainActor
+    private func bootstrapApp() {
+        DebugLog.tabs("WikiFSApp: bootstrapApp called, didBootstrap=\(Self.didBootstrap)")
+        guard !Self.didBootstrap else { return }
+        Self.didBootstrap = true
+
+        // Synchronous part: activate most recent + file provider wiring.
+        registry.activateMostRecent()
+        fileProviderBox.provider = fileProvider
+        fileProvider.wire(into: registry)
+        registry.flushActiveStore = { [sessionManager] wikiID in
+            sessionManager.flushSession(for: wikiID)
+        }
+
+        // Status item + File Provider setup run from .task (on the first
+        // WindowGroup that appears) via bootstrapApp's idempotent guard.
+        // The async Task parts also run from there.
+    }
+
+    /// Create and start the menu-bar status item. Called from .task (runs
+    /// when a window appears — guaranteed even with state restoration).
+    /// Idempotent — guarded by `didStartStatusItem`.
+    @MainActor
+    private static var didStartStatusItem = false
+    @MainActor
+    private func startStatusItem() {
+        guard !Self.didStartStatusItem else { return }
+        Self.didStartStatusItem = true
+
+        let statusController = MenuBarItemController(
+            queueEngine: queueEngine,
+            activityTracker: activityTracker,
+            sessionManager: sessionManager)
+        statusController.start()
+        appDelegate.menuBarItemController = statusController
+
+        // File Provider setup + change bridge (async).
+        Task {
+            if let warning = await FileProviderSetupVerifier.verifyAndRepairInstalledProvider() {
+                fileProviderSetupWarning = warning
+                showingFileProviderSetupWarning = true
+            }
+            await fileProvider.migrateDomainsIfNeeded(
+                wikiIDs: registry.wikis.map(\.id))
+            await registry.registerAllDomains()
+
+            let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
+            bridge.sessionLookup = { [sessionManager] wikiID in
+                sessionManager.allSessions.filter { $0.wikiID == wikiID }
+            }
+            bridge.refreshObservations()
+            changeBridge = bridge
+            appDelegate.sessionManager = sessionManager
+        }
     }
 
     var body: some Scene {
@@ -141,6 +303,7 @@ struct WikiFSApp: App {
                 sessionManager: sessionManager,
                 fileProvider: fileProvider
             )
+            .appEnvironment(tracker: activityTracker)
             .alert(
                 "Install Self Driving Wiki in Applications",
                 isPresented: $showingLaunchLocationWarning,
@@ -178,40 +341,8 @@ struct WikiFSApp: App {
                 changeBridge?.refreshObservations()
             }
             .task {
-                fileProvider.wire(into: registry)
-                // Flush a specific wiki's store before export/delete. The
-                // closure receives the wiki ID so the registry can target the
-                // right session.
-                registry.flushActiveStore = { [sessionManager] wikiID in
-                    sessionManager.flushSession(for: wikiID)
-                }
-                // First render already loaded the wiki list (reloadData, no
-                // selection). Now set the active wiki id: only triggers
-                // selectRow (not reloadData), so no NSTableView reentrancy.
-                registry.activateMostRecent()
-                if let warning = await FileProviderSetupVerifier.verifyAndRepairInstalledProvider() {
-                    fileProviderSetupWarning = warning
-                    showingFileProviderSetupWarning = true
-                }
-                await fileProvider.migrateDomainsIfNeeded(
-                    wikiIDs: registry.wikis.map(\.id))
-                await registry.registerAllDomains()
-                // Stand up the change bridge now that the registry is loaded,
-                // then observe every wiki's `wikictl` Darwin notification.
-                let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
-                // Route flushes to all matching sessions — a wikictl write to
-                // wiki A must update every window showing wiki A.
-                bridge.sessionLookup = { [sessionManager] wikiID in
-                    sessionManager.allSessions.filter { $0.wikiID == wikiID }
-                }
-                bridge.refreshObservations()
-                changeBridge = bridge
-                // Give the AppDelegate a reference to the session manager so
-                // it can flush ALL sessions on app background (R3 safety net —
-                // unreleased sessions from closed-but-not-onDisappear'd
-                // windows are drained here, since per-window scenePhase only
-                // flushes active-window sessions).
-                appDelegate.sessionManager = sessionManager
+                bootstrapApp()
+                startStatusItem()
             }
         }
         .windowToolbarStyle(.unified)
@@ -233,6 +364,20 @@ struct WikiFSApp: App {
                 sessionManager: sessionManager,
                 fileProvider: fileProvider
             )
+            .appEnvironment(tracker: activityTracker)
+            .onAppear {
+                DebugLog.tabs("RootScene wiki-window onAppear: wikiID=\(wikiID ?? "nil")")
+            }
+            .task {
+                bootstrapApp()
+                startStatusItem()
+            }
+            // The presented value can arrive AFTER first render (state
+            // restoration) or change in place (openWindow(value:) routing to
+            // an existing window). RootScene copies the value into @State at
+            // creation, so key the whole subtree on it — a changed value must
+            // rebuild RootScene, not be silently ignored.
+            .id(wikiID)
         }
 
         // Extraction compare: a real, resizable, non-modal window (one per
@@ -246,19 +391,41 @@ struct WikiFSApp: App {
         .windowResizability(.contentMinSize)
 
         Settings {
-            TabView {
+            TabView(selection: settingsSelectedTab) {
                 AboutView()
+                    .tag(SettingsTab.about)
                     .tabItem { Label("About", systemImage: "info.circle") }
                 ZoteroSettingsView(containerDirectory: containerDirectory)
+                    .tag(SettingsTab.zotero)
                     .tabItem { Label("Zotero", systemImage: "books.vertical") }
                 ExtractionSettingsView(containerDirectory: containerDirectory, launcher: settingsLauncher)
+                    .tag(SettingsTab.extraction)
                     .tabItem { Label("Extraction", systemImage: "doc.viewfinder") }
                 AgentsSettingsView(containerDirectory: containerDirectory)
+                    .tag(SettingsTab.agents)
                     .tabItem { Label("Agents", systemImage: "cpu") }
             }
+            .appEnvironment(tracker: activityTracker)
             .frame(minWidth: 560, minHeight: 520)
         }
         .windowResizability(.contentMinSize)
+    }
+
+    /// Settings tab tags used by the TabView selection and `@AppStorage`.
+    enum SettingsTab: String {
+        case about
+        case zotero
+        case extraction
+        case agents
+    }
+
+    /// Binding that bridges `@AppStorage(String)` → `SettingsTab` for the
+    /// Settings `TabView(selection:)`.
+    private var settingsSelectedTab: Binding<SettingsTab> {
+        Binding(
+            get: { SettingsTab(rawValue: settingsSelectedTabRaw) ?? .about },
+            set: { settingsSelectedTabRaw = $0.rawValue }
+        )
     }
 }
 
@@ -271,11 +438,51 @@ struct WikiFSApp: App {
 /// backgrounded — the closest macOS equivalent to "all windows inactive."
 final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor weak var sessionManager: SessionManager?
+    /// STRONG on purpose: this is the only long-lived owner of the status-item
+    /// controller. A weak reference here deallocates the controller the moment
+    /// `startStatusItem()` returns, which removes the NSStatusItem from the
+    /// menu bar before it ever draws.
+    @MainActor var menuBarItemController: MenuBarItemController?
+    @MainActor var bootstrap: (@MainActor () -> Void)?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        DebugLog.tabs("AppDelegate: applicationDidFinishLaunching")
+        MainActor.assumeIsolated {
+            bootstrap?()
+        }
+    }
 
     func applicationWillResignActive(_ notification: Notification) {
         MainActor.assumeIsolated {
             sessionManager?.flushAllSessions()
         }
+    }
+
+    /// Keep the app alive after the last window closes — it drops to
+    /// menu-bar-only (accessory) mode so the queue engine keeps running.
+    /// Always return false: the status item provides the quit path, and
+    /// the queue is durable so work resumes on next launch.
+    /// (Phase 6: activation policy switching — AC1.1, AC1.2)
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        NSApp.setActivationPolicy(.accessory)
+        return false
+    }
+
+    /// When the user reopens the app (Dock click, status item), restore
+    /// normal dock presence (AC1.3).
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            NSApp.setActivationPolicy(.regular)
+        }
+        return true
+    }
+
+    /// Confirm quit if there's active queue work (AC1.4). For now, allow
+    /// termination since the queue is durable (items persist to SQLite and
+    /// resume on relaunch). A full quit-confirmation dialog is a future
+    /// refinement.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        .terminateNow
     }
 }
 
@@ -319,5 +526,23 @@ extension FileProviderSpike {
         registry.renameDomain = { [weak self] id, name in
             await self?.renameDomain(id: id, displayName: name)
         }
+    }
+}
+
+// MARK: - App environment injection
+
+/// Centralizes all required `@Environment` injections for app scenes. Every
+/// `WindowGroup` and `Settings` scene MUST use this modifier — if a new
+/// `@Environment`-dependent type is added, add it here so no scene can forget.
+///
+/// The assert catches missing injections at debug-build runtime (fitness for
+/// `@Environment`-dependent views like `WikiDetailView` and
+/// `ExtractionSettingsView`).
+extension View {
+    @MainActor
+    func appEnvironment(tracker: QueueActivityTracker) -> some View {
+        assert(tracker.isAttachedToEngine, "QueueActivityTracker must be attached to a QueueEngine before injecting into a scene")
+        return self
+            .environment(tracker)
     }
 }

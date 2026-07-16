@@ -3,9 +3,10 @@ import WikiFSEngine
 import WikiFSCore
 import WikiFSEngine
 
-/// The live activity feed for a `claude -p` run. This is the inspector/log
-/// surface: compact rows, tool calls, diagnostics, and optional internals.
-struct AgentActivityView: View {
+/// The live activity feed for an ACP-driven agent run — the "Agent Queue."
+/// Shows a real-time transcript of agent tool calls, diagnostics, and results
+/// as the agent executes, with an optional internals toggle for verbose output.
+struct AgentQueueView: View {
     @Bindable var launcher: AgentLauncher
     let showsResultEvents: Bool
     let showsInternals: Bool
@@ -23,6 +24,7 @@ struct AgentActivityView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            header
             if let error = launcher.preflightError {
                 preflightBanner(error)
             }
@@ -89,6 +91,19 @@ struct AgentActivityView: View {
         }
     }
 
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Agent Queue")
+                .font(.headline)
+            Text("Live transcript of agent tool calls, diagnostics, and results as the agent runs.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, ActivityMetrics.padding)
+        .padding(.top, ActivityMetrics.padding)
+        .padding(.bottom, ActivityMetrics.padding)
+    }
+
     private func preflightBanner(_ error: String) -> some View {
         Label(error, systemImage: "exclamationmark.triangle.fill")
             .font(.callout)
@@ -121,9 +136,9 @@ private enum ActivityMetrics {
 extension AgentEvent {
     var isInternalTranscriptEvent: Bool {
         switch self {
-        case .systemInit, .toolUse, .toolResult, .subagent, .raw, .messageStop, .assistantTextDelta:
+        case .systemInit, .toolUse, .toolResult, .subagent, .raw, .messageStop, .assistantTextDelta, .thinkingDelta:
             true
-        case .userText, .assistantText, .result, .turnFailed:
+        case .userText, .assistantText, .result, .thinking, .turnFailed:
             false
         }
     }

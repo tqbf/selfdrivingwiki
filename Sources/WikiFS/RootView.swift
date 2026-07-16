@@ -32,7 +32,9 @@ struct RootView: View {
             fileProvider: fileProvider,
             agentLauncher: session.agentLauncher,
             chatLauncher: session.chatLauncher,
-            extractionCoordinator: session.extractionCoordinator
+            extractionCoordinator: session.extractionCoordinator,
+            queueEngine: session.queueEngine,
+            extractionProvider: session.extractionProvider
         )
         .id(session.wikiID)
     }

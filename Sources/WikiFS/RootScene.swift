@@ -64,10 +64,15 @@ struct RootScene: View {
                 // The wiki ID is known but the session isn't resolved yet.
                 ProgressView("Opening wiki…")
                     .onAppear { resolveSession(for: wikiID) }
+                    .onAppear {
+                        DebugLog.tabs("RootScene [Opening wiki…]: wikiID=\(wikiID)")
+                    }
             } else {
-                // No wiki ID yet (launch, before activateMostRecent) or no
-                // wikis exist at all. Show the empty-state CTA so the user
-                // can create their first wiki.
+                // No wiki ID from the WindowGroup binding AND no activeWikiID
+                // adoption yet. This happens when the main WindowGroup creates
+                // a RootScene before activateMostRecent() runs, or when state
+                // restoration opens an extra main window. Try to adopt the
+                // activeWikiID immediately — if it's already set, use it.
                 ContentUnavailableView {
                     Label("No Wikis", systemImage: "books.vertical")
                 } description: {
@@ -77,7 +82,31 @@ struct RootScene: View {
                         Task { await registry.createWiki(displayName: "My Wiki") }
                     }
                 }
+                .onAppear {
+                    DebugLog.tabs("RootScene [No Wikis]: wikiID=nil session=nil registry.wikis.count=\(registry.wikis.count) activeWikiID=\(registry.activeWikiID ?? "nil") isSceneActive=\(isSceneActive)")
+                    // Only adopt activeWikiID for the main launch window (which
+                    // starts with wikiID==nil from the single-identity WindowGroup).
+                    // Wiki windows (from WindowGroup(for: String.self)) should receive
+                    // their ID from the binding — if they're nil here, it's a state-
+                    // restoration edge case; adopt activeWikiID as a fallback.
+                    if wikiID == nil, let activeID = registry.activeWikiID {
+                        DebugLog.tabs("RootScene [No Wikis]: adopting activeWikiID=\(activeID)")
+                        wikiID = activeID
+                    } else if wikiID == nil, registry.activeWikiID == nil, !registry.wikis.isEmpty {
+                        // The main WindowGroup's .task hasn't run yet (or this
+                        // is a state-restored wiki window). Trigger activateMostRecent
+                        // so activeWikiID gets set, which our onChange will adopt.
+                        DebugLog.tabs("RootScene [No Wikis]: activating most recent")
+                        registry.activateMostRecent()
+                    }
+                }
             }
+        }
+        .onAppear {
+            DebugLog.tabs("RootScene body onAppear: wikiID=\(wikiID ?? "nil") session=\(session != nil ? "set" : "nil")")
+        }
+        .onChange(of: wikiID) { old, new in
+            DebugLog.tabs("RootScene wikiID changed: old=\(old ?? "nil") new=\(new ?? "nil")")
         }
         // Observe activeWikiID for two purposes:
         // 1. Launch: activateMostRecent() sets activeWikiID → adopt it as
@@ -119,16 +148,23 @@ struct RootScene: View {
             if phase == .active { Task { await session?.upgradeSearchIndex() } }
         }
         .onDisappear {
-            // Release the session when the window closes. If another window
-            // has the same wiki open, the session is still in the cache (the
-            // other window's RootScene will re-resolve it). Note: macOS may
-            // not call .onDisappear on window close — unreleased sessions
-            // linger harmlessly in the SessionManager cache and are drained
-            // by AppDelegate.applicationWillResignActive →
+            // Release the session when the window closes — but only if the
+            // queue engine has no pending/running work for this wiki. If
+            // extraction or ingestion is in progress, the session must stay
+            // alive so the worker can access the store + launcher.
+            // Note: macOS may not call .onDisappear on window close —
+            // unreleased sessions linger harmlessly in the SessionManager
+            // cache and are drained by
+            // AppDelegate.applicationWillResignActive →
             // flushAllSessions() on app background (plan R3).
             if let wikiID {
-                sessionManager.releaseSession(for: wikiID)
-                fileProvider.unsubscribeBus(for: wikiID)
+                Task {
+                    let hasWork = await session?.queueEngine.hasActiveWork(for: wikiID) ?? false
+                    if !hasWork {
+                        sessionManager.releaseSession(for: wikiID)
+                        fileProvider.unsubscribeBus(for: wikiID)
+                    }
+                }
             }
         }
     }

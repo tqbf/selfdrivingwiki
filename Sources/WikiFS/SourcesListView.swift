@@ -60,7 +60,7 @@ struct SourcesListView: NSViewControllerRepresentable {
 
 // MARK: - Callbacks
 
-/// One item for the Extract action: enough to drive `launcher.extractPDF` per
+/// One item for the Extract action: enough to drive queue-based extraction per
 /// source without the controller knowing about the launcher.
 struct SourceExtractItem {
     let id: PageID

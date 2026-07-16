@@ -1,7 +1,7 @@
 import Foundation
 
 /// Fetches a URL and lands its content as a source file in the active wiki —
-/// exactly like a drag-dropped file, so the existing "Ingest into wiki" `claude -p`
+/// exactly like a drag-dropped file, so the existing "Ingest into wiki" agent
 /// operation can summarize it afterward.
 ///
 /// Named `URLFetchService` (not `URLIngestService`) because it only fetches and

@@ -11,14 +11,14 @@ import WikiFSCore
 /// `WIKI_STATE.md` rendering (`WikiStateSnapshot.renderStateFile`), the staged leaf
 /// names (`AgentStaging`), the tiny-vs-non-tiny decision (`IngestPlan.decide`), and
 /// the prompts (`WikiOperation`) — are all unit-tested in the core.
-enum OperationRequest {
+public enum OperationRequest {
   /// One source for ingest: raw bytes + extension + mount-relative display path.
-  struct StagedSource: Equatable, Sendable {
-    let bytes: Data
-    let ext: String         // lowercased, e.g. "md", "pdf"
-    let displayPath: String  // mount-relative, e.g. "sources/by-id/<ulid>.md"
+  public struct StagedSource: Equatable, Sendable {
+    public let bytes: Data
+    public let ext: String         // lowercased, e.g. "md", "pdf"
+    public let displayPath: String  // mount-relative, e.g. "sources/by-id/<ulid>.md"
 
-    init(bytes: Data, ext: String, displayPath: String) {
+    public init(bytes: Data, ext: String, displayPath: String) {
       self.bytes = bytes
       self.ext = ext
       self.displayPath = displayPath

@@ -1,6 +1,6 @@
 import Foundation
 
-/// The three discrete `claude -p` operations the app can run against the
+/// The three discrete agent operations the app can run against the
 /// currently-selected wiki (`plans/llm-wiki.md` Phase C, decision #2): **Ingest**,
 /// **Query**, and **Lint**.
 ///

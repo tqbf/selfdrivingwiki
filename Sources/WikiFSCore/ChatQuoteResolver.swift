@@ -46,7 +46,7 @@ public enum ChatQuoteResolver {
             return summary.isEmpty ? name : "\(name) \(summary)"
         case .toolResult(_, let summary):
             return summary
-        case .systemInit, .subagent, .assistantTextDelta, .messageStop, .raw:
+        case .systemInit, .subagent, .assistantTextDelta, .thinking, .thinkingDelta, .messageStop, .raw:
             return ""
         case .turnFailed(let reason):
             return reason.description

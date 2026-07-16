@@ -80,15 +80,13 @@ struct PageDetailView: View {
                                systemImage: "pencil") { isEditing = true }
                             .help("Edit this page manually")
                         if case .page(let id) = store.selection {
-                            let pageTitle = store.summaries.first(where: { $0.id == id })?.title ?? ""
                             Button("Lint", systemImage: "checkmark.seal") {
                                 Task {
-                                    await AgentOperationRunner.runLintPages(
-                                        pages: [(id: id, title: pageTitle)],
-                                        launcher: launcher, store: store,
+                                    try? await session.queueEngine.enqueue(QueueItemRequest(
+                                        queue: .ingestion,
                                         wikiID: session.wikiID,
-                                        changeSignaler: fileProvider,
-                                        wikictlDirectory: HelpersLocation.wikictlDirectory)
+                                        payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [id])
+                                    ))
                                 }
                             }
                             .help("Fix [[wiki-link]] syntax and run LLM lint on this page")

@@ -4,7 +4,7 @@ import Testing
 @testable import WikiFS
 @testable import WikiFSEngine
 
-/// Tests for the tolerant `claude -p --output-format stream-json` NDJSON parser.
+/// Tests for the tolerant ACP agent NDJSON stream parser.
 /// The fixture lines are REAL shapes captured from the installed CLI (2.1.178), so
 /// the parser is verified against the actual event schema — `system`/`init`,
 /// `assistant` text + `tool_use` blocks, `user`/`tool_result`, the final `result`,
@@ -27,6 +27,16 @@ struct AgentEventParserTests {
     @Test func assistantTextBlockBecomesAssistantText() {
         let line = #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll run that command."}]}}"#
         #expect(AgentEventParser.parse(line: line) == .assistantText("I'll run that command."))
+    }
+
+    @Test func assistantThinkingBlockBecomesThinking() {
+        let line = #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","text":"Considering the best approach…"}]}}"#
+        #expect(AgentEventParser.parse(line: line) == .thinking("Considering the best approach…"))
+    }
+
+    @Test func emptyThinkingBlockIsSkipped() {
+        let line = #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","text":"  "}]}}"#
+        #expect(AgentEventParser.parse(line: line) == nil)
     }
 
     @Test func assistantToolUseBlockSummarizesBashCommand() {
@@ -130,6 +140,16 @@ struct AgentEventParserTests {
     @Test func contentBlockTextDeltaBecomesAssistantTextDelta() {
         let line = #"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"he"}}}"#
         #expect(AgentEventParser.parse(line: line) == .assistantTextDelta("he"))
+    }
+
+    @Test func thinkingDeltaStreamEventBecomesThinkingDelta() {
+        let line = #"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","text":"reasoning"}}}"#
+        #expect(AgentEventParser.parse(line: line) == .thinkingDelta("reasoning"))
+    }
+
+    @Test func emptyThinkingDeltaIsSkipped() {
+        let line = #"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","text":""}}}"#
+        #expect(AgentEventParser.parse(line: line) == nil)
     }
 
     @Test func emptyTextDeltaIsSkipped() {

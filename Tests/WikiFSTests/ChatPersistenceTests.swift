@@ -94,7 +94,7 @@ struct ChatPersistenceTests {
     // MARK: - End-to-end sink installation via startInteractiveQuery
 
     // No existing seam lets tests feed stdout lines into `AgentLauncher` without
-    // spawning a real `claude -p` process (the parser is only reachable via the
+    // spawning a real agent process (the parser is only reachable via the
     // private `ingestStdout`, driven by a `Process`'s stdout pipe). Per the task's
     // instruction, an end-to-end "sink receives flushed events from a live session"
     // test is skipped rather than spawning a real process in unit tests.

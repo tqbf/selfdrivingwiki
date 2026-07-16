@@ -27,10 +27,6 @@ struct QueryNewChatTests {
         launcher.stderr = "some stderr"
         launcher.exitStatus = 0
         launcher.preflightError = "some preflight error"
-        // Sentinel: extraction state must be untouched.
-        launcher.extractionLog = "sentinel-extraction-log"
-        launcher.extractionPID = 4242
-        launcher.extractingSourceIDs = [PageID(rawValue: "sentinel-source")]
 
         launcher.startNewChat()
 
@@ -39,10 +35,6 @@ struct QueryNewChatTests {
         #expect(launcher.stderr.isEmpty)
         #expect(launcher.exitStatus == nil)
         #expect(launcher.preflightError == nil)
-        // Extraction state is a completely separate mechanism — untouched.
-        #expect(launcher.extractionLog == "sentinel-extraction-log")
-        #expect(launcher.extractionPID == 4242)
-        #expect(launcher.extractingSourceIDs == [PageID(rawValue: "sentinel-source")])
     }
 
     // MARK: - startNewChat() guard: never kills a non-query run

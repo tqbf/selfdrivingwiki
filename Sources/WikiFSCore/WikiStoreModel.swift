@@ -112,6 +112,12 @@ public final class WikiStoreModel {
 
     /// The sidebar selection: a page, the system-prompt document, or nothing.
     public var selection: WikiSelection?
+
+    /// Whether the trailing change-log sidebar (`log.md`) is shown in this
+    /// wiki's window. Hidden by default; toggled from the window toolbar.
+    /// Lives on the store (not view `@State`) so the sidebar's own close
+    /// button and the toolbar toggle share one source of truth.
+    public var isChangeLogSidebarVisible = false
     public private(set) var backStack: [WikiSelection] = []
     public private(set) var forwardStack: [WikiSelection] = []
 
@@ -210,7 +216,7 @@ public final class WikiStoreModel {
     public var draftChatMessage: String = ""
 
     /// Number of concurrent agent runs (interactive sessions or one-shot
-    /// `claude -p` operations) currently writing to THIS wiki. When the LAST
+    /// one-shot agent operations) currently writing to THIS wiki. When the LAST
     /// run ends, the model reloads from the store so the sidebar reflects the
     /// agent's writes. No longer a mutex — CAS (page versions, W0) prevents
     /// data races so concurrent edits are fine; `save()` catches
@@ -1092,7 +1098,7 @@ public final class WikiStoreModel {
         mermaidSaveWarning = nil
         var restoredFromPendingDraft = false
         switch newValue {
-        case .newChat, .lint, .bookmark, .chat:
+        case .newChat, .bookmark, .chat:
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
@@ -1784,7 +1790,7 @@ public final class WikiStoreModel {
     /// Add a resource by URL as a source: fetch it, convert HTML→Markdown (or
     /// store a PDF / text / binary verbatim), and land it as a source file —
     /// exactly like a drag-dropped file, so the existing **"Ingest into wiki"**
-    /// `claude -p` operation can summarize it afterward. Lands through the SAME
+    /// agent operation can summarize it afterward. Lands through the SAME
     /// `store.addSource` path as `addFiles`, so it appears under Sources +
     /// `sources/by-{id,name}` immediately and is pickable in Operations → Ingest.
     /// Returns the outcome on success; throws a user-readable
@@ -2778,7 +2784,7 @@ public final class WikiStoreModel {
             sourceIDs.contains(id)
         case .chat(let id):
             chatIDs.contains(id)
-        case .newChat, .systemPrompt, .changeLog, .lint, .bookmark:
+        case .newChat, .systemPrompt, .changeLog, .bookmark:
             true
         }
     }
