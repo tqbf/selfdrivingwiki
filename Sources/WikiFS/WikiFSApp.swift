@@ -27,9 +27,13 @@ struct WikiFSApp: App {
     /// its session. Replaces the former `@State session` + `SessionRef`.
     @State private var sessionManager: SessionManager
     @State private var fileProvider = FileProviderSpike()
+    /// One app-scoped launcher for Settings-only use ("Test Connection" + backend
+    /// config). Has its own `GenerationGate`, independent of any session's gate
+    /// — a Settings connection test doesn't block an active wiki's ingest.
+    @State private var settingsLauncher: AgentLauncher
     /// App-wide extraction backend resolver (local pdf2md / Claude / Docling
-    /// Serve). One instance, owned by the app, shared as a ref into each
-    /// `WikiSession` (it carries no per-wiki state).
+    /// Serve). Threaded like `settingsLauncher` — one instance, owned by the app,
+    /// shared as a ref into each `WikiSession` (it carries no per-wiki state).
     @State private var extractionCoordinator: ExtractionCoordinator
     /// App-wide queue engine. Owns the persistent `queue.sqlite` store; drives
     /// extraction/ingestion workers off-main. One instance, shared across
@@ -194,6 +198,14 @@ struct WikiFSApp: App {
         sessionBox.setSessionLookup { [weak sm] wikiID in
             sm?.sessions[wikiID]
         }
+        // Settings-only launcher (D5): its own gate, independent of any
+        // session's gate. Used for "Test Connection" + backend config only.
+        let settingsGate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
+        _settingsLauncher = State(initialValue: {
+            let l = AgentLauncher(generationGate: settingsGate, extractionCoordinator: coordinator)
+            l.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
+            return l
+        }())
 
         // Assert bun is bundled — ACP providers (claude-acp via bunx) are broken
         // without it. If this fires, run `./build.sh` (which now hard-fails when
@@ -261,8 +273,7 @@ struct WikiFSApp: App {
         let statusController = MenuBarItemController(
             queueEngine: queueEngine,
             activityTracker: activityTracker,
-            sessionManager: sessionManager,
-            containerDirectory: containerDirectory)
+            sessionManager: sessionManager)
         statusController.start()
         appDelegate.menuBarItemController = statusController
 
@@ -327,7 +338,6 @@ struct WikiFSApp: App {
                 fileProvider: fileProvider
             )
             .appEnvironment(tracker: activityTracker)
-            .settingsMenuObserver()
             .alert(
                 "Install Self Driving Wiki in Applications",
                 isPresented: $showingLaunchLocationWarning,
@@ -424,6 +434,9 @@ struct WikiFSApp: App {
                 ZoteroSettingsView(containerDirectory: containerDirectory)
                     .tag(SettingsTab.zotero)
                     .tabItem { Label("Zotero", systemImage: "books.vertical") }
+                ExtractionSettingsView(containerDirectory: containerDirectory, launcher: settingsLauncher)
+                    .tag(SettingsTab.extraction)
+                    .tabItem { Label("Extraction", systemImage: "doc.viewfinder") }
                 AgentsSettingsView(containerDirectory: containerDirectory)
                     .tag(SettingsTab.agents)
                     .tabItem { Label("Agents", systemImage: "cpu") }
@@ -438,6 +451,7 @@ struct WikiFSApp: App {
     enum SettingsTab: String {
         case about
         case zotero
+        case extraction
         case agents
     }
 
@@ -643,33 +657,12 @@ extension FileProviderSpike {
 ///
 /// The assert catches missing injections at debug-build runtime (fitness for
 /// `@Environment`-dependent views like `WikiDetailView` and
-/// `ExtractionBackendSettingsView`).
+/// `ExtractionSettingsView`).
 extension View {
     @MainActor
     func appEnvironment(tracker: QueueActivityTracker) -> some View {
         assert(tracker.isAttachedToEngine, "QueueActivityTracker must be attached to a QueueEngine before injecting into a scene")
         return self
             .environment(tracker)
-    }
-
-    /// Bridges the menu-bar "Settings…" item to the SwiftUI Settings scene.
-    /// The `NSStatusItem` posts `openSettingsRequest` (outside the responder
-    /// chain, so `NSApp.sendAction` doesn't work — #449); this modifier
-    /// observes it and calls `@Environment(\.openSettings)` from within
-    /// scene context.
-    @MainActor
-    func settingsMenuObserver() -> some View {
-        modifier(SettingsMenuObserverModifier())
-    }
-}
-
-private struct SettingsMenuObserverModifier: ViewModifier {
-    @Environment(\.openSettings) private var openSettings
-
-    func body(content: Content) -> some View {
-        content
-            .onReceive(NotificationCenter.default.publisher(for: .openSettingsRequest)) { _ in
-                openSettings()
-            }
     }
 }

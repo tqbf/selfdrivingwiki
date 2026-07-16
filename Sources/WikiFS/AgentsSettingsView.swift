@@ -36,6 +36,7 @@ struct AgentsSettingsView: View {
     var body: some View {
         Form {
             providersSection
+            stagesSection
             permissionSection
         }
         .formStyle(.grouped)
@@ -273,6 +274,87 @@ struct AgentsSettingsView: View {
             selectedProviderID = config.providers.first?.id
         }
         providerPendingDeletion = nil
+    }
+
+    // MARK: - Stages section
+
+    private var stagesSection: some View {
+        Section {
+            stageRow(.planner, label: "Planner")
+            stageRow(.executor, label: "Executor")
+            stageRow(.finalizer, label: "Finalizer")
+        } header: {
+            Text("Ingestion Stages")
+        } footer: {
+            Text("Unset stages use the default provider and its selected model.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func stageRow(_ stage: IngestStage, label: String) -> some View {
+        let assignment = config.stageAssignments[stage]
+        let providerId = assignment?.providerId
+        let provider = providerId.flatMap { config.provider(id: $0) }
+
+        return HStack {
+            Text(label)
+                .frame(width: 80, alignment: .leading)
+
+            Picker("", selection: providerPickerBinding(for: stage)) {
+                Text("App default").tag(Optional<String>.none)
+                ForEach(config.enabledProviders) { provider in
+                    Text(provider.label).tag(Optional(provider.id))
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: .infinity)
+
+            Picker("", selection: modelPickerBinding(for: stage)) {
+                Text("Provider default").tag(Optional<String>.none)
+                ForEach(provider.map { config.cachedModels(forProvider: $0.id) } ?? []) { model in
+                    Text(model.name).tag(Optional(model.modelId))
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: .infinity)
+            .disabled(provider == nil)
+        }
+    }
+
+    private func providerPickerBinding(for stage: IngestStage) -> Binding<String?> {
+        Binding(
+            get: { config.stageAssignments[stage]?.providerId },
+            set: { newValue in
+                var assignments = config.stageAssignments
+                if let newValue {
+                    assignments[stage] = StageAssignment(providerId: newValue, modelId: nil)
+                } else {
+                    assignments.removeValue(forKey: stage)
+                }
+                save(AgentProvidersConfig(
+                    providers: config.providers,
+                    providerModels: config.providerModels,
+                    selectedModelIds: config.selectedModelIds,
+                    favoriteModelIds: config.favoriteModelIds,
+                    stageAssignments: assignments))
+            })
+    }
+
+    private func modelPickerBinding(for stage: IngestStage) -> Binding<String?> {
+        Binding(
+            get: { config.stageAssignments[stage]?.modelId },
+            set: { newValue in
+                guard let providerId = config.stageAssignments[stage]?.providerId else { return }
+                var assignments = config.stageAssignments
+                assignments[stage] = StageAssignment(providerId: providerId, modelId: newValue)
+                save(AgentProvidersConfig(
+                    providers: config.providers,
+                    providerModels: config.providerModels,
+                    selectedModelIds: config.selectedModelIds,
+                    favoriteModelIds: config.favoriteModelIds,
+                    stageAssignments: assignments))
+            })
     }
 
     // MARK: - Permission mode (moved from the old Agent tab)
