@@ -2050,6 +2050,30 @@ public final class AgentLauncher {
         guard persistedEventCount < events.count else { return }
         let tail = Self.unflushedTail(events: events, persistedCount: persistedEventCount)
         persistedEventCount = events.count
+        // Diagnostic (issue: "page attached → no response"): summarize what the
+        // turn actually produced so a repro tells us empty/tool-only vs. a live
+        // render bug. Logs the tail's event-kind histogram + total assistant
+        // text length.
+        var kinds: [String: Int] = [:]
+        var assistantChars = 0
+        for e in tail {
+            let k: String
+            switch e {
+            case .userText: k = "userText"
+            case .assistantText(let t): k = "assistantText"; assistantChars += t.count
+            case .assistantTextDelta: k = "assistantTextDelta"
+            case .toolUse: k = "toolUse"
+            case .toolResult: k = "toolResult"
+            case .subagent: k = "subagent"
+            case .result(_, let t): k = "result"; assistantChars += t.count
+            case .systemInit: k = "systemInit"
+            case .messageStop: k = "messageStop"
+            case .turnFailed: k = "turnFailed"
+            case .raw: k = "raw"
+            }
+            kinds[k, default: 0] += 1
+        }
+        DebugLog.agent("flushTranscript: tail=\(tail.count) assistantChars=\(assistantChars) kinds=\(kinds)")
         transcriptSink?(tail)
     }
 

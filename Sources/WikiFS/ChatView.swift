@@ -340,22 +340,22 @@ struct ChatView: View {
                         hideToolCalls: hideToolCalls
                     )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.horizontal, PageEditorMetrics.contentInset)
+                        .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
                         .padding(.top, chatSummary != nil ? 0 : ChatMetrics.chatTopInset)
                     if transcriptIsRunning && launcher.isGenerating {
                         thinkingIndicator
-                            .padding(.horizontal, PageEditorMetrics.contentInset)
+                            .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
                             .padding(.bottom, ChatMetrics.sectionSpacing / 2)
                     }
                     if let pending = livePendingPermission {
                         PermissionApprovalView(permission: pending) { optionId in
                             Task { await launcher.resolvePendingPermission(optionId: optionId) }
                         }
-                        .padding(.horizontal, PageEditorMetrics.contentInset)
+                        .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
                         .padding(.bottom, ChatMetrics.sectionSpacing / 2)
                     }
                     chatComposer
-                        .padding(.horizontal, PageEditorMetrics.contentInset)
+                        .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
                         .padding(.top, ChatMetrics.sectionSpacing)
                         .padding(.bottom, ChatMetrics.contentInset)
                 }
@@ -386,6 +386,15 @@ struct ChatView: View {
     @ViewBuilder
     private func composerToolbar(sendActive: Bool) -> some View {
         HStack(spacing: 10) {
+            // Click-to-add context: a "+" that opens a searchable picker of the
+            // wiki's pages/sources/chats. Selecting one attaches it as context
+            // (same currency as the sidebar drag-and-drop path, issue #385).
+            AddContextPicker(store: store) { payload in
+                let attachment = ChatAttachment(payload: payload, store: store)
+                if !attachments.contains(attachment) {
+                    attachments.append(attachment)
+                }
+            }
             // Inside ContentView the session is always non-nil (a wiki is
             // open), so the provider/model chips are always shown.
             ProviderSelector(launcher: launcher)
@@ -584,13 +593,13 @@ struct ChatView: View {
         .padding(.top, ChatMetrics.composerTopPadding)
         .padding(.bottom, ChatMetrics.composerBottomPadding)
         .background(
-            Color(nsColor: .controlBackgroundColor),
+            Color(nsColor: .textBackgroundColor),
             in: RoundedRectangle(cornerRadius: ChatMetrics.composerCornerRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: ChatMetrics.composerCornerRadius, style: .continuous)
-                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
+                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.9), lineWidth: 1.5)
         }
-        .shadow(color: Color.black.opacity(0.06), radius: 18, x: 0, y: 8)
+        .shadow(color: Color.black.opacity(0.10), radius: 20, x: 0, y: 8)
         .frame(maxWidth: .infinity)
         // Accept sidebar drags anywhere in the composer box. This is the
         // innermost drop target for SidebarDragPayloadList — it intercepts the
@@ -623,7 +632,7 @@ struct ChatView: View {
     private var stopButton: some View {
         Button(action: { launcher.stopAgent() }) {
             Image(systemName: "stop.circle.fill")
-                .font(.system(size: 15, weight: .bold))
+                .font(.system(size: 17, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: ChatMetrics.sendButtonSize, height: ChatMetrics.sendButtonSize)
                 .background(Color.red.opacity(0.85), in: Circle())
@@ -638,7 +647,7 @@ struct ChatView: View {
     private func sendButton(active: Bool) -> some View {
         Button(action: sendMessage) {
             Image(systemName: "arrow.up")
-                .font(.system(size: 15, weight: .bold))
+                .font(.system(size: 17, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: ChatMetrics.sendButtonSize, height: ChatMetrics.sendButtonSize)
                 .background(sendButtonBackground(active: active), in: Circle())
@@ -914,20 +923,24 @@ enum ChatMetrics {
     static let debugTopInset: CGFloat = 18
     static let controlsBandHeight: CGFloat = 28
     static let chatTopInset: CGFloat = 56
+    /// Extra horizontal breathing room added to the transcript + composer on
+    /// top of `PageEditorMetrics.contentInset`, so the chat content (numbered
+    /// lists especially) sits well clear of the window edges.
+    static let extraHorizontalMargin: CGFloat = 18
     /// Horizontal inset of the composer box's contents (paseo-style). Also the
     /// effective left margin for the text, since `ComposerTextView` uses zero
     /// line-fragment padding.
-    static let composerHorizontalPadding: CGFloat = 16
+    static let composerHorizontalPadding: CGFloat = 18
     /// Top inset above the text inside the composer box.
-    static let composerTopPadding: CGFloat = 12
+    static let composerTopPadding: CGFloat = 14
     /// Bottom inset below the toolbar row inside the composer box.
-    static let composerBottomPadding: CGFloat = 10
+    static let composerBottomPadding: CGFloat = 12
     /// Vertical gap between the text and the toolbar row inside the box.
-    static let composerRowSpacing: CGFloat = 8
+    static let composerRowSpacing: CGFloat = 10
     /// Corner radius of the unified composer box (paseo uses a soft rounded
     /// rectangle, not a full pill).
-    static let composerCornerRadius: CGFloat = 16
-    static let sendButtonSize: CGFloat = 30
+    static let composerCornerRadius: CGFloat = 18
+    static let sendButtonSize: CGFloat = 34
     /// Font for `ComposerTextView` — matches the previous `TextField`'s
     /// `.font(.body)`, expressed as an `NSFont` since the composer is
     /// AppKit-backed.
