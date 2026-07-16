@@ -2,207 +2,226 @@
 
 ![SDW Screen Shot](SDW.png)
 
-A native **macOS SwiftUI wiki**, backed by **SQLite**, mirrored **read-only** onto
-the filesystem by a **File Provider extension** — and now a **self-maintaining LLM
-wiki**. A user keeps **many** wikis (a personal one, a research one, a per-book
-one); for each wiki an LLM (`claude -p`, run from the app as **Ingest / Ask /
-Edit / Lint**) authors and maintains the content: it *reads* the wiki through `wikictl` (DB-direct) and
-*writes* it through the same `wikictl` CLI. The File Provider mount is an optional
-read-only projection — useful for browsing in Finder, but not required for the agent. The human curates sources and asks
-questions; the agent does the bookkeeping (summary/entity/concept pages,
-`[[wiki-links]]`, a curated `index.md`, a chronological `log.md`).
+A native macOS app that turns a pile of sources — PDFs, web pages, podcast
+episodes, your own notes — into a **connected knowledge base** that an AI agent
+maintains for you. You bring in the material; the agent reads it, writes wiki
+pages, cross-references everything with links, and keeps it all organized. You
+ask questions in plain language and get answers grounded in your own library.
 
-It runs **locally only** — free local dev signing, no Developer ID / notarization
-needed to build and run it yourself.
+It runs **locally on your Mac**. Your data stays in a SQLite file you own.
 
 ---
 
-## The non-negotiable invariant
+## What you can do with it
+
+### 📥 Collect sources
+
+Drag in a PDF. Paste a web link. Import your Zotero library or an entire Obsidian
+vault. Drop a folder of markdown notes. Sources are the raw material — whatever
+you're studying, researching, or trying to make sense of.
+
+### 🤖 Let the agent do the bookkeeping
+
+Point the agent at your sources and it **ingests** them: reads each one, extracts
+the key information, and writes wiki pages — summaries, entity profiles, concept
+explanations — all cross-referenced with `[[wiki links]]`. For large PDFs, it
+fans out to parallel sub-agents to digest the bulk, then a lead agent decides
+what belongs and writes everything.
+
+### 💬 Ask questions
+
+Open a chat and ask anything: *"What are the main differences between these two
+papers?"* or *"Create a page comparing the evaluation metrics across my
+sources."* The agent reads your wiki to answer. Ask it to update pages, add
+cross-references, or explain a concept — it can modify the wiki when you ask it
+to.
+
+### 🔗 Follow the connections
+
+Every page links to every other page, to sources, and even to **specific
+passages** inside documents. A link like `[[source:Paper#"the results show a 30%
+improvement"]]` takes you straight to the highlighted quote in the PDF. Ghost
+links (red) mark pages that don't exist yet — spots where the wiki could grow.
+
+### 🔖 Bookmark and navigate
+
+Bookmark your go-to pages into folders. Search semantically — type "neural
+networks" and find pages about "deep learning." Use the Safari-style omnibox
+(⌘L) for instant navigation. Open multiple wikis in separate windows.
+
+---
+
+## The mental model
+
+```
+  You add sources ──► Agent ingests them ──► Pages appear in the wiki
+       │                                            │
+       │              You ask questions ◄──────────┤  (agent reads the wiki)
+       │                                            │
+       └── You refine, bookmark, and navigate ◄─────┘
+```
+
+| Concept | What it means |
+|---|---|
+| **Wiki** | A self-contained knowledge base. Have many — one per project, book, or research area. Each opens in its own window. |
+| **Page** | A Markdown wiki page — the curated output. The agent writes most; you edit any. |
+| **Source** | Raw material: a PDF, web page, podcast, or note file. The input the agent digests into pages. |
+| **Agent** | The AI that maintains the wiki. It ingests sources into pages, answers questions in chat, and cleans up formatting. |
+| **Wiki link** | `[[Like This]]` — the connective tissue. Links connect pages, sources, and specific passages. |
+| **Bookmark** | Your personal folder tree of shortcuts to pages, sources, and chats. |
+
+---
+
+## A quick tour of the interface
+
+The window follows familiar macOS patterns — tabs like Safari, a sidebar like
+Xcode, an omnibox like a browser.
+
+- **Sidebar** (left) — four sections: **Pages**, **Sources**, **Bookmarks**,
+  **Chats**. Each has a search bar and action buttons.
+- **Tab strip** (top of detail) — open multiple pages, sources, and chats in
+  tabs. Switch with ⌘1–9, close with ⌘W, reopen with ⌘⇧T.
+- **Omnibox** (toolbar) — shows the current page as `[[Title]]` when idle;
+  becomes a semantic search field when you click or press ⌘L.
+- **Wiki switcher** (toolbar, right) — switch between wikis. Click to open in a
+  new window; option-click to switch in place.
+- **Menu bar item** — monitors agent work in the background. Fills in while
+  processing; shows queue status on hover.
+
+---
+
+## The workflow in practice
+
+1. **Create a wiki** — name it after your project or research area.
+2. **Add sources** — drag in PDFs, paste URLs, import from Zotero or a notes
+   folder.
+3. **Ingest** — select sources → right-click → Ingest. The agent reads them and
+   writes pages. Monitor progress in the menu bar or the Agent Queue window (⌘I).
+4. **Explore** — browse the generated pages, follow wiki links, search
+   semantically, bookmark what matters.
+5. **Ask** — chat with the agent about the content. Have it create comparison
+   pages, fill gaps, or update existing pages.
+6. **Maintain** — run Lint to clean up formatting. Re-ingest when sources are
+   updated. The agent keeps `index.md` and `log.md` current automatically.
+
+---
+
+## User guide
+
+For the full experience — every feature, every workflow, every shortcut:
+
+| Guide | What you'll learn |
+|---|---|
+| [**Getting Started**](docs/user-guide/getting-started.md) | Create your first wiki, set up the agent, add sources, run your first ingest. |
+| [**Interface Tour**](docs/user-guide/interface.md) | The main window: sidebar, tabs, toolbar, omnibox, wiki switcher, menu bar. |
+| [**Pages & Links**](docs/user-guide/pages-and-links.md) | Reading and editing pages, wiki link syntax, anchors and quotes, zoom, find. |
+| [**Sources & Ingestion**](docs/user-guide/sources-and-ingestion.md) | Adding sources, PDF extraction, the source detail view, versioning, the queue. |
+| [**Chatting with the Agent**](docs/user-guide/chat.md) | Starting chats, adding context, permission approvals, reading the transcript. |
+| [**Organizing & Managing**](docs/user-guide/organizing-and-managing.md) | Bookmarks, search, navigation, multiple wikis, settings, notifications. |
+| [**Keyboard Shortcuts**](docs/user-guide/keyboard-shortcuts.md) | Complete quick-reference card. |
+
+---
+
+## Build & install
+
+Self Driving Wiki runs **locally only** — free local dev signing, no Developer ID
+or notarization needed to build and run yourself.
+
+### Prerequisites
+
+- **macOS 14+** (developed on macOS 26).
+- A **Swift 6 toolchain** — Xcode from the App Store or the swift.org toolchain.
+  No `.xcodeproj` — the build is `swift build` + [`build.sh`](build.sh).
+- An **AI agent** on your PATH (e.g., `claude`). The app preflights this and
+  shows a clear error if it's missing.
+- For the **optional File Provider mount** (Finder integration): an Apple
+  Development certificate + App Group + File Provider profiles under `signing/`.
+  Without these, the app works fine but the Finder folder doesn't appear. See
+  [`plans/signing.md`](plans/signing.md).
+
+### Build & run
+
+```sh
+make            # debug build → build/Self Driving Wiki.app
+make run        # install to /Applications, register File Provider, open the app
+make install    # copy to /Applications and register LaunchServices + File Provider
+make check      # compile-only gate (CI / agent verification)
+make test       # run the test suite
+make help       # every target
+```
+
+### Runtime notes
+
+1. **Install to `/Applications`.** macOS only discovers File Provider extensions
+   from apps in `/Applications`. Running from `build/` won't register the mount.
+2. **Enable the domain.** A third-party File Provider must be toggled on in
+   System Settings before its folder appears in Finder.
+3. **TCC prompt on first launch.** A Transparency/Consent prompt may block the
+   extension until you grant it.
+4. **Read-after-write lag (~5s).** The Finder folder lags the database by a few
+   seconds after a write — it self-heals. The agent always reads the database
+   directly, so this only affects Finder browsing.
+
+> The File Provider mount is **optional**. The app, the agent, and all features
+> work without it — it exists for Finder browsing convenience.
+
+---
+
+## For developers & contributors
+
+<details>
+<summary>Architecture, repo layout, and contributing notes</summary>
+
+### The non-negotiable invariant
 
 > **SQLite is the source of truth. The File Provider mount is READ-ONLY and
 > optional. Both reads and writes go through `wikictl` (DB-direct). Never make
 > the mount writable.**
 
-This is the whole point of the proof-of-concept. The File Provider extension is
-*part of the design*, not a convenience — do **not** replace it with a plain-folder export.
-The agent reads via `wikictl` (DB-direct), so the mount is not required for the agent
-to function; it exists for the UI page reader and Finder integration. Making the mount writable
-(implementing `createItem`/`modifyItem` write-back) would dissolve the invariant
-that the project exists to demonstrate. The split is deliberate:
+This is the whole point of the proof-of-concept. Making the mount writable
+would dissolve the invariant the project exists to demonstrate.
 
 ```
-  claude -p ──reads──>  wikictl  ──reads──>  SQLite (App Group DB)
-        │                                                 │ (optional read-only projection)
-        └──writes──>  wikictl  ──writes──>  SQLite  ──projects──>  File Provider mount
-                          │
-                          └── Darwin notification ──> app: refresh sidebar + signalChange()
+  agent ──reads──>  wikictl  ──reads──>  SQLite (App Group DB)
+         │                                              │ (optional read-only projection)
+         └──writes──>  wikictl  ──writes──>  SQLite  ──projects──>  File Provider mount
 ```
 
----
+### Repo layout (5 SwiftPM targets)
 
-## Quick start
+| Target | Purpose |
+|---|---|
+| **`WikiFSCore`** | Dependency-free core: data model, SQLite store, multi-wiki registry, agent operation seams, URL ingest + HTML→Markdown. |
+| **`WikiFS`** | The SwiftUI app — editor/viewer, wiki switcher, operations, domain registration. |
+| **`WikiFSFileProvider`** | File Provider extension — read-only SQLite→filesystem projection. |
+| **`WikiCtlCore`** | `wikictl`'s logic (arg parsing, dispatch, wiki resolution). Unit-testable. |
+| **`wikictl`** | The agent's write path CLI. |
 
-### Prerequisites
+Test target: `WikiFSTests` (`Tests/WikiFSTests/`).
 
-- **macOS 14+** (the appex targets macOS 14; this was developed/gated on macOS 26).
-- A **Swift 6 toolchain** — Xcode from the App Store, or the swift.org toolchain.
-  Xcode is only a toolchain provider here (`swift`, `codesign`); there is **no
-  `.xcodeproj`, no `xcodebuild`, no XcodeGen** — the build is `swift build` +
-  [`build.sh`](build.sh).
-- For the **signed install path** (the only way the File Provider extension
-  actually loads): an **Apple Development certificate** in your keychain plus the
-  **App Group** + **File Provider** provisioning profiles under `signing/`. The
-  manual Apple-portal checklist is [`plans/signing.md`](plans/signing.md). Without a
-  real cert + profiles, `build.sh` falls back to ad-hoc signing — the app still
-  launches, but **the extension will not register as a File Provider**.
-- For the agent operations: **`claude` must be on your login-shell PATH.** The app
-  preflights this (`PathPreflight.resolveOnLoginShell`) and surfaces a clear error
-  if it's missing, rather than spawning a doomed process.
+### Where to look
 
-### Build & run
+- **Schema + migrations:** `Sources/WikiFSCore/SQLiteWikiStore.swift`
+- **Multi-wiki:** `WikiRegistry.swift` / `WikiDescriptor.swift` / `WikiRegistryClient.swift`
+- **File Provider projection:** `Sources/WikiFSFileProvider/Projection.swift`
+- **Agent operations:** `AgentLauncher.swift` / `AgentOperationRunner.swift` / `GenerationGate.swift`
+- **Write path + change bridge:** `wikictl/main.swift`, `WikiFSCore/PageUpsert.swift`, `WikiFS/WikiChangeBridge.swift`
+- **URL ingest:** `URLIngestService.swift`, `HTMLToMarkdown.swift`
 
-From the repo root (full detail in [`plans/build-environment.md`](plans/build-environment.md)):
+### Contributing
 
-```sh
-make            # debug build → build/Self Driving Wiki.app (also builds + embeds wikictl)
-make run        # install to /Applications, register File Provider, then open the app
-make check      # compile-only gate, no bundle/sign (CI / agent verification)
-make test       # the SwiftPM test suite
-make install    # copy to /Applications and register LaunchServices + File Provider
-make help       # every target
-```
+- **Dependency-free by default.** Hand-wrapped SQLite, hand-rolled HTML→Markdown.
+- **Pure-core / thin-app split.** Logic in `WikiFSCore` / `WikiCtlCore` for unit testing.
+- **Run `make test` before pushing.**
+- **Follow [`SWIFTUI-RULES.md`](SWIFTUI-RULES.md).**
+- **Never merge to `main` yourself** ([`CLAUDE.md`](CLAUDE.md)).
 
-### Runtime notes a new dev WILL hit
+### Deep design docs
 
-These are not optional polish — without them the File Provider half does not work:
+- [`PLAN.md`](PLAN.md) — master index + milestone status
+- [`PROGRESS.md`](PROGRESS.md) — running build log, newest first
+- [`plans/architecture.md`](plans/architecture.md) — system map
+- [`ISSUES.md`](ISSUES.md) — known limitations
+- [`SWIFTUI-RULES.md`](SWIFTUI-RULES.md) + [`CLAUDE.md`](CLAUDE.md) — coding rules
 
-1. **`make install` (the app must live in `/Applications`).** macOS only discovers
-   third-party File Provider extensions from an app installed in `/Applications`.
-   Running straight out of `build/` will not register the domains. See
-   [`plans/file-provider.md`](plans/file-provider.md).
-2. **The domain must be user-enabled.** A third-party File Provider has to be
-   toggled on by the user in **System Settings** before its mount appears in
-   Finder's sidebar.
-3. **The macOS-26 TCC prompt on first / re-signed launch.** A first launch (or any
-   re-signed install) fires a Transparency/Consent prompt ("…would like to access
-   data from other apps") that *blocks the extension from launching* until you grant
-   it. This is recorded in [`ISSUES.md`](ISSUES.md) (and the live-gate memory).
-4. **Read-after-write lag (~5 s).** The File Provider mount lags the database by
-   a few seconds after a write — it self-heals, no relaunch needed. The agent reads via
-   `wikictl page get` (DB-direct, always current), so this never affects the agent. Only
-   Finder browsing sees the lag. See [`ISSUES.md`](ISSUES.md).
-
-For live testing, **create a fresh wiki** rather than reusing a long-lived,
-heavily-churned one (a hammered domain replica can wedge — see `ISSUES.md`).
-
----
-
-## Repo layout (the 5 SwiftPM targets)
-
-Defined in [`Package.swift`](Package.swift):
-
-| Target | Kind | Purpose |
-| --- | --- | --- |
-| **`WikiFSCore`** | library | The dependency-free core: data model, hand-rolled SQLite store, multi-wiki registry, the `claude -p` operation seams, log/index/TREE rendering, URL-ingest + HTML→Markdown. Shared by the app, the extension, the CLI, and the tests. |
-| **`WikiFS`** | executable | The SwiftUI app target for Self Driving Wiki — the editor/viewer, the wiki switcher, the Operations panel (Ingest/Query/Lint), domain registration + change bridge. |
-| **`WikiFSFileProvider`** | executable* | The File Provider extension target — the read-only SQLite→filesystem projection. (*Built as an executable, then repackaged into a `.appex` by `build.sh`; entry point overridden to `_NSExtensionMain`.) |
-| **`WikiCtlCore`** | library | `wikictl`'s logic: arg parsing, command dispatch, wiki resolution, the Darwin post. Library-split so it's unit-testable. |
-| **`wikictl`** | executable | The agent's **write path** — a scriptable CLI that writes straight to a wiki's `<ulid>.sqlite` and posts a per-wiki Darwin notification. A thin shell over `WikiCtlCore`. |
-
-The test target is `WikiFSTests` (in `Tests/WikiFSTests/`).
-
-**Where to look** for the main subsystems:
-
-- **Schema + migrations + change token:** `Sources/WikiFSCore/SQLiteWikiStore.swift`
-- **Multi-wiki:** `WikiRegistry.swift` / `WikiDescriptor.swift` / `WikiRegistryClient.swift`, `DatabaseLocation.swift`
-- **File Provider projection:** `Sources/WikiFSFileProvider/Projection.swift`, `FileProviderExtension.swift`, `WikiFSEnumerator.swift`, `WikiFSItem.swift`
-- **The agent operations:** `WikiOperation.swift` / `OperationCommand.swift` / `IngestPlan.swift` / `IngestWriteRule.swift` / `AgentEvent.swift` (core) and `AgentLauncher.swift` / `SpawnGate.swift` (spawn serialization) / `QueryConversationView.swift` (ask/edit sessions) / `OperationsView.swift` / `AgentActivityView.swift` / `OperationRequest.swift` (app)
-- **Write path + change bridge:** `wikictl/main.swift`, `WikiCtlCore/*`, `WikiFSCore/PageUpsert.swift`, `WikiFSCore/WikiChangeNotification.swift`, `WikiFS/WikiChangeBridge.swift`, `WikiFSCore/ChangeCoalescer.swift`
-- **URL ingest:** `URLIngestService.swift`, `URLSessionFetcher.swift`, `ShareLinkNormalizer.swift`, `HTMLToMarkdown.swift` (+ `HTMLTokenizer`/`HTMLMarkdownRenderer`/`HTMLEntities`)
-
----
-
-## How it works (tour)
-
-A deeper map is in [`plans/architecture.md`](plans/architecture.md); the short version:
-
-- **Many wikis.** A `wikis.json` registry lists the user's wikis. Each wiki is one
-  self-contained `<ulid>.sqlite` file in the App Group container **plus one File
-  Provider domain** (`NSFileProviderDomain`), mounting at its own
-  `~/Library/CloudStorage/Self Driving Wiki-<name>`. A wiki's stable identity is its **ULID**,
-  never its display name (rename-safe). The extension is instantiated per domain;
-  `domain.identifier` *is* the wiki ULID, which selects the DB to open.
-
-- **Read/write split.** The agent reads and writes through `wikictl` (DB-direct).
-  The File Provider mount is an optional read-only projection for Finder integration
-  and the UI page reader. The agent (`page upsert/get/list/delete`, `log append`,
-  `index set`), which writes the App Group SQLite directly and posts a per-wiki
-  Darwin notification `org.sockpuppet.wiki.changed.<ulid>`. The app's
-  `WikiChangeBridge` observes it, debounces a burst (`ChangeCoalescer`, ~250 ms),
-  rebuilds the sidebar, and `signalChange()`s that wiki's domain so the mount
-  refreshes. `PageUpsert` is the **shared** create-or-update + `[[link]]`-reparse
-  seam used by *both* the app and `wikictl`, so the link graph can't drift.
-
-- **The `claude -p` operations.** The app surfaces four operations. **Ingest** and
-  **Lint** are one-shot `claude -p` spawns, each launched into a fresh scratch dir
-  with `WIKI_DB` (the wiki ULID) and `WIKICTL` (the wikictl path) in the environment,
-  the wiki's schema via `--append-system-prompt`, `--dangerously-skip-permissions`,
-  and `--output-format stream-json` (parsed live into an activity panel; also
-  written to a backend `run.jsonl`). The in-app editor is **locked** during a run.
-  **Ask** and **Edit** are persistent interactive sessions — each owns its own tab,
-  process, and transcript; follow-up turns go to stdin rather than spawning a new
-  process. All four surfaces share one `SpawnGate`: at most one `claude` process runs
-  at a time, FIFO-serialized across ingest / ask / edit / lint.
-  - **Ingest** is tiered by source size: a **tiny** source gets a single **Opus**
-    pass; a **large** source gets an **Opus curator** that fans out to **2–19
-    Sonnet `source-reader` subagents** which only *digest* the bulk (read-only,
-    never write) — **Opus decides what belongs and writes everything**.
-  - **Ask** runs under a physically-enforced read-only seatbelt — the agent cannot
-    write the wiki regardless of prompt. **Edit** may write the wiki (governed by the
-    sandbox enable toggle in Settings → Agent). **Lint** is a single-Opus one-shot run.
-- **URL ingest.** Paste a URL → fetch (desktop UA, follows redirects) → share-link
-  normalize (e.g. Dropbox `www`→`dl`) → content-sniff magic numbers →
-  HTML→Markdown (hand-rolled) or verbatim PDF/bytes → stored through the same
-  ingest path as a drag-dropped file.
-- **Projected root docs.** Each mount root carries `CLAUDE.md`/`AGENTS.md` (the
-  agent schema), `index.md` (curated catalog), `log.md` (grep-able chronological
-  log), `WIKI-STRUCTURE.md` (layout map; `TREE.md` is a legacy alias), plus
-  `pages/`, `files/`, `manifest.json`, and `indexes/*.jsonl`.
-
----
-
-## Docs map
-
-- **[`PLAN.md`](PLAN.md)** — master index: the doc table, milestone status, build
-  quick-reference.
-- **[`PROGRESS.md`](PROGRESS.md)** — the running build log, newest first, with each
-  gate's evidence. **To get up to speed, read `PLAN.md` then `PROGRESS.md`.**
-- **[`plans/architecture.md`](plans/architecture.md)** — the system map (this repo's
-  companion to the README).
-- **`plans/`** — deep design: [`INITIAL.md`](plans/INITIAL.md) (original
-  architecture), [`llm-wiki.md`](plans/llm-wiki.md) (the LLM-wiki design + phases),
-  [`BRINGUP.md`](plans/BRINGUP.md), [`build-environment.md`](plans/build-environment.md),
-  [`file-provider.md`](plans/file-provider.md), [`signing.md`](plans/signing.md).
-- **[`ISSUES.md`](ISSUES.md)** — known limitations we've chosen to live with.
-- **[`SWIFTUI-RULES.md`](SWIFTUI-RULES.md)** + **[`CLAUDE.md`](CLAUDE.md)** — the
-  SwiftUI/macOS coding rules and the working agreement (docs to keep, skills to use,
-  PR rules).
-
----
-
-## Contributing notes
-
-- **Dependency-free by default.** No SwiftPM package dependencies — the SQLite layer
-  is hand-wrapped over the system `SQLite3` C API; HTML→Markdown is hand-rolled (no
-  `NSAttributedString(html:)`). Keep it that way unless there's a strong reason.
-- **Pure-core / thin-app split.** Logic lives in `WikiFSCore` / `WikiCtlCore` so it's
-  unit-testable without a running app or a real `claude` process. The app and the
-  CLI are thin shells; the `Process` spawn and the SwiftUI views stay deliberately
-  thin over pure, injectable seams (`OperationCommand`, `WikiOperation`, `PageUpsert`,
-  `AgentEventParser`, `URLIngestService` with an injected fetcher).
-- **Run `make test` before pushing** (320 tests).
-- **Follow [`SWIFTUI-RULES.md`](SWIFTUI-RULES.md)**, and respect the
-  **"live-gate, don't trust a green build"** ethos: a passing build and a passing
-  test suite are necessary but not sufficient — File Provider behavior has to be
-  verified on a real signed install (see the gate evidence in `PROGRESS.md`).
-- **PRs are fine; never merge to `main` yourself** ([`CLAUDE.md`](CLAUDE.md)).
+</details>
