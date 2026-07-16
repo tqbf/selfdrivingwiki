@@ -10,17 +10,22 @@ ask questions in plain language and get answers grounded in your own library.
 
 It runs **locally on your Mac**. Your data stays in a SQLite file you own.
 
+> **New here?** Start with the [**Getting Started guide**](docs/user-guide/getting-started.md)
+> — it walks you through creating a wiki, adding sources, and running your first
+> ingest in five minutes. For everything else, browse the
+> [**full user guide**](docs/user-guide/README.md).
+
 ---
 
 ## What you can do with it
 
-### 📥 Collect sources
+### 📥 [Collect sources](docs/user-guide/sources-and-ingestion.md#adding-sources)
 
 Drag in a PDF. Paste a web link. Import your Zotero library or an entire Obsidian
 vault. Drop a folder of markdown notes. Sources are the raw material — whatever
 you're studying, researching, or trying to make sense of.
 
-### 🤖 Let the agent do the bookkeeping
+### 🤖 [Let the agent do the bookkeeping](docs/user-guide/sources-and-ingestion.md#ingestion)
 
 Point the agent at your sources and it **ingests** them: reads each one, extracts
 the key information, and writes wiki pages — summaries, entity profiles, concept
@@ -28,7 +33,7 @@ explanations — all cross-referenced with `[[wiki links]]`. For large PDFs, it
 fans out to parallel sub-agents to digest the bulk, then a lead agent decides
 what belongs and writes everything.
 
-### 💬 Ask questions
+### 💬 [Ask questions](docs/user-guide/chat.md)
 
 Open a chat and ask anything: *"What are the main differences between these two
 papers?"* or *"Create a page comparing the evaluation metrics across my
@@ -36,14 +41,14 @@ sources."* The agent reads your wiki to answer. Ask it to update pages, add
 cross-references, or explain a concept — it can modify the wiki when you ask it
 to.
 
-### 🔗 Follow the connections
+### 🔗 [Follow the connections](docs/user-guide/pages-and-links.md#wiki-links--the-connective-tissue)
 
 Every page links to every other page, to sources, and even to **specific
 passages** inside documents. A link like `[[source:Paper#"the results show a 30%
 improvement"]]` takes you straight to the highlighted quote in the PDF. Ghost
 links (red) mark pages that don't exist yet — spots where the wiki could grow.
 
-### 🔖 Bookmark and navigate
+### 🔖 [Bookmark and navigate](docs/user-guide/organizing-and-managing.md#bookmarks)
 
 Bookmark your go-to pages into folders. Search semantically — type "neural
 networks" and find pages about "deep learning." Use the Safari-style omnibox
@@ -63,16 +68,18 @@ networks" and find pages about "deep learning." Use the Safari-style omnibox
 
 | Concept | What it means |
 |---|---|
-| **Wiki** | A self-contained knowledge base. Have many — one per project, book, or research area. Each opens in its own window. |
-| **Page** | A Markdown wiki page — the curated output. The agent writes most; you edit any. |
-| **Source** | Raw material: a PDF, web page, podcast, or note file. The input the agent digests into pages. |
-| **Agent** | The AI that maintains the wiki. It ingests sources into pages, answers questions in chat, and cleans up formatting. |
-| **Wiki link** | `[[Like This]]` — the connective tissue. Links connect pages, sources, and specific passages. |
-| **Bookmark** | Your personal folder tree of shortcuts to pages, sources, and chats. |
+| **[Wiki](docs/user-guide/organizing-and-managing.md#multiple-wikis)** | A self-contained knowledge base. Have many — one per project, book, or research area. Each opens in its own window. |
+| **[Page](docs/user-guide/pages-and-links.md)** | A Markdown wiki page — the curated output. The agent writes most; you edit any. |
+| **[Source](docs/user-guide/sources-and-ingestion.md)** | Raw material: a PDF, web page, podcast, or note file. The input the agent digests into pages. |
+| **[Agent](docs/user-guide/chat.md)** | The AI that maintains the wiki. It ingests sources into pages, answers questions in chat, and cleans up formatting. |
+| **[Wiki link](docs/user-guide/pages-and-links.md#wiki-links--the-connective-tissue)** | `[[Like This]]` — the connective tissue. Links connect pages, sources, and specific passages. |
+| **[Bookmark](docs/user-guide/organizing-and-managing.md#bookmarks)** | Your personal folder tree of shortcuts to pages, sources, and chats. |
 
 ---
 
 ## A quick tour of the interface
+
+> Full detail: [**Interface Tour**](docs/user-guide/interface.md)
 
 The window follows familiar macOS patterns — tabs like Safari, a sidebar like
 Xcode, an omnibox like a browser.
@@ -92,23 +99,26 @@ Xcode, an omnibox like a browser.
 
 ## The workflow in practice
 
-1. **Create a wiki** — name it after your project or research area.
-2. **Add sources** — drag in PDFs, paste URLs, import from Zotero or a notes
+> Walkthrough: [**Getting Started**](docs/user-guide/getting-started.md)
+
+1. **[Create a wiki](docs/user-guide/organizing-and-managing.md#creating-wikis)** — name it after your project or research area.
+2. **[Add sources](docs/user-guide/sources-and-ingestion.md#adding-sources)** — drag in PDFs, paste URLs, import from Zotero or a notes
    folder.
-3. **Ingest** — select sources → right-click → Ingest. The agent reads them and
+3. **[Ingest](docs/user-guide/sources-and-ingestion.md#ingestion)** — select sources → right-click → Ingest. The agent reads them and
    writes pages. Monitor progress in the menu bar or the Agent Queue window (⌘I).
-4. **Explore** — browse the generated pages, follow wiki links, search
+4. **[Explore](docs/user-guide/pages-and-links.md)** — browse the generated pages, follow wiki links, search
    semantically, bookmark what matters.
-5. **Ask** — chat with the agent about the content. Have it create comparison
+5. **[Ask](docs/user-guide/chat.md)** — chat with the agent about the content. Have it create comparison
    pages, fill gaps, or update existing pages.
-6. **Maintain** — run Lint to clean up formatting. Re-ingest when sources are
+6. **[Maintain](docs/user-guide/organizing-and-managing.md#the-change-log)** — run Lint to clean up formatting. Re-ingest when sources are
    updated. The agent keeps `index.md` and `log.md` current automatically.
 
 ---
 
 ## User guide
 
-For the full experience — every feature, every workflow, every shortcut:
+For the full experience — every feature, every workflow, every shortcut — browse
+the **[complete user guide](docs/user-guide/README.md)**:
 
 | Guide | What you'll learn |
 |---|---|
