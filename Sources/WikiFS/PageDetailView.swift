@@ -25,6 +25,9 @@ struct PageDetailView: View {
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @AppStorage("isOutlineExpanded") private var isOutlineExpanded = false
+    /// Per-view collapse state for the header. Starts collapsed; persists
+    /// across same-type tab switches (SwiftUI keeps the view alive).
+    @State private var isHeaderExpanded = false
 
     // Find bar state. The model is shared (hoisted to `ContentView` and injected
     // via environment) so the address bar's "Find on Page…" menu item can drive
@@ -34,21 +37,15 @@ struct PageDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header — always visible, same layout in both modes.
-            VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
-                Label {
-                    EditableTitle(
-                        title: store.draftTitle,
-                        placeholder: "Untitled",
-                        isDisabled: false,
-                        onCommit: renameCurrentPage
-                    )
-                } icon: {
-                    Image(systemName: ResourceKind.page.systemImageName)
-                        .foregroundStyle(.secondary)
-                }
-
-                HStack(spacing: 12) {
+            // Header — title always visible; date + action buttons expandable.
+            CollapsibleDetailHeader(
+                systemImage: ResourceKind.page.systemImageName,
+                title: store.draftTitle,
+                isExpanded: $isHeaderExpanded,
+                onTitleCommit: renameCurrentPage
+            ) {
+                VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
+                    HStack(spacing: 12) {
                     if let date = pageUpdatedAt {
                         Text(date, style: .date)
                     }
@@ -126,6 +123,7 @@ struct PageDetailView: View {
                         }
                         .help("Toggle Outline")
                     }
+                    }
                 }
             }
             .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
@@ -163,6 +161,7 @@ struct PageDetailView: View {
             if let id = store.activeTabID {
                 store.setTabEditing(tabID: id, isEditing: newValue)
             }
+            if newValue { isHeaderExpanded = true } // reveal Save/Cancel
             if !newValue { caretCharIndex = nil }
         }
         .background { findShortcutButton }

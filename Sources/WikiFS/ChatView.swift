@@ -39,6 +39,9 @@ struct ChatView: View {
     /// chat tab the outline is closed by default; the user can expand it
     /// within that view's lifetime.
     @State private var chatOutlineExpanded = false
+    /// Per-view collapse state for the header. Starts collapsed; persists
+    /// across same-type tab switches (SwiftUI keeps the view alive).
+    @State private var isHeaderExpanded = false
     /// Persisted toggle to hide tool-call rows from the chat transcript
     /// (issue #381). Independent of "Show internals" which gates the full
     /// raw activity feed.
@@ -458,23 +461,18 @@ struct ChatView: View {
 
     @ViewBuilder
     private func header(for chat: ChatSummary) -> some View {
-        VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
-            Label {
-                EditableTitle(
-                    title: chat.title,
-                    placeholder: "Untitled Chat",
-                    lineLimit: 1,
-                    isDisabled: false,
-                    onCommit: { newTitle in
-                        store.renameChat(id: chat.id, to: newTitle)
-                    }
-                )
-            } icon: {
-                Image(systemName: ResourceKind.chat.systemImageName)
-                    .foregroundStyle(.secondary)
+        CollapsibleDetailHeader(
+            systemImage: ResourceKind.chat.systemImageName,
+            title: chat.title,
+            placeholder: "Untitled Chat",
+            titleLineLimit: 1,
+            isExpanded: $isHeaderExpanded,
+            onTitleCommit: { newTitle in
+                store.renameChat(id: chat.id, to: newTitle)
             }
-
-            Text(chat.updatedAt, style: .date)
+        ) {
+            VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
+                Text(chat.updatedAt, style: .date)
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -513,6 +511,7 @@ struct ChatView: View {
                     Image(systemName: "sidebar.right")
                 }
                 .help("Toggle Outline")
+            }
             }
         }
         .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
