@@ -1078,8 +1078,22 @@ public final class WikiStoreModel {
         }
     }
 
+    /// Date formatter for default untitled page titles, so rapid page
+    /// creation doesn't collide or look identical in the sidebar.
+    private static let untitledDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f
+    }()
+
+    /// The default title for a new page: "Untitled" + a timestamp so multiple
+    /// new pages are distinguishable and unlikely to collide.
+    public static func defaultUntitledTitle() -> String {
+        "Untitled \(untitledDateFormatter.string(from: Date()))"
+    }
+
     /// Create a new page and open it in a new tab.
-    public func newPageInNewTab(title: String = "Untitled") {
+    public func newPageInNewTab(title: String = WikiStoreModel.defaultUntitledTitle()) {
         flushPendingSaves()
         do {
             let page = try store.createPage(title: title, createdBy: "user")
@@ -1541,7 +1555,7 @@ public final class WikiStoreModel {
     // MARK: - Mutations
 
     @discardableResult
-    public func newPage(title: String = "Untitled") -> PageID? {
+    public func newPage(title: String = WikiStoreModel.defaultUntitledTitle()) -> PageID? {
         flushPendingSaves()
         do {
             let page = try store.createPage(title: title, createdBy: "user")
@@ -1560,18 +1574,38 @@ public final class WikiStoreModel {
         }
     }
 
+    /// When non-nil, the last rename was blocked because another page already
+    /// has that title. Views observe this to show an alert, then call
+    /// `clearRenameConflict()` to dismiss.
+    public private(set) var renameConflictingTitle: String?
+
+    public func clearRenameConflict() {
+        renameConflictingTitle = nil
+    }
+
     public func rename(_ id: PageID, to newTitle: String) {
         // Persist any pending edits to whatever's open first, then rename.
         flushPendingSave()
+        renameConflictingTitle = nil
+        let sanitizedTitle = WikiNameRules.sanitized(newTitle)
         do {
+            // Block rename if another page already has this title (case-
+            // insensitive, matching wiki-link resolution). The user gets an
+            // alert via `renameConflictingTitle` instead of a silent revert.
+            if let existingID = try store.resolveTitleToID(sanitizedTitle),
+               existingID != id {
+                renameConflictingTitle = sanitizedTitle
+                DebugLog.store("WikiStoreModel.rename blocked: '\(sanitizedTitle)' already exists (page \(existingID.rawValue))")
+                return
+            }
             let page = try store.getPage(id: id)
             let cleanBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
-            try store.updatePage(id: id, title: newTitle, body: cleanBody, lastEditedBy: nil)
+            try store.updatePage(id: id, title: sanitizedTitle, body: cleanBody, lastEditedBy: nil)
             reloadSummaries()
-            if selection == .page(id) { draftTitle = newTitle }
+            if selection == .page(id) { draftTitle = sanitizedTitle }
             // Update any tab showing this renamed page.
             for i in tabs.indices where tabs[i].selection == .page(id) {
-                tabs[i].title = newTitle
+                tabs[i].title = sanitizedTitle
             }
         } catch {
             DebugLog.store("WikiStoreModel.rename failed: \(error)")
