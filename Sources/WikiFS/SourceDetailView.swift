@@ -43,6 +43,9 @@ struct SourceDetailView: View {
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @AppStorage("isOutlineExpanded") private var isOutlineExpanded = false
+    /// Per-view collapse state for the header. Starts collapsed; persists
+    /// across same-type tab switches (SwiftUI keeps the view alive).
+    @State private var isHeaderExpanded = false
     @State private var headVersion: SourceMarkdownVersion?
     @State private var origin: SourceOrigin?
     @State private var isEditing = false
@@ -282,6 +285,7 @@ struct SourceDetailView: View {
             if let id = store.activeTabID {
                 store.setTabEditing(tabID: id, isEditing: newValue)
             }
+            if newValue { isHeaderExpanded = true } // reveal Save/Cancel
             if !newValue { shouldRestoreEditing = false; caretCharIndex = nil }
         }
     }
@@ -289,21 +293,17 @@ struct SourceDetailView: View {
     // MARK: - Header
 
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
-            Label {
-                EditableTitle(
-                    title: displayName,
-                    placeholder: "Untitled",
-                    lineLimit: 2,
-                    isDisabled: isEditLockedExternally,
-                    onCommit: { store.renameSource(id: file.id, to: $0) }
-                )
-            } icon: {
-                Image(systemName: symbol)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 8) {
+        CollapsibleDetailHeader(
+            systemImage: symbol,
+            title: displayName,
+            placeholder: "Untitled",
+            titleLineLimit: 2,
+            isTitleDisabled: isEditLockedExternally,
+            isExpanded: $isHeaderExpanded,
+            onTitleCommit: { store.renameSource(id: file.id, to: $0) }
+        ) {
+            VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
+                HStack(spacing: 8) {
                 Text(Self.sizeFormatter.string(fromByteCount: Int64(file.byteSize)))
                 metadataSeparator
                 // Compact, single-line dates — "Added Jun 26, 2026 · Updated
@@ -497,6 +497,7 @@ struct SourceDetailView: View {
                     .foregroundStyle(.red)
             }
 
+            }
         }
         .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
         .padding(PageEditorMetrics.contentInset)
