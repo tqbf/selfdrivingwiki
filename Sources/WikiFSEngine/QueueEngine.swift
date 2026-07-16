@@ -108,6 +108,14 @@ public actor QueueEngine {
             DebugLog.store("QueueEngine.start: reset \(resetCount) running items to queued")
         }
 
+        // Re-sync in-memory state after the reset. If items were dispatched
+        // during `enqueue` before `start()` was called, `resetRunningToQueued`
+        // may have reset those items from `.running` to `.queued` in the DB
+        // without clearing the in-memory provider counts / wiki set. Without
+        // this rebuild, `dispatchScan` would skip those items because the
+        // stale counts make the provider look at-capacity.
+        await rebuildInMemoryState()
+
         // Load run states.
         for queue in [QueueKind.extraction, QueueKind.ingestion] {
             runStates[queue] = (try? store.queueRunState(for: queue)) ?? .running

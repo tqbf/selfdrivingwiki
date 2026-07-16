@@ -463,7 +463,16 @@ struct QueueEngineTests {
 
         let recorder = FakeWorkerRecorder()
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { item in
+                // Round-robin: w1→p1, w2→p2, w3→p1, ...
+                // Two providers with limit 1 each means two wikis run
+                // concurrently; the third waits for a slot to free.
+                switch item.wikiID {
+                case "w1", "w3": return "p1"
+                case "w2": return "p2"
+                default: return "p1"
+                }
+            },
             worker: { item in recorder.record(item.id) }
         )
         // Two providers, limit 1 each, so two wikis can run concurrently.
