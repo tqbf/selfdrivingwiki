@@ -9,7 +9,7 @@ import WikiFSCore
 /// These tests verify scheduling, capacity limits, pause/halt semantics,
 /// chained-item completion, event stream contents, and rehydration — all
 /// with injectable fake workers (no real extraction/ingestion runs).
-@Suite
+@Suite(.serialized)
 struct QueueEngineTests {
 
     // MARK: - Test helpers
@@ -353,7 +353,13 @@ struct QueueEngineTests {
                 await gate.wait()
             }
         )
-        let config = QueueEngineConfig(localExtractionLimit: 1)
+        // "p1" is a *remote* backend, so it is governed by `remoteExtractionLimit`
+        // — `localExtractionLimit` does not apply to it. Serialize the two items
+        // so the `executedIDs.count == 1` throw reliably targets the first item;
+        // with the default remoteExtractionLimit of 2 both run concurrently and
+        // the check races on recording order (intermittently marking id1 done
+        // instead of failed).
+        let config = QueueEngineConfig(localExtractionLimit: 1, remoteExtractionLimit: 1)
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
 
         let id1 = try await engine.enqueue(
@@ -463,7 +469,17 @@ struct QueueEngineTests {
 
         let recorder = FakeWorkerRecorder()
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { item in
+                // Round-robin providers to match the config below: w1→p1,
+                // w2→p2, w3→p1. With two providers (limit 1 each) two wikis run
+                // concurrently while the third waits for a slot — which is what
+                // the test intends to exercise.
+                switch item.wikiID {
+                case "w1", "w3": return "p1"
+                case "w2": return "p2"
+                default: return "p1"
+                }
+            },
             worker: { item in recorder.record(item.id) }
         )
         // Two providers, limit 1 each, so two wikis can run concurrently.
