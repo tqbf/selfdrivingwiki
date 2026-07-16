@@ -350,13 +350,19 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             // Show a transient popover anchored to the status item so the
             // user gets immediate feedback that their ingest / extraction
             // was queued — before the icon even updates.
+            let isLint = item.queue == .ingestion
+                && item.payload.lintPageIDs != nil
             showTransientHint(
-                message: item.queue == .ingestion
-                    ? "Ingest queued"
-                    : "Extraction queued",
-                symbol: item.queue == .ingestion
-                    ? "books.vertical.fill"
-                    : "doc.text.magnifyingglass"
+                message: isLint
+                    ? "Lint queued"
+                    : (item.queue == .ingestion
+                        ? "Ingest queued"
+                        : "Extraction queued"),
+                symbol: isLint
+                    ? "checkmark.seal"
+                    : (item.queue == .ingestion
+                        ? "books.vertical.fill"
+                        : "doc.text.magnifyingglass")
             )
             // Refresh snapshot + update icon so the menu bar immediately
             // reflects queued items (not just running ones). Without this,
