@@ -824,7 +824,16 @@ private final class FakeWorkerRecorder: @unchecked Sendable {
     }
 
     func waitForCount(_ count: Int, timeoutSeconds: TimeInterval) async throws {
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        // The engine dispatches workers via unstructured `Task`s on Swift's
+        // cooperative thread pool. Under Swift Testing's parallel execution
+        // (200+ suites contending for the pool at once on CI), those tasks can
+        // be starved far beyond local timings — a 3-deep sequential dispatch
+        // chain that completes in <1s locally can take 8s+ on a CI runner. The
+        // poll loop below returns the instant `count` is reached, so a generous
+        // floor never slows a passing run; it only avoids spurious timeouts in
+        // the genuine-still-pending case.
+        let effective = max(timeoutSeconds, 30)
+        let deadline = Date().addingTimeInterval(effective)
         while true {
             let current = executedIDs.count
             if current >= count { return }
