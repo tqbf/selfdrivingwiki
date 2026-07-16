@@ -227,6 +227,20 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     @objc private func openWikiWindow(_ sender: NSMenuItem?) {
         guard let wikiID = sender?.representedObject as? String else { return }
         NSApplication.shared.activate(ignoringOtherApps: true)
+
+        // Focus an already-open window for this wiki rather than opening a
+        // duplicate. `openWindow(value:)` only dedups within the value-driven
+        // WindowGroup; a wiki adopted by the main window is invisible to it,
+        // so we look the window up by the identifier WindowIdentifierTagger
+        // stamps on it.
+        let identifier = NSUserInterfaceItemIdentifier(wikiWindowIdentifierPrefix + wikiID)
+        if let existing = NSApplication.shared.windows.first(where: {
+            $0.identifier == identifier
+        }) {
+            existing.makeKeyAndOrderFront(nil)
+            return
+        }
+
         openWindowBridge.openWiki?(wikiID)
     }
 
