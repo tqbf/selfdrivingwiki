@@ -127,6 +127,13 @@ agents, NOT Polytoken):
   no matter how the app launched. The only exception is real CLI stdout (e.g.
   `wikictl`'s command output).
 
+* Never use bare `try?` to swallow errors silently — it hides failures and has
+  already caused lost transcripts (`QueueStore.swift:156-160`) and misattributed
+  queue items (#475). Use `do { try … } catch { DebugLog.store(…) }` (or the
+  appropriate `DebugLog` channel) so the failure is at least visible in
+  Console.app. If ignoring the error is genuinely correct, add a comment saying
+  why.
+
 * Never commit or push directly to `main`. Always work on a feature branch, push
   the branch, and open a PR. You may push PR branches but MUST NOT merge them to
   main yourself.
