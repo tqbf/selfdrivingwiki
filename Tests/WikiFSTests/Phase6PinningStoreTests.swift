@@ -69,7 +69,7 @@ struct Phase6PinningStoreTests {
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
 
         let v1 = try store.appendProcessedMarkdown(sourceID: source.id, content: "v1", origin: "t", note: nil)
-        let v2 = try store.appendProcessedMarkdown(sourceID: source.id, content: "v2", origin: "t", note: nil)
+        try store.appendProcessedMarkdown(sourceID: source.id, content: "v2", origin: "t", note: nil)
 
         // A cite @v1, a cite @v2, and an embed @v1 — three distinct edges under
         // source_links_edge (from, to, role, COALESCE(pin, '')).

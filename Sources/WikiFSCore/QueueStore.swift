@@ -567,7 +567,7 @@ public final class QueueStore: @unchecked Sendable {
 
         return try rewrap {
             let sql: String
-            if let queue {
+            if queue != nil {
                 sql = """
                 SELECT \(Self.selectColumns)
                 FROM queue_items
