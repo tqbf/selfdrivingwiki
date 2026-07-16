@@ -61,9 +61,6 @@ struct ActivityWindowView: View {
             ToolbarItem(placement: .primaryAction) {
                 queueControlMenu
             }
-            ToolbarItem(placement: .primaryAction) {
-                configButton
-            }
         }
         .onAppear { viewModel.attach(engine: queueEngine) }
         .onDisappear { viewModel.detach() }
@@ -315,31 +312,6 @@ struct ActivityWindowView: View {
         .help(state == .paused
             ? "\(queueTitle) queue is paused"
             : "\(queueTitle) queue controls")
-    }
-
-    // MARK: - Config button
-
-    /// Gear icon that opens Settings on the tab relevant to this queue's
-    /// activity — Extraction settings for the extraction queue, Agents
-    /// settings for the ingestion queue. Uses `@AppStorage` to select the
-    /// tab and the AppKit selector to open the Settings window (the activity
-    /// windows are standalone `NSWindow`s, so `@Environment(\.openSettings)`
-    /// isn't available here).
-    private var configButton: some View {
-        Button {
-            UserDefaults.standard.set(
-                queue == .extraction
-                    ? WikiFSApp.SettingsTab.extraction.rawValue
-                    : WikiFSApp.SettingsTab.agents.rawValue,
-                forKey: "settings.selectedTab"
-            )
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        } label: {
-            Image(systemName: "gearshape")
-        }
-        .help(queue == .extraction
-            ? "Extraction Settings"
-            : "Agent Settings")
     }
 
     // MARK: - Detail pane
