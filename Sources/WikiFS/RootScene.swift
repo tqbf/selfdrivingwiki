@@ -102,6 +102,10 @@ struct RootScene: View {
                 }
             }
         }
+        // Tag this window's NSWindow.identifier with its wiki ID so the menu
+        // bar can find and focus an already-open wiki window instead of
+        // spawning a duplicate (see WindowIdentifierTagger).
+        .background(WindowIdentifierTagger(wikiID: wikiID))
         .onAppear {
             DebugLog.tabs("RootScene body onAppear: wikiID=\(wikiID ?? "nil") session=\(session != nil ? "set" : "nil")")
         }
