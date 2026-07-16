@@ -228,8 +228,12 @@ survives relaunch. This means:
 
 - **Operations keep running** even if you close all windows.
 - **Operations are ordered** — you can drag to reorder queued items.
-- **Concurrency is managed** — one ingest per wiki at a time, but extraction
-  jobs for different files run in parallel.
+- **Ingestion is serialized** — one job runs at a time globally (a per-provider
+  limit of 1 with a single shared provider). A per-wiki invariant additionally
+  ensures a wiki is never double-ingested.
+- **Extraction concurrency depends on the backend** — local pdf2md runs one
+  extraction at a time; remote backends (Claude, Gemini, Docling Serve) allow
+  up to 2 concurrent extractions.
 - **You can pause, resume, halt, cancel, and retry** from the activity windows.
 - **Crash recovery** — if the app crashes, in-flight items are re-queued on next
   launch.

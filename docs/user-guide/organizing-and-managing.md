@@ -227,8 +227,12 @@ All extraction and ingestion operations flow through a **persistent queue**.
 
 - **Survives relaunch** — in-flight items are re-queued after a crash or restart.
 - **Runs in the background** — operations continue even with no window open.
-- **Concurrency management** — one ingest per wiki at a time; extractions
-  parallelize across different files.
+- **Ingestion is serialized** — one job runs at a time globally (per-provider
+  limit 1). A per-wiki invariant additionally prevents double-ingesting a
+  wiki.
+- **Extraction concurrency depends on the backend** — local pdf2md runs one
+  extraction at a time; remote backends (Claude, Gemini, Docling Serve) allow
+  up to 2 concurrent extractions.
 - **Ordering** — drag to reorder queued items.
 
 ### Queue controls
