@@ -160,6 +160,23 @@ Use `![[source:Name]]` to embed media directly in a page:
 
 Embeds let you reference source material visually within a page's narrative.
 
+### Embedding a YouTube video (or other web media)
+
+You don't have to download media to embed it. Paste a YouTube, Vimeo, Spotify,
+SoundCloud, or Apple Podcasts URL via **[Add from URL](sources-and-ingestion.md#from-a-url)**
+and the app creates a lightweight **byteless** source — nothing is downloaded;
+it just remembers the provider and video/episode id. Then reference it like any
+other source:
+
+```
+![[source:My Conference Talk]]
+```
+
+That renders an inline player (a YouTube iframe, a Spotify widget, an Apple
+Podcasts player, etc.) right in the page. The source stays citable and
+searchable in the Sources list, and the agent can embed it into pages the same
+way you would.
+
 ---
 
 ## Special pages

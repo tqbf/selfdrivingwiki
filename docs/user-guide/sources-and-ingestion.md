@@ -42,6 +42,13 @@ verbatim and appear in the Sources sidebar.
 The fetched content lands in Sources with a **Website** or **Apple Podcast**
 origin tag.
 
+**Media URLs are byteless.** Paste a **YouTube**, **Vimeo**, **Spotify**,
+**SoundCloud**, or **Apple Podcasts** URL and the app recognizes it as web
+media: nothing is downloaded — it stores a lightweight source that remembers
+the provider and the video/episode id. These sources are first-class (visible,
+searchable, and citable), and you embed them as inline players with
+`![[source:Name]]`. See [Embeds](pages-and-links.md#embedding-a-youtube-video-or-other-web-media).
+
 ### From Zotero
 
 If you use [Zotero](https://www.zotero.org/) for reference management:
