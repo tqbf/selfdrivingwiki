@@ -2,6 +2,95 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-16 — "Worked for Xs" footer with hover-swap (branch `social-dugong`)
+
+**Implemented.** Added a "Worked for Xs" duration footer under assistant
+responses that swaps to the completion timestamp on hover — matching
+Paseo's `AssistantTurnFooter` pattern.
+
+- **Why:** Paseo renders a metadata line after each assistant turn showing
+  how long the agent took ("Worked for 4s"); hovering swaps it to the
+  completion time ("2:34 PM"). WikiFS had no such metadata.
+- **Challenge:** `AgentEvent` has no timestamp fields — events are pure
+  data (`.assistantText(String)`, etc.). The timing was tracked only at the
+  launcher level (`runStartedAt`) for the whole session, not per-event.
+- **What changed:**
+
+  1. **`AgentEvent` (`AgentEvent.swift`):** Moved
+     `isInternalTranscriptEvent` from `WikiFS` into `WikiFSCore` (it was an
+     extension in `AgentQueueView.swift`). Added
+     `isVisibleInTranscript(in:)` — the filtered-visibility predicate
+     factored out of the old `[AgentEvent].transcriptVisible` filter so it
+     can be called per-index. The private `hasAssistantText(matching:in:)`
+     dedup helper moved here too.
+
+  2. **`AgentLauncher` (`AgentLauncher.swift`):** Added
+     `eventTimestamps: [Date]` parallel to `events`. Every code path that
+     appends to or replaces `events` — `mergeOrAppend` (deltas, final text,
+     thinking), `startInteractiveQuery` (pre-display), and
+     `sendInteractiveMessage` (non-pre-display) — now appends/updates
+     timestamps in lockstep. Both reset sites (`prepareForNewSession` +
+     `resetRunArtifacts`) clear `eventTimestamps = []`.
+
+  3. **`[AgentEvent]` extension (`ChatTranscriptView.swift`):** Refactored
+     `transcriptVisible` to use new `transcriptVisibleIndices` (returns
+     indices instead of elements) so callers with parallel arrays can filter
+     timestamps in lockstep. Removed the old private `hasAssistantText`
+     (logic moved to `AgentEvent`).
+
+  4. **`ChatView` (`ChatView.swift`):** Added `displayTimestamps: [Date?]`
+     computed property — live path maps `launcher.eventTimestamps` through
+     `transcriptVisibleIndices`; persisted path maps
+     `persistedMessages.createdAt`. Passed to `ChatTranscriptView`.
+
+  5. **`ChatTranscriptView`:** Added `timestamps: [Date?]` param. The
+     `hideToolCalls` filter now mirrors on both `events` and `timestamps`.
+     Forwards to `ChatWebView`.
+
+  6. **`ChatWebView`:** Added `timestamps: [Date?]` property. Coordinator
+     stores/reforwards it through `apply` → `appendRows`/`replaceLastRow`
+     → `rowHTML` → `chatRowHTML` → `assistantBubbleHTML`. Added
+     `formatDuration(_:)` (mirrors Paseo's `formatDuration`) and
+     `formatTimestamp(_:now:)` (mirrors `formatMessageTimestamp`). Added
+     `workDuration(at:timestamps:)` — scans backwards for the previous
+     non-nil timestamp to compute the gap. The footer HTML: a `.turn-footer`
+     div with a hidden sizer (reserves width), a `.turn-duration` span
+     (visible at 60% opacity), and a `.turn-timestamp` span (hidden, fades to
+     70% on `.chat-assistant:hover`). Pure CSS hover-swap, no JS needed.
+
+- **Activity-feed callers** (`AgentQueueView`, `ActivityWindowView`) are
+  unaffected — they don't set `timestamps` (defaults to `[]`), so no
+  footers render.
+- **Build:** `swift build` passes cleanly (one pre-existing warning fixed).
+- **Tests:** All 2385 tests pass (fast tier).
+
+## 2026-07-16 — Copy icon on assistant responses (branch `social-dugong`)
+
+**Implemented.** Replaced the text "Copy" button on assistant chat bubbles
+with a lucide `Copy` SVG icon, matching Paseo's `TurnCopyButton` pattern.
+
+- **Why:** Paseo shows a small clipboard icon on hover at the end of each
+  assistant turn — it's compact, visually clean, and swaps to a green
+  checkmark for 1.5 s after clicking to confirm the clipboard write. The
+  old WikiFS button was a plain text "Copy" label.
+- **What changed** (all in `Sources/WikiFS/ChatWebView.swift`, issue #285
+  touch-up):
+  - `assistantBubbleHTML` — the button now renders `Self.copyIconSVG` (a
+    lucide `Copy` SVG, 15×15, `currentColor` stroke) instead of the literal
+    "Copy" text. Added `aria-label="Copy"` for accessibility.
+  - Two static SVG constants (`copyIconSVG`, `checkIconSVG`) on the
+    `Coordinator` — single-line raw string literals, clean SVG markup.
+  - CSS `.copy-btn` — restyled from text pill (fixed `font-size: 11px`,
+    background) to a flexible icon button: `display: flex`, no background
+    (shows `--code-bg` only on hover), tighter padding, `currentColor`
+    inherits the muted→text color transition. Added `.copy-btn svg { display:
+    block }` to prevent inline gaps.
+  - JS click handler — swaps `btn.innerHTML` between the check SVG (green,
+    `.copied` class) and the copy SVG after a 1.5 s timeout (was 1.2 s, now
+    matches Paseo's 1.5 s). SVG strings are defined as JS `var`s so the
+    handler can restore the original icon without a round-trip.
+- **Build:** `swift build` passes cleanly (no new warnings).
+
 ## 2026-07-16 — Timestamped untitled pages + rename collision guard
 
 **Implemented (branch `torpid-penguin`).** Two related changes to page-title
