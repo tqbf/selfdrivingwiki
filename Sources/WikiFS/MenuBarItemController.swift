@@ -135,6 +135,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         // calls `openWindowBridge.openWiki(wiki.id)` which opens or focuses
         // that wiki's window via SwiftUI's `WindowGroup(for: String.self)`.
         if !registry.wikis.isEmpty {
+            // Nest the wiki list under a "Wikis" submenu to keep the top-level
+            // status menu compact — the list can grow arbitrarily long.
+            let wikisItem = NSMenuItem(
+                title: "Wikis",
+                action: nil,
+                keyEquivalent: "")
+            let wikisMenu = NSMenu()
             for wiki in registry.wikis {
                 let item = NSMenuItem(
                     title: wiki.displayName,
@@ -144,8 +151,10 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
                 item.representedObject = wiki.id
                 // Show a checkmark next to the most-recently-used wiki.
                 item.state = (registry.activeWikiID == wiki.id) ? .on : .off
-                menu.addItem(item)
+                wikisMenu.addItem(item)
             }
+            wikisItem.submenu = wikisMenu
+            menu.addItem(wikisItem)
             menu.addItem(.separator())
         } else {
             // No wikis exist: offer the main window so the user can create one.
@@ -218,6 +227,20 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     @objc private func openWikiWindow(_ sender: NSMenuItem?) {
         guard let wikiID = sender?.representedObject as? String else { return }
         NSApplication.shared.activate(ignoringOtherApps: true)
+
+        // Focus an already-open window for this wiki rather than opening a
+        // duplicate. `openWindow(value:)` only dedups within the value-driven
+        // WindowGroup; a wiki adopted by the main window is invisible to it,
+        // so we look the window up by the identifier WindowIdentifierTagger
+        // stamps on it.
+        let identifier = NSUserInterfaceItemIdentifier(wikiWindowIdentifierPrefix + wikiID)
+        if let existing = NSApplication.shared.windows.first(where: {
+            $0.identifier == identifier
+        }) {
+            existing.makeKeyAndOrderFront(nil)
+            return
+        }
+
         openWindowBridge.openWiki?(wikiID)
     }
 

@@ -95,27 +95,22 @@ if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix(
 
 let daemon = WikiDaemon(containerDirectory: containerDirectory)
 
-do {
-    let delegate = WikiDaemonListenerDelegate(daemon: daemon)
+let delegate = WikiDaemonListenerDelegate(daemon: daemon)
 
-    // The daemon is always launched via launchd (the `MachServices` key in the
-    // plist registers the mach service name). `NSXPCListener(machServiceName:)`
-    // registers with launchd so clients connecting via
-    // `NSXPCConnection(machServiceName:)` reach this listener.
-    //
-    // Direct-run without launchd does NOT work: the mach service isn't
-    // registered, and `NSXPCListenerEndpoint` can't be serialized to a file
-    // (it must pass through an existing XPC connection — a chicken-and-egg
-    // problem). Use `make install-daemon` for both development and production.
-    let listener = NSXPCListener(machServiceName: WikiDaemonMachServiceName)
-    listener.delegate = delegate
-    listener.resume()
+// The daemon is always launched via launchd (the `MachServices` key in the
+// plist registers the mach service name). `NSXPCListener(machServiceName:)`
+// registers with launchd so clients connecting via
+// `NSXPCConnection(machServiceName:)` reach this listener.
+//
+// Direct-run without launchd does NOT work: the mach service isn't
+// registered, and `NSXPCListenerEndpoint` can't be serialized to a file
+// (it must pass through an existing XPC connection — a chicken-and-egg
+// problem). Use `make install-daemon` for both development and production.
+let listener = NSXPCListener(machServiceName: WikiDaemonMachServiceName)
+listener.delegate = delegate
+listener.resume()
 
-    DebugLog.store("wikid: daemon started, serving on \(WikiDaemonMachServiceName)")
+DebugLog.store("wikid: daemon started, serving on \(WikiDaemonMachServiceName)")
 
-    // Keep the process alive until launchd stops it (IdleTimeout) or a signal arrives.
-    RunLoop.current.run()
-} catch {
-    DebugLog.store("wikid: fatal — could not start: \(error)")
-    exit(1)
-}
+// Keep the process alive until launchd stops it (IdleTimeout) or a signal arrives.
+RunLoop.current.run()
