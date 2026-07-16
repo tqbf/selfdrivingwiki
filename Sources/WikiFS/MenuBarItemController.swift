@@ -149,8 +149,19 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
                     keyEquivalent: "")
                 item.target = self
                 item.representedObject = wiki.id
-                // Show a checkmark next to the most-recently-used wiki.
-                item.state = (registry.activeWikiID == wiki.id) ? .on : .off
+                // Show an "open" icon next to wikis whose window is
+                // currently on screen, rather than a checkmark on the
+                // most-recently-used wiki. The MRU wiki can differ from
+                // what's actually loaded: in accessory mode every window
+                // may be closed while `activeWikiID` still holds the last
+                // one. A window's presence is the true "loaded" signal.
+                if windowForWiki(wiki.id) != nil {
+                    let symbol = NSImage(
+                        systemSymbolName: "macwindow",
+                        accessibilityDescription: "Wiki is open")
+                    symbol?.isTemplate = true
+                    item.image = symbol
+                }
                 wikisMenu.addItem(item)
             }
             wikisItem.submenu = wikisMenu
@@ -233,15 +244,21 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         // WindowGroup; a wiki adopted by the main window is invisible to it,
         // so we look the window up by the identifier WindowIdentifierTagger
         // stamps on it.
-        let identifier = NSUserInterfaceItemIdentifier(wikiWindowIdentifierPrefix + wikiID)
-        if let existing = NSApplication.shared.windows.first(where: {
-            $0.identifier == identifier
-        }) {
+        if let existing = windowForWiki(wikiID) {
             existing.makeKeyAndOrderFront(nil)
             return
         }
 
         openWindowBridge.openWiki?(wikiID)
+    }
+
+    /// Returns the on-screen `NSWindow` currently showing the given wiki, if
+    /// any. Used to focus an already-open wiki window (avoiding duplicates in
+    /// `openWikiWindow`) and to show the "open" icon in the Wikis submenu for
+    /// wikis that are loaded.
+    private func windowForWiki(_ wikiID: String) -> NSWindow? {
+        let identifier = NSUserInterfaceItemIdentifier(wikiWindowIdentifierPrefix + wikiID)
+        return NSApplication.shared.windows.first { $0.identifier == identifier }
     }
 
     @objc private func openMainWindow(_ sender: NSMenuItem?) {
