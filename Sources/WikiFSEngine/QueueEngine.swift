@@ -358,8 +358,12 @@ public actor QueueEngine {
             // display plumbing; the final `.assistantText` carries the full
             // text, so persisting every delta bloats rows AND rehydrates as
             // one row per word-fragment.
-            guard event.isPersistable else { return }
-            try? store.appendItemEvent(itemID: id, event: event)
+                guard event.isPersistable else { return }
+                do {
+                    try store.appendItemEvent(itemID: id, event: event)
+                } catch {
+                    DebugLog.store("QueueEngine: appendItemEvent failed for item=\(id): \(error)")
+                }
         }
     }
 

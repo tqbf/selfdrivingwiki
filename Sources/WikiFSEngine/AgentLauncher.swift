@@ -139,6 +139,15 @@ public final class AgentLauncher {
     /// substitute a stub backend.
     @ObservationIgnored var backend: AgentBackend = ACPBackend()
 
+    /// Factory closure that constructs the backend for a session. Called at
+    /// spawn time in `run()` / `startInteractiveQuery()` so a fresh backend is
+    /// built per session with the current permission policy. Injectable so tests
+    /// can substitute a stub backend that survives the `self.backend = ...`
+    /// assignment in `run()` (setting `backend` directly is overwritten).
+    @ObservationIgnored var resolveBackend: (PermissionPolicy) -> AgentBackend = {
+        AgentBackendFactory.makeBackend(policy: $0)
+    }
+
     /// The chat's permission mode (`@AppStorage("agentPermissionMode")`, default
     /// `.bypass`). v1: app-wide persisted. Read at spawn time so it bakes into
     /// the `ACPBackend`'s `PermissionPolicy`.
@@ -719,7 +728,7 @@ public final class AgentLauncher {
         // (or selected) provider, and resolves its PATH command + Keychain key
         // into providerHints. The app is ACP-only.
         let provider = resolveSelectedProvider()
-        self.backend = AgentBackendFactory.makeBackend(policy: policy)
+        self.backend = resolveBackend(policy)
 
         // Resolve the provider's spawn command (PATH-resolved because the
         // swift-acp SDK's launch() does NOT do PATH lookup) + the Keychain-backed
@@ -852,10 +861,12 @@ public final class AgentLauncher {
             captureProcessID(session: session)
             startCompletionWatchdog()
 
-            // Consume the per-turn stream in a background Task (fire-and-forget:
-            // run() returns after spawn commit; the stream is drained async).
-            // This replaces the old readabilityHandler → ingestStdout path.
-            let backend = self.backend
+            // Consume the per-turn stream INLINE so run() does not return until
+            // the turn completes. The queue worker awaits run() to decide when
+            // the item is done — a fire-and-forget Task here marks it completed
+            // while the agent is still streaming (#475). Mirrors the pattern in
+            // sendInteractiveMessage. The @MainActor await suspends per event;
+            // it does not block the main actor.
             let generationGateReleasesPerTurn = Self.releasesGenerationSlotPerTurn(
                 isInteractiveSession: isInteractiveSession)
             // The prompt is sent via `send()`. The sub-agent plan (source-reader
@@ -864,21 +875,26 @@ public final class AgentLauncher {
             // an instruction to do everything directly.
             var promptText = operation.prompt(wikiRoot: wikiRoot)
             promptText += "\n\nIMPORTANT: Do NOT dispatch sub-agents, background tasks, or async agents. Do NOT use sleep or ScheduleWakeup. Read all sources, process them, and write all wiki pages directly in THIS session — everything must complete before you stop."
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let stream = await backend.send(
-                    TurnInput(userText: promptText), into: session)
-                for await event in stream {
-                    self.lastActivityAt = Date()
-                    self.mergeOrAppend(event)
-                    if AgentEvent.endsGeneration(event) {
-                        self.setGenerating(false)
-                        self.flushTranscript()
-                        if generationGateReleasesPerTurn {
-                            self.releaseGenerationSlot()
-                        }
+            let stream = await self.backend.send(
+                TurnInput(userText: promptText), into: session)
+            for await event in stream {
+                self.lastActivityAt = Date()
+                self.mergeOrAppend(event)
+                if AgentEvent.endsGeneration(event) {
+                    self.setGenerating(false)
+                    self.flushTranscript()
+                    if generationGateReleasesPerTurn {
+                        self.releaseGenerationSlot()
                     }
                 }
+            }
+            // Stream ended (turn done or process died). If onExit hasn't fired
+            // yet (finish() not called), ensure teardown happens before run()
+            // returns so callers see post-finish state: gate released, run
+            // lifecycle decremented, onAgentEvent cleared. finish() is idempotent
+            // (isRunning guard), so a later onExit-triggered finish() is a no-op.
+            if isRunning {
+                finish(status: exitStatus ?? 0)
             }
         } catch {
             DebugLog.agent("run: spawn FAILED: \(error.localizedDescription)")
@@ -947,7 +963,7 @@ public final class AgentLauncher {
         if let cached = cache[cacheKey] {
             backend = cached
         } else {
-            backend = AgentBackendFactory.makeBackend(policy: policy)
+            backend = resolveBackend(policy)
             cache[cacheKey] = backend
         }
         let providerHints = AgentBackendFactory.providerHints(
@@ -1441,7 +1457,7 @@ public final class AgentLauncher {
         let provider = resolveSelectedProvider()
         let resolvedSelectedModel = providersConfig().selectedModelId(forProvider: provider.id)
         DebugLog.agent("startInteractiveQuery: provider=\(provider.id) selectedModel=\(resolvedSelectedModel ?? "nil")") // TEMP DEBUG
-        self.backend = AgentBackendFactory.makeBackend(policy: policy)
+        self.backend = resolveBackend(policy)
 
         // Resolve the provider's spawn command (PATH-resolved) + the
         // Keychain-backed API key (keyed by provider id).
