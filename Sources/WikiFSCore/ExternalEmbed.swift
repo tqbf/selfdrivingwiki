@@ -48,6 +48,26 @@ public struct SourceEmbedDescriptor: Sendable, Equatable {
     }
 }
 
+// MARK: - WikiReaderOrigin
+
+/// The synthetic https origin the page reader's WKWebView document is loaded
+/// under (`loadHTMLString(baseURL:)`). YouTube's embedded player rejects an
+/// embed whose parent document has no real origin (opaque `null` under an
+/// `about:blank` base) with **error 153** — so the reader document needs a real
+/// origin AND the YouTube embed URL must carry a matching `?origin=` param.
+///
+/// Defined here — in the same file as the embed-URL builder that stamps
+/// `?origin=` — so the URL the iframe points at and the `baseURL` the reader
+/// loads the wrapping document under can never drift out of lock-step. The host
+/// is a private synthetic name (not a real site); it only has to be a
+/// syntactically valid https origin that the reader and the embed agree on.
+public enum WikiReaderOrigin {
+    /// The origin string, e.g. stamped into `?origin=` on the YouTube embed URL.
+    public static let string = "https://reader.wikifs.local"
+    /// The same origin as a `URL`, for `loadHTMLString(baseURL:)`.
+    public static var url: URL? { URL(string: string) }
+}
+
 // MARK: - EmbedTarget
 
 /// The render decision `ExternalEmbed` makes for one descriptor: *what kind* of
@@ -104,7 +124,20 @@ public enum ExternalEmbed {
         switch mime {
         case "video/youtube":
             guard let id = d.externalIdentity, !id.isEmpty else { return nil }
-            return EmbedTarget(kind: .iframe, url: "https://www.youtube-nocookie.com/embed/\(id)")
+            // Privacy-enhanced host (no tracking cookies) — but the player 153-errors
+            // unless the embed carries the reader's origin. `enablejsapi=1` lets the
+            // player postMessage back to the parent; `origin`/`widget_referrer` name
+            // the reader origin the parent document is actually loaded under
+            // (`WikiReaderOrigin` → the WKWebView baseURL). Percent-encode the `://`
+            // in the origin value so it survives as a single query value (mirrors the
+            // SoundCloud track-URL encoding below).
+            var allowed = CharacterSet.urlQueryAllowed
+            allowed.remove(charactersIn: ":/")
+            let origin = WikiReaderOrigin.string.addingPercentEncoding(withAllowedCharacters: allowed)
+                ?? WikiReaderOrigin.string
+            let url = "https://www.youtube-nocookie.com/embed/\(id)"
+                + "?enablejsapi=1&origin=\(origin)&widget_referrer=\(origin)"
+            return EmbedTarget(kind: .iframe, url: url)
         case "video/vimeo":
             guard let id = d.externalIdentity, !id.isEmpty else { return nil }
             return EmbedTarget(kind: .iframe, url: "https://player.vimeo.com/video/\(id)")

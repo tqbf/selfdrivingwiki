@@ -24,7 +24,15 @@ struct ExternalEmbedTests {
         let t = try #require(ExternalEmbed.target(for: descriptor(
             mimeType: "video/youtube", externalIdentity: "dQw4w9WgXcQ")))
         #expect(t.kind == .iframe)
-        #expect(t.url == "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ")
+        // Privacy-enhanced host + the reader origin threaded through so the player
+        // accepts the embed (no origin ⇒ error 153, issue #206). Origin `://` is
+        // percent-encoded as a query value.
+        let origin = WikiReaderOrigin.string.addingPercentEncoding(
+            withAllowedCharacters: {
+                var a = CharacterSet.urlQueryAllowed; a.remove(charactersIn: ":/"); return a
+            }())!
+        #expect(t.url == "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ"
+            + "?enablejsapi=1&origin=\(origin)&widget_referrer=\(origin)")
     }
 
     @Test func vimeoTarget() throws {

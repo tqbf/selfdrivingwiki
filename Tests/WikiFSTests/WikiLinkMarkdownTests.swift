@@ -498,9 +498,27 @@ struct WikiLinkMarkdownTests {
         #expect(out.contains("<iframe"))
         #expect(out.contains("youtube-nocookie.com/embed/dQw4w9WgXcQ"))
         #expect(out.contains("wiki-embed"))
-        #expect(out.contains("loading=\"lazy\""))
+        // YouTube iframes are eager-loaded (NOT lazy) and carry a referrer policy —
+        // lazy-loading + null referrer is what produced error 153 (issue #206).
+        #expect(!out.contains("loading=\"lazy\""))
+        #expect(out.contains("referrerpolicy=\"strict-origin-when-cross-origin\""))
         #expect(!out.contains("wiki-blob://"))  // external, not blob
         #expect(!out.contains("wiki://"))  // not a fallback cite link
+    }
+
+    @Test func embedNonYouTubeIframeKeepsLazyLoading() {
+        // Non-goal guard (issue #206): Vimeo/Spotify/etc. iframes render unchanged —
+        // still lazy-loaded, no YouTube-specific attributes.
+        let id = PageID(rawValue: "01HTESTVIMEO00000000000000")
+        let target = EmbedTarget(kind: .iframe, url: "https://player.vimeo.com/video/76979871")
+        let out = WikiLinkMarkdown.linkified(
+            "![[source:video]]",
+            isResolved: { _, _ in true },
+            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "video/vimeo", target: target) }
+        )
+        #expect(out.contains("<iframe"))
+        #expect(out.contains("player.vimeo.com/video/76979871"))
+        #expect(out.contains("loading=\"lazy\""))
     }
 
     @Test func embedDirectRemoteAudioTargetRendersNativeAudio() {
