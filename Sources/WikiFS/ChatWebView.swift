@@ -569,21 +569,26 @@ struct ChatWebView: NSViewRepresentable {
         private static func assistantBubbleHTML(text: String, context: WikiRenderContext?, isFinal: Bool, timestamp: Date? = nil, allEvents: [AgentEvent] = [], allTimestamps: [Date?] = [], index: Int = -1) -> String {
             var html = """
             <div class="row chat-row chat-assistant"><div class="bubble">\
-            <button class="copy-btn" type="button" data-copy="\(htmlAttributeEscape(text))" aria-label="Copy">\(Self.copyIconSVG)</button>\
             \(renderedMarkdown(text, context: context, isFinal: isFinal))</div>
             """
 
+            // Footer action bar: sits on its own line directly beneath the bubble
+            // so it reads as attached to the response. Holds the copy button and,
+            // when a timestamp is available, the "Worked for Xs" label (which
+            // hover-swaps to the completion timestamp).
+            var metaHTML = ""
             if let ts = timestamp {
                 let duration = Self.workDuration(at: index, timestamps: allTimestamps)
                 let durationLabel = duration.map { "Worked for \(Self.formatDuration($0))" } ?? ""
                 let timestampLabel = Self.formatTimestamp(ts)
-                // The footer: a sizer (hidden, reserves width) + the visible
+                // The meta: a sizer (hidden, reserves width) + the visible
                 // duration label + the timestamp (hidden by default). On hover,
                 // the duration fades out and the timestamp fades in — pure CSS,
                 // width stays stable (sizer reserves the wider of the two).
                 let durationHTML = durationLabel.isEmpty ? "" : #"<span class="turn-duration">\#(escape(durationLabel))</span>"#
-                html += #"<div class="turn-footer"><span class="turn-sizer">\#(escape(timestampLabel))</span>\#(durationHTML)<span class="turn-timestamp">\#(escape(timestampLabel))</span></div>"#
+                metaHTML = #"<span class="turn-meta"><span class="turn-sizer">\#(escape(timestampLabel))</span>\#(durationHTML)<span class="turn-timestamp">\#(escape(timestampLabel))</span></span>"#
             }
+            html += #"<div class="turn-footer"><button class="copy-btn" type="button" data-copy="\#(htmlAttributeEscape(text))" aria-label="Copy">\#(Self.copyIconSVG)</button>\#(metaHTML)</div>"#
 
             html += "</div>"
             return html
@@ -840,8 +845,14 @@ struct ChatWebView: NSViewRepresentable {
             padding: 11px 16px; white-space: pre-wrap; font-size: 13.5px;
           }
           .chat-assistant .bubble { position: relative; }
+          /* Footer action bar beneath the response: copy button + "Worked for Xs"
+             label share one line, left-aligned under the bubble so they read as
+             attached to it. */
+          .turn-footer {
+            display: flex; align-items: center; gap: 4px;
+            margin-top: 4px; min-height: 20px;
+          }
           .copy-btn {
-            position: absolute; top: 2px; right: 2px;
             display: flex; align-items: center; justify-content: center;
             opacity: 0; transition: opacity 0.15s ease, color 0.15s ease;
             -webkit-appearance: none; appearance: none;
@@ -853,11 +864,11 @@ struct ChatWebView: NSViewRepresentable {
           .copy-btn:hover { opacity: 1; color: var(--text); background: var(--code-bg); }
           .copy-btn.copied { opacity: 1; color: #34c759; }
           .copy-btn svg { display: block; }
-          /* Turn footer: "Worked for Xs" with hover-swap to timestamp.
-             Mirrors Paseo's AssistantTurnFooter — a sizer reserves width so
-             the label doesn't shift when swapping. */
-          .turn-footer {
-            position: relative; margin-top: 6px;
+          /* "Worked for Xs" with hover-swap to timestamp. Mirrors Paseo's
+             AssistantTurnFooter — a sizer reserves width so the label doesn't
+             shift when swapping. */
+          .turn-meta {
+            position: relative; display: inline-block;
             min-height: 16px;
           }
           .turn-sizer {
