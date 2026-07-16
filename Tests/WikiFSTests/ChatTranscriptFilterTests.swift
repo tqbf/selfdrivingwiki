@@ -20,9 +20,23 @@ struct ChatTranscriptFilterTests {
         #expect(events.transcriptVisible == events)
     }
 
-    @Test func toolUsePasses() {
-        let events: [AgentEvent] = [.toolUse(name: "Bash", inputSummary: "ls")]
+    @Test func editToolUsePasses() {
+        let events: [AgentEvent] = [.toolUse(name: "Edit", inputSummary: "page.md")]
         #expect(events.transcriptVisible == events)
+    }
+
+    @Test func readOnlyToolUseIsDropped() {
+        // Read-only tool calls (Bash, Read, Glob, Grep) are always hidden from
+        // the transcript — their one-line summaries are noise. Only
+        // mutation-relevant calls (Edit, Write, Agent) stay visible.
+        let events: [AgentEvent] = [
+            .toolUse(name: "Bash", inputSummary: "ls"),
+            .toolUse(name: "Read", inputSummary: "page.md"),
+            .toolUse(name: "Glob", inputSummary: "*.swift"),
+            .toolUse(name: "Grep", inputSummary: "pattern"),
+            .toolUse(name: "Edit", inputSummary: "page.md"),
+        ]
+        #expect(events.transcriptVisible == [.toolUse(name: "Edit", inputSummary: "page.md")])
     }
 
     @Test func nonErrorToolResultIsDropped() {
@@ -119,7 +133,6 @@ struct ChatTranscriptFilterTests {
         ]
         #expect(events.transcriptVisible == [
             .userText("What's in the wiki?"),
-            .toolUse(name: "Read", inputSummary: "page.md"),
             .assistantText("Here's what's in the wiki."),
         ])
     }
