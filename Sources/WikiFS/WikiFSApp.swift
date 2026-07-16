@@ -63,6 +63,13 @@ struct WikiFSApp: App {
     /// `.task` below. The change bridge observes `wikictl`'s Darwin notifications.
     @State private var changeBridge: WikiChangeBridge?
 
+    /// App delegate that intercepts termination to show a "confirm to quit"
+    /// dialog (toggleable in Settings → General). Catches all quit paths:
+    /// ⌘Q, Apple menu, Dock, and system shutdown.
+    @NSApplicationDelegateAdaptor(
+        QuitConfirmationDelegate.self
+    ) private var quitDelegate
+
     init() {
         // Migrate the renamed chat-zoom @AppStorage key before any ChatView reads
         // it. Idempotent: copies `conversation.zoom` → `chat.zoom` only when the
@@ -289,6 +296,33 @@ struct WikiFSApp: App {
             changeBridge = bridge
             appDelegate.sessionManager = sessionManager
         }
+
+        // Wire the quit-confirmation delegate's closures. Flush pending autosaves
+        // (don't lose buffered edits), and report any active operation (extraction,
+        // ingestion, agent run) so the quit dialog message is tailored and the app
+        // won't silently quit mid-work even with the setting off.
+        quitDelegate.flushPendingSaves = { [weak sessionManager] in
+            sessionManager?.flushAllSessions()
+        }
+        quitDelegate.activeOperationDescription = { [weak activityTracker, weak sessionManager] in
+            if activityTracker?.isExtracting == true {
+                return "A PDF extraction"
+            }
+            if activityTracker?.isIngesting == true {
+                return "A source ingestion"
+            }
+            if let sm = sessionManager {
+                for session in sm.allSessions {
+                    if session.agentLauncher.isRunning {
+                        return "An agent operation"
+                    }
+                    if session.chatLauncher.isRunning {
+                        return "A chat session"
+                    }
+                }
+            }
+            return nil
+        }
     }
 
     var body: some Scene {
@@ -395,6 +429,8 @@ struct WikiFSApp: App {
                 AboutView()
                     .tag(SettingsTab.about)
                     .tabItem { Label("About", systemImage: "info.circle") }
+                GeneralSettingsView()
+                    .tabItem { Label("General", systemImage: "gearshape") }
                 ZoteroSettingsView(containerDirectory: containerDirectory)
                     .tag(SettingsTab.zotero)
                     .tabItem { Label("Zotero", systemImage: "books.vertical") }
