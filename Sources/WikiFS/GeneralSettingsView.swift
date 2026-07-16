@@ -7,7 +7,7 @@ import SwiftUI
 /// to confirm before the app terminates — catching ⌘Q / Apple menu Quit / Dock
 /// Quit / system shutdown.
 struct GeneralSettingsView: View {
-    @AppStorage(QuitConfirmationDelegate.confirmQuitKey)
+    @AppStorage(AppDelegate.confirmQuitKey)
     private var confirmBeforeQuitting = true
 
     var body: some View {

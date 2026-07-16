@@ -29,7 +29,16 @@ jobs:
       - name: Generate codegen files (version + prompts)
         run: make version prompts
       - name: Build
-        run: xcrun swift build || swift build
+        # Select the swift command that works on this runner and export it so
+        # the Test step uses the SAME toolchain (a mismatch forces a full
+        # recompile — the old `xcrun ... || swift ...` on Test doubled runtime).
+        run: |
+          if xcrun swift build 2>/dev/null; then
+            echo "SWIFT=xcrun swift" >> "$GITHUB_ENV"
+          else
+            swift build
+            echo "SWIFT=swift" >> "$GITHUB_ENV"
+          fi
       - name: Test (fast tier — slow SQLite suites skipped, issue #292)
         # Fast tier — quick PR feedback. The slow SQLite integration suites
         # (tagged .integration in Tests/WikiFSTests/TestTags.swift) are skipped
@@ -39,11 +48,10 @@ jobs:
         # (issue #364) — promote that job to a required status check so a
         # failing AC test blocks merge. Still run `swift test` locally before
         # merge for fast iteration — see AGENTS.md.
-        # ProjectionTreeTests un-skipped after #291 (ReadScope): ~32 s on CI
-        # hardware (~2–3x slower), down from 165 s+ per working-set test.
+        # To add a slow suite: tag it `.integration` AND append its name here.
         env:
-          SKIP: 'EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests|SQLiteStatementLifecycleIntegrationTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|ChatSummaryTests'
-        run: xcrun swift test --skip "$SKIP" || swift test --skip "$SKIP"
+          SKIP: 'EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests|SQLiteStatementLifecycleIntegrationTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|ChatSummaryTests|ProjectionTreeTests'
+        run: $SWIFT test --skip "$SKIP"
 
   swift-integration:
     # Full test suite — including the SQLite integration suites the fast-tier
@@ -63,9 +71,15 @@ jobs:
       - name: Generate codegen files (version + prompts)
         run: make version prompts
       - name: Build
-        run: xcrun swift build || swift build
+        run: |
+          if xcrun swift build 2>/dev/null; then
+            echo "SWIFT=xcrun swift" >> "$GITHUB_ENV"
+          else
+            swift build
+            echo "SWIFT=swift" >> "$GITHUB_ENV"
+          fi
       - name: Test (full suite — integration suites included, issue #364)
-        run: xcrun swift test || swift test
+        run: $SWIFT test
 
   python:
     runs-on: ubuntu-latest
