@@ -63,12 +63,11 @@ struct WikiFSApp: App {
     /// `.task` below. The change bridge observes `wikictl`'s Darwin notifications.
     @State private var changeBridge: WikiChangeBridge?
 
-    /// App delegate that intercepts termination to show a "confirm to quit"
-    /// dialog (toggleable in Settings → General). Catches all quit paths:
-    /// ⌘Q, Apple menu, Dock, and system shutdown.
-    @NSApplicationDelegateAdaptor(
-        QuitConfirmationDelegate.self
-    ) private var quitDelegate
+    // NOTE: There must be exactly ONE @NSApplicationDelegateAdaptor. Registering
+    // two adaptors with different types (e.g. a separate QuitConfirmationDelegate)
+    // causes only one to win the NSApplication.shared.delegate slot; accessing the
+    // other triggers an unconditional `as!` cast that aborts at launch (#378).
+    // The quit-confirmation logic lives on AppDelegate itself.
 
     init() {
         // Migrate the renamed chat-zoom @AppStorage key before any ChatView reads
@@ -297,14 +296,15 @@ struct WikiFSApp: App {
             appDelegate.sessionManager = sessionManager
         }
 
-        // Wire the quit-confirmation delegate's closures. Flush pending autosaves
-        // (don't lose buffered edits), and report any active operation (extraction,
-        // ingestion, agent run) so the quit dialog message is tailored and the app
-        // won't silently quit mid-work even with the setting off.
-        quitDelegate.flushPendingSaves = { [weak sessionManager] in
+        // Wire the quit-confirmation closures onto AppDelegate (the single app
+        // delegate). Flush pending autosaves (don't lose buffered edits), and
+        // report any active operation (extraction, ingestion, agent run) so the
+        // quit dialog message is tailored and the app won't silently quit
+        // mid-work even with the setting off.
+        appDelegate.flushPendingSaves = { [weak sessionManager] in
             sessionManager?.flushAllSessions()
         }
-        quitDelegate.activeOperationDescription = { [weak activityTracker, weak sessionManager] in
+        appDelegate.activeOperationDescription = { [weak activityTracker, weak sessionManager] in
             if activityTracker?.isExtracting == true {
                 return "A PDF extraction"
             }
@@ -481,6 +481,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor var menuBarItemController: MenuBarItemController?
     @MainActor var bootstrap: (@MainActor () -> Void)?
 
+    // MARK: - Quit confirmation (folded in from the former QuitConfirmationDelegate;
+    // see #378 — there can be only one app delegate)
+
+    /// Called before the app terminates so the model can flush buffered edits.
+    /// Wired in `startStatusItem()`.
+    var flushPendingSaves: (() -> Void)?
+
+    /// Returns a human-readable description of any operation in flight (PDF
+    /// extraction, source ingestion, agent run, or chat), or `nil` when idle.
+    /// The quit dialog message is tailored based on what's running.
+    var activeOperationDescription: (() -> String?)?
+
+    /// `@AppStorage` key for the "ask before quitting" toggle (Settings →
+    /// General). Default is "ask" (true) when unset — matching the feature's
+    /// purpose. Referenced by `GeneralSettingsView`.
+    static let confirmQuitKey = "confirmBeforeQuitting"
+
+    static var confirmBeforeQuitting: Bool {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: confirmQuitKey) != nil else { return true }
+        return defaults.bool(forKey: confirmQuitKey)
+    }
+
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         DebugLog.tabs("AppDelegate: applicationDidFinishLaunching")
         MainActor.assumeIsolated {
@@ -513,12 +537,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    /// Confirm quit if there's active queue work (AC1.4). For now, allow
-    /// termination since the queue is durable (items persist to SQLite and
-    /// resume on relaunch). A full quit-confirmation dialog is a future
-    /// refinement.
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        .terminateNow
+    /// Intercept termination to show a "confirm to quit" dialog (toggleable in
+    /// Settings → General). Catches all quit paths: ⌘Q, Apple menu, Dock, and
+    /// system shutdown. Returns `.terminateLater` so the system pauses while we
+    /// present an `NSAlert`, then we reply with the user's choice.
+    ///
+    /// Even when `confirmBeforeQuitting` is **off**, the dialog appears if an
+    /// extraction, ingestion, agent, or chat operation is in flight — silent
+    /// termination during active work could lose data.
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        // Flush pending saves regardless — don't lose buffered edits on quit.
+        flushPendingSaves?()
+
+        let activeOp = activeOperationDescription?()
+
+        // If nothing is running AND the user has disabled confirm-before-quit,
+        // quit now without a dialog.
+        guard activeOp != nil || Self.confirmBeforeQuitting else {
+            return .terminateNow
+        }
+
+        // Either the user wants confirmation, or there's active work we
+        // shouldn't interrupt silently — show the dialog in both cases.
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+
+        if let description = activeOp {
+            alert.messageText = "Quit Self Driving Wiki?"
+            alert.informativeText =
+                "\(description) is still running and will be cancelled. "
+                + "Are you sure you want to quit?"
+        } else {
+            alert.messageText = "Quit Self Driving Wiki?"
+            alert.informativeText = "Are you sure you want to quit?"
+        }
+
+        let quitButton = alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+        quitButton.hasDestructiveAction = true
+        quitButton.keyEquivalent = "\r"    // Return → default (Quit)
+        // Make Cancel the escape-equivalent so ⎋ dismisses without quitting.
+        alert.buttons.last?.keyEquivalent = "\u{1b}"
+
+        // Present as a sheet on the current key window when possible; fall back
+        // to a modal dialog when no window is available (e.g. all windows
+        // closed but app still active in accessory mode).
+        if let window = sender.windows.first(
+            where: { $0.isVisible && $0.canBecomeKey }
+        ) {
+            alert.beginSheetModal(for: window) { response in
+                NSApp.reply(
+                    toApplicationShouldTerminate:
+                        response == .alertFirstButtonReturn
+                )
+            }
+        } else {
+            let response = alert.runModal()
+            NSApp.reply(
+                toApplicationShouldTerminate:
+                    response == .alertFirstButtonReturn
+            )
+        }
+
+        // We've deferred the decision to the alert callback.
+        return .terminateLater
     }
 }
 
