@@ -138,8 +138,7 @@ extension AgentEvent {
         switch self {
         case .systemInit, .toolUse, .toolResult, .subagent, .raw, .messageStop, .assistantTextDelta, .thinkingDelta:
             true
-        case .userText, .assistantText, .result, .turnFailed:
-        case .userText, .assistantText, .result, .thinking:
+        case .userText, .assistantText, .result, .thinking, .turnFailed:
             false
         }
     }

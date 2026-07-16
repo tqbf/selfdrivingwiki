@@ -761,6 +761,42 @@ public final class QueueStore: @unchecked Sendable {
         }
     }
 
+    // MARK: - Public API: Reorder
+
+    /// Update the `ordering_key` for an item. Used by the engine's
+    /// `reorderItem` to move a queued item to a new position in its queue.
+    /// Does not change state — the item must already be `.queued`.
+    /// Returns the updated item, or `nil` if the item was not found.
+    @discardableResult
+    public func updateOrderingKey(id: QueueItem.ID, key: Int64) throws -> QueueItem? {
+        lock.lock(); defer { lock.unlock() }
+
+        try withTransaction {
+            let sql = """
+            UPDATE queue_items SET ordering_key = ?1 WHERE id = ?2;
+            """
+            let stmt = try statement(sql)
+            defer { stmt.reset() }
+            try stmt.bind(key, at: 1)
+            try stmt.bind(id, at: 2)
+            _ = try stmt.step()
+        }
+        return try getItem(id)
+    }
+
+    /// The current maximum ordering key for a queue. Used by the engine
+    /// when moving an item to the end of a queue.
+    public func maxOrderingKey(for queue: QueueKind) throws -> Int64 {
+        lock.lock(); defer { lock.unlock() }
+
+        let sql = "SELECT COALESCE(MAX(ordering_key), 0) FROM queue_items WHERE queue = ?1;"
+        let stmt = try statement(sql)
+        defer { stmt.reset() }
+        try stmt.bind(queue.rawValue, at: 1)
+        _ = try stmt.step()
+        return stmt.int(at: 0)
+    }
+
     // MARK: - Public API: Crash recovery
 
     /// Reset all items found in `.running` state back to `.queued` (their

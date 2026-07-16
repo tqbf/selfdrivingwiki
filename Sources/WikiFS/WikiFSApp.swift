@@ -56,6 +56,9 @@ struct WikiFSApp: App {
     @State private var showingLaunchLocationWarning: Bool
     @State private var fileProviderSetupWarning: FileProviderSetupWarning?
     @State private var showingFileProviderSetupWarning = false
+    /// Drives the Settings TabView selection so the activity windows can open
+    /// Settings on the relevant tab (gear button → extraction/agents config).
+    @AppStorage("settings.selectedTab") private var settingsSelectedTabRaw = SettingsTab.about.rawValue
     /// Built lazily after `bootstrap` (it needs the registered wikis) — see the
     /// `.task` below. The change bridge observes `wikictl`'s Darwin notifications.
     @State private var changeBridge: WikiChangeBridge?
@@ -388,20 +391,41 @@ struct WikiFSApp: App {
         .windowResizability(.contentMinSize)
 
         Settings {
-            TabView {
+            TabView(selection: settingsSelectedTab) {
                 AboutView()
+                    .tag(SettingsTab.about)
                     .tabItem { Label("About", systemImage: "info.circle") }
                 ZoteroSettingsView(containerDirectory: containerDirectory)
+                    .tag(SettingsTab.zotero)
                     .tabItem { Label("Zotero", systemImage: "books.vertical") }
                 ExtractionSettingsView(containerDirectory: containerDirectory, launcher: settingsLauncher)
+                    .tag(SettingsTab.extraction)
                     .tabItem { Label("Extraction", systemImage: "doc.viewfinder") }
                 AgentsSettingsView(containerDirectory: containerDirectory)
+                    .tag(SettingsTab.agents)
                     .tabItem { Label("Agents", systemImage: "cpu") }
             }
             .appEnvironment(tracker: activityTracker)
             .frame(minWidth: 560, minHeight: 520)
         }
         .windowResizability(.contentMinSize)
+    }
+
+    /// Settings tab tags used by the TabView selection and `@AppStorage`.
+    enum SettingsTab: String {
+        case about
+        case zotero
+        case extraction
+        case agents
+    }
+
+    /// Binding that bridges `@AppStorage(String)` → `SettingsTab` for the
+    /// Settings `TabView(selection:)`.
+    private var settingsSelectedTab: Binding<SettingsTab> {
+        Binding(
+            get: { SettingsTab(rawValue: settingsSelectedTabRaw) ?? .about },
+            set: { settingsSelectedTabRaw = $0.rawValue }
+        )
     }
 }
 

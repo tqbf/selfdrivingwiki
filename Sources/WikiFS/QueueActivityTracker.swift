@@ -333,6 +333,10 @@ final class QueueActivityTracker {
         case .runStateChanged:
             // Not relevant to activity tracking.
             break
+        case .reordered:
+            // Ordering changed but state is unchanged; the next snapshot
+            // refresh will pick up the new order. No tracker update needed.
+            break
         }
     }
 

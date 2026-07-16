@@ -61,6 +61,9 @@ struct ActivityWindowView: View {
             ToolbarItem(placement: .primaryAction) {
                 queueControlMenu
             }
+            ToolbarItem(placement: .primaryAction) {
+                configButton
+            }
         }
         .onAppear { viewModel.attach(engine: queueEngine) }
         .onDisappear { viewModel.detach() }
@@ -90,6 +93,44 @@ struct ActivityWindowView: View {
         }
     }
 
+    // MARK: - Reorder
+
+    /// Handle a drag-to-reorder in the Active section. Translates the
+    /// SwiftUI `onMove` indices into a `queueEngine.reorderItem` call.
+    /// Only `.queued` items can be moved — `.running` items are silently
+    /// ignored (the engine's `reorderItem` guard rejects them).
+    private func handleMove(
+        in active: [QueueItem],
+        from sources: IndexSet,
+        to destination: Int
+    ) {
+        guard let movedIndex = sources.first,
+              movedIndex < active.count else { return }
+        let movedItem = active[movedIndex]
+
+        // Compute the item that will follow the moved item after the drop.
+        // SwiftUI's `destination` is the target index in the list *after*
+        // the source is removed, so we adjust accordingly.
+        let adjustedDest: Int
+        if movedIndex < destination {
+            adjustedDest = destination - 1
+        } else {
+            adjustedDest = destination
+        }
+
+        let beforeItemID: QueueItem.ID?
+        if adjustedDest >= active.count {
+            // Moved to end — no item before it.
+            beforeItemID = nil
+        } else {
+            beforeItemID = active[adjustedDest].id
+        }
+
+        Task {
+            await queueEngine.reorderItem(id: movedItem.id, beforeItemID: beforeItemID)
+        }
+    }
+
     // MARK: - Sidebar
 
     @ViewBuilder
@@ -106,6 +147,9 @@ struct ActivityWindowView: View {
                         ForEach(active) { item in
                             itemRow(item)
                                 .tag(item.id)
+                        }
+                        .onMove { sources, destination in
+                            handleMove(in: active, from: sources, to: destination)
                         }
                     }
                 }
@@ -271,6 +315,31 @@ struct ActivityWindowView: View {
         .help(state == .paused
             ? "\(queueTitle) queue is paused"
             : "\(queueTitle) queue controls")
+    }
+
+    // MARK: - Config button
+
+    /// Gear icon that opens Settings on the tab relevant to this queue's
+    /// activity — Extraction settings for the extraction queue, Agents
+    /// settings for the ingestion queue. Uses `@AppStorage` to select the
+    /// tab and the AppKit selector to open the Settings window (the activity
+    /// windows are standalone `NSWindow`s, so `@Environment(\.openSettings)`
+    /// isn't available here).
+    private var configButton: some View {
+        Button {
+            UserDefaults.standard.set(
+                queue == .extraction
+                    ? WikiFSApp.SettingsTab.extraction.rawValue
+                    : WikiFSApp.SettingsTab.agents.rawValue,
+                forKey: "settings.selectedTab"
+            )
+            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        } label: {
+            Image(systemName: "gearshape")
+        }
+        .help(queue == .extraction
+            ? "Extraction Settings"
+            : "Agent Settings")
     }
 
     // MARK: - Detail pane

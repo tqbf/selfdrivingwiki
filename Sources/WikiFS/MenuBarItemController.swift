@@ -352,6 +352,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
                 updateIcon()
             }
             return
+        case .reordered:
+            // A queued item was moved; refresh the snapshot for menu
+            // accuracy. No hint popover (this is a reorder, not an enqueue).
+            Task {
+                lastSnapshot = await queueEngine.snapshot()
+            }
+            return
         default:
             break
         }

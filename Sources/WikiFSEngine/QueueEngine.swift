@@ -218,6 +218,53 @@ public actor QueueEngine {
         await dispatchScan()
     }
 
+    // MARK: - Reorder
+
+    /// Move a queued item to a new position in its queue. The item is placed
+    /// **before** `beforeItemID` (i.e., it gets an ordering key lower than
+    /// that item). If `beforeItemID` is `nil`, the item is moved to the end.
+    ///
+    /// Only `.queued` items can be reordered — `.running` items are actively
+    /// being processed and must stay in place. Items in other queues are
+    /// unaffected (ordering keys are per-queue-kind).
+    ///
+    /// The new key is computed as the midpoint between the neighbor keys.
+    /// With the default 1000-gap scheme, there is always room. If the gap
+    /// shrinks to zero (extremely unlikely), the item is placed at
+    /// `max + 1000` as a fallback.
+    public func reorderItem(id: QueueItem.ID, beforeItemID: QueueItem.ID?) async {
+        guard let item = try? store.getItem(id), item.state == .queued else { return }
+
+        var key: Int64
+        if let beforeID = beforeItemID,
+           let beforeItem = try? store.getItem(beforeID) {
+            // Move before `beforeItem`: new key is between the predecessor
+            // and `beforeItem`.
+            let active = (try? store.loadActive(for: item.queue)) ?? []
+            let beforeKey = beforeItem.orderingKey
+            let predecessorKey = active
+                .map(\.orderingKey)
+                .filter { $0 < beforeKey }
+                .max() ?? 0
+            let midpoint = predecessorKey + (beforeKey - predecessorKey) / 2
+            if midpoint > predecessorKey && midpoint < beforeKey {
+                key = midpoint
+            } else {
+                // Gap too small — fall back to end of queue.
+                let maxKey = (try? store.maxOrderingKey(for: item.queue)) ?? 0
+                key = max(maxKey, beforeKey) + 1000
+            }
+        } else {
+            // Move to end.
+            key = ((try? store.maxOrderingKey(for: item.queue)) ?? 0) + 1000
+        }
+
+        _ = try? store.updateOrderingKey(id: id, key: key)
+        if let updated = try? store.getItem(id) {
+            emit(.reordered(updated))
+        }
+    }
+
     // MARK: - Has active work
 
     /// Whether the engine has any queued or running items for the given wiki.

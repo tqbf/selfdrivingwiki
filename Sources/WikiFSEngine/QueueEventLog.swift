@@ -192,6 +192,21 @@ struct QueueLogRecord: Codable, Sendable {
             self.startedAt = nil
             self.finishedAt = nil
             self.durationMs = nil
+
+        case .reordered(let i):
+            self.eventType = "reordered"
+            self.itemID = i.id
+            self.queue = i.queue.rawValue
+            self.wikiID = i.wikiID
+            self.providerID = i.providerID
+            self.itemState = i.state.rawValue
+            self.runState = nil
+            self.orderingKey = i.orderingKey
+            self.attempt = i.attempt
+            self.error = nil
+            self.startedAt = i.startedAt
+            self.finishedAt = i.finishedAt
+            self.durationMs = nil
         }
 
         self.runLogPath = nil

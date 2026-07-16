@@ -88,12 +88,15 @@ public enum QueueEvent: Sendable {
     case cancelled(QueueItem)
     /// A queue was paused or resumed.
     case runStateChanged(queue: QueueKind, state: QueueRunState)
+    /// A queued item was reordered (dragged to a new position). Carries the
+    /// updated item with its new `orderingKey`.
+    case reordered(QueueItem)
 
     /// The item this event pertains to (if any).
     public var item: QueueItem? {
         switch self {
         case .enqueued(let i), .started(let i), .completed(let i),
-             .cancelled(let i):
+             .cancelled(let i), .reordered(let i):
             return i
         case .failed(let i, _):
             return i

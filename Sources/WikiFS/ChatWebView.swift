@@ -434,12 +434,12 @@ struct ChatWebView: NSViewRepresentable {
                 return """
                 <div class="row row-result\(isError ? " is-error" : "")"><div class="row-label">\(label)</div>\(bodyHTML)</div>
                 """
-            case .messageStop, .assistantTextDelta:
-                return ""  // internal — not rendered (deltas are merged into `.assistantText` upstream)
-            case .turnFailed(let reason):
-                return turnFailedBannerHTML(reason: reason)
             case .messageStop, .assistantTextDelta, .thinkingDelta:
                 return ""  // internal — not rendered (deltas are merged upstream)
+            case .thinking(let text):
+                return thinkingRowHTML(text: text, context: context, isFinal: isFinal)
+            case .turnFailed(let reason):
+                return turnFailedBannerHTML(reason: reason)
             case .raw(let line):
                 return "<pre class=\"row row-raw\">\(escape(line))</pre>"
             }
@@ -526,6 +526,9 @@ struct ChatWebView: NSViewRepresentable {
             <span class="row-turn-failed-icon">⚠︎</span>\
             <div class="row-turn-failed-body">\
             <strong>\(escape(reason.label))</strong> \(escape(reason.description))</div></div>
+            """
+        }
+
         /// An activity-feed tool row: a collapsible `<details>` box showing the
         /// tool name + summary in the header (collapsed), and the full text in
         /// an expandable body. Used by both `.toolUse` and `.toolResult` in

@@ -1865,6 +1865,8 @@ public final class AgentLauncher {
             case .systemInit: k = "systemInit"
             case .messageStop: k = "messageStop"
             case .turnFailed: k = "turnFailed"
+            case .thinking: k = "thinking"
+            case .thinkingDelta: k = "thinkingDelta"
             case .raw: k = "raw"
             }
             kinds[k, default: 0] += 1
