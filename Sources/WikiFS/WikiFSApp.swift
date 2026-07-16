@@ -509,6 +509,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DebugLog.tabs("AppDelegate: applicationDidFinishLaunching")
         MainActor.assumeIsolated {
             bootstrap?()
+            removeRedundantAppMenuItems()
+        }
+    }
+
+    /// Remove the auto-generated "About" and "Settings…" items from the
+    /// "Self Driving Wiki" app menu. Both are surfaced under the menu-bar
+    /// icon instead (`MenuBarItemController.buildMenu`) — the status item is
+    /// reachable even in accessory mode, when the app has no menu bar. The
+    /// Settings scene itself is untouched, so `showSettingsWindow:` (gear
+    /// buttons, "Open Settings…") and the window keep working; the About
+    /// panel opens from the icon via `orderFrontStandardAboutPanel:`.
+    @MainActor
+    private func removeRedundantAppMenuItems() {
+        let settingsAction = Selector(("showSettingsWindow:"))
+        let aboutAction = #selector(NSApplication.orderFrontStandardAboutPanel(_:))
+        guard let mainMenu = NSApp.mainMenu else { return }
+        for topLevel in mainMenu.items {
+            guard let submenu = topLevel.submenu else { continue }
+            // Iterate a snapshot (`submenu.items` is a fresh array), so
+            // removing while iterating is safe. `action` is optional, so
+            // compare against the selectors directly (optional == non-optional
+            // lifts via Equatable) rather than via a Set<Selector>.
+            submenu.items
+                .filter {
+                    $0.action == settingsAction
+                        || $0.action == aboutAction
+                        || $0.title.hasPrefix("Settings")
+                        || $0.title.hasPrefix("About")
+                }
+                .forEach { submenu.removeItem($0) }
+            tidySeparators(in: submenu)
+        }
+    }
+
+    /// Collapse leading separators and consecutive duplicate separators that
+    /// removing items leaves behind — NSMenu doesn't auto-merge them, so an
+    /// un-tidied menu could start with a blank divider.
+    @MainActor
+    private func tidySeparators(in menu: NSMenu) {
+        while menu.items.first?.isSeparatorItem == true {
+            menu.removeItem(at: 0)
+        }
+        var index = 0
+        while index < menu.items.count {
+            let nextIsSeparator = index + 1 < menu.items.count
+                && menu.items[index + 1].isSeparatorItem
+            if menu.items[index].isSeparatorItem && nextIsSeparator {
+                menu.removeItem(at: index)
+            } else {
+                index += 1
+            }
         }
     }
 
