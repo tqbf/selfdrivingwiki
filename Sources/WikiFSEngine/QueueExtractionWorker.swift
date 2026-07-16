@@ -55,6 +55,7 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
         // can route: local → "local-pdf2md", remote → backend-specific.
         switch resolved.backend {
         case .localPdf2md: return "local-pdf2md"
+        case .acp: return "remote-acp"
         case .anthropic: return "remote-anthropic"
         case .gemini: return "remote-gemini"
         case .doclingServe: return "remote-docling"

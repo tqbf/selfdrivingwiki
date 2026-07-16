@@ -891,6 +891,8 @@ struct SourceDetailView: View {
         switch backend {
         case .localPdf2md:
             return extractionCoordinator.current()
+        case .acp:
+            return extractionCoordinator.current()
         case .anthropic:
             let base = config.anthropicBaseURLOverride.flatMap(URL.init(string:))
                 ?? URL(string: ExtractionConfig.defaultAnthropicBaseURL)!
@@ -917,7 +919,7 @@ struct SourceDetailView: View {
         switch backend {
         case .anthropic: return config.anthropicModel
         case .gemini: return config.geminiModel
-        case .localPdf2md, .doclingServe: return nil
+        case .acp, .localPdf2md, .doclingServe: return nil
         }
     }
 

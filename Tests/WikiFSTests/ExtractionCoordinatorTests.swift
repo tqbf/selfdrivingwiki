@@ -148,4 +148,33 @@ struct ExtractionCoordinatorTests {
         #expect(coord.config.backend == .localPdf2md)
         #expect(coord.current() is LocalPdf2MarkdownExtractor)
     }
+
+    // MARK: - ACP backend
+
+    @Test func acpBackendWithNoProviderFallsBackToLocal() throws {
+        // When .acp is configured but no ACP provider can be resolved (no
+        // command on PATH), the coordinator falls back to the local extractor
+        // rather than crashing. The resolveCommand closure returns nil.
+        let dir = tempDirectory()
+        var cfg = ExtractionConfig()
+        cfg.backend = .acp
+        cfg.acpProviderId = "claude-acp"
+        try cfg.save(to: dir)
+
+        // Seed agent-providers.json so the provider exists + is enabled.
+        let providersConfig = AgentProvidersConfig(providers: [
+            AgentProvider(id: "claude-acp", label: "Claude", command: ["/nonexistent/claude"], enabled: true, isDefault: true)
+        ])
+        try providersConfig.save(to: dir)
+
+        let coord = ExtractionCoordinator(
+            containerDirectory: dir,
+            credentialStore: InMemoryExtractionCredentialStore(),
+            acpCredentialStore: InMemoryACPCredentialStore(),
+            fetcher: FakeHTTPFetcher(body: "x"),
+            localExtractorFactory: { LocalPdf2MarkdownExtractor() })
+        #expect(coord.config.backend == .acp)
+        // Falls back to local because the command can't be resolved on PATH.
+        #expect(coord.current() is LocalPdf2MarkdownExtractor)
+    }
 }

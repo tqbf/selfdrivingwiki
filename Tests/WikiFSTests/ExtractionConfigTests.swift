@@ -91,8 +91,42 @@ struct ExtractionConfigTests {
             #expect(!backend.helpText.isEmpty)
         }
         #expect(ExtractionBackend.localPdf2md.displayName == "Local pdf2md")
+        #expect(ExtractionBackend.acp.displayName == "ACP Provider")
         #expect(ExtractionBackend.anthropic.displayName == "Claude (Anthropic API)")
         #expect(ExtractionBackend.gemini.displayName == "Gemini (Google AI)")
         #expect(ExtractionBackend.doclingServe.displayName == "Docling Serve")
+    }
+
+    @Test func acpBackendRoundTripsAgentName() {
+        #expect(ExtractionBackend.acp.agentName == "acp-extraction")
+        #expect(ExtractionBackend.from(agentName: "acp-extraction") == .acp)
+    }
+
+    @Test func acpProviderIdRoundTrips() throws {
+        let dir = tempDirectory()
+        var config = ExtractionConfig()
+        config.backend = .acp
+        config.acpProviderId = "claude-acp"
+        try config.save(to: dir)
+
+        let loaded = ExtractionConfig.load(from: dir)
+        #expect(loaded.backend == .acp)
+        #expect(loaded.acpProviderId == "claude-acp")
+    }
+
+    @Test func acpProviderIdDecodesAsNilWhenAbsent() throws {
+        // A file written before the .acp backend existed (no acpProviderId key)
+        // decodes with nil — forward-compatible.
+        let json = Data(#"{"backend":"anthropic"}"#.utf8)
+        let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
+        #expect(config.acpProviderId == nil)
+    }
+
+    @Test func acpProviderIdRoundTripsNil() throws {
+        let dir = tempDirectory()
+        let config = ExtractionConfig(backend: .acp, acpProviderId: nil)
+        try config.save(to: dir)
+        let loaded = ExtractionConfig.load(from: dir)
+        #expect(loaded.acpProviderId == nil)
     }
 }
