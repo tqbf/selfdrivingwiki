@@ -53,6 +53,39 @@ it:
 - Root ("Bookmarks") is available for top-level items.
 - Header shows count: *"Add 3 Pages to Bookmarks."*
 
+### Use case: ask the agent to build an outline, then open it in Obsidian
+
+You don't have to file bookmarks by hand. Because the agent can create and
+organize bookmarks the same way you can, you can hand it a curation task in
+Chat:
+
+> *"Create a bookmark folder called **Reading List** with subfolders for each
+> author, and file every source and its summary page under the right author.
+> Add a **Key Chats** folder with the conversations where we worked out the
+> methodology."*
+
+The agent builds the folder tree and files pages, sources, and chats into it.
+Now the payoff: the **File Provider mount** (the optional read-only folder the
+wiki exposes in Finder) projects that same bookmark tree to disk under a
+top-level `bookmarks/` folder —
+
+- Bookmark **folders** become real folders.
+- **Page** and **chat** bookmarks become `.md` files (chats render as a
+  transcript).
+- **Source** bookmarks appear as the original file.
+- `[[Wiki links]]` inside the pages are rewritten to **relative paths**, so they
+  resolve *within* the exported folder layout.
+
+That last point is what makes the tree a working Obsidian vault, not a flat
+dump. Point Obsidian (or any Markdown editor) at the wiki's mount folder — or
+just the `bookmarks/` subfolder — and you get the exact outline the agent built,
+with clickable links between pages. The agent organizes; you read the result in
+your editor of choice.
+
+> The mount is **read-only** — edits happen in the app or through the agent, and
+> the folder re-projects automatically. See
+> [multiple wikis](#multiple-wikis) for enabling a per-wiki mount.
+
 ---
 
 ## Search
