@@ -838,7 +838,7 @@ struct ChatWebView: NSViewRepresentable {
           .row-turn-failed-body strong { font-weight: 600; color: #ff9f0a; }
           .chat-row { display: flex; margin: 0 0 14px; }
           .chat-user { justify-content: flex-end; }
-          .chat-assistant { justify-content: flex-start; }
+          .chat-assistant { justify-content: flex-start; flex-direction: column; }
           .chat-user .bubble { max-width: min(760px, 86%); }
           .chat-user .bubble {
             background: var(--code-bg); border-radius: 14px;
@@ -850,7 +850,7 @@ struct ChatWebView: NSViewRepresentable {
              attached to it. */
           .turn-footer {
             display: flex; align-items: center; gap: 4px;
-            margin-top: 4px; min-height: 20px;
+            margin-top: 4px; margin-left: 6px; min-height: 20px;
           }
           .copy-btn {
             display: flex; align-items: center; justify-content: center;
