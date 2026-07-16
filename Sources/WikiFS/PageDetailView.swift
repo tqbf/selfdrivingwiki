@@ -182,6 +182,19 @@ struct PageDetailView: View {
             guard findModel.currentMatchIndex > 0 else { return }
             findVersion &+= 1
         }
+        .alert(
+            "Title Already Exists",
+            isPresented: Binding(
+                get: { store.renameConflictingTitle != nil },
+                set: { if !$0 { store.clearRenameConflict() } }
+            )
+        ) {
+            Button("OK", role: .cancel) { store.clearRenameConflict() }
+        } message: {
+            if let title = store.renameConflictingTitle {
+                Text("A page with the title “\(title)” already exists. Please choose a different name.")
+            }
+        }
     }
 
     // MARK: - Content + Outline

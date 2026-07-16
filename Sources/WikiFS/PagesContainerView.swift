@@ -45,6 +45,19 @@ struct PagesContainerView: View {
             Button("Cancel", role: .cancel) { renameTarget = nil }
             Button("Rename") { commitRename() }
         }
+        .alert(
+            "Title Already Exists",
+            isPresented: Binding(
+                get: { store.renameConflictingTitle != nil },
+                set: { if !$0 { store.clearRenameConflict() } }
+            )
+        ) {
+            Button("OK", role: .cancel) { store.clearRenameConflict() }
+        } message: {
+            if let title = store.renameConflictingTitle {
+                Text("A page with the title “\(title)” already exists. Please choose a different name.")
+            }
+        }
         .sheet(item: $addToBookmarksContext) { ctx in
             BookmarkTargetPickerSheet(
                 store: store,
