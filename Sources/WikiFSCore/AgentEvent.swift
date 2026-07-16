@@ -208,6 +208,14 @@ public enum AgentEvent: Equatable, Sendable, Codable {
         }
     }
 
+    /// Tool-name set for read-only (no wiki mutation) tools. Their one-line
+    /// `.toolUse` summaries are hidden from the transcript by
+    /// `[AgentEvent].transcriptVisible` — only mutation-relevant calls
+    /// (Edit, Write, Agent/Task) remain visible in the feed. Error results
+    /// still surface (they're rare and signal problems); full raw detail
+    /// for every call lives under "Show internals".
+    public static let readOnlyToolNames: Set<String> = ["Bash", "Read", "Glob", "Grep"]
+
     /// Fold a stream of raw events into display rows: consecutive
     /// `.assistantTextDelta` chunks accumulate into ONE `.assistantText` row,
     /// and the final `.assistantText` for a streamed block replaces the

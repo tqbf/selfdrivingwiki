@@ -95,7 +95,14 @@ extension [AgentEvent] {
             switch event {
             case .result(_, let text):
                 return !hasAssistantText(matching: text)
-            case .toolUse, .thinking:
+            case .toolUse(let name, _):
+                // Read-only tool calls (Bash, Read, Glob, Grep) are always
+                // hidden from the transcript — their one-line summaries are
+                // noise. Mutation-relevant calls (Edit, Write, Agent) stay
+                // visible. Full raw detail for every call lives under
+                // "Show internals".
+                return !AgentEvent.readOnlyToolNames.contains(name)
+            case .thinking:
                 // A concise one-line progress summary per tool call (issue #173):
                 // lets the user see the agent reading/searching/editing without
                 // opting into the full internals view. Full raw detail still lives
