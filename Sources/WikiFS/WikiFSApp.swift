@@ -62,6 +62,11 @@ struct WikiFSApp: App {
     /// Built lazily after `bootstrap` (it needs the registered wikis) — see the
     /// `.task` below. The change bridge observes `wikictl`'s Darwin notifications.
     @State private var changeBridge: WikiChangeBridge?
+    /// Bridges SwiftUI's `@Environment(\.openWindow)` to AppKit (menu bar,
+    /// app delegate) so wiki windows can be reopened from the status item
+    /// when no windows are visible (accessory mode). Wired by
+    /// `WindowBridgeProbe`, a hidden view inside the main `WindowGroup`.
+    @State private var openWindowBridge = OpenWindowBridge()
 
     // NOTE: There must be exactly ONE @NSApplicationDelegateAdaptor. Registering
     // two adaptors with different types (e.g. a separate QuitConfirmationDelegate)
@@ -273,7 +278,9 @@ struct WikiFSApp: App {
         let statusController = MenuBarItemController(
             queueEngine: queueEngine,
             activityTracker: activityTracker,
-            sessionManager: sessionManager)
+            sessionManager: sessionManager,
+            registry: registry,
+            openWindowBridge: openWindowBridge)
         statusController.start()
         appDelegate.menuBarItemController = statusController
 
@@ -330,6 +337,13 @@ struct WikiFSApp: App {
             }
             return nil
         }
+        appDelegate.reopenMostRecentWiki = { [registry, openWindowBridge] in
+            if let wikiID = registry.activeWikiID ?? registry.wikis.first?.id {
+                openWindowBridge.openWiki?(wikiID)
+            } else {
+                openWindowBridge.openMain?()
+            }
+        }
     }
 
     var body: some Scene {
@@ -337,13 +351,18 @@ struct WikiFSApp: App {
         // wiki via the `registry.activeWikiID` → `wikiID` adoption flow in
         // `RootScene`. This avoids the "empty window flash" that
         // `WindowGroup(for:)` would show before `.task` runs.
-        WindowGroup {
+        //
+        // `id: "main"` lets `openWindow(id: "main")` reopen this window from
+        // the status bar menu / Dock click when all windows are closed
+        // (accessory mode) and there are no wikis to open via `openWindow(value:)`.
+        WindowGroup(id: "main") {
             RootScene(
                 wikiID: nil,
                 registry: registry,
                 sessionManager: sessionManager,
                 fileProvider: fileProvider
             )
+            .background(WindowBridgeProbe(bridge: openWindowBridge))
             .appEnvironment(tracker: activityTracker)
             .alert(
                 "Install Self Driving Wiki in Applications",
@@ -405,6 +424,7 @@ struct WikiFSApp: App {
                 sessionManager: sessionManager,
                 fileProvider: fileProvider
             )
+            .background(WindowBridgeProbe(bridge: openWindowBridge))
             .appEnvironment(tracker: activityTracker)
             .onAppear {
                 DebugLog.tabs("RootScene wiki-window onAppear: wikiID=\(wikiID ?? "nil")")
@@ -504,6 +524,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The quit dialog message is tailored based on what's running.
     var activeOperationDescription: (() -> String?)?
 
+    /// Called from `applicationShouldHandleReopen` (Dock click) to restore a
+    /// wiki window when the user reopens the app with no visible windows.
+    /// Opens the MRU wiki's window, or the main window (empty-state) if no
+    /// wikis exist. Wired in `startStatusItem()` where both `registry` and
+    /// `openWindowBridge` are in scope.
+    var reopenMostRecentWiki: (() -> Void)?
+
     /// `@AppStorage` key for the "ask before quitting" toggle (Settings →
     /// General). Default is "ask" (true) when unset — matching the feature's
     /// purpose. Referenced by `GeneralSettingsView`.
@@ -591,10 +618,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// When the user reopens the app (Dock click, status item), restore
-    /// normal dock presence (AC1.3).
+    /// normal dock presence (AC1.3) and open a wiki window if none are
+    /// visible — so the user isn't stranded in accessory mode with no way
+    /// back to their content.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag {
-            NSApp.setActivationPolicy(.regular)
+        MainActor.assumeIsolated {
+            if !flag {
+                NSApp.setActivationPolicy(.regular)
+                reopenMostRecentWiki?()
+            }
         }
         return true
     }

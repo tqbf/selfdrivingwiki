@@ -29,6 +29,12 @@ public final class AgentLauncher {
     /// visible" via `@testable import WikiFS`, without requiring a real spawned
     /// process.
     public var events: [AgentEvent] = []
+    /// Wall-clock timestamps parallel to `events` — when each row was first
+    /// appended (for streamed rows, the first delta's arrival; replaced rows
+    /// update to the finalization time). Used to render the "Worked for Xs"
+    /// footer under assistant responses (issue #285). `nil`-safe: callers that
+    /// don't need timing ignore this array.
+    public private(set) var eventTimestamps: [Date] = []
 
     /// Per-event callback set by the queue ingestion provider before calling
     /// `launcher.run(...)`. Fires once per typed agent event that is appended
@@ -1505,6 +1511,7 @@ public final class AgentLauncher {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !preDisplay.isEmpty {
             events.append(.userText(preDisplay))
+            eventTimestamps.append(Date())
             firstMessagePreDisplayed = true
         }
         // NOTE: do NOT `setGenerating(true)` here. The first turn's transition is
@@ -1664,6 +1671,7 @@ public final class AgentLauncher {
                 self.firstMessagePreDisplayed = false
             } else {
                 self.events.append(.userText(visible))
+                self.eventTimestamps.append(Date())
             }
             // The fresh-chat path seeds this first user message at chat-creation
             // time (WikiStoreModel.startChat). Mark it flushed so the next
@@ -1774,6 +1782,7 @@ public final class AgentLauncher {
             stopAgent()
         }
         events = []
+        eventTimestamps = []
         isStreamingAssistantRow = false
         isStreamingThinkingRow = false
         rawTranscript = ""
@@ -1782,7 +1791,6 @@ public final class AgentLauncher {
         preflightError = nil
         transcriptSink = nil
         persistedEventCount = 0
-        // D2: clear the live chat association. The retarget back to the draft
         // state (.newChat draft → .chat(id)) is handled by the caller (ChatView)
         // via store.retargetTab, since the launcher does not
         // know which tab it lives in.
@@ -1893,12 +1901,15 @@ public final class AgentLauncher {
     /// behavior). This is what lets `ChatWebView` patch a live row
     /// instead of only ever appending (issue #121).
     private func mergeOrAppend(_ event: AgentEvent) {
+        let now = Date()
         switch event {
         case .assistantTextDelta(let delta):
             if isStreamingAssistantRow, case .assistantText(let existing) = events.last {
                 events[events.count - 1] = .assistantText(existing + delta)
+                // Keep the original timestamp — the row's "first seen" time.
             } else {
                 events.append(.assistantText(delta))
+                eventTimestamps.append(now)
                 isStreamingAssistantRow = true
             }
 
@@ -1910,8 +1921,11 @@ public final class AgentLauncher {
             // it always has.
             if isStreamingAssistantRow, case .assistantText = events.last {
                 events[events.count - 1] = event
+                // Update to the finalization time — the turn is complete.
+                eventTimestamps[eventTimestamps.count - 1] = now
             } else {
                 events.append(event)
+                eventTimestamps.append(now)
             }
             isStreamingAssistantRow = false
 
@@ -1922,6 +1936,7 @@ public final class AgentLauncher {
                 events[events.count - 1] = .thinking(existing + delta)
             } else {
                 events.append(.thinking(delta))
+                eventTimestamps.append(now)
                 isStreamingThinkingRow = true
             }
 
@@ -1930,13 +1945,16 @@ public final class AgentLauncher {
             // replace with the authoritative full text. Mirrors `.assistantText`.
             if isStreamingThinkingRow, case .thinking = events.last {
                 events[events.count - 1] = event
+                eventTimestamps[eventTimestamps.count - 1] = now
             } else {
                 events.append(event)
+                eventTimestamps.append(now)
             }
             isStreamingThinkingRow = false
 
         default:
             events.append(event)
+            eventTimestamps.append(now)
             isStreamingAssistantRow = false
             isStreamingThinkingRow = false
         }
@@ -2043,6 +2061,7 @@ public final class AgentLauncher {
         watchdogTask = nil
         watchdogHasEscalated = false
         events = []
+        eventTimestamps = []
         isStreamingAssistantRow = false
         isStreamingThinkingRow = false
         rawTranscript = ""
@@ -2052,7 +2071,6 @@ public final class AgentLauncher {
         setGenerating(false)
         runningKind = nil
         logFileURL = nil
-        runStartedAt = nil
         lastActivityAt = nil
         currentProcessID = nil
         sessionHandle = nil
