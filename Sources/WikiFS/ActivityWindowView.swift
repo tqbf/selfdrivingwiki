@@ -29,11 +29,14 @@ struct ActivityWindowView: View {
     let queueEngine: QueueEngine
     @Bindable var activityTracker: QueueActivityTracker
     weak var sessionManager: SessionManager?
+    let containerDirectory: URL
+    let settingsLauncher: AgentLauncher
 
     @State private var viewModel = QueueViewModel()
     @State private var selectedItemID: QueueItem.ID?
     @State private var loadedEvents: [AgentEvent] = []
     @State private var didAutoSelect = false
+    @State private var showSettingsSheet = false
 
     private var queueTitle: String {
         queue == .extraction ? "Extraction Queue" : "Agent Queue"
@@ -67,6 +70,9 @@ struct ActivityWindowView: View {
         }
         .onAppear { viewModel.attach(engine: queueEngine) }
         .onDisappear { viewModel.detach() }
+        .sheet(isPresented: $showSettingsSheet) {
+            queueSettingsSheet
+        }
         // Auto-select the most interesting item once, when the first snapshot
         // lands — a window opened from "1 running" should show that run.
         .onChange(of: activeItems.map(\.id)) { _, _ in
@@ -319,27 +325,59 @@ struct ActivityWindowView: View {
 
     // MARK: - Config button
 
-    /// Gear icon that opens Settings on the tab relevant to this queue's
-    /// activity — Extraction settings for the extraction queue, Agents
-    /// settings for the ingestion queue. Uses `@AppStorage` to select the
-    /// tab and the AppKit selector to open the Settings window (the activity
-    /// windows are standalone `NSWindow`s, so `@Environment(\.openSettings)`
-    /// isn't available here).
+    /// Gear icon that opens a settings sheet relevant to this queue's
+    /// activity — extraction settings for the extraction queue, ingestion
+    /// stage assignments for the ingestion queue. Presented as a SwiftUI
+    /// `.sheet` directly within this `ActivityWindowView` (which is hosted in
+    /// a standalone `NSWindow` via `NSHostingController`), so it doesn't need
+    /// the broken `NSApp.sendAction` → `showSettingsWindow:` AppKit selector
+    /// that failed silently from outside the Settings scene (#449).
     private var configButton: some View {
         Button {
-            UserDefaults.standard.set(
-                queue == .extraction
-                    ? WikiFSApp.SettingsTab.extraction.rawValue
-                    : WikiFSApp.SettingsTab.agents.rawValue,
-                forKey: "settings.selectedTab"
-            )
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            showSettingsSheet = true
         } label: {
             Image(systemName: "gearshape")
         }
         .help(queue == .extraction
             ? "Extraction Settings"
-            : "Agent Settings")
+            : "Ingestion Settings")
+    }
+
+    /// The settings sheet content, chosen by queue kind. The extraction sheet
+    /// uses `ExtractionBackendSettingsView` (extracted from the Settings →
+    /// Extraction tab — #449); the ingestion sheet uses
+    /// `IngestionStagesView` (extracted from the Agents Settings tab — #449).
+    /// Both get the activity tracker via `.environment(activityTracker)` since
+    /// the standalone `NSWindow` doesn't inherit it from the SwiftUI scene.
+    @ViewBuilder
+    private var queueSettingsSheet: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(queue == .extraction ? "Extraction Settings" : "Ingestion Settings")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    showSettingsSheet = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            if queue == .extraction {
+                ExtractionBackendSettingsView(containerDirectory: containerDirectory)
+                    .environment(activityTracker)
+            } else {
+                IngestionStagesView(containerDirectory: containerDirectory)
+                    .environment(activityTracker)
+            }
+        }
     }
 
     // MARK: - Detail pane

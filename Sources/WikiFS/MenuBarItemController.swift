@@ -24,6 +24,8 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     private let queueEngine: QueueEngine
     private let activityTracker: QueueActivityTracker
     private weak var sessionManager: SessionManager?
+    private let containerDirectory: URL
+    private let settingsLauncher: AgentLauncher
 
     // MARK: - AppKit
 
@@ -44,11 +46,15 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     init(
         queueEngine: QueueEngine,
         activityTracker: QueueActivityTracker,
-        sessionManager: SessionManager
+        sessionManager: SessionManager,
+        containerDirectory: URL,
+        settingsLauncher: AgentLauncher
     ) {
         self.queueEngine = queueEngine
         self.activityTracker = activityTracker
         self.sessionManager = sessionManager
+        self.containerDirectory = containerDirectory
+        self.settingsLauncher = settingsLauncher
     }
 
     // MARK: - Lifecycle
@@ -210,7 +216,9 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
                 queue: queue,
                 queueEngine: queueEngine,
                 activityTracker: activityTracker,
-                sessionManager: sessionManager
+                sessionManager: sessionManager,
+                containerDirectory: containerDirectory,
+                settingsLauncher: settingsLauncher
             )
             // NSHostingController (not a bare NSHostingView) so SwiftUI can
             // install the window's unified toolbar from the view's `.toolbar`.

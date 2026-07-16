@@ -273,7 +273,9 @@ struct WikiFSApp: App {
         let statusController = MenuBarItemController(
             queueEngine: queueEngine,
             activityTracker: activityTracker,
-            sessionManager: sessionManager)
+            sessionManager: sessionManager,
+            containerDirectory: containerDirectory,
+            settingsLauncher: settingsLauncher)
         statusController.start()
         appDelegate.menuBarItemController = statusController
 

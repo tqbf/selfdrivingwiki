@@ -2,6 +2,46 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-15 — Extraction backend settings extracted to queue window (issue #449)
+
+**Implemented.** The PDF extraction backend picker (Local pdf2md / Claude /
+Gemini / Docling Serve) and its config sections are now in a reusable
+`ExtractionBackendSettingsView`, used in both the Settings → Extraction tab
+and the Extraction Queue's gear button sheet — parallel to the
+`IngestionStagesView` extraction.
+
+- **Created `ExtractionBackendSettingsView`** — self-contained view with
+  the backend picker, per-backend config sections (API keys, model, endpoint,
+  Test Connection), auto-save, and extraction-in-progress lock. Reads
+  `QueueActivityTracker` via `@Environment` instead of a `launcher` param.
+- **`ExtractionSettingsView` slimmed to a thin wrapper** that embeds
+  `ExtractionBackendSettingsView` — the Settings → Extraction tab is
+  unchanged visually.
+- **`ActivityWindowView` now uses `ExtractionBackendSettingsView`** in the
+  extraction gear button sheet instead of the full `ExtractionSettingsView`.
+
+## 2026-07-15 — Queue window gear button opens settings sheet (issue #449)
+
+**Implemented.** The gear icon in both queue activity windows (Extraction
+Queue and Agent Queue) now opens a SwiftUI `.sheet` with the relevant
+settings instead of silently failing via the broken `NSApp.sendAction`
+AppKit selector.
+
+- **Extracted `IngestionStagesView`** from `AgentsSettingsView` — the
+  planner/executor/finalizer stage assignment section is now a standalone
+  reusable view that loads its own `AgentProvidersConfig` and auto-saves.
+- **`AgentsSettingsView` now embeds `IngestionStagesView`** instead of
+  inline stage rows — zero visual change in Settings, but the same view is
+  reused in the activity window sheet.
+- **`ActivityWindowView.configButton`** sets `showSettingsSheet = true`
+  instead of the `showSettingsWindow:` selector. The sheet shows
+  `ExtractionSettingsView` for the extraction queue and
+  `IngestionStagesView` for the ingestion queue, with the activity tracker
+  injected via `.environment(activityTracker)`.
+- **Threaded `containerDirectory` + `settingsLauncher`** through
+  `MenuBarItemController` → `ActivityWindowView` so the sheet content has
+  the dependencies it needs.
+
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
