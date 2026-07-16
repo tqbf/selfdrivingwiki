@@ -12,7 +12,11 @@ import WikiFSEngine
 /// bar icon that changes shape reads as a different app).
 ///
 /// The menu-bar dropdown groups queue windows, a Maintenance submenu
-/// (Vacuum All, Agent Instructions), and Quit.
+/// (Vacuum All, Agent Instructions), Settings, and Quit. Settings lives
+/// here rather than in the "Self Driving Wiki" app menu because the status
+/// item is the always-available surface — in accessory mode there's no menu
+/// bar at all. The app-menu items are removed in
+/// `AppDelegate.removeRedundantAppMenuItems`.
 ///
 /// Lives in `WikiFS` because it uses AppKit (`NSStatusItem`, `NSWindow`)
 /// and SwiftUI for the window content. The engine itself stays headless.
@@ -146,6 +150,17 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        // Settings — moved here from the "Self Driving Wiki" app menu (the
+        // status item is reachable even in accessory mode; the app menu
+        // isn't). Opens the Settings scene via the same selector the gear
+        // buttons use (`showSettingsWindow:`).
+        let settingsItem = NSMenuItem(
+            title: "Settings…",
+            action: #selector(openSettings(_:)),
+            keyEquivalent: "")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
         // About + Quit.
         let aboutItem = NSMenuItem(
             title: "About Self Driving Wiki",
@@ -184,6 +199,14 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     @objc private func openAgentInstructions(_ sender: NSMenuItem?) {
         targetSession?.store.openTab(.systemPrompt)
         activateWikiWindow()
+    }
+
+    /// Open the Settings window. Sends the Settings scene's action
+    /// (`showSettingsWindow:`) — the same selector the activity-window gear
+    /// buttons use — so a single code path opens Settings everywhere.
+    @objc private func openSettings(_ sender: NSMenuItem?) {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        NSApplication.shared.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 
     /// Bring a wiki window to the front. `openTab` switches the tab inside
