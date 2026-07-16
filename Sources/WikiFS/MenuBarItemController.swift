@@ -24,6 +24,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     private let queueEngine: QueueEngine
     private let activityTracker: QueueActivityTracker
     private weak var sessionManager: SessionManager?
+    private let containerDirectory: URL
 
     // MARK: - AppKit
 
@@ -44,11 +45,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     init(
         queueEngine: QueueEngine,
         activityTracker: QueueActivityTracker,
-        sessionManager: SessionManager
+        sessionManager: SessionManager,
+        containerDirectory: URL
     ) {
         self.queueEngine = queueEngine
         self.activityTracker = activityTracker
         self.sessionManager = sessionManager
+        self.containerDirectory = containerDirectory
     }
 
     // MARK: - Lifecycle
@@ -146,6 +149,18 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        // Settings — opens the SwiftUI Settings scene. Posted via notification
+        // because the menu bar is an NSStatusItem outside the SwiftUI scene
+        // hierarchy (same problem as the activity window gear button, #449).
+        let settingsItem = NSMenuItem(
+            title: "Settings…",
+            action: #selector(openSettings(_:)),
+            keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
+        menu.addItem(.separator())
+
         // About + Quit.
         let aboutItem = NSMenuItem(
             title: "About Self Driving Wiki",
@@ -166,6 +181,15 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
     @objc private func openExtractionWindow(_ sender: NSMenuItem?) {
         showQueueWindow(for: .extraction)
+    }
+
+    /// Post a notification that the SwiftUI app scene observes to call
+    /// `@Environment(\.openSettings)` from within scene context — the menu bar
+    /// is outside the responder chain, so direct AppKit selectors for opening
+    /// Settings don't work (#449).
+    @objc private func openSettings(_ sender: NSMenuItem?) {
+        NotificationCenter.default.post(name: .openSettingsRequest, object: nil)
+        activateWikiWindow()
     }
 
     /// The session menu actions target: the frontmost wiki window's session,
@@ -210,7 +234,8 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
                 queue: queue,
                 queueEngine: queueEngine,
                 activityTracker: activityTracker,
-                sessionManager: sessionManager
+                sessionManager: sessionManager,
+                containerDirectory: containerDirectory
             )
             // NSHostingController (not a bare NSHostingView) so SwiftUI can
             // install the window's unified toolbar from the view's `.toolbar`.
@@ -403,6 +428,17 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         hintPopover?.close()
         hintPopover = nil
     }
+}
+
+// MARK: - Notifications
+
+extension Notification.Name {
+    /// Posted by `MenuBarItemController` when the user picks "Settings…"
+    /// from the menu bar. Observed by the SwiftUI app scene, which calls
+    /// `@Environment(\.openSettings)` from within scene context (#449):
+    /// the menu bar `NSStatusItem` is outside the responder chain, so
+    /// direct AppKit selectors for opening Settings don't work.
+    static let openSettingsRequest = Notification.Name("openSettingsRequest")
 }
 
 // MARK: - Hint view

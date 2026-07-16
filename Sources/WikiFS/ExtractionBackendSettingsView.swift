@@ -1,26 +1,26 @@
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
-import WikiFSEngine
 
-/// Settings for PDF→Markdown extraction — the second Settings scene tab. Picks
-/// the backend (Local pdf2md / Claude / Gemini / Docling Serve) and configures
-/// the selected backend's credentials + endpoint. Mirrors `ZoteroSettingsView`
-/// for structure (secrets in Keychain, non-secret prefs in `ExtractionConfig`)
-/// but **auto-saves on change** instead of an explicit Save button: every edit
-/// persists immediately, so closing the window can never drop a just-typed value
-/// (the failure mode a focus-loss/Save pattern risks).
+/// Reusable view for PDF→Markdown extraction backend selection and
+/// configuration — the backend picker (Local pdf2md / Claude / Gemini /
+/// Docling Serve) plus the selected backend's credentials, endpoint, and
+/// Test Connection button. Shown in the Extraction Queue activity window's
+/// gear button sheet (issue #449).
 ///
-/// Only the selected backend's config section is shown — picking another backend
-/// swaps the section in place, so the form stays uncluttered and Test Connection
-/// is unambiguous (it always targets the visible section).
-struct ExtractionSettingsView: View {
+/// Auto-saves on every edit (every field's `.onChange` calls
+/// `persistAll()`). Secrets go through `ExtractionCredentialStore`
+/// (Keychain), never into the JSON config file.
+///
+/// Only the selected backend's config section is shown — picking another
+/// backend swaps the section in place, so the form stays uncluttered and
+/// Test Connection is unambiguous (it always targets the visible section).
+struct ExtractionBackendSettingsView: View {
     let containerDirectory: URL
     let credentialStore: any ExtractionCredentialStore
     let fetcher: any HTTPRequestFetcher
-    /// Observed so the panel can lock itself while a PDF extraction is running —
-    /// changing the backend or keys mid-conversion is unsafe.
-    let launcher: AgentLauncher
+    /// Observed so the panel can lock itself while a PDF extraction is
+    /// running — changing the backend or keys mid-conversion is unsafe.
     @Environment(QueueActivityTracker.self) private var tracker
 
     // Drafts initialized from config + Keychain in `init`; every change is
@@ -47,12 +47,10 @@ struct ExtractionSettingsView: View {
 
     init(
         containerDirectory: URL,
-        launcher: AgentLauncher,
         credentialStore: any ExtractionCredentialStore = KeychainExtractionCredentialStore(),
         fetcher: any HTTPRequestFetcher = URLSessionRequestFetcher()
     ) {
         self.containerDirectory = containerDirectory
-        self.launcher = launcher
         self.credentialStore = credentialStore
         self.fetcher = fetcher
 
@@ -99,7 +97,7 @@ struct ExtractionSettingsView: View {
             backendConfigSection
         }
         .formStyle(.grouped)
-        .frame(minWidth: Metrics.width, minHeight: Metrics.height)
+        .frame(minWidth: 460, minHeight: 420)
         .disabled(extractionInProgress)
         .alert("Couldn't Connect to Claude", isPresented: anthropicErrorBinding,
                presenting: anthropicErrorMessage) { _ in
@@ -336,13 +334,5 @@ struct ExtractionSettingsView: View {
                 doclingTest = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             }
         }
-    }
-
-    private enum Metrics {
-        static let width: CGFloat = 460
-        /// A fixed height tall enough for the multi-line footers and so that
-        /// switching backends (sections of different heights) doesn't resize
-        /// the window. A short section just leaves space below it.
-        static let height: CGFloat = 420
     }
 }
