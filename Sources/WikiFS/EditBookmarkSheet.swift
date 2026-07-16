@@ -46,7 +46,7 @@ struct EditBookmarkSheet: View {
                 }
 
                 // Timestamps (read-only) — issue #242. Relative date mirrors
-                // RecentChatRow's treatment of chat.updatedAt; the absolute date
+                // ChatsCellView's treatment of chat.updatedAt; the absolute date
                 // is the tooltip for precision. "Updated" only appears when the
                 // node has actually changed since creation.
                 if let node {
