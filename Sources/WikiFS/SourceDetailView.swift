@@ -987,8 +987,13 @@ struct SourceDetailView: View {
             }
         }
         .keyboardShortcut(.return, modifiers: .command)
-        .disabled(isRunning || isIngesting || isAnySourceIngesting
-                  || isThisFileExtracting || isEditLockedExternally)
+        // Don't disable during an active ingestion or extraction — the queue
+        // engine serializes both (ingestion maxConcurrent=1 per provider;
+        // extraction limit 1 for local pdf2md). A second tap just appends to
+        // the queue. `isRunning` still blocks when a *chat* agent is running
+        // (no ingest active) to avoid a launcher preflight refusal.
+        .disabled((isRunning && !isAnySourceIngesting)
+                  || isEditLockedExternally)
         .confirmationDialog(
             "Ingest Again?",
             isPresented: $showReingestConfirmation,
