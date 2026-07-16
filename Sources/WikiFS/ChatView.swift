@@ -85,6 +85,29 @@ struct ChatView: View {
             persistedEvents: persistedMessages.map(\.event))
     }
 
+    /// Wall-clock timestamps parallel to `displayMessages`. Live path:
+    /// `launcher.eventTimestamps` (same indices as `launcher.events`); persisted
+    /// path: `persistedMessages.map(\.createdAt)`. Filtered through
+    /// `transcriptVisibleIndices` to stay parallel after tool-call/etc.
+    /// filtering. `nil` entries (misaligned arrays from test setups or partial
+    /// state) are preserved — they produce no footer.
+    private var displayTimestamps: [Date?] {
+        let indices: [Int]
+        if isLiveChat {
+            let events = launcher.events
+            indices = events.transcriptVisibleIndices
+            return indices.map { idx in
+                idx < launcher.eventTimestamps.count ? launcher.eventTimestamps[idx] : nil
+            }
+        } else {
+            let events = persistedMessages.map(\.event)
+            indices = events.transcriptVisibleIndices
+            return indices.map { idx in
+                idx < persistedMessages.count ? persistedMessages[idx].createdAt : nil
+            }
+        }
+    }
+
     /// Empty-state message for the transcript placeholder. The live streaming
     /// case overlays "Waiting for the Agent…" via `transcriptIsRunning`; the
     /// idle/persisted cases show their own message here.
@@ -332,6 +355,7 @@ struct ChatView: View {
                 VStack(spacing: 0) {
                     ChatTranscriptView(
                         events: displayMessages,
+                        timestamps: displayTimestamps,
                         emptyStateMessage: transcriptEmptyMessage,
                         isRunning: transcriptIsRunning,
                         onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),

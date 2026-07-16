@@ -133,13 +133,4 @@ private enum ActivityMetrics {
     static let padding: CGFloat = 10
 }
 
-extension AgentEvent {
-    var isInternalTranscriptEvent: Bool {
-        switch self {
-        case .systemInit, .toolUse, .toolResult, .subagent, .raw, .messageStop, .assistantTextDelta, .thinkingDelta:
-            true
-        case .userText, .assistantText, .result, .thinking, .turnFailed:
-            false
-        }
-    }
-}
+

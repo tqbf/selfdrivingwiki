@@ -10,6 +10,10 @@ struct ChatTranscriptView: View {
     /// The transcript-visible events to render (caller pre-filters via
     /// `[AgentEvent].transcriptVisible`).
     let events: [AgentEvent]
+    /// Wall-clock timestamps parallel to `events` (after the same filtering).
+    /// `nil` entries produce no "Worked for" footer. Used to render the
+    /// duration metadata under assistant responses.
+    var timestamps: [Date?] = []
     /// Idle/fallback empty-state message. Overridden by "Waiting for the
     /// Agent…" while `isRunning` (the live streaming case).
     var emptyStateMessage: String
@@ -41,7 +45,16 @@ struct ChatTranscriptView: View {
     var hideToolCalls: Bool = false
 
     var body: some View {
+        // Mirror the hideToolCalls filter on both events and timestamps so
+        // they stay parallel. When hideToolCalls is on, remove tool-call
+        // events and their corresponding timestamps.
         let visibleEvents = hideToolCalls ? events.filter { !$0.isToolCall } : events
+        let visibleTimestamps = hideToolCalls
+            ? events.indices.compactMap { idx -> Date? in
+                guard !events[idx].isToolCall else { return nil }
+                return idx < timestamps.count ? timestamps[idx] : nil
+            }
+            : timestamps
         return Group {
             if visibleEvents.isEmpty {
                 placeholder
@@ -55,7 +68,8 @@ struct ChatTranscriptView: View {
                     blobStore: blobStore,
                     zoom: zoom,
                     scrollRequest: scrollRequest,
-                    quoteAnchor: quoteAnchor
+                    quoteAnchor: quoteAnchor,
+                    timestamps: visibleTimestamps
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -87,47 +101,18 @@ private enum ChatTranscriptMetrics {
 }
 
 extension [AgentEvent] {
+    /// The indices of transcript-visible events (same filtering rule as
+    /// `transcriptVisible`). Returned so callers that carry parallel arrays
+    /// (timestamps, etc.) can filter them in lockstep without duplicating the
+    /// predicate.
+    var transcriptVisibleIndices: [Int] {
+        indices.filter { self[$0].isVisibleInTranscript(in: self) }
+    }
+
     /// The transcript-visible subset shared by the live chat surface and the
     /// read-only chat-history view, so a persisted chat re-renders
     /// exactly like it looked live.
     var transcriptVisible: [AgentEvent] {
-        filter { event in
-            switch event {
-            case .result(_, let text):
-                return !hasAssistantText(matching: text)
-            case .toolUse(let name, _):
-                // Read-only tool calls (Bash, Read, Glob, Grep) are always
-                // hidden from the transcript — their one-line summaries are
-                // noise. Mutation-relevant calls (Edit, Write, Agent) stay
-                // visible. Full raw detail for every call lives under
-                // "Show internals".
-                return !AgentEvent.readOnlyToolNames.contains(name)
-            case .thinking:
-                // A concise one-line progress summary per tool call (issue #173):
-                // lets the user see the agent reading/searching/editing without
-                // opting into the full internals view. Full raw detail still lives
-                // behind "Show internals".
-                // .thinking is surfaced as a collapsible box (issue #391) —
-                // distinct from the full internals feed.
-                return true
-            case .toolResult(let isError, _):
-                // Surface failed tool calls (a useful stall/error signal); successes
-                // are implied by the agent's next action or final answer.
-                return isError
-            default:
-                return !event.isInternalTranscriptEvent
-            }
-        }
-    }
-
-    private func hasAssistantText(matching text: String) -> Bool {
-        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else { return false }
-        return contains { event in
-            if case .assistantText(let assistantText) = event {
-                return assistantText.trimmingCharacters(in: .whitespacesAndNewlines) == normalized
-            }
-            return false
-        }
+        transcriptVisibleIndices.map { self[$0] }
     }
 }

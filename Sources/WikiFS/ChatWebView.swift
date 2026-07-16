@@ -97,6 +97,13 @@ struct ChatWebView: NSViewRepresentable {
     /// load). The coordinator stashes it and applies once rows are rendered.
     var quoteAnchor: ChatHighlightRequest? = nil
 
+    /// Wall-clock timestamps parallel to `events`. Indexed per-row so the
+    /// coordinator can compute a duration ("Worked for Xs") and a completion
+    /// timestamp for each assistant bubble. Entry `nil` → no footer for that
+    /// row. Empty array (default) → no footers at all (activity-feed callers
+    /// that don't track timing are unaffected).
+    var timestamps: [Date?] = []
+
     /// Name of the `WKScriptMessage` channel the per-bubble "Copy" button posts
     /// to (issue #285). The JS click listener calls
     /// `window.webkit.messageHandlers.copyText.postMessage(text)`; the coordinator
@@ -129,7 +136,7 @@ struct ChatWebView: NSViewRepresentable {
         context.coordinator.style = style
         context.coordinator.onWikiLink = onWikiLink
         context.coordinator.renderContext = renderContext
-        context.coordinator.reload(events: events, showsInternals: showsInternals)
+        context.coordinator.reload(events: events, showsInternals: showsInternals, timestamps: timestamps)
         return webView
     }
 
@@ -142,7 +149,7 @@ struct ChatWebView: NSViewRepresentable {
         if let handler = webView.configuration.urlSchemeHandler(forURLScheme: BlobSchemeHandler.scheme) as? BlobSchemeHandler {
             handler.store = blobStore
         }
-        context.coordinator.apply(events: events, showsInternals: showsInternals)
+        context.coordinator.apply(events: events, showsInternals: showsInternals, timestamps: timestamps)
         // Outline click → scroll the i-th user bubble into view. Only fires when
         // the version advances, so unrelated re-renders (streaming) don't re-scroll.
         if let req = scrollRequest, req.version != context.coordinator.appliedScrollVersion {
@@ -189,6 +196,12 @@ struct ChatWebView: NSViewRepresentable {
         private var renderedShowsInternals: Bool?
         private var isLoaded = false
         private var pendingEvents: [AgentEvent] = []
+        /// Pending timestamps to render once the page finishes loading (stashed by
+        /// `apply` when the view isn't loaded yet). Parallel to `pendingEvents`.
+        private var pendingTimestamps: [Date?] = []
+        /// The full timestamps array — refreshed each `apply` call. Used to
+        /// compute "Worked for Xs" duration + completion timestamp per row.
+        private var timestamps: [Date?] = []
         /// The last event actually rendered, so `apply` can detect "no new row, but
         /// `AgentLauncher` grew the last one in place" (a streamed `.assistantText`
         /// delta merge, issue #121) and patch that row instead of no-op'ing.
@@ -202,27 +215,31 @@ struct ChatWebView: NSViewRepresentable {
         /// the current `WikiRenderContext` (or nil → constant-true behavior).
         private func currentContext() -> WikiRenderContext? { renderContext?() }
 
-        func reload(events: [AgentEvent], showsInternals: Bool) {
+        func reload(events: [AgentEvent], showsInternals: Bool, timestamps: [Date?] = []) {
             renderedCount = 0
             renderedShowsInternals = showsInternals
             renderedLastEvent = nil
             renderedEvents = events
+            self.timestamps = timestamps
             isLoaded = false
             pendingEvents = events
+            pendingTimestamps = timestamps
             webView?.loadHTMLString(Self.shellHTML, baseURL: URL(string: "about:blank"))
         }
 
-        func apply(events: [AgentEvent], showsInternals: Bool) {
+        func apply(events: [AgentEvent], showsInternals: Bool, timestamps: [Date?] = []) {
+            self.timestamps = timestamps
             if renderedShowsInternals != showsInternals {
-                reload(events: events, showsInternals: showsInternals)
+                reload(events: events, showsInternals: showsInternals, timestamps: timestamps)
                 return
             }
             guard isLoaded else {
                 pendingEvents = events
+                pendingTimestamps = timestamps
                 return
             }
             if events.count < renderedCount {
-                reload(events: events, showsInternals: showsInternals)
+                reload(events: events, showsInternals: showsInternals, timestamps: timestamps)
                 return
             }
             guard events.count > renderedCount else {
@@ -234,7 +251,7 @@ struct ChatWebView: NSViewRepresentable {
                     // The last row of a live stream is still growing → render it
                     // in the streaming (links-only) tier so a half-typed
                     // `![[source:…` never instantiates a broken iframe/player.
-                    replaceLastRow(last, isStreaming: true, allEvents: events)
+                    replaceLastRow(last, at: events.count - 1, isStreaming: true, allEvents: events)
                     renderedLastEvent = last
                 }
                 renderedEvents = events
@@ -246,9 +263,9 @@ struct ChatWebView: NSViewRepresentable {
             let context = currentContext()
             if let prevLast = renderedEvents.last, events.count > renderedEvents.count,
                renderedEvents.count > 0 {
-                replaceLastRow(prevLast, isStreaming: false, allEvents: events, context: context)
+                replaceLastRow(prevLast, at: renderedEvents.count - 1, isStreaming: false, allEvents: events, context: context)
             }
-            appendRows(Array(events[renderedCount...]), context: context)
+            appendRows(Array(events[renderedCount...]), startingIndex: renderedCount, context: context)
             renderedCount = events.count
             renderedLastEvent = events.last
             renderedEvents = events
@@ -258,11 +275,12 @@ struct ChatWebView: NSViewRepresentable {
             isLoaded = true
             let toRender = pendingEvents
             pendingEvents = []
+            pendingTimestamps = []
             // Initial load: every row is final (persisted chats load all-at-once;
             // a freshly-opened live view's events are all complete at this point).
             let context = currentContext()
             if !toRender.isEmpty {
-                appendRows(toRender, context: context)
+                appendRows(toRender, startingIndex: 0, context: context)
             }
             renderedCount = toRender.count
             renderedLastEvent = toRender.last
@@ -316,12 +334,17 @@ struct ChatWebView: NSViewRepresentable {
             decisionHandler(.allow)
         }
 
-        private func appendRows(_ events: [AgentEvent], context: WikiRenderContext?) {
+        private func appendRows(_ events: [AgentEvent], startingIndex: Int, context: WikiRenderContext?) {
             // Appended rows are always final (they're complete events). Only the
             // actively-streaming trailing row — patched via the same-count
             // `replaceLastRow(..., isStreaming: true)` path — uses the
             // links-only tier.
-            let html = events.map { Self.rowHTML(for: $0, style: style, context: context, isFinal: true) }.joined()
+            var html = ""
+            for (offset, event) in events.enumerated() {
+                let absoluteIndex = startingIndex + offset
+                let ts = absoluteIndex < timestamps.count ? timestamps[absoluteIndex] : nil
+                html += Self.rowHTML(for: event, style: style, context: context, isFinal: true, timestamp: ts, allEvents: renderedEvents + events, allTimestamps: timestamps, index: absoluteIndex)
+            }
             guard !html.isEmpty,
                   let data = try? JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed]),
                   let jsonString = String(data: data, encoding: .utf8)
@@ -338,8 +361,9 @@ struct ChatWebView: NSViewRepresentable {
         /// a half-typed `![[source:…` never instantiates a broken iframe/player
         /// that churns per token. When false, the row is being *re-finalized*
         /// (a new event landed = turn boundary) → render the full context.
-        private func replaceLastRow(_ event: AgentEvent, isStreaming: Bool, allEvents: [AgentEvent], context: WikiRenderContext? = nil) {
-            let html = Self.rowHTML(for: event, style: style, context: context, isFinal: !isStreaming)
+        private func replaceLastRow(_ event: AgentEvent, at index: Int, isStreaming: Bool, allEvents: [AgentEvent], context: WikiRenderContext? = nil) {
+            let ts = index < timestamps.count ? timestamps[index] : nil
+            let html = Self.rowHTML(for: event, style: style, context: context, isFinal: !isStreaming, timestamp: ts, allEvents: allEvents, allTimestamps: timestamps, index: index)
             guard let data = try? JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed]),
                   let jsonString = String(data: data, encoding: .utf8)
             else { return }
@@ -364,10 +388,10 @@ struct ChatWebView: NSViewRepresentable {
 
         // MARK: - Row rendering
 
-        private static func rowHTML(for event: AgentEvent, style: VisualStyle, context: WikiRenderContext?, isFinal: Bool) -> String {
+        private static func rowHTML(for event: AgentEvent, style: VisualStyle, context: WikiRenderContext?, isFinal: Bool, timestamp: Date? = nil, allEvents: [AgentEvent] = [], allTimestamps: [Date?] = [], index: Int = -1) -> String {
             switch style {
             case .activityFeed: feedRowHTML(for: event, context: context, isFinal: isFinal)
-            case .chat: chatRowHTML(for: event, context: context, isFinal: isFinal)
+            case .chat: chatRowHTML(for: event, context: context, isFinal: isFinal, timestamp: timestamp, allEvents: allEvents, allTimestamps: allTimestamps, index: index)
             }
         }
 
@@ -450,7 +474,7 @@ struct ChatWebView: NSViewRepresentable {
         /// SwiftUI rendering), no row labels. Tool calls render as a concise,
         /// muted one-line progress indicator (issue #173) — independent of the
         /// "Show internals" toggle, which still gates the full raw feed.
-        static func chatRowHTML(for event: AgentEvent, context: WikiRenderContext? = nil, isFinal: Bool = true) -> String {
+        static func chatRowHTML(for event: AgentEvent, context: WikiRenderContext? = nil, isFinal: Bool = true, timestamp: Date? = nil, allEvents: [AgentEvent] = [], allTimestamps: [Date?] = [], index: Int = -1) -> String {
             switch event {
             case .userText(let text):
                 // Run user text through the markdown renderer so prepended
@@ -460,12 +484,12 @@ struct ChatWebView: NSViewRepresentable {
                 <div class="row chat-row chat-user"><div class="bubble">\(renderedMarkdown(text, context: context, isFinal: isFinal))</div></div>
                 """
             case .assistantText(let text):
-                return assistantBubbleHTML(text: text, context: context, isFinal: isFinal)
+                return assistantBubbleHTML(text: text, context: context, isFinal: isFinal, timestamp: timestamp, allEvents: allEvents, allTimestamps: allTimestamps, index: index)
             case .thinking(let text):
                 return thinkingRowHTML(text: text, context: context, isFinal: isFinal)
             case .result(_, let text):
                 guard !text.isEmpty else { return "" }
-                return assistantBubbleHTML(text: text, context: context, isFinal: isFinal)
+                return assistantBubbleHTML(text: text, context: context, isFinal: isFinal, timestamp: timestamp, allEvents: allEvents, allTimestamps: allTimestamps, index: index)
             case .toolUse(let name, let summary):
                 return chatToolRowHTML(name: name, summary: summary, isError: false)
             case .toolResult(let isError, let summary):
@@ -480,17 +504,89 @@ struct ChatWebView: NSViewRepresentable {
             }
         }
 
-        /// A chat-style assistant bubble (markdown prose + a hover-revealed "Copy"
-        /// button). Shared by `.assistantText` and `.result` rows (issue #285).
+        /// Inline SVG for the copy button (lucide `Copy` icon, inner `currentColor`
+        /// so CSS controls the tint). Duplicated as a JS string in `shellHTML`
+        /// so the click handler can swap between copy↔check without a round-trip.
+        private static let copyIconSVG = #"<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>"#
+
+        /// Inline SVG for the post-copy checkmark (lucide `Check` icon) — shown for
+        /// ~1.5 s to confirm the clipboard write landed.
+        private static let checkIconSVG = #"<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>"#
+
+        /// Format a duration (seconds) as a compact string: "47s", "2m 12s",
+        /// "1h 5m". Mirrors Paseo's `formatDuration` (utils/time.ts).
+        static func formatDuration(_ seconds: TimeInterval) -> String {
+            let s = max(0, Int(seconds.rounded(.down)))
+            if s < 60 { return "\(s)s" }
+            let m = s / 60
+            if m < 60 {
+                let rem = s % 60
+                return rem == 0 ? "\(m)m" : "\(m)m \(rem)s"
+            }
+            let h = m / 60
+            let remMin = m % 60
+            return remMin == 0 ? "\(h)h" : "\(h)h \(remMin)m"
+        }
+
+        /// Format a timestamp for the hover-reveal label — same-day shows just
+        /// the time; older shows the date + time. Mirrors Paseo's
+        /// `formatMessageTimestamp` (utils/time.ts).
+        static func formatTimestamp(_ date: Date, now: Date = Date()) -> String {
+            let timeFmt = DateFormatter()
+            timeFmt.timeStyle = .short
+            let timeStr = timeFmt.string(from: date)
+            guard Calendar.current.isDate(date, inSameDayAs: now) else {
+                let dateFmt = DateFormatter()
+                dateFmt.dateStyle = .medium
+                return "\(dateFmt.string(from: date)), \(timeStr)"
+            }
+            return timeStr
+        }
+
+        /// Compute the "Worked for Xs" duration for a row: the gap between
+        /// this row's timestamp and the previous non-nil timestamp in the
+        /// parallel array. If there's no predecessor, returns nil.
+        private static func workDuration(at index: Int, timestamps: [Date?]) -> TimeInterval? {
+            guard index < timestamps.count, let ts = timestamps[index] else { return nil }
+            for i in stride(from: min(index - 1, timestamps.count - 1), through: 0, by: -1) {
+                if let prev = timestamps[i] {
+                    return ts.timeIntervalSince(prev)
+                }
+            }
+            return nil
+        }
+
+        /// A chat-style assistant bubble (markdown prose + a hover-revealed copy
+        /// icon button). Shared by `.assistantText` and `.result` rows (issue #285).
         /// The button's `data-copy` attribute carries the **raw markdown** (HTML-
         /// attribute-escaped) — not the rendered HTML — so the clipboard gets the
-        /// plain text the user would have drag-selected.
-        private static func assistantBubbleHTML(text: String, context: WikiRenderContext?, isFinal: Bool) -> String {
-            """
+        /// plain text the user would have drag-selected. The icon swaps to a green
+        /// checkmark for ~1.5 s after clicking (mirrors Paseo's `TurnCopyButton`).
+        ///
+        /// When `timestamp` is non-nil, a "Worked for Xs" footer is appended below
+        /// the prose. On hover, the duration swaps to the completion timestamp
+        /// (CSS-only, no JS) — mirroring Paseo's `AssistantTurnFooter`.
+        private static func assistantBubbleHTML(text: String, context: WikiRenderContext?, isFinal: Bool, timestamp: Date? = nil, allEvents: [AgentEvent] = [], allTimestamps: [Date?] = [], index: Int = -1) -> String {
+            var html = """
             <div class="row chat-row chat-assistant"><div class="bubble">\
-            <button class="copy-btn" type="button" data-copy="\(htmlAttributeEscape(text))">Copy</button>\
-            \(renderedMarkdown(text, context: context, isFinal: isFinal))</div></div>
+            <button class="copy-btn" type="button" data-copy="\(htmlAttributeEscape(text))" aria-label="Copy">\(Self.copyIconSVG)</button>\
+            \(renderedMarkdown(text, context: context, isFinal: isFinal))</div>
             """
+
+            if let ts = timestamp {
+                let duration = Self.workDuration(at: index, timestamps: allTimestamps)
+                let durationLabel = duration.map { "Worked for \(Self.formatDuration($0))" } ?? ""
+                let timestampLabel = Self.formatTimestamp(ts)
+                // The footer: a sizer (hidden, reserves width) + the visible
+                // duration label + the timestamp (hidden by default). On hover,
+                // the duration fades out and the timestamp fades in — pure CSS,
+                // width stays stable (sizer reserves the wider of the two).
+                let durationHTML = durationLabel.isEmpty ? "" : #"<span class="turn-duration">\#(escape(durationLabel))</span>"#
+                html += #"<div class="turn-footer"><span class="turn-sizer">\#(escape(timestampLabel))</span>\#(durationHTML)<span class="turn-timestamp">\#(escape(timestampLabel))</span></div>"#
+            }
+
+            html += "</div>"
+            return html
         }
 
         /// A single muted, left-aligned progress line for a tool call — the
@@ -745,16 +841,39 @@ struct ChatWebView: NSViewRepresentable {
           }
           .chat-assistant .bubble { position: relative; }
           .copy-btn {
-            position: absolute; top: 0; right: 0;
-            opacity: 0; transition: opacity 0.15s ease;
+            position: absolute; top: 2px; right: 2px;
+            display: flex; align-items: center; justify-content: center;
+            opacity: 0; transition: opacity 0.15s ease, color 0.15s ease;
             -webkit-appearance: none; appearance: none;
-            background: var(--code-bg); border: none; border-radius: 5px;
-            padding: 2px 7px; font: inherit; font-size: 11px;
-            color: var(--muted); cursor: pointer; line-height: 1.4;
+            background: none; border: none; border-radius: 5px;
+            padding: 3px; cursor: pointer;
+            color: var(--muted);
           }
-          .chat-assistant:hover .copy-btn { opacity: 0.75; }
-          .copy-btn:hover { opacity: 1; color: var(--text); }
+          .chat-assistant:hover .copy-btn { opacity: 0.55; }
+          .copy-btn:hover { opacity: 1; color: var(--text); background: var(--code-bg); }
           .copy-btn.copied { opacity: 1; color: #34c759; }
+          .copy-btn svg { display: block; }
+          /* Turn footer: "Worked for Xs" with hover-swap to timestamp.
+             Mirrors Paseo's AssistantTurnFooter — a sizer reserves width so
+             the label doesn't shift when swapping. */
+          .turn-footer {
+            position: relative; margin-top: 6px;
+            min-height: 16px;
+          }
+          .turn-sizer {
+            visibility: hidden; opacity: 0;
+            font-size: 11px; color: var(--muted);
+            white-space: nowrap; height: 0; display: block;
+          }
+          .turn-duration, .turn-timestamp {
+            position: absolute; top: 0; left: 0;
+            font-size: 11px; color: var(--muted);
+            white-space: nowrap; transition: opacity 0.15s ease;
+          }
+          .turn-duration { opacity: 0.6; }
+          .turn-timestamp { opacity: 0; }
+          .chat-assistant:hover .turn-duration { opacity: 0; }
+          .chat-assistant:hover .turn-timestamp { opacity: 0.7; }
           .chat-tool {
             justify-content: flex-start; align-items: baseline;
             gap: 6px; font-size: 11.5px; color: var(--muted);
@@ -824,10 +943,13 @@ struct ChatWebView: NSViewRepresentable {
             }
             window.scrollTo(0, document.body.scrollHeight);
           }
-          // Delegated click handler for the per-bubble "Copy" button (issue #285).
+          // Delegated click handler for the per-bubble copy icon (issue #285).
           // Works on dynamically-appended rows since it's on `document`. Posts the
           // raw markdown text (from `data-copy`) to the Swift message handler, then
-          // briefly shows "Copied" feedback.
+          // swaps the icon to a green checkmark for ~1.5 s (mirrors Paseo's
+          // TurnCopyButton Copy↔Check swap).
+          var copyIconSVG = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+          var checkIconSVG = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
           document.addEventListener('click', function(e) {
             var btn = e.target.closest && e.target.closest('.copy-btn');
             if (!btn) return;
@@ -836,13 +958,12 @@ struct ChatWebView: NSViewRepresentable {
             try {
               window.webkit.messageHandlers.copyText.postMessage(text);
             } catch (err) { /* handler not registered — no-op */ }
-            var orig = btn.textContent;
-            btn.textContent = 'Copied';
+            btn.innerHTML = checkIconSVG;
             btn.classList.add('copied');
             setTimeout(function() {
-              btn.textContent = orig;
+              btn.innerHTML = copyIconSVG;
               btn.classList.remove('copied');
-            }, 1200);
+            }, 1500);
           });
         </script>
         </body></html>
