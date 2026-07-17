@@ -25,7 +25,7 @@ workflows, and the mental model. It does not cover internals or architecture.
 ### The fundamental workflow
 
 <center>
-<img src="user-guide/images/cycle.svg" alt="Workflow" style="max-width: 50%; height: auto" />
+<img src="user-guide/images/cycle.jpg" alt="Workflow" style="max-width: 50%; height: auto" />
 </center>
 
 1. **[Collect](sources-and-ingestion.md#adding-sources)** — Drag in PDFs, paste URLs, import from Zotero, or drop a folder of notes.
