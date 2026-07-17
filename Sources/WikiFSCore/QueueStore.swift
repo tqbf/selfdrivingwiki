@@ -158,7 +158,10 @@ public final class QueueStore: @unchecked Sendable {
     /// existing v1 databases silently lacked it, and `try? appendItemEvent`
     /// swallowed the "no such table" error on every write, so transcripts
     /// never survived a relaunch.
-    private static let currentSchemaVersion = 2
+    /// v3: Namespace `QueueRunState.running` rawValue from `"running"` to
+    /// `"queue-running"` in the `queue_state` table. Disambiguates from
+    /// `QueueItemState.running` (`"running"`) — issue #508.
+    private static let currentSchemaVersion = 3
 
     /// Stepwise, idempotent schema migration keyed on `PRAGMA user_version`.
     /// A fresh DB (version 0) runs `createFreshSchemaV1()`; an existing DB at
@@ -189,6 +192,11 @@ public final class QueueStore: @unchecked Sendable {
             version = 2
             try exec("PRAGMA user_version=2;")
         }
+        if version < 3 {
+            try migrateV2ToV3()
+            version = 3
+            try exec("PRAGMA user_version=3;")
+        }
     }
 
     /// v1 → v2: add the per-item transcript table to databases created before
@@ -210,6 +218,14 @@ public final class QueueStore: @unchecked Sendable {
         CREATE INDEX IF NOT EXISTS idx_queue_item_events
             ON queue_item_events(item_id, seq);
         """)
+    }
+
+    /// v2 → v3: Namespace the `QueueRunState.running` rawValue in the
+    /// `queue_state` table from `"running"` to `"queue-running"`. This
+    /// disambiguates it from `QueueItemState.running` (`"running"`)
+    /// — issue #508. Safe + idempotent (no-op if already migrated).
+    private func migrateV2ToV3() throws {
+        try exec("UPDATE queue_state SET state = 'queue-running' WHERE state = 'running';")
     }
 
     /// Build the complete v1 schema for a fresh database and stamp
@@ -245,8 +261,8 @@ public final class QueueStore: @unchecked Sendable {
         """)
 
         // Seed default run states: both queues start running.
-        try exec("INSERT INTO queue_state(queue, state) VALUES ('extraction', 'running');")
-        try exec("INSERT INTO queue_state(queue, state) VALUES ('ingestion', 'running');")
+        try exec("INSERT INTO queue_state(queue, state) VALUES ('extraction', 'queue-running');")
+        try exec("INSERT INTO queue_state(queue, state) VALUES ('ingestion', 'queue-running');")
 
         try exec("""
         CREATE TABLE queue_item_events (

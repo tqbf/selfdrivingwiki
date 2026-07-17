@@ -39,7 +39,9 @@ public enum QueueItemState: String, Codable, Sendable {
 /// Persisted in `queue_state`; the engine reads this at launch to honour
 /// a user-initiated pause across app restarts.
 public enum QueueRunState: String, Codable, Sendable {
-    case running
+    /// Namespaced rawValue (`"queue-running"`) so it cannot collide with
+    /// `QueueItemState.running` (`"running"`) — issue #508.
+    case running = "queue-running"
     case paused
 }
 
