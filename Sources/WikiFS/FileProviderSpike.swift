@@ -514,8 +514,7 @@ final class FileProviderSpike: ChangeSignaler {
     private func ensureSignalCoalescer() {
         guard signalCoalescer == nil else { return }
         signalCoalescer = ChangeCoalescer(
-            schedule: { [weak self] work in
-                guard let self else { return ChangeCoalescer.Handle(cancel: {}) }
+            schedule: { work in
                 let task = Task { @MainActor in
                     try? await Task.sleep(for: Self.signalCoalesceWindow)
                     guard !Task.isCancelled else { return }

@@ -13,6 +13,8 @@ import Foundation
 // `PODCAST_TRANSCRIPTS` compilation condition. See plans/podcast-transcripts.md.
 let podcastTranscriptsEnabled = ProcessInfo.processInfo.environment["WIKIFS_APP_STORE"] == nil
 let podcastSwiftSettings: [SwiftSetting] = podcastTranscriptsEnabled ? [.define("PODCAST_TRANSCRIPTS")] : []
+/// Treat compiler warnings as errors so they never silently accumulate (#493).
+let strictSwiftSettings: [SwiftSetting] = podcastSwiftSettings + [.unsafeFlags(["-warnings-as-errors"])]
 
 let package = Package(
     name: "WikiFS",
@@ -70,7 +72,7 @@ let package = Package(
             // NaturalLanguage: semantic-search embeddings. JavaScriptCore: the
             // MermaidValidator runs the vendored merval bundle in a JSContext
             // (system framework — no Node) to validate ```mermaid blocks on save.
-            swiftSettings: podcastSwiftSettings,
+            swiftSettings: strictSwiftSettings,
             linkerSettings: [
                 .linkedFramework("NaturalLanguage"),
                 .linkedFramework("JavaScriptCore"),
@@ -87,7 +89,8 @@ let package = Package(
                 "WikiFSCore",
                 .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
             ],
-            path: "Sources/WikiFSMLX"
+            path: "Sources/WikiFSMLX",
+            swiftSettings: [.unsafeFlags(["-warnings-as-errors"])]
         ),
         // The agent execution engine — extracted from the app target so a
         // standalone daemon (`wikid`) can link it. Holds: AgentLauncher,
@@ -104,7 +107,7 @@ let package = Package(
                 .product(name: "ACPModel", package: "swift-acp"),
             ],
             path: "Sources/WikiFSEngine",
-            swiftSettings: podcastSwiftSettings
+            swiftSettings: strictSwiftSettings
         ),
         .executableTarget(
             name: "WikiFS",
@@ -117,7 +120,7 @@ let package = Package(
             path: "Sources/WikiFS",
             // WKWebView for the reader path (Sources/WikiFS/WikiReaderView.swift)
             // — the single markdown reader (replaced the vendored Textual).
-            swiftSettings: podcastSwiftSettings,
+            swiftSettings: strictSwiftSettings,
             linkerSettings: [.linkedFramework("WebKit")]
         ),
         // wikictl's logic (arg parsing, command dispatch, wiki resolution, the
@@ -131,7 +134,7 @@ let package = Package(
             // Must match WikiFSCore's PODCAST_TRANSCRIPTS flag so conditional
             // API in SourceRefreshService (the podcast refresh branch) compiles
             // consistently across the dependency.
-            swiftSettings: podcastSwiftSettings
+            swiftSettings: strictSwiftSettings
         ),
         // wikictl — the agent's write path (plans/llm-wiki.md Phase A). A
         // scriptable CLI that writes straight to a wiki's <ulid>.sqlite in the
@@ -142,7 +145,7 @@ let package = Package(
             name: "wikictl",
             dependencies: ["WikiFSCore", "WikiCtlCore"],
             path: "Sources/wikictl",
-            swiftSettings: podcastSwiftSettings
+            swiftSettings: strictSwiftSettings
         ),
         // wikid — the XPC daemon (plans/multi-wiki-daemon.md Phase 1B). Owns the
         // live wiki registry + store lifecycle, serving clients via XPC. Launchd
@@ -154,7 +157,7 @@ let package = Package(
             name: "wikid",
             dependencies: ["WikiFSCore"],
             path: "Sources/wikid",
-            swiftSettings: podcastSwiftSettings
+            swiftSettings: strictSwiftSettings
         ),
         // podcast-token-helper — the FairPlay/Mescal bearer-token signer for Apple
         // Podcasts transcripts. An ObjC executable ON PURPOSE: it dlopens the private
@@ -192,7 +195,7 @@ let package = Package(
                            .product(name: "ACPModel", package: "swift-acp")],
             path: "Tests/WikiFSTests",
             // Matches WikiFSCore so the gated podcast test files compile in/out too.
-            swiftSettings: podcastSwiftSettings
+            swiftSettings: strictSwiftSettings
         ),
         // The File Provider extension binary. build.sh repackages this into a
         // .appex bundle under Self Driving Wiki.app/Contents/PlugIns and signs it.
@@ -200,6 +203,7 @@ let package = Package(
             name: "WikiFSFileProvider",
             dependencies: ["WikiFSCore"],
             path: "Sources/WikiFSFileProvider",
+            swiftSettings: [.unsafeFlags(["-warnings-as-errors"])],
             linkerSettings: [
                 .linkedFramework("FileProvider"),
                 // Override the Mach-O entry point to _NSExtensionMain (the same

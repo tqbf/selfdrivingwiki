@@ -129,7 +129,7 @@ struct QueueEngineTests {
         let config = QueueEngineConfig(ingestionLimits: ["p1": 1, "p2": 1])
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
 
-        let id1 = try await engine.enqueue(
+        _ = try await engine.enqueue(
             QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
         _ = try await engine.enqueue(
             QueueItemRequest(queue: .ingestion, wikiID: "w2", payload: makePayload()))
@@ -487,7 +487,7 @@ struct QueueEngineTests {
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
 
         // Enqueue items from 3 different wikis.
-        let id1 = try await engine.enqueue(
+        _ = try await engine.enqueue(
             QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
         _ = try await engine.enqueue(
             QueueItemRequest(queue: .ingestion, wikiID: "w2", payload: makePayload()))
@@ -576,7 +576,7 @@ struct QueueEngineTests {
         _ = try await engine.enqueue(
             QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
 
-        let events = try await eventTask.value
+        let events = await eventTask.value
 
         // Should have at least .enqueued, .started, .completed.
         #expect(events.count >= 3)

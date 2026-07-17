@@ -446,7 +446,7 @@ struct SQLiteWikiStoreTests {
             """, nil, nil, nil) == SQLITE_OK)
         // Read back the DDL — must contain ON DELETE CASCADE.
         let ddl = scalarText(raw,
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='source_links';") ?? ""
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='source_links';")
         #expect(ddl.contains("ON DELETE CASCADE"))
         _ = store
     }

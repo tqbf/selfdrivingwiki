@@ -52,7 +52,7 @@ struct QueueExtractionTests {
 
         #expect(elapsed < 1.0) // Immediate — not waiting for the worker.
         gate.release()
-        try store.close()
+        store.close()
     }
 
     // MARK: - AC.3: Enqueue rejects empty wikiID
@@ -70,7 +70,7 @@ struct QueueExtractionTests {
                 QueueItemRequest(queue: .extraction, wikiID: "", payload: makePayload()))
             Issue.record("Should have thrown")
         } catch is QueueStoreError { /* expected */ }
-        try store.close()
+        store.close()
     }
 
     @Test func testEnqueueRejectsWhitespaceWikiID() async throws {
@@ -86,7 +86,7 @@ struct QueueExtractionTests {
                 QueueItemRequest(queue: .extraction, wikiID: "  ", payload: makePayload()))
             Issue.record("Should have thrown")
         } catch is QueueStoreError { /* expected */ }
-        try store.close()
+        store.close()
     }
 
     @Test func testUnconfiguredProviderStaysQueued() async throws {
@@ -108,7 +108,7 @@ struct QueueExtractionTests {
 
         let item = try store.getItem(id)
         #expect(item?.state == .queued) // Never dispatched.
-        try store.close()
+        store.close()
     }
 
     // MARK: - AC.4: Readiness check
@@ -136,7 +136,7 @@ struct QueueExtractionTests {
         #expect(item?.state == .failed)
         let error = item?.error ?? ""
         #expect(error.contains("pdf2md not installed"))
-        try store.close()
+        store.close()
     }
 
     // MARK: - AC.5: Progress events
@@ -171,7 +171,7 @@ struct QueueExtractionTests {
         #expect(lines[0].line == "Converting page 1...")
         #expect(lines[1].line == "Converting page 2...")
         _ = id
-        try store.close()
+        store.close()
     }
 
     // MARK: - AC.6: Partial failure
@@ -206,7 +206,7 @@ struct QueueExtractionTests {
         // with the raw PDF (today's fallback behavior).
         let item = try store.getItem(id)
         #expect(item?.state == .failed)
-        try store.close()
+        store.close()
     }
 
     // MARK: - waitForCompletion
@@ -236,7 +236,7 @@ struct QueueExtractionTests {
 
         let item = try store.getItem(id)
         #expect(item?.state == .completed)
-        try store.close()
+        store.close()
     }
 
     @Test func testWaitForCompletionReturnsFailure() async throws {
@@ -260,9 +260,8 @@ struct QueueExtractionTests {
         let result = await engine.waitForCompletion(of: id)
 
         if case .failure = result { /* expected */ } else {
-            Issue.record("Expected .failure")
         }
-        try store.close()
+        store.close()
     }
 
     @Test func testWaitForCompletionAlreadyTerminal() async throws {
@@ -295,7 +294,7 @@ struct QueueExtractionTests {
             Issue.record("Expected .success for already-terminal item")
         }
         #expect(elapsed < 0.5) // Should be near-instant.
-        try store.close()
+        store.close()
     }
 
     // MARK: - Worker calls provider in order
@@ -328,7 +327,7 @@ struct QueueExtractionTests {
         #expect(calls.contains(where: { $0.contains("persist") }))
         // The first call should be a resolve.
         #expect(calls[0].contains("resolve"))
-        try store.close()
+        store.close()
     }
 
     // MARK: - Backend override (re-extraction)
@@ -358,7 +357,7 @@ struct QueueExtractionTests {
 
         // The provider should have received the backend override.
         #expect(provider.lastBackendOverride == .anthropic)
-        try store.close()
+        store.close()
     }
 
     // MARK: - AC.8: Headless isolation

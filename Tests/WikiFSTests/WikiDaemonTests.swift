@@ -249,7 +249,7 @@ struct WikiDaemonTests {
         let data = try #require(daemon.createWiki(name: "Close Me"))
         let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
 
-        daemon.openStore(wikiID: descriptor.id)
+        _ = daemon.openStore(wikiID: descriptor.id)
         daemon.closeStore(wikiID: descriptor.id)  // Should not crash
 
         // Reopening should work after close
@@ -264,7 +264,7 @@ struct WikiDaemonTests {
         let data = try #require(daemon.createWiki(name: "Token Test"))
         let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
 
-        daemon.openStore(wikiID: descriptor.id)
+        _ = daemon.openStore(wikiID: descriptor.id)
         let token = daemon.changeToken(wikiID: descriptor.id)
         #expect(!token.isEmpty)
     }

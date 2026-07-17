@@ -144,8 +144,8 @@ struct SessionManagerTests {
         let url2 = dir.appendingPathComponent("\(descriptor2.id).sqlite", isDirectory: false)
         _ = try? SQLiteWikiStore(databaseURL: url2)
 
-        let session1 = manager.session(for: descriptor1.id, descriptor: descriptor1)
-        let session2 = manager.session(for: descriptor2.id, descriptor: descriptor2)
+        _ = manager.session(for: descriptor1.id, descriptor: descriptor1)
+        _ = manager.session(for: descriptor2.id, descriptor: descriptor2)
 
         // flushAllSessions should flush both sessions' pending saves without
         // removing them from the cache — no crash, sessions still present.

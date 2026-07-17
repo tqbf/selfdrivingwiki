@@ -331,7 +331,7 @@ struct ContentView: View {
     private func runIngest(sourceID: PageID) {
         DebugLog.ingest("ContentView.runIngest: user pressed Ingest (sourceID=\(sourceID.rawValue))")
         Task {
-            await store.flushPendingSaves()
+            store.flushPendingSaves()
             await enqueueIngestion(
                 sourceIDs: [sourceID],
                 store: store,

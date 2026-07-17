@@ -282,7 +282,7 @@ struct PageVersionTests {
 
         // v3 — save by agent-A (amend fails: different actor → append)
         // This makes v2 have a child (v3).
-        try store.appendPageVersion(
+        _ = try store.appendPageVersion(
             pageID: page.id, title: "Guarded Page", body: "v3 body",
             expectedHeadVersionID: v2, lastEditedBy: "agent-A")
 

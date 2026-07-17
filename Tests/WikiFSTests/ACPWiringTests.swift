@@ -190,10 +190,10 @@ import ACPModel
             try await delegate.handlePermissionRequest(request: request)
         }
         try await Task.sleep(nanoseconds: 50_000_000)
-        #expect(await delegate.pendingSnapshot().count == 1)
+        #expect(delegate.pendingSnapshot().count == 1)
 
         // Drain — the launcher's cancel path.
-        let drained = await delegate.cancelAllPending()
+        let drained = delegate.cancelAllPending()
         #expect(drained == 1)
 
         // The suspended request resumes with a cancelled outcome.
@@ -201,16 +201,16 @@ import ACPModel
         #expect(response.outcome.outcome == "cancelled")
         #expect(response.outcome.optionId == nil)
         // Pending map is empty (no leak).
-        #expect(await delegate.pendingSnapshot().isEmpty)
+        #expect(delegate.pendingSnapshot().isEmpty)
     }
 
     /// Draining with nothing pending is a no-op returning 0 (cancel on an idle
     /// session must be safe).
     @Test func cancelAllPendingNoOpWhenIdle() async {
         let delegate = ACPPermissionDelegate(policy: .alwaysAsk)
-        let drained = await delegate.cancelAllPending()
+        let drained = delegate.cancelAllPending()
         #expect(drained == 0)
-        #expect(await delegate.pendingSnapshot().isEmpty)
+        #expect(delegate.pendingSnapshot().isEmpty)
     }
 
     /// Drain resumes MULTIPLE pending requests (a session can have more than
@@ -226,10 +226,10 @@ import ACPModel
             _ = Task<Void, Never> { _ = try? await delegate.handlePermissionRequest(request: request) }
         }
         try await Task.sleep(nanoseconds: 50_000_000)
-        #expect(await delegate.pendingSnapshot().count == 2)
+        #expect(delegate.pendingSnapshot().count == 2)
 
-        let drained = await delegate.cancelAllPending()
+        let drained = delegate.cancelAllPending()
         #expect(drained == 2)
-        #expect(await delegate.pendingSnapshot().isEmpty)
+        #expect(delegate.pendingSnapshot().isEmpty)
     }
 }
