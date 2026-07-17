@@ -387,6 +387,19 @@ struct WikiCtlCommandTests {
         #expect(lines[1].contains("alpha.txt"))
     }
 
+    @Test func fileListShowsDisplayNameAfterRename() throws {
+        let store = try tempStore()
+        let src = try store.addSource(filename: "User Guide.md", data: Data("# Guide".utf8))
+        try store.renameSource(id: src.id, to: "Self-Driving Wiki — User Guide")
+        let result = try SourceCommand.run(.list(json: false), in: store, cwd: "/tmp")
+        guard case .text(let output) = result.payload else {
+            #expect(Bool(false), "expected .text payload"); return
+        }
+        // Text mode should show the display name, not the filename.
+        #expect(output.contains("Self-Driving Wiki — User Guide"))
+        #expect(!output.contains("User Guide.md"))
+    }
+
     @Test func fileListJSONMatchesFilesJSONL() throws {
         let store = try tempStore()
         _ = try store.addSource(filename: "one.txt", data: Data("aaa".utf8))
@@ -402,7 +415,8 @@ struct WikiCtlCommandTests {
             IndexGenerators.SourceIndexRow(
                 id: s.id.rawValue, filename: s.filename, ext: s.ext,
                 mime: s.mimeType, byteSize: s.byteSize,
-                createdAt: s.createdAt, updatedAt: s.updatedAt, version: s.version
+                createdAt: s.createdAt, updatedAt: s.updatedAt, version: s.version,
+                displayName: s.displayName
             )
         }
         let expected = String(decoding: IndexGenerators.sourcesJSONL(sources: rows), as: UTF8.self)

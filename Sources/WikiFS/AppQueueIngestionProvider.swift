@@ -242,7 +242,10 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         // AgentOperationRunner.runLintPages but with progress + transcript.
         let preflights = pages.map { page in
             let preflight = store.preflightLint(pageID: page.id)
-            return (title: page.title, brokenLinks: preflight?.brokenPageLinks ?? [])
+            let allBroken = (preflight?.brokenPageLinks ?? [])
+                + (preflight?.brokenSourceLinks ?? [])
+                + (preflight?.brokenChatLinks ?? [])
+            return (title: page.title, brokenLinks: allBroken)
         }
         let combinedTitle = pages.map(\.title).joined(separator: ", ")
         let combinedBroken = preflights.flatMap(\.brokenLinks)

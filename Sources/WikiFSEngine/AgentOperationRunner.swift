@@ -403,7 +403,12 @@ public enum AgentOperationRunner {
     ) async {
         let preflights = pages.map { page in
             let preflight = store.preflightLint(pageID: page.id)
-            return (title: page.title, brokenLinks: preflight?.brokenPageLinks ?? [])
+            // Combine all three namespaces so the lint task sees broken source
+            // and chat links too, not just broken page links.
+            let allBroken = (preflight?.brokenPageLinks ?? [])
+                + (preflight?.brokenSourceLinks ?? [])
+                + (preflight?.brokenChatLinks ?? [])
+            return (title: page.title, brokenLinks: allBroken)
         }
         let combinedTitle = pages.map(\.title).joined(separator: ", ")
         let combinedBroken = preflights.flatMap(\.brokenLinks)

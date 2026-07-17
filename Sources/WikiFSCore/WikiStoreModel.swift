@@ -1359,15 +1359,21 @@ public final class WikiStoreModel {
     }
 
     /// Pre-flight checks run before an LLM page-lint: apply `WikiLinkFixer` fixes and
-    /// detect broken `[[page links]]`. Reads fresh from the store so it works for any
+    /// detect broken `[[wiki links]]`. Reads fresh from the store so it works for any
     /// page, not just the loaded draft. If the current page is loaded, also syncs the
     /// draft (without marking it dirty). Returns `nil` when the page cannot be read.
     public struct LintPreflight: Sendable {
         /// `true` when `WikiLinkFixer.applyFixes` rewrote one or more `\]]` brackets.
         public let didFixLinks: Bool
         /// Page titles referenced by `[[wiki links]]` in the page that do not resolve
-        /// to an existing page. Source links (`[[source:X]]`) are excluded.
+        /// to an existing page.
         public let brokenPageLinks: [String]
+        /// Source display names referenced by `[[source:…]]` in the page that do not
+        /// resolve to an existing source.
+        public let brokenSourceLinks: [String]
+        /// Chat titles referenced by `[[chat:…]]` in the page that do not resolve
+        /// to an existing chat.
+        public let brokenChatLinks: [String]
     }
 
     public func preflightLint(pageID: PageID) -> LintPreflight? {
@@ -1390,25 +1396,88 @@ public final class WikiStoreModel {
             }
         }
 
-        // Detect broken page links (source links are intentionally excluded).
+        // Detect broken wiki links across all three namespaces.
         let body = didFix ? fixedBody : original
-        let links = WikiLinkParser.parse(body)
+        let ns = body as NSString
+        let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
+        let matches = WikiLinkSpan.regex.matches(
+            in: body, range: NSRange(location: 0, length: ns.length))
         let knownTitles = Set(summaries.map { $0.title })
+        let knownPageIDs = Set(summaries.map { $0.id.rawValue.uppercased() })
+        let allChats = (try? store.listAllChatsOrderedByID()) ?? []
+        let knownChatTitles = Set(allChats.map { $0.title })
+        let knownChatIDs = Set(allChats.map { $0.id.rawValue.uppercased() })
         // Mirror replaceLinks: a link is broken only when NO candidate reading
         // of its raw target (per WikiLinkResolver — handles `#` in titles)
-        // names an existing page. Unique the output — two parsed links can
+        // names an existing resource. Unique the output — two parsed links can
         // share a base since parse() de-dupes by raw target.
         var seenBroken = Set<String>()
-        let broken = links
-            .filter { $0.linkType == .page }
-            .compactMap { link -> String? in
-                let raw = link.fragment.map { "\(link.target)#\($0)" } ?? link.target
-                guard WikiLinkResolver.resolvedSplit(of: raw, isKnown: { knownTitles.contains($0) }) == nil
-                else { return nil }
-                return seenBroken.insert(link.target).inserted ? link.target : nil
+        var brokenPages: [String] = []
+        var brokenSources: [String] = []
+        var brokenChats: [String] = []
+        for match in matches {
+            let fullRange = match.range
+            // Skip links inside code spans / fenced blocks — `[[Like This]]`
+            // in backticks is example text, not a real link.
+            guard !WikiLinkSpan.isProtected(fullRange, by: codeRanges) else { continue }
+
+            let rawTarget = ns.substring(with: match.range(at: 1))
+            let aliasRange = match.range(at: 2)
+            let rawAlias = aliasRange.location != NSNotFound ? ns.substring(with: aliasRange) : nil
+            let fixed = WikiLinkFixer.fix(target: rawTarget, alias: rawAlias)
+            let collapsed = WikiText.normalized(fixed.target)
+            guard !collapsed.isEmpty else { continue }
+
+            let (base, fragment) = WikiLinkParser.splitFragment(collapsed)
+            guard !base.isEmpty else { continue }
+            let (bareBase, _) = WikiLinkParser.splitVersionPin(base)
+            let (kind, bareTarget) = WikiLinkParser.classify(bareBase)
+            guard !bareTarget.isEmpty, !WikiLinkParser.isEmptyPrefix(bareBase) else { continue }
+
+            let raw = fragment.map { "\(bareTarget)#\($0)" } ?? bareTarget
+
+            let known: (String) -> Bool
+            let knownIDs: Set<String>
+            switch kind {
+            case .page:
+                known = { knownTitles.contains($0) }
+                knownIDs = knownPageIDs
+            case .source:
+                // For source links, also check looseMatchKey so a name with a
+                // dash variant still counts as resolved (mirrors the store's
+                // resolveSourceByName pass 3 and the projection's LinkMaps).
+                known = { [self] name in
+                    self.sources.contains { $0.effectiveName == name }
+                    || self.sources.contains { WikiNameRules.looseMatchKey($0.effectiveName) == WikiNameRules.looseMatchKey(name) }
+                }
+                knownIDs = Set(sources.map { $0.id.rawValue.uppercased() })
+            case .chat:
+                known = { knownChatTitles.contains($0) }
+                knownIDs = knownChatIDs
             }
 
-        return LintPreflight(didFixLinks: didFix, brokenPageLinks: broken)
+            // Canonical ULID links (resolved at save time) are never broken —
+            // the ULID is a stable id, not a title to look up by name.
+            if WikiLinkParser.isCanonicalULID(bareTarget) {
+                guard !knownIDs.contains(bareTarget.uppercased()) else { continue }
+            } else {
+                guard WikiLinkResolver.resolvedSplit(of: raw, isKnown: known) == nil else { continue }
+            }
+
+            let label = fixed.alias.map { WikiText.normalized($0) } ?? bareTarget
+            let dedupLabel = label.isEmpty ? bareTarget : label
+            guard seenBroken.insert("\(kind.rawValue):\(dedupLabel)").inserted else { continue }
+            switch kind {
+            case .page:   brokenPages.append(dedupLabel)
+            case .source: brokenSources.append(dedupLabel)
+            case .chat:   brokenChats.append(dedupLabel)
+            }
+        }
+
+        return LintPreflight(didFixLinks: didFix,
+                             brokenPageLinks: brokenPages,
+                             brokenSourceLinks: brokenSources,
+                             brokenChatLinks: brokenChats)
     }
 
     /// Cancel any pending debounce and save synchronously. Called on page
