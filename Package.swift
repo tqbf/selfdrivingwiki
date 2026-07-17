@@ -81,6 +81,34 @@ let package = Package(
             path: "Sources/WikiFSLinks",
             swiftSettings: strictSwiftSettings
         ),
+        // Markdown/content-transformation cluster — linter, extractors, diffs,
+        // HTML↔markdown converters, slug utils, mermaid validator. Depends on
+        // WikiFSTypes (DebugLog/PageID/etc.) and WikiFSLinks (WikiLinkFixer/
+        // WikiLinkSpan). Extracted from WikiFSCore in module restructuring
+        // Phase 2 (#532). Re-exported by WikiFSCore via ModuleExports.swift.
+        // Previously Sources/WikiFSCore/Markdown/.
+        // JavaScriptCore: MarkdownLinter + MermaidValidator run vendored JS
+        // bundles (markdownlint, merval) in a JSContext (no Node at runtime).
+        .target(
+            name: "WikiFSMarkdown",
+            dependencies: ["WikiFSTypes", "WikiFSLinks"],
+            path: "Sources/WikiFSMarkdown",
+            swiftSettings: strictSwiftSettings,
+            linkerSettings: [.linkedFramework("JavaScriptCore")]
+        ),
+        // Search/embedding cluster — Embedder protocol, NLEmbedder, embedding
+        // service, text chunker, rank fusion, wiki index. Depends only on
+        // WikiFSTypes (PageID/DebugLog). Extracted from WikiFSCore in module
+        // restructuring Phase 3 (#532). Re-exported by WikiFSCore via
+        // ModuleExports.swift. Previously Sources/WikiFSCore/Search/.
+        // NaturalLanguage: NLEmbedder uses NLEmbedding for on-device vectors.
+        .target(
+            name: "WikiFSSearch",
+            dependencies: ["WikiFSTypes"],
+            path: "Sources/WikiFSSearch",
+            swiftSettings: strictSwiftSettings,
+            linkerSettings: [.linkedFramework("NaturalLanguage")]
+        ),
         // Non-UI core: page model, ULID, the WikiStore protocol + SQLite
         // implementation, and the @Observable WikiStoreModel. Depended on by
         // the executable AND the test target so logic is testable without a
@@ -91,16 +119,11 @@ let package = Package(
                 "CSqliteVec",
                 "WikiFSTypes",
                 "WikiFSLinks",
+                "WikiFSMarkdown",
+                "WikiFSSearch",
             ],
             path: "Sources/WikiFSCore",
-            // NaturalLanguage: semantic-search embeddings. JavaScriptCore: the
-            // MermaidValidator runs the vendored merval bundle in a JSContext
-            // (system framework — no Node) to validate ```mermaid blocks on save.
             swiftSettings: strictSwiftSettings,
-            linkerSettings: [
-                .linkedFramework("NaturalLanguage"),
-                .linkedFramework("JavaScriptCore"),
-            ]
         ),
         // App-only MiniLM (MLX/Metal) embeddings. Links MLX (Metal/Accelerate)
         // — which the File Provider extension must NOT (com.apple.fileprovider-
