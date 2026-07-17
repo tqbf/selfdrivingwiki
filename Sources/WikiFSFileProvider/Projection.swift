@@ -1609,7 +1609,7 @@ struct Projection {
             // Sibling eligibility: has a chain AND is NOT markdown-native.
             // Markdown-native sources don't get a sibling — the verbatim .md is the content.
             guard let head = heads[row.id],
-                  MimeType.isText(row.mime) else { return [verbatimNode] }
+                  !MimeType.isText(row.mime) else { return [verbatimNode] }
             let markdownID = byName
                 ? Identity.sourceMarkdownByName(row.id)
                 : Identity.sourceMarkdownByID(row.id)
