@@ -1064,6 +1064,23 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     decisionHandler(.cancel)
                     return
                 }
+                // Relative links in source markdown (e.g. `[Back to README](../README.md)`)
+                // are not `[[wikilinks]]`, so `RelativeLinkRewriter` leaves them as raw
+                // `<a href>`. WKWebView resolves them against the synthetic reader origin
+                // (`WikiReaderOrigin` → `https://reader.wikifs.invalid`). Try to navigate to
+                // a matching source by filename/display-name; if none found, cancel silently
+                // — never open the bogus `reader.wikifs.invalid` URL in the system browser.
+                if url.host == WikiReaderOrigin.url?.host {
+                    let targetName = url.lastPathComponent
+                    let openInNewTab = navigationAction.modifierFlags.contains(.command)
+                    if let store,
+                       let id = store.sourceID(forDisplayName: targetName)
+                               ?? store.sourceID(forDisplayName: (targetName as NSString).deletingPathExtension) {
+                        store.selectSource(byID: id, anchor: url.fragment, openInNewTab: openInNewTab)
+                    }
+                    decisionHandler(.cancel)
+                    return
+                }
                 // External links open in the system browser, not in the reader.
                 // Footnote references are same-page fragment links (`#wiki-fn-…`),
                 // so they fall through to `.allow` and WKWebView scrolls natively.

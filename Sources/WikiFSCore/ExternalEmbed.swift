@@ -63,7 +63,12 @@ public struct SourceEmbedDescriptor: Sendable, Equatable {
 /// syntactically valid https origin that the reader and the embed agree on.
 public enum WikiReaderOrigin {
     /// The origin string, e.g. stamped into `?origin=` on the YouTube embed URL.
-    public static let string = "https://reader.wikifs.local"
+    /// Uses `.invalid` (RFC 2606) so the host **never** resolves — `.local` is
+    /// mDNS/Bonjour-resolvable, so a device on the LAN could advertise this name
+    /// and intercept stray relative fetches/XHRs from the reader document.
+    /// YouTube's `?origin=` check is a string comparison against
+    /// `window.location.origin`, not a DNS lookup, so `.invalid` satisfies it.
+    public static let string = "https://reader.wikifs.invalid"
     /// The same origin as a `URL`, for `loadHTMLString(baseURL:)`.
     public static var url: URL? { URL(string: string) }
 }
