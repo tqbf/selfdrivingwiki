@@ -38,6 +38,7 @@ struct PageTitleCollisionTests {
     @Test func newPageWithoutExplicitTitleGetsTimestamp() throws {
         let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
         model.newPage()
+        model.reloadFromStore()
         let summary = try #require(model.summaries.first)
         #expect(summary.title.hasPrefix("Untitled "))
         #expect(summary.title != "Untitled")
@@ -46,6 +47,7 @@ struct PageTitleCollisionTests {
     @Test func newPageInNewTabWithoutExplicitTitleGetsTimestamp() throws {
         let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
         model.newPageInNewTab()
+        model.reloadFromStore()
         let summary = try #require(model.summaries.first)
         #expect(summary.title.hasPrefix("Untitled "))
         #expect(summary.title != "Untitled")
@@ -57,12 +59,14 @@ struct PageTitleCollisionTests {
         let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
         model.newPage(title: "First Page")
         model.newPage(title: "Second Page")
+        model.reloadFromStore()
         guard case let .page(secondID)? = model.selection else {
             Issue.record("expected a page selection"); return
         }
 
         // Try to rename Second Page → "First Page" (already exists).
         model.rename(secondID, to: "First Page")
+        model.reloadFromStore()
 
         // The rename should be blocked: title unchanged, conflict surfaced.
         #expect(model.summaries.first { $0.id == secondID }?.title == "Second Page")
@@ -72,12 +76,14 @@ struct PageTitleCollisionTests {
     @Test func renameToOwnTitleIsAllowed() throws {
         let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
         model.newPage(title: "Same Title")
+        model.reloadFromStore()
         guard case let .page(id)? = model.selection else {
             Issue.record("expected a page selection"); return
         }
 
         // Renaming to the same title should not trigger a conflict.
         model.rename(id, to: "Same Title")
+        model.reloadFromStore()
         #expect(model.renameConflictingTitle == nil)
         #expect(model.summaries.first { $0.id == id }?.title == "Same Title")
     }
@@ -86,12 +92,14 @@ struct PageTitleCollisionTests {
         let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
         model.newPage(title: "My Page")
         model.newPage(title: "Other Page")
+        model.reloadFromStore()
         guard case let .page(otherID)? = model.selection else {
             Issue.record("expected a page selection"); return
         }
 
         // "MY PAGE" should collide with "My Page" (case-insensitive).
         model.rename(otherID, to: "MY PAGE")
+        model.reloadFromStore()
         #expect(model.summaries.first { $0.id == otherID }?.title == "Other Page")
         #expect(model.renameConflictingTitle == "MY PAGE")
     }
@@ -100,11 +108,13 @@ struct PageTitleCollisionTests {
         let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
         model.newPage(title: "Alpha")
         model.newPage(title: "Beta")
+        model.reloadFromStore()
         guard case let .page(betaID)? = model.selection else {
             Issue.record("expected a page selection"); return
         }
 
         model.rename(betaID, to: "Gamma")
+        model.reloadFromStore()
         #expect(model.renameConflictingTitle == nil)
         #expect(model.summaries.first { $0.id == betaID }?.title == "Gamma")
     }
@@ -113,6 +123,7 @@ struct PageTitleCollisionTests {
         let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
         model.newPage(title: "A")
         model.newPage(title: "B")
+        model.reloadFromStore()
         guard case let .page(bID)? = model.selection else {
             Issue.record("expected a page selection"); return
         }

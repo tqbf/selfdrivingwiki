@@ -33,6 +33,7 @@ struct WikiStoreModelAddURLTests {
             finalURL: URL(string: "https://example.com/doc")!))
 
         let outcome = try await model.addURL("example.com/doc", fetcher: fetcher)
+        model.reloadFromStore()
 
         #expect(outcome.kind == .htmlConverted)
         #expect(outcome.filename == "My Doc.md")
@@ -58,6 +59,7 @@ struct WikiStoreModelAddURLTests {
             finalURL: URL(string: "https://example.com/files/paper.pdf")!))
 
         let outcome = try await model.addURL("https://example.com/files/paper.pdf", fetcher: fetcher)
+        model.reloadFromStore()
         #expect(outcome.kind == .pdf)
         #expect(model.sources.first?.filename == "paper.pdf")
         let id = model.sources.first!.id

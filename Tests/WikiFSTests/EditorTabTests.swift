@@ -762,6 +762,7 @@ struct EditorTabTests {
         let f1 = try store.addSource(filename: "report.pdf", data: Data("pdf".utf8))
         model.reloadFromStore()
         model.renameSource(id: f1.id, to: "My Custom Title")
+        model.reloadFromStore()
         #expect(model.tabTitle(for: .source(f1.id)) == "My Custom Title")
     }
 
@@ -773,6 +774,7 @@ struct EditorTabTests {
         #expect(model.tabs[0].title == "doc.pdf")
 
         model.renameSource(id: f1.id, to: "Annual Report")
+        model.reloadFromStore()
         #expect(model.tabs[0].title == "Annual Report")
     }
 

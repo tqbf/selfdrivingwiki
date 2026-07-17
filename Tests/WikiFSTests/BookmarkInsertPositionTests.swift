@@ -28,7 +28,9 @@ struct BookmarkInsertPositionTests {
         let model = WikiStoreModel(store: store)
 
         model.addPageRef(parentID: nil, pageID: p1.id)
+        model.reloadBookmarkNodes()
         model.addPageRef(parentID: nil, pageID: p2.id)
+        model.reloadBookmarkNodes()
 
         let nodes = model.bookmarkNodes.sorted { $0.position < $1.position }
         #expect(nodes.map(\.position) == [0, 1])
@@ -44,6 +46,7 @@ struct BookmarkInsertPositionTests {
 
         let earlier = try store.createPage(title: "Earlier")
         model.addPageRef(parentID: nil, pageID: earlier.id, position: 0)
+        model.reloadBookmarkNodes()
 
         let nodes = model.bookmarkNodes.sorted { $0.position < $1.position }
         #expect(nodes.map(\.position) == [0, 1])
@@ -59,11 +62,15 @@ struct BookmarkInsertPositionTests {
         let c = try store.createPage(title: "C")
         let model = WikiStoreModel(store: store)
         model.addPageRef(parentID: nil, pageID: a.id) // 0
+        model.reloadBookmarkNodes()
         model.addPageRef(parentID: nil, pageID: b.id) // 1
+        model.reloadBookmarkNodes()
         model.addPageRef(parentID: nil, pageID: c.id) // 2
+        model.reloadBookmarkNodes()
 
         let mid = try store.createPage(title: "MID")
         model.addPageRef(parentID: nil, pageID: mid.id, position: 1)
+        model.reloadBookmarkNodes()
 
         let nodes = model.bookmarkNodes.sorted { $0.position < $1.position }
         #expect(nodes.map(\.position) == [0, 1, 2, 3])
@@ -80,10 +87,13 @@ struct BookmarkInsertPositionTests {
         let s2 = try store.addSource(filename: "b.pdf", data: Data("y".utf8))
         let model = WikiStoreModel(store: store)
         model.addSourceRef(parentID: nil, sourceID: s1.id) // 0
+        model.reloadBookmarkNodes()
         model.addSourceRef(parentID: nil, sourceID: s2.id) // 1
+        model.reloadBookmarkNodes()
 
         let between = try store.addSource(filename: "mid.pdf", data: Data("z".utf8))
         model.addSourceRef(parentID: nil, sourceID: between.id, position: 1)
+        model.reloadBookmarkNodes()
 
         let nodes = model.bookmarkNodes.sorted { $0.position < $1.position }
         #expect(nodes.map(\.position) == [0, 1, 2])
@@ -102,7 +112,9 @@ struct BookmarkInsertPositionTests {
         let a = try store.createPage(title: "A")
         let b = try store.createPage(title: "B")
         model.addPageRef(parentID: folder.id, pageID: a.id) // 0
+        model.reloadBookmarkNodes()
         model.addPageRef(parentID: folder.id, pageID: b.id) // 1
+        model.reloadBookmarkNodes()
 
         // Also a root-level ref, to confirm it's untouched.
         let root = try store.createPage(title: "Root")
@@ -110,6 +122,7 @@ struct BookmarkInsertPositionTests {
 
         let mid = try store.createPage(title: "MID")
         model.addPageRef(parentID: folder.id, pageID: mid.id, position: 0)
+        model.reloadBookmarkNodes()
 
         let folderChildren = model.bookmarkNodes
             .filter { $0.parentID == folder.id }
@@ -134,6 +147,7 @@ struct BookmarkInsertPositionTests {
         let b = try store.createPage(title: "B")
         // No siblings exist beyond position 0; position 5 is out of range.
         model.addPageRef(parentID: nil, pageID: b.id, position: 5)
+        model.reloadBookmarkNodes()
 
         let nodes = model.bookmarkNodes.sorted { $0.position < $1.position }
         #expect(nodes.map(\.position) == [0, 1],

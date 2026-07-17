@@ -56,6 +56,7 @@ struct WikiStoreModelDropRoutingTests {
             finalURL: URL(string: "https://example.com/article")!))
 
         await model.addDroppedURLs([webloc], fetcher: fetcher)
+        model.reloadFromStore()
 
         // Routed through addURL → converted markdown, NOT the raw plist bytes.
         #expect(model.sources.count == 1)
@@ -77,6 +78,7 @@ struct WikiStoreModelDropRoutingTests {
         await model.addDroppedURLs(
             [URL(string: "https://example.com/page")!],
             fetcher: fetcher)
+        model.reloadFromStore()
 
         #expect(model.sources.count == 1)
         #expect(model.sources.first?.filename == "Page.md")
@@ -94,6 +96,7 @@ struct WikiStoreModelDropRoutingTests {
 
         await model.addDroppedURLs([file], fetcher: FakeFetcher(response: URLFetchService.FetchResponse(
             data: Data(), contentType: nil, finalURL: URL(string: "https://unused.example")!)))
+        model.reloadFromStore()
 
         #expect(model.sources.count == 1)
         #expect(model.sources.first?.filename == "notes.txt")
@@ -120,6 +123,7 @@ struct WikiStoreModelDropRoutingTests {
             finalURL: URL(string: "https://example.com/web")!))
 
         await model.addDroppedURLs([webloc, txt], fetcher: fetcher)
+        model.reloadFromStore()
 
         let names = model.sources.map(\.filename).sorted()
         #expect(names == ["Web.md", "doc.txt"])

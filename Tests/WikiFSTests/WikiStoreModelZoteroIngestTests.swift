@@ -57,6 +57,7 @@ struct WikiStoreModelZoteroIngestTests {
         try await model.ingestFromZotero(
             attachment(key: "DJLXA7DG", filename: "report.pdf"),
             parentItem: parentItem(), zoteroDir: zoteroDir)
+        model.reloadFromStore()
 
         #expect(model.sources.count == 1)
         #expect(model.sources.first?.filename == "report.pdf")
@@ -78,6 +79,7 @@ struct WikiStoreModelZoteroIngestTests {
         try await model.ingestFromZotero(
             attachment(key: "DJLXA7DG", filename: "report.pdf"),
             parentItem: parentItem(key: "PARENT1", title: "The Road Not Taken"), zoteroDir: zoteroDir)
+        model.reloadFromStore()
 
         #expect(model.sources.count == 1)
         let summary = model.sources.first!
@@ -131,6 +133,7 @@ struct WikiStoreModelZoteroIngestTests {
             attachment(key: "K1", filename: "paper.pdf"), parentItem: parentItem(), zoteroDir: zoteroDir)
         try await model.ingestFromZotero(
             attachment(key: "K1", filename: "notes.md", contentType: "text/markdown"), parentItem: parentItem(), zoteroDir: zoteroDir)
+        model.reloadFromStore()
 
         #expect(model.sources.count == 2)
         let filenames = Set(model.sources.map(\.filename))

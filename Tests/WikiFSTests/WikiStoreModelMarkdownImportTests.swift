@@ -50,6 +50,7 @@ struct WikiStoreModelMarkdownImportTests {
         ])
 
         let result = await model.importFromMarkdownFolder(directory: dir)
+        model.reloadFromStore()
         #expect(result.imported == 3)
         #expect(result.errors.isEmpty)
         #expect(model.sources.count == 3)
@@ -64,6 +65,7 @@ struct WikiStoreModelMarkdownImportTests {
         ])
 
         _ = await model.importFromMarkdownFolder(directory: dir)
+        model.reloadFromStore()
         let filenames = Set(model.sources.map(\.filename))
         #expect(filenames == ["My Note.md", "Project Plan.md"])
     }
@@ -75,6 +77,7 @@ struct WikiStoreModelMarkdownImportTests {
         let dir = try tempMarkdownDir(files: ["note.md": body])
 
         _ = await model.importFromMarkdownFolder(directory: dir)
+        model.reloadFromStore()
         #expect(model.sources.count == 1)
         let id = model.sources.first!.id
         let storedContent = try store.sourceContent(id: id)
@@ -92,6 +95,7 @@ struct WikiStoreModelMarkdownImportTests {
         ])
 
         let result = await model.importFromMarkdownFolder(directory: dir)
+        model.reloadFromStore()
         #expect(result.imported == 1)
         #expect(model.sources.count == 1)
         #expect(model.sources.first?.filename == "note.md")
@@ -116,6 +120,7 @@ struct WikiStoreModelMarkdownImportTests {
         let dir = try tempMarkdownDir(files: [:])
 
         let result = await model.importFromMarkdownFolder(directory: dir)
+        model.reloadFromStore()
         #expect(result.imported == 0)
         #expect(result.errors.isEmpty)
         #expect(model.sources.isEmpty)
@@ -130,6 +135,7 @@ struct WikiStoreModelMarkdownImportTests {
         ])
 
         let result = await model.importFromMarkdownFolder(directory: dir)
+        model.reloadFromStore()
         #expect(result.imported == 0)
         #expect(model.sources.isEmpty)
     }
@@ -144,6 +150,7 @@ struct WikiStoreModelMarkdownImportTests {
         ])
 
         let result = await model.importFromMarkdownFolder(directory: dir)
+        model.reloadFromStore()
         #expect(result.imported == 3)
         #expect(result.errors.isEmpty)
         let filenames = Set(model.sources.map(\.filename))
@@ -174,6 +181,7 @@ struct WikiStoreModelMarkdownImportTests {
         let dir = try tempMarkdownDir(files: ["ObsidianNote.md": body])
 
         _ = await model.importFromMarkdownFolder(directory: dir)
+        model.reloadFromStore()
         #expect(model.sources.count == 1)
         let id = model.sources.first!.id
         let stored = try store.sourceContent(id: id)
@@ -205,6 +213,7 @@ struct WikiStoreModelMarkdownImportTests {
         try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
 
         let result = await model.importFromMarkdownFolder(directory: root)
+        model.reloadFromStore()
         #expect(result.imported == 1)
         #expect(model.sources.first?.filename == "visible.md")
     }
@@ -216,12 +225,14 @@ struct WikiStoreModelMarkdownImportTests {
         // First import
         let dir1 = try tempMarkdownDir(files: ["one.md": "# One"])
         let r1 = await model.importFromMarkdownFolder(directory: dir1)
+        model.reloadFromStore()
         #expect(r1.imported == 1)
         let countAfterFirst = model.sources.count
 
         // Second import
         let dir2 = try tempMarkdownDir(files: ["two.md": "# Two"])
         let r2 = await model.importFromMarkdownFolder(directory: dir2)
+        model.reloadFromStore()
         #expect(r2.imported == 1)
         #expect(model.sources.count == countAfterFirst + 1)
     }
@@ -249,6 +260,7 @@ struct WikiStoreModelMarkdownImportTests {
         let model = WikiStoreModel(store: store)
 
         model.addSource(filename: "note.md", data: Data("# Hello".utf8))
+        model.reloadFromStore()
         #expect(model.sources.count == 1)
         let source = model.sources[0]
 
@@ -275,6 +287,7 @@ struct WikiStoreModelMarkdownImportTests {
         let model = WikiStoreModel(store: store)
 
         model.addSource(filename: "data.bin", data: Data([0x00, 0x01, 0x02]))
+        model.reloadFromStore()
         #expect(model.sources.count == 1)
         let source = model.sources[0]
 
