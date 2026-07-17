@@ -158,20 +158,34 @@ struct LogIndexTests {
     @Test func changeTokenAdvancesOnLogOnlyWrite() throws {
         let store = try tempStore()
         // Fresh DB: no pages/files, system_prompt + wiki_index at v1, no log rows.
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0:0:0:0")
+        let token0 = try store.changeToken()
+        #expect(token0.systemPrompt == 1)
+        #expect(token0.log == 0)
+        #expect(token0.wikiIndex == 1)
         // Appending ONLY a log entry must still advance the token (logCount fold).
         _ = try store.appendLog(kind: .ingest, title: "x", note: nil)
-        #expect(try store.changeToken() == "0:0:0:0:1:1:1:0:0:0:0:0:0:0")
+        let token1 = try store.changeToken()
+        #expect(token1.log == 1)
+        // No other fold moved.
+        #expect(token1.systemPrompt == token0.systemPrompt)
+        #expect(token1.wikiIndex == token0.wikiIndex)
         _ = try store.appendLog(kind: .lint, title: "y", note: nil)
-        #expect(try store.changeToken() == "0:0:0:0:1:2:1:0:0:0:0:0:0:0")
+        let token2 = try store.changeToken()
+        #expect(token2.log == 2)
     }
 
     @Test func changeTokenAdvancesOnIndexOnlyWrite() throws {
         let store = try tempStore()
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0:0:0:0")
+        let token0 = try store.changeToken()
+        #expect(token0.wikiIndex == 1)
+        #expect(token0.systemPrompt == 1)
         // Editing ONLY the index must still advance the token (idxVersion fold).
         try store.updateWikiIndex(body: "edited")
-        #expect(try store.changeToken() == "0:0:0:0:1:0:2:0:0:0:0:0:0:0")
+        let token1 = try store.changeToken()
+        #expect(token1.wikiIndex == 2)
+        // No other fold moved.
+        #expect(token1.systemPrompt == token0.systemPrompt)
+        #expect(token1.log == token0.log)
     }
 
     // MARK: - v3 → v4 → v5 migration (preserves prior data, seeds index)

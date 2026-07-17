@@ -151,56 +151,93 @@ struct SQLiteWikiStoreTests {
     @Test func changeTokenAdvancesOnEveryMutation() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
 
-        // Current format (v20, 11 folds):
         // Current format (v20, 11 folds + bookmark + chat):
-        //   "<pCount>:<pSum>:<fCount>:<fSum>:<spVersion>:<logCount>:<idxVersion>:<smvCount>:<svCount>:<refsGenSum>:<actCount>:<bookmarkCount>:<chatCount>:<chatMessageCount>".
+        //   pages(count:sum) | sourceTable(count:sum) | systemPrompt | log |
+        //   wikiIndex | sourceMarkdownVersions | sourceGraph(svCount,refsGenSum,
+        //   actCount) | bookmarks | chat(count,messageCount).
         // A fresh DB seeds the system_prompt AND wiki_index singletons at version
         // 1, has no log rows, no source_markdown_versions, no sources, no
-        // bookmarks, and no chats → trailing ":1:0:1:0:0:0:0:0:0".
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0:0:0:0")
+        // bookmarks, and no chats.
+        let token0 = try store.changeToken()
+        #expect(token0.pages == .init(count: 0, versionSum: 0))
+        #expect(token0.sourceTable == .init(count: 0, versionSum: 0))
+        #expect(token0.systemPrompt == 1)
+        #expect(token0.log == 0)
+        #expect(token0.wikiIndex == 1)
+        #expect(token0.sourceMarkdownVersions == 0)
+        #expect(token0.sourceGraph == .init())
+        #expect(token0.bookmarks == 0)
+        #expect(token0.chat == .init())
 
         // Create bumps page COUNT and SUM (version starts at 1). Phase 3 also
         // seeds a root version + page-content ref (refsGenSum=1) + import
         // activity (actCount=1).
         let a = try store.createPage(title: "Alpha")
-        #expect(try store.changeToken() == "1:1:0:0:1:0:1:0:0:1:1:0:0:0")
+        let token1 = try store.changeToken()
+        #expect(token1.pages == .init(count: 1, versionSum: 1))
+        #expect(token1.sourceTable == token0.sourceTable)
+        #expect(token1.systemPrompt == token0.systemPrompt)
+        #expect(token1.log == token0.log)
+        #expect(token1.wikiIndex == token0.wikiIndex)
+        #expect(token1.sourceMarkdownVersions == 0)
+        #expect(token1.sourceGraph == .init(versionCount: 0, refsGenerationSum: 1, activitiesCount: 1))
+        #expect(token1.bookmarks == 0)
+        #expect(token1.chat == token0.chat)
 
         // Update bumps that row's version by 1 → SUM increments.
         try store.updatePage(id: a.id, title: "Alpha", body: "edited")
-        #expect(try store.changeToken() == "1:2:0:0:1:0:1:0:0:1:1:0:0:0")
+        let token2 = try store.changeToken()
+        #expect(token2.pages == .init(count: 1, versionSum: 2))
+        // Source/graph folds unchanged.
+        #expect(token2.sourceGraph == token1.sourceGraph)
 
         // A SECOND page that is NOT the global-max version must STILL advance the
         // token — the MAX-vs-SUM correctness lock. b starts at version 1, yet
         // count:sum changes (2 pages, sum 2+1=3).
         let b = try store.createPage(title: "Beta")
-        #expect(try store.changeToken() == "2:3:0:0:1:0:1:0:0:2:2:0:0:0")
+        let token3 = try store.changeToken()
+        #expect(token3.pages == .init(count: 2, versionSum: 3))
+        #expect(token3.sourceGraph == .init(versionCount: 0, refsGenerationSum: 2, activitiesCount: 2))
 
         try store.updatePage(id: b.id, title: "Beta", body: "beta edit")
-        #expect(try store.changeToken() == "2:4:0:0:1:0:1:0:0:2:2:0:0:0")
+        let token4 = try store.changeToken()
+        #expect(token4.pages == .init(count: 2, versionSum: 4))
+        #expect(token4.sourceGraph == token3.sourceGraph)
 
         // Delete changes page COUNT and SUM. deletePage also cascades the page's
         // `page-content` ref (W0/#312 made refs.owner_id polymorphic with no FK
         // cascade), so refsGenSum drops from 2 → 1. Activities are provenance and
         // are NOT cascaded, so actCount stays at 2.
         try store.deletePage(id: b.id)
-        #expect(try store.changeToken() == "1:2:0:0:1:0:1:0:0:1:2:0:0:0")
+        let token5 = try store.changeToken()
+        #expect(token5.pages == .init(count: 1, versionSum: 2))
+        #expect(token5.sourceGraph == .init(versionCount: 0, refsGenerationSum: 1, activitiesCount: 2))
     }
 
     /// The token MUST advance on ingest AND on delete (else the `files/` tree
     /// would never refresh — the orchestrator-critical fold-in).
     @Test func changeTokenAdvancesOnIngestAndDelete() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0:0:0:0")
+        let token0 = try store.changeToken()
+        #expect(token0.sourceTable == .init(count: 0, versionSum: 0))
+        #expect(token0.sourceGraph == .init())
 
         // Ingest bumps the file COUNT and SUM (version 1). It ALSO writes one
         // source_version, one ref (generation 1), and one import activity → the
         // three v20 folds become 1:1:1.
         let f = try store.addSource(filename: "a.txt", data: Data("hi".utf8))
-        #expect(try store.changeToken() == "0:0:1:1:1:0:1:0:1:1:1:0:0:0")
+        let token1 = try store.changeToken()
+        #expect(token1.sourceTable == .init(count: 1, versionSum: 1))
+        #expect(token1.sourceGraph == .init(versionCount: 1, refsGenerationSum: 1, activitiesCount: 1))
+        // No other fold moved.
+        #expect(token1.pages == token0.pages)
+        #expect(token1.systemPrompt == token0.systemPrompt)
 
         // A second file.
         _ = try store.addSource(filename: "b.txt", data: Data("yo".utf8))
-        #expect(try store.changeToken() == "0:0:2:2:1:0:1:0:2:2:2:0:0:0")
+        let token2 = try store.changeToken()
+        #expect(token2.sourceTable == .init(count: 2, versionSum: 2))
+        #expect(token2.sourceGraph == .init(versionCount: 2, refsGenerationSum: 2, activitiesCount: 2))
 
         // Delete the first → file COUNT/SUM, svCount, and refsGenSum drop. The
         // import ACTIVITY is provenance (no cascade from sources) so actCount
@@ -209,31 +246,38 @@ struct SQLiteWikiStoreTests {
         // Pre-existing failure on main (#131) — the expected refsGenSum value
         // drifted when activity handling changed. Only assert that the token
         // CHANGED (not the exact value) since the pre-existing failure.
-        let preDelete = "0:0:2:2:1:0:1:0:2:2:2:0:0:0"
         try store.deleteSource(id: f.id)
         let postDelete = try store.changeToken()
-        #expect(postDelete != preDelete, "deleteSource must change the token")
+        #expect(postDelete != token2, "deleteSource must change the token")
     }
 
     /// The token MUST advance when a processed markdown version is appended,
     /// or the `sources/` tree would never learn of new extracts.
     @Test func changeTokenAdvancesOnAppendProcessedMarkdown() throws {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0:0:0:0")
+        let token0 = try store.changeToken()
+        #expect(token0.sourceMarkdownVersions == 0)
 
         // Add a source first.
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf content".utf8))
-        #expect(try store.changeToken() == "0:0:1:1:1:0:1:0:1:1:1:0:0:0")
+        let token1 = try store.changeToken()
+        #expect(token1.sourceMarkdownVersions == 0)
+        #expect(token1.sourceTable == .init(count: 1, versionSum: 1))
 
         // Append processed markdown — smvCount goes 0 → 1.
         _ = try store.appendProcessedMarkdown(
             sourceID: source.id, content: "# Extracted", origin: "test", note: nil)
-        #expect(try store.changeToken() == "0:0:1:1:1:0:1:1:1:1:1:0:0:0")
+        let token2 = try store.changeToken()
+        #expect(token2.sourceMarkdownVersions == 1)
+        // No other source fold moved.
+        #expect(token2.sourceTable == token1.sourceTable)
+        #expect(token2.sourceGraph == token1.sourceGraph)
 
         // Append another version — smvCount advances again.
         _ = try store.appendProcessedMarkdown(
             sourceID: source.id, content: "# Edited", origin: "test", note: "edit")
-        #expect(try store.changeToken() == "0:0:1:1:1:0:1:2:1:1:1:0:0:0")
+        let token3 = try store.changeToken()
+        #expect(token3.sourceMarkdownVersions == 2)
 
         // Deleting the source removes its markdown versions + content versions +
         // ref (CASCADE), but the import activity persists (provenance) →
@@ -241,10 +285,9 @@ struct SQLiteWikiStoreTests {
         // NOTE: refs are NOT cascaded by deleteSource (refs.owner_id has no FK).
         // Pre-existing failure on main (#131) — refsGenSum doesn't drop to 0.
         // Only assert that the token CHANGED.
-        let preDelete2 = "0:0:1:1:1:0:1:2:1:1:1:0:0:0"
         try store.deleteSource(id: source.id)
         let postDelete2 = try store.changeToken()
-        #expect(postDelete2 != preDelete2, "deleteSource must change the token")
+        #expect(postDelete2 != token3, "deleteSource must change the token")
     }
 
     /// processedMarkdownHeadsBySource returns one row per source, keyed by

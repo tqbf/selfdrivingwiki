@@ -153,13 +153,13 @@ final class WikiDaemon {
         queue.sync { () -> String in
             // If the store is open, read the token directly
             if let store = openStores[wikiID] {
-                return (try? store.changeToken()) ?? ""
+                return (try? store.changeToken())?.rawString ?? ""
             }
             // Store not held open — open it transiently to read the token
             guard registry.descriptor(id: wikiID) != nil else { return "" }
             let dbURL = databaseURL(forWikiID: wikiID)
             guard let store = try? SQLiteWikiStore(databaseURL: dbURL) else { return "" }
-            return (try? store.changeToken()) ?? ""
+            return (try? store.changeToken())?.rawString ?? ""
         }
     }
 

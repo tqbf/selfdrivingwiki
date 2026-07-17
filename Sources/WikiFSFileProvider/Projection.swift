@@ -511,8 +511,9 @@ struct Projection {
         }
         guard let store = openReadStore(),
               let token = try? store.changeToken() else { return "0:0" }
-        readStoreHolder?.cacheToken(token)
-        return token
+        let raw = token.rawString
+        readStoreHolder?.cacheToken(raw)
+        return raw
     }
 
     // MARK: - Flat resource projections (slice 2b)

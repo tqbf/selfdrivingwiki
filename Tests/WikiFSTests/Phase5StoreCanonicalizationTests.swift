@@ -160,11 +160,11 @@ struct Phase5StoreCanonicalizationTests {
     /// the stamp to v22 so reopening runs the v23 sweep. Returns the URL + the
     /// linker page id + the target id + the pre-migration token/version.
     private func buildRewoundV22DB() throws -> (url: URL, linkerID: PageID, targetID: PageID,
-                                                 token: String, version: Int) {
+                                                 token: ChangeToken, version: Int) {
         let url = tempDatabaseURL()
         let targetID: PageID
         let linkerID: PageID
-        let token: String
+        let token: ChangeToken
         let version: Int
         do {
             let store = try SQLiteWikiStore(databaseURL: url)
