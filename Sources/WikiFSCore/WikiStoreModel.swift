@@ -1803,7 +1803,7 @@ public final class WikiStoreModel {
         filename: String, data: Data, mimeType: String?, zoteroItemTitle: String?
     ) async -> String?? {
         let ext = (filename as NSString).pathExtension.lowercased()
-        let isPDF = ext == "pdf" || mimeType?.lowercased() == "application/pdf"
+        let isPDF = ext == "pdf" || MimeType.isPDF(mimeType)
         guard isPDF else { return nil }
         return await Task.detached(priority: .userInitiated) {
             DisplayNameResolver.resolve(
@@ -2400,7 +2400,7 @@ public final class WikiStoreModel {
             return head
         }
         // Seed v1 from verbatim bytes for markdown-native sources (MIME-keyed).
-        guard let mime = file.mimeType, mime.hasPrefix("text/") else { return nil }
+        guard MimeType.isText(file.mimeType) else { return nil }
         guard let bytes = try? store.sourceContent(id: file.id),
               let text = String(data: bytes, encoding: .utf8) else { return nil }
         do {

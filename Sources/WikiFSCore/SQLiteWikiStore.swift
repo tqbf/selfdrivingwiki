@@ -8377,7 +8377,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             activityID: textOrNull(7),
             sourceVersionID: textOrNull(8),
             blobHash: textOrNull(9),
-            mimeType: textOrNull(10) ?? "text/markdown",
+            mimeType: textOrNull(10) ?? MimeType.markdown,
             technique: textOrNull(11)
         )
     }
@@ -8711,7 +8711,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         return SourceMarkdownVersion(
             id: id, sourceID: sourceID, parentID: parentID,
             content: content, origin: origin, note: note, createdAt: now,
-            blobHash: blobHash, mimeType: "text/markdown", technique: technique
+            blobHash: blobHash, mimeType: MimeType.markdown, technique: technique
         )
         }
     }
@@ -8798,7 +8798,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             id: id, sourceID: sourceID, parentID: parentID,
             content: content, origin: .extraction, note: note, createdAt: now,
             activityID: storedActivityID, sourceVersionID: resolvedSourceVersionID,
-            blobHash: storedBlobHash, mimeType: "text/markdown",
+            blobHash: storedBlobHash, mimeType: MimeType.markdown,
             technique: backend.rawValue
         )
         }

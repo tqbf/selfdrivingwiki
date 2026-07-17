@@ -46,7 +46,7 @@ func enqueueIngestion(
     for sourceID in newSourceIDs {
         // Check if this source needs extraction first.
         if let source = store.sources.first(where: { $0.id == sourceID }),
-           source.mimeType == "application/pdf",
+           MimeType.isPDF(source.mimeType),
            store.processedMarkdownHead(for: source) == nil {
             // PDF without extracted markdown → enqueue extraction, wait
             // for it, then include in ingestion batch.

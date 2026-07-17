@@ -168,7 +168,7 @@ public struct GeminiExtractionClient: MarkdownExtractor {
             "contents": [[
                 "role": "user",
                 "parts": [
-                    ["inline_data": ["mime_type": "application/pdf", "data": b64]],
+                    ["inline_data": ["mime_type": MimeType.pdf, "data": b64]],
                     ["text": ExtractionPrompts.instruction],
                 ],
             ]],

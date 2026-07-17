@@ -60,7 +60,7 @@ final class BlobSchemeHandler: NSObject, WKURLSchemeHandler {
         }
 
         let headers = [
-            "Content-Type": mimeType ?? "application/octet-stream",
+            "Content-Type": mimeType ?? MimeType.octetStream,
             "Content-Length": "\(data.count)"
         ]
         let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",

@@ -1212,7 +1212,7 @@ struct Projection {
             metadataVersion: Data(head.id.rawValue.utf8),
             created: head.createdAt, modified: head.createdAt,
             ingestedExt: "md",
-            mimeType: "text/markdown"
+            mimeType: MimeType.markdown
         )
     }
 
@@ -1399,7 +1399,7 @@ struct Projection {
             // Sibling eligibility mirrors `sourceNodes`: a processed head AND a
             // non-`text/*` mime yields the `.md` sibling; otherwise the verbatim file.
             let hasSibling = heads[entry.id] != nil
-                && (entry.mime.map { !$0.hasPrefix("text/") } ?? false)
+                && (entry.mime.map { !MimeType.isText($0) } ?? false)
             let file = hasSibling
                 ? FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: "md", sourceID: entry.id)
                 : FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: entry.ext, sourceID: entry.id)
@@ -1456,7 +1456,7 @@ struct Projection {
     private func rewrittenVerbatimSourceContent(
         id: PageID, mimeType: String?, maps: LinkMaps
     ) -> Data? {
-        guard let mime = mimeType, mime.hasPrefix("text/"),
+        guard MimeType.isText(mimeType),
               let siblingMap = maps.siblingImages[id], !siblingMap.isEmpty,
               let store = openReadStore(),
               let raw = try? store.sourceContent(id: id),
@@ -1609,7 +1609,7 @@ struct Projection {
             // Sibling eligibility: has a chain AND is NOT markdown-native.
             // Markdown-native sources don't get a sibling — the verbatim .md is the content.
             guard let head = heads[row.id],
-                  let mime = row.mime, !mime.hasPrefix("text/") else { return [verbatimNode] }
+                  !MimeType.isText(row.mime) else { return [verbatimNode] }
             let markdownID = byName
                 ? Identity.sourceMarkdownByName(row.id)
                 : Identity.sourceMarkdownByID(row.id)

@@ -62,8 +62,8 @@ extension WikiStoreModel {
             guard let source = sources.first(where: { $0.id == id }) else {
                 return "doc"
             }
-            if source.mimeType == "application/pdf" { return "doc.richtext" }
-            if let mime = source.mimeType, mime.hasPrefix("text/") { return "doc.plaintext" }
+            if MimeType.isPDF(source.mimeType) { return "doc.richtext" }
+            if MimeType.isText(source.mimeType) { return "doc.plaintext" }
             return "doc"
         case .bookmark: return "bookmark"
         case .chat: return "bubble.left.and.bubble.right"

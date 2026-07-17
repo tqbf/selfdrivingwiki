@@ -103,11 +103,11 @@ struct SourceDetailView: View {
     // MARK: - Computed
 
     private var isMarkdownNative: Bool {
-        if let mime = file.mimeType { return mime.hasPrefix("text/") }
+        if let mime = file.mimeType { return MimeType.isText(mime) }
         return false
     }
 
-    private var isPDF: Bool { file.mimeType == "application/pdf" }
+    private var isPDF: Bool { MimeType.isPDF(file.mimeType) }
 
     private var hasMarkdown: Bool { headVersion != nil }
 

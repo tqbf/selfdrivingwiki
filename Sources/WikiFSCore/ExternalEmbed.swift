@@ -127,7 +127,7 @@ public enum ExternalEmbed {
 
         // 1. Provider synthetic mimes → provider-player iframe URLs.
         switch mime {
-        case "video/youtube":
+        case MimeType.videoYouTube:
             guard let id = d.externalIdentity, !id.isEmpty else { return nil }
             // Privacy-enhanced host (no tracking cookies) — but the player 153-errors
             // unless the embed carries the reader's origin. `enablejsapi=1` lets the

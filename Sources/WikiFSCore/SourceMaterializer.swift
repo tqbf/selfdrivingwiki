@@ -382,7 +382,7 @@ public struct ApplePodcastMaterializer: SourceMaterializer {
         return MaterializedSource(
             filename: transcript.filename,
             data: Data(transcript.markdown.utf8),
-            mimeType: "text/markdown",
+            mimeType: MimeType.markdown,
             provenance: SourceProvenance(
                 agentName: agentName,
                 activityKind: "fetch",
