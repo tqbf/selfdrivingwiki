@@ -184,9 +184,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     }
 
     private func escape(_ s: String) -> String {
-        s.replacingOccurrences(of: "&", with: "&amp;")
-         .replacingOccurrences(of: "<", with: "&lt;")
-         .replacingOccurrences(of: ">", with: "&gt;")
+        HTMLEntities.escapeHTML(s)
     }
 
     private func escapeAttribute(_ s: String) -> String {

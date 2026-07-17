@@ -42,50 +42,16 @@ public struct KeychainExtractionCredentialStore: ExtractionCredentialStore {
     }
 
     public func secret(_ secret: ExtractionSecret) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
-            kSecAttrAccount as String: account(for: secret),
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        KeychainSecretStore.read(service: Self.service, account: account(for: secret))
     }
 
     public func setSecret(_ value: String?, _ secret: ExtractionSecret) throws {
         let account = account(for: secret)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
-            kSecAttrAccount as String: account,
-        ]
-
-        guard let value, !value.isEmpty else {
-            let status = SecItemDelete(query as CFDictionary)
-            guard status == errSecSuccess || status == errSecItemNotFound else {
-                throw ExtractionKeychainError(operation: "delete(\(account))", status: status)
-            }
-            return
-        }
-
-        let data = Data(value.utf8)
-        // Try update first (the common "user is changing their key" case); if
-        // nothing exists yet, add it.
-        let updateStatus = SecItemUpdate(
-            query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if updateStatus == errSecItemNotFound {
-            var addQuery = query
-            addQuery[kSecValueData as String] = data
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-            guard addStatus == errSecSuccess else {
-                throw ExtractionKeychainError(operation: "add(\(account))", status: addStatus)
-            }
-        } else if updateStatus != errSecSuccess {
-            throw ExtractionKeychainError(operation: "update(\(account))", status: updateStatus)
-        }
+        try KeychainSecretStore.write(
+            service: Self.service, account: account, value: value,
+            error: { operation, status in
+                ExtractionKeychainError(operation: "\(operation)(\(account))", status: status)
+            })
     }
 }
 

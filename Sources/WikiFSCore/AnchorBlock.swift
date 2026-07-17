@@ -130,14 +130,7 @@ public struct AnchorBlock: Equatable, Sendable {
     /// GFM-style heading slug: lowercased, spaces→`-`, drop punctuation,
     /// collapse runs, dedup with `-1/-2` suffix.
     public static func makeSlug(_ headingText: String, counts: inout [String: Int]) -> String {
-        let base = String(
-            headingText
-                .lowercased()
-                .map { $0.isWhitespace ? "-" : $0 }
-                .filter { $0.isLetter || $0.isNumber || $0 == "-" }
-                .split(separator: "-", omittingEmptySubsequences: true)
-                .joined(separator: "-")
-        )
+        let base = SlugUtils.slugBase(headingText)
         guard !base.isEmpty else { return "heading" }
         let count = counts[base, default: 0]
         counts[base] = count + 1

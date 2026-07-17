@@ -28,49 +28,15 @@ public struct KeychainZoteroCredentialStore: ZoteroCredentialStore {
     public init() {}
 
     public func apiKey() -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
-            kSecAttrAccount as String: Self.account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        KeychainSecretStore.read(service: Self.service, account: Self.account)
     }
 
     public func setAPIKey(_ key: String?) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
-            kSecAttrAccount as String: Self.account,
-        ]
-
-        guard let key, !key.isEmpty else {
-            let status = SecItemDelete(query as CFDictionary)
-            guard status == errSecSuccess || status == errSecItemNotFound else {
-                throw ZoteroKeychainError(operation: "delete", status: status)
-            }
-            return
-        }
-
-        let data = Data(key.utf8)
-        // Try update first (the common "user is changing their key" case); if
-        // nothing exists yet, add it.
-        let updateStatus = SecItemUpdate(
-            query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if updateStatus == errSecItemNotFound {
-            var addQuery = query
-            addQuery[kSecValueData as String] = data
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-            guard addStatus == errSecSuccess else {
-                throw ZoteroKeychainError(operation: "add", status: addStatus)
-            }
-        } else if updateStatus != errSecSuccess {
-            throw ZoteroKeychainError(operation: "update", status: updateStatus)
-        }
+        try KeychainSecretStore.write(
+            service: Self.service, account: Self.account, value: key,
+            error: { operation, status in
+                ZoteroKeychainError(operation: operation, status: status)
+            })
     }
 }
 

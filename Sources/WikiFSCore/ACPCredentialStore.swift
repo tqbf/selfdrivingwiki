@@ -57,74 +57,35 @@ public struct KeychainACPCredentialStore: ACPCredentialStore {
     public init() {}
 
     public func apiKey() -> String? {
-        Self.read(account: Self.account)
+        KeychainSecretStore.read(service: Self.service, account: Self.account)
     }
 
     public func setAPIKey(_ value: String?) throws {
-        try Self.write(account: Self.account, value: value)
+        try KeychainSecretStore.write(
+            service: Self.service, account: Self.account, value: value,
+            error: { operation, status in
+                ACPKeychainError(operation: "\(operation)(\(Self.account))", status: status)
+            })
     }
 
     // MARK: - Per-provider (#324)
 
     public func apiKey(forProvider id: String) -> String? {
-        Self.read(account: Self.providerAccount(id))
+        KeychainSecretStore.read(service: Self.service, account: Self.providerAccount(id))
     }
 
     public func setAPIKey(_ value: String?, forProvider id: String) throws {
-        try Self.write(account: Self.providerAccount(id), value: value)
+        let account = Self.providerAccount(id)
+        try KeychainSecretStore.write(
+            service: Self.service, account: account, value: value,
+            error: { operation, status in
+                ACPKeychainError(operation: "\(operation)(\(account))", status: status)
+            })
     }
 
     /// Namespace a per-provider account so each provider's key is isolated.
     private static func providerAccount(_ id: String) -> String {
         "acp-provider:\(id)"
-    }
-
-    // MARK: - Shared Keychain helpers
-
-    private static func read(account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    private static func write(account: String, value: String?) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-
-        guard let value, !value.isEmpty else {
-            let status = SecItemDelete(query as CFDictionary)
-            guard status == errSecSuccess || status == errSecItemNotFound else {
-                throw ACPKeychainError(operation: "delete(\(account))", status: status)
-            }
-            return
-        }
-
-        let data = Data(value.utf8)
-        // Try update first (the common "user is changing their key" case); if
-        // nothing exists yet, add it.
-        let updateStatus = SecItemUpdate(
-            query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if updateStatus == errSecItemNotFound {
-            var addQuery = query
-            addQuery[kSecValueData as String] = data
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-            guard addStatus == errSecSuccess else {
-                throw ACPKeychainError(operation: "add(\(account))", status: addStatus)
-            }
-        } else if updateStatus != errSecSuccess {
-            throw ACPKeychainError(operation: "update(\(account))", status: updateStatus)
-        }
     }
 }
 

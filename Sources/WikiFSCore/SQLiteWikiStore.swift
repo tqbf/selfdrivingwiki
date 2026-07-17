@@ -6783,23 +6783,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     static func slugify(_ title: String) -> String {
-        let lowered = title.lowercased()
-        var chars: [Character] = []
-        for ch in lowered {
-            if ch == " " || ch == "\t" || ch == "\n" {
-                chars.append("-")
-            } else if ch.isLetter, ch.isASCII {
-                chars.append(ch)
-            } else if ch.isNumber, ch.isASCII {
-                chars.append(ch)
-            } else if ch == "-" {
-                chars.append(ch)
-            }
-        }
-        // Collapse runs of '-' and trim leading/trailing ones.
-        let collapsed = String(chars)
-            .split(separator: "-", omittingEmptySubsequences: true)
-            .joined(separator: "-")
+        let collapsed = SlugUtils.slugBase(title)
         return collapsed.isEmpty ? "untitled" : collapsed
     }
 

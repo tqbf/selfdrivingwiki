@@ -9,7 +9,19 @@ import Foundation
 /// cases the spec flags (`&amp; &lt; &gt; &quot; &#39; &nbsp;` …). Tolerant: an
 /// unterminated or unrecognized `&…` is left verbatim rather than dropped or
 /// crashing.
-enum HTMLEntities {
+public enum HTMLEntities {
+
+    /// Escape `&`, `<`, `>` for safe embedding in HTML text. The single source of
+    /// truth for the three-char escape formerly duplicated as private `escape(_:)`
+    /// in `ChatWebView` and `MarkdownHTMLRenderer` (and the
+    /// `escapeAttribute`/`escapePreservingBreaks` wrappers that build on it).
+    /// `public` so the `WikiFS` app target can reach it; `decode` stays module-
+    /// internal. See issue #502 (cross-module dedup, L2).
+    public static func escapeHTML(_ s: String) -> String {
+        s.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+    }
 
     /// The named entities we recognize. Lowercase-keyed; lookups are case-sensitive
     /// for named entities (matching how browsers treat e.g. `&AMP;` vs `&amp;` —
