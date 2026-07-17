@@ -1363,44 +1363,66 @@ struct Projection {
     private func makeLinkMaps() -> LinkMaps {
         let store = openReadStore()
 
+        // Build the shared link index from pre-fetched rows. Centralizes source
+        // name-variant / loose-key / sibling-image computation so this and
+        // WikiRenderContext.build agree on normalization (#511). The index is
+        // a neutral intermediate; we adapt its entries to RelativeLinkRewriter
+        // .Target below — the file-path logic is Projection-specific.
+        let siblingImages = (try? store?.siblingImageResolvers()) ?? [:]
+        let index = WikiLinkIndex.build(
+            pages: ((try? store?.listAllPagesOrderedByID()) ?? []).map {
+                WikiLinkIndex.PageEntry(id: $0.id.rawValue, title: $0.title) },
+            sources: ((try? store?.listAllSourcesOrderedByID()) ?? []).map {
+                WikiLinkIndex.SourceEntry(
+                    id: $0.id, filename: $0.filename, ext: $0.ext,
+                    mime: $0.mime, displayName: $0.displayName) },
+            chats: ((try? store?.listAllChatsOrderedByID()) ?? []).map {
+                WikiLinkIndex.ChatEntry(id: $0.id.rawValue, title: $0.title) },
+            siblingImages: siblingImages)
+
+        // Heads map — Projection-specific: determines whether each source
+        // target points at the readable .md sibling or the raw verbatim file.
+        let heads = (try? store?.processedMarkdownHeadsBySource()) ?? [:]
+
         var pageByTitle: [String: RelativeLinkRewriter.Target] = [:]
         var pageByID: [String: RelativeLinkRewriter.Target] = [:]
-        for page in (try? store?.listAllPagesOrderedByID()) ?? [] {
-            let file = FilenameEscaping.byTitleFilename(title: page.title, pageID: page.id.rawValue)
-            let target = RelativeLinkRewriter.Target(path: Self.pagesByTitleDir + [file], title: page.title)
-            pageByTitle[page.title] = target
-            pageByID[page.id.rawValue.uppercased()] = target
+        for entry in index.pages {
+            let file = FilenameEscaping.byTitleFilename(title: entry.title, pageID: entry.id)
+            let target = RelativeLinkRewriter.Target(path: Self.pagesByTitleDir + [file], title: entry.title)
+            pageByTitle[entry.title] = target
+            pageByID[entry.id.uppercased()] = target
         }
 
         var sourceByName: [String: RelativeLinkRewriter.Target] = [:]
         var sourceByID: [String: RelativeLinkRewriter.Target] = [:]
-        let heads = (try? store?.processedMarkdownHeadsBySource()) ?? [:]
-        for row in (try? store?.listAllSourcesOrderedByID()) ?? [] {
-            let humanName = row.displayName ?? row.filename
+        for entry in index.sources {
             // Sibling eligibility mirrors `sourceNodes`: a processed head AND a
             // non-`text/*` mime yields the `.md` sibling; otherwise the verbatim file.
-            let hasSibling = heads[row.id] != nil && (row.mime.map { !$0.hasPrefix("text/") } ?? false)
+            let hasSibling = heads[entry.id] != nil
+                && (entry.mime.map { !$0.hasPrefix("text/") } ?? false)
             let file = hasSibling
-                ? FilenameEscaping.byNameSourceFilename(filename: humanName, ext: "md", sourceID: row.id)
-                : FilenameEscaping.byNameSourceFilename(filename: humanName, ext: row.ext, sourceID: row.id)
-            let target = RelativeLinkRewriter.Target(path: Self.sourcesByNameDir + [file], title: humanName)
-            sourceByName[humanName] = target
-            sourceByID[row.id.uppercased()] = target
+                ? FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: "md", sourceID: entry.id)
+                : FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: entry.ext, sourceID: entry.id)
+            let target = RelativeLinkRewriter.Target(path: Self.sourcesByNameDir + [file], title: entry.humanName)
+            sourceByName[entry.humanName] = target
+            sourceByID[entry.id.uppercased()] = target
         }
 
         var chatByTitle: [String: RelativeLinkRewriter.Target] = [:]
         var chatByID: [String: RelativeLinkRewriter.Target] = [:]
-        for chat in (try? store?.listAllChatsOrderedByID()) ?? [] {
-            let file = FilenameEscaping.byTitleFilename(title: chat.title, pageID: chat.id.rawValue)
-            let target = RelativeLinkRewriter.Target(path: Self.chatsByNameDir + [file], title: chat.title)
-            chatByTitle[chat.title] = target
-            chatByID[chat.id.rawValue.uppercased()] = target
+        for entry in index.chats {
+            let file = FilenameEscaping.byTitleFilename(title: entry.title, pageID: entry.id)
+            let target = RelativeLinkRewriter.Target(path: Self.chatsByNameDir + [file], title: entry.title)
+            chatByTitle[entry.title] = target
+            chatByID[entry.id.uppercased()] = target
         }
 
-        let siblingImages = (try? store?.siblingImageResolvers()) ?? [:]
-
-        let sourceByLooseKey = Self.buildLooseKeyMap(sourceByName)
-        let chatByLooseKey   = Self.buildLooseKeyMap(chatByTitle)
+        // Loose-key maps: adapt from the shared index's collision-free
+        // looseMatchKey → name maps. Each name is guaranteed to be a key in
+        // the corresponding name → Target dict above (both were built from the
+        // same entries), so compactMapValues never drops a valid entry.
+        let sourceByLooseKey = index.sourceByLooseKey.compactMapValues { sourceByName[$0] }
+        let chatByLooseKey = index.chatByLooseKey.compactMapValues { chatByTitle[$0] }
 
         return LinkMaps(pageByTitle: pageByTitle, pageByID: pageByID,
                         sourceByName: sourceByName, sourceByID: sourceByID,
@@ -1408,26 +1430,6 @@ struct Projection {
                         siblingImages: siblingImages,
                         sourceByLooseKey: sourceByLooseKey,
                         chatByLooseKey: chatByLooseKey)
-    }
-
-    /// Build a loose-key → target map from a name → target dict. Collisions
-    /// (two names with the same `WikiNameRules.looseMatchKey`) are omitted,
-    /// matching the store's `resolveSourceByName` pass-3 unique-only constraint
-    /// — an ambiguous match resolves to nothing rather than picking arbitrarily.
-    private static func buildLooseKeyMap(_ entries: [String: RelativeLinkRewriter.Target])
-        -> [String: RelativeLinkRewriter.Target] {
-        var out: [String: RelativeLinkRewriter.Target] = [:]
-        var seen = Set<String>()
-        for (name, target) in entries {
-            let key = WikiNameRules.looseMatchKey(name)
-            if seen.contains(key) {
-                out.removeValue(forKey: key)   // collision → ambiguous, remove
-            } else {
-                seen.insert(key)
-                out[key] = target
-            }
-        }
-        return out
     }
 
     /// Rewrite `[[wikilinks]]` in `raw` to relative Markdown links, computing
