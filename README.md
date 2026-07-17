@@ -1,237 +1,56 @@
-# Self Driving Wiki
+# Self-Driving Wiki — User Guide
 
-![SDW Screen Shot](SDW.png)
+**Self-Driving Wiki** is a native macOS app that combines a personal wiki with
+an AI agent. You collect source material — PDFs, web pages, podcast episodes,
+markdown notes — and the agent reads, digests, and organizes them into a
+connected knowledge base of wiki pages. You ask questions, the agent answers
+from (and updates) the wiki, and everything stays linked and searchable.
 
-A native macOS app that turns a pile of sources — PDFs, web pages, podcast
-episodes, your own notes — into a **connected knowledge base** that an AI agent
-maintains for you. You bring in the material; the agent reads it, writes wiki
-pages, cross-references everything with links, and keeps it all organized. You
-ask questions in plain language and get answers grounded in your own library.
-
-It runs **locally on your Mac**. Your data stays in a SQLite file you own.
-
-> **New here?** Start with the [**Getting Started guide**](docs/user-guide/getting-started.md)
-> — it walks you through creating a wiki, adding sources, and running your first
-> ingest in five minutes. For everything else, browse the
-> [**full user guide**](docs/user-guide/README.md).
+This guide covers **what you see and what you can do** — the interface, the
+workflows, and the mental model. It does not cover internals or architecture.
 
 ---
 
-## What you can do with it
+## Core concepts
 
-### 📥 [Collect sources](docs/user-guide/sources-and-ingestion.md#adding-sources)
-
-Drag in a PDF. Paste a web link. Import your Zotero library or an entire Obsidian
-vault. Drop a folder of markdown notes. Sources are the raw material — whatever
-you're studying, researching, or trying to make sense of.
-
-### 🤖 [Let the agent do the bookkeeping](docs/user-guide/sources-and-ingestion.md#ingestion)
-
-Point the agent at your sources and it **ingests** them: reads each one, extracts
-the key information, and writes wiki pages — summaries, entity profiles, concept
-explanations — all cross-referenced with `[[wiki links]]`. For large PDFs, it
-fans out to parallel sub-agents to digest the bulk, then a lead agent decides
-what belongs and writes everything.
-
-### 💬 [Ask questions](docs/user-guide/chat.md)
-
-Open a chat and ask anything: *"What are the main differences between these two
-papers?"* or *"Create a page comparing the evaluation metrics across my
-sources."* The agent reads your wiki to answer. Ask it to update pages, add
-cross-references, or explain a concept — it can modify the wiki when you ask it
-to.
-
-### 🔗 [Follow the connections](docs/user-guide/pages-and-links.md#wiki-links--the-connective-tissue)
-
-Every page links to every other page, to sources, and even to **specific
-passages** inside documents. A link like `[[source:Paper#"the results show a 30%
-improvement"]]` takes you straight to the highlighted quote in the PDF. Ghost
-links (red) mark pages that don't exist yet — spots where the wiki could grow.
-
-### 🔖 [Bookmark and navigate](docs/user-guide/organizing-and-managing.md#bookmarks)
-
-Bookmark your go-to pages into folders. Search semantically — type "neural
-networks" and find pages about "deep learning." Use the Safari-style omnibox
-(⌘L) for instant navigation. Open multiple wikis in separate windows.
-
----
-
-## The mental model
-
-```
-  You add sources ──► Agent ingests them ──► Pages appear in the wiki
-       │                                            │
-       │              You ask questions ◄──────────┤  (agent reads the wiki)
-       │                                            │
-       └── You refine, bookmark, and navigate ◄─────┘
-```
-
-| Concept | What it means |
+| Concept | What it means to you |
 |---|---|
-| **[Wiki](docs/user-guide/organizing-and-managing.md#multiple-wikis)** | A self-contained knowledge base. Have many — one per project, book, or research area. Each opens in its own window. |
-| **[Page](docs/user-guide/pages-and-links.md)** | A Markdown wiki page — the curated output. The agent writes most; you edit any. |
-| **[Source](docs/user-guide/sources-and-ingestion.md)** | Raw material: a PDF, web page, podcast, or note file. The input the agent digests into pages. |
-| **[Agent](docs/user-guide/chat.md)** | The AI that maintains the wiki. It ingests sources into pages, answers questions in chat, and cleans up formatting. |
-| **[Wiki link](docs/user-guide/pages-and-links.md#wiki-links--the-connective-tissue)** | `[[Like This]]` — the connective tissue. Links connect pages, sources, and specific passages. |
-| **[Bookmark](docs/user-guide/organizing-and-managing.md#bookmarks)** | Your personal folder tree of shortcuts to pages, sources, and chats. |
+| **[Wiki](organizing-and-managing.md#multiple-wikis)** | A self-contained knowledge base. You can have many — a personal one, a research project, a per-book study guide. Each lives in its own window and has its own pages, sources, and chat history. |
+| **[Page](pages-and-links.md)** | A wiki page written in Markdown. Pages are the curated output — summaries, entity profiles, concept explanations, indexes. The agent writes most of them; you can edit any of them. |
+| **[Source](sources-and-ingestion.md)** | Raw material you bring into the wiki: a dropped PDF, a fetched web page, a Zotero attachment, an imported markdown folder. Sources are the input the agent digests into pages. |
+| **[Agent](chat.md)** | The AI that maintains the wiki. It can **Ingest** sources into pages, answer questions in **Chat**, clean up formatting with **Lint**, and more. You interact with it conversationally. |
+| **[Wiki link](pages-and-links.md#wiki-links--the-connective-tissue)** | The connective tissue. `[[Page Name]]` links pages to each other; `[[source:Name]]` links pages to sources. Links are how the knowledge base stays connected and navigable. |
+| **[Bookmark](organizing-and-managing.md#bookmarks)** | A user-defined shortcut to a page, source, or chat, organized into folders. Your personal table of contents. |
+
+### The fundamental workflow
+
+![Workflow](./images/cycle.svg)
+
+1. **[Collect](sources-and-ingestion.md#adding-sources)** — Drag in PDFs, paste URLs, import from Zotero, or drop a folder of notes.
+2. **[Ingest](sources-and-ingestion.md#ingestion)** — Tell the agent to process sources. It reads them, extracts key information, and writes pages with cross-references.
+3. **[Explore](pages-and-links.md)** — Browse pages, follow wiki links, search semantically, bookmark what matters.
+4. **[Ask](chat.md)** — Chat with the agent about the wiki's contents. Ask it to update pages, add cross-references, or explain a concept.
+5. **[Maintain](organizing-and-managing.md#the-change-log)** — Run Lint to clean up formatting. Re-ingest when sources are updated. The agent keeps `index.md` and `log.md` current.
 
 ---
 
-## A quick tour of the interface
+## Table of contents
 
-> Full detail: [**Interface Tour**](docs/user-guide/interface.md)
-
-The window follows familiar macOS patterns — tabs like Safari, a sidebar like
-Xcode, an omnibox like a browser.
-
-- **Sidebar** (left) — four sections: **Pages**, **Sources**, **Bookmarks**,
-  **Chats**. Each has a search bar and action buttons.
-- **Tab strip** (top of detail) — open multiple pages, sources, and chats in
-  tabs. Switch with ⌘1–9, close with ⌘W, reopen with ⌘⇧T.
-- **Omnibox** (toolbar) — shows the current page as `[[Title]]` when idle;
-  becomes a semantic search field when you click or press ⌘L.
-- **Wiki switcher** (toolbar, right) — switch between wikis. Click to open in a
-  new window; option-click to switch in place.
-- **Menu bar item** — monitors agent work in the background. Fills in while
-  processing; shows queue status on hover.
-
----
-
-## The workflow in practice
-
-> Walkthrough: [**Getting Started**](docs/user-guide/getting-started.md)
-
-1. **[Create a wiki](docs/user-guide/organizing-and-managing.md#creating-wikis)** — name it after your project or research area.
-2. **[Add sources](docs/user-guide/sources-and-ingestion.md#adding-sources)** — drag in PDFs, paste URLs, import from Zotero or a notes
-   folder.
-3. **[Ingest](docs/user-guide/sources-and-ingestion.md#ingestion)** — select sources → right-click → Ingest. The agent reads them and
-   writes pages. Monitor progress in the menu bar or the Agent Queue window (⌘I).
-4. **[Explore](docs/user-guide/pages-and-links.md)** — browse the generated pages, follow wiki links, search
-   semantically, bookmark what matters.
-5. **[Ask](docs/user-guide/chat.md)** — chat with the agent about the content. Have it create comparison
-   pages, fill gaps, or update existing pages.
-6. **[Maintain](docs/user-guide/organizing-and-managing.md#the-change-log)** — run Lint to clean up formatting. Re-ingest when sources are
-   updated. The agent keeps `index.md` and `log.md` current automatically.
-
----
-
-## User guide
-
-For the full experience — every feature, every workflow, every shortcut — browse
-the **[complete user guide](docs/user-guide/README.md)**:
-
-| Guide | What you'll learn |
+| Page | What you'll learn |
 |---|---|
-| [**Getting Started**](docs/user-guide/getting-started.md) | Create your first wiki, set up the agent, add sources, run your first ingest. |
-| [**Interface Tour**](docs/user-guide/interface.md) | The main window: sidebar, tabs, toolbar, omnibox, wiki switcher, menu bar. |
-| [**Pages & Links**](docs/user-guide/pages-and-links.md) | Reading and editing pages, wiki link syntax, anchors and quotes, zoom, find. |
-| [**Sources & Ingestion**](docs/user-guide/sources-and-ingestion.md) | Adding sources, PDF extraction, the source detail view, versioning, the queue. |
-| [**Chatting with the Agent**](docs/user-guide/chat.md) | Starting chats, adding context, permission approvals, reading the transcript. |
-| [**Organizing & Managing**](docs/user-guide/organizing-and-managing.md) | Bookmarks, search, navigation, multiple wikis, settings, notifications. |
-| [**Keyboard Shortcuts**](docs/user-guide/keyboard-shortcuts.md) | Complete quick-reference card. |
+| [**Getting Started**](getting-started.md) | Create your first wiki, set up the agent, add sources, run your first ingest, ask your first question. |
+| [**Interface Tour**](interface.md) | The main window: sidebar sections, tab bar, toolbar omnibox, wiki switcher, detail pane, drop zones. |
+| [**Pages & Links**](pages-and-links.md) | Reading and editing pages, wiki link syntax, anchors and quotes, ghost links, outlines, zoom, find-on-page. |
+| [**Sources & Ingestion**](sources-and-ingestion.md) | Adding sources (drag-drop, URL, Zotero, folder import), PDF extraction, the source detail view, versioning, the ingest operation. |
+| [**Chatting with the Agent**](chat.md) | Starting chats, the composer, adding context, permission approvals, reading the transcript, chat history. |
+| [**Organizing & Managing**](organizing-and-managing.md) | Bookmarks, semantic search, navigation, multiple wikis and windows, settings, the activity queue, notifications. |
+| [**Keyboard Shortcuts**](keyboard-shortcuts.md) | A complete quick-reference card. |
 
 ---
 
-## Build & install
+## Design philosophy
 
-Self Driving Wiki runs **locally only** — free local dev signing, no Developer ID
-or notarization needed to build and run yourself.
-
-### Prerequisites
-
-- **macOS 14+** (developed on macOS 26).
-- A **Swift 6 toolchain** — Xcode from the App Store or the swift.org toolchain.
-  No `.xcodeproj` — the build is `swift build` + [`build.sh`](build.sh).
-- An **AI agent** on your PATH (e.g., `claude`). The app preflights this and
-  shows a clear error if it's missing.
-- For the **optional File Provider mount** (Finder integration): an Apple
-  Development certificate + App Group + File Provider profiles under `signing/`.
-  Without these, the app works fine but the Finder folder doesn't appear. See
-  [`plans/signing.md`](plans/signing.md).
-
-### Build & run
-
-```sh
-make            # debug build → build/Self Driving Wiki.app
-make run        # install to /Applications, register File Provider, open the app
-make install    # copy to /Applications and register LaunchServices + File Provider
-make check      # compile-only gate (CI / agent verification)
-make test       # run the test suite
-make help       # every target
-```
-
-### Runtime notes
-
-1. **Install to `/Applications`.** macOS only discovers File Provider extensions
-   from apps in `/Applications`. Running from `build/` won't register the mount.
-2. **Enable the domain.** A third-party File Provider must be toggled on in
-   System Settings before its folder appears in Finder.
-3. **TCC prompt on first launch.** A Transparency/Consent prompt may block the
-   extension until you grant it.
-4. **Read-after-write lag (~5s).** The Finder folder lags the database by a few
-   seconds after a write — it self-heals. The agent always reads the database
-   directly, so this only affects Finder browsing.
-
-> The File Provider mount is **optional**. The app, the agent, and all features
-> work without it — it exists for Finder browsing convenience.
-
----
-
-## For developers & contributors
-
-<details>
-<summary>Architecture, repo layout, and contributing notes</summary>
-
-### The non-negotiable invariant
-
-> **SQLite is the source of truth. The File Provider mount is READ-ONLY and
-> optional. Both reads and writes go through `wikictl` (DB-direct). Never make
-> the mount writable.**
-
-This is the whole point of the proof-of-concept. Making the mount writable
-would dissolve the invariant the project exists to demonstrate.
-
-```
-  agent ──reads──>  wikictl  ──reads──>  SQLite (App Group DB)
-         │                                              │ (optional read-only projection)
-         └──writes──>  wikictl  ──writes──>  SQLite  ──projects──>  File Provider mount
-```
-
-### Repo layout (5 SwiftPM targets)
-
-| Target | Purpose |
-|---|---|
-| **`WikiFSCore`** | Dependency-free core: data model, SQLite store, multi-wiki registry, agent operation seams, URL ingest + HTML→Markdown. |
-| **`WikiFS`** | The SwiftUI app — editor/viewer, wiki switcher, operations, domain registration. |
-| **`WikiFSFileProvider`** | File Provider extension — read-only SQLite→filesystem projection. |
-| **`WikiCtlCore`** | `wikictl`'s logic (arg parsing, dispatch, wiki resolution). Unit-testable. |
-| **`wikictl`** | The agent's write path CLI. |
-
-Test target: `WikiFSTests` (`Tests/WikiFSTests/`).
-
-### Where to look
-
-- **Schema + migrations:** `Sources/WikiFSCore/SQLiteWikiStore.swift`
-- **Multi-wiki:** `WikiRegistry.swift` / `WikiDescriptor.swift` / `WikiRegistryClient.swift`
-- **File Provider projection:** `Sources/WikiFSFileProvider/Projection.swift`
-- **Agent operations:** `AgentLauncher.swift` / `AgentOperationRunner.swift` / `GenerationGate.swift`
-- **Write path + change bridge:** `wikictl/main.swift`, `WikiFSCore/PageUpsert.swift`, `WikiFS/WikiChangeBridge.swift`
-- **URL ingest:** `URLIngestService.swift`, `HTMLToMarkdown.swift`
-
-### Contributing
-
-- **Dependency-free by default.** Hand-wrapped SQLite, hand-rolled HTML→Markdown.
-- **Pure-core / thin-app split.** Logic in `WikiFSCore` / `WikiCtlCore` for unit testing.
-- **Run `make test` before pushing.**
-- **Follow [`SWIFTUI-RULES.md`](SWIFTUI-RULES.md).**
-- **Never merge to `main` yourself** ([`CLAUDE.md`](CLAUDE.md)).
-
-### Deep design docs
-
-- [`PLAN.md`](PLAN.md) — master index + milestone status
-- [`PROGRESS.md`](PROGRESS.md) — running build log, newest first
-- [`plans/architecture.md`](plans/architecture.md) — system map
-- [`ISSUES.md`](ISSUES.md) — known limitations
-- [`SWIFTUI-RULES.md`](SWIFTUI-RULES.md) + [`CLAUDE.md`](CLAUDE.md) — coding rules
-
-</details>
+- **The agent maintains the wiki; you curate.** Pages are reader-first by default. The agent writes and updates content; you edit when you want to correct or guide. You don't have to hand-author every page.
+- **Everything is linked.** Wiki links connect pages to pages, pages to sources, and even to specific passages inside documents. The knowledge base is a graph, not a pile of files.
+- **Read-only filesystem, read/write database.** The wiki can optionally appear as a read-only folder in Finder (the File Provider mount), but all edits happen in the app or through the agent. This keeps the data consistent.
+- **Native macOS feel.** Tabs like Safari, an omnibox like Safari, a sidebar like Xcode, bookmarks like a browser. If you know macOS, you know the basics.

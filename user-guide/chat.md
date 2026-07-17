@@ -95,13 +95,7 @@ page to the Results section."*
 When the agent wants to modify the wiki and you're in **Always Ask** mode, an
 **approval card** appears inline — between the transcript and the composer:
 
-```
-┌─────────────────────────────────────────────┐
-│  ☑ Edit file                                 │
-│  pages/methods.md — updating cross-reference │
-│                          [Approve] [Reject]  │
-└─────────────────────────────────────────────┘
-```
+![Approval Dialog](./images/approval.png)
 
 - **Approve** — lets the action proceed. The agent continues working.
 - **Reject** — denies the action. The agent adapts.
