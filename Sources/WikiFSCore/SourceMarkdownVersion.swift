@@ -1,5 +1,21 @@
 import Foundation
 
+/// The origin of a `SourceMarkdownVersion` — what created it. Persisted as the
+/// `source_markdown_versions.origin` column. Typed (not a raw string) so a typo
+/// like `"User"` is a compile error rather than a silent mis-guard (issue #501).
+public enum SourceMarkdownOrigin: String, Sendable, CaseIterable {
+    /// Backend extraction (pdf2md, anthropic, gemini, docling, …).
+    case extraction
+    /// Manual user edit.
+    case user
+    /// Revert to an older version (appends a new row reusing the target's blob).
+    case revert
+    /// Native markdown file seeded from its raw bytes (lazy seeding).
+    case source
+    /// Media (audio/video) transcription.
+    case transcript
+}
+
 /// One version in the append-only, git-lite version chain for a source's
 /// processed markdown. Each version is a FULL-TEXT snapshot (never a delta).
 /// ULID-sorted: MAX(id) is always the HEAD. The original source bytes in
@@ -21,8 +37,8 @@ public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
     /// `blobHash` to obtain body text. The empty string only appears transiently
     /// in the DB column, never on this property.
     public let content: String
-    /// Who/what created this version: "extraction", "user", or "revert".
-    public let origin: String
+    /// Who/what created this version (extraction / user / revert / source / transcript).
+    public let origin: SourceMarkdownOrigin
     /// Optional edit summary (unused by UI for now).
     public let note: String?
     /// When this version was created.
@@ -48,7 +64,7 @@ public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
         sourceID: PageID,
         parentID: PageID?,
         content: String,
-        origin: String,
+        origin: SourceMarkdownOrigin,
         note: String?,
         createdAt: Date,
         activityID: String? = nil,

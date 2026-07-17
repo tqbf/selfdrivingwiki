@@ -196,11 +196,11 @@ struct AgentTranscriptRenderContextTests {
             originalPath: nil, activityID: nil)
         try store.renameSource(id: paper.id, to: "My Paper")
         _ = try store.appendProcessedMarkdown(
-            sourceID: paper.id, content: "v1 body", origin: "extraction", note: nil)
+            sourceID: paper.id, content: "v1 body", origin: .extraction, note: nil)
         let v2 = try store.appendProcessedMarkdown(
-            sourceID: paper.id, content: "the quoted text", origin: "extraction", note: nil)
+            sourceID: paper.id, content: "the quoted text", origin: .extraction, note: nil)
         _ = try store.appendProcessedMarkdown(
-            sourceID: paper.id, content: "v3 body", origin: "extraction", note: nil)
+            sourceID: paper.id, content: "v3 body", origin: .extraction, note: nil)
         model.reloadFromStore()
         return (model, home.id, paper.id, v2.id)
     }

@@ -27,7 +27,7 @@ struct ProcessedMarkdownTests {
 
     /// Regression for the byteless-podcast bug: on a CAS-only DB (the
     /// `source_markdown_versions.content` column dropped at v24), a derived
-    /// transcript written via `appendProcessedMarkdown(origin: "transcript")`
+    /// transcript written via `appendProcessedMarkdown(origin: .transcript)`
     /// lives ONLY in `blobs` and must round-trip through `processedMarkdownHead`.
     /// Previously the blob-join reader still selected the dropped `smv.content`
     /// column → `no such column: smv.content` → byteless sources (Apple Podcast
@@ -39,7 +39,7 @@ struct ProcessedMarkdownTests {
         let body = "SPEAKER_1: transcript body that must survive the CAS-only round-trip."
 
         _ = try store.appendProcessedMarkdown(
-            sourceID: source.id, content: body, origin: "transcript", note: nil)
+            sourceID: source.id, content: body, origin: .transcript, note: nil)
 
         // The inline `content` column is gone (CAS-only, v24).
         #expect(store.scalarText(
@@ -144,7 +144,7 @@ struct ProcessedMarkdownTests {
         let store = try SQLiteWikiStore(databaseURL: url)
         let file = try store.addSource(filename: "test.md", data: Data("hello".utf8))
         _ = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "v1", origin: "extraction", note: nil)
+            sourceID: file.id, content: "v1", origin: .extraction, note: nil)
         // Reopen — must not fail from duplicate DDL.
         let reopened = try SQLiteWikiStore(databaseURL: url)
         let head = try reopened.processedMarkdownHead(sourceID: file.id)
@@ -157,9 +157,9 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let file = try seedSource(in: store)
         let v1 = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "first", origin: "extraction", note: nil)
+            sourceID: file.id, content: "first", origin: .extraction, note: nil)
         #expect(v1.parentID == nil)
-        #expect(v1.origin == "extraction")
+        #expect(v1.origin == .extraction)
         #expect(v1.content == "first")
     }
 
@@ -167,9 +167,9 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let file = try seedSource(in: store)
         let v1 = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "one", origin: "extraction", note: nil)
+            sourceID: file.id, content: "one", origin: .extraction, note: nil)
         let v2 = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "two", origin: "user", note: nil)
+            sourceID: file.id, content: "two", origin: .user, note: nil)
         #expect(v2.parentID == v1.id)
     }
 
@@ -177,12 +177,12 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let file = try seedSource(in: store)
         _ = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "v1", origin: "extraction", note: nil)
+            sourceID: file.id, content: "v1", origin: .extraction, note: nil)
         // Tiny sleep guarantees the next ULID has a strictly later timestamp
         // so ORDER BY id DESC picks it up correctly.
         usleep(2000)
         let v2 = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "v2", origin: "user", note: nil)
+            sourceID: file.id, content: "v2", origin: .user, note: nil)
         let head = try store.processedMarkdownHead(sourceID: file.id)
         #expect(head?.id == v2.id)
         #expect(head?.content == "v2")
@@ -192,10 +192,10 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let file = try seedSource(in: store)
         let v1 = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "first", origin: "extraction", note: nil)
+            sourceID: file.id, content: "first", origin: .extraction, note: nil)
         usleep(2000)
         let v2 = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "second", origin: "user", note: nil)
+            sourceID: file.id, content: "second", origin: .user, note: nil)
         let history = try store.processedMarkdownHistory(sourceID: file.id)
         #expect(history.count == 2)
         #expect(history[0].id == v2.id)  // newest first
@@ -207,7 +207,7 @@ struct ProcessedMarkdownTests {
         let file = try seedSource(in: store)
         #expect(try store.hasProcessedMarkdown(sourceID: file.id) == false)
         _ = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "x", origin: "extraction", note: nil)
+            sourceID: file.id, content: "x", origin: .extraction, note: nil)
         #expect(try store.hasProcessedMarkdown(sourceID: file.id) == true)
     }
 
@@ -217,14 +217,14 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let file = try seedSource(in: store)
         let v1 = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "original", origin: "extraction", note: nil)
+            sourceID: file.id, content: "original", origin: .extraction, note: nil)
         usleep(2000)
         _ = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "edit", origin: "user", note: nil)
+            sourceID: file.id, content: "edit", origin: .user, note: nil)
         usleep(2000)
         let v3 = try store.revertProcessedMarkdown(sourceID: file.id, to: v1.id)
         #expect(v3.content == "original")
-        #expect(v3.origin == "revert")
+        #expect(v3.origin == .revert)
         #expect(v3.parentID != nil)  // parent is the previous head
         // v1 is untouched
         let history = try store.processedMarkdownHistory(sourceID: file.id)
@@ -235,10 +235,10 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let file = try seedSource(in: store)
         _ = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "v1", origin: "extraction", note: nil)
+            sourceID: file.id, content: "v1", origin: .extraction, note: nil)
         usleep(2000)
         _ = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "v2", origin: "user", note: nil)
+            sourceID: file.id, content: "v2", origin: .user, note: nil)
         let v1 = try store.processedMarkdownHistory(sourceID: file.id).last!
         usleep(2000)
         let reverted = try store.revertProcessedMarkdown(sourceID: file.id, to: v1.id)
@@ -252,9 +252,9 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
         _ = try store.appendProcessedMarkdown(
-            sourceID: ingested.id, content: "v1", origin: "extraction", note: nil)
+            sourceID: ingested.id, content: "v1", origin: .extraction, note: nil)
         _ = try store.appendProcessedMarkdown(
-            sourceID: ingested.id, content: "v2", origin: "user", note: nil)
+            sourceID: ingested.id, content: "v2", origin: .user, note: nil)
         try store.deleteSource(id: ingested.id)
         #expect(try store.hasProcessedMarkdown(sourceID: ingested.id) == false)
     }
@@ -266,9 +266,9 @@ struct ProcessedMarkdownTests {
         let original = Data([0x00, 0xFF, 0x42])
         let ingested = try store.addSource(filename: "data.bin", data: original)
         _ = try store.appendProcessedMarkdown(
-            sourceID: ingested.id, content: "edit 1", origin: "user", note: nil)
+            sourceID: ingested.id, content: "edit 1", origin: .user, note: nil)
         _ = try store.appendProcessedMarkdown(
-            sourceID: ingested.id, content: "edit 2", origin: "user", note: nil)
+            sourceID: ingested.id, content: "edit 2", origin: .user, note: nil)
         let content = try store.sourceContent(id: ingested.id)
         #expect(content == original)
     }
@@ -287,10 +287,10 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let file = try seedSource(in: store)
         let v1 = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "first seed", origin: "extraction", note: nil)
+            sourceID: file.id, content: "first seed", origin: .extraction, note: nil)
         usleep(2000)
         _ = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "second seed", origin: "extraction", note: nil)
+            sourceID: file.id, content: "second seed", origin: .extraction, note: nil)
         let history = try store.processedMarkdownHistory(sourceID: file.id)
         // Two versions: the second call appended v2 (parent = v1).
         // The "double-seed guard" is at the caller level (WikiStoreModel).
@@ -319,10 +319,10 @@ struct ProcessedMarkdownTests {
         let fileB = try seedSource(in: store, filename: "beta.txt", data: Data("beta".utf8))
         let fileC = try seedSource(in: store, filename: "gamma.txt", data: Data("gamma".utf8)) // no head
         let headA = try store.appendProcessedMarkdown(
-            sourceID: fileA.id, content: "alpha head", origin: "extraction", note: nil)
+            sourceID: fileA.id, content: "alpha head", origin: .extraction, note: nil)
         usleep(2000)
         let headB = try store.appendProcessedMarkdown(
-            sourceID: fileB.id, content: "beta head", origin: "extraction", note: nil)
+            sourceID: fileB.id, content: "beta head", origin: .extraction, note: nil)
         let heads = try store.processedMarkdownHeadsBySource()
         #expect(heads.count == 2) // fileC has no head
         #expect(heads[fileA.id.rawValue]?.content == "alpha head")
@@ -336,10 +336,10 @@ struct ProcessedMarkdownTests {
         let store = try tempStore()
         let file = try seedSource(in: store)
         _ = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "v1", origin: "extraction", note: nil)
+            sourceID: file.id, content: "v1", origin: .extraction, note: nil)
         usleep(2000)
         let v2 = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "v2", origin: "user", note: nil)
+            sourceID: file.id, content: "v2", origin: .user, note: nil)
         let heads = try store.processedMarkdownHeadsBySource()
         #expect(heads.count == 1)
         #expect(heads[file.id.rawValue]?.content == "v2")
@@ -439,7 +439,7 @@ struct ProcessedMarkdownTests {
             backend: .anthropic, sourceVersionID: nil, note: nil, modelVersion: nil)
         usleep(2000)
         _ = try store.appendProcessedMarkdown(
-            sourceID: file.id, content: "edited body", origin: "user", note: nil)
+            sourceID: file.id, content: "edited body", origin: .user, note: nil)
         let blobsBefore = store.scalarText("SELECT COUNT(*) FROM blobs;")
         usleep(2000)
         let reverted = try store.revertProcessedMarkdown(sourceID: file.id, to: v1.id)

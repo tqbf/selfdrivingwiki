@@ -40,7 +40,7 @@ struct FullTextSearchTests {
         let s = try store.addSource(filename: "paper-2024.pdf", data: Data("%PDF".utf8))
         _ = try store.appendProcessedMarkdown(
             sourceID: s.id, content: "Hypnosis measurably alters pain perception.",
-            origin: "extraction", note: nil)
+            origin: .extraction, note: nil)
         let hits = try store.searchSimilarSources(query: "hypnosis", limit: 10)
         #expect(hits.count == 1)
         #expect(hits.first?.id == s.id)
@@ -96,7 +96,7 @@ struct FullTextSearchTests {
         _ = try store.createPage(title: "Page Two")
         let s = try store.addSource(filename: "doc.pdf", data: Data("%PDF".utf8))
         _ = try store.appendProcessedMarkdown(
-            sourceID: s.id, content: "indexed body text", origin: "extraction", note: nil)
+            sourceID: s.id, content: "indexed body text", origin: .extraction, note: nil)
 
         let counts = store.rebuildFTS()
         #expect(counts.pages >= 2)

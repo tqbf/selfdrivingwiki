@@ -328,7 +328,7 @@ public protocol WikiStore: Sendable {
     /// head to set `parentID`. Returns the new version.
     @discardableResult
     func appendProcessedMarkdown(sourceID: PageID, content: String,
-                                 origin: String, note: String?,
+                                 origin: SourceMarkdownOrigin, note: String?,
                                  technique: String?) throws -> SourceMarkdownVersion
 
     /// Revert to an older version by appending a NEW version whose content

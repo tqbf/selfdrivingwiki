@@ -575,7 +575,7 @@ struct WikiCtlCommandTests {
         let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
         // Append first version (extraction).
         _ = try store.appendProcessedMarkdown(
-            sourceID: ingested.id, content: "original", origin: "extraction", note: nil)
+            sourceID: ingested.id, content: "original", origin: .extraction, note: nil)
         // Small delay ensures the next ULID is strictly later.
         usleep(2000)
         // Run edit-markdown which appends a "user" version.
@@ -589,12 +589,12 @@ struct WikiCtlCommandTests {
 
         // Head (first, newest) is the user-edited version.
         #expect(history[0].content == "edited")
-        #expect(history[0].origin == "user")
+        #expect(history[0].origin == .user)
         #expect(history[0].parentID == history[1].id)
 
         // Second is the extraction baseline.
         #expect(history[1].content == "original")
-        #expect(history[1].origin == "extraction")
+        #expect(history[1].origin == .extraction)
         #expect(history[1].parentID == nil)
     }
 
@@ -602,7 +602,7 @@ struct WikiCtlCommandTests {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
         _ = try store.appendProcessedMarkdown(
-            sourceID: ingested.id, content: "original", origin: "extraction", note: nil)
+            sourceID: ingested.id, content: "original", origin: .extraction, note: nil)
         // Small delay ensures the next ULID is strictly later.
         usleep(2000)
         let result = try SourceCommand.run(
@@ -610,7 +610,7 @@ struct WikiCtlCommandTests {
         #expect(result.didCommit)
         let head = try store.processedMarkdownHead(sourceID: ingested.id)
         #expect(head?.content == "edited")
-        #expect(head?.origin == "user")
+        #expect(head?.origin == .user)
     }
 
     @Test func editMarkdownFailsWhenNoChainExists() throws {
@@ -631,7 +631,7 @@ struct WikiCtlCommandTests {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "unique.md", data: Data("hello".utf8))
         _ = try store.appendProcessedMarkdown(
-            sourceID: ingested.id, content: "v1", origin: "extraction", note: nil)
+            sourceID: ingested.id, content: "v1", origin: .extraction, note: nil)
         // Small delay ensures the next ULID is strictly later.
         usleep(2000)
         let result = try SourceCommand.run(

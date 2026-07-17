@@ -48,11 +48,11 @@ struct WikiRenderContextTests {
             originalPath: nil, activityID: nil)
         try store.renameSource(id: paper.id, to: "My Paper")
         let v1 = try store.appendProcessedMarkdown(
-            sourceID: paper.id, content: "v1 body", origin: "extraction", note: nil)
+            sourceID: paper.id, content: "v1 body", origin: .extraction, note: nil)
         let v2 = try store.appendProcessedMarkdown(
-            sourceID: paper.id, content: "v2 body", origin: "extraction", note: nil)
+            sourceID: paper.id, content: "v2 body", origin: .extraction, note: nil)
         let v3 = try store.appendProcessedMarkdown(
-            sourceID: paper.id, content: "v3 body", origin: "extraction", note: nil)
+            sourceID: paper.id, content: "v3 body", origin: .extraction, note: nil)
 
         // A byteless YouTube source — exercises the external EmbedTarget path.
         let yt = try store.addBytelessSource(

@@ -779,7 +779,7 @@ struct SourceDetailView: View {
                 let history = store.processedMarkdownHistory(for: file.id)
                 let headID = headVersion?.id.rawValue
                 ForEach(history) { version in
-                    let agent = names[version.id.rawValue] ?? version.origin
+                    let agent = names[version.id.rawValue] ?? version.origin.rawValue
                     Button {
                         store.setActiveMarkdown(for: file.id, to: version.id)
                         headVersion = store.processedMarkdownHead(for: file)
@@ -834,8 +834,8 @@ struct SourceDetailView: View {
     /// not the mutating origin verb.
     private static func activeAlternativeLabel(head: SourceMarkdownVersion, agent: String?) -> String {
         switch head.origin {
-        case "user": return "Edited"
-        case "revert": return "Reverted"
+        case .user: return "Edited"
+        case .revert: return "Reverted"
         default:
             if let agent { return backendDisplayName(forAgent: agent) }
             return "Extraction"
@@ -1067,12 +1067,13 @@ struct SourceDetailView: View {
     /// the currently-displayed markdown version came to exist. `nil` for
     /// "source" (the as-ingested seed version of a native markdown file,
     /// which the added-date row above already covers) so the row is omitted.
-    private static func markdownOriginLabel(for origin: String) -> String? {
+    private static func markdownOriginLabel(for origin: SourceMarkdownOrigin) -> String? {
         switch origin {
-        case "extraction": return "Converted"
-        case "user": return "Edited"
-        case "revert": return "Reverted"
-        default: return nil
+        case .extraction: return "Converted"
+        case .user: return "Edited"
+        case .revert: return "Reverted"
+        case .source: return nil
+        case .transcript: return nil
         }
     }
 }

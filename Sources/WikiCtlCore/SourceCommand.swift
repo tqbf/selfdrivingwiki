@@ -208,7 +208,7 @@ public enum SourceCommand {
         guard try store.hasProcessedMarkdown(sourceID: id) else {
             throw Failure.message("no processed markdown for this source")
         }
-        try store.appendProcessedMarkdown(sourceID: id, content: content, origin: "user", note: nil, technique: nil)
+        try store.appendProcessedMarkdown(sourceID: id, content: content, origin: .user, note: nil, technique: nil)
         return Result(payload: .text(""), didCommit: true)
     }
 
@@ -328,7 +328,7 @@ public enum SourceCommand {
                 sourceID: id, data: data, mimeType: nil, provenance: prov)
         case .derivedMarkdown(let content):
             try store.appendProcessedMarkdown(
-                sourceID: id, content: content, origin: "transcript", note: nil, technique: nil)
+                sourceID: id, content: content, origin: .transcript, note: nil, technique: nil)
         }
         return Result(
             payload: .text("Refreshed \(origin.displayLabel) source."),

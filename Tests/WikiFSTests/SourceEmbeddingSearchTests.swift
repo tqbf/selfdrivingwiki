@@ -143,7 +143,7 @@ struct SourceEmbeddingSearchTests {
         // a guarded no-op and the version still commits.
         #expect(throws: Never.self) {
             _ = try store.appendProcessedMarkdown(
-                sourceID: s.id, content: "# Hello world", origin: "extraction", note: nil)
+                sourceID: s.id, content: "# Hello world", origin: .extraction, note: nil)
         }
     }
 
