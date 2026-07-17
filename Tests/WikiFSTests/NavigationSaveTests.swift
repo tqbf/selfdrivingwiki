@@ -26,6 +26,7 @@ struct NavigationSaveTests {
         let aID = model.selection!
         model.newPage(title: "B")
         let bID = model.selection!
+        model.reloadFromStore()
 
         // Select A, type into the body (no autosave — only explicit save).
         model.select(aID)
@@ -63,10 +64,12 @@ struct NavigationSaveTests {
         let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
         model.newPage(title: "First")
         model.newPage(title: "Second")
+        model.reloadFromStore()
         #expect(model.summaries.count == 2)
 
         let firstID = model.summaries.first { $0.title == "First" }!.id
         model.delete(firstID)
+        model.reloadFromStore()
         // Rebuilt from source — not a stale cache.
         #expect(model.summaries.count == 1)
         #expect(model.summaries.allSatisfy { $0.title != "First" })
@@ -82,6 +85,7 @@ struct NavigationSaveTests {
         let aID = model.selection!
         model.newPage(title: "B")
         let bID = model.selection!
+        model.reloadFromStore()
 
         // Simulate List selecting A (binding writes selection, view fires onChange).
         model.selection = aID
@@ -102,10 +106,12 @@ struct NavigationSaveTests {
     @Test func renameUpdatesSummaryFromSource() throws {
         let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
         model.newPage(title: "Old Name")
+        model.reloadFromStore()
         guard case let .page(id)? = model.selection else {
             Issue.record("expected a page selection"); return
         }
         model.rename(id, to: "New Name")
+        model.reloadFromStore()
         #expect(model.summaries.first { $0.id == id }?.title == "New Name")
         #expect(model.draftTitle == "New Name")
     }

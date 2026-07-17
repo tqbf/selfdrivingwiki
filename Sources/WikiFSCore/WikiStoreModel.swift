@@ -1098,7 +1098,9 @@ public final class WikiStoreModel {
         do {
             let page = try store.createPage(title: title, createdBy: "user")
             try store.replaceLinks(from: page.id, parsedLinks: WikiLinkParser.parse(page.bodyMarkdown))
-            reloadSummaries()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write. The title is passed to openTab explicitly, so tabTitle
+            // (which reads `summaries`) is never called and needs no synchronous freshness.
             openTab(.page(page.id), title: title)
         } catch {
             DebugLog.store("WikiStoreModel.newPageInNewTab failed: \(error)")
@@ -1253,7 +1255,7 @@ public final class WikiStoreModel {
             // After a successful versioned save, refresh the head version id so
             // the next save CAS-expects the version we just wrote.
             loadedPageHeadVersionID = try? store.pageHeadVersionID(pageID: id)
-            reloadSummaries()
+            // No manual reload — the bus fires reloadFromStore() async after the upsert.
             // Non-blocking mermaid lint: the in-app save still succeeds (the
             // editor is the human escape from wikictl's hard block), but a broken
             // diagram is flagged so the author can fix it.
@@ -1386,7 +1388,7 @@ public final class WikiStoreModel {
         if didFix {
             do {
                 try PageUpsert.upsert(in: store, id: pageID, title: page.title, body: fixedBody)
-                reloadSummaries()
+                // No manual reload — the bus fires reloadFromStore() async after the upsert.
                 if loadedPage == pageID {
                     draftBody = fixedBody
                     isDraftDirty = false
@@ -1632,7 +1634,9 @@ public final class WikiStoreModel {
             // run it for uniformity with the save() path (and so a future
             // create-with-body wouldn't silently skip link indexing).
             try store.replaceLinks(from: page.id, parsedLinks: WikiLinkParser.parse(page.bodyMarkdown))
-            reloadSummaries()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write. The title is passed to openTab explicitly, so tabTitle
+            // (which reads `summaries`) is never called and needs no synchronous freshness.
             let newSelection = WikiSelection.page(page.id)
             recordHistoryTransition(from: loadedSelection, to: newSelection)
             openTab(newSelection, title: title)
@@ -1670,7 +1674,7 @@ public final class WikiStoreModel {
             let page = try store.getPage(id: id)
             let cleanBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
             try store.updatePage(id: id, title: sanitizedTitle, body: cleanBody, lastEditedBy: nil)
-            reloadSummaries()
+            // No manual reload — the bus fires reloadFromStore() async after the update.
             if selection == .page(id) { draftTitle = sanitizedTitle }
             // Update any tab showing this renamed page.
             for i in tabs.indices where tabs[i].selection == .page(id) {
@@ -1687,13 +1691,9 @@ public final class WikiStoreModel {
     public func renameSource(id: PageID, to newDisplayName: String) {
         do {
             try store.renameSource(id: id, to: newDisplayName)
-            // Refresh BOTH lists: `sources` so the renamed source's display name
-            // updates in the sidebar + detail view (without this the rename commits
-            // to the DB but the live UI snaps back to the old name), and
-            // `summaries` because the rename rewrites inbound `[[source:…]]` links
-            // in the pages that reference it.
-            reloadSources()
-            reloadSummaries()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // rename, which reloads BOTH `sources` (display name in sidebar/detail)
+            // and `summaries` (the rename rewrites inbound `[[source:…]]` links).
             for i in tabs.indices where tabs[i].selection == .source(id) {
                 tabs[i].title = newDisplayName
             }
@@ -1710,7 +1710,8 @@ public final class WikiStoreModel {
             if let tab = tabs.first(where: { $0.selection == .page(id) }) {
                 closeTab(id: tab.id)
             }
-            reloadSummaries()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // delete. History and tab cleanup happen explicitly above.
         } catch {
             DebugLog.store("WikiStoreModel.delete failed: \(error)")
             storeError = StoreError(
@@ -1842,6 +1843,7 @@ public final class WikiStoreModel {
     /// `ingestingSourceIDs`). Issue #178.
     public func addFiles(_ fileURLs: [URL]) async {
         var lastSourceID: PageID?
+        var lastSourceName: String?
         var duplicateNames: [String] = []
         for url in fileURLs {
             // Skip directories — only flat files are ingested.
@@ -1868,6 +1870,7 @@ public final class WikiStoreModel {
             do {
                 let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
                 lastSourceID = summary.id
+                lastSourceName = summary.effectiveName
             } catch WikiStoreError.duplicateContent(let existing) {
                 // Byte-identical to an already-stored source — skip rather than
                 // abort the rest of the drop batch; report it so the user isn't
@@ -1877,8 +1880,12 @@ public final class WikiStoreModel {
                 DebugLog.store("WikiStoreModel.addFiles store failed for \(url.lastPathComponent): \(error)")
             }
         }
-        reloadSources()
-        if let sourceID = lastSourceID {
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // store writes. The tab title is passed explicitly to openTab so it
+        // doesn't read the stale `sources` array via tabTitle.
+        if let sourceID = lastSourceID, let name = lastSourceName {
+            openTab(.source(sourceID), title: name)
+        } else if let sourceID = lastSourceID {
             openTab(.source(sourceID))
         }
         if !duplicateNames.isEmpty {
@@ -1959,8 +1966,10 @@ public final class WikiStoreModel {
             let markdown = String(data: transcript.data, encoding: .utf8) ?? ""
             try store.appendProcessedMarkdown(
                 sourceID: summary.id, content: markdown, origin: "transcript", note: nil, technique: nil)
-            reloadSources()
-            openTab(.source(summary.id))
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write. The tab title is passed explicitly so tabTitle (which
+            // reads `sources`) needs no synchronous freshness.
+            openTab(.source(summary.id), title: summary.effectiveName)
             return URLFetchService.FetchOutcome(
                 filename: transcript.filename,
                 byteSize: transcript.data.count,
@@ -2006,8 +2015,10 @@ public final class WikiStoreModel {
                 externalRef: match.planURL,
                 externalIdentity: match.externalIdentity),
             role: .primary)
-        reloadSources()
-        openTab(.source(summary.id))
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // store write. The tab title is passed explicitly so tabTitle (which
+        // reads `sources`) needs no synchronous freshness.
+        openTab(.source(summary.id), title: summary.effectiveName)
         return URLFetchService.FetchOutcome(
             filename: match.filename, byteSize: 0, kind: kind)
     }
@@ -2052,8 +2063,10 @@ public final class WikiStoreModel {
                 DebugLog.store("WikiStoreModel.importURLSource setSourceDisplayName failed (source=\(summary.id.rawValue)): \(error)")
             }
         }
-        reloadSources()
-        openTab(.source(summary.id))
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // store write. The tab title is passed explicitly so tabTitle (which
+        // reads `sources`) needs no synchronous freshness.
+        openTab(.source(summary.id), title: summary.effectiveName)
         return URLFetchService.FetchOutcome(
             filename: snapshot.plan.filename, byteSize: snapshot.plan.data.count,
             kind: URLFetchService.mapFormat(snapshot.plan.format))
@@ -2152,7 +2165,8 @@ public final class WikiStoreModel {
             try store.appendProcessedMarkdown(
                 sourceID: id, content: content, origin: "transcript", note: nil, technique: nil)
         }
-        reloadSources()
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // version append.
         return "Refreshed \(origin.displayLabel) source."
     }
 
@@ -2164,7 +2178,8 @@ public final class WikiStoreModel {
                 filename: filename, data: data, zoteroItemKey: nil, zoteroItemTitle: nil,
                 mimeType: nil, provenance: nil, role: .primary,
                 originalPath: nil, activityID: nil)
-            reloadSources()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write.
         } catch WikiStoreError.duplicateContent(let existing) {
             storeError = StoreError(
                 title: "Duplicate File Skipped",
@@ -2200,8 +2215,10 @@ public final class WikiStoreModel {
             mimeType: materialized.mimeType, zoteroItemTitle: materialized.zoteroItemTitle)
         do {
             let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
-            reloadSources()
-            openTab(.source(summary.id))
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write. The tab title is passed explicitly so tabTitle (which
+            // reads `sources`) needs no synchronous freshness.
+            openTab(.source(summary.id), title: summary.effectiveName)
         } catch {
             DebugLog.store("WikiStoreModel.ingestFromZotero failed: \(error)")
             throw error
@@ -2233,6 +2250,7 @@ public final class WikiStoreModel {
         var errorMessages: [String] = []
 
         var firstSourceID: PageID?
+        var firstSourceName: String?
         for file in result.files {
             let ext = (file.filename as NSString).pathExtension.lowercased()
             let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
@@ -2241,7 +2259,7 @@ public final class WikiStoreModel {
             do {
                 let materialized = try await provider.materialize()
                 let summary = try storeMaterialized(materialized)
-                if firstSourceID == nil { firstSourceID = summary.id }
+                if firstSourceID == nil { firstSourceID = summary.id; firstSourceName = summary.effectiveName }
                 imported += 1
             } catch WikiStoreError.duplicateContent(let existing) {
                 errorMessages.append("\(file.filename): duplicate of \(existing.effectiveName), skipped")
@@ -2254,8 +2272,12 @@ public final class WikiStoreModel {
                 ?? "\(walkError.path): unknown error")
         }
 
-        reloadSources()
-        if let sourceID = firstSourceID {
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // store writes. The tab title is passed explicitly so tabTitle (which
+        // reads `sources`) needs no synchronous freshness.
+        if let sourceID = firstSourceID, let name = firstSourceName {
+            openTab(.source(sourceID), title: name)
+        } else if let sourceID = firstSourceID {
             openTab(.source(sourceID))
         }
         return (imported: imported, errors: errorMessages)
@@ -2271,7 +2293,8 @@ public final class WikiStoreModel {
             if let tab = tabs.first(where: { $0.selection == .source(id) }) {
                 closeTab(id: tab.id)
             }
-            reloadSources()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // delete. History and tab cleanup happen explicitly above.
         } catch {
             DebugLog.store("WikiStoreModel.deleteSource failed: \(error)")
         }
@@ -2829,7 +2852,8 @@ public final class WikiStoreModel {
             let node = try store.createBookmarkNode(
                 parentID: parentID, position: position, kind: .folder,
                 label: name, targetID: nil)
-            reloadBookmarkNodes()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write.
             return node.id
         } catch {
             DebugLog.store("WikiStoreModel.createFolder failed: \(error)")
@@ -2846,7 +2870,8 @@ public final class WikiStoreModel {
             _ = try store.createBookmarkNode(
                 parentID: parentID, position: pos, kind: .pageRef,
                 label: nil, targetID: pageID)
-            reloadBookmarkNodes()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write.
             let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
             DebugLog.tabs("addPageRef: done in \(String(format: "%.1f", ms)) ms")
         } catch {
@@ -2862,7 +2887,8 @@ public final class WikiStoreModel {
             _ = try store.createBookmarkNode(
                 parentID: parentID, position: pos, kind: .sourceRef,
                 label: nil, targetID: sourceID)
-            reloadBookmarkNodes()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write.
         } catch {
             DebugLog.store("WikiStoreModel.addSourceRef failed: \(error)")
         }
@@ -2876,7 +2902,8 @@ public final class WikiStoreModel {
             _ = try store.createBookmarkNode(
                 parentID: parentID, position: pos, kind: .chatRef,
                 label: nil, targetID: chatID)
-            reloadBookmarkNodes()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write.
         } catch {
             DebugLog.store("WikiStoreModel.addChatRef failed: \(error)")
         }
@@ -2886,7 +2913,8 @@ public final class WikiStoreModel {
     public func renameBookmarkNode(id: String, to label: String) {
         do {
             try store.updateBookmarkNode(id: id, label: label)
-            reloadBookmarkNodes()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write.
         } catch {
             DebugLog.store("WikiStoreModel.renameBookmarkNode failed: \(error)")
         }
@@ -2896,7 +2924,8 @@ public final class WikiStoreModel {
     public func deleteBookmarkNode(id: String) {
         do {
             try store.deleteBookmarkNode(id: id)
-            reloadBookmarkNodes()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write.
         } catch {
             DebugLog.store("WikiStoreModel.deleteBookmarkNode failed: \(error)")
         }
@@ -2908,7 +2937,8 @@ public final class WikiStoreModel {
     public func moveBookmarkNode(id: String, toParentID: String?, position: Int) -> Bool {
         do {
             try store.moveBookmarkNode(id: id, toParentID: toParentID, position: position)
-            reloadBookmarkNodes()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write.
             return true
         } catch {
             DebugLog.store("WikiStoreModel.moveBookmarkNode failed: \(error)")
@@ -2959,7 +2989,12 @@ public final class WikiStoreModel {
             // already persisted (firstMessagePrePersisted) so it marks the event as
             // flushed and does NOT double-insert it on the first transcript flush.
             try store.appendChatMessages(chatID: chat.id, events: [.userText(firstMessage)])
-            reloadChats()
+            // Insert the single new chat into the local array instead of a full
+            // reloadChats(). The bus fires reloadFromStore() async after the store
+            // write, but the immediate caller (retargetActiveTabToChat →
+            // retargetTab → tabTitle) reads `chats` synchronously, so the row
+            // must be present NOW.
+            chats.insert(chat, at: 0)
             return chat
         } catch {
             DebugLog.store("WikiStoreModel.startChat failed: \(error)")
@@ -2979,7 +3014,8 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.rollbackChatCreation failed: \(error)")
         }
-        reloadChats()
+        // No manual reloadChats — the bus fires reloadFromStore() async after the
+        // delete. The tab retarget below doesn't depend on the chats array.
         // Revert the tab we retargeted to `.chat(id)` back to the draft composer.
         if let tab = tabs.first(where: { $0.selection == .chat(id) }) {
             retargetTab(id: tab.id, to: draft)
@@ -2993,7 +3029,8 @@ public final class WikiStoreModel {
         guard !persistable.isEmpty else { return }
         do {
             try store.appendChatMessages(chatID: chatID, events: persistable)
-            reloadChats()  // cheap — keeps updated_at ordering + counts live.
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write (keeps updated_at ordering + counts live).
         } catch {
             DebugLog.store("WikiStoreModel.appendChatEvents failed: \(error)")
         }
@@ -3006,7 +3043,8 @@ public final class WikiStoreModel {
     public func renameChat(id: PageID, to title: String) {
         do {
             try store.renameChat(id: id, to: title)
-            reloadChats()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // rename.
         } catch {
             DebugLog.store("WikiStoreModel.renameChat failed: \(error)")
             storeError = StoreError(
@@ -3018,7 +3056,8 @@ public final class WikiStoreModel {
     public func updateChatSummary(chatID: PageID, summary: String) {
         do {
             try store.updateChatSummary(chatID: chatID, summary: summary)
-            reloadChats()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // update.
         } catch {
             DebugLog.store("WikiStoreModel.updateChatSummary failed: \(error)")
         }
@@ -3032,7 +3071,8 @@ public final class WikiStoreModel {
             if let tab = tabs.first(where: { $0.selection == .chat(id) }) {
                 closeTab(id: tab.id)
             }
-            reloadChats()
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // delete. History and tab cleanup happen explicitly above.
         } catch {
             DebugLog.store("WikiStoreModel.deleteChat failed: \(error)")
             storeError = StoreError(

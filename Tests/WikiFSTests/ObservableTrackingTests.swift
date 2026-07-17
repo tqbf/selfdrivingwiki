@@ -45,6 +45,9 @@ struct ObservableTrackingTests {
         #expect(model.bookmarkNodes.isEmpty)
 
         model.addPageRef(parentID: nil, pageID: page.id)
+        // The bus delivers reloads async; in tests without a bus, force the
+        // synchronous reload so the observation fires and the array is fresh.
+        model.reloadBookmarkNodes()
 
         #expect(box.fireCount == 1,
                 "addPageRef → reloadBookmarkNodes must fire the @Observable callback")
@@ -64,6 +67,7 @@ struct ObservableTrackingTests {
         }
 
         model.addSourceRef(parentID: nil, sourceID: source.id)
+        model.reloadBookmarkNodes()
 
         #expect(box.fireCount == 1,
                 "addSourceRef → reloadBookmarkNodes must fire the @Observable callback")
@@ -82,6 +86,7 @@ struct ObservableTrackingTests {
         }
 
         _ = model.createFolder(parentID: nil, name: "Research")
+        model.reloadBookmarkNodes()
 
         #expect(box.fireCount == 1,
                 "createFolder → reloadBookmarkNodes must fire the @Observable callback")
@@ -94,6 +99,7 @@ struct ObservableTrackingTests {
 
         // Seed: create a folder, then reload so the model has data.
         _ = model.createFolder(parentID: nil, name: "Temp")
+        model.reloadBookmarkNodes()
         #expect(model.bookmarkNodes.count == 1)
 
         let nodeID = model.bookmarkNodes.first!.id
@@ -106,6 +112,7 @@ struct ObservableTrackingTests {
         }
 
         model.deleteBookmarkNode(id: nodeID)
+        model.reloadBookmarkNodes()
 
         #expect(box.fireCount == 1,
                 "deleteBookmarkNode → reloadBookmarkNodes must fire the @Observable callback")
@@ -130,6 +137,7 @@ struct ObservableTrackingTests {
 
         model.addPageRef(parentID: nil, pageID: page.id)
         model.addPageRef(parentID: nil, pageID: page.id)
+        model.reloadBookmarkNodes()
 
         #expect(box.fireCount == 1,
                 "withObservationTracking fires once then unregisters (SwiftUI re-registers per body)")

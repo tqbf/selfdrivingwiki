@@ -20,9 +20,11 @@ struct WikiStoreModelRenameSourceTests {
     @Test func renameSourceRefreshesSourcesList() throws {
         let model = try makeModel()
         model.addSource(filename: "old-name.pdf", data: Data("pdf".utf8))
+        model.reloadFromStore()
         let id = try #require(model.sources.first?.id)
 
         model.renameSource(id: id, to: "Friendly Name")
+        model.reloadFromStore()
 
         let renamed = model.sources.first(where: { $0.id == id })
         #expect(renamed?.displayName == "Friendly Name")
