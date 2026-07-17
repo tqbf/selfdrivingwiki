@@ -7420,6 +7420,35 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         return out
     }
 
+    /// One chat summary by ID (direct O(1) lookup — analogous to
+    /// `getPage(id:)` / `getSource(id:)`). Throws `.notFound` if absent.
+    /// Replaces the O(all chats) `listAllChatsOrderedByID().first(where:)`
+    /// pattern used per-leaf in the File Provider projection (#490).
+    public func getChat(id: PageID) throws -> ChatSummary {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement("""
+        SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
+               (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id),
+               c.summary, c.summary_at
+        FROM chats c WHERE c.id = ?1;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        guard try stmt.step() else { throw WikiStoreError.notFound(id) }
+        let summaryIsNull = sqlite3_column_type(stmt.handle, 6) == SQLITE_NULL
+        let summaryAtIsNull = sqlite3_column_type(stmt.handle, 7) == SQLITE_NULL
+        return ChatSummary(
+            id: PageID(rawValue: stmt.text(at: 0)),
+            kind: ChatKind(rawValue: stmt.text(at: 1)) ?? .edit,
+            title: stmt.text(at: 2),
+            createdAt: Date(timeIntervalSince1970: stmt.double(at: 3)),
+            updatedAt: Date(timeIntervalSince1970: stmt.double(at: 4)),
+            messageCount: Int(stmt.int(at: 5)),
+            summary: summaryIsNull ? nil : stmt.text(at: 6),
+            summaryAt: summaryAtIsNull ? nil : Date(timeIntervalSince1970: stmt.double(at: 7))
+        )
+    }
+
     /// Resolve a `[[chat:…]]` target to a chat id. Case-insensitive; on a
     /// duplicate-title collision, the oldest chat wins (lowest ULID — stable
     /// identity, like `resolveTitleToID` for pages). Used by the wikilink

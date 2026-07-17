@@ -338,6 +338,14 @@ struct Projection {
         private let lock = NSLock()
         private var cachedStore: SQLiteWikiStore?
         private var cachedToken: String?
+        /// Token-invalidated `LinkMaps` cache (#490). Built once per scope
+        /// (on the first `cachedLinkMaps()` call) and reused for every leaf
+        /// / bookmark in the same enumeration pass — replacing O(n) rebuilds
+        /// of 5 full-table scans per pass. Cleared whenever `cacheToken`
+        /// stores a DIFFERENT token so a store that was unavailable on the
+        /// first `changeToken()` (returning `"0:0"` without caching) and then
+        /// becomes available is correctly reflected.
+        private var cachedLinkMaps: LinkMaps?
 
         init(databaseURL: URL?, wikiID: String) {
             self.databaseURL = databaseURL
@@ -364,9 +372,27 @@ struct Projection {
         }
 
         /// Cache the token (called once per scope, on first `changeToken()`).
+        /// A token change invalidates any cached `LinkMaps` so a scope that
+        /// initially saw `"0:0"` (store unavailable) rebuilds on the real
+        /// token once the store becomes reachable (#490).
         func cacheToken(_ value: String) {
             lock.lock(); defer { lock.unlock() }
-            cachedToken = value
+            if cachedToken != value {
+                cachedToken = value
+                cachedLinkMaps = nil
+            }
+        }
+
+        /// The cached link maps, or nil if not yet computed for this scope.
+        var linkMaps: LinkMaps? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedLinkMaps
+        }
+
+        /// Cache link maps (built once per scope from the shared read store).
+        func cacheLinkMaps(_ maps: LinkMaps) {
+            lock.lock(); defer { lock.unlock() }
+            cachedLinkMaps = maps
         }
     }
 
@@ -560,7 +586,7 @@ struct Projection {
             // For by-title pages, size must match the rewritten bytes that
             // contents(for:) will serve — a mismatch truncates cat (#216).
             if id.rawValue.hasPrefix(Identity.byTitlePrefix) {
-                let data = projection.byTitleContent(for: page, maps: projection.makeLinkMaps())
+                let data = projection.byTitleContent(for: page, maps: projection.cachedLinkMaps())
                 return Self.pageFileNode(for: id, page: page, contentData: data)
             }
             return Self.pageFileNode(for: id, page: page)
@@ -571,7 +597,7 @@ struct Projection {
                   let page = try? store.getPage(id: PageID(rawValue: ulid)) else { return nil }
             // By-title view: rewrite [[wikilinks]] to relative Markdown links.
             if id.rawValue.hasPrefix(Identity.byTitlePrefix) {
-                return projection.byTitleContent(for: page, maps: projection.makeLinkMaps())
+                return projection.byTitleContent(for: page, maps: projection.cachedLinkMaps())
             }
             return Data(PageMarkdownFormat.fileContent(for: page).utf8)
         }
@@ -596,7 +622,7 @@ struct Projection {
                 }
                 // For by-name markdown siblings, size must match rewritten bytes.
                 if id.rawValue.hasPrefix(Identity.sourceMarkdownByNamePrefix) {
-                    let data = projection.rewriteLinks(head.content, maps: projection.makeLinkMaps(),
+                    let data = projection.rewriteLinks(head.content, maps: projection.cachedLinkMaps(),
                                                        baseDir: Self.sourcesByNameDir)
                     return Self.sourceMarkdownNode(for: id, source: file, head: head, contentData: data)
                 }
@@ -608,7 +634,7 @@ struct Projection {
                 if id.rawValue.hasPrefix(Identity.sourceByNamePrefix) {
                     let contentData = projection.rewrittenVerbatimSourceContent(
                         id: PageID(rawValue: ulid), mimeType: file.mimeType,
-                        maps: projection.makeLinkMaps())
+                        maps: projection.cachedLinkMaps())
                     return Self.sourceNode(for: id, file: file, contentData: contentData)
                 }
                 return Self.sourceNode(for: id, file: file)
@@ -625,7 +651,7 @@ struct Projection {
                 let wrapped = SourceMarkdownFormat.fileContent(for: head)
                 // By-name markdown siblings: rewrite [[wikilinks]] to relative links.
                 if id.rawValue.hasPrefix(Identity.sourceMarkdownByNamePrefix) {
-                    return projection.rewriteLinks(wrapped, maps: projection.makeLinkMaps(),
+                    return projection.rewriteLinks(wrapped, maps: projection.cachedLinkMaps(),
                                                    baseDir: Self.sourcesByNameDir)
                 }
                 return Data(wrapped.utf8)
@@ -637,7 +663,7 @@ struct Projection {
                 if id.rawValue.hasPrefix(Identity.sourceByNamePrefix),
                    let rewritten = projection.rewrittenVerbatimSourceContent(
                        id: PageID(rawValue: ulid), mimeType: file.mimeType,
-                       maps: projection.makeLinkMaps()) {
+                       maps: projection.cachedLinkMaps()) {
                     return rewritten
                 }
                 return data
@@ -655,13 +681,12 @@ struct Projection {
         nodeForLeaf: { projection, id in
             guard let ulid = Identity.chatULID(from: id),
                   let store = projection.openReadStore(),
-                  let chats = try? store.listAllChatsOrderedByID(),
-                  let chat = chats.first(where: { $0.id.rawValue == ulid }) else { return nil }
+                  let chat = try? store.getChat(id: PageID(rawValue: ulid)) else { return nil }
             // For by-name chats, size must match rewritten bytes.
             if id.rawValue.hasPrefix(Identity.chatByNamePrefix) {
                 let messages = (try? store.chatMessages(chatID: chat.id)) ?? []
                 let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
-                let data = projection.rewriteLinks(raw, maps: projection.makeLinkMaps(),
+                let data = projection.rewriteLinks(raw, maps: projection.cachedLinkMaps(),
                                                    baseDir: Self.chatsByNameDir)
                 return Self.chatFileNode(for: id, chat: chat, in: store, contentData: data)
             }
@@ -670,13 +695,12 @@ struct Projection {
         contentForLeaf: { projection, id in
             guard let ulid = Identity.chatULID(from: id),
                   let store = projection.openReadStore(),
-                  let chats = try? store.listAllChatsOrderedByID(),
-                  let chat = chats.first(where: { $0.id.rawValue == ulid }),
+                  let chat = try? store.getChat(id: PageID(rawValue: ulid)),
                   let messages = try? store.chatMessages(chatID: chat.id) else { return nil }
             let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
             // By-name chats: rewrite [[wikilinks]] to relative links.
             if id.rawValue.hasPrefix(Identity.chatByNamePrefix) {
-                return projection.rewriteLinks(raw, maps: projection.makeLinkMaps(),
+                return projection.rewriteLinks(raw, maps: projection.cachedLinkMaps(),
                                                baseDir: Self.chatsByNameDir)
             }
             return Data(raw.utf8)
@@ -984,7 +1008,7 @@ struct Projection {
                          created: nil, modified: nil)
         case .chatRef:
             if let targetID = node.targetID,
-               let chat = (try? store.listAllChatsOrderedByID())?.first(where: { $0.id == targetID }) {
+               let chat = try? store.getChat(id: targetID) {
                 let messages = (try? store.chatMessages(chatID: chat.id)) ?? []
                 let baseDir = bookmarkBaseDir(for: node, in: allNodes)
                 let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
@@ -1007,7 +1031,7 @@ struct Projection {
               let store = openReadStore(),
               let nodes = try? store.listBookmarkNodes(),
               let node = nodes.first(where: { $0.id == ulid }) else { return nil }
-        return bookmarkNodeItem(for: node, in: store, maps: makeLinkMaps(), allNodes: nodes)
+        return bookmarkNodeItem(for: node, in: store, maps: cachedLinkMaps(), allNodes: nodes)
     }
 
     /// Enumerate the children of a bookmark container (the topLevel folder or a
@@ -1024,7 +1048,7 @@ struct Projection {
         }
         guard let store = openReadStore(),
               let nodes = try? store.listBookmarkNodes() else { return [] }
-        let maps = makeLinkMaps()
+        let maps = cachedLinkMaps()
         return nodes
             .filter { $0.parentID == parentID }
             .sorted { $0.position < $1.position }
@@ -1047,7 +1071,7 @@ struct Projection {
                 return Data("# Stale reference\n\nThis bookmark points to a deleted page.".utf8)
             }
             return rewriteLinks(PageMarkdownFormat.fileContent(for: page),
-                                maps: makeLinkMaps(),
+                                maps: cachedLinkMaps(),
                                 baseDir: bookmarkBaseDir(for: node, in: nodes))
         case .sourceRef:
             guard let targetID = node.targetID else {
@@ -1057,12 +1081,12 @@ struct Projection {
                 ?? Data("# Stale reference\n\nThis bookmark points to a deleted source.".utf8)
         case .chatRef:
             guard let targetID = node.targetID,
-                  let chat = (try? store.listAllChatsOrderedByID())?.first(where: { $0.id == targetID }) else {
+                  let chat = try? store.getChat(id: targetID) else {
                 return Data("# Stale reference\n\nThis bookmark points to a deleted chat.".utf8)
             }
             let messages = (try? store.chatMessages(chatID: chat.id)) ?? []
             let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
-            return rewriteLinks(raw, maps: makeLinkMaps(),
+            return rewriteLinks(raw, maps: cachedLinkMaps(),
                                 baseDir: bookmarkBaseDir(for: node, in: nodes))
         }
     }
@@ -1071,7 +1095,7 @@ struct Projection {
     private func allBookmarkNodes() -> [ProjectedNode] {
         guard let store = openReadStore(),
               let nodes = try? store.listBookmarkNodes() else { return [] }
-        let maps = makeLinkMaps()
+        let maps = cachedLinkMaps()
         return nodes.compactMap { bookmarkNodeItem(for: $0, in: store, maps: maps, allNodes: nodes) }
     }
 
@@ -1288,6 +1312,21 @@ struct Projection {
     /// pre-migration tables (missing → empty map → links left `[[…]]` verbatim).
     /// Source links target the readable `.md` sibling when one exists, else the
     /// verbatim file — matching the file that `sourceNodes` actually projects.
+    ///
+    /// In a read scope (the normal path), the result is cached on the
+    /// `ReadScope` and reused for every leaf/bookmark in the same enumeration
+    /// pass — one build replaces the O(n) rebuilds that previously ran 5
+    /// full-table scans per leaf (#490). Call `cachedLinkMaps()` instead of
+    /// calling this directly so the cache is transparent to every call site.
+    private func cachedLinkMaps() -> LinkMaps {
+        if let scope = readStoreHolder, let cached = scope.linkMaps {
+            return cached
+        }
+        let maps = makeLinkMaps()
+        readStoreHolder?.cacheLinkMaps(maps)
+        return maps
+    }
+
     private func makeLinkMaps() -> LinkMaps {
         let store = openReadStore()
 
@@ -1372,7 +1411,7 @@ struct Projection {
     }
 
     /// Rewrite relative image srcs in a markdown-native verbatim source's own
-    /// content, IF it has image siblings (`makeLinkMaps().siblingImages`).
+    /// content, IF it has image siblings (`cachedLinkMaps().siblingImages`).
     /// Returns `nil` when there's nothing to rewrite (binary sources, sources
     /// with no image siblings, or non-`by-name` requests) — the caller then
     /// falls back to raw stored bytes with NO computation, matching today's
@@ -1497,7 +1536,7 @@ struct Projection {
     private func pageNodes(byTitle: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
               let pages = try? store.listAllPagesOrderedByID() else { return [] }
-        let maps = byTitle ? makeLinkMaps() : nil
+        let maps = byTitle ? cachedLinkMaps() : nil
         return pages.map { page in
             let id = byTitle ? Identity.pageByTitle(page.id.rawValue)
                              : Identity.pageByID(page.id.rawValue)
@@ -1518,7 +1557,7 @@ struct Projection {
               let files = try? store.listAllSourcesOrderedByID() else { return [] }
         let heads = (try? store.processedMarkdownHeadsBySource()) ?? [:]
         // Build link maps once for by-name markdown sibling rewriting.
-        let maps = byName ? makeLinkMaps() : nil
+        let maps = byName ? cachedLinkMaps() : nil
         return files.flatMap { row in
             let id = byName ? Identity.sourceByName(row.id) : Identity.sourceByID(row.id)
             let summary = SourceSummary(
@@ -1555,7 +1594,7 @@ struct Projection {
         guard let store = openReadStore(),
               let chats = try? store.listAllChatsOrderedByID() else { return [] }
         // Build link maps once for by-name chat rewriting.
-        let maps = byName ? makeLinkMaps() : nil
+        let maps = byName ? cachedLinkMaps() : nil
         return chats.map { chat in
             let id = byName ? Identity.chatByName(chat.id.rawValue)
                             : Identity.chatByID(chat.id.rawValue)
