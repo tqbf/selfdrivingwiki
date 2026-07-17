@@ -276,6 +276,35 @@ struct WikiDaemonTests {
         #expect(token.isEmpty)
     }
 
+    /// When the store's `changeToken()` (or its transient open) throws, the
+    /// daemon must NOT swallow the error as `""` ("no changes" → stale File
+    /// Provider projection, #487). It must log and return a sentinel the caller
+    /// can distinguish from a genuine token — and that never matches a cached
+    /// anchor, so the enumerator re-syncs.
+    @Test func changeTokenReturnsSentinelOnStoreError() throws {
+        let dir = tempDirectory()
+        let daemon = makeDaemon(dir: dir)
+        let data = try #require(daemon.createWiki(name: "Corrupt Test"))
+        let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
+
+        // Force the transient-open path (store not held in `openStores`)
+        daemon.closeStore(wikiID: descriptor.id)
+
+        // Corrupt the DB so SQLiteWikiStore(databaseURL:) throws (SQLITE_NOTADB)
+        let dbURL = dir.appendingPathComponent("\(descriptor.id).sqlite", isDirectory: false)
+        for suffix in ["", "-wal", "-shm"] {
+            try? FileManager.default.removeItem(atPath: dbURL.path + suffix)
+        }
+        try Data("not a sqlite database".utf8).write(to: dbURL)
+
+        let token = daemon.changeToken(wikiID: descriptor.id)
+        #expect(token == WikiDaemon.errorTokenSentinel)
+        // Sentinel is distinguishable from both a genuine token (colon-joined
+        // integers) and from `""` (unknown wiki).
+        #expect(!token.isEmpty)
+        #expect(!token.contains(":"))
+    }
+
     // MARK: - Multiple wikis
 
     @Test func multipleWikisAreIndependent() throws {

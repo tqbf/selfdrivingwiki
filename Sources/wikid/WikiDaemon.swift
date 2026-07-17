@@ -149,17 +149,46 @@ final class WikiDaemon {
         }
     }
 
+    /// Sentinel returned by ``changeToken(wikiID:)`` when reading the store's
+    /// change token throws. A genuine change token is always colon-joined
+    /// integers (e.g. `"0:0:0:…"`), so this is syntactically distinguishable
+    /// from a real "no changes" token — and it never matches a previously
+    /// cached anchor, so callers (the File Provider enumerator) treat it as
+    /// "changed" and re-sync rather than silently skipping an update (#487).
+    /// Contrast with `""`, which means the wikiID is unknown (not registered).
+    static let errorTokenSentinel = "<<changeToken-read-error>>"
+
     func changeToken(wikiID: String) -> String {
         queue.sync { () -> String in
-            // If the store is open, read the token directly
+            // If the store is open, read the token directly.
+            // Never swallow a thrown error as `""` (which would be reported to
+            // the File Provider as "no changes" → stale projections, #487).
             if let store = openStores[wikiID] {
-                return (try? store.changeToken())?.rawString ?? ""
+                do {
+                    return try store.changeToken().rawString
+                } catch {
+                    DebugLog.store("wikid: changeToken() failed for \(wikiID) (open store): \(error)")
+                    return Self.errorTokenSentinel
+                }
             }
-            // Store not held open — open it transiently to read the token
+            // Store not held open — open it transiently to read the token.
+            // Unknown wiki → "" (genuine "not registered"); any thrown error
+            // during open/read → sentinel (logs + forces caller re-sync).
             guard registry.descriptor(id: wikiID) != nil else { return "" }
             let dbURL = databaseURL(forWikiID: wikiID)
-            guard let store = try? SQLiteWikiStore(databaseURL: dbURL) else { return "" }
-            return (try? store.changeToken())?.rawString ?? ""
+            let store: SQLiteWikiStore
+            do {
+                store = try SQLiteWikiStore(databaseURL: dbURL)
+            } catch {
+                DebugLog.store("wikid: changeToken() failed to open transient store for \(wikiID): \(error)")
+                return Self.errorTokenSentinel
+            }
+            do {
+                return try store.changeToken().rawString
+            } catch {
+                DebugLog.store("wikid: changeToken() failed for \(wikiID) (transient store): \(error)")
+                return Self.errorTokenSentinel
+            }
         }
     }
 
