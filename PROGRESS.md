@@ -4794,3 +4794,45 @@ crash, left in the fast tier per issue #439's stated scope.
 
 **Build:** `make build` clean; the two suites now skip in the fast tier and run
 in `swift-integration`.
+
+## json-render Source Providers — Phase 1 (2026-07-16)
+
+Phase 1 complete: the wiki is a json-render render target. A vanilla-JS form
+renderer (~200 lines, vendored as `Sources/WikiFS/jsonrender-form.js`) renders
+the form-primitives spec subset (`{ root, elements }`) into HTML form inputs in
+a WKWebView. No React, no npm, no build step. Actions round-trip to Swift via
+`WKScriptMessageHandler`.
+
+**What shipped:**
+- `Sources/WikiFS/jsonrender-form.js` — the form renderer bundle. Renders
+  TextField, PasswordField, NumberField, SelectField, Checkbox, DateRange,
+  FilePicker, Button, Stack. Resolves `$state` (read) and `$bindState` (two-way)
+  prop expressions matching upstream `@json-render/core` semantics. Emits
+  `addAction` messages on button click with resolved `actionParams`.
+- `Sources/WikiFS/JSONRenderView.swift` — SwiftUI WKWebView wrapper. Resolves
+  the JS via `Bundle.main` → `Bundle.module` fallback (works in both `.app` and
+  `swift test`). `NSViewRepresentable` bridge; `addAction`/`log`/`error`
+  message handlers. Redacts secrets before `DebugLog`.
+- `Sources/WikiFS/JSONRenderPayloadEncoder.swift` — pure Swift base64 encoder
+  for spec injection (avoids quote-escaping hazards).
+- `Sources/WikiFS/RedactionHelper.swift` — scrubs password/secret values from
+  `addAction` payloads before logging (R2: secrets never reach Console.app).
+- `Sources/WikiFS/JSONRenderDevProofView.swift` — temporary app entry (View ▸
+  json-render Form Proof menu) rendering the sample form spec.
+- `Package.swift` — added `resources: [.copy("jsonrender-form.js")]` to the
+  WikiFS target so `swift test` can resolve the JS via `Bundle.module`.
+- `build.sh` — copies `jsonrender-form.js` to the app's `Resources/` (same
+  convention as mermaid.js).
+- `.github/workflows/ci.yml` — `JSONRenderScenarioTests` added to the fast-tier
+  skip list (integration tier; `.tags(.integration)`).
+
+**Acceptance criteria (all Phase 1 pass):**
+- AC.1: `JSONRenderRuntimeTests/test_runtime_resources_bundled` ✓
+- AC.2: `JSONRenderScenarioTests/test_renders_form_spec` ✓
+- AC.3: `JSONRenderScenarioTests/test_addSource_action_round_trips` ✓
+- AC.4: `JSONRenderPayloadEncoderTests/test_encode_round_trips_quoted_payload` ✓
+- AC.15: `RedactionTests/test_addAction_payload_redacted_before_log` ✓
+
+**Test results:** 9 tests in 4 suites, all passing (0.34s for the full Phase 1
+filter). 7 unit tests run in both CI tiers; 2 integration tests (`.integration`)
+skip in the fast tier and run in `swift-integration`.

@@ -174,6 +174,16 @@ if [ -f "${MERMAID_JS}" ]; then
 else
   echo "  (mermaid.min.js not found at ${MERMAID_JS} — mermaid blocks will render as code)"
 fi
+# Vendored json-render form renderer (hand-written vanilla JS, ~200 lines).
+# Copied as jsonrender-form.js so the Bundle lookup is a simple name/ext pair.
+# Unlike Mermaid (which degrades gracefully), this IS the form feature — no
+# fallback. See plans/json-render-source-providers.md Phase 1.
+JSONRENDER_JS="Sources/WikiFS/jsonrender-form.js"
+if [ -f "${JSONRENDER_JS}" ]; then
+  cp "${JSONRENDER_JS}" "${RESOURCES_DIR}/jsonrender-form.js"
+else
+  echo "  (jsonrender-form.js not found at ${JSONRENDER_JS} — form rendering will fail)"
+fi
 # Vendored merval (zero-dependency Mermaid syntax validator), bundled to a single
 # self-contained IIFE. Copied as merval.js so the loader's name/ext lookup is
 # simple. Runs in a JavaScriptCore JSContext at save time — no Node at runtime.

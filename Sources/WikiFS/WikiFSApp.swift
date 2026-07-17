@@ -472,6 +472,15 @@ struct WikiFSApp: App {
             .frame(minWidth: 560, minHeight: 520)
         }
         .windowResizability(.contentMinSize)
+
+        // Phase 1.3 dev proof: a temporary window for the json-render form
+        // renderer. Opened from View ▸ json-render Form Proof. Phase 3 replaces
+        // this with real provider/connection tabs.
+        WindowGroup("json-render Form Proof") {
+            JSONRenderDevProofView()
+        }
+        .defaultSize(width: 520, height: 460)
+        .windowResizability(.contentMinSize)
     }
 
     /// Settings tab tags used by the TabView selection and `@AppStorage`.

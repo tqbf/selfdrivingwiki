@@ -115,6 +115,10 @@ let package = Package(
                 .product(name: "Markdown", package: "swift-markdown"),
             ],
             path: "Sources/WikiFS",
+            // The json-render form renderer JS is declared as a SwiftPM resource
+            // so tests can resolve it via Bundle.module (build.sh also copies it
+            // to the app's Resources/ for Bundle.main — see plans/json-render-source-providers.md).
+            resources: [.copy("jsonrender-form.js")],
             // WKWebView for the reader path (Sources/WikiFS/WikiReaderView.swift)
             // — the single markdown reader (replaced the vendored Textual).
             swiftSettings: podcastSwiftSettings,
