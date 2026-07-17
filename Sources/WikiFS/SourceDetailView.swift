@@ -37,7 +37,7 @@ struct SourceDetailView: View {
     let extractionCoordinator: ExtractionCoordinator
     let queueEngine: QueueEngine
     let extractionProvider: any QueueExtractionProvider
-    let fileProvider: FileProviderSpike
+    let fileProvider: FileProviderFacade
     @Bindable var store: WikiStoreModel
 
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)

@@ -57,7 +57,7 @@ struct WikiChangeBridgeTests {
         let descriptor = registry.wikis.first!
         let session = makeSession(wikiID: descriptor.id, descriptor: descriptor, dir: dir)
 
-        let fileProvider = FileProviderSpike()
+        let fileProvider = FileProviderFacade()
         let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
         // Inject the lookup closure — returns the session whose wikiID matches.
         bridge.sessionLookup = { wikiID in
@@ -92,7 +92,7 @@ struct WikiChangeBridgeTests {
         let session1 = makeSession(wikiID: descriptor.id, descriptor: descriptor, dir: dir)
         let session2 = makeSession(wikiID: descriptor.id, descriptor: descriptor, dir: dir)
 
-        let fileProvider = FileProviderSpike()
+        let fileProvider = FileProviderFacade()
         let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
         var pokedSessions: [String] = []
         bridge.sessionLookup = { wikiID in
@@ -127,7 +127,7 @@ struct WikiChangeBridgeTests {
         let sessionA = makeSession(wikiID: descriptorA.id, descriptor: descriptorA, dir: dir)
         let sessionB = makeSession(wikiID: descriptorB.id, descriptor: descriptorB, dir: dir)
 
-        let fileProvider = FileProviderSpike()
+        let fileProvider = FileProviderFacade()
         let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
         var pokedWikiIDs: [String] = []
         bridge.sessionLookup = { wikiID in
@@ -156,7 +156,7 @@ struct WikiChangeBridgeTests {
         let descriptor = registry.wikis.first!
         let session = makeSession(wikiID: descriptor.id, descriptor: descriptor, dir: dir)
 
-        let fileProvider = FileProviderSpike()
+        let fileProvider = FileProviderFacade()
         let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
         bridge.sessionLookup = { wikiID in
             wikiID == session.wikiID ? [session] : []

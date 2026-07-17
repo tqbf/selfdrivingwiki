@@ -5,7 +5,7 @@ import Testing
 /// Tests for `DomainRegistrationPolicy` — the pure decision logic behind robust
 /// File Provider domain registration (verify + bounded retry). The side effects
 /// (`NSFileProviderManager.add`/`.domains()`/`signalEnumerator`) live in the app
-/// layer's `FileProviderSpike`, which can't be unit-tested; THIS arithmetic
+/// layer's `FileProviderFacade`, which can't be unit-tested; THIS arithmetic
 /// (registered? / retry? / failed?) is the extracted, tested seam.
 struct DomainRegistrationPolicyTests {
 
@@ -49,7 +49,7 @@ struct DomainRegistrationPolicyTests {
         )
     }
 
-    /// Drive the same loop `FileProviderSpike.registerDomain` runs — a domain that
+    /// Drive the same loop `FileProviderFacade.registerDomain` runs — a domain that
     /// only appears on the LAST allowed attempt must still resolve to `.registered`
     /// (the busy-daemon-self-heals case), never `.failed`.
     @Test func resolvesRegisteredOnFinalAttempt() {

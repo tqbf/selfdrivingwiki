@@ -21,7 +21,7 @@ import WikiFSEngine
 /// on this AppKit-coupled class directly (plans/multi-wiki-daemon.md §3.2).
 @MainActor
 @Observable
-final class FileProviderSpike: ChangeSignaler {
+final class FileProviderFacade: ChangeSignaler {
     var status = "Not registered"
     /// The user-visible mount path of the ACTIVE wiki (resolved at select time).
     var path: String?
@@ -153,7 +153,7 @@ final class FileProviderSpike: ChangeSignaler {
                     // Distinguish benign already-exists (the verify below confirms
                     // presence) from a real failure we must not bury: log it AND
                     // keep it in `status` so it shows in the console and the UI.
-                    DebugLog.fileprovider("FileProviderSpike.registerDomain(\(displayName)): add failed: \(error)")
+                    DebugLog.fileprovider("FileProviderFacade.registerDomain(\(displayName)): add failed: \(error)")
                     status = "Register \(displayName) failed: \(error.localizedDescription)"
                 }
             }
@@ -173,7 +173,7 @@ final class FileProviderSpike: ChangeSignaler {
 
             case .failed:
                 DebugLog.fileprovider("""
-                    FileProviderSpike.registerDomain(\(displayName)): domain \(id) \
+                    FileProviderFacade.registerDomain(\(displayName)): domain \(id) \
                     still absent after \(attemptsMade) attempts — daemon may be wedged.
                     """)
                 status = "Register \(displayName) failed: domain did not appear after \(attemptsMade) tries."

@@ -16,7 +16,7 @@ struct SidebarView: View {
     /// The per-active-wiki session (store + launchers + descriptor).
     var session: WikiSession
     /// Used to open an ingested file in its default app via its user-visible URL.
-    let fileProvider: FileProviderSpike
+    let fileProvider: FileProviderFacade
     /// Required to launch the LLM lint from the sidebar context menu.
     @Bindable var launcher: AgentLauncher
     /// The chat launcher — drives the live indicator on recent-chat rows (D4).

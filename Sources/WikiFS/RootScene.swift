@@ -33,7 +33,7 @@ struct RootScene: View {
     @State var wikiID: String?
     @Bindable var registry: WikiRegistryClient
     @Bindable var sessionManager: SessionManager
-    let fileProvider: FileProviderSpike
+    let fileProvider: FileProviderFacade
 
     @State private var session: WikiSession?
     @State private var isSceneActive = false

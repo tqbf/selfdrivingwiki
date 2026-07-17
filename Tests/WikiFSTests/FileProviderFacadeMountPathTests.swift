@@ -3,12 +3,12 @@ import Testing
 @testable import WikiFS
 @testable import WikiFSEngine
 
-/// Tests for `FileProviderSpike` schema migration and non-blocking path
+/// Tests for `FileProviderFacade` schema migration and non-blocking path
 /// resolution.  Share URL resolution (`resolveSourceByNameURL` /
 /// `resolvePageByTitleURL`) relies on `getUserVisibleURL` which requires
 /// a live daemon — not testable in unit tests.
 @MainActor
-struct FileProviderSpikeMountPathTests {
+struct FileProviderFacadeMountPathTests {
 
     // MARK: - Schema migration
 
@@ -28,7 +28,7 @@ struct FileProviderSpikeMountPathTests {
     @Test func resolvePathCompletesWithoutBlocking() async {
         // resolvePath should return quickly even when the domain isn't
         // registered — warmCaches is detached and must not block the caller.
-        let spike = FileProviderSpike()
+        let spike = FileProviderFacade()
         await spike.resolvePath(id: "nonexistent-wiki-id", displayName: "Test")
         // After resolvePath returns, isResolvingPath must be false
         // regardless of whether the mount succeeded.

@@ -21,7 +21,7 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
     /// When true, all folders are force-expanded (used during search so hits
     /// inside collapsed folders are immediately visible).
     var forceExpandAll: Bool = false
-    let fileProvider: FileProviderSpike
+    let fileProvider: FileProviderFacade
     var onOpen: ([WikiSelection]) -> Void
     var onOpenBackground: ([WikiSelection]) -> Void
     var onEdit: (String) -> Void
@@ -103,7 +103,7 @@ final class BookmarksOutlineViewController: NSViewController {
     var scrollView: NSScrollView!
     var outlineView: NSOutlineView!
     var store: WikiStoreModel?
-    var fileProvider: FileProviderSpike?
+    var fileProvider: FileProviderFacade?
     var callbacks: BookmarksCallbacks?
 
     /// Snapshot for change detection — covers all fields that affect rendering

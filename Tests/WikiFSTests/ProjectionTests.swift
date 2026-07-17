@@ -167,7 +167,7 @@ struct ProjectionTests {
     /// The `source-by-name:` prefix is the contract between the app
     /// (`WikiFSContainerID`) and the File Provider extension
     /// (`Projection.Identity`). If these ever diverge,
-    /// `FileProviderSpike.resolveSourceByNameURL(id:)` wonʼt resolve to real
+    /// `FileProviderFacade.resolveSourceByNameURL(id:)` wonʼt resolve to real
     /// File Provider items, and the share sheet will see an empty file list.
     @Test func sourceByNamePrefixMatchesAcrossModules() {
         #expect(Projection.Identity.sourceByNamePrefix == WikiFSContainerID.sourceByNamePrefix)

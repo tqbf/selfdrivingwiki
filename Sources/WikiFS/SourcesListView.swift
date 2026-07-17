@@ -15,7 +15,7 @@ import WikiFSCore
 /// Provider for an external launch.
 struct SourcesListView: NSViewControllerRepresentable {
     let store: WikiStoreModel
-    let fileProvider: FileProviderSpike
+    let fileProvider: FileProviderFacade
     let session: WikiSession
     let launcher: AgentLauncher
     let ingestingSourceIDs: Set<PageID>
@@ -222,7 +222,7 @@ final class SourcesListViewController: NSViewController {
     var scrollView: NSScrollView!
     var tableView: SourcesNSTableView!
     var store: WikiStoreModel?
-    var fileProvider: FileProviderSpike?
+    var fileProvider: FileProviderFacade?
     var launcher: AgentLauncher?
     var callbacks: SourcesListCallbacks?
     var ingestingIDs: Set<PageID> = []

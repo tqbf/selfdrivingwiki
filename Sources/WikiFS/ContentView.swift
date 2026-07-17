@@ -13,7 +13,7 @@ struct ContentView: View {
     var session: WikiSession
     /// App-scoped registry: wiki list + active id + create/select/delete.
     @Bindable var registry: WikiRegistryClient
-    let fileProvider: FileProviderSpike
+    let fileProvider: FileProviderFacade
     @Bindable var agentLauncher: AgentLauncher
     let chatLauncher: AgentLauncher
     let extractionCoordinator: ExtractionCoordinator

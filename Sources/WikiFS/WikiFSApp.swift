@@ -26,7 +26,7 @@ struct WikiFSApp: App {
     /// `RootScene` calls `sessionManager.session(for:descriptor:)` to resolve
     /// its session. Replaces the former `@State session` + `SessionRef`.
     @State private var sessionManager: SessionManager
-    @State private var fileProvider = FileProviderSpike()
+    @State private var fileProvider = FileProviderFacade()
     /// One app-scoped launcher for Settings-only use ("Test Connection" + backend
     /// config). Has its own `GenerationGate`, independent of any session's gate
     /// — a Settings connection test doesn't block an active wiki's ingest.
@@ -46,7 +46,7 @@ struct WikiFSApp: App {
     /// `@MainActor` `AgentLauncher` + `WikiStoreModel` for ingestion.
     @State private var ingestionProvider: any QueueIngestionProvider
     /// Mutable box for the file provider reference — the ingestion provider
-    /// uses it to access the `FileProviderSpike` which is only available
+    /// uses it to access the `FileProviderFacade` which is only available
     /// after the `@State` property is initialized by SwiftUI.
     @State private var fileProviderBox: FileProviderBox
     /// App-wide queue-activity tracker. Observes `QueueEngine.events` and
@@ -723,7 +723,7 @@ private struct LaunchLocationWarning {
     }
 }
 
-extension FileProviderSpike {
+extension FileProviderFacade {
     /// Inject this provider's per-wiki domain side effects into the registry, so
     /// `createWiki` / `deleteWiki` / `renameWiki` can register/remove/rename FP
     /// domains. The FP bus subscription to each active session's store is wired

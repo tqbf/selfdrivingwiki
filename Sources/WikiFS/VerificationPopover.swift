@@ -6,10 +6,10 @@ import SwiftUI
 /// pasteboard, and shows it plus a copyable verification command the user can
 /// paste into Terminal to confirm the projection.
 ///
-/// The path is bound to the observable `FileProviderSpike.path`, so if
+/// The path is bound to the observable `FileProviderFacade.path`, so if
 /// resolution is still in flight when the popover opens it fills in live.
 struct VerificationPopover: View {
-    let fileProvider: FileProviderSpike
+    let fileProvider: FileProviderFacade
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {

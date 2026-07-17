@@ -11,7 +11,7 @@ struct WikiDetailView: View {
     @Bindable var chatLauncher: AgentLauncher   // chat launcher (write-capable)
     /// The per-active-wiki session (store + launchers + descriptor).
     var session: WikiSession
-    let fileProvider: FileProviderSpike
+    let fileProvider: FileProviderFacade
     let extractionCoordinator: ExtractionCoordinator
     @Environment(QueueActivityTracker.self) private var tracker
     let queueEngine: QueueEngine

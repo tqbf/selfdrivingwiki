@@ -19,7 +19,7 @@ enum WikiLinkMenuNSItems {
         for url: URL,
         actions: [WikiLinkAction]? = nil,
         store: WikiStoreModel,
-        fileProvider: FileProviderSpike?,
+        fileProvider: FileProviderFacade?,
         addURL: ((String) -> Void)? = nil,
         addBookmark: ((BookmarkTargetPickerContext) -> Void)? = nil
     ) -> [NSMenuItem] {

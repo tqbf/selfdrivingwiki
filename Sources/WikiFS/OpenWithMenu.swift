@@ -9,7 +9,7 @@ import WikiFSCore
 /// source's MIME type / filename (and pages are always Markdown), so the submenu
 /// builds synchronously with no File Provider URL resolution. The mount URL is
 /// only resolved at click time, then handed to `NSWorkspace.open` with the
-/// chosen app — see `FileProviderSpike.openSource(id:with:)` / `openPage(id:with:)`.
+/// chosen app — see `FileProviderFacade.openSource(id:with:)` / `openPage(id:with:)`.
 enum OpenWithMenu {
     /// Build the submenu for `contentType`. Each app item's `representedObject`
     /// is `payload(appURL)`; the trailing "Other…" item is `payload(nil)`.
