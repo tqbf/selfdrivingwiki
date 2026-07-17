@@ -2044,7 +2044,13 @@ public final class WikiStoreModel {
         // the UI shows "How to Do Thing" instead of "How to Do Thing.md".
         if snapshot.plan.format == .htmlConverted {
             let cleanTitle = (snapshot.page.filename as NSString).deletingPathExtension
-            try? store.setSourceDisplayName(id: summary.id, displayName: cleanTitle)
+            do {
+                try store.setSourceDisplayName(id: summary.id, displayName: cleanTitle)
+            } catch {
+                // #475/#492: don't silently swallow — the display name would silently
+                // revert to "Foo.md" with no Console.app trace of why.
+                DebugLog.store("WikiStoreModel.importURLSource setSourceDisplayName failed (source=\(summary.id.rawValue)): \(error)")
+            }
         }
         reloadSources()
         openTab(.source(summary.id))
@@ -2374,8 +2380,15 @@ public final class WikiStoreModel {
         guard let mime = file.mimeType, mime.hasPrefix("text/") else { return nil }
         guard let bytes = try? store.sourceContent(id: file.id),
               let text = String(data: bytes, encoding: .utf8) else { return nil }
-        return try? store.appendProcessedMarkdown(
-            sourceID: file.id, content: text, origin: "source", note: nil, technique: nil)
+        do {
+            return try store.appendProcessedMarkdown(
+                sourceID: file.id, content: text, origin: "source", note: nil, technique: nil)
+        } catch {
+            // #475/#492: seeding v1 from verbatim bytes is a persistence write;
+            // swallowing the throw silently drops the first version with no trace.
+            DebugLog.store("WikiStoreModel.processedMarkdownHead appendProcessedMarkdown (seed v1) failed (source=\(file.id.rawValue)): \(error)")
+            return nil
+        }
     }
 
     /// True when at least one processed-markdown version exists for this source.
@@ -2446,8 +2459,15 @@ public final class WikiStoreModel {
     /// keystroke spam.
     @discardableResult
     public func saveProcessedMarkdown(for sourceID: PageID, content: String) -> SourceMarkdownVersion? {
-        try? store.appendProcessedMarkdown(
-            sourceID: sourceID, content: content, origin: "user", note: nil, technique: nil)
+        do {
+            return try store.appendProcessedMarkdown(
+                sourceID: sourceID, content: content, origin: "user", note: nil, technique: nil)
+        } catch {
+            // #475/#492: the user's source-markdown edit is lost if this write
+            // throws; log so it's visible in Console.app instead of vanishing.
+            DebugLog.store("WikiStoreModel.saveProcessedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
     }
 
     /// Seed the first processed-markdown version for a PDF from extraction
@@ -2462,9 +2482,16 @@ public final class WikiStoreModel {
         if let head = try? store.processedMarkdownHead(sourceID: sourceID) {
             return head
         }
-        return try? store.recordMarkdownExtraction(
-            sourceID: sourceID, content: content, backend: backend,
-            sourceVersionID: nil, note: nil, modelVersion: modelVersion)
+        do {
+            return try store.recordMarkdownExtraction(
+                sourceID: sourceID, content: content, backend: backend,
+                sourceVersionID: nil, note: nil, modelVersion: modelVersion)
+        } catch {
+            // #475/#492: PDF extraction output (expensive) is lost if this write
+            // throws; log so it's visible in Console.app instead of vanishing.
+            DebugLog.store("WikiStoreModel.seedPdfMarkdown recordMarkdownExtraction failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
     }
 
     /// Re-extract a source's content with a given extractor + backend, appending
@@ -2484,10 +2511,17 @@ public final class WikiStoreModel {
             pdfData: data, filename: filename, onProgress: onProgress) else {
             return nil
         }
-        return try? store.recordMarkdownExtraction(
-            sourceID: sourceID, content: markdown, backend: backend,
-            sourceVersionID: nil, note: "re-extract via \(backend.agentName)",
-            modelVersion: modelVersion)
+        do {
+            return try store.recordMarkdownExtraction(
+                sourceID: sourceID, content: markdown, backend: backend,
+                sourceVersionID: nil, note: "re-extract via \(backend.agentName)",
+                modelVersion: modelVersion)
+        } catch {
+            // #475/#492: re-extraction is seconds-minutes of MLX/PDF compute;
+            // swallowing the throw silently discards it with no trace.
+            DebugLog.store("WikiStoreModel.reExtractMarkdown recordMarkdownExtraction failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
     }
 
     /// Nominate an existing processed-markdown row as the active HEAD for a

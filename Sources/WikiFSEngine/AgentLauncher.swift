@@ -207,7 +207,13 @@ public final class AgentLauncher {
     public func setDefaultProvider(id: String) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingDefault(id: id)
-        try? updated.save(to: dir)
+        do {
+            try updated.save(to: dir)
+        } catch {
+            // #475/#492: persisting the default-provider choice is a mutation;
+            // swallowing the throw silently reverts the choice on next launch.
+            DebugLog.store("AgentLauncher.setDefaultProvider save failed (provider=\(id)): \(error)")
+        }
         return updated
     }
 
@@ -223,7 +229,13 @@ public final class AgentLauncher {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingCachedModels(models, forProvider: providerId)
         DebugLog.store("cacheDiscoveredModels: provider=\(providerId) count=\(models.count) → save") // TEMP DEBUG
-        try? updated.save(to: dir)
+        do {
+            try updated.save(to: dir)
+        } catch {
+            // #475/#492: the cached model list silently disappears on next launch
+            // if this write throws; log so it's visible in Console.app.
+            DebugLog.store("AgentLauncher.cacheDiscoveredModels save failed (provider=\(providerId)): \(error)")
+        }
     }
 
     /// Set + persist the user's model selection for `providerId`, then return
@@ -234,7 +246,13 @@ public final class AgentLauncher {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingSelectedModel(modelId, forProvider: providerId)
         DebugLog.store("setSelectedModel: provider=\(providerId) modelId=\(modelId ?? "nil") → save") // TEMP DEBUG
-        try? updated.save(to: dir)
+        do {
+            try updated.save(to: dir)
+        } catch {
+            // #475/#492: the user's model selection silently reverts on next
+            // launch if this write throws; log so it's visible in Console.app.
+            DebugLog.store("AgentLauncher.setSelectedModel save failed (provider=\(providerId) modelId=\(modelId ?? "nil")): \(error)")
+        }
         return updated
     }
 
@@ -252,7 +270,13 @@ public final class AgentLauncher {
         let updated = providersConfig()
             .settingDefault(id: provider.id)
             .settingSelectedModel(modelId, forProvider: provider.id)
-        try? updated.save(to: dir)
+        do {
+            try updated.save(to: dir)
+        } catch {
+            // #475/#492: provider+model selection must land together; swallowing
+            // the throw silently reverts both on next launch.
+            DebugLog.store("AgentLauncher.setSelectedModelAndDefault save failed (provider=\(provider.id) modelId=\(modelId ?? "nil")): \(error)")
+        }
         return updated
     }
 
@@ -271,7 +295,13 @@ public final class AgentLauncher {
     public func toggleFavoriteModel(_ modelId: String, forProvider providerId: String) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().togglingFavoriteModel(modelId, forProvider: providerId)
-        try? updated.save(to: dir)
+        do {
+            try updated.save(to: dir)
+        } catch {
+            // #475/#492: the favorite toggle silently reverts if this write
+            // throws; log so it's visible in Console.app.
+            DebugLog.store("AgentLauncher.toggleFavoriteModel save failed (provider=\(providerId) model=\(modelId)): \(error)")
+        }
         return updated
     }
 

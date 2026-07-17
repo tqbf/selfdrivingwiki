@@ -7269,7 +7269,14 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             return
         }
         DebugLog.store("reembedChatMessages[\(chatID.rawValue)] msgs=\(texts.count) chunks=\(chunks.count)")
-        try? appendChatChunks(chatID: chatID, chunks: chunks)
+        do {
+            try appendChatChunks(chatID: chatID, chunks: chunks)
+        } catch {
+            // #475/#492: appendChatChunks is the persistence write for the MLX
+            // embedding compute above; swallowing the throw would discard all of
+            // it with no trace. Log so the lost write is visible in Console.app.
+            DebugLog.store("reembedChatMessages appendChatChunks failed (chat=\(chatID.rawValue) chunks=\(chunks.count)): \(error)")
+        }
     }
 
     public func listChats() throws -> [ChatSummary] {
