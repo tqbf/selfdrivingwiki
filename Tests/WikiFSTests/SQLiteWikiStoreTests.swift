@@ -52,6 +52,22 @@ struct SQLiteWikiStoreTests {
         #expect(scalarText(db, "PRAGMA journal_mode;").lowercased() == "wal")
         #expect(store.pragmaValue("foreign_keys") == "1")
 
+        // #519: performance PRAGMAs applied to the read-write connection. These
+        // are per-connection settings, so read them from the store's own
+        // connection (not the external `db` handle, which has SQLite defaults).
+        #expect(store.pragmaValue("synchronous") == "1")        // NORMAL
+        #expect(store.pragmaValue("mmap_size") == "268435456") // 256 MB
+        #expect(store.pragmaValue("cache_size") == "-65536")    // 64 MB
+        #expect(store.pragmaValue("temp_store") == "2")         // MEMORY
+
+        // #519: the same PRAGMAs apply to pooled read-only connections
+        // (`WikiReadPool` members), which share `applyPerformancePragmas()`.
+        let reader = try SQLiteWikiStore(readOnlyURL: url)
+        #expect(reader.pragmaValue("synchronous") == "1")
+        #expect(reader.pragmaValue("mmap_size") == "268435456")
+        #expect(reader.pragmaValue("cache_size") == "-65536")
+        #expect(reader.pragmaValue("temp_store") == "2")
+
         let tables = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))
         #expect(tables.isSuperset(of:

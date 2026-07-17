@@ -131,6 +131,11 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         do {
             try exec("PRAGMA busy_timeout=5000;")
             try exec("PRAGMA query_only=ON;")
+            // Performance PRAGMAs (#519). This connection inherits WAL mode from
+            // the DB file (set by the writer); synchronous=NORMAL is safe and a
+            // no-op for committed reads. cache_size/mmap_size/temp_store all
+            // improve read throughput for pooled readers (`WikiReadPool`).
+            try applyPerformancePragmas()
             registerVec(on: db)
         } catch {
             sqlite3_close(db)
@@ -183,6 +188,35 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         }
         try exec("PRAGMA foreign_keys=ON;")
         try exec("PRAGMA busy_timeout=5000;")
+        // Performance PRAGMAs (#519). MUST come after journal_mode=WAL above:
+        // synchronous=NORMAL is only corruption-safe in WAL mode (in rollback
+        // journal mode it can lose a committed transaction on power loss).
+        try applyPerformancePragmas()
+    }
+
+    /// Performance PRAGMAs recommended for WAL-mode applications (#519).
+    /// Applied to BOTH read-write and read-only connections so reads benefit
+    /// from the larger cache and mmap too.
+    ///
+    /// - `synchronous=NORMAL`: in WAL mode this is **safe against corruption**
+    ///   and eliminates most fsync syscalls (2–5× burst write throughput). The
+    ///   only theoretical risk is losing the last in-flight transaction on a
+    ///   power-loss crash — acceptable for a local-only app whose File Provider
+    ///   projection is rebuilt from the DB.
+    /// - `mmap_size=268435456` (256 MB): memory-map the DB file for faster
+    ///   random access (link resolution, page lookups, source-by-id reads). A
+    ///   hint only — the OS page cache manages actual memory; no-op when the DB
+    ///   is smaller than the cap.
+    /// - `cache_size=-65536` (64 MB): the default ~2 MB per-connection cache is
+    ///   too small for `WikiReadPool`'s several readers; more page-index and row
+    ///   data stays resident between queries.
+    /// - `temp_store=MEMORY`: temp tables and B-tree sorting (ORDER BY in
+    ///   `listAllPagesOrderedByID`, FTS5 BM25 ranking, RRF fusion) stay in RAM.
+    private func applyPerformancePragmas() throws {
+        try exec("PRAGMA synchronous=NORMAL;")
+        try exec("PRAGMA mmap_size=268435456;")
+        try exec("PRAGMA cache_size=-65536;")
+        try exec("PRAGMA temp_store=MEMORY;")
     }
 
     /// Stepwise, idempotent schema migration keyed on `PRAGMA user_version`.
