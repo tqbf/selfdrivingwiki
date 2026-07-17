@@ -460,8 +460,6 @@ struct ChatWebView: NSViewRepresentable {
                 """
             case .messageStop, .assistantTextDelta, .thinkingDelta:
                 return ""  // internal — not rendered (deltas are merged upstream)
-            case .thinking(let text):
-                return thinkingRowHTML(text: text, context: context, isFinal: isFinal)
             case .turnFailed(let reason):
                 return turnFailedBannerHTML(reason: reason)
             case .raw(let line):

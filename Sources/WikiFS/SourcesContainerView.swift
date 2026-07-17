@@ -87,7 +87,7 @@ struct SourcesContainerView: View {
         ) {
             Button("Ingest Again", role: .destructive) {
                 Task {
-                    await store.flushPendingSaves()
+                    store.flushPendingSaves()
                     await enqueueIngestion(
                         sourceIDs: pendingBatchIngestIDs,
                         store: store,
@@ -217,7 +217,7 @@ struct SourcesContainerView: View {
             },
             onIngest: { ids in
                 Task {
-                    await store.flushPendingSaves()
+                    store.flushPendingSaves()
                     await enqueueIngestion(
                         sourceIDs: ids,
                         store: store,

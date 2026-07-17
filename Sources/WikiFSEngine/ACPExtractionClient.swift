@@ -137,7 +137,7 @@ public struct ACPExtractionClient: MarkdownExtractor {
 
         // Build the provider hints + backend profile (mirrors the launcher's
         // resolveACPProviderSpawn → AgentBackendFactory.providerHints pipeline).
-        var hints = AgentBackendFactory.providerHints(
+        let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: resolvedCommand,
             apiKey: apiKey,

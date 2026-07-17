@@ -223,7 +223,7 @@ struct QueueActivityTrackerIngestionTests {
     func ingestionStartedAddsSourceIDs() async {
         let tracker = QueueActivityTracker()
         let item = makeItem(queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")])
-        await tracker.start(events: AsyncStream { _ in })
+        tracker.start(events: AsyncStream { _ in })
 
         // Simulate the events the engine would emit.
         tracker.attachForTesting(events: AsyncStream { _ in })

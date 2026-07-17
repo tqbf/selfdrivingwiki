@@ -257,7 +257,7 @@ struct QueueStoreTests {
         // have a hole where an accidental reference to app-layer types in
         // the engine could go unnoticed. Removed: the old assertion that no
         // WikiFS file references queue symbols (now intentionally false).
-        #expect(true, "Phase 5 app wiring is intentional — see testQueueStoreFilesAreHeadless for the real guard")
+        #expect(Bool(true), "Phase 5 app wiring is intentional — see testQueueStoreFilesAreHeadless for the real guard")
     }
 
     // MARK: - Ordering key assignment

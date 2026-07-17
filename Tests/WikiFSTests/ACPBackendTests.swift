@@ -191,7 +191,7 @@ import ACPModel
     /// so `.messageStop` is synthesized for all of them.
     @Test func everyStopReasonIsATurnBoundary() {
         for reason in [StopReason.endTurn, .maxTokens, .refusal, .cancelled, .maxTurnRequests] {
-            #expect(reason != nil)  // exhaustive over the enum cases
+            _ = reason  // exhaustive over the enum cases
         }
     }
 
@@ -216,7 +216,7 @@ import ACPModel
         #expect(response.outcome.outcome == "selected")
         #expect(response.outcome.optionId == "opt-allow")
         // Nothing was deferred.
-        #expect(await delegate.pendingSnapshot().isEmpty)
+        #expect(delegate.pendingSnapshot().isEmpty)
     }
 
     /// Yolo prefers `allow_always` over `allow_once` when both are offered.
@@ -277,13 +277,13 @@ import ACPModel
         // Give the suspended continuation a moment to register, then assert the
         // request is pending (the future UI would surface this as Approve/Reject).
         try await Task.sleep(nanoseconds: 50_000_000)
-        let pending = await delegate.pendingSnapshot()
+        let pending = delegate.pendingSnapshot()
         #expect(pending.count == 1)
         #expect(pending.first?.toolCallId == "tc-pending")
         #expect(pending.first?.options.count == 2)
 
         // Resolve ALLOW — the future UI's Approve button.
-        let resolvedAllow = await delegate.resolve(optionId: "opt-allow")
+        let resolvedAllow = delegate.resolve(optionId: "opt-allow")
         #expect(resolvedAllow == true)
 
         let (response, error) = await requestTask.value
@@ -292,7 +292,7 @@ import ACPModel
         #expect(response.outcome.optionId == "opt-allow")
 
         // Pending cleared after resolution.
-        #expect(await delegate.pendingSnapshot().isEmpty)
+        #expect(delegate.pendingSnapshot().isEmpty)
     }
 
     /// Always-ask then resolve DENY — the future UI's Reject button. The agent
@@ -313,10 +313,10 @@ import ACPModel
         }
 
         try await Task.sleep(nanoseconds: 50_000_000)
-        #expect(await delegate.pendingSnapshot().count == 1)
+        #expect(delegate.pendingSnapshot().count == 1)
 
         // Resolve DENY.
-        let resolvedDeny = await delegate.resolve(optionId: "opt-reject")
+        let resolvedDeny = delegate.resolve(optionId: "opt-reject")
         #expect(resolvedDeny == true)
 
         let response = try await requestTask.value
@@ -335,14 +335,14 @@ import ACPModel
         // Register a pending request but don't resolve it (leave it suspended).
         _ = Task<Void, Never> { _ = try? await delegate.handlePermissionRequest(request: request) }
         try await Task.sleep(nanoseconds: 50_000_000)
-        #expect(await delegate.pendingSnapshot().count == 1)
+        #expect(delegate.pendingSnapshot().count == 1)
 
         // Unknown option id → no resolution.
-        #expect(await delegate.resolve(optionId: "does-not-exist") == false)
-        #expect(await delegate.pendingSnapshot().count == 1)
+        #expect(delegate.resolve(optionId: "does-not-exist") == false)
+        #expect(delegate.pendingSnapshot().count == 1)
 
         // Clean up: resolve for real so the suspended task completes.
-        _ = await delegate.resolve(optionId: "opt-allow")
+        _ = delegate.resolve(optionId: "opt-allow")
     }
 
     // MARK: - Helpers

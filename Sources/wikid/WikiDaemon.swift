@@ -145,7 +145,7 @@ final class WikiDaemon {
         queue.sync {
             // Best-effort: remove from the held-open dict. The store is deinit'd by ARC.
             // If another client had a session, it will re-open on next use.
-            openStores.removeValue(forKey: wikiID)
+            _ = openStores.removeValue(forKey: wikiID)
         }
     }
 

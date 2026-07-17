@@ -617,7 +617,7 @@ struct WikiCtlCommandTests {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "doc.pdf", data: Data("%PDF".utf8))
         do {
-            try SourceCommand.run(
+            _ = try SourceCommand.run(
                 .editMarkdown(.id(ingested.id), content: "edited"), in: store, cwd: "/tmp")
             Issue.record("expected SourceCommand.Failure")
         } catch let error as SourceCommand.Failure {
