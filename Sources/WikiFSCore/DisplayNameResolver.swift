@@ -78,8 +78,7 @@ public enum DisplayNameResolver {
     private static func isMarkdown(filename: String, mimeType: String?) -> Bool {
         let ext = (filename as NSString).pathExtension.lowercased()
         if ext == "md" || ext == "markdown" { return true }
-        if let mime = mimeType?.lowercased(),
-           mime == "text/markdown" || mime == "text/x-markdown" {
+        if MimeType.isMarkdown(mimeType) {
             return true
         }
         return false
@@ -88,7 +87,7 @@ public enum DisplayNameResolver {
     private static func isPDF(filename: String, mimeType: String?) -> Bool {
         let ext = (filename as NSString).pathExtension.lowercased()
         if ext == "pdf" { return true }
-        if let mime = mimeType?.lowercased(), mime == "application/pdf" {
+        if MimeType.isPDF(mimeType) {
             return true
         }
         return false

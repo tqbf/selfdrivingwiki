@@ -474,7 +474,7 @@ extension SourcesListViewController {
     }
 
     private func canExtract(_ source: SourceSummary) -> Bool {
-        source.mimeType == "application/pdf"
+        MimeType.isPDF(source.mimeType)
             && store?.processedMarkdownHead(for: source) == nil
     }
 
@@ -529,7 +529,7 @@ extension SourcesListViewController {
     @objc private func extractAction(_ sender: NSMenuItem) {
         guard let p = sender.representedObject as? SourcesMenuPayload, let store else { return }
         let toExtract = p.effective.compactMap { s -> SourceExtractItem? in
-            guard s.mimeType == "application/pdf",
+            guard MimeType.isPDF(s.mimeType),
                   store.processedMarkdownHead(for: s) == nil,
                   let data = store.sourceBytes(id: s.id) else { return nil }
             return SourceExtractItem(id: s.id, filename: s.filename, data: data)

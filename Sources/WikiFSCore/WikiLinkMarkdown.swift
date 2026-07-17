@@ -431,7 +431,7 @@ public enum WikiLinkMarkdown {
         if mime.hasPrefix("audio/") {
             return "<audio src=\"\(url)\" controls class=\"wiki-embed\"></audio>"
         }
-        if mime == "application/pdf" {
+        if MimeType.isPDF(mime) {
             return "<iframe src=\"\(url)\" class=\"wiki-embed-pdf\"></iframe>"
         }
         return nil // unknown MIME → caller falls back to cite link

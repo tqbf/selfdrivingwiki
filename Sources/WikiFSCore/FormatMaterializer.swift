@@ -74,11 +74,11 @@ public enum FormatMaterializer {
         if shouldSniff(mime), let sniffed = ContentSniff.mimeType(of: data) {
             let ext = binaryExtension(forMIME: sniffed, extensionHint: extensionHint)
             let filename = ext.isEmpty ? sanitizeStem(stem) : ensureExtension(sanitizeStem(stem), ext: ext)
-            let format: SourceFormat = sniffed == "application/pdf" ? .pdf : .binary
+            let format: SourceFormat = MimeType.isPDF(sniffed) ? .pdf : .binary
             return FormatPlan(filename: filename, data: data, format: format)
         }
 
-        if mime == "text/html" || mime == "application/xhtml+xml" {
+        if mime == MimeType.html || mime == MimeType.xhtml {
             let html = decodeText(data)
             let result = HTMLToMarkdown.convert(html)
             let resolvedStem = result.title.flatMap { nonEmpty($0) } ?? stem
@@ -86,12 +86,12 @@ public enum FormatMaterializer {
             return FormatPlan(filename: filename, data: Data(result.markdown.utf8), format: .htmlConverted)
         }
 
-        if mime == "application/pdf" {
+        if MimeType.isPDF(mime) {
             let filename = ensureExtension(sanitizeStem(stem), ext: "pdf")
             return FormatPlan(filename: filename, data: data, format: .pdf)
         }
 
-        if let mime, mime.hasPrefix("text/") {
+        if let mime, MimeType.isText(mime) {
             let ext = textExtension(forMIME: mime, extensionHint: extensionHint)
             let filename = ensureExtension(sanitizeStem(stem), ext: ext)
             return FormatPlan(filename: filename, data: data, format: .text)
@@ -110,7 +110,7 @@ public enum FormatMaterializer {
     /// `application/octet-stream`. A specific declared type is trusted as-is.
     static func shouldSniff(_ mime: String?) -> Bool {
         switch mime {
-        case nil, "text/html", "application/xhtml+xml", "application/octet-stream":
+        case nil, MimeType.html, MimeType.xhtml, MimeType.octetStream:
             return true
         default:
             return false
@@ -154,7 +154,7 @@ public enum FormatMaterializer {
     /// `extensionHint`, else `txt`.
     static func textExtension(forMIME mime: String, extensionHint: String?) -> String {
         switch mime {
-        case "text/markdown", "text/x-markdown": return "md"
+        case MimeType.markdown, MimeType.markdownX: return "md"
         case "text/plain": return "txt"
         case "text/csv": return "csv"
         case "text/css": return "css"
@@ -170,7 +170,7 @@ public enum FormatMaterializer {
     static func binaryExtension(forMIME mime: String?, extensionHint: String?) -> String {
         if let mime {
             switch mime {
-            case "image/jpeg": return "jpg"
+            case MimeType.imageJPEG: return "jpg"
             case "image/png": return "png"
             case "image/gif": return "gif"
             case "image/webp": return "webp"

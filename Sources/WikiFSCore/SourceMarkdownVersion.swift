@@ -70,7 +70,7 @@ public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
         activityID: String? = nil,
         sourceVersionID: String? = nil,
         blobHash: String? = nil,
-        mimeType: String = "text/markdown",
+        mimeType: String = MimeType.markdown,
         technique: String? = nil
     ) {
         self.id = id

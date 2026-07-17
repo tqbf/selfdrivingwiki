@@ -130,7 +130,7 @@ public enum WebsiteSnapshotExtractor {
            let mime = UTType(filenameExtension: urlExt)?.preferredMIMEType {
             return mime
         }
-        return "application/octet-stream"
+        return MimeType.octetStream
     }
 
     // MARK: - Disambiguation (pure)
@@ -282,7 +282,7 @@ public enum WebsiteSnapshotExtractor {
         var images: [SnapshotImage] = []
         for urlKey in downloadOrder {
             guard let d = downloadedByURL[urlKey], let path = pathByURL[urlKey] else { continue }
-            let mime = mimes[urlKey] ?? "application/octet-stream"
+            let mime = mimes[urlKey] ?? MimeType.octetStream
             let filename = (path as NSString).lastPathComponent
             images.append(SnapshotImage(
                 originalPath: path,

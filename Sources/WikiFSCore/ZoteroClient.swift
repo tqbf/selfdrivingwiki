@@ -282,8 +282,8 @@ public struct ZoteroAttachment: Identifiable, Hashable, Sendable {
     public var isIngestable: Bool {
         // Prefer the API-declared content type when available.
         if let ct = contentType?.lowercased() {
-            if ct == "application/pdf" { return true }
-            if ct.hasPrefix("text/") { return true }  // text/markdown, text/plain, etc.
+            if MimeType.isPDF(ct) { return true }
+            if MimeType.isText(ct) { return true }  // text/markdown, text/plain, etc.
         }
         // Filename-based heuristic as fallback.
         guard let filename = filename?.lowercased() else { return false }

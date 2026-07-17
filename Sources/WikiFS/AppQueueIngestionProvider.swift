@@ -92,7 +92,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
 
             // PDF → reuse extracted markdown if available (extraction already
             // ran via the extraction queue item).
-            if source.mimeType == "application/pdf" {
+            if MimeType.isPDF(source.mimeType) {
                 if let head = store.processedMarkdownHead(for: source) {
                     sourceBytes = head.content.data(using: .utf8) ?? bytes
                     sourceExt = "md"

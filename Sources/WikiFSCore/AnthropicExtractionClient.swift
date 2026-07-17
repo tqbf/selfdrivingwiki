@@ -175,7 +175,7 @@ public struct AnthropicExtractionClient: MarkdownExtractor {
                         "type": "document",
                         "source": [
                             "type": "base64",
-                            "media_type": "application/pdf",
+                            "media_type": MimeType.pdf,
                             "data": b64,
                         ],
                     ],
