@@ -229,8 +229,8 @@ struct QueueStoreTests {
             .deletingLastPathComponent()
 
         let files = [
-            root.appendingPathComponent("Sources/WikiFSCore/QueueStore.swift"),
-            root.appendingPathComponent("Sources/WikiFSCore/QueueTypes.swift"),
+            root.appendingPathComponent("Sources/WikiFSCore/Core/QueueStore.swift"),
+            root.appendingPathComponent("Sources/WikiFSCore/Core/QueueTypes.swift"),
         ]
 
         for fileURL in files {

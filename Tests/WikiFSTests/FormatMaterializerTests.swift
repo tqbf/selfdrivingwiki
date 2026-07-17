@@ -223,7 +223,7 @@ struct FormatMaterializerTests {
     @Test func formatMaterializerHasNoURLTypeDependency() throws {
         let repoRoot = try #require(Self.locateRepoRoot())
         let path = repoRoot
-            .appendingPathComponent("Sources/WikiFSCore/FormatMaterializer.swift")
+            .appendingPathComponent("Sources/WikiFSCore/Sources/FormatMaterializer.swift")
         let source = try String(contentsOf: path, encoding: .utf8)
 
         // No URL-coupled type names.

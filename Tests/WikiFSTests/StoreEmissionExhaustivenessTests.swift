@@ -19,7 +19,7 @@ struct StoreEmissionExhaustivenessTests {
         let testFile = URL(fileURLWithPath: #filePath)
         // Tests/WikiFSTests/<this>.swift -> up three = package root.
         let root = testFile.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let url = root.appendingPathComponent("Sources/WikiFSCore/SQLiteWikiStore.swift")
+        let url = root.appendingPathComponent("Sources/WikiFSCore/Store/SQLiteWikiStore.swift")
         return try String(contentsOf: url, encoding: .utf8)
     }
 
