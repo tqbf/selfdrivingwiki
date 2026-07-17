@@ -70,4 +70,33 @@ struct WikiNameRulesTests {
         // A 6+ char or non-alphanumeric tail is not a file extension.
         #expect(WikiNameRules.looseMatchKey("release.candidate") == "release.candidate")
     }
+
+    // MARK: - dash normalization
+
+    @Test func looseKeyNormalizesEmDashToSpace() {
+        // "Self-Driving Wiki — User Guide" (em dash) should match
+        // "Self-Driving Wiki User Guide" (no dash at all).
+        let withEmDash = WikiNameRules.looseMatchKey("Self-Driving Wiki \u{2014} User Guide")
+        let noDash = WikiNameRules.looseMatchKey("Self-Driving Wiki User Guide")
+        #expect(withEmDash == noDash)
+    }
+
+    @Test func looseKeyNormalizesEnDashToSpace() {
+        let withEnDash = WikiNameRules.looseMatchKey("Foo \u{2013} Bar")
+        let noDash = WikiNameRules.looseMatchKey("Foo Bar")
+        #expect(withEnDash == noDash)
+    }
+
+    @Test func looseKeyNormalizesHyphenToSpace() {
+        let withHyphen = WikiNameRules.looseMatchKey("Self-Driving Wiki")
+        let noDash = WikiNameRules.looseMatchKey("Self Driving Wiki")
+        #expect(withHyphen == noDash)
+    }
+
+    @Test func looseKeyNormalizesMixedDashVariants() {
+        // Em dash, en dash, and hyphen-minus all normalize to space.
+        let mixed = WikiNameRules.looseMatchKey("A\u{2014}B\u{2013}C-D")
+        let allSpaces = WikiNameRules.looseMatchKey("A B C D")
+        #expect(mixed == allSpaces)
+    }
 }

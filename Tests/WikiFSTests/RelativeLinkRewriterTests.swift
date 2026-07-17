@@ -119,6 +119,42 @@ struct RelativeLinkRewriterTests {
         #expect(rewrite("[[source:missing.pdf]]") == "[[source:missing.pdf]]")
     }
 
+    @Test func sourceLinkWithDashMismatchResolvesViaLooseKey() {
+        // The agent cited "Self-Driving Wiki User Guide" but the source is
+        // named "Self-Driving Wiki — User Guide" (em dash). The resolver's
+        // loose-key fallback should still resolve it. This mirrors the
+        // production LinkMaps.resolver which falls back to looseMatchKey.
+        let storedName = "Self-Driving Wiki \u{2014} User Guide"
+        var looseSources: [String: Target] = [:]
+        var seen = Set<String>()
+        for (name, target) in Self.sources {
+            let key = WikiNameRules.looseMatchKey(name)
+            if !seen.insert(key).inserted { looseSources.removeValue(forKey: key) }
+            else { looseSources[key] = target }
+        }
+        let storedTarget = Target(path: ["sources", "by-name", "Self-Driving Wiki \u{2014} User Guide--01CCCCCC.md"],
+                                  title: storedName)
+        var sources = Self.sources
+        sources[storedName] = storedTarget
+        looseSources[WikiNameRules.looseMatchKey(storedName)] = storedTarget
+
+        let resolver = RelativeLinkRewriter.Resolver(
+            baseDir: ["pages", "by-title"],
+            page:   { t, isID in isID ? Self.pagesByID[t.uppercased()] : Self.pages[t] },
+            source: { t, isID in
+                if isID { return Self.sourcesByID[t.uppercased()] }
+                return sources[t] ?? looseSources[WikiNameRules.looseMatchKey(t)]
+            },
+            chat:   { t, isID in isID ? Self.chatsByID[t.uppercased()] : Self.chats[t] }
+        )
+        let out = RelativeLinkRewriter.rewrite(
+            "[[source:Self-Driving Wiki User Guide#Launch the app]]",
+            resolver: resolver)
+        #expect(out.contains("../../sources/by-name/"))
+        #expect(out.contains("--01CCCCCC.md"))
+        #expect(!out.contains("[[source:"))
+    }
+
     // MARK: - Chat links → chats/by-name (cross-namespace)
 
     @Test func canonicalChatLinkResolvesToRelativePath() {

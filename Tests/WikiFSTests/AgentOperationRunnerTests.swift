@@ -67,4 +67,88 @@ struct AgentOperationRunnerTests {
         let combined = preflights.flatMap(\.brokenLinks)
         #expect(combined == ["One", "Two", "Three"])
     }
+
+    // MARK: - Canonical ULID links are not false positives
+
+    @Test func canonicalULIDPageLinkIsNotBroken() throws {
+        let (model, store) = try tempStore()
+        let target = try store.createPage(title: "Target Page")
+        let page = try store.createPage(title: "Linker")
+        // A canonical [[page:<ULID>|alias]] link should NOT be reported broken.
+        try store.updatePage(id: page.id, title: "Linker",
+            body: "See [[page:\(target.id.rawValue)#Intro|Target Page]].")
+        model.reloadFromStore()
+
+        let preflight = model.preflightLint(pageID: page.id)
+        #expect(preflight?.brokenPageLinks.isEmpty == true)
+    }
+
+    // MARK: - Links inside code spans are not checked
+
+    @Test func linksInsideCodeSpansAreNotBroken() throws {
+        let (model, store) = try tempStore()
+        let page = try store.createPage(title: "Docs")
+        // `[[Like This]]` inside backticks is example text, not a real link.
+        try store.updatePage(id: page.id, title: "Docs",
+            body: "Use `[[Like This]]` to link pages.")
+        model.reloadFromStore()
+
+        let preflight = model.preflightLint(pageID: page.id)
+        #expect(preflight?.brokenPageLinks.isEmpty == true)
+    }
+
+    @Test func linksInsideFencedBlocksAreNotBroken() throws {
+        let (model, store) = try tempStore()
+        let page = try store.createPage(title: "Docs")
+        try store.updatePage(id: page.id, title: "Docs", body: """
+        Example:
+
+        ```
+        [[Nonexistent Page]]
+        ```
+        """)
+        model.reloadFromStore()
+
+        let preflight = model.preflightLint(pageID: page.id)
+        #expect(preflight?.brokenPageLinks.isEmpty == true)
+    }
+
+    // MARK: - Source links are checked
+
+    @Test func brokenSourceLinkIsDetected() throws {
+        let (model, store) = try tempStore()
+        let page = try store.createPage(title: "Citing Page")
+        try store.updatePage(id: page.id, title: "Citing Page",
+            body: "[^1]: [[source:Nonexistent Source#\"quote\"]]\n\nText.[^1]")
+        model.reloadFromStore()
+
+        let preflight = model.preflightLint(pageID: page.id)
+        #expect(preflight?.brokenSourceLinks.contains("Nonexistent Source") == true)
+    }
+
+    @Test func resolvedSourceLinkIsNotBroken() throws {
+        let (model, store) = try tempStore()
+        _ = try store.addSource(filename: "Guide.md", data: Data("# Guide".utf8))
+        let page = try store.createPage(title: "Citing Page")
+        try store.updatePage(id: page.id, title: "Citing Page",
+            body: "[^1]: [[source:Guide#\"intro\"]]\n\nText.[^1]")
+        model.reloadFromStore()
+
+        let preflight = model.preflightLint(pageID: page.id)
+        #expect(preflight?.brokenSourceLinks.isEmpty == true)
+    }
+
+    @Test func sourceLinkWithDashMismatchIsNotBroken() throws {
+        let (model, store) = try tempStore()
+        let src = try store.addSource(filename: "Guide.md", data: Data("# Guide".utf8))
+        try store.renameSource(id: src.id, to: "Self-Driving Wiki \u{2014} User Guide")
+        let page = try store.createPage(title: "Citing Page")
+        // Agent cited the name without the em dash — looseMatchKey should resolve it.
+        try store.updatePage(id: page.id, title: "Citing Page",
+            body: "[^1]: [[source:Self-Driving Wiki User Guide#\"intro\"]]\n\nText.[^1]")
+        model.reloadFromStore()
+
+        let preflight = model.preflightLint(pageID: page.id)
+        #expect(preflight?.brokenSourceLinks.isEmpty == true)
+    }
 }

@@ -1246,12 +1246,28 @@ struct Projection {
         let chatByID:     [String: RelativeLinkRewriter.Target]
         let siblingImages: [PageID: [String: PageID]]   // sourceID -> [originalPath -> sibling sourceID]
 
+        /// Loose-key fallback maps for sources and chats. When an exact name
+        /// lookup fails (e.g. an agent cited "Self-Driving Wiki User Guide" but
+        /// the source is named "Self-Driving Wiki — User Guide" with an em
+        /// dash), the loose key — which normalizes dashes, strips extensions
+        /// and parenthetical suffixes — still resolves. Collisions (two
+        /// entries with the same loose key) are omitted, mirroring the store's
+        /// `resolveSourceByName` pass-3 unique-only constraint.
+        let sourceByLooseKey: [String: RelativeLinkRewriter.Target]
+        let chatByLooseKey:   [String: RelativeLinkRewriter.Target]
+
         func resolver(baseDir: [String]) -> RelativeLinkRewriter.Resolver {
             RelativeLinkRewriter.Resolver(
                 baseDir: baseDir,
                 page:   { t, isID in isID ? pageByID[t.uppercased()]   : pageByTitle[t] },
-                source: { t, isID in isID ? sourceByID[t.uppercased()] : sourceByName[t] },
-                chat:   { t, isID in isID ? chatByID[t.uppercased()]   : chatByTitle[t] }
+                source: { t, isID in
+                    if isID { return sourceByID[t.uppercased()] }
+                    return sourceByName[t] ?? sourceByLooseKey[WikiNameRules.looseMatchKey(t)]
+                },
+                chat:   { t, isID in
+                    if isID { return chatByID[t.uppercased()] }
+                    return chatByTitle[t] ?? chatByLooseKey[WikiNameRules.looseMatchKey(t)]
+                }
             )
         }
 
@@ -1310,10 +1326,35 @@ struct Projection {
 
         let siblingImages = (try? store?.siblingImageResolvers()) ?? [:]
 
+        let sourceByLooseKey = Self.buildLooseKeyMap(sourceByName)
+        let chatByLooseKey   = Self.buildLooseKeyMap(chatByTitle)
+
         return LinkMaps(pageByTitle: pageByTitle, pageByID: pageByID,
                         sourceByName: sourceByName, sourceByID: sourceByID,
                         chatByTitle: chatByTitle, chatByID: chatByID,
-                        siblingImages: siblingImages)
+                        siblingImages: siblingImages,
+                        sourceByLooseKey: sourceByLooseKey,
+                        chatByLooseKey: chatByLooseKey)
+    }
+
+    /// Build a loose-key → target map from a name → target dict. Collisions
+    /// (two names with the same `WikiNameRules.looseMatchKey`) are omitted,
+    /// matching the store's `resolveSourceByName` pass-3 unique-only constraint
+    /// — an ambiguous match resolves to nothing rather than picking arbitrarily.
+    private static func buildLooseKeyMap(_ entries: [String: RelativeLinkRewriter.Target])
+        -> [String: RelativeLinkRewriter.Target] {
+        var out: [String: RelativeLinkRewriter.Target] = [:]
+        var seen = Set<String>()
+        for (name, target) in entries {
+            let key = WikiNameRules.looseMatchKey(name)
+            if seen.contains(key) {
+                out.removeValue(forKey: key)   // collision → ambiguous, remove
+            } else {
+                seen.insert(key)
+                out[key] = target
+            }
+        }
+        return out
     }
 
     /// Rewrite `[[wikilinks]]` in `raw` to relative Markdown links, computing

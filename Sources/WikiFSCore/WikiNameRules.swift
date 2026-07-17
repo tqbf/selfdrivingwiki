@@ -51,6 +51,13 @@ public enum WikiNameRules {
     /// near-miss never silently picks between two plausible sources.
     public static func looseMatchKey(_ name: String) -> String {
         var s = WikiText.normalized(name).lowercased()
+        // Normalize Unicode dash variants and ASCII hyphens to spaces so that
+        // "Self-Driving Wiki — User Guide" and "Self-Driving Wiki User Guide"
+        // produce the same key. Dashes are used interchangeably in document
+        // titles, and the unique-only constraint prevents false matches.
+        s = s.replacingOccurrences(of: "\u{2014}", with: " ")   // em dash
+             .replacingOccurrences(of: "\u{2013}", with: " ")   // en dash
+             .replacingOccurrences(of: "-", with: " ")           // hyphen-minus
         // One trailing ".ext" — only if it looks like a real file extension
         // (1–5 alphanumerics), so "v2.5" style names lose at most a digit and
         // both sides lose it identically.

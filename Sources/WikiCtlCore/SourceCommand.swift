@@ -101,7 +101,11 @@ public enum SourceCommand {
                     byteSize: summary.byteSize,
                     createdAt: summary.createdAt,
                     updatedAt: summary.updatedAt,
-                    version: summary.version
+                    version: summary.version,
+                    displayName: summary.displayName
+                    // hasMarkdown defaults to false — the authoritative
+                    // sources.jsonl (on the mount) carries that field; the
+                    // WikiStore protocol's listSources() doesn't expose it.
                 )
             }
             let data = IndexGenerators.sourcesJSONL(sources: rows)
@@ -111,9 +115,13 @@ public enum SourceCommand {
             )
         }
         // TSV: id <tab> name <tab> size <tab> mime, one file per line.
+        // `name` is the display name when set, falling back to filename —
+        // matching sourcesJSONL and how sources are labeled app-wide, so the
+        // agent sees the same name it should use in [[source:Name]] citations.
         let lines = summaries.map { summary in
             let mime = summary.mimeType ?? ""
-            return "\(summary.id.rawValue)\t\(summary.filename)\t\(summary.byteSize)\t\(mime)"
+            let name = summary.effectiveName
+            return "\(summary.id.rawValue)\t\(name)\t\(summary.byteSize)\t\(mime)"
         }
         return Result(
             payload: .text(lines.joined(separator: "\n")),
