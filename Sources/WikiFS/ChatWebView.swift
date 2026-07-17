@@ -678,9 +678,7 @@ struct ChatWebView: NSViewRepresentable {
         }
 
         private static func escape(_ s: String) -> String {
-            s.replacingOccurrences(of: "&", with: "&amp;")
-                .replacingOccurrences(of: "<", with: "&lt;")
-                .replacingOccurrences(of: ">", with: "&gt;")
+            HTMLEntities.escapeHTML(s)
         }
 
         /// JavaScript that highlights the first occurrence of `quote` in the
