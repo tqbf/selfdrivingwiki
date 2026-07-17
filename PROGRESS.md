@@ -4922,3 +4922,31 @@ crash, left in the fast tier per issue #439's stated scope.
 
 **Build:** `make build` clean; the two suites now skip in the fast tier and run
 in `swift-integration`.
+
+---
+
+## 2026-07-17 — Reorganize WikiFSCore + WikiFS into subdirectories (#531)
+
+**Problem:** `Sources/WikiFSCore/` (131 flat `.swift` files) and
+`Sources/WikiFS/` (92 flat `.swift` files) were monolithic flat directories,
+making navigation and understanding ownership difficult.
+
+**Fix:** Pure `git mv` reorganization into logical subdirectories — zero new
+SPM targets, zero import changes, zero access-control changes. SwiftPM
+recursively includes all `.swift` under each target's `path:`, so subdirectories
+are transparent to the build.
+
+- **WikiFSCore** (131 files → 7 dirs): `Store/` (9), `Links/` (11), `Markdown/`
+  (15), `Sources/` (14), `Integrations/` (25), `Search/` (6), `Core/` (51).
+- **WikiFS** (92 files → 10 dirs): `Pages/` (4), `Sources/` (14), `Chats/` (4),
+  `Bookmarks/` (5), `Settings/` (9), `Queue/` (11), `Window/` (18), `Reader/` (8),
+  `Editor/` (17), `System/` (2).
+
+**Test follow-up:** 4 source-scan tests had hardcoded `Sources/WikiFSCore/<File>.swift`
+path strings to read source files (not compile symbols). Updated 7 path strings
+across 4 test files to follow the moved files to their new subdirectories:
+`FormatMaterializerTests`, `QueueStoreTests`, `StoreEmissionExhaustivenessTests`,
+`SourceMaterializerTests`. No logic changed — only path strings.
+
+**Build/Tests:** `swift build` clean (107s); fast test tier 2456 tests passed
+(21s). PR #531.
