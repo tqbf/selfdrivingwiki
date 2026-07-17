@@ -153,9 +153,28 @@ struct SystemPromptTests {
     @Test func changeTokenAdvancesOnSystemPromptEdit() throws {
         let store = try tempStore()
         // No pages, no sources: only the system-prompt version moves.
-        #expect(try store.changeToken() == "0:0:0:0:1:0:1:0:0:0:0:0:0:0")
+        let token0 = try store.changeToken()
+        #expect(token0.pages == .init(count: 0, versionSum: 0))
+        #expect(token0.sourceTable == .init(count: 0, versionSum: 0))
+        #expect(token0.systemPrompt == 1)
+        #expect(token0.log == 0)
+        #expect(token0.wikiIndex == 1)
+        #expect(token0.sourceMarkdownVersions == 0)
+        #expect(token0.sourceGraph == .init())
+        #expect(token0.bookmarks == 0)
+        #expect(token0.chat == .init())
         try store.updateSystemPrompt(body: "edited")
-        #expect(try store.changeToken() == "0:0:0:0:2:0:1:0:0:0:0:0:0:0")
+        let token1 = try store.changeToken()
+        #expect(token1.systemPrompt == 2)
+        // No other fold moved.
+        #expect(token1.pages == token0.pages)
+        #expect(token1.sourceTable == token0.sourceTable)
+        #expect(token1.log == token0.log)
+        #expect(token1.wikiIndex == token0.wikiIndex)
+        #expect(token1.sourceMarkdownVersions == token0.sourceMarkdownVersions)
+        #expect(token1.sourceGraph == token0.sourceGraph)
+        #expect(token1.bookmarks == token0.bookmarks)
+        #expect(token1.chat == token0.chat)
     }
 
     // MARK: - UPSERT recreates a missing singleton row (defensive)

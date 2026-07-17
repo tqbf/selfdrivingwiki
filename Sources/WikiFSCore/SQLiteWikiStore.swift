@@ -2646,19 +2646,23 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// a per-row version) and the index part uses the row `version` (it UPSERTs
     /// like `system_prompt`). Both fall back to `0` on a not-yet-migrated read
     /// connection (the v4/v5 tables absent), exactly like the `spVersion` fold.
-    public func changeToken() throws -> String {
+    /// The change token MUST advance: `changeToken()` folds `COUNT(pages)` +
+    /// `SUM(version)` into a ``ChangeToken`` — the File Provider sync anchor.
+    public func changeToken() throws -> ChangeToken {
         lock.lock(); defer { lock.unlock() }
         // Assembled from per-kind ``ChangeTokenContributor``s (slice 2b). The
-        // registry joins fragments in registration order; today's order
-        // reproduces the historical 11-field token byte-for-byte — the ~20
-        // hardcoded-literal assertions in SQLiteWikiStoreTests / LogIndexTests
-        // / SystemPromptTests enforce that. Each contributor runs under this
+        // registry applies folds in registration order; today's order
+        // reproduces the historical 14-field rawString — the
+        // ChangeTokenContributorTests contributor-order test + the rawString
+        // round-trip test enforce that. Each contributor runs under this
         // lock and reads committed state via the private `*Count`/`*Version`
         // helpers below (values only — no statement handle crosses the call;
         // `docs/skills/sqlite-concurrency/SKILL.md`).
-        return try Self.tokenContributors
-            .map { try $0.fragment(in: self) }
-            .joined(separator: ":")
+        var token = ChangeToken()
+        for contributor in Self.tokenContributors {
+            token.apply(try contributor.fold(in: self))
+        }
+        return token
     }
 
     /// `COUNT`/`SUM(version)` over `pages`. Unlike the resilient `*Count`/
@@ -2798,12 +2802,13 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
     // MARK: - changeToken contributors (slice 2b)
 
-    /// The per-kind contributors whose fragments join into ``changeToken()``.
-    /// Order is load-bearing: it reproduces the historical 11-field token
-    /// byte-for-byte. A kind may appear more than once (the historical layout
-    /// interleaves the system-prompt/log/index folds between the `sources`
-    /// table fold and the graph-model source folds). `internal` so the
-    /// contributor-exhaustiveness test can read it (`@testable import`).
+    /// The per-kind contributors whose folds assemble into ``changeToken()``.
+    /// Order is load-bearing: it reproduces the historical 14-field
+    /// ``ChangeToken/rawString`` byte-for-byte. A kind may appear more than
+    /// once (the historical layout interleaves the system-prompt/log/index
+    /// folds between the `sources` table fold and the graph-model source
+    /// folds). `internal` so the contributor-exhaustiveness test can read it
+    /// (`@testable import`).
     static let tokenContributors: [any ChangeTokenContributor] = [
         PagesTokenContributor(),
         SourceTableTokenContributor(),
@@ -2818,38 +2823,38 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
     private struct PagesTokenContributor: ChangeTokenContributor {
         let kind: ResourceKind = .page
-        func fragment(in store: SQLiteWikiStore) throws -> String {
+        func fold(in store: SQLiteWikiStore) throws -> ChangeTokenFold {
             let (count, sum) = try store.pageCountSum()
-            return "\(count):\(sum)"
+            return .pages(count: count, versionSum: sum)
         }
     }
 
     private struct SourceTableTokenContributor: ChangeTokenContributor {
         let kind: ResourceKind = .source
-        func fragment(in store: SQLiteWikiStore) throws -> String {
+        func fold(in store: SQLiteWikiStore) throws -> ChangeTokenFold {
             let (count, sum) = store.sourceCountSum()
-            return "\(count):\(sum)"
+            return .sourceTable(count: count, versionSum: sum)
         }
     }
 
     private struct SystemPromptTokenContributor: ChangeTokenContributor {
         let kind: ResourceKind = .systemPrompt
-        func fragment(in store: SQLiteWikiStore) throws -> String {
-            "\(store.systemPromptVersion())"
+        func fold(in store: SQLiteWikiStore) throws -> ChangeTokenFold {
+            .systemPrompt(version: store.systemPromptVersion())
         }
     }
 
     private struct LogTokenContributor: ChangeTokenContributor {
         let kind: ResourceKind = .log
-        func fragment(in store: SQLiteWikiStore) throws -> String {
-            "\(store.logRowCount())"
+        func fold(in store: SQLiteWikiStore) throws -> ChangeTokenFold {
+            .log(rowCount: store.logRowCount())
         }
     }
 
     private struct WikiIndexTokenContributor: ChangeTokenContributor {
         let kind: ResourceKind = .wikiIndex
-        func fragment(in store: SQLiteWikiStore) throws -> String {
-            "\(store.wikiIndexVersion())"
+        func fold(in store: SQLiteWikiStore) throws -> ChangeTokenFold {
+            .wikiIndex(version: store.wikiIndexVersion())
         }
     }
 
@@ -2858,8 +2863,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// historical layout, so it is its own contributor in registry order.
     private struct SourceDerivedTokenContributor: ChangeTokenContributor {
         let kind: ResourceKind = .source
-        func fragment(in store: SQLiteWikiStore) throws -> String {
-            "\(store.sourceMarkdownVersionCount())"
+        func fold(in store: SQLiteWikiStore) throws -> ChangeTokenFold {
+            .sourceMarkdownVersions(count: store.sourceMarkdownVersionCount())
         }
     }
 
@@ -2868,8 +2873,10 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// logically source provenance/version state.
     private struct SourceGraphTokenContributor: ChangeTokenContributor {
         let kind: ResourceKind = .source
-        func fragment(in store: SQLiteWikiStore) throws -> String {
-            "\(store.sourceVersionCount()):\(store.refsGenerationSum()):\(store.activitiesCount())"
+        func fold(in store: SQLiteWikiStore) throws -> ChangeTokenFold {
+            .sourceGraph(versionCount: store.sourceVersionCount(),
+                         refsGenerationSum: store.refsGenerationSum(),
+                         activitiesCount: store.activitiesCount())
         }
     }
 
@@ -2877,8 +2884,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// bumps the token so the File Provider re-enumerates the `bookmarks/` tree.
     private struct BookmarkTokenContributor: ChangeTokenContributor {
         let kind: ResourceKind = .bookmark
-        func fragment(in store: SQLiteWikiStore) throws -> String {
-            "\(store.bookmarkNodesCount())"
+        func fold(in store: SQLiteWikiStore) throws -> ChangeTokenFold {
+            .bookmarks(count: store.bookmarkNodesCount())
         }
     }
 
@@ -2887,8 +2894,8 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// message count. Both advance the token so the FP re-enumerates `chats/`.
     private struct ChatTokenContributor: ChangeTokenContributor {
         let kind: ResourceKind = .chat
-        func fragment(in store: SQLiteWikiStore) throws -> String {
-            "\(store.chatCount()):\(store.chatMessageCount())"
+        func fold(in store: SQLiteWikiStore) throws -> ChangeTokenFold {
+            .chat(count: store.chatCount(), messageCount: store.chatMessageCount())
         }
     }
 
