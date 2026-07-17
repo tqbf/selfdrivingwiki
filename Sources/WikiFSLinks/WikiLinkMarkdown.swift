@@ -83,9 +83,9 @@ public enum WikiLinkMarkdown {
     /// - Returns: Markdown safe to hand to `AttributedString(markdown:)`.
     public static func linkified(
         _ body: String,
-        isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool = { _, _ in true },
+        isResolved: (String, ParsedLink.LinkType) -> Bool = { _, _ in true },
         embedInfo: ((String) -> SourceEmbedInfo?)? = nil,
-        displayName: (PageID, WikiLinkParser.ParsedLink.LinkType) -> String? = { _, _ in nil },
+        displayName: (PageID, ParsedLink.LinkType) -> String? = { _, _ in nil },
         pinnedExtractionID: ((PageID, Int) -> PageID?)? = nil
     ) -> String {
         let ns = body as NSString
@@ -313,7 +313,7 @@ public enum WikiLinkMarkdown {
     /// `anchor`) or non-wiki. Used by the view's `OpenURLAction` to route the click.
     /// Host `"anchor"` is same-page scroll — not a navigation, so returns nil here
     /// (the OpenURLAction handles it separately).
-    public static func resolvedKind(from url: URL) -> WikiLinkParser.ParsedLink.LinkType? {
+    public static func resolvedKind(from url: URL) -> ParsedLink.LinkType? {
         guard url.scheme == scheme, let host = url.host else { return nil }
         switch host {
         case resolvedHost:   return .page     // "page"
@@ -337,7 +337,7 @@ public enum WikiLinkMarkdown {
     // MARK: - Helpers
 
     private static func markdownLink(display: String, target: String,
-                                     kind: WikiLinkParser.ParsedLink.LinkType,
+                                     kind: ParsedLink.LinkType,
                                      resolved: Bool,
                                      fragment: String? = nil,
                                      id: PageID? = nil,

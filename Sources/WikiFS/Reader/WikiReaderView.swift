@@ -872,9 +872,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 // constant-true). The transcript's nil-context=constant-true
                 // contract (Phase A.2) is a separate concern, handled at the
                 // ChatWebView layer, not here.
-                let isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool
+                let isResolved: (String, ParsedLink.LinkType) -> Bool
                 let embedInfo: ((String) -> WikiLinkMarkdown.SourceEmbedInfo?)?
-                let displayName: (PageID, WikiLinkParser.ParsedLink.LinkType) -> String?
+                let displayName: (PageID, ParsedLink.LinkType) -> String?
                 let pinnedExtractionID: ((PageID, Int) -> PageID?)?
                 if let context {
                     isResolved = context.isResolved

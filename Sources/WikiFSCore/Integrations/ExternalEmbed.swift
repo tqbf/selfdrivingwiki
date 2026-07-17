@@ -73,33 +73,6 @@ public enum WikiReaderOrigin {
     public static var url: URL? { URL(string: string) }
 }
 
-// MARK: - EmbedTarget
-
-/// The render decision `ExternalEmbed` makes for one descriptor: *what kind* of
-/// element to emit and the *URL* it points at. Kept deliberately minimal (kind +
-/// url) — the element attributes (`allow`, `loading`, sizing class) are a pure
-/// render concern decided in `WikiLinkMarkdown.embedHTML`, not here, so the
-/// dispatch table stays a trivially-testable function of the descriptor.
-public struct EmbedTarget: Sendable, Equatable {
-    public enum Kind: Sendable, Equatable {
-        /// A provider player `<iframe>` (YouTube, Vimeo, Spotify, SoundCloud,
-        /// Apple Podcasts).
-        case iframe
-        /// A native `<audio>` pointed at a direct-remote media URL.
-        case audio
-        /// A native `<video>` pointed at a direct-remote media URL.
-        case video
-    }
-
-    public let kind: Kind
-    public let url: String
-
-    public init(kind: Kind, url: String) {
-        self.kind = kind
-        self.url = url
-    }
-}
-
 // MARK: - ExternalEmbed (pure dispatch table)
 
 /// Pure, store-free dispatch from a `SourceEmbedDescriptor` to an `EmbedTarget`.

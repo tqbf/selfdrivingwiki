@@ -31,22 +31,22 @@ struct LinkPrefixAccessorTests {
     // MARK: - ParsedLink.LinkType bridge
 
     @Test func linkTypeResourceKindBridgesCorrectly() {
-        #expect(WikiLinkParser.ParsedLink.LinkType.page.resourceKind == .page)
-        #expect(WikiLinkParser.ParsedLink.LinkType.source.resourceKind == .source)
-        #expect(WikiLinkParser.ParsedLink.LinkType.chat.resourceKind == .chat)
+        #expect(ParsedLink.LinkType.page.resourceKind == .page)
+        #expect(ParsedLink.LinkType.source.resourceKind == .source)
+        #expect(ParsedLink.LinkType.chat.resourceKind == .chat)
     }
 
     @Test func linkTypeLinkPrefixIsNonOptionalAndMatchesResourceKind() {
-        for kind in WikiLinkParser.ParsedLink.LinkType.allCases {
+        for kind in ParsedLink.LinkType.allCases {
             #expect(kind.linkPrefix == kind.resourceKind.linkPrefix)
             #expect(!kind.linkPrefix.isEmpty)
         }
     }
 
     @Test func linkTypeLinkPrefixReturnsExpectedValues() {
-        #expect(WikiLinkParser.ParsedLink.LinkType.page.linkPrefix == "page:")
-        #expect(WikiLinkParser.ParsedLink.LinkType.source.linkPrefix == "source:")
-        #expect(WikiLinkParser.ParsedLink.LinkType.chat.linkPrefix == "chat:")
+        #expect(ParsedLink.LinkType.page.linkPrefix == "page:")
+        #expect(ParsedLink.LinkType.source.linkPrefix == "source:")
+        #expect(ParsedLink.LinkType.chat.linkPrefix == "chat:")
     }
 
     // MARK: - Host constants

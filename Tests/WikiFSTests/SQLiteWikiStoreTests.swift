@@ -524,7 +524,7 @@ struct SQLiteWikiStoreTests {
         let source = try store.addSource(filename: "note.md", data: Data("md".utf8))
 
         // Mixed links: one page link, one source link.
-        let links: [WikiLinkParser.ParsedLink] = [
+        let links: [ParsedLink] = [
             .init(linkType: .page, target: "Test Page", linkText: "self"),
             .init(linkType: .source, target: source.filename, linkText: "the note"),
         ]

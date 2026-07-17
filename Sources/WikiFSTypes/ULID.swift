@@ -27,7 +27,7 @@ public enum ULID {
     /// sensitive id lookup (`getPage(id:)`, `pageIDToName[id]`), rendering it as
     /// a ghost. Restricting to uppercase makes a lowercase ULID resolve by name
     /// (which fails) → ghost, the safest behavior for hand-edited content.
-    static let allowedCharacters: CharacterSet = {
+    public static let allowedCharacters: CharacterSet = {
         var set = CharacterSet()
         for ch in alphabet { set.insert(charactersIn: String(ch)) }
         return set

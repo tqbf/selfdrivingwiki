@@ -4819,7 +4819,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// `WikiLinkResolver`, so names containing `#` resolve whole. `resolve` is
     /// `resolveTitleToID` for page links, `resolveSourceByName` for citations.
     private func resolveLinkTarget(
-        _ link: WikiLinkParser.ParsedLink,
+        _ link: ParsedLink,
         using resolve: (String) throws -> PageID?
     ) throws -> PageID? {
         let raw = link.fragment.map { "\(link.target)#\($0)" } ?? link.target
@@ -4836,7 +4836,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// OR the id names no row, so the caller can fall back to name resolution
     /// (collision safety: a title that happens to be ULID-shaped still links).
     private func canonicalLinkID(
-        _ link: WikiLinkParser.ParsedLink
+        _ link: ParsedLink
     ) throws -> PageID? {
         guard WikiLinkParser.isCanonicalULID(link.target) else { return nil }
         let id = PageID(rawValue: link.target)
@@ -4854,7 +4854,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func replaceLinks(from pageID: PageID,
-                             parsedLinks: [WikiLinkParser.ParsedLink]) throws {
+                             parsedLinks: [ParsedLink]) throws {
         try mutate(event: { _ in localEvent(.page, id: pageID.rawValue, change: .updated) }) {
         // One transaction: wipe this page's outgoing links in BOTH tables, then
         // insert the resolved subsets. Unresolved targets are OMITTED.

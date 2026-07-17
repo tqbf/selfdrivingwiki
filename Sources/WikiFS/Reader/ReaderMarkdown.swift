@@ -13,9 +13,9 @@ import WikiFSCore
 enum ReaderMarkdown {
     static func prepared(
         _ raw: String,
-        isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool,
+        isResolved: (String, ParsedLink.LinkType) -> Bool,
         embedInfo: ((String) -> WikiLinkMarkdown.SourceEmbedInfo?)? = nil,
-        displayName: (PageID, WikiLinkParser.ParsedLink.LinkType) -> String? = { _, _ in nil },
+        displayName: (PageID, ParsedLink.LinkType) -> String? = { _, _ in nil },
         pinnedExtractionID: ((PageID, Int) -> PageID?)? = nil
     ) -> String {
         let renderedFootnotes = WikiFootnoteMarkdown.rendered(raw)

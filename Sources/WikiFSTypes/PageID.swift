@@ -14,4 +14,3 @@ public struct PageID: Hashable, Codable, RawRepresentable, Sendable {
 extension PageID: Identifiable {
     public var id: String { rawValue }
 }
-

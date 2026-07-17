@@ -106,7 +106,7 @@ struct Phase5StoreCanonicalizationTests {
 
         // Render an inbound-link page: the stale alias "Old Title" must display
         // the CURRENT title "New Title" (display-at-render self-heal).
-        let displayName: (PageID, WikiLinkParser.ParsedLink.LinkType) -> String? = { id, kind in
+        let displayName: (PageID, ParsedLink.LinkType) -> String? = { id, kind in
             guard kind == .page, id == target.id else { return nil }
             return "New Title"
         }
@@ -145,7 +145,7 @@ struct Phase5StoreCanonicalizationTests {
         #expect(after.updatedAt == before.updatedAt)
 
         // The stale alias "Old Paper" self-heals to "New Paper" at render.
-        let displayName: (PageID, WikiLinkParser.ParsedLink.LinkType) -> String? = { id, kind in
+        let displayName: (PageID, ParsedLink.LinkType) -> String? = { id, kind in
             guard kind == .source, id == source.id else { return nil }
             return "New Paper"
         }

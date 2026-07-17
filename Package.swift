@@ -59,6 +59,28 @@ let package = Package(
                 .headerSearchPath("."),
             ]
         ),
+        // Shared leaf types (PageID, ULID, ResourceKind, EmbedTarget, ParsedLink)
+        // — Foundation-only, depended on by WikiFSLinks and WikiFSCore. Extracted
+        // from WikiFSCore in module restructuring Phase 1 (#532) so the pure-logic
+        // link cluster (WikiFSLinks) and the store/protocol (WikiFSCore) can both
+        // reference these foundational types without a circular dependency.
+        .target(
+            name: "WikiFSTypes",
+            path: "Sources/WikiFSTypes",
+            swiftSettings: strictSwiftSettings
+        ),
+        // The wiki-link grammar cluster — pure-logic parser/resolver/rewriter/
+        // rules. Depends only on WikiFSTypes (PageID/ULID/ParsedLink/etc.).
+        // Extracted from WikiFSCore in module restructuring Phase 1 (#532).
+        // Re-exported by WikiFSCore via @_exported import (ModuleExports.swift)
+        // so existing importers of WikiFSCore see link types with no per-file
+        // imports. Previously Sources/WikiFSCore/Links/.
+        .target(
+            name: "WikiFSLinks",
+            dependencies: ["WikiFSTypes"],
+            path: "Sources/WikiFSLinks",
+            swiftSettings: strictSwiftSettings
+        ),
         // Non-UI core: page model, ULID, the WikiStore protocol + SQLite
         // implementation, and the @Observable WikiStoreModel. Depended on by
         // the executable AND the test target so logic is testable without a
@@ -67,6 +89,8 @@ let package = Package(
             name: "WikiFSCore",
             dependencies: [
                 "CSqliteVec",
+                "WikiFSTypes",
+                "WikiFSLinks",
             ],
             path: "Sources/WikiFSCore",
             // NaturalLanguage: semantic-search embeddings. JavaScriptCore: the
