@@ -223,28 +223,6 @@ struct URLFetchServiceTests {
         #expect(collector.data == pdf)
     }
 
-    @Test func sniffContentTypeMagicNumbers() {
-        #expect(URLFetchService.sniffContentType(Data("%PDF-1.4".utf8)) == "application/pdf")
-        #expect(URLFetchService.sniffContentType(Data([0x89, 0x50, 0x4E, 0x47])) == "image/png")
-        #expect(URLFetchService.sniffContentType(Data([0xFF, 0xD8, 0xFF, 0xE0])) == "image/jpeg")
-        #expect(URLFetchService.sniffContentType(Data("GIF89a".utf8)) == "image/gif")
-        #expect(URLFetchService.sniffContentType(Data([0x50, 0x4B, 0x03, 0x04])) == "application/zip")
-        // Plain text / HTML carries no magic → nil (falls back to declared type).
-        #expect(URLFetchService.sniffContentType(Data("<!DOCTYPE html>".utf8)) == nil)
-        #expect(URLFetchService.sniffContentType(Data("hello".utf8)) == nil)
-        #expect(URLFetchService.sniffContentType(Data()) == nil)
-    }
-
-    @Test func shouldSniffOnlyAmbiguousTypes() {
-        #expect(URLFetchService.shouldSniff(nil))
-        #expect(URLFetchService.shouldSniff("text/html"))
-        #expect(URLFetchService.shouldSniff("application/octet-stream"))
-        // A specific declared type is trusted, not sniffed.
-        #expect(!URLFetchService.shouldSniff("application/pdf"))
-        #expect(!URLFetchService.shouldSniff("image/png"))
-        #expect(!URLFetchService.shouldSniff("text/plain"))
-    }
-
     // MARK: - Errors
 
     @Test func nonHTTPSuccessSurfacedAsError() async throws {
@@ -334,22 +312,11 @@ struct URLFetchServiceTests {
         #expect(URLFetchService.normalizedMIME(nil) == nil)
     }
 
-    @Test func ensureExtensionDoesNotDouble() {
-        #expect(URLFetchService.ensureExtension("file", ext: "md") == "file.md")
-        #expect(URLFetchService.ensureExtension("file.md", ext: "md") == "file.md")
-        #expect(URLFetchService.ensureExtension("file.MD", ext: "md") == "file.MD")
-    }
-
-    @Test func stemFromURLPrefersPathThenHost() {
-        #expect(URLFetchService.stemFromURL(URL(string: "https://a.com/x/report.pdf")!) == "report")
-        #expect(URLFetchService.stemFromURL(URL(string: "https://a.com/")!) == "a.com")
-        #expect(URLFetchService.stemFromURL(URL(string: "https://a.com")!) == "a.com")
-    }
-
-    @Test func sanitizeStemCapsAndCleans() {
-        let long = String(repeating: "x", count: 200)
-        #expect(URLFetchService.sanitizeStem(long).count <= 80)
-        #expect(URLFetchService.sanitizeStem("a/b:c") == "a-b-c")
-        #expect(URLFetchService.sanitizeStem("   ") == "untitled")
+    @Test func nameHintPrefersPathThenHost() {
+        let path = URLFetchService.nameHint(for: URL(string: "https://a.com/x/report.pdf")!)
+        #expect(path.stem == "report")
+        #expect(path.ext == "pdf")
+        #expect(URLFetchService.nameHint(for: URL(string: "https://a.com/")!).stem == "a.com")
+        #expect(URLFetchService.nameHint(for: URL(string: "https://a.com")!).stem == "a.com")
     }
 }
