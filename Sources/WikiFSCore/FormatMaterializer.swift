@@ -71,7 +71,7 @@ public enum FormatMaterializer {
         // carry a known binary magic number, store them verbatim as the sniffed
         // type instead of running HTML→Markdown on binary garbage. A specific
         // declared type is trusted as-is.
-        if shouldSniff(mime), let sniffed = sniffContentType(data) {
+        if shouldSniff(mime), let sniffed = ContentSniff.mimeType(of: data) {
             let ext = binaryExtension(forMIME: sniffed, extensionHint: extensionHint)
             let filename = ext.isEmpty ? sanitizeStem(stem) : ensureExtension(sanitizeStem(stem), ext: ext)
             let format: SourceFormat = sniffed == "application/pdf" ? .pdf : .binary
@@ -115,12 +115,6 @@ public enum FormatMaterializer {
         default:
             return false
         }
-    }
-
-    /// Detect a known binary content type from leading magic-number bytes, else
-    /// `nil`. Delegates to the shared `ContentSniff` helper.
-    static func sniffContentType(_ data: Data) -> String? {
-        ContentSniff.mimeType(of: data)
     }
 
     // MARK: - Helpers (pure)

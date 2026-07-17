@@ -209,10 +209,10 @@ struct FormatMaterializerTests {
     }
 
     @Test func sniffContentTypeMagicNumbers() {
-        #expect(FormatMaterializer.sniffContentType(Data("%PDF-1.4".utf8)) == "application/pdf")
-        #expect(FormatMaterializer.sniffContentType(Data([0x89, 0x50, 0x4E, 0x47])) == "image/png")
-        #expect(FormatMaterializer.sniffContentType(Data("<!DOCTYPE html>".utf8)) == nil)
-        #expect(FormatMaterializer.sniffContentType(Data()) == nil)
+        #expect(ContentSniff.mimeType(of: Data("%PDF-1.4".utf8)) == "application/pdf")
+        #expect(ContentSniff.mimeType(of: Data([0x89, 0x50, 0x4E, 0x47])) == "image/png")
+        #expect(ContentSniff.mimeType(of: Data("<!DOCTYPE html>".utf8)) == nil)
+        #expect(ContentSniff.mimeType(of: Data()) == nil)
     }
 
     // MARK: - AC.7: FormatMaterializer has no URL-type dependency

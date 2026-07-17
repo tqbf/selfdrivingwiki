@@ -2,10 +2,9 @@ import Foundation
 import Testing
 @testable import WikiFSCore
 
-/// Direct tests for the shared `ContentSniff.mimeType(of:)` helper. Previously
-/// these were only exercised through `URLFetchService.sniffContentType`, but
-/// `addSource` now depends on `ContentSniff` directly for the MIME-first path
-/// (content-type-over-extension plan).
+/// Direct tests for the shared `ContentSniff.mimeType(of:)` helper — the
+/// canonical magic-number sniffer used by `FormatMaterializer.dispatch` and
+/// `addSource` (content-type-over-extension plan).
 struct ContentSniffTests {
 
     @Test func pdfMagicBytes() {

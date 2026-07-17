@@ -195,16 +195,6 @@ public struct URLFetchService {
         return StorePlan(filename: fp.filename, data: fp.data, kind: mapFormat(fp.format))
     }
 
-    // MARK: - Content sniffing (thin forwarders to FormatMaterializer)
-
-    static func shouldSniff(_ mime: String?) -> Bool {
-        FormatMaterializer.shouldSniff(mime)
-    }
-
-    static func sniffContentType(_ data: Data) -> String? {
-        FormatMaterializer.sniffContentType(data)
-    }
-
     // MARK: - Helpers (thin forwarders to FormatMaterializer)
 
     static func normalizedMIME(_ raw: String?) -> String? {
@@ -213,35 +203,6 @@ public struct URLFetchService {
 
     static func decodeText(_ data: Data) -> String {
         FormatMaterializer.decodeText(data)
-    }
-
-    /// The filename stem from a URL: the last path component without its extension,
-    /// else the host. Kept here for backward compat (its test calls it directly);
-    /// `plan(for:)` uses `nameHint(for:)` instead.
-    static func stemFromURL(_ url: URL) -> String {
-        let last = url.lastPathComponent
-        if !last.isEmpty, last != "/" {
-            let ns = last as NSString
-            let stem = ns.deletingPathExtension
-            if !stem.isEmpty { return stem }
-        }
-        if let host = url.host, !host.isEmpty {
-            return host
-        }
-        return "download"
-    }
-
-    static func sanitizeStem(_ stem: String) -> String {
-        FormatMaterializer.sanitizeStem(stem)
-    }
-
-    static func ensureExtension(_ stem: String, ext: String) -> String {
-        FormatMaterializer.ensureExtension(stem, ext: ext)
-    }
-
-    static func textExtension(forMIME mime: String, url: URL) -> String {
-        let ext = (url.lastPathComponent as NSString).pathExtension.lowercased()
-        return FormatMaterializer.textExtension(forMIME: mime, extensionHint: ext.isEmpty ? nil : ext)
     }
 
     static func binaryExtension(forMIME mime: String?, url: URL) -> String {
