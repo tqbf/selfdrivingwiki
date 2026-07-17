@@ -19,7 +19,7 @@ workflows, and the mental model. It does not cover internals or architecture.
 | **[Page](pages-and-links.md)** | A wiki page written in Markdown. Pages are the curated output — summaries, entity profiles, concept explanations, indexes. The agent writes most of them; you can edit any of them. |
 | **[Source](sources-and-ingestion.md)** | Raw material you bring into the wiki: a dropped PDF, a fetched web page, a Zotero attachment, an imported markdown folder. Sources are the input the agent digests into pages. |
 | **[Agent](chat.md)** | The AI that maintains the wiki. It can **Ingest** sources into pages, answer questions in **Chat**, clean up formatting with **Lint**, and more. You interact with it conversationally. |
-| **[Wiki link](pages-and-links.md#wiki-links--the-connective-tissue)** | The connective tissue. `[[Page Name]]` links pages to each other; `[[source:Name]]` links pages to sources. Links are how the knowledge base stays connected and navigable. |
+| **[Wiki link](pages-and-links.md#wiki-links--the-connective-tissue)** | The connective tissue. `[[Page Name]]` links pages to each other; `[[source:Name]]` links pages to sources.  `[[chat:Name]]` links to past chats with the agent. Links are how the knowledge base stays connected and navigable. |
 | **[Bookmark](organizing-and-managing.md#bookmarks)** | A user-defined shortcut to a page, source, or chat, organized into folders. Your personal table of contents. |
 
 ### The fundamental workflow
