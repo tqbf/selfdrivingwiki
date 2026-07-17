@@ -145,7 +145,7 @@ public protocol WikiStore: Sendable {
     /// Replace ALL outgoing links for `pageID` with the resolved subset of
     /// `parsedLinks`, in one transaction. Targets that don't resolve to a page
     /// are omitted (the schema forbids a NULL `to_page_id`). Self-links allowed.
-    func replaceLinks(from pageID: PageID, parsedLinks: [WikiLinkParser.ParsedLink]) throws
+    func replaceLinks(from pageID: PageID, parsedLinks: [ParsedLink]) throws
 
     // MARK: - Ingested files (Phase 5)
     //

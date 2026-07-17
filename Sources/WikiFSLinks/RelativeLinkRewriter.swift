@@ -63,7 +63,7 @@ public enum RelativeLinkRewriter {
             self.chat = chat
         }
 
-        func namespace(for kind: WikiLinkParser.ParsedLink.LinkType) -> (String, Bool) -> Target? {
+        func namespace(for kind: ParsedLink.LinkType) -> (String, Bool) -> Target? {
             switch kind {
             case .page:   return page
             case .source: return source
@@ -195,7 +195,9 @@ public enum RelativeLinkRewriter {
     /// Root-relative path from `baseDir` (a directory) to `target` (whose last
     /// component is a filename), percent-encoded per component. Same directory →
     /// bare filename; different subtree → `../…/…`.
-    static func relativePath(from baseDir: [String], to target: [String]) -> String {
+    // Kept `public` (not `internal`) because `SourceImageRewriter` in WikiFSCore
+    // calls it cross-module after the WikiFSLinks extraction (Phase 1, #532).
+    public static func relativePath(from baseDir: [String], to target: [String]) -> String {
         let targetDir = target.dropLast()
         var common = 0
         while common < baseDir.count && common < targetDir.count
@@ -214,7 +216,7 @@ public enum RelativeLinkRewriter {
 
     /// Strip a leading `page:` / `source:` / `chat:` prefix matching `kind` from
     /// `collapsed`, preserving any inner `#` (so `#`-in-name disambiguation works).
-    private static func stripPrefix(_ kind: WikiLinkParser.ParsedLink.LinkType,
+    private static func stripPrefix(_ kind: ParsedLink.LinkType,
                                     from collapsed: String) -> String {
         let token = "\(kind.rawValue):"
         return collapsed.hasPrefix(token) ? String(collapsed.dropFirst(token.count)) : collapsed

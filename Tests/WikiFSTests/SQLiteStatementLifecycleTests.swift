@@ -140,7 +140,7 @@ import SQLite3
 
         // canonicalLinkID(.chat) → exercise via replaceLinks with a chat link.
         try store.replaceLinks(from: page.id, parsedLinks: [
-            WikiLinkParser.ParsedLink(
+            ParsedLink(
                 linkType: .chat, target: chat.id.rawValue,
                 linkText: "Chat"),
         ])

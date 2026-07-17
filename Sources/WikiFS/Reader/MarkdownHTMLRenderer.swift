@@ -122,8 +122,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             } else if let title = WikiLinkMarkdown.target(from: url) {
                 let prefix: String
                 switch url.host {
-                case WikiLinkMarkdown.sourceHost: prefix = WikiLinkParser.ParsedLink.LinkType.source.linkPrefix
-                case WikiLinkMarkdown.chatHost:   prefix = WikiLinkParser.ParsedLink.LinkType.chat.linkPrefix
+                case WikiLinkMarkdown.sourceHost: prefix = ParsedLink.LinkType.source.linkPrefix
+                case WikiLinkMarkdown.chatHost:   prefix = ParsedLink.LinkType.chat.linkPrefix
                 default:                          prefix = ""
                 }
                 let frag = WikiLinkMarkdown.fragment(from: url)

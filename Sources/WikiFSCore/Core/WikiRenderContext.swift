@@ -203,7 +203,7 @@ public struct WikiRenderContext: Sendable {
     /// for sources). This is the exact `isResolved` closure
     /// `WikiReaderView.startLoad` passed to `ReaderMarkdown.prepared` — moved
     /// here verbatim so reader and transcript agree on ghost styling.
-    public var isResolved: (String, WikiLinkParser.ParsedLink.LinkType) -> Bool {
+    public var isResolved: (String, ParsedLink.LinkType) -> Bool {
         { name, kind in
             if WikiLinkParser.isCanonicalULID(name) {
                 let id = PageID(rawValue: name)
@@ -233,7 +233,7 @@ public struct WikiRenderContext: Sendable {
     /// `[[source:ULID|Stale Title]]` resolves ULID → the CURRENT display name
     /// here, so a rename self-heals visually without touching bytes. Returns
     /// `nil` when the id isn't known (the renderer keeps the alias).
-    public var displayName: (PageID, WikiLinkParser.ParsedLink.LinkType) -> String? {
+    public var displayName: (PageID, ParsedLink.LinkType) -> String? {
         { id, kind in
             switch kind {
             case .source: return sourceIDToName[id]
