@@ -1,6 +1,25 @@
 import Foundation
 import WikiFSCore
 
+// MARK: - QueueEventType
+
+/// The event-type discriminant for `QueueLogRecord`. Each case maps 1:1 to
+/// a `QueueEvent` case (modulo associated values). Replaces the former
+/// `eventType: String` field — a typo like `"strted"` would silently be
+/// written and never caught; with a String-backed enum, the compiler
+/// enforces the set of valid values (issue #508).
+enum QueueEventType: String, Codable, Sendable {
+    case enqueued
+    case started
+    case completed
+    case failed
+    case cancelled
+    case progress
+    case transcript
+    case runStateChanged
+    case reordered
+}
+
 // MARK: - QueueLogRecord
 
 /// One JSONL line in the queue event log. Every `QueueEvent` emitted by the
@@ -11,9 +30,10 @@ struct QueueLogRecord: Codable, Sendable {
     /// state-transition timestamp; that's `startedAt`/`finishedAt`).
     let timestamp: Int64
 
-    /// `"enqueued"` | `"started"` | `"completed"` | `"failed"` | `"cancelled"`
-    /// | `"runStateChanged"`.
-    let eventType: String
+    /// The typed event discriminant — `"enqueued"` | `"started"` | etc.
+    /// Typed as `QueueEventType` so a typo cannot be silently written
+    /// (issue #508).
+    let eventType: QueueEventType
 
     /// The item's ULID. `nil` for `runStateChanged`.
     let itemID: String?
@@ -27,14 +47,18 @@ struct QueueLogRecord: Codable, Sendable {
     /// The provider that claimed the item. `nil` until `markRunning`.
     let providerID: String?
 
-    /// The `QueueItemState` raw value. `nil` for `runStateChanged` (use
-    /// `runState` instead). Disambiguated from `runState` so a consumer never
-    /// has to guess which enum a `"running"` value belongs to.
-    let itemState: String?
+    /// The item's `QueueItemState`. `nil` for `runStateChanged` (use
+    /// `runState` instead). Typed as `QueueItemState` (not `String`) so
+    /// type system tracks which enum a `"running"` value belongs to
+    /// — no ambiguity even though `QueueItemState.running` and
+    /// `QueueRunState.running` share a common string form (issue #508).
+    let itemState: QueueItemState?
 
-    /// The `QueueRunState` raw value. Only populated for `runStateChanged`;
-    /// `nil` for all item-carrying events.
-    let runState: String?
+    /// The `QueueRunState`. Only populated for `runStateChanged`;
+    /// `nil` for all item-carrying events. Typed as `QueueRunState`
+    /// (not `String`) so the type system disambiguates from `itemState`
+    /// (issue #508).
+    let runState: QueueRunState?
 
     /// The item's `orderingKey` (gap-based position). `nil` for `runStateChanged`.
     let orderingKey: Int64?
@@ -68,12 +92,12 @@ struct QueueLogRecord: Codable, Sendable {
 
         switch event {
         case .enqueued(let i):
-            self.eventType = "enqueued"
+            self.eventType = .enqueued
             self.itemID = i.id
             self.queue = i.queue.rawValue
             self.wikiID = i.wikiID
             self.providerID = i.providerID
-            self.itemState = i.state.rawValue
+            self.itemState = i.state
             self.runState = nil
             self.orderingKey = i.orderingKey
             self.attempt = i.attempt
@@ -83,12 +107,12 @@ struct QueueLogRecord: Codable, Sendable {
             self.durationMs = nil
 
         case .started(let i):
-            self.eventType = "started"
+            self.eventType = .started
             self.itemID = i.id
             self.queue = i.queue.rawValue
             self.wikiID = i.wikiID
             self.providerID = i.providerID
-            self.itemState = i.state.rawValue
+            self.itemState = i.state
             self.runState = nil
             self.orderingKey = i.orderingKey
             self.attempt = i.attempt
@@ -98,12 +122,12 @@ struct QueueLogRecord: Codable, Sendable {
             self.durationMs = nil
 
         case .completed(let i):
-            self.eventType = "completed"
+            self.eventType = .completed
             self.itemID = i.id
             self.queue = i.queue.rawValue
             self.wikiID = i.wikiID
             self.providerID = i.providerID
-            self.itemState = i.state.rawValue
+            self.itemState = i.state
             self.runState = nil
             self.orderingKey = i.orderingKey
             self.attempt = i.attempt
@@ -113,12 +137,12 @@ struct QueueLogRecord: Codable, Sendable {
             self.durationMs = Self.computeDuration(startedAt: i.startedAt, finishedAt: i.finishedAt)
 
         case .failed(let i, let error):
-            self.eventType = "failed"
+            self.eventType = .failed
             self.itemID = i.id
             self.queue = i.queue.rawValue
             self.wikiID = i.wikiID
             self.providerID = i.providerID
-            self.itemState = i.state.rawValue
+            self.itemState = i.state
             self.runState = nil
             self.orderingKey = i.orderingKey
             self.attempt = i.attempt
@@ -128,12 +152,12 @@ struct QueueLogRecord: Codable, Sendable {
             self.durationMs = Self.computeDuration(startedAt: i.startedAt, finishedAt: i.finishedAt)
 
         case .cancelled(let i):
-            self.eventType = "cancelled"
+            self.eventType = .cancelled
             self.itemID = i.id
             self.queue = i.queue.rawValue
             self.wikiID = i.wikiID
             self.providerID = i.providerID
-            self.itemState = i.state.rawValue
+            self.itemState = i.state
             self.runState = nil
             self.orderingKey = i.orderingKey
             self.attempt = i.attempt
@@ -147,7 +171,7 @@ struct QueueLogRecord: Codable, Sendable {
             // consumed live by the UI via the event stream, but NOT individually
             // logged to the JSONL audit trail (which records state transitions
             // only). The write() method skips this case.
-            self.eventType = "progress"
+            self.eventType = .progress
             self.itemID = nil
             self.queue = nil
             self.wikiID = nil
@@ -164,7 +188,7 @@ struct QueueLogRecord: Codable, Sendable {
         case .transcript:
             // Transcript events are high-volume (per-agent-event forwarding).
             // Consumed live by the Activity window, NOT logged to JSONL.
-            self.eventType = "transcript"
+            self.eventType = .transcript
             self.itemID = nil
             self.queue = nil
             self.wikiID = nil
@@ -179,13 +203,13 @@ struct QueueLogRecord: Codable, Sendable {
             self.durationMs = nil
 
         case .runStateChanged(let queue, let state):
-            self.eventType = "runStateChanged"
+            self.eventType = .runStateChanged
             self.itemID = nil
             self.queue = queue.rawValue
             self.wikiID = nil
             self.providerID = nil
             self.itemState = nil
-            self.runState = state.rawValue
+            self.runState = state
             self.orderingKey = nil
             self.attempt = nil
             self.error = nil
@@ -194,12 +218,12 @@ struct QueueLogRecord: Codable, Sendable {
             self.durationMs = nil
 
         case .reordered(let i):
-            self.eventType = "reordered"
+            self.eventType = .reordered
             self.itemID = i.id
             self.queue = i.queue.rawValue
             self.wikiID = i.wikiID
             self.providerID = i.providerID
-            self.itemState = i.state.rawValue
+            self.itemState = i.state
             self.runState = nil
             self.orderingKey = i.orderingKey
             self.attempt = i.attempt

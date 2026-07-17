@@ -147,10 +147,10 @@ struct QueueEventLogTests {
         let records = readLogRecords(at: files[0])
 
         #expect(records.count == 4)
-        #expect(records[0].eventType == "enqueued")
-        #expect(records[1].eventType == "started")
-        #expect(records[2].eventType == "completed")
-        #expect(records[3].eventType == "cancelled")
+        #expect(records[0].eventType == .enqueued)
+        #expect(records[1].eventType == .started)
+        #expect(records[2].eventType == .completed)
+        #expect(records[3].eventType == .cancelled)
     }
 
     @Test func testFailedEventIncludesErrorAndDuration() async throws {
@@ -164,7 +164,7 @@ struct QueueEventLogTests {
         let files = FileManager.default.files(in: dir)
         let records = readLogRecords(at: files[0])
         #expect(records.count == 1)
-        #expect(records[0].eventType == "failed")
+        #expect(records[0].eventType == .failed)
         #expect(records[0].error == "something broke")
         #expect(records[0].durationMs == 4000) // 6000 - 2000
     }
@@ -194,7 +194,7 @@ struct QueueEventLogTests {
         let files = FileManager.default.files(in: dir)
         let records = readLogRecords(at: files[0])
         #expect(records.count == 1)
-        #expect(records[0].eventType == "cancelled")
+        #expect(records[0].eventType == .cancelled)
         #expect(records[0].itemID == "TESTCANCELLED001")
         #expect(records[0].wikiID == "wiki1")
         #expect(records[0].durationMs == nil)
@@ -210,9 +210,9 @@ struct QueueEventLogTests {
         let files = FileManager.default.files(in: dir)
         let records = readLogRecords(at: files[0])
         #expect(records.count == 1)
-        #expect(records[0].eventType == "runStateChanged")
+        #expect(records[0].eventType == .runStateChanged)
         #expect(records[0].queue == "ingestion")
-        #expect(records[0].runState == "paused")
+        #expect(records[0].runState == .paused)
         #expect(records[0].itemID == nil)
         #expect(records[0].wikiID == nil)
         #expect(records[0].itemState == nil)
@@ -228,7 +228,7 @@ struct QueueEventLogTests {
         let files = FileManager.default.files(in: dir)
         let records = readLogRecords(at: files[0])
         #expect(records.count == 1)
-        #expect(records[0].runState == "running")
+        #expect(records[0].runState == .running)
     }
 
     @Test func testRecordIncludesItemTimestamps() async throws {
@@ -257,7 +257,7 @@ struct QueueEventLogTests {
         let records = readLogRecords(at: files[0])
         #expect(records[0].providerID == "provider-A")
         #expect(records[0].queue == "extraction")
-        #expect(records[0].itemState == "running")
+        #expect(records[0].itemState == .running)
     }
 
     // MARK: - AC6.2: Daily rotation + bounded retention
@@ -305,8 +305,8 @@ struct QueueEventLogTests {
 
         #expect(day1Records.count == 1)
         #expect(day2Records.count == 1)
-        #expect(day1Records[0].eventType == "enqueued")
-        #expect(day2Records[0].eventType == "completed")
+        #expect(day1Records[0].eventType == .enqueued)
+        #expect(day2Records[0].eventType == .completed)
     }
 
     @Test func testPruneOldFiles() async throws {
@@ -355,8 +355,8 @@ struct QueueEventLogTests {
         #expect(files.count == 1)
         let records = readLogRecords(at: files[0])
         #expect(records.count == 2) // Both events in the same file.
-        #expect(records[0].eventType == "enqueued")
-        #expect(records[1].eventType == "completed")
+        #expect(records[0].eventType == .enqueued)
+        #expect(records[1].eventType == .completed)
     }
 
     // MARK: - Stop / unwritable
@@ -443,9 +443,9 @@ struct QueueEventLogTests {
 
         // Should have at least: enqueued, started, completed.
         let eventTypes = records.map(\.eventType)
-        #expect(eventTypes.contains("enqueued"))
-        #expect(eventTypes.contains("started"))
-        #expect(eventTypes.contains("completed"))
+        #expect(eventTypes.contains(.enqueued))
+        #expect(eventTypes.contains(.started))
+        #expect(eventTypes.contains(.completed))
 
         store.close()
     }
