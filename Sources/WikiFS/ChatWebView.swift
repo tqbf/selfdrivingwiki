@@ -340,10 +340,13 @@ struct ChatWebView: NSViewRepresentable {
             // `replaceLastRow(..., isStreaming: true)` path — uses the
             // links-only tier.
             var html = ""
+            // Hoist the concatenation above the loop: `renderedEvents + events`
+            // was rebuilt per-row, making the loop O(n²) in array copies (#503 P2).
+            let allEvents = renderedEvents + events
             for (offset, event) in events.enumerated() {
                 let absoluteIndex = startingIndex + offset
                 let ts = absoluteIndex < timestamps.count ? timestamps[absoluteIndex] : nil
-                html += Self.rowHTML(for: event, style: style, context: context, isFinal: true, timestamp: ts, allEvents: renderedEvents + events, allTimestamps: timestamps, index: absoluteIndex)
+                html += Self.rowHTML(for: event, style: style, context: context, isFinal: true, timestamp: ts, allEvents: allEvents, allTimestamps: timestamps, index: absoluteIndex)
             }
             guard !html.isEmpty,
                   let data = try? JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed]),
