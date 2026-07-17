@@ -41,7 +41,7 @@ final class BlobSchemeHandler: NSObject, WKURLSchemeHandler {
     @MainActor func serve(_ task: WKURLSchemeTask) {
         guard let url = task.request.url,
               url.scheme == Self.scheme,
-              url.host == "source" else {
+              url.host == WikiLinkMarkdown.sourceHost else {
             respond404(task, url: task.request.url)
             return
         }

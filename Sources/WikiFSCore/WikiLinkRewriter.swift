@@ -90,12 +90,7 @@ public enum WikiLinkRewriter {
             // Canonical target portion: kind:ULID (+ @vN pin + #fragment if any).
             // Phase 6: the pin is preserved verbatim (`@v3`), not resolved here —
             // it stays in the body as the per-occurrence source of truth.
-            let prefix: String
-            switch kind {
-            case .source: prefix = "source:"
-            case .chat:   prefix = "chat:"
-            case .page:   prefix = "page:"
-            }
+            let prefix = kind.linkPrefix
             let canonicalTarget = prefix + resolvedID.rawValue
                 + (pin.map { "@v\($0)" } ?? "")
                 + (resolvedFragment.map { "#\($0)" } ?? "")

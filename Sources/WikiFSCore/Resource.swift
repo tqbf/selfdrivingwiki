@@ -50,6 +50,20 @@ public enum ResourceKind: String, Sendable, CaseIterable {
         case .log:         "clock.arrow.circlepath"
         }
     }
+
+    /// The `[[kind:Target]]` wiki-link prefix for linkable kinds:
+    /// `"page:"`, `"source:"`, `"chat:"`, `"bookmark:"`.
+    ///
+    /// Returns `nil` for non-linkable kinds (`systemPrompt`, `wikiIndex`,
+    /// `log`) that have no wiki-link syntax. This is the single source of
+    /// truth for link-kind prefix strings — inline literals should never be
+    /// re-derived at call sites (#489).
+    public var linkPrefix: String? {
+        switch self {
+        case .page, .source, .chat, .bookmark: return "\(rawValue):"
+        case .systemPrompt, .wikiIndex, .log: return nil
+        }
+    }
 }
 
 /// One fold's structured contribution to the whole-wiki change token.

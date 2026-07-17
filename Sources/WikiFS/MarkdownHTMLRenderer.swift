@@ -115,16 +115,16 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         let dest = link.destination ?? ""
         var tooltip = dest
         if let url = URL(string: dest), url.scheme == WikiLinkMarkdown.scheme {
-            if url.host == "anchor" {
+            if url.host == WikiLinkMarkdown.anchorHost {
                 if let frag = WikiLinkMarkdown.fragment(from: url) {
                     tooltip = "#\(frag)"
                 }
             } else if let title = WikiLinkMarkdown.target(from: url) {
                 let prefix: String
                 switch url.host {
-                case "source": prefix = "source:"
-                case "chat":   prefix = "chat:"
-                default:       prefix = ""
+                case WikiLinkMarkdown.sourceHost: prefix = WikiLinkParser.ParsedLink.LinkType.source.linkPrefix
+                case WikiLinkMarkdown.chatHost:   prefix = WikiLinkParser.ParsedLink.LinkType.chat.linkPrefix
+                default:                          prefix = ""
                 }
                 let frag = WikiLinkMarkdown.fragment(from: url)
                 let fragSuffix = frag.map { "#\($0)" } ?? ""

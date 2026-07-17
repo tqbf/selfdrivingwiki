@@ -176,13 +176,13 @@ public struct WikiStateSnapshot: Equatable, Sendable {
           label = child.label ?? "(unnamed folder)"
         case .pageRef:
           icon = "📄"
-          label = "page:\(child.targetID?.rawValue ?? "?")"
+          label = "\(ResourceKind.page.linkPrefix ?? "")\(child.targetID?.rawValue ?? "?")"
         case .sourceRef:
           icon = "📎"
-          label = "source:\(child.targetID?.rawValue ?? "?")"
+          label = "\(ResourceKind.source.linkPrefix ?? "")\(child.targetID?.rawValue ?? "?")"
         case .chatRef:
           icon = "💬"
-          label = "chat:\(child.targetID?.rawValue ?? "?")"
+          label = "\(ResourceKind.chat.linkPrefix ?? "")\(child.targetID?.rawValue ?? "?")"
         }
         lines.append("\(indent)- \(icon) \(label)")
         if child.kind == .folder {

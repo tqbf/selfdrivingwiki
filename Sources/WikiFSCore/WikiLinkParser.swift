@@ -28,7 +28,27 @@ public enum WikiLinkParser {
     /// A single parsed link reference: the kind + the bare target (prefix-stripped)
     /// and the display text to record in the link tables.
     public struct ParsedLink: Equatable, Sendable {
-        public enum LinkType: String, Equatable, Sendable { case page, source, chat }
+        public enum LinkType: String, Equatable, Sendable, CaseIterable {
+            case page, source, chat
+
+            /// Bridge to the shared ``ResourceKind`` vocabulary (#489). The three
+            /// linkable link-types map directly to their `ResourceKind`
+            /// counterparts, so link-kind prefixes and host strings come from one
+            /// source of truth.
+            public var resourceKind: ResourceKind {
+                switch self {
+                case .page:   return .page
+                case .source: return .source
+                case .chat:   return .chat
+                }
+            }
+
+            /// The `[[kind:Target]]` wiki-link prefix for this kind (`"page:"`,
+            /// `"source:"`, `"chat:"`). Never nil — all `LinkType` cases are
+            /// linkable. Delegates to ``ResourceKind/linkPrefix``, so there is
+            /// exactly one place where prefix strings are defined (#489).
+            public var linkPrefix: String { resourceKind.linkPrefix! }
+        }
 
         public let linkType: LinkType
         public let target: String       // prefix-stripped, whitespace-collapsed (BASE only)
@@ -75,9 +95,9 @@ public enum WikiLinkParser {
     /// so a page literally titled "source:foo" is linkable as `[[page:source:foo]]`.
     /// The remainder is re-normalized so `[[source: X]]` → ("X"), not (" X").
     public static func classify(_ target: String) -> (ParsedLink.LinkType, String) {
-        if let rest = peel(prefix: "page:", off: target)   { return (.page,   WikiText.normalized(rest)) }
-        if let rest = peel(prefix: "source:", off: target) { return (.source, WikiText.normalized(rest)) }
-        if let rest = peel(prefix: "chat:", off: target)   { return (.chat,   WikiText.normalized(rest)) }
+        if let rest = peel(prefix: ParsedLink.LinkType.page.linkPrefix, off: target)   { return (.page,   WikiText.normalized(rest)) }
+        if let rest = peel(prefix: ParsedLink.LinkType.source.linkPrefix, off: target) { return (.source, WikiText.normalized(rest)) }
+        if let rest = peel(prefix: ParsedLink.LinkType.chat.linkPrefix, off: target)   { return (.chat,   WikiText.normalized(rest)) }
         return (.page, target) // target already normalized by the caller
     }
 
@@ -85,10 +105,11 @@ public enum WikiLinkParser {
     /// the remainder is empty/whitespace (e.g. `[[source:]]`, `[[page:   ]]`). Both
     /// parse() and WikiLinkMarkdown.linkified() use this to emit literal text.
     public static func isEmptyPrefix(_ target: String) -> Bool {
-        for prefix in ["page:", "source:", "chat:"] {
+        for kind in ParsedLink.LinkType.allCases {
+            let prefix = kind.linkPrefix
             guard target.hasPrefix(prefix) else { continue }
             let rest = String(target.dropFirst(prefix.count))
-            return rest.allSatisfy(\.isWhitespace)
+            return rest.allSatisfy { $0.isWhitespace }
         }
         return false
     }
