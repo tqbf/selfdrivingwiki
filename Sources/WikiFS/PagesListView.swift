@@ -14,7 +14,7 @@ import WikiFSCore
 /// `NSOutlineView`).
 struct PagesListView: NSViewControllerRepresentable {
     let store: WikiStoreModel
-    let fileProvider: FileProviderSpike
+    let fileProvider: FileProviderFacade
     let session: WikiSession
     let launcher: AgentLauncher
     let callbacks: PagesListCallbacks
@@ -94,7 +94,7 @@ final class PagesListViewController: NSViewController {
     var scrollView: NSScrollView!
     var tableView: PagesNSTableView!
     var store: WikiStoreModel?
-    var fileProvider: FileProviderSpike?
+    var fileProvider: FileProviderFacade?
     /// The active wiki's home page (drives the Set/Clear Home Page menu item).
     /// Set by `PagesListView.updateNSViewController` from the session descriptor.
     var homePageID: PageID?

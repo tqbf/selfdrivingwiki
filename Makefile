@@ -248,7 +248,7 @@ run: install
 # through the (read-only) extension's `deleteItem` and is rejected.
 #
 # The one CLI-drivable fix is the app's own `WIKIFS_REENUMERATE=1` hatch
-# (FileProviderSpike.swift `registerDomain`): read once at launch, it calls
+# (FileProviderFacade.swift `registerDomain`): read once at launch, it calls
 # `NSFileProviderManager.remove(domain)` for each wiki before re-adding it —
 # tearing down and rebuilding the whole projection, which forces a full
 # re-fetch. `open --env` (macOS 14+) sets that var for the freshly-launched
@@ -261,7 +261,7 @@ run: install
 # default `run`/`install` behavior because a full domain reset re-downloads
 # everything and would slow down routine iteration unrelated to rendering
 # changes. The permanent, no-flag-needed fix for a SHIPPED rendering-contract
-# change is bumping `FileProviderSpike.currentSchemaVersion`, which resets
+# change is bumping `FileProviderFacade.currentSchemaVersion`, which resets
 # every user's domain automatically on next launch (see its doc comment) —
 # use `reload` here to verify, then decide separately whether the change
 # warrants that bump.

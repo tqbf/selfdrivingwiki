@@ -8,7 +8,7 @@ import WikiFSCore
 /// instant selection + native double-click.
 struct PagesContainerView: View {
     @Bindable var store: WikiStoreModel
-    let fileProvider: FileProviderSpike
+    let fileProvider: FileProviderFacade
     /// The per-active-wiki session (store + launchers + descriptor).
     var session: WikiSession
     /// App-scoped registry — used for `setHomePage` persistence.

@@ -22,7 +22,7 @@ struct RootView: View {
     var session: WikiSession
     /// App-scoped registry: wiki list + active id + create/select/delete.
     @Bindable var registry: WikiRegistryClient
-    let fileProvider: FileProviderSpike
+    let fileProvider: FileProviderFacade
 
     var body: some View {
         ContentView(

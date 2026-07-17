@@ -1,6 +1,6 @@
 import Foundation
 
-// `ResourceKind` (and the `Resource` / `ChangeTokenContributor` abstractions)
+// `ResourceKind` (and the `ChangeTokenContributor` abstraction)
 // now live in `Resource.swift` (slice 2b) next to the access layer that owns
 // them; the bus is a consumer of kinds, not their home.
 

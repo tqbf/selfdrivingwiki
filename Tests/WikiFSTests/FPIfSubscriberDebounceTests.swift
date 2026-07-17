@@ -4,7 +4,7 @@ import Foundation
 
 /// Integration tests for the File-Provider subscriber seam (AC.4, AC.7): a burst
 /// of store events collapses to a single FP signal through the bus + the pure
-/// `ChangeCoalescer`. This is exactly how `FileProviderSpike.subscribeBus(for:bus:)`
+/// `ChangeCoalescer`. This is exactly how `FileProviderFacade.subscribeBus(for:bus:)`
 /// wires the active store's bus (a real `Task.sleep` scheduler in production); a
 /// manual scheduler stands in for the window so the collapse is asserted
 /// deterministically (no real File Provider domain is touched — that path is
@@ -36,7 +36,7 @@ struct FPIfSubscriberDebounceTests {
 
     /// `@MainActor` holder for the coalescer so the `@MainActor @Sendable` bus
     /// handler can reach it across the Task hop without a data-race (mirrors how
-    /// production reaches it through the `@MainActor` `FileProviderSpike` `self`).
+    /// production reaches it through the `@MainActor` `FileProviderFacade` `self`).
     /// Also counts deliveries so the test can deterministically await the async
     /// bus dispatch before firing the fake scheduler.
     private final class SignalBox {
@@ -69,7 +69,7 @@ struct FPIfSubscriberDebounceTests {
 
     /// Wire the production seam: a store's bus → a `ChangeCoalescer` (with the
     /// given scheduler) whose flush records the wikiID, mirroring
-    /// `FileProviderSpike.subscribeBus(for:bus:)`.
+    /// `FileProviderFacade.subscribeBus(for:bus:)`.
     private func wireSeam(scheduler: ManualScheduler, flushes: @escaping (String) -> Void) throws -> (SQLiteWikiStore, WikiEventBus, SignalBox) {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
         let bus = WikiEventBus(wikiID: "W")

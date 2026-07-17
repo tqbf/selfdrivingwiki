@@ -10,7 +10,7 @@ import WikiFSCore
 /// computed array.
 struct SourcesContainerView: View {
     @Bindable var store: WikiStoreModel
-    let fileProvider: FileProviderSpike
+    let fileProvider: FileProviderFacade
     /// The per-active-wiki session (store + launchers + descriptor).
     var session: WikiSession
     @Environment(QueueActivityTracker.self) private var tracker

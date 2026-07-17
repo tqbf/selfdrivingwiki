@@ -5,7 +5,7 @@ import Foundation
 /// These are NOT `NSFileProviderItemIdentifier` values (that would drag a
 /// `FileProvider` dependency into the core library) — they are just the raw
 /// string keys. The File Provider extension (`Projection.Identity`) and the app
-/// (`FileProviderSpike.signalChange()`) BOTH reference these so the two sides
+/// (`FileProviderFacade.signalChange()`) BOTH reference these so the two sides
 /// can never silently drift apart: signaling the wrong container id would leave
 /// the page list stale even after a correct enumerator fix.
 public enum WikiFSContainerID {
@@ -67,7 +67,7 @@ public enum WikiFSContainerID {
     }
 
     /// Prefix for a single source's `by-name` LEAF identifier. Shared with the
-    /// extension so `FileProviderSpike.resolveSourceByNameURL(id:)` and
+    /// extension so `FileProviderFacade.resolveSourceByNameURL(id:)` and
     /// `Projection.Identity.sourceByName(_:)` use the same identifier.
     public static let sourceByNamePrefix = "source-by-name:"
 

@@ -25,7 +25,7 @@ final class WikiChangeBridge {
     static let coalesceWindow: Duration = .milliseconds(250)
 
     private let registry: WikiRegistryClient
-    private let fileProvider: FileProviderSpike
+    private let fileProvider: FileProviderFacade
     /// Returns all live sessions whose `wikiID` matches — injected from the
     /// app via `SessionManager`. Replaces the former `weak var session`
     /// (which held a single session). In multi-window, a `wikictl` write to
@@ -40,7 +40,7 @@ final class WikiChangeBridge {
     /// idempotent — it only adds newly-registered wikis and drops removed ones.
     private var observedWikiIDs: Set<String> = []
 
-    init(registry: WikiRegistryClient, fileProvider: FileProviderSpike) {
+    init(registry: WikiRegistryClient, fileProvider: FileProviderFacade) {
         self.registry = registry
         self.fileProvider = fileProvider
         self.coalescer = ChangeCoalescer(

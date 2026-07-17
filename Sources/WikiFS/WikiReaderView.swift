@@ -32,7 +32,7 @@ struct WikiReaderView: View {
     let store: WikiStoreModel
     /// The File Provider spike, for "Copy File Path" on wiki links. Only page
     /// readers (which own a spike) pass it; `nil` elsewhere omits that item.
-    var fileProvider: FileProviderSpike? = nil
+    var fileProvider: FileProviderFacade? = nil
     /// Opens the "Add from URL" sheet pre-filled with a URL — injected via the
     /// `\.addURLHandler` environment value, feeding the http(s) "Add as Source"
     /// context-menu item through `WikiLinkMenuNSItems`.
@@ -333,7 +333,7 @@ final class WikiReaderWebView: WKWebView {
     /// Existence/navigation state for the custom menu items, set by
     /// `WikiReaderRep` from the view's store / fileProvider / addURLHandler.
     var store: WikiStoreModel?
-    var fileProvider: FileProviderSpike?
+    var fileProvider: FileProviderFacade?
     var currentSelection: WikiSelection?
     var addURLHandler: ((String) -> Void)?
     var addBookmarkHandler: ((BookmarkTargetPickerContext) -> Void)?
@@ -741,7 +741,7 @@ private final class LinkHoverMessageHandler: NSObject, WKScriptMessageHandler {
 internal struct WikiReaderRep: NSViewRepresentable {
     let markdown: String
     let store: WikiStoreModel
-    let fileProvider: FileProviderSpike?
+    let fileProvider: FileProviderFacade?
     let readerZoom: Double
     /// The selection this reader renders — used to match a pending scroll anchor.
     let currentSelection: WikiSelection?

@@ -11,7 +11,7 @@ struct PageDetailView: View {
     @Bindable var launcher: AgentLauncher
     /// The per-active-wiki session (store + launchers + descriptor).
     var session: WikiSession
-    let fileProvider: FileProviderSpike
+    let fileProvider: FileProviderFacade
     @State private var isEditing = false
     /// Pending scroll-to-heading for the editor (outline click while editing).
     @State private var editorScrollRequest: EditorScrollRequest?

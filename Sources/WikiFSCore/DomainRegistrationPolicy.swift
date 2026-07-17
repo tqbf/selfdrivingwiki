@@ -7,7 +7,7 @@ import Foundation
 /// and RETRY a bounded number of times before giving up).
 ///
 /// PURE + injectable, mirroring `PathPreflight`: the app layer
-/// (`FileProviderSpike`) owns the side effects (`NSFileProviderManager.add`,
+/// (`FileProviderFacade`) owns the side effects (`NSFileProviderManager.add`,
 /// `.domains()`, `signalEnumerator`, the async backoff sleep); THIS type owns
 /// only the "is it registered? / should we retry? / have we exhausted our
 /// attempts?" arithmetic, so that logic is unit-tested without importing

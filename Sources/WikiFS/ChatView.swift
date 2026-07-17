@@ -25,7 +25,7 @@ struct ChatView: View {
     @Bindable var launcher: AgentLauncher
     /// The per-active-wiki session (store + launchers + descriptor).
     var session: WikiSession
-    let fileProvider: FileProviderSpike
+    let fileProvider: FileProviderFacade
 
     @State private var showsInternals = false
     @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: ChatMetrics.composerFont)

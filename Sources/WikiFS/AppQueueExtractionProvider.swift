@@ -17,13 +17,13 @@ import WikiFSEngine
 /// session manager is constructed, the box is updated to look up real sessions.
 /// The provider captures the box (a reference type), so it sees the update.
 
-/// A mutable, `@MainActor`-isolated box for a `FileProviderSpike` reference.
+/// A mutable, `@MainActor`-isolated box for a `FileProviderFacade` reference.
 /// Used by `AppQueueIngestionProvider` to access the file provider without
 /// needing it at construction time (the app's `@State fileProvider` is
 /// initialized via its property initializer, not in `init()`).
 @MainActor
 final class FileProviderBox: @unchecked Sendable {
-    var provider: FileProviderSpike?
+    var provider: FileProviderFacade?
 }
 
 @MainActor
