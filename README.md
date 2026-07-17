@@ -24,7 +24,9 @@ workflows, and the mental model. It does not cover internals or architecture.
 
 ### The fundamental workflow
 
-![Workflow](./user-guide/images/cycle.svg)
+<center>
+<img src="user-guide/images/cycle.svg" alt="Workflow" style="max-width: 50%; height: auto" />
+</center>
 
 1. **[Collect](sources-and-ingestion.md#adding-sources)** — Drag in PDFs, paste URLs, import from Zotero, or drop a folder of notes.
 2. **[Ingest](sources-and-ingestion.md#ingestion)** — Tell the agent to process sources. It reads them, extracts key information, and writes pages with cross-references.
