@@ -34,6 +34,7 @@ load-bearing for the app to function.
 
 | Doc | What it covers |
 | --- | --- |
+| [`docs/user-guide/`](docs/user-guide/README.md) | **User guide.** What the user sees and does — not architecture. Covers concepts, getting started, the interface, pages & links, sources & ingestion, chatting with the agent, bookmarks/search/navigation, multiple wikis, settings, the queue, and keyboard shortcuts. Start here for user-facing documentation. |
 | [`README.md`](README.md) | **Start here (new developers).** What Self Driving Wiki is, the non-negotiable read-only-mount / write-via-`wikictl` invariant, quick start (`make` targets + the runtime gotchas), repo layout, and a tour of how it works. |
 | [`plans/architecture.md`](plans/architecture.md) | **The system map.** Components/targets, the per-wiki SQLite data model + migration ladder + `changeToken()`, the File Provider projection, the read/write split + change bridge, the `claude -p` operations (Ingest tiering, Query, Lint), URL ingest, and the key invariants/gotchas. Read after the README to go deep. |
 | [`plans/INITIAL.md`](plans/INITIAL.md) | Original full product/architecture plan (milestones, schema, File Provider design, definition of done). Source of truth for *what we're building*. |
