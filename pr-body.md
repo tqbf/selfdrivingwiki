@@ -1,42 +1,65 @@
-## Summary
+## Design: ACP session efficiency (issue #525)
 
-Remove ~28 redundant per-mutator `reload*()` calls from `WikiStoreModel.swift`. After the #129 event-bus landed (Phase E), the model subscribes to ALL `ResourceChangeEvent`s via `subscribeToChanges()`, which calls `reloadFromStore()` on every event. The bus delivers async (`Task { @MainActor in ... }`), so the manual reload doesn't replace the bus-driven one — it **doubles** it: 8 table scans + 2 history-prune passes per save where 4 suffice.
+Design document for optimizing the ACP session lifecycle in the multi-phase
+ingest pipeline. **This is a research/design PR — no code changes.**
 
-## Changes
+### Problem
 
-### Production code (`WikiStoreModel.swift`)
+`runACPIngestPlannerExecutors` spawns a new subprocess per phase (planner,
+each executor, finalizer) — 7 complete lifecycles for a 5-source ingest, each
+with ~2–4s of launch/initialize/authenticate/newSession/setModel overhead =
+**12–24s wasted** on process plumbing.
 
-Removed `reloadSummaries()`, `reloadSources()`, `reloadBookmarkNodes()`, and `reloadChats()` calls from:
-- **Page mutators:** `save()`, `newPage()`, `newPageInNewTab()`, `rename()`, `delete()`, `preflightLint()`
-- **Source mutators:** `addFiles()`, `addURL()` (all paths), `addSource()`, `ingestFromZotero()`, `importFromMarkdownFolder()`, `renameSource()`, `deleteSource()`, `performRefresh()`
-- **Bookmark mutators:** `createFolder()`, `addPageRef()`, `addSourceRef()`, `addChatRef()`, `renameBookmarkNode()`, `deleteBookmarkNode()`, `moveBookmarkNode()`
-- **Chat mutators:** `startChat()`, `rollbackChatCreation()`, `appendChatEvents()`, `renameChat()`, `updateChatSummary()`, `deleteChat()`
+The swift-acp SDK already exposes a rich session lifecycle we don't use:
+`closeSession` (free context without killing subprocess), `resumeSession`
+(crash recovery — our `resume()` returns `nil`), `forkSession` (branch
+conversation), `listSessions`.
 
-### Exceptions kept
+### Design: four incremental phases
 
-- **`agentRunEnded()`** (line ~1603): still calls `reloadFromStore()` — legit exception, updates run counts and is not driven by store events.
-- **`pageSortOrder.didSet`** and **`init`**: not mutators — sort change and initial load.
-- **`startChat()`**: instead of `reloadChats()`, inserts the single new row directly via `chats.insert(chat, at: 0)` — the immediate caller (`retargetActiveTabToChat → retargetTab → tabTitle`) reads `chats` synchronously.
-- **Mutators that `openTab(...)` the just-created row** (8 sites): the bus reload is async, but `tabTitle(for:)` reads the `summaries`/`sources` arrays synchronously. Fixed by passing the known title explicitly to `openTab(_:title:)` so `tabTitle` is never called, and capturing `effectiveName` from the returned `SourceSummary` for source-creating mutators.
+1. **Warm subprocess** — one `launch`+`initialize` at ingest start, per-phase
+   `session/new`+`session/close` (without `terminate`), one `terminate` at the
+   end. New `ACPBackend.closeSession()` method. Eliminates 6 subprocess
+   spawn/teardown cycles. Uses only existing SDK methods.
 
-### Test fixes
+2. **`session/resume` crash recovery** — detect subprocess death, spawn a new
+   one, `resumeSession` to restore context without history replay. Fall back
+   to `session/load` (O(history)) or fresh `session/new`. Requires persisting
+   the ACP `sessionId` in the QueueItem payload.
 
-Tests without an event bus rely on the (now-removed) synchronous reloads. Fixed by adding explicit `model.reloadFromStore()` (or `model.reloadChats()`/`model.reloadBookmarkNodes()`) after mutations before checking model arrays. The bus itself is tested separately in `WikiChangeBridgeBusTests` / `WikiEventBusTests` with proper async polling.
+3. **`session/fork` for executors** — fork the planner session so executors
+   inherit source-layout understanding without reasoning noise. Falls back to
+   fresh sessions if fork unsupported.
 
-## Performance impact
+4. **Parallel executors** — `withTaskGroup` for concurrent sessions on one
+   subprocess (or a pool fallback), plus context monitoring via `usage_update`
+   notifications (proactive artifact write at ~64%, close+fresh at ~80%).
 
-Each local mutation that previously triggered:
-- 1 synchronous reload (4 table scans + history prune) from the mutator
-- 1 async reload (4 table scans + prune + render-context rebuild) from the bus
+### Also covers
 
-Now triggers only the async bus-driven reload. **~50% reduction in table scans per mutation.**
+- Context-benefit matrix (warm subprocess always; warm sessions only within
+  context-beneficial boundaries — e.g., a single source extraction)
+- Budget/cost tracking integration (`UsageUpdate.cost` and
+  `SessionPromptResponse.usage` — currently discarded, ties to #528)
+- Interaction analysis with the generation gate, `stopAgent`, and the watchdog
+- Risk table with mitigations (silent subprocess death, concurrent sessions,
+  context window exhaustion)
+- Implementation sequencing with dependency graph
 
-## Test plan
+### Verified against
 
-- [x] `swift build` passes
-- [x] Fast test tier passes (2438 tests, 0 failures):
-  ```
-  swift test --skip 'EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests|SQLiteStatementLifecycleIntegrationTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|ChatSummaryTests|ProjectionTreeTests'
-  ```
+Confirmed all SDK method signatures and types against
+`wsargent/swift-acp` v0.2.0+ source (`Client.swift`, `Capabilities.swift`,
+`Updates.swift`, `Responses.swift`, `Session.swift`):
+`closeSession`, `resumeSession`, `forkSession`, `listSessions`, `loadSession`,
+`terminate`, `processIdentifier`, `stderrLines`;
+`SessionCapabilities` sub-capabilities; `UsageUpdate` with
+`used`/`size`/`cost`; `SessionPromptResponse` with `usage: Usage?`.
 
-Fixes #491
+### Files
+
+- `plans/acp-session-efficiency.md` — the design document (new)
+- `PLAN.md` — documentation index entry (updated)
+- `PROGRESS.md` — progress log entry (updated)
+
+Closes #525 (design).
