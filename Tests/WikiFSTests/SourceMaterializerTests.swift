@@ -397,8 +397,8 @@ struct SourceMaterializerTests {
         let agentFiles = [
             "Sources/WikiFSCore/OperationCommand.swift",
             "Sources/WikiFSCore/AgentCommandConfig.swift",
-            "Sources/WikiFSCore/WikiOperation.swift",
-            "Sources/WikiFSCore/IngestWriteRule.swift",
+            "Sources/WikiFSCore/Core/WikiOperation.swift",
+            "Sources/WikiFSCore/Sources/IngestWriteRule.swift",
         ]
         let repoRoot = try #require(Self.locateRepoRoot())
         var hits: [String] = []
@@ -411,7 +411,7 @@ struct SourceMaterializerTests {
             }
         }
         // Also check the prompt layer the agent sees (SystemPrompt + GeneratedPrompts).
-        for promptFile in ["Sources/WikiFSCore/SystemPrompt.swift", "Sources/WikiFSCore/GeneratedPrompts.swift"] {
+        for promptFile in ["Sources/WikiFSCore/Core/SystemPrompt.swift", "Sources/WikiFSCore/GeneratedPrompts.swift"] {
             let path = repoRoot.appendingPathComponent(promptFile)
             guard FileManager.default.fileExists(atPath: path.path) else { continue }
             let content = try String(contentsOf: path, encoding: .utf8)
