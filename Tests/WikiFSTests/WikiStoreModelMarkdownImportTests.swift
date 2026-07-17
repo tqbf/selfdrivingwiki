@@ -268,7 +268,7 @@ struct WikiStoreModelMarkdownImportTests {
         let head = model.processedMarkdownHead(for: source)
         #expect(head != nil)
         #expect(head?.content == "# Hello")
-        #expect(head?.origin == "source")
+        #expect(head?.origin == .source)
 
         // Chain row was created.
         #expect(try store.hasProcessedMarkdown(sourceID: source.id))

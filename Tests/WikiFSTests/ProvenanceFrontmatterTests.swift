@@ -70,7 +70,7 @@ import Foundation
     // MARK: - Source markdown frontmatter
 
     private func sampleVersion(
-        origin: String = "extraction",
+        origin: SourceMarkdownOrigin = .extraction,
         technique: String? = "anthropic",
         note: String? = nil
     ) -> SourceMarkdownVersion {
@@ -121,7 +121,7 @@ import Foundation
     }
 
     @Test func sourceFrontmatterUserEdit() {
-        let ver = sampleVersion(origin: "user", technique: nil)
+        let ver = sampleVersion(origin: .user, technique: nil)
         let md = SourceMarkdownFormat.fileContent(for: ver)
         #expect(md.contains("origin: user"))
         #expect(!md.contains("technique:"))

@@ -20,9 +20,9 @@ struct Phase6PinningModelTests {
         let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
-        _ = try store.appendProcessedMarkdown(sourceID: source.id, content: "v1", origin: "t", note: nil)
-        _ = try store.appendProcessedMarkdown(sourceID: source.id, content: "v2", origin: "t", note: nil)
-        let v3 = try store.appendProcessedMarkdown(sourceID: source.id, content: "v3", origin: "t", note: nil)
+        _ = try store.appendProcessedMarkdown(sourceID: source.id, content: "v1", origin: .extraction, note: nil)
+        _ = try store.appendProcessedMarkdown(sourceID: source.id, content: "v2", origin: .extraction, note: nil)
+        let v3 = try store.appendProcessedMarkdown(sourceID: source.id, content: "v3", origin: .extraction, note: nil)
         model.reloadFromStore()
         return (model, source.id, v3.id)
     }

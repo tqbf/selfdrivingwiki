@@ -79,7 +79,7 @@ struct ProjectionTests {
             sourceID: PageID(rawValue: sourceID),
             parentID: nil,
             content: "# Processed Report\n\nThis is the extracted markdown.",
-            origin: "extraction",
+            origin: .extraction,
             note: nil,
             createdAt: createdAt
         )
@@ -131,7 +131,7 @@ struct ProjectionTests {
             sourceID: PageID(rawValue: sourceID),
             parentID: nil,
             content: "Extracted content from Trip Report.",
-            origin: "extraction",
+            origin: .extraction,
             note: nil,
             createdAt: createdAt
         )

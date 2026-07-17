@@ -25,6 +25,14 @@ import Foundation
 ///   * unmatched / malformed brackets are ignored.
 public enum WikiLinkParser {
 
+    /// The role of a source-link edge (`source_links.role`): a citation
+    /// (`[[source:…]]`) or an embed (`![[source:…]]`). Typed (not a raw
+    /// string) so the SQL read/write seam can't silently mis-bind (issue #501).
+    public enum LinkRole: String, Sendable, CaseIterable {
+        case cite
+        case embed
+    }
+
     /// A single parsed link reference: the kind + the bare target (prefix-stripped)
     /// and the display text to record in the link tables.
     public struct ParsedLink: Equatable, Sendable {
@@ -244,7 +252,8 @@ public enum WikiLinkParser {
             // Phase 6: the pin is part of the dedup key so `[[source:X@v3]]` and
             // `[[source:X@v5]]` are distinct occurrences (matches the
             // `source_links_edge` pin-distinct semantics, §4.4).
-            let dedupKey = "\(kind.rawValue):\(raw):\(isEmbed ? "embed" : "cite"):\(pin ?? "")"
+            let role = isEmbed ? WikiLinkParser.LinkRole.embed : .cite
+            let dedupKey = "\(kind.rawValue):\(raw):\(role.rawValue):\(pin ?? "")"
             guard seen.insert(dedupKey).inserted else { continue }
 
             let linkText: String

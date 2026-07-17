@@ -1965,7 +1965,7 @@ public final class WikiStoreModel {
                 provenance: prov, role: .primary)
             let markdown = String(data: transcript.data, encoding: .utf8) ?? ""
             try store.appendProcessedMarkdown(
-                sourceID: summary.id, content: markdown, origin: "transcript", note: nil, technique: nil)
+                sourceID: summary.id, content: markdown, origin: .transcript, note: nil, technique: nil)
             // No manual reload — the bus fires reloadFromStore() async after the
             // store write. The tab title is passed explicitly so tabTitle (which
             // reads `sources`) needs no synchronous freshness.
@@ -2163,7 +2163,7 @@ public final class WikiStoreModel {
                 sourceID: id, data: data, mimeType: nil, provenance: prov)
         case .derivedMarkdown(let content):
             try store.appendProcessedMarkdown(
-                sourceID: id, content: content, origin: "transcript", note: nil, technique: nil)
+                sourceID: id, content: content, origin: .transcript, note: nil, technique: nil)
         }
         // No manual reload — the bus fires reloadFromStore() async after the
         // version append.
@@ -2405,7 +2405,7 @@ public final class WikiStoreModel {
               let text = String(data: bytes, encoding: .utf8) else { return nil }
         do {
             return try store.appendProcessedMarkdown(
-                sourceID: file.id, content: text, origin: "source", note: nil, technique: nil)
+                sourceID: file.id, content: text, origin: .source, note: nil, technique: nil)
         } catch {
             // #475/#492: seeding v1 from verbatim bytes is a persistence write;
             // swallowing the throw silently drops the first version with no trace.
@@ -2484,7 +2484,7 @@ public final class WikiStoreModel {
     public func saveProcessedMarkdown(for sourceID: PageID, content: String) -> SourceMarkdownVersion? {
         do {
             return try store.appendProcessedMarkdown(
-                sourceID: sourceID, content: content, origin: "user", note: nil, technique: nil)
+                sourceID: sourceID, content: content, origin: .user, note: nil, technique: nil)
         } catch {
             // #475/#492: the user's source-markdown edit is lost if this write
             // throws; log so it's visible in Console.app instead of vanishing.

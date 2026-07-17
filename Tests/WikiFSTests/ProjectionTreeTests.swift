@@ -39,7 +39,7 @@ struct ProjectionTreeTests {
         let pdfSource = try store.addSource(
             filename: "doc.pdf", data: Data("%PDF-1.4 fake".utf8), mimeType: "application/pdf")
         _ = try store.appendProcessedMarkdown(
-            sourceID: pdfSource.id, content: "# Extracted", origin: "test", note: nil)
+            sourceID: pdfSource.id, content: "# Extracted", origin: .extraction, note: nil)
         let pages = try store.listAllPagesOrderedByID()   // ULID order
         let projection = Projection(wikiID: "proj-tree-\(UUID().uuidString)", databaseURL: url)
         return Seeded(projection: projection, store: store, pages: pages,
@@ -98,7 +98,7 @@ struct ProjectionTreeTests {
         let pdf = try store.addSource(
             filename: "paper.pdf", data: Data("%PDF fake".utf8), mimeType: "application/pdf")
         _ = try store.appendProcessedMarkdown(
-            sourceID: pdf.id, content: "# Paper", origin: "test", note: nil)
+            sourceID: pdf.id, content: "# Paper", origin: .extraction, note: nil)
         let src = try store.createPage(title: "Home")
         try store.updatePage(
             id: src.id, title: "Home",

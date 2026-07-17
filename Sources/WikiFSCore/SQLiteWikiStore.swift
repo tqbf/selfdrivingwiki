@@ -1857,7 +1857,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 // is the provenance; stamping an extract activity would mislabel a
                 // manual edit as a backend extraction (activity_id stays NULL).
                 var activityID: String? = nil
-                if row.origin == "extraction" {
+                if SourceMarkdownOrigin(rawValue: row.origin) == .extraction {
                     let id = ULID.generate()
                     insActivity.reset()
                     try insActivity.bind(id, at: 1)
@@ -3513,7 +3513,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                 "SELECT status FROM workspaces WHERE id = ?1;")
             statusStmt.reset()
             try statusStmt.bind(workspaceID, at: 1)
-            guard try statusStmt.step(), statusStmt.text(at: 0) == "open" else {
+            guard try statusStmt.step(), WorkspaceStatus(rawValue: statusStmt.text(at: 0)) == .open else {
                 throw WikiStoreError.unexpected("workspace \(workspaceID) is not open")
             }
             statusStmt.reset()
@@ -4310,7 +4310,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
                     "SELECT status FROM workspaces WHERE id = ?1;")
                 statusStmt.reset()
                 try statusStmt.bind(workspaceID, at: 1)
-                guard try statusStmt.step(), statusStmt.text(at: 0) == "open" else {
+                guard try statusStmt.step(), WorkspaceStatus(rawValue: statusStmt.text(at: 0)) == .open else {
                     throw WikiStoreError.unexpected("workspace \(workspaceID) is not open")
                 }
                 statusStmt.reset()
@@ -4976,7 +4976,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// Returns the resolved smv id, or nil when the edge has no pin (NULL) or
     /// doesn't exist. Phase 6: test/diagnostic accessor for pin write-back.
     public func sourceLinkPin(from pageID: PageID, to sourceID: PageID,
-                              role: String = "cite") throws -> PageID? {
+                              role: WikiLinkParser.LinkRole = .cite) throws -> PageID? {
         lock.lock(); defer { lock.unlock() }
         let stmt = try statement("""
         SELECT pinned_version_id FROM source_links
@@ -4985,7 +4985,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         defer { stmt.reset() }
         try stmt.bind(pageID.rawValue, at: 1)
         try stmt.bind(sourceID.rawValue, at: 2)
-        try stmt.bind(role, at: 3)
+        try stmt.bind(role.rawValue, at: 3)
         guard try stmt.step() else { return nil }
         return sqlite3_column_type(stmt.handle, 0) == SQLITE_NULL
             ? nil : PageID(rawValue: stmt.text(at: 0))
@@ -8159,7 +8159,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             let id = PageID(rawValue: stmt.text(at: 0))
             guard let bytes = try? sourceContent(id: id),
                   let text = String(data: bytes, encoding: .utf8) else { continue }
-            _ = try? appendProcessedMarkdown(sourceID: id, content: text, origin: "source", note: nil)
+            _ = try? appendProcessedMarkdown(sourceID: id, content: text, origin: .source, note: nil)
             seeded += 1
         }
         if seeded > 0 { DebugLog.store("seedNativeMarkdownSources: seeded \(seeded) source(s)") }
@@ -8387,7 +8387,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             sourceID: PageID(rawValue: stmt.text(at: 1)),
             parentID: parentID,
             content: stmt.text(at: 3),
-            origin: stmt.text(at: 4),
+            origin: SourceMarkdownOrigin(rawValue: stmt.text(at: 4)) ?? .extraction,
             note: textOrNull(5),
             createdAt: Date(timeIntervalSince1970: stmt.double(at: 6)),
             activityID: textOrNull(7),
@@ -8689,7 +8689,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
     @discardableResult
     public func appendProcessedMarkdown(sourceID: PageID, content: String,
-                                        origin: String, note: String?,
+                                        origin: SourceMarkdownOrigin, note: String?,
                                         technique: String? = nil) throws -> SourceMarkdownVersion {
         try mutate(event: { _ in localEvent(.source, id: sourceID.rawValue, change: .updated) }) {
         let id = PageID(rawValue: ULID.generate())
@@ -8709,7 +8709,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         try stmt.bind(id.rawValue, at: 1)
         try stmt.bind(sourceID.rawValue, at: 2)
         if let parentID { try stmt.bind(parentID.rawValue, at: 3) }
-        try stmt.bind(origin, at: 4)
+        try stmt.bind(origin.rawValue, at: 4)
         if let note { try stmt.bind(note, at: 5) }
         try stmt.bind(now.timeIntervalSince1970, at: 6)
         try stmt.bind(blobHash, at: 7)
@@ -8812,7 +8812,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
         return SourceMarkdownVersion(
             id: id, sourceID: sourceID, parentID: parentID,
-            content: content, origin: "extraction", note: note, createdAt: now,
+            content: content, origin: .extraction, note: note, createdAt: now,
             activityID: storedActivityID, sourceVersionID: resolvedSourceVersionID,
             blobHash: storedBlobHash, mimeType: "text/markdown",
             technique: backend.rawValue
@@ -8861,7 +8861,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             // append-copy path (rare; only pre-v21 rows that escaped backfill).
             return try appendProcessedMarkdown(
                 sourceID: sourceID, content: targetVersion.content,
-                origin: "revert", note: "revert to \(versionID.rawValue)")
+                origin: .revert, note: "revert to \(versionID.rawValue)")
         }
         // All values extracted — release the read snapshot before the write
         // transaction so `target` is not left busy through BEGIN IMMEDIATE (#332).
@@ -8901,7 +8901,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
 
         return SourceMarkdownVersion(
             id: id, sourceID: sourceID, parentID: parentID,
-            content: targetVersion.content, origin: "revert",
+            content: targetVersion.content, origin: .revert,
             note: "revert to \(versionID.rawValue)", createdAt: now,
             activityID: targetVersion.activityID,
             sourceVersionID: targetVersion.sourceVersionID,

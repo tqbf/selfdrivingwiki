@@ -266,7 +266,7 @@ struct SQLiteWikiStoreTests {
 
         // Append processed markdown — smvCount goes 0 → 1.
         _ = try store.appendProcessedMarkdown(
-            sourceID: source.id, content: "# Extracted", origin: "test", note: nil)
+            sourceID: source.id, content: "# Extracted", origin: .extraction, note: nil)
         let token2 = try store.changeToken()
         #expect(token2.sourceMarkdownVersions == 1)
         // No other source fold moved.
@@ -275,7 +275,7 @@ struct SQLiteWikiStoreTests {
 
         // Append another version — smvCount advances again.
         _ = try store.appendProcessedMarkdown(
-            sourceID: source.id, content: "# Edited", origin: "test", note: "edit")
+            sourceID: source.id, content: "# Edited", origin: .extraction, note: "edit")
         let token3 = try store.changeToken()
         #expect(token3.sourceMarkdownVersions == 2)
 
@@ -307,7 +307,7 @@ struct SQLiteWikiStoreTests {
 
         // Append markdown for source a only.
         let v1 = try store.appendProcessedMarkdown(
-            sourceID: a.id, content: "# A", origin: "test", note: nil)
+            sourceID: a.id, content: "# A", origin: .extraction, note: nil)
         var heads = try store.processedMarkdownHeadsBySource()
         #expect(heads.count == 1)
         #expect(heads[a.id.rawValue]?.id == v1.id)
@@ -315,7 +315,7 @@ struct SQLiteWikiStoreTests {
 
         // Append markdown for source b.
         let v2 = try store.appendProcessedMarkdown(
-            sourceID: b.id, content: "# B", origin: "test", note: nil)
+            sourceID: b.id, content: "# B", origin: .extraction, note: nil)
         heads = try store.processedMarkdownHeadsBySource()
         #expect(heads.count == 2)
         #expect(heads[a.id.rawValue]?.id == v1.id)
@@ -323,7 +323,7 @@ struct SQLiteWikiStoreTests {
 
         // Append a new head for source a — only that source's entry changes.
         let v3 = try store.appendProcessedMarkdown(
-            sourceID: a.id, content: "# A Edited", origin: "test", note: "edit")
+            sourceID: a.id, content: "# A Edited", origin: .extraction, note: "edit")
         heads = try store.processedMarkdownHeadsBySource()
         #expect(heads.count == 2)
         #expect(heads[a.id.rawValue]?.id == v3.id)
