@@ -128,34 +128,40 @@ public struct WikiRenderContext: Sendable {
     /// render task — the derived closures never touch the store.
     @MainActor
     public static func build(from store: WikiStoreModel) -> WikiRenderContext {
-        // --- Existence sets (reader lines ~820–846) ---
-        let pageTitles = Set(store.summaries.map { $0.title.lowercased() })
-        let pageIDToName = Dictionary(
-            uniqueKeysWithValues: store.summaries.map { ($0.id, $0.title) })
+        // Build the shared link index from the model's already-fetched rows.
+        // Centralizes source name-variant / loose-key / sibling-image
+        // computation so this and Projection.makeLinkMaps agree on normalization
+        // (#511). Each consumer then adapts the neutral entries to its own shape.
+        let index = WikiLinkIndex.build(
+            pages: store.summaries.map {
+                WikiLinkIndex.PageEntry(id: $0.id.rawValue, title: $0.title) },
+            sources: store.sources.map {
+                WikiLinkIndex.SourceEntry(
+                    id: $0.id.rawValue, filename: $0.filename, ext: $0.ext,
+                    mime: $0.mimeType, displayName: $0.displayName) },
+            chats: store.chats.map {
+                WikiLinkIndex.ChatEntry(id: $0.id.rawValue, title: $0.title) },
+            siblingImages: store.siblingImageResolvers())
 
-        let sourceNames = Set(store.sources.flatMap { source -> [String] in
-            let names = [source.displayName, source.filename].compactMap { $0 }
-            let stripped = names.map { ($0 as NSString).deletingPathExtension }
-            return (names + stripped).map { $0.lowercased() }
-        })
+        // --- Existence sets + id→name dicts (derived from the shared index) ---
+        let pageTitles = Set(index.pages.map { $0.title.lowercased() })
+        let pageIDToName = Dictionary(
+            uniqueKeysWithValues:
+                index.pages.map { (PageID(rawValue: $0.id), $0.title) })
+
+        let sourceNames = index.sourceLowerNameVariants
         let sourceIDToName = Dictionary(
             uniqueKeysWithValues:
-                store.sources.map { ($0.id, $0.displayName ?? $0.filename) })
+                index.sources.map { (PageID(rawValue: $0.id), $0.humanName) })
 
-        let chatTitles = Set(store.chats.map { $0.title.lowercased() })
+        let chatTitles = Set(index.chats.map { $0.title.lowercased() })
         let chatIDToName = Dictionary(
-            uniqueKeysWithValues: store.chats.map { ($0.id, $0.title) })
+            uniqueKeysWithValues:
+                index.chats.map { (PageID(rawValue: $0.id), $0.title) })
 
-        // Lenient tier mirroring resolveSourceByName pass 3: loose keys
-        // (extension + trailing "(…)" stripped) UNIQUE across sources.
-        var looseKeyCounts: [String: Int] = [:]
-        for source in store.sources {
-            let effective = source.displayName ?? source.filename
-            looseKeyCounts[WikiNameRules.looseMatchKey(effective), default: 0] += 1
-        }
-        let uniqueLooseKeys = Set(looseKeyCounts.filter { $0.value == 1 }.keys)
+        let uniqueLooseKeys = index.uniqueSourceLooseKeys
 
-        // --- Embed map (reader lines ~848–873) ---
+        // --- Embed map (reader lines ~848–873; WRC-specific — per-source) ---
         let embedDescriptorMap = store.embedDescriptors()
         var embedMap: [String: WikiLinkMarkdown.SourceEmbedInfo] = [:]
         for source in store.sources {
@@ -171,9 +177,9 @@ public struct WikiRenderContext: Sendable {
             embedMap[source.id.rawValue.lowercased()] = info
         }
 
-        // --- Phase 6 chain + Phase 4 sibling maps ---
+        // --- Phase 6 chain + Phase 4 sibling maps (WRC-specific) ---
         let sourceDerivedChain = store.sourceDerivedChains()
-        let siblingMaps = store.siblingImageResolvers()
+        let siblingMaps = index.siblingImages
 
         return WikiRenderContext(
             pageTitles: pageTitles,
