@@ -20,10 +20,10 @@ public enum OmniboxResult: Identifiable, Hashable, Sendable {
 
     public var id: String {
         switch self {
-        case .page(let p): return "page:\(p.id.rawValue)"
-        case .source(let s): return "source:\(s.id.rawValue)"
-        case .chat(let c): return "chat:\(c.id.rawValue)"
-        case .bookmark(let node, _): return "bookmark:\(node.id)"
+        case .page(let p): return "\(ResourceKind.page.linkPrefix!)\(p.id.rawValue)"
+        case .source(let s): return "\(ResourceKind.source.linkPrefix!)\(s.id.rawValue)"
+        case .chat(let c): return "\(ResourceKind.chat.linkPrefix!)\(c.id.rawValue)"
+        case .bookmark(let node, _): return "\(ResourceKind.bookmark.linkPrefix!)\(node.id)"
         case .ask: return "ask"
         }
     }

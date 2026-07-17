@@ -50,8 +50,12 @@ public enum WikiLinkMarkdown {
     public static let blobScheme = "wiki-blob"
     /// Host for a link whose target resolves to a real page (navigates).
     public static let resolvedHost = "page"
+    /// Host for a link whose target resolves to a real source (navigates).
+    public static let sourceHost = "source"
     /// Host for a link whose target resolves to a real chat (navigates).
     public static let chatHost = "chat"
+    /// Host for a same-page anchor link (scroll, no navigation).
+    public static let anchorHost = "anchor"
     /// Host for a link whose target has no page/source (rendered dimmed, inert).
     public static let unresolvedHost = "missing"
 
@@ -257,7 +261,7 @@ public enum WikiLinkMarkdown {
     public static func target(from url: URL) -> String? {
         guard url.scheme == scheme,
               let host = url.host,
-              host == resolvedHost || host == "source" || host == chatHost || host == unresolvedHost,
+              host == resolvedHost || host == sourceHost || host == chatHost || host == unresolvedHost,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let title = components.queryItems?.first(where: { $0.name == "title" })?.value,
               !title.isEmpty
@@ -273,7 +277,7 @@ public enum WikiLinkMarkdown {
     public static func id(from url: URL) -> PageID? {
         guard url.scheme == scheme,
               let host = url.host,
-              host == resolvedHost || host == "source" || host == chatHost,
+              host == resolvedHost || host == sourceHost || host == chatHost,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let idString = components.queryItems?.first(where: { $0.name == "id" })?.value,
               !idString.isEmpty
@@ -288,7 +292,7 @@ public enum WikiLinkMarkdown {
     public static func pin(from url: URL) -> PageID? {
         guard url.scheme == scheme,
               let host = url.host,
-              host == "source",
+              host == sourceHost,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let pinString = components.queryItems?.first(where: { $0.name == "pin" })?.value,
               !pinString.isEmpty
@@ -300,7 +304,7 @@ public enum WikiLinkMarkdown {
     /// view's `OpenURLAction` to extract the anchor for scroll-to.
     public static func fragment(from url: URL) -> String? {
         guard url.scheme == scheme, let host = url.host,
-              host == resolvedHost || host == "source" || host == chatHost || host == unresolvedHost || host == "anchor"
+              host == resolvedHost || host == sourceHost || host == chatHost || host == unresolvedHost || host == anchorHost
         else { return nil }
         return url.fragment?.removingPercentEncoding
     }
@@ -313,7 +317,7 @@ public enum WikiLinkMarkdown {
         guard url.scheme == scheme, let host = url.host else { return nil }
         switch host {
         case resolvedHost:   return .page     // "page"
-        case "source":       return .source
+        case sourceHost:     return .source   // "source"
         case chatHost:       return .chat     // "chat"
         default:             return nil       // "missing", "anchor", or anything else → inert
         }
@@ -327,7 +331,7 @@ public enum WikiLinkMarkdown {
 
     /// True if `url` is a same-page anchor (`wiki://anchor#…`).
     public static func isSamePageAnchor(_ url: URL) -> Bool {
-        url.scheme == scheme && url.host == "anchor"
+        url.scheme == scheme && url.host == anchorHost
     }
 
     // MARK: - Helpers
@@ -340,7 +344,7 @@ public enum WikiLinkMarkdown {
                                      pinID: PageID? = nil) -> String {
         let host: String
         if resolved {
-            host = kind == .source ? "source" : (kind == .chat ? chatHost : resolvedHost)
+            host = kind == .source ? sourceHost : (kind == .chat ? chatHost : resolvedHost)
         } else {
             host = unresolvedHost
         }

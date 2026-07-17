@@ -1392,7 +1392,7 @@ public final class AgentLauncher {
     /// runs (ingest/lint/query) get `agent:<kind>`. The `WIKI_AUTHOR` env var
     /// carries this into `wikictl`, where an explicit `--author` flag overrides it.
     static func authorForRun(kind: WikiOperation.Kind, chatID: String?) -> String {
-        if let chatID { return "chat:\(chatID)" }
+        if let chatID { return "\(ResourceKind.chat.linkPrefix!)\(chatID)" }
         return "agent:\(kind.rawValue)"
     }
 
@@ -1559,7 +1559,7 @@ public final class AgentLauncher {
                 // originating conversation (resolvable via [[chat:…]]). An explicit
                 // `--author` on `wikictl page upsert` overrides this.
                 if let chatID {
-                    hints["env.WIKI_AUTHOR"] = "chat:\(chatID)"
+                    hints["env.WIKI_AUTHOR"] = "\(ResourceKind.chat.linkPrefix!)\(chatID)"
                 }
                 return hints
             }(),
