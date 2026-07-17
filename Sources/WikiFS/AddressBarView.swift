@@ -453,6 +453,10 @@ struct AddressBarView: View {
         case .chat(let id):
             let title = store.chats.first { $0.id == id }?.title ?? ""
             return title.isEmpty ? "" : "[[chat:\(title)]]"
+        case .connection:
+            // Connections aren't wiki-linkable; the omnibox stays in its
+            // search-first empty state on a connection tab.
+            return ""
         }
     }
 }

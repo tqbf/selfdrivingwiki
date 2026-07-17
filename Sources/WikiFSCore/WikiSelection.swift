@@ -18,4 +18,8 @@ public enum WikiSelection: Hashable, Sendable {
     case bookmark(String)
     /// A persisted agent chat, by id (issue #119).
     case chat(PageID)
+    /// A configured source connection (e.g. Zotero), by connection id. Opens the
+    /// connection's config/workspace tab. Connections are app-wide; the id is the
+    /// `Connection.id` (a ULID/well-known string), so this stays value-typed.
+    case connection(String)
 }

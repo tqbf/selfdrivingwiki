@@ -33,7 +33,7 @@ public protocol Resource: Sendable {
 /// lives next to the `Resource` abstraction that owns it (the bus is one
 /// *consumer* of kinds, not their home).
 public enum ResourceKind: String, Sendable, CaseIterable {
-    case page, source, systemPrompt, wikiIndex, log, bookmark, chat
+    case page, source, systemPrompt, wikiIndex, log, bookmark, chat, connection
 
     /// The SF Symbol name used for this resource kind across every UI surface:
     /// sidebar sections, detail-view headers, the omnibox icon, bookmark row
@@ -48,6 +48,7 @@ public enum ResourceKind: String, Sendable, CaseIterable {
         case .systemPrompt: "doc.text"
         case .wikiIndex:   "book.closed"
         case .log:         "clock.arrow.circlepath"
+        case .connection:  "cable.connector"
         }
     }
 }

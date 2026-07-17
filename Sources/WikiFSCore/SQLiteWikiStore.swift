@@ -26,7 +26,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// final step of `migrate(from:)`. Tests reference this instead of
     /// hardcoding a magic number, so a schema bump doesn't require updating
     /// every test file.
-    public static let currentSchemaVersion = 37
+    public static let currentSchemaVersion = 38
 
     private let db: OpaquePointer
     /// Prepared-statement cache keyed by SQL text; reused via `reset()`.
@@ -628,6 +628,9 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // model recreation between launches. Created here in the fresh path;
         // existing DBs get it via the v36→37 migration step.
         try createWikiMetadataTable()
+        // v38 (per-wiki connections): a `connections` table for Zotero/Folder
+        // connections scoped to this wiki. Purely additive (`IF NOT EXISTS`).
+        try createConnectionsTable()
         try exec("PRAGMA user_version=\(Self.currentSchemaVersion);")
     }
 
@@ -647,6 +650,26 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// The v36→37 migration step: creates the `wiki_metadata` key-value table.
     private func migrateV36ToV37() throws {
         try createWikiMetadataTable()
+    }
+
+    /// The `connections` table (v38): one row per configured connection in this
+    /// wiki. Non-secret config values are stored as a JSON blob in `config`;
+    /// secrets live in the Keychain (see `ConnectionCredentialStore`), keyed by
+    /// `(connectionID, field)`.
+    private func createConnectionsTable() throws {
+        try exec("""
+        CREATE TABLE IF NOT EXISTS connections (
+            id          TEXT PRIMARY KEY,
+            provider_id TEXT NOT NULL,
+            label       TEXT NOT NULL,
+            config      TEXT NOT NULL DEFAULT '{}'
+        );
+        """)
+    }
+
+    /// The v37→38 migration step: creates the `connections` table.
+    private func migrateV37ToV38() throws {
+        try createConnectionsTable()
     }
 
     /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
@@ -1591,8 +1614,18 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         // key-value table for persisting one-time work flags (e.g. the link-
         // reconcile version) so they survive model recreation between launches.
         // Purely additive — `CREATE TABLE IF NOT EXISTS`.
-        if version < Self.currentSchemaVersion {
+        if version < 37 {
             try migrateV36ToV37()
+            try exec("PRAGMA user_version=37;")
+            version = 37
+        }
+
+        // Step 37 → 38 (per-wiki connections): creates a `connections` table so
+        // each wiki owns its Zotero/Folder connections. Purely additive —
+        // `CREATE TABLE IF NOT EXISTS`. No app-wide JSON migration: connections
+        // are per-wiki now; the old `connections.json` is simply abandoned.
+        if version < Self.currentSchemaVersion {
+            try migrateV37ToV38()
             try exec("PRAGMA user_version=\(Self.currentSchemaVersion);")
             version = Self.currentSchemaVersion
         }
@@ -2796,6 +2829,16 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         return stmt.int(at: 0)
     }
 
+    /// The `connections` table's row COUNT, resilient to the table not existing
+    /// yet (a read connection opened against a pre-v38 DB). On any failure
+    /// returns `0`.
+    private func connectionsCount() -> Int64 {
+        guard let stmt = try? statement("SELECT COUNT(*) FROM connections;") else { return 0 }
+        defer { stmt.reset() }
+        guard (try? stmt.step()) == true else { return 0 }
+        return stmt.int(at: 0)
+    }
+
     // MARK: - changeToken contributors (slice 2b)
 
     /// The per-kind contributors whose fragments join into ``changeToken()``.
@@ -2814,6 +2857,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         SourceGraphTokenContributor(),
         BookmarkTokenContributor(),
         ChatTokenContributor(),
+        ConnectionTokenContributor(),
     ]
 
     private struct PagesTokenContributor: ChangeTokenContributor {
@@ -2889,6 +2933,17 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         let kind: ResourceKind = .chat
         func fragment(in store: SQLiteWikiStore) throws -> String {
             "\(store.chatCount()):\(store.chatMessageCount())"
+        }
+    }
+
+    /// Connection fold (v38): the `connections` row count. A create/delete/
+    /// rename bumps the count so the sidebar refreshes. Connections aren't File
+    /// Provider projected, but the token fold keeps the structural invariant
+    /// that every `ResourceKind` contributes a fragment.
+    private struct ConnectionTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .connection
+        func fragment(in store: SQLiteWikiStore) throws -> String {
+            "\(store.connectionsCount())"
         }
     }
 
@@ -7093,6 +7148,70 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             try upd.bind(childID, at: 1)
             try upd.bind(Int64(i), at: 2)
             _ = try upd.step()
+        }
+    }
+
+    // MARK: - Connections (v38 — per-wiki)
+
+    /// List all connections in this wiki, ordered by label.
+    public func listConnections() throws -> [Connection] {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try statement(
+            "SELECT id, provider_id, label, config FROM connections ORDER BY label COLLATE NOCASE;")
+        defer { stmt.reset() }
+        var results: [Connection] = []
+        while try stmt.step() {
+            let id = stmt.text(at: 0)
+            let providerID = stmt.text(at: 1)
+            let label = stmt.text(at: 2)
+            let configJSON = stmt.text(at: 3)
+            let config = (try? JSONDecoder().decode([String: String].self, from: Data(configJSON.utf8))) ?? [:]
+            results.append(Connection(id: id, providerID: providerID, label: label, config: config))
+        }
+        return results
+    }
+
+    /// Insert or replace a connection (by id). Non-secret `config` values are
+    /// serialized to JSON; secrets stay in the Keychain.
+    public func upsertConnection(_ connection: Connection) throws {
+        try mutate(event: { _ in localEvent(.connection, id: connection.id, change: .updated) }) {
+        let configData = try JSONEncoder().encode(connection.config)
+        let configJSON = String(data: configData, encoding: .utf8) ?? "{}"
+        let stmt = try statement("""
+        INSERT INTO connections (id, provider_id, label, config)
+        VALUES (?1, ?2, ?3, ?4)
+        ON CONFLICT(id) DO UPDATE SET
+            provider_id = excluded.provider_id,
+            label       = excluded.label,
+            config      = excluded.config;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(connection.id, at: 1)
+        try stmt.bind(connection.providerID, at: 2)
+        try stmt.bind(connection.label, at: 3)
+        try stmt.bind(configJSON, at: 4)
+        _ = try stmt.step()
+        }
+    }
+
+    /// Delete a connection by id.
+    public func deleteConnection(id: String) throws {
+        try mutate(event: { _ in localEvent(.connection, id: id, change: .deleted) }) {
+        let stmt = try statement("DELETE FROM connections WHERE id = ?1;")
+        defer { stmt.reset() }
+        try stmt.bind(id, at: 1)
+        _ = try stmt.step()
+        }
+    }
+
+    /// Rename a connection's label.
+    public func renameConnection(id: String, to label: String) throws {
+        try mutate(event: { _ in localEvent(.connection, id: id, change: .updated) }) {
+        let stmt = try statement("UPDATE connections SET label = ?2 WHERE id = ?1;")
+        defer { stmt.reset() }
+        try stmt.bind(id, at: 1)
+        try stmt.bind(label, at: 2)
+        _ = try stmt.step()
         }
     }
 

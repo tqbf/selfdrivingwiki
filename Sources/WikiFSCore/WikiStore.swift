@@ -554,6 +554,21 @@ public protocol WikiStore: Sendable {
     /// the old and new parent so positions stay contiguous (0, 1, 2, …).
     func moveBookmarkNode(id: String, toParentID: String?, position: Int) throws
 
+    // MARK: - Connections (v38 — per-wiki)
+
+    /// All connections in this wiki, ordered by label.
+    func listConnections() throws -> [Connection]
+
+    /// Insert or replace a connection (by id). Non-secret `config` values are
+    /// serialized to JSON in the `config` column; secrets stay in the Keychain.
+    func upsertConnection(_ connection: Connection) throws
+
+    /// Delete a connection by id.
+    func deleteConnection(id: String) throws
+
+    /// Rename a connection's label.
+    func renameConnection(id: String, to label: String) throws
+
     // MARK: - Persisted chats (issue #119 phase 1)
 
     /// Create a new chat row. `id` is a fresh ULID; `createdAt`/`updatedAt` both

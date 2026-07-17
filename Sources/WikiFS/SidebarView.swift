@@ -45,7 +45,7 @@ struct SidebarView: View {
     /// The sidebar's sections. Each gets an icon in the selector bar and, when
     /// selected, fills the list below.
     enum SidebarSection: String, CaseIterable, Identifiable {
-        case pages, sources, bookmarks, chats
+        case pages, sources, bookmarks, chats, connections
 
         var id: String { rawValue }
 
@@ -55,6 +55,7 @@ struct SidebarView: View {
             case .sources: "Sources"
             case .bookmarks: "Bookmarks"
             case .chats: "Chats"
+            case .connections: "Connections"
             }
         }
 
@@ -64,6 +65,7 @@ struct SidebarView: View {
             case .sources: ResourceKind.source.systemImageName
             case .bookmarks: ResourceKind.bookmark.systemImageName
             case .chats: ResourceKind.chat.systemImageName
+            case .connections: "cable.connector"
             }
         }
     }
@@ -186,6 +188,8 @@ struct SidebarView: View {
                 })
         case .chats:
             AgentToolsView(store: store, chatLauncher: chatLauncher)
+        case .connections:
+            ConnectionsContainerView(store: store)
         }
     }
 

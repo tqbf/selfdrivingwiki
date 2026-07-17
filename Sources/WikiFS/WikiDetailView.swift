@@ -193,6 +193,8 @@ struct WikiDetailView: View {
                 session: session,
                 fileProvider: fileProvider
             )
+        case .connection(let id):
+            ConnectionDetailView(store: store, connectionID: id)
         }
     }
 

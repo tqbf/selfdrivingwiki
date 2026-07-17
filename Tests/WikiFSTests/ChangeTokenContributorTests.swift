@@ -33,8 +33,8 @@ struct ChangeTokenContributorTests {
     @Test func contributorOrderMatchesHistoricalLayout() throws {
         let kinds = SQLiteWikiStore.tokenContributors.map(\.kind)
         // pages | sources(table) | systemPrompt | log | wikiIndex |
-        // source(derived) | source(graph folds) | bookmark | chat
+        // source(derived) | source(graph folds) | bookmark | chat | connection
         #expect(kinds == [.page, .source, .systemPrompt, .log, .wikiIndex,
-                          .source, .source, .bookmark, .chat])
+                          .source, .source, .bookmark, .chat, .connection])
     }
 }

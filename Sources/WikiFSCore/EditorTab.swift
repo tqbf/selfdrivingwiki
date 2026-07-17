@@ -48,6 +48,11 @@ extension WikiStoreModel {
             return bookmarkNodes.first(where: { $0.id == id })?.label ?? "Bookmark"
         case .chat(let id):
             return chats.first { $0.id == id }?.title ?? "Chat"
+        case .connection:
+            // The connection's label is passed explicitly at openTab; this is
+            // only the fallback (the app-wide connection list lives in the UI
+            // layer, not the store).
+            return "Connection"
         }
     }
 
@@ -67,6 +72,7 @@ extension WikiStoreModel {
             return "doc"
         case .bookmark: return "bookmark"
         case .chat: return "bubble.left.and.bubble.right"
+        case .connection: return "cable.connector"
         }
     }
 }

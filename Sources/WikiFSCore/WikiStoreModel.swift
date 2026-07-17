@@ -171,6 +171,10 @@ public final class WikiStoreModel {
     /// like `bookmarkNodes`.
     public private(set) var chats: [ChatSummary] = []
 
+    /// Per-wiki connections (v38), rebuilt from `store.listConnections()` after
+    /// every mutation — same §3.1 pattern as `bookmarkNodes` / `chats`.
+    public private(set) var connections: [Connection] = []
+
     /// A pending question to pre-fill the chat composer, set by the omnibox
     /// "Ask" action (#288). Consumed by `ChatView` on first appearance, then
     /// cleared. `nil` means no pre-fill is waiting.
@@ -306,6 +310,7 @@ public final class WikiStoreModel {
         reloadSources()
         reloadBookmarkNodes()
         reloadChats()
+        reloadConnections()
         // Preload the system-prompt draft so its editor has content immediately;
         // selecting it later reloads fresh from the store.
         draftSystemPrompt = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
@@ -921,6 +926,16 @@ public final class WikiStoreModel {
         DebugLog.store("[tabs] openTabInBackground: new background tab for \(selection) (id=\(tab.id)), \(tabs.count) tabs total")
     }
 
+    /// Update the tab-bar title of every open tab showing `selection`. Used when
+    /// a resource whose label lives outside the store is renamed (e.g. a
+    /// connection, whose label lives in the app-wide `ConnectionRegistry`, not in
+    /// `tabTitle(for:)`). A no-op if no such tab is open.
+    public func retitleTabs(for selection: WikiSelection, to title: String) {
+        for i in tabs.indices where tabs[i].selection == selection {
+            tabs[i].title = title
+        }
+    }
+
     /// Retarget an open tab IN PLACE to a new selection, preserving the tab's
     /// UUID — so tab order, drag/drop position, and per-tab history survive (D2).
     /// Used for the draft-state morph (.newChat → .chat(id) on first send) and
@@ -1112,7 +1127,7 @@ public final class WikiStoreModel {
         mermaidSaveWarning = nil
         var restoredFromPendingDraft = false
         switch newValue {
-        case .newChat, .bookmark, .chat:
+        case .newChat, .bookmark, .chat, .connection:
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
@@ -2525,6 +2540,7 @@ public final class WikiStoreModel {
         reloadSources()
         reloadChats()
         reloadBookmarkNodes()
+        reloadConnections()
         pruneHistoryToCurrentStore()
         reloadCurrentDraftIfClean()
     }
@@ -2783,6 +2799,10 @@ public final class WikiStoreModel {
         bookmarkNodes = (try? store.listBookmarkNodes()) ?? []
     }
 
+    public func reloadConnections() {
+        connections = (try? store.listConnections()) ?? []
+    }
+
     // MARK: - Bookmark node mutations
 
     /// Create a folder at root or inside another folder. Returns the new node id,
@@ -2882,6 +2902,101 @@ public final class WikiStoreModel {
         }
     }
 
+    // MARK: - Connection mutations (v38 — per-wiki)
+
+    /// The credential store for connection secrets (Keychain-backed). Lazily
+    /// created — the same `KeychainConnectionCredentialStore` the old
+    /// `ConnectionRegistry` used, now owned by the per-wiki model.
+    @ObservationIgnored
+    private lazy var credentialStore: any ConnectionCredentialStore = KeychainConnectionCredentialStore()
+
+    /// Look up a connection by id from the in-memory list.
+    public func connection(id: String) -> Connection? {
+        connections.first { $0.id == id }
+    }
+
+    /// Resolve a provider manifest for a connection (stateless lookup).
+    public func manifest(for connection: Connection) -> ProviderManifest? {
+        ProviderRegistry.manifest(for: connection.providerID)
+    }
+
+    /// Create a new unconfigured connection for `providerID`, persist it, and
+    /// return it. The caller opens its config tab.
+    @discardableResult
+    public func createConnection(providerID: String) -> Connection? {
+        let manifest = ProviderRegistry.manifest(for: providerID)
+        let connection = Connection(
+            id: UUID().uuidString,
+            providerID: providerID,
+            label: manifest?.displayName ?? providerID.capitalized)
+        do {
+            try store.upsertConnection(connection)
+            reloadConnections()
+            return connection
+        } catch {
+            DebugLog.store("WikiStoreModel.createConnection failed: \(error)")
+            return nil
+        }
+    }
+
+    /// Insert or replace a connection (non-secret config → SQLite; secrets →
+    /// Keychain).
+    public func upsertConnection(_ connection: Connection) {
+        do {
+            try store.upsertConnection(connection)
+            reloadConnections()
+        } catch {
+            DebugLog.store("WikiStoreModel.upsertConnection failed: \(error)")
+        }
+    }
+
+    /// Rename a connection's label.
+    public func renameConnection(id: String, to label: String) {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            try store.renameConnection(id: id, to: trimmed)
+            reloadConnections()
+            if let renamed = connection(id: id) {
+                retitleTabs(for: .connection(renamed.id), to: renamed.label)
+            }
+        } catch {
+            DebugLog.store("WikiStoreModel.renameConnection failed: \(error)")
+        }
+    }
+
+    /// Delete a connection and its Keychain secrets.
+    public func deleteConnection(id: String) {
+        // Best-effort secret cleanup before deleting the row.
+        if let connection = connection(id: id),
+           let manifest = manifest(for: connection) {
+            for field in manifest.config.fields where field.secret {
+                try? credentialStore.setSecret(nil, connectionID: id, field: field.name)
+            }
+        }
+        do {
+            try store.deleteConnection(id: id)
+            reloadConnections()
+        } catch {
+            DebugLog.store("WikiStoreModel.deleteConnection failed: \(error)")
+        }
+    }
+
+    /// Read a secret field for a connection (Keychain).
+    public func secret(for connection: Connection, field: String) -> String? {
+        credentialStore.secret(connectionID: connection.id, field: field)
+    }
+
+    /// Persist a secret field for a connection (Keychain). Empty/nil deletes.
+    public func setSecret(_ value: String, for connection: Connection, field: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        try? credentialStore.setSecret(
+            trimmed.isEmpty ? nil : trimmed,
+            connectionID: connection.id, field: field)
+    }
+
+    // MARK: - History pruning
+
     private func pruneHistoryToCurrentStore() {
         let pageIDs = Set(summaries.map(\.id))
         let sourceIDs = Set(sources.map(\.id))
@@ -2903,7 +3018,7 @@ public final class WikiStoreModel {
             sourceIDs.contains(id)
         case .chat(let id):
             chatIDs.contains(id)
-        case .newChat, .systemPrompt, .changeLog, .bookmark:
+        case .newChat, .systemPrompt, .changeLog, .bookmark, .connection:
             true
         }
     }
