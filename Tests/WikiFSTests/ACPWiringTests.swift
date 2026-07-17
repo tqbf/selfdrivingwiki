@@ -47,8 +47,8 @@ import ACPModel
             provider: provider,
             resolvedCommand: ["/usr/local/bin/npx", "--yes", "@agentclientprotocol/claude-agent-acp"],
             apiKey: nil)
-        #expect(hints["acpAgentPath"] == "/usr/local/bin/npx")
-        #expect(hints["acpAgentArgs"] == "--yes @agentclientprotocol/claude-agent-acp")
+        #expect(hints[HintKey.acpAgentPath.rawValue] == "/usr/local/bin/npx")
+        #expect(hints[HintKey.acpAgentArgs.rawValue] == "--yes @agentclientprotocol/claude-agent-acp")
     }
 
     /// An empty resolved command yields an empty dict (→ `ACPBackend` throws
@@ -66,7 +66,7 @@ import ACPModel
         let hints = AgentBackendFactory.providerHints(
             provider: provider, resolvedCommand: ["/bin/agent"], apiKey: nil)
         #expect(hints.count == 1)
-        #expect(hints["acpAgentPath"] == "/bin/agent")
+        #expect(hints[HintKey.acpAgentPath.rawValue] == "/bin/agent")
     }
 
     // MARK: - AgentSpawnConfig.environment (Phase 2, plans/acp-multi-provider.md)
@@ -78,10 +78,10 @@ import ACPModel
     /// process environment.
     @Test func resolveSpawnConfigCollectsEnvPrefixedHints() {
         let profile = BackendProfile(providerHints: [
-            "acpAgentPath": "/usr/local/bin/hermes",
-            "acpAgentArgs": "acp",
-            "env.ZAI_API_KEY": "secretish",
-            "env.HERMES_MODE": "fast",
+            HintKey.acpAgentPath.rawValue: "/usr/local/bin/hermes",
+            HintKey.acpAgentArgs.rawValue: "acp",
+            HintKey.env("ZAI_API_KEY"): "secretish",
+            HintKey.env("HERMES_MODE"): "fast",
         ])
         let spawn = ACPBackend.resolveSpawnConfig(from: profile)
         #expect(spawn?.executablePath == "/usr/local/bin/hermes")
@@ -91,7 +91,7 @@ import ACPModel
     /// No `env.`-prefixed hints → empty environment (no merge, unchanged
     /// behavior for providers with no extra env).
     @Test func resolveSpawnConfigEmptyEnvironmentWhenUnconfigured() {
-        let profile = BackendProfile(providerHints: ["acpAgentPath": "/bin/agent"])
+        let profile = BackendProfile(providerHints: [HintKey.acpAgentPath.rawValue: "/bin/agent"])
         let spawn = ACPBackend.resolveSpawnConfig(from: profile)
         #expect(spawn?.environment.isEmpty == true)
     }

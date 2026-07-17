@@ -227,8 +227,8 @@ import WikiFSCore
             resolvedCommand: ["/usr/local/bin/hermes", "acp"],
             apiKey: "secret",
             selectedModelId: "glm-4.7")
-        #expect(hints["acpSelectedModelId"] == "glm-4.7")
-        #expect(hints["acpAgentPath"] == "/usr/local/bin/hermes")
+        #expect(hints[HintKey.acpSelectedModelId.rawValue] == "glm-4.7")
+        #expect(hints[HintKey.acpAgentPath.rawValue] == "/usr/local/bin/hermes")
     }
 
     @Test func providerHintsOmitsSelectedModelIdWhenNil() {
@@ -238,7 +238,7 @@ import WikiFSCore
             resolvedCommand: ["/usr/local/bin/hermes", "acp"],
             apiKey: nil,
             selectedModelId: nil)
-        #expect(hints["acpSelectedModelId"] == nil)
+        #expect(hints[HintKey.acpSelectedModelId.rawValue] == nil)
     }
 
     @Test func providerHintsEmptyWhenCommandUnresolved() {

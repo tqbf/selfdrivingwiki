@@ -268,8 +268,8 @@ import ACPModel
             resolvedCommand: ["/usr/local/bin/hermes", "acp"],
             apiKey: nil,
             selectedModelId: nil)
-        #expect(hints["env.ZAI_API_KEY"] == "secretish")
-        #expect(hints["env.HERMES_MODE"] == "fast")
+        #expect(hints[HintKey.env("ZAI_API_KEY")] == "secretish")
+        #expect(hints[HintKey.env("HERMES_MODE")] == "fast")
     }
 
     /// The per-stage resolved model id (`resolvedProvider(for:).modelId`) is
@@ -283,7 +283,7 @@ import ACPModel
             resolvedCommand: ["/usr/local/bin/opencode", "acp"],
             apiKey: nil,
             selectedModelId: "anthropic/claude-sonnet")
-        #expect(hints["acpSelectedModelId"] == "anthropic/claude-sonnet")
+        #expect(hints[HintKey.acpSelectedModelId.rawValue] == "anthropic/claude-sonnet")
     }
 
     // MARK: - FakeAgentBackend recording
@@ -375,10 +375,10 @@ import ACPModel
             FakeSessionBehavior(),
         ])
 
-        let hints1 = BackendProfile(providerHints: ["acpSelectedModelId": "opus-4"])
+        let hints1 = BackendProfile(providerHints: [HintKey.acpSelectedModelId.rawValue: "opus-4"])
         _ = try await fake.start(profile: hints1, systemPrompt: "") { _ in }
 
-        let hints2 = BackendProfile(providerHints: ["acpSelectedModelId": "sonnet-4"])
+        let hints2 = BackendProfile(providerHints: [HintKey.acpSelectedModelId.rawValue: "sonnet-4"])
         _ = try await fake.start(profile: hints2, systemPrompt: "") { _ in }
 
         let recorded = await fake.startModelHints

@@ -1765,7 +1765,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             //    reusing it if already present (idempotent for rewound DBs).
             let legacyAgentID: String
             let existing = try? statement(
-                "SELECT id FROM agents WHERE name='legacy-extraction' LIMIT 1;")
+                "SELECT id FROM agents WHERE name='\(ExtractionBackend.legacyAgentName)' LIMIT 1;")
             let found = existing.flatMap { stmt -> Bool in
                 (try? stmt.step()) ?? false
             } ?? false
@@ -1775,7 +1775,7 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             } else {
                 legacyAgentID = ULID.generate()
                 let ins = try statement(
-                    "INSERT INTO agents (id, kind, name) VALUES (?1, 'software', 'legacy-extraction');")
+                    "INSERT INTO agents (id, kind, name) VALUES (?1, 'software', '\(ExtractionBackend.legacyAgentName)');")
                 ins.reset()
                 try ins.bind(legacyAgentID, at: 1)
                 _ = try ins.step()

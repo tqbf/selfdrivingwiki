@@ -785,7 +785,7 @@ struct SourceDetailView: View {
                         headVersion = store.processedMarkdownHead(for: file)
                     } label: {
                         Label {
-                            Text("\(Self.backendDisplayName(forAgent: agent)) — \(version.createdAt, style: .date)")
+                            Text("\(ExtractionAlternative.backendDisplayName(agentName: agent)) — \(version.createdAt, style: .date)")
                         } icon: {
                             Image(systemName: version.id.rawValue == headID
                                   ? "checkmark.circle.fill" : "doc.text")
@@ -837,17 +837,9 @@ struct SourceDetailView: View {
         case .user: return "Edited"
         case .revert: return "Reverted"
         default:
-            if let agent { return backendDisplayName(forAgent: agent) }
+            if let agent { return ExtractionAlternative.backendDisplayName(agentName: agent) }
             return "Extraction"
         }
-    }
-
-    /// Human-facing backend name for an `agents.name` value: the legacy
-    /// migration stub reads "Legacy", known backends use their display name,
-    /// and anything else falls back to the raw name.
-    private static func backendDisplayName(forAgent agent: String) -> String {
-        if agent == "legacy-extraction" { return "Legacy" }
-        return ExtractionBackend.from(agentName: agent)?.displayName ?? agent
     }
 
     /// Re-extract the source with a chosen backend, appending a coexisting
@@ -867,7 +859,7 @@ struct SourceDetailView: View {
                 queue: .extraction, wikiID: store.eventBus?.wikiID ?? "",
                 payload: QueueItemPayload(
                     sourceIDs: [file.id],
-                    stageRouting: ["backend": backend.rawValue]))
+                    stageRouting: [StageRoutingKey.backend.rawValue: backend.rawValue]))
             let itemID = try await queueEngine.enqueue(request)
             let result = await queueEngine.waitForCompletion(of: itemID)
 

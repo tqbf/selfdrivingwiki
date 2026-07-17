@@ -66,10 +66,10 @@ struct ACPSmokeTests {
         defer { try? FileManager.default.removeItem(at: scratch) }
 
         var hints: [String: String] = [
-            "acpAgentPath": resolvedAgentPath,
-            "acpAgentArgs": agentArgs,
+            HintKey.acpAgentPath.rawValue: resolvedAgentPath,
+            HintKey.acpAgentArgs.rawValue: agentArgs,
         ]
-        if let apiKey { hints["acpAgentApiKey"] = apiKey }
+        if let apiKey { hints[HintKey.acpAgentApiKey.rawValue] = apiKey }
 
         let profile = BackendProfile(
             model: nil,

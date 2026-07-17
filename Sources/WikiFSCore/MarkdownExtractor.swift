@@ -101,6 +101,14 @@ public enum ExtractionBackend: String, Sendable, CaseIterable, Codable {
         }
     }
 
+    /// The PROV `agents.name` for the pre-v21 legacy migration stub agent.
+    /// Pre-v21 rows that had inline `content` (no separate extraction) are
+    /// backfilled with a synthetic agent of this name so provenance is
+    /// consistent. `ExtractionBackend.from(agentName:)` returns `nil` for
+    /// this value (the stub has no corresponding modern backend); callers
+    /// fall back to a "Legacy" label via `ExtractionAlternative.backendDisplayName`.
+    public static let legacyAgentName = "legacy-extraction"
+
     /// The PROV `agents.name` this backend maps to (§4.7). Used by
     /// `recordMarkdownExtraction` so an extraction's provenance recovers to the
     /// backend that produced it. Stable strings, never user-facing.

@@ -265,7 +265,7 @@ public actor ACPBackend: AgentBackend {
         // without a subprocess; here we just execute it. A bad/stale selection
         // falls back to the agent default (no setModel) — never reproduces the
         // 404 the picker exists to prevent.
-        if let selectedModelId = profile.providerHints["acpSelectedModelId"],
+        if let selectedModelId = profile.providerHints[HintKey.acpSelectedModelId.rawValue],
            !selectedModelId.isEmpty {
             let advertisedIds = modelsInfo?.availableModels.map(\.modelId) ?? []
             let decision = ACPModelSelectionResolver.resolve(
@@ -601,15 +601,17 @@ public actor ACPBackend: AgentBackend {
     /// unit-testable from `@testable import WikiFSEngine` without spawning a
     /// subprocess (`ACPWiringTests`).
     static func resolveSpawnConfig(from profile: BackendProfile) -> AgentSpawnConfig? {
-        let path = profile.providerHints["acpAgentPath"] ?? profile.model
+        let path = profile.providerHints[HintKey.acpAgentPath.rawValue] ?? profile.model
         guard let path, !path.isEmpty else { return nil }
-        let args = ShellArgv.tokenize(profile.providerHints["acpAgentArgs"] ?? "")
+        let args = ShellArgv.tokenize(profile.providerHints[HintKey.acpAgentArgs.rawValue] ?? "")
             .filter { !$0.isEmpty }
         let cwd = profile.scratchDirectory?.path
-        let apiKey = profile.providerHints["acpAgentApiKey"]
+        let apiKey = profile.providerHints[HintKey.acpAgentApiKey.rawValue]
         var environment: [String: String] = [:]
-        for (key, value) in profile.providerHints where key.hasPrefix("env.") {
-            environment[String(key.dropFirst(4))] = value
+        for (key, value) in profile.providerHints {
+            if let envKey = HintKey.envKey(from: key) {
+                environment[envKey] = value
+            }
         }
         return AgentSpawnConfig(
             executablePath: path, arguments: args, workingDirectory: cwd, apiKey: apiKey,
@@ -775,7 +777,7 @@ enum ACPBackendError: Error, LocalizedError {
         case .noAgentConfigured:
             return """
             ACPBackend requires an agent path. Set BackendProfile.providerHints\
-            ["acpAgentPath"] (or `model`) to an ACP agent executable, \
+            ["\(HintKey.acpAgentPath.rawValue)"] (or `model`) to an ACP agent executable, \
             e.g. /path/to/claude-agent-acp.
             """
         case .missingAPIKey:

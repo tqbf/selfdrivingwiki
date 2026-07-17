@@ -2,6 +2,15 @@ import Foundation
 
 // MARK: - Queue kinds
 
+/// Compile-time-checked keys for `QueueItemPayload.stageRouting` — the dict
+/// that threads stage-specific overrides (e.g. re-extraction backend choice)
+/// from the UI to the queue workers. Using the enum's `rawValue` instead of a
+/// bare string literal prevents typos that silently produce `nil` lookups.
+public enum StageRoutingKey: String, Sendable {
+    /// Backend override for re-extraction (value is an `ExtractionBackend.rawValue`).
+    case backend
+}
+
 /// The two persistent processing queues. Each `QueueItem` belongs to exactly
 /// one queue, and each queue has its own independent run state (running /
 /// paused) and ordering-key sequence.

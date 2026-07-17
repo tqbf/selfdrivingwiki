@@ -855,13 +855,13 @@ public final class AgentLauncher {
                 apiKey: acpAPIKey,
                 selectedModelId: providersConfig().selectedModelId(forProvider: provider.id))
         if let wsID = workspaceID {
-            providerHints["env.WIKI_WORKSPACE"] = wsID
+            providerHints[HintKey.env("WIKI_WORKSPACE")] = wsID
         }
         // #397: inject the author provenance into the child env so agent-written
         // pages carry created_by/last_edited_by "for free" — no agent action needed.
         // The launcher resolves it from the operation kind (one-shot runs) or the
         // chatID (interactive runs). An explicit `--author` on wikictl still wins.
-        providerHints["env.WIKI_AUTHOR"] = Self.authorForRun(kind: operation.kind, chatID: nil)
+        providerHints[HintKey.env("WIKI_AUTHOR")] = Self.authorForRun(kind: operation.kind, chatID: nil)
         let profile = BackendProfile(
             providerHints: providerHints,
             scratchDirectory: scratch,
@@ -1589,7 +1589,7 @@ public final class AgentLauncher {
                 // originating conversation (resolvable via [[chat:…]]). An explicit
                 // `--author` on `wikictl page upsert` overrides this.
                 if let chatID {
-                    hints["env.WIKI_AUTHOR"] = "\(ResourceKind.chat.linkPrefix!)\(chatID)"
+                    hints[HintKey.env("WIKI_AUTHOR")] = "\(ResourceKind.chat.linkPrefix!)\(chatID)"
                 }
                 return hints
             }(),

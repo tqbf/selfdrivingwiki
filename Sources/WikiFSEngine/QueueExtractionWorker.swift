@@ -39,7 +39,7 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
         // backend the worker will actually use.
         guard let sourceID = item.payload.sourceIDs.first else { return nil }
 
-        let override = item.payload.stageRouting?["backend"].flatMap {
+        let override = item.payload.stageRouting?[StageRoutingKey.backend.rawValue].flatMap {
             ExtractionBackend(rawValue: $0)
         }
 
@@ -95,7 +95,7 @@ struct QueueExtractionWorker: QueueWorker {
         }
 
         // Resolve the backend override from the payload (re-extraction).
-        let backendOverride = item.payload.stageRouting?["backend"].flatMap {
+        let backendOverride = item.payload.stageRouting?[StageRoutingKey.backend.rawValue].flatMap {
             ExtractionBackend(rawValue: $0)
         }
 
