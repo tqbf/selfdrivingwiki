@@ -27,7 +27,7 @@ import Foundation
 /// - `selectedModelIds` — `[providerId: modelId]`, the user's per-provider
 ///   model pick. Empty (the default) = "use the agent's default model" → today's
 ///   behavior is unchanged for existing users.
-public struct AgentProvidersConfig: Codable, Equatable, Sendable {
+public struct AgentProvidersConfig: JSONSidecarConfig {
 
     /// The configured providers. At least one is always present (the Claude
     /// default). Order is the display order in Settings.
@@ -342,15 +342,13 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
     /// from `seed(discovered:)` (running real PATH discovery) AND persist the
     /// seed so subsequent loads are stable + the user's edits survive. A corrupt
     /// file degrades to the seed too (same fresh-install behavior as
-    /// `AgentCommandConfig.load`).
+    /// `AgentCommandConfig.load`). Delegates the file read + decode to
+    /// `JSONSidecarConfig.load(from:)`.
     public static func loadOrSeed(
         from directory: URL,
         discover: () -> [DiscoveredACPAgent] = { ACPProviderDiscovery.discover() }
     ) -> AgentProvidersConfig {
-        let url = directory.appendingPathComponent(fileName, isDirectory: false)
-        if let data = try? Data(contentsOf: url),
-           let config = try? JSONDecoder().decode(AgentProvidersConfig.self, from: data),
-           !config.providers.isEmpty {
+        if let config = load(from: directory), !config.providers.isEmpty {
             // Preserve the decoded model caches + selections (re-wrapping with
             // only `providers` would wipe them). Re-normalize providers only.
             DebugLog.store("AgentProvidersConfig.loadOrSeed: LOAD providers=\(config.providers.count) hasModelCaches=\(!config.providerModels.isEmpty) hasSelections=\(!config.selectedModelIds.isEmpty)") // TEMP DEBUG
@@ -367,17 +365,5 @@ public struct AgentProvidersConfig: Codable, Equatable, Sendable {
         let seeded = seed(discovered: discover())
         try? seeded.save(to: directory)
         return seeded
-    }
-
-    /// Persist to `agent-providers.json` in `directory`, atomically,
-    /// pretty-printed + sorted keys. Never writes API keys (those are in the
-    /// Keychain).
-    public func save(to directory: URL) throws {
-        DebugLog.store("AgentProvidersConfig.save: providers=\(providers.count) default=\(defaultProvider.id) modelCaches=\(providerModels.count) selections=\(selectedModelIds.count)") // TEMP DEBUG
-        let url = directory.appendingPathComponent(Self.fileName, isDirectory: false)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(self)
-        try data.write(to: url, options: .atomic)
     }
 }

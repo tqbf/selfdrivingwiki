@@ -10,7 +10,7 @@ import Foundation
 /// root as a sibling of `zotero-config.json`. Follows `ZoteroConfig`'s load/save
 /// pattern exactly (pure value type, explicit injected directory, atomic write),
 /// and `WikiRegistry`'s degrade-to-empty-on-corrupt rule.
-public struct ExtractionConfig: Codable, Equatable, Sendable {
+public struct ExtractionConfig: JSONSidecarConfig {
     /// Which backend `ExtractionCoordinator.current()` resolves to.
     public var backend: ExtractionBackend
 
@@ -110,29 +110,13 @@ public struct ExtractionConfig: Codable, Equatable, Sendable {
         self.doclingServeEndpoint = try c.decodeIfPresent(String.self, forKey: .doclingServeEndpoint)
     }
 
-    // MARK: - Persistence
+    // MARK: - Persistence (via `JSONSidecarConfig`)
 
     /// Load from `extraction-config.json` in `directory`. A missing or corrupt
     /// file degrades to an empty (default) config rather than throwing — same
-    /// fresh-install behavior as `ZoteroConfig.load`.
+    /// fresh-install behavior as `ZoteroConfig.load`. Delegates the file read +
+    /// decode to `JSONSidecarConfig.load(from:)` and supplies the default config.
     public static func load(from directory: URL) -> ExtractionConfig {
-        let url = directory.appendingPathComponent(fileName, isDirectory: false)
-        guard let data = try? Data(contentsOf: url) else { return ExtractionConfig() }
-        guard let config = try? JSONDecoder().decode(ExtractionConfig.self, from: data) else {
-            DebugLog.config("ExtractionConfig: corrupt \(fileName), starting with defaults")
-            return ExtractionConfig()
-        }
-        return config
-    }
-
-    /// Persist to `extraction-config.json` in `directory`, atomically,
-    /// pretty-printed + sorted keys (matches `ZoteroConfig.save`'s
-    /// reviewable-diff rationale).
-    public func save(to directory: URL) throws {
-        let url = directory.appendingPathComponent(ExtractionConfig.fileName, isDirectory: false)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(self)
-        try data.write(to: url, options: .atomic)
+        load(from: directory) ?? ExtractionConfig()
     }
 }

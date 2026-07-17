@@ -9,7 +9,7 @@ import Foundation
 /// is persisted once at the App Group container root, a sibling of `wikis.json`
 /// rather than a field on `WikiDescriptor`. Follows `WikiRegistry`'s load/save
 /// pattern exactly (pure value type, explicit injected directory, atomic write).
-public struct ZoteroConfig: Codable, Equatable, Sendable {
+public struct ZoteroConfig: JSONSidecarConfig {
     /// The numeric Zotero user library ID. `nil` until the user configures it.
     public var libraryID: String?
 
@@ -39,28 +39,13 @@ public struct ZoteroConfig: Codable, Equatable, Sendable {
         return ZoteroLocalStorage.defaultDirectory()
     }
 
-    // MARK: - Persistence
+    // MARK: - Persistence (via `JSONSidecarConfig`)
 
     /// Load from `zotero-config.json` in `directory`. A missing or corrupt file
     /// degrades to an empty (unconfigured) config rather than throwing — same
-    /// fresh-install behavior as `WikiRegistry.load`.
+    /// fresh-install behavior as `WikiRegistry.load`. Delegates the file read +
+    /// decode to `JSONSidecarConfig.load(from:)` and supplies the empty default.
     public static func load(from directory: URL) -> ZoteroConfig {
-        let url = directory.appendingPathComponent(fileName, isDirectory: false)
-        guard let data = try? Data(contentsOf: url) else { return ZoteroConfig() }
-        guard let config = try? JSONDecoder().decode(ZoteroConfig.self, from: data) else {
-            DebugLog.config("ZoteroConfig: corrupt \(fileName), starting empty")
-            return ZoteroConfig()
-        }
-        return config
-    }
-
-    /// Persist to `zotero-config.json` in `directory`, atomically, pretty-printed
-    /// + sorted keys (matches `WikiRegistry.save`'s reviewable-diff rationale).
-    public func save(to directory: URL) throws {
-        let url = directory.appendingPathComponent(ZoteroConfig.fileName, isDirectory: false)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(self)
-        try data.write(to: url, options: .atomic)
+        load(from: directory) ?? ZoteroConfig()
     }
 }
