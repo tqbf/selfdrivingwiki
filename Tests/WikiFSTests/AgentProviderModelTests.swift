@@ -276,9 +276,9 @@ import ACPModel
             provider: provider,
             resolvedCommand: ["/usr/local/bin/gemini", "--acp"],
             apiKey: "secret")
-        #expect(hints["acpAgentPath"] == "/usr/local/bin/gemini")
-        #expect(hints["acpAgentArgs"] == "--acp")
-        #expect(hints["acpAgentApiKey"] == "secret")
+        #expect(hints[HintKey.acpAgentPath.rawValue] == "/usr/local/bin/gemini")
+        #expect(hints[HintKey.acpAgentArgs.rawValue] == "--acp")
+        #expect(hints[HintKey.acpAgentApiKey.rawValue] == "secret")
     }
 
     @Test func providerHintsEmptyForCLIProvider() {
@@ -305,7 +305,7 @@ import ACPModel
             provider: provider,
             resolvedCommand: ["/usr/local/bin/gemini", "--acp"],
             apiKey: nil)
-        #expect(hints["acpAgentApiKey"] == nil)
+        #expect(hints[HintKey.acpAgentApiKey.rawValue] == nil)
     }
 }
 

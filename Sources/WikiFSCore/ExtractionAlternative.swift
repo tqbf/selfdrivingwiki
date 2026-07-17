@@ -53,7 +53,7 @@ extension ExtractionAlternative {
         if let backend = ExtractionBackend.from(agentName: agentName) {
             return backend.displayName
         }
-        if agentName == "legacy-extraction" { return "Legacy" }
+        if agentName == ExtractionBackend.legacyAgentName { return "Legacy" }
         // Capitalize only the first character (predictable for hyphenated names
         // like "future-tool" → "Future-tool"; `.capitalized` would also upper
         // case after the hyphen).

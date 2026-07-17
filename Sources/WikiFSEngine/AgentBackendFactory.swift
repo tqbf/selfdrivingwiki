@@ -38,16 +38,16 @@ public enum AgentBackendFactory {
     ) -> [String: String] {
         guard !resolvedCommand.isEmpty else { return [:] }
         var hints: [String: String] = [:]
-        hints["acpAgentPath"] = resolvedCommand[0]
+        hints[HintKey.acpAgentPath.rawValue] = resolvedCommand[0]
         let args = resolvedCommand.dropFirst()
         if !args.isEmpty {
-            hints["acpAgentArgs"] = args.joined(separator: " ")
+            hints[HintKey.acpAgentArgs.rawValue] = args.joined(separator: " ")
         }
         if let apiKey, !apiKey.isEmpty {
-            hints["acpAgentApiKey"] = apiKey
+            hints[HintKey.acpAgentApiKey.rawValue] = apiKey
         }
         if let selectedModelId, !selectedModelId.isEmpty {
-            hints["acpSelectedModelId"] = selectedModelId
+            hints[HintKey.acpSelectedModelId.rawValue] = selectedModelId
         }
         // Phase 2 (plans/acp-multi-provider.md): thread the provider's extra
         // environment into the spawn via the established `env.`-prefix
@@ -55,7 +55,7 @@ public enum AgentBackendFactory {
         // process environment, e.g. the Phase-7 `WIKI_WORKSPACE` injection).
         // Non-secret knobs only — API keys stay in `acpAgentApiKey`/the Keychain.
         for (key, value) in provider.env {
-            hints["env.\(key)"] = value
+            hints[HintKey.env(key)] = value
         }
         return hints
     }

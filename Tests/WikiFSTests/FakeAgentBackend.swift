@@ -89,7 +89,7 @@ actor FakeAgentBackend: AgentBackend {
             : FakeSessionBehavior()
         behaviorIndex += 1
 
-        startModelHints.append(profile.providerHints["acpSelectedModelId"])
+        startModelHints.append(profile.providerHints[HintKey.acpSelectedModelId.rawValue])
 
         if behavior.shouldFailOnStart {
             throw FakeBackendError.startFailed

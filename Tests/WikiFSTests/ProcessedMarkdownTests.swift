@@ -572,7 +572,7 @@ struct ProcessedMarkdownTests {
                == "Claude (Anthropic API)")
         #expect(ExtractionAlternative.backendDisplayName(agentName: "pdf2md")
                == "Local pdf2md")
-        #expect(ExtractionAlternative.backendDisplayName(agentName: "legacy-extraction")
+        #expect(ExtractionAlternative.backendDisplayName(agentName: ExtractionBackend.legacyAgentName)
                == "Legacy")
         #expect(ExtractionAlternative.backendDisplayName(agentName: "future-tool")
                == "Future-tool")
@@ -584,7 +584,7 @@ struct ProcessedMarkdownTests {
         #expect(ExtractionBackend.from(agentName: "gemini") == .gemini)
         #expect(ExtractionBackend.from(agentName: "pdf2md") == .localPdf2md)
         #expect(ExtractionBackend.from(agentName: "docling-serve") == .doclingServe)
-        #expect(ExtractionBackend.from(agentName: "legacy-extraction") == nil)
+        #expect(ExtractionBackend.from(agentName: ExtractionBackend.legacyAgentName) == nil)
         #expect(ExtractionBackend.from(agentName: "nope") == nil)
     }
 

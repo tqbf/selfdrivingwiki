@@ -349,7 +349,7 @@ struct QueueExtractionTests {
         // Enqueue with a backend override in the payload's stageRouting.
         let payload = QueueItemPayload(
             sourceIDs: [PageID(rawValue: "SRC1")],
-            stageRouting: ["backend": "anthropic"])
+            stageRouting: [StageRoutingKey.backend.rawValue: "anthropic"])
         _ = try await engine.enqueue(
             QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: payload))
 
