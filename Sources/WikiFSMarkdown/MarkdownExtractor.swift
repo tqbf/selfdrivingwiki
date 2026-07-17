@@ -140,11 +140,31 @@ public enum ExtractionBackend: String, Sendable, CaseIterable, Codable {
 /// The shared extraction contract: a faithful-transcription prompt every model
 /// backend uses so output is consistent regardless of provider. Both
 /// `AnthropicExtractionClient` and `GeminiExtractionClient` send these verbatim.
+///
+/// Inlined from `prompts/extraction-system.md` and `prompts/extraction-
+/// instruction.md` (codegenned into `GeneratedPrompts` in WikiFSCore) to avoid
+/// a circular dependency: WikiFSMarkdown → WikiFSCore → WikiFSMarkdown.
+/// Update both if the copy changes.
 public enum ExtractionPrompts {
     /// System instruction: a precise PDF→Markdown transcription engine. Output
     /// ONLY markdown, preserve structure/tables/math, no commentary.
-    public static let system: String = GeneratedPrompts.extractionSystem
+    public static let system: String = #"""
+You are a precise PDF-to-Markdown extraction engine. Convert the provided PDF into clean, faithful Markdown.
+
+Rules:
+- Output ONLY the Markdown. No preamble, no commentary, no wrapping code fences, no "Here is…".
+- Preserve the document's reading order and structure.
+- Render headings as ATX headings (#, ##, ###, …) at appropriate levels.
+- Preserve lists, blockquotes, and horizontal rules in Markdown syntax.
+- Render tables as GFM pipe tables.
+- Render math as LaTeX: inline as $…$ and display blocks as $$…$$ on their own lines.
+- Preserve code in fenced code blocks with the language when known.
+- Include figure/table captions as plain text. Omit decorative page furniture: running headers/footers and page numbers.
+- Transcribe faithfully — do not summarize, paraphrase, or invent content.
+"""#
 
     /// The per-request instruction paired with the PDF input.
-    public static let instruction: String = GeneratedPrompts.extractionInstruction
+    public static let instruction: String = #"""
+Extract the full text of this PDF as Markdown, following the system rules exactly.
+"""#
 }

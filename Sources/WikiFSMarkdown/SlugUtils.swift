@@ -17,9 +17,9 @@ import Foundation
 /// `PodcastEpisodeURL.slug` is path-based and deliberately separate — not here.
 ///
 /// See issue #502 (cross-module dedup, L3).
-enum SlugUtils {
+public enum SlugUtils {
 
-    static func slugBase(_ s: String) -> String {
+    public static func slugBase(_ s: String) -> String {
         String(
             s.lowercased()
                 .map { $0.isWhitespace ? "-" : $0 }

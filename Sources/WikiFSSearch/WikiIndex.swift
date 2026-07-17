@@ -24,5 +24,15 @@ public struct WikiIndex: Equatable, Sendable {
     /// Seeded into a fresh DB (the v4→5 migration) and used as the projection's
     /// fallback when the row/table can't be read (e.g. a read connection opened
     /// against a not-yet-migrated DB), so `index.md` always exists.
-    public static let defaultBody: String = GeneratedPrompts.wikiIndexDefault
+    ///
+    /// Inlined from `prompts/wiki-index-default.md` (codegenned into
+    /// `GeneratedPrompts.wikiIndexDefault` in WikiFSCore) to avoid a circular
+    /// dependency: WikiFSSearch → WikiFSCore → WikiFSSearch. Update both if
+    /// the copy changes (it rarely does — it's a one-time seed).
+    public static let defaultBody: String = #"""
+# Index
+
+This is the wiki's curated index. The maintaining agent rewrites it on each
+ingest to catalog the pages worth knowing about.
+"""#
 }

@@ -17,6 +17,12 @@ public enum WikiFootnoteMarkdown {
         public let id: String
         public let number: Int
         public let markdown: String
+
+        public init(id: String, number: Int, markdown: String) {
+            self.id = id
+            self.number = number
+            self.markdown = markdown
+        }
     }
 
     public struct Rendered: Equatable, Sendable {

@@ -6,13 +6,13 @@ import Foundation
 /// ranking high in SEVERAL lists outscores one ranking high in only a single
 /// list. The standard constant is `k = 60` (the original TREC paper / Elasticsearch
 /// default). Pure Swift over arrays — fully unit-testable, no model/vec needed.
-enum RankFusion {
+public enum RankFusion {
 
     /// Fuse `lists` (each already ranked best-first) into one ranked list.
     /// Dedupes by `id`; ties break by best single-list rank, then by first-seen
     /// order. Returns one representative object per id (identical across lists for
     /// a given id). Truncate the result with `.prefix(limit)` at the call site.
-    static func rrf<T>(
+    public static func rrf<T>(
         _ lists: [[T]],
         id keyPath: KeyPath<T, PageID>,
         k: Int = 60

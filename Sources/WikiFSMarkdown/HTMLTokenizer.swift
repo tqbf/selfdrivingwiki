@@ -6,7 +6,7 @@ extension HTMLToMarkdown {
     /// drive the Markdown renderer, not a full DOM. `text` carries raw (still
     /// entity-encoded) character data; the renderer decodes entities so it can do so
     /// AFTER deciding code-vs-prose context.
-    enum Token: Equatable {
+    public enum Token: Equatable {
         /// `<name attrs…>` — `selfClosing` is true for `<br/>` / `<img …/>` form.
         case startTag(name: String, attributes: [String: String], selfClosing: Bool)
         /// `</name>`
