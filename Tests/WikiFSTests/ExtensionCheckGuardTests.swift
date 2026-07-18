@@ -11,7 +11,7 @@ import Testing
 /// - `WikiFilePanels` — `.sqlite` export filter (UI file dialog)
 /// - `WikiFSItem` — generated-doc suffixes (`.md`, `.json`, `.jsonl` on names we control)
 /// - `EmbeddingService` — `Bundle.main.bundlePath.hasSuffix(".app")` (runtime path)
-/// - `SQLiteWikiStore` — same bundle-path guard + ext fallback in `addSource` (last resort)
+/// - `any WikiStore` — same bundle-path guard + ext fallback in `addSource` (last resort)
 /// - `ZoteroClient` — `isIngestable` fallback heuristic (MIME-first already)
 /// - `WikiStoreModel` — markdown lazy-seed ext check (owned by Phase C)
 struct ExtensionCheckGuardTests {
@@ -30,7 +30,7 @@ struct ExtensionCheckGuardTests {
         "WikiFilePanels",         // .sqlite export filter
         "WikiFSItem",             // generated-doc suffixes on names we control
         "EmbeddingService",       // Bundle.main.bundlePath.hasSuffix(".app")
-        "SQLiteWikiStore",        // bundle-path guard + ext fallback in addSource
+        "any WikiStore",        // bundle-path guard + ext fallback in addSource
         "ZoteroClient",           // isIngestable fallback (MIME-first already)
         "WikiStoreModel",         // markdown lazy-seed (Phase C owns removal)
     ]

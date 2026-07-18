@@ -48,7 +48,7 @@ struct AddressBarLayoutHostedTests {
     private func renderedWidth(detailWidth: CGFloat, sidebarVisible: Bool,
                                homePageID: PageID? = nil) async throws -> CGFloat {
         _ = Self.app
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         let view = AddressBarView(
             store: model,

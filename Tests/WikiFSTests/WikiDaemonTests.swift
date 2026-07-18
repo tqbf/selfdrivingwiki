@@ -89,7 +89,7 @@ struct WikiDaemonTests {
 
         // Verify the Home page actually exists in the DB
         let dbURL = dir.appendingPathComponent("\(descriptor.id).sqlite")
-        let store = try SQLiteWikiStore(databaseURL: dbURL)
+        let store = try StoreBackend.current.makeStore(databaseURL: dbURL)
         let pages = try store.listPages(sortBy: .newestFirst)
         #expect(pages.count == 1)
         #expect(pages[0].title == "Home")
@@ -290,7 +290,7 @@ struct WikiDaemonTests {
         // Force the transient-open path (store not held in `openStores`)
         daemon.closeStore(wikiID: descriptor.id)
 
-        // Corrupt the DB so SQLiteWikiStore(databaseURL:) throws (SQLITE_NOTADB)
+        // Corrupt the DB so StoreBackend.current.makeStore(databaseURL:) throws (SQLITE_NOTADB)
         let dbURL = dir.appendingPathComponent("\(descriptor.id).sqlite", isDirectory: false)
         for suffix in ["", "-wal", "-shm"] {
             try? FileManager.default.removeItem(atPath: dbURL.path + suffix)

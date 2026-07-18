@@ -34,7 +34,7 @@ struct MarkdownEditorWarningTests {
     private struct Failure: Error { let msg: String; init(_ s: String) { msg = s } }
 
     @Test func saveSetsWarningForCosmeticIssues() async throws {
-        let store = try SQLiteWikiStore(databaseURL: tempURL())
+        let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)
         model.markdownLinter = try repoLinter()
         model.newPage(title: "Messy")
@@ -46,7 +46,7 @@ struct MarkdownEditorWarningTests {
     }
 
     @Test func saveClearsWarningOnceFixed() async throws {
-        let store = try SQLiteWikiStore(databaseURL: tempURL())
+        let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)
         model.markdownLinter = try repoLinter()
         model.newPage(title: "FixMe")
@@ -61,7 +61,7 @@ struct MarkdownEditorWarningTests {
     }
 
     @Test func saveSucceedsWithOriginalBody() async throws {
-        let store = try SQLiteWikiStore(databaseURL: tempURL())
+        let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)
         model.markdownLinter = try repoLinter()
         model.newPage(title: "Original")
@@ -76,7 +76,7 @@ struct MarkdownEditorWarningTests {
     }
 
     @Test func fixMarkdownInDraftCleansAndSaves() async throws {
-        let store = try SQLiteWikiStore(databaseURL: tempURL())
+        let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)
         model.markdownLinter = try repoLinter()
         model.newPage(title: "FixMe")
@@ -99,7 +99,7 @@ struct MarkdownEditorWarningTests {
     }
 
     @Test func fixMarkdownInDraftIsNoOpForCleanBody() async throws {
-        let store = try SQLiteWikiStore(databaseURL: tempURL())
+        let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)
         model.markdownLinter = try repoLinter()
         model.newPage(title: "AlreadyClean")
@@ -111,7 +111,7 @@ struct MarkdownEditorWarningTests {
     }
 
     @Test func noWarningForCleanPage() async throws {
-        let store = try SQLiteWikiStore(databaseURL: tempURL())
+        let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)
         model.markdownLinter = try repoLinter()
         model.newPage(title: "Clean")
@@ -123,7 +123,7 @@ struct MarkdownEditorWarningTests {
 
     @Test func noCrashWhenLinterUnavailable() throws {
         // The unbundled path: nil linter → no warning, no crash.
-        let store = try SQLiteWikiStore(databaseURL: tempURL())
+        let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)
         model.markdownLinter = nil
         model.newPage(title: "Unbundled")

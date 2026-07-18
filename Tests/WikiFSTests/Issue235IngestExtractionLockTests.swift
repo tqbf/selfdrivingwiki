@@ -39,7 +39,7 @@ struct Issue235IngestExtractionLockTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = WikiStoreModel(
-            store: try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite")))
+            store: try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite")))
 
         // Initially clear.
         #expect(!store.isIngestInProgress)

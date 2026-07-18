@@ -31,7 +31,7 @@ struct ObservableTrackingTests {
     // MARK: - bookmarkNodes
 
     @Test func addPageRefFiresBookmarkNodesObservation() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
         let page = try store.createPage(title: "Observable Page")
         let model = WikiStoreModel(store: store)
 
@@ -55,7 +55,7 @@ struct ObservableTrackingTests {
     }
 
     @Test func addSourceRefFiresBookmarkNodesObservation() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
         let source = try store.addSource(filename: "paper.pdf", data: Data("x".utf8))
         let model = WikiStoreModel(store: store)
 
@@ -75,7 +75,7 @@ struct ObservableTrackingTests {
     }
 
     @Test func createFolderFiresBookmarkNodesObservation() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
 
         let box = Box()
@@ -94,7 +94,7 @@ struct ObservableTrackingTests {
     }
 
     @Test func deleteBookmarkNodeFiresObservation() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
 
         // Seed: create a folder, then reload so the model has data.
@@ -124,7 +124,7 @@ struct ObservableTrackingTests {
         /// once, then unregisters. SwiftUI re-registers on each body
         /// re-evaluation, but a raw call does not. This test documents that
         /// contract so a future "optimization" that makes it sticky is caught.
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
         let page = try store.createPage(title: "One-Shot Page")
         let model = WikiStoreModel(store: store)
 

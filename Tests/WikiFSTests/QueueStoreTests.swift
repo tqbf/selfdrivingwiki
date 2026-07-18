@@ -5,7 +5,7 @@ import Testing
 /// Tests for the persistent `QueueStore` (Phase 1 of the Queue Engine).
 ///
 /// Each test opens a real `queue.sqlite` in a unique temp directory, mirroring
-/// the `SQLiteWikiStoreTests` pattern. These are fast CRUD-level tests (no N+1
+/// the `any WikiStoreTests` pattern. These are fast CRUD-level tests (no N+1
 /// working sets), so they run in the fast CI tier — not tagged `.integration`.
 @Suite
 struct QueueStoreTests {

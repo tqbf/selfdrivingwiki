@@ -83,7 +83,7 @@ struct SessionManagerTests {
         let descriptor2 = WikiDescriptor.make(displayName: "Second Wiki")
         // Seed the DB file for descriptor2.
         let url2 = dir.appendingPathComponent("\(descriptor2.id).sqlite", isDirectory: false)
-        _ = try? SQLiteWikiStore(databaseURL: url2)
+        _ = try? StoreBackend.current.makeStore(databaseURL: url2)
 
         let session1 = manager.session(for: descriptor1.id, descriptor: descriptor1)
         let session2 = manager.session(for: descriptor2.id, descriptor: descriptor2)
@@ -142,7 +142,7 @@ struct SessionManagerTests {
         // Create a second wiki.
         let descriptor2 = WikiDescriptor.make(displayName: "Second Wiki")
         let url2 = dir.appendingPathComponent("\(descriptor2.id).sqlite", isDirectory: false)
-        _ = try? SQLiteWikiStore(databaseURL: url2)
+        _ = try? StoreBackend.current.makeStore(databaseURL: url2)
 
         _ = manager.session(for: descriptor1.id, descriptor: descriptor1)
         _ = manager.session(for: descriptor2.id, descriptor: descriptor2)
@@ -170,7 +170,7 @@ struct SessionManagerTests {
         // Create a second wiki.
         let descriptor2 = WikiDescriptor.make(displayName: "Second Wiki")
         let url2 = dir.appendingPathComponent("\(descriptor2.id).sqlite", isDirectory: false)
-        _ = try? SQLiteWikiStore(databaseURL: url2)
+        _ = try? StoreBackend.current.makeStore(databaseURL: url2)
 
         let session1 = manager.session(for: descriptor1.id, descriptor: descriptor1)
         let session2 = manager.session(for: descriptor2.id, descriptor: descriptor2)

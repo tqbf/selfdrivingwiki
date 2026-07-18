@@ -3038,6 +3038,14 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    /// 1-arg convenience requirement: forward to the full-signature impl with
+    /// `createdBy: nil`. The concrete default-arg method above can't satisfy a
+    /// no-default protocol requirement, so this explicit forwarder is needed.
+    @discardableResult
+    public func createPage(title: String) throws -> WikiPage {
+        try createPage(title: title, createdBy: nil)
+    }
+
     public func updatePage(id: PageID, title: String, body: String, lastEditedBy: String? = nil) throws {
         try mutate(event: { _ in localEvent(.page, id: id.rawValue, change: .updated) }) {
         // Recompute slug from the (possibly renamed) title, then bump version
@@ -5241,6 +5249,19 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
             displayName: displayName, role: role
         )
         }
+    }
+
+    /// 2-arg convenience requirement: forward to the full-signature impl with
+    /// all trailing args at their defaults. The concrete default-arg method
+    /// above can't satisfy a no-default protocol requirement, so this explicit
+    /// forwarder is needed.
+    @discardableResult
+    public func addSource(filename: String, data: Data) throws -> SourceSummary {
+        try addSource(
+            filename: filename, data: data,
+            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            provenance: nil, role: .primary, originalPath: nil,
+            activityID: nil, resolvedDisplayName: nil)
     }
 
     // MARK: - Graph-model Phase 4: website snapshot store primitives

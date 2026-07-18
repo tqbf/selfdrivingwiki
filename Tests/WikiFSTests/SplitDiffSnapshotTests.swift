@@ -103,7 +103,7 @@ struct SplitDiffSnapshotTests {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-diff-snap-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let store = try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let store = try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
         let file = try store.addSource(filename: "Thinking+is+Believing.pdf",
                                        data: Data("%PDF-1.4".utf8))
         _ = try store.recordMarkdownExtraction(

@@ -281,7 +281,7 @@ struct AgentGenerationSlotTests {
             .appendingPathComponent("wikifs-gen-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let store = WikiStoreModel(
-            store: try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite")))
+            store: try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite")))
 
         // Extraction phase (now managed by QueueActivityTracker, not the launcher):
         // no claude running. Counter is 0.

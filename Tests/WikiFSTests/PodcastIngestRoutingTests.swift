@@ -10,11 +10,11 @@ import Testing
 @MainActor
 struct PodcastIngestRoutingTests {
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> any WikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-podcast-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     /// Records whether it was asked for a transcript, and returns a canned one.

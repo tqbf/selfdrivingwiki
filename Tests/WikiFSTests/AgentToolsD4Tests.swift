@@ -23,11 +23,11 @@ import WikiFSEngine
 @MainActor
 struct AgentToolsD4Tests {
 
-    private func tempModel() throws -> (WikiStoreModel, SQLiteWikiStore) {
+    private func tempModel() throws -> (WikiStoreModel, any WikiStore) {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-d4-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let store = try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let store = try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
         return (WikiStoreModel(store: store), store)
     }
 

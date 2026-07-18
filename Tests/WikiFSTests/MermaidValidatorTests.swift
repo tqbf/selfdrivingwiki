@@ -191,7 +191,7 @@ struct MermaidValidatorTests {
 
     @Test func upsertAbortsBeforeWritingAnInvalidBlock() throws {
         let v = try validator()
-        let store = try SQLiteWikiStore(databaseURL: tempDB())
+        let store = try StoreBackend.current.makeStore(databaseURL: tempDB())
         let bad = "```mermaid\nflowchart LR\n  A B\n```"
         do {
             _ = try PageCommand.run(.upsert(id: nil, title: "Diagrams", body: bad),
@@ -206,7 +206,7 @@ struct MermaidValidatorTests {
 
     @Test func upsertEndToEndWritesAValidDiagram() throws {
         let v = try validator()
-        let store = try SQLiteWikiStore(databaseURL: tempDB())
+        let store = try StoreBackend.current.makeStore(databaseURL: tempDB())
         let good = "# Diagrams\n\n```mermaid\nflowchart LR\n  A[\"X\"] --> B[\"Y\"]\n```"
         let result = try PageCommand.run(.upsert(id: nil, title: "Diagrams", body: good),
                                          in: store, validator: v)

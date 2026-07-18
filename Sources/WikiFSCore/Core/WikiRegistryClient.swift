@@ -73,7 +73,7 @@ public final class WikiRegistryClient {
 
     public init(
         containerDirectory: URL,
-        makeStore: @escaping (URL) throws -> WikiStore = { try SQLiteWikiStore(databaseURL: $0) }
+        makeStore: @escaping (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) }
     ) {
         self.containerDirectory = containerDirectory
         self.makeStore = makeStore

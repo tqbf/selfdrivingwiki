@@ -29,7 +29,7 @@ struct MermaidEditorWarningTests {
     private struct Failure: Error { let msg: String; init(_ s: String) { msg = s } }
 
     @Test func saveSetsWarningForBrokenDiagram() throws {
-        let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
+        let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.mermaidValidator = try repoValidator()
         model.newPage(title: "Diagrams")
         model.draftBody = "```mermaid\nflowchart LR\n  A B\n```"
@@ -39,7 +39,7 @@ struct MermaidEditorWarningTests {
     }
 
     @Test func saveClearsWarningOnceFixed() throws {
-        let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
+        let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.mermaidValidator = try repoValidator()
         model.newPage(title: "Diagrams")
         model.draftBody = "```mermaid\nflowchart LR\n  A B\n```"
@@ -52,7 +52,7 @@ struct MermaidEditorWarningTests {
     }
 
     @Test func pageSwitchClearsStaleWarning() throws {
-        let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
+        let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.mermaidValidator = try repoValidator()
         model.newPage(title: "Bad")
         model.draftBody = "```mermaid\nflowchart LR\n  A B\n```"
@@ -64,7 +64,7 @@ struct MermaidEditorWarningTests {
     }
 
     @Test func noWarningForPageWithoutMermaid() throws {
-        let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
+        let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.mermaidValidator = try repoValidator()
         model.newPage(title: "Prose")
         model.draftBody = "# Just a heading\n\nNo diagrams here."
