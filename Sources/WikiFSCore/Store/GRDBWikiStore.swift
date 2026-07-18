@@ -183,6 +183,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     try migrateIfNeeded(db)
                 }
             }
+            // Heal any FTS5 index whose term b-tree is empty (e.g. pages that
+            // predate the FTS triggers, or a restored-from-backup DB). Mirrors
+            // SQLiteWikiStore.ensureSearchIndexesPopulated's FTS step. NOT run by
+            // the read-only File Provider open.
+            ensureSearchIndexesPopulated()
         } catch {
             throw WikiStoreError.open("\(error)")
         }
@@ -1941,8 +1946,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         return nil
     }
 
-    /// `resolveSourceByName` taking a `Database` directly.
+    /// `resolveSourceByName` taking a `Database` directly. Faithful port of
+    /// `SQLiteWikiStore.resolveSourceByName` (3-pass: exact → extension-stripped
+    /// → loose-key unique). Safe to call from inside a `mutate`/transaction
+    /// closure — never re-enters `dbQueue`.
     private func resolveSourceByNameLocked(_ displayName: String, in db: Database) throws -> PageID? {
+        // Pass 1: exact (display_name or filename) match, newest first.
         if let id = try String.fetchOne(
             db,
             sql: """
@@ -1955,7 +1964,94 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         ) {
             return PageID(rawValue: id)
         }
+        // Pass 2 + 3: scan all sources — extension-stripped match (immediate)
+        // and loose-key collection (unique-only at the end).
+        let queryLooseKey = WikiNameRules.looseMatchKey(displayName)
+        var looseMatches: [PageID] = []
+        let rows = try Row.fetchAll(
+            db,
+            sql: "SELECT id, COALESCE(display_name, filename) AS name FROM sources ORDER BY updated_at DESC;"
+        )
+        for row in rows {
+            let id: String = row["id"]
+            let name: String = row["name"]
+            if (name as NSString).deletingPathExtension.caseInsensitiveCompare(displayName) == .orderedSame {
+                return PageID(rawValue: id)
+            }
+            if !queryLooseKey.isEmpty, WikiNameRules.looseMatchKey(name) == queryLooseKey {
+                looseMatches.append(PageID(rawValue: id))
+            }
+        }
+        // Pass 3: lenient, unique-only.
+        return looseMatches.count == 1 ? looseMatches[0] : nil
+    }
+
+    /// Resolve a parsed link's target to an id, trying every candidate
+    /// (name, fragment) reading of the raw target — longest name first — via
+    /// `WikiLinkResolver`, so names containing `#` resolve whole. Ported from
+    /// `SQLiteWikiStore.resolveLinkTarget`, but takes a `Database` and a
+    /// resolver closure `(String, Database) throws -> PageID?` (the `*Locked`
+    /// variants) so it can run inside the write transaction without re-entering
+    /// `dbQueue`.
+    private func resolveLinkTarget(
+        _ link: ParsedLink,
+        using resolve: (String, Database) throws -> PageID?,
+        in db: Database
+    ) throws -> PageID? {
+        let raw = link.fragment.map { "\(link.target)#\($0)" } ?? link.target
+        for split in WikiLinkResolver.candidateSplits(of: raw) {
+            if let id = try resolve(split.base, db) { return id }
+        }
         return nil
+    }
+
+    /// If `link.target` is a canonical ULID naming an existing row, return that
+    /// id directly (Phase 5). Ported from `SQLiteWikiStore.canonicalLinkID` but
+    /// does the existence check via `String.fetchOne` rather than the public
+    /// `getPage`/`getSource` (those open their own `dbQueue.read` and would
+    /// re-enter). Returns `nil` for non-canonical targets or ids naming no row
+    /// so the caller can fall back to name resolution.
+    private func canonicalLinkID(_ link: ParsedLink, in db: Database) throws -> PageID? {
+        guard WikiLinkParser.isCanonicalULID(link.target) else { return nil }
+        let id = PageID(rawValue: link.target)
+        switch link.linkType {
+        case .page:
+            return try String.fetchOne(
+                db, sql: "SELECT id FROM pages WHERE id = ?;", arguments: [id.rawValue]
+            ) != nil ? id : nil
+        case .source:
+            return try String.fetchOne(
+                db, sql: "SELECT id FROM sources WHERE id = ?;", arguments: [id.rawValue]
+            ) != nil ? id : nil
+        case .chat:
+            return try String.fetchOne(
+                db, sql: "SELECT id FROM chats WHERE id = ?;", arguments: [id.rawValue]
+            ) != nil ? id : nil
+        }
+    }
+
+    /// The derived-markdown chain (`[smvID]`) for `sourceID`, ULID-asc =
+    /// chronological (index 0 = v1). Locked variant of
+    /// `SQLiteWikiStore.derivedVersionIDs` — runs against the given `db`.
+    private func derivedVersionIDsLocked(sourceID: PageID, in db: Database) throws -> [PageID] {
+        let rows = try String.fetchAll(
+            db,
+            sql: "SELECT id FROM source_markdown_versions WHERE file_id = ? ORDER BY id ASC;",
+            arguments: [sourceID.rawValue]
+        )
+        return rows.map { PageID(rawValue: $0) }
+    }
+
+    /// Resolve an `@vN` ordinal (1-based) to the concrete smv id for
+    /// `sourceID`, or `nil` when out of range. Locked variant of
+    /// `SQLiteWikiStore.resolveVersionPin` — runs against the given `db`.
+    private func resolveVersionPin(
+        _ pin: String, sourceID: PageID, in db: Database
+    ) throws -> PageID? {
+        guard let ordinal = Int(pin), ordinal >= 1 else { return nil }
+        let ids = try derivedVersionIDsLocked(sourceID: sourceID, in: db)
+        let idx = ordinal - 1
+        return idx < ids.count ? ids[idx] : nil
     }
 
     /// `resolveChatByTitle` taking a `Database` directly.
@@ -2755,6 +2851,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             """, arguments: [title, slug, body,
                             Date().timeIntervalSince1970, lastEditedBy,
                             id.rawValue])
+            // Match SQLiteWikiStore: a 0-row UPDATE means the id is gone, so
+            // throw .notFound inside `mutate`'s body. The savepoint rolls back
+            // and `mutate` discards the buffered event (no emit on failure).
+            guard db.changesCount > 0 else { throw WikiStoreError.notFound(id) }
         }
     }
 
@@ -2795,22 +2895,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func resolveSourceByName(_ displayName: String) throws -> PageID? {
-        // TODO: complex three-pass resolution (exact, extension-stripped, lenient).
-        // For now, the exact-match pass (most common case).
         try dbQueue.read { db in
-            if let id = try String.fetchOne(
-                db,
-                sql: """
-                SELECT id FROM sources
-                WHERE COALESCE(display_name, filename) = ? COLLATE NOCASE
-                   OR filename = ? COLLATE NOCASE
-                ORDER BY updated_at DESC LIMIT 1;
-                """,
-                arguments: [displayName, displayName]
-            ) {
-                return PageID(rawValue: id)
-            }
-            return nil
+            try self.resolveSourceByNameLocked(displayName, in: db)
         }
     }
 
@@ -2818,17 +2904,63 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try mutate(event: { _ in
             self.localEvent(.page, id: pageID.rawValue, change: .updated)
         }) { db in
-            // Delete all existing outgoing links, then insert the resolved
-            // subset. Targets that don't resolve to a page are omitted (the
-            // schema forbids a NULL to_page_id). Self-links allowed.
+            // Delete all existing outgoing page + source links, then insert the
+            // resolved subset. Faithful port of `SQLiteWikiStore.replaceLinks`:
+            // canonical-ULID targets validate by id (direct row fetch); legacy
+            // and forward links resolve by name via `resolveLinkTarget`. All
+            // resolvers used here are the `*Locked` variants that take the
+            // in-transaction `db` — the public `resolveTitleToID` /
+            // `resolveSourceByName` open their own `dbQueue.read`, which would
+            // re-enter the DatabaseQueue's serial queue and hit GRDB's fatal
+            // "Database methods are not reentrant".
             try db.execute(sql: "DELETE FROM page_links WHERE from_page_id = ?;",
                            arguments: [pageID.rawValue])
+            try db.execute(sql: "DELETE FROM source_links WHERE from_page_id = ?;",
+                           arguments: [pageID.rawValue])
             for link in parsedLinks {
-                guard let target = try self.resolveTitleToID(link.target) else { continue }
-                try db.execute(sql: """
-                INSERT OR IGNORE INTO page_links (from_page_id, to_page_id, link_text)
-                VALUES (?, ?, ?);
-                """, arguments: [pageID.rawValue, target.rawValue, link.linkText])
+                switch link.linkType {
+                case .page:
+                    let resolved: PageID?
+                    if let id = try self.canonicalLinkID(link, in: db) {
+                        resolved = id
+                    } else {
+                        resolved = try self.resolveLinkTarget(
+                            link, using: self.resolveTitleToIDLocked, in: db)
+                    }
+                    guard let resolved else { continue }
+                    try db.execute(sql: """
+                    INSERT OR IGNORE INTO page_links (from_page_id, to_page_id, link_text)
+                    VALUES (?, ?, ?);
+                    """, arguments: [pageID.rawValue, resolved.rawValue, link.linkText])
+                case .source:
+                    let resolved: PageID?
+                    if let id = try self.canonicalLinkID(link, in: db) {
+                        resolved = id
+                    } else {
+                        resolved = try self.resolveLinkTarget(
+                            link, using: self.resolveSourceByNameLocked, in: db)
+                    }
+                    guard let resolved else { continue }
+                    // Resolve the `@vN` ordinal (1-based) to a concrete smv id;
+                    // NULL when unpinned or out-of-range (follows the active ref).
+                    let pinID = try link.versionPin.flatMap {
+                        try self.resolveVersionPin($0, sourceID: resolved, in: db)
+                    }
+                    // Embed source links (`![[source:…]]`) write a DISTINCT edge
+                    // with role='embed' — the `source_links_edge` unique index
+                    // treats (from, to, role, pin) as distinct, so a cite + embed
+                    // to the same source coexist as separate rows (Phase 4a, AC.3).
+                    let role = link.isEmbed ? "embed" : "cite"
+                    try db.execute(sql: """
+                    INSERT OR IGNORE INTO source_links
+                        (from_page_id, to_source_id, link_text, role, pinned_version_id)
+                    VALUES (?, ?, ?, ?, ?);
+                    """, arguments: [pageID.rawValue, resolved.rawValue, link.linkText,
+                                     role, pinID?.rawValue])
+                case .chat:
+                    // Chat links resolve at render time (no persisted graph edge).
+                    continue
+                }
             }
         }
     }
@@ -4938,16 +5070,24 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func missingSourceEmbeddingWork() -> [(id: PageID, text: String)] {
         do {
             return try dbQueue.read { db in
+                // Mirrors SQLiteWikiStore: text is the source's title + its
+                // processed-markdown HEAD body (title-only when un-extracted).
+                // The body is the CAS-resolved HEAD version (`smvHeadBodySQL`),
+                // NOT the filename — guards the regression where the embed text
+                // silently emptied to just the filename (AC.9a).
                 let rows = try Row.fetchAll(db, sql: """
-                SELECT s.id, COALESCE(s.display_name, s.filename) AS text
+                SELECT s.id, COALESCE(s.display_name, s.filename) AS title,
+                       \(Self.smvHeadBodySQL) AS body
                 FROM sources s
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM source_chunks WHERE source_id = s.id
-                )
+                LEFT JOIN source_chunks sc ON sc.source_id = s.id
+                WHERE sc.source_id IS NULL
                 ORDER BY s.id;
                 """)
                 return rows.map { row in
-                    (id: PageID(rawValue: row["id"]), text: row["text"])
+                    let id = PageID(rawValue: row["id"])
+                    let title: String = row["title"]
+                    let body: String = row["body"]
+                    return (id, body.isEmpty ? title : "\(title)\n\n\(body)")
                 }
             }
         } catch {
@@ -5404,6 +5544,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             UPDATE chats SET title = ?, updated_at = ?
             WHERE id = ?;
             """, arguments: [title, Date().timeIntervalSince1970, id.rawValue])
+            // A 0-row UPDATE means the chat id is gone — throw .notFound inside
+            // `mutate`'s body so the savepoint rolls back and no event is emitted
+            // (mirrors updatePage / SQLiteWikiStore.renameChat).
+            guard db.changesCount > 0 else { throw WikiStoreError.notFound(id) }
 
             // Refresh the FTS sidecar title so keyword search reflects the new
             // name (the body is unchanged). A no-op if no chat_search row exists
@@ -6990,6 +7134,42 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             try Int.fetchOne(db, sql: "SELECT count(*) FROM sources_fts;") ?? 0
         }) ?? 0
         return (pages, sources)
+    }
+
+    // MARK: - Launch search-index heal
+
+    /// On writable open, rebuild any FTS5 index whose term b-tree is empty.
+    /// Mirrors the FTS step of `SQLiteWikiStore.ensureSearchIndexesPopulated`:
+    /// a bare `count(*)` on an *external-content* FTS5 table reads the CONTENT
+    /// table, so `count(*) FROM pages_fts` always equals `count(*) FROM pages`
+    /// — a rowid-count health check can NEVER detect "never built" (the ranking
+    /// bug: pages_fts reported 232/232 but had ZERO indexed terms → MATCH
+    /// returned nothing → search degraded to semantic-only). The `_idx` shadow
+    /// segment b-tree holds the real terms; 0 there means "never built" → run
+    /// the FTS5 'rebuild' command. Idempotent + near-zero cost when healthy.
+    private func ensureSearchIndexesPopulated() {
+        dbQueue.writeWithoutTransaction { db in
+            for (fts, content) in [("pages_fts", "pages"),
+                                   ("sources_fts", "sources"),
+                                   ("chats_fts", "chats")] {
+                let contentRows = (try? Int.fetchOne(db, sql: "SELECT count(*) FROM \(content);")) ?? 0
+                guard contentRows > 0, ftsIndexRowCount(fts, in: db) == 0 else { continue }
+                do {
+                    try db.execute(sql: "INSERT INTO \(fts)(\(fts)) VALUES ('rebuild');")
+                    DebugLog.store("ensureSearchIndexes: rebuilt empty \(fts) term index")
+                } catch {
+                    DebugLog.store("ensureSearchIndexes: \(fts) rebuild failed — \(error)")
+                }
+            }
+        }
+    }
+
+    /// Row count of an FTS5 table's `_idx` shadow segment b-tree. NOT the
+    /// distinct-term count (that's `fts5vocab`), but a reliable emptiness probe:
+    /// `_idx == 0` iff the index was never built. Mirrors
+    /// `SQLiteWikiStore.ftsIndexRowCount`.
+    private func ftsIndexRowCount(_ table: String, in db: Database) -> Int {
+        (try? Int.fetchOne(db, sql: "SELECT count(*) FROM \(table)_idx;")) ?? 0
     }
 
     // MARK: - Source link queries
