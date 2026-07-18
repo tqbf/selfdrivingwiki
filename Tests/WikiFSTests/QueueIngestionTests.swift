@@ -104,7 +104,8 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         sourceIDs: [PageID],
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
     ) async throws {
         calledWikiID = wikiID
         calledSourceIDs = sourceIDs
@@ -117,7 +118,8 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         wikiID: String,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
     ) async throws {
         calledLintWikiID = wikiID
         calledLintPageIDs = []
@@ -131,7 +133,8 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         pageIDs: [PageID],
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
     ) async throws {
         calledLintWikiID = wikiID
         calledLintPageIDs = pageIDs
@@ -155,7 +158,8 @@ struct QueueIngestionWorkerTests {
         let factory = QueueIngestionWorkerFactory(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in },
+            emitLiveUsage: { _, _ in })
         let worker = try await factory.worker(for: QueueItem(
             id: "test1", queue: .ingestion, wikiID: "wiki1",
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
@@ -180,7 +184,7 @@ struct QueueIngestionWorkerTests {
         let worker = QueueIngestionWorker(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in })
 
         await #expect(throws: QueueIngestionError.self) {
             try await worker.execute(QueueItem(
@@ -198,7 +202,7 @@ struct QueueIngestionWorkerTests {
         let worker = QueueIngestionWorker(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in })
 
         await #expect(throws: QueueIngestionError.self) {
             try await worker.execute(QueueItem(
@@ -217,7 +221,7 @@ struct QueueIngestionWorkerTests {
         let worker = QueueIngestionWorker(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in })
 
         do {
             try await worker.execute(QueueItem(
@@ -249,7 +253,7 @@ struct QueueIngestionWorkerTests {
         let worker = QueueIngestionWorker(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in })
 
         try await worker.execute(QueueItem(
             id: "test-ready-ok", queue: .ingestion, wikiID: "wiki1",
@@ -414,7 +418,8 @@ struct LintIngestionDispatchTests {
         let factory = QueueIngestionWorkerFactory(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in },
+            emitLiveUsage: { _, _ in })
         let worker = try await factory.worker(for: QueueItem(
             id: "lint1", queue: .ingestion, wikiID: "w1",
             payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [PageID(rawValue: "p1")]),
@@ -439,7 +444,8 @@ struct LintIngestionDispatchTests {
         let factory = QueueIngestionWorkerFactory(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in },
+            emitLiveUsage: { _, _ in })
         let worker = try await factory.worker(for: QueueItem(
             id: "lint2", queue: .ingestion, wikiID: "w1",
             payload: QueueItemPayload(sourceIDs: [], lintPageIDs: []),
@@ -462,7 +468,8 @@ struct LintIngestionDispatchTests {
         let factory = QueueIngestionWorkerFactory(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in },
+            emitLiveUsage: { _, _ in })
         let worker = try await factory.worker(for: QueueItem(
             id: "ing1", queue: .ingestion, wikiID: "w1",
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "s1")]),

@@ -67,7 +67,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         sourceIDs: [PageID],
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
     ) async throws {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
@@ -165,7 +166,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
                         }
                     },
                     onProgress: onProgress,
-                    onTranscript: onTranscript
+                    onTranscript: onTranscript,
+                    onLiveUsage: onLiveUsage
                 )
             } catch {
                 DebugLog.ingest("AppQueueIngestionProvider: workspace creation FAILED — falling back to main, \(error.localizedDescription)")
@@ -177,7 +179,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
                     changeSignaler: changeSignaler,
                     ingestingSourceIDs: Set(sourceIDs),
                     onProgress: onProgress,
-                    onTranscript: onTranscript
+                    onTranscript: onTranscript,
+                    onLiveUsage: onLiveUsage
                 )
             }
         } else {
@@ -189,7 +192,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
                 changeSignaler: changeSignaler,
                 ingestingSourceIDs: Set(sourceIDs),
                 onProgress: onProgress,
-                onTranscript: onTranscript
+                onTranscript: onTranscript,
+                onLiveUsage: onLiveUsage
             )
         }
 
@@ -213,7 +217,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         wikiID: String,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
     ) async throws {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
@@ -237,7 +242,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             wikiID: wikiID,
             changeSignaler: changeSignaler,
             onProgress: onProgress,
-            onTranscript: onTranscript
+            onTranscript: onTranscript,
+            onLiveUsage: onLiveUsage
         )
         onUsage?(launcher.runTotalUsage)
     }
@@ -247,7 +253,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         pageIDs: [PageID],
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
     ) async throws {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
@@ -293,7 +300,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             wikiID: wikiID,
             changeSignaler: changeSignaler,
             onProgress: onProgress,
-            onTranscript: onTranscript
+            onTranscript: onTranscript,
+            onLiveUsage: onLiveUsage
         )
         onUsage?(launcher.runTotalUsage)
     }
@@ -312,7 +320,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         workspaceID: String? = nil,
         onWorkspaceMerge: (@MainActor () -> Void)? = nil,
         onProgress: @escaping @Sendable (String) -> Void,
-        onTranscript: (@Sendable (AgentEvent) -> Void)?
+        onTranscript: (@Sendable (AgentEvent) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
     ) async {
         // Signal the File Provider to refresh the mount before the agent reads.
         await changeSignaler.signalChange()
@@ -332,6 +341,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             ingestingSourceIDs: ingestingSourceIDs,
             workspaceID: workspaceID,
             onEvent: onTranscript,
+            onLiveUsage: onLiveUsage,
+            providerLabel: resolveSelectedProvider().label,
             onLock: { store.agentRunStarted() },
             onUnlock: {
                 store.agentRunEnded()
@@ -351,7 +362,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         wikiID: String,
         changeSignaler: any ChangeSignaler,
         onProgress: @escaping @Sendable (String) -> Void,
-        onTranscript: (@Sendable (AgentEvent) -> Void)?
+        onTranscript: (@Sendable (AgentEvent) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
     ) async {
         await changeSignaler.signalChange()
         let root = changeSignaler.path ?? ""
@@ -365,6 +377,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             ingestingSourceIDs: [],
             workspaceID: nil,
             onEvent: onTranscript,
+            onLiveUsage: onLiveUsage,
+            providerLabel: resolveSelectedProvider().label,
             onLock: { store.agentRunStarted() },
             onUnlock: { store.agentRunEnded() }
         )

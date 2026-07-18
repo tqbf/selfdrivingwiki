@@ -196,6 +196,32 @@ public actor ACPBackend: AgentBackend {
     /// Read by `sessionUsage(for:)` / `contextUsage(for:)` after a turn drains.
     private var usageStates: [String: SessionUsageState] = [:]
 
+    /// #544 live progress: optional per-run callback invoked from the
+    /// notification drain loop on every `usage_update` with the session's
+    /// current `SessionUsage` snapshot. Installed by the launcher at run start
+    /// (it downcasts the backend to `ACPBackend` and sets this); cleared in
+    /// `cancel()`. The callback hops to the main actor in the caller's
+    /// `onLiveUsage` closure before emitting to the queue. nil when live
+    /// progress isn't requested (non-ACP backends, test stubs).
+    ///
+    /// The snapshot carries the current session's `SessionUsageState` totals —
+    /// cumulative token counts + the latest context window + cost. It does NOT
+    /// carry `modelId`/`providerLabel`/`thinkingLevel` (those live on the
+    /// session record + the launcher's config); the launcher enriches the
+    /// snapshot before forwarding to the queue. For the full cross-phase run
+    /// total, the launcher accumulates `runTotalUsage` at each phase's end via
+    /// `capturePhaseUsage`. The Activity window shows the live snapshot during
+    /// the run and the merged total on completion.
+    public var liveUsageCallback: (@Sendable (SessionHandle, SessionUsage) -> Void)?
+
+    /// #544 live progress: async setter for `liveUsageCallback` — actor-isolated
+    /// mutation must hop to the actor. The launcher calls this from its
+    /// `installLiveUsageCallback` (which runs off the ACP actor). Passing nil
+    /// detaches the callback (used in `cancel()`).
+    public func setLiveUsageCallback(_ cb: (@Sendable (SessionHandle, SessionUsage) -> Void)?) {
+        liveUsageCallback = cb
+    }
+
     /// The injected permission policy (yolo vs alwaysAsk). Defaults to `yolo`
     /// — the safe default per the design doc's caveat (always-ask enforcement
     /// depends on the agent emitting `request_permission`, which not all do).
@@ -643,6 +669,7 @@ public actor ACPBackend: AgentBackend {
             // stopReason), while notifications stream in via the fanout
             // subscription. The prompt task and watchdog are both cancelled on
             // consumer termination.
+            let liveUsageCB = self.liveUsageCallback  // capture once (actor-isolated read)
             let promptTask = Task { [client, sessionId, fanout, completionFlag, processHealth, promptText, usageState, handle, debugLogger, debugTurn] in
                 // Subscribe to the session-lifetime fanout (NOT the SDK's
                 // `client.notifications` — that's single-consumer; re-acquiring
@@ -671,6 +698,19 @@ public actor ACPBackend: AgentBackend {
                                 size: usageUpdate.size,
                                 cost: usageUpdate.cost?.amount,
                                 currency: usageUpdate.cost?.currency)
+                            // #544 live progress: forward the post-capture
+                            // snapshot to the launcher's live-usage callback
+                            // so the Activity window updates during the run.
+                            // `snapshot()` carries the cumulative token totals +
+                            // latest context window + cost; the model id is
+                            // attached separately by `buildLiveUsage` (an actor
+                            // hop reads the session's currentModelId). The
+                            // final cross-phase total arrives via `.usage` at end.
+                            if let cb = liveUsageCB {
+                                if let snapshot = usageState?.snapshot() {
+                                    cb(handle, snapshot)
+                                }
+                            }
                         }
                         // #566: write the refreshed config options back to the
                         // session record so the `thought_level` current value
@@ -918,6 +958,9 @@ public actor ACPBackend: AgentBackend {
         // a crash. No session should be resumed from a cancelled run.
         resumableSessionId = nil
         savedOnExit = nil
+        // #544 live progress: detach the live-usage callback so a cancelled
+        // run never forwards stale snapshots to a new run.
+        liveUsageCallback = nil
         // No session record? Could be a warm-subprocess cancel where the session
         // was already closed via closeSession but the process is still alive.
         // Tear down the warm process if present.

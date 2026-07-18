@@ -16,6 +16,7 @@ enum QueueEventType: String, Codable, Sendable {
     case cancelled
     case progress
     case transcript
+    case liveUsage
     case usage
     case runStateChanged
     case reordered
@@ -203,6 +204,24 @@ struct QueueLogRecord: Codable, Sendable {
             self.finishedAt = nil
             self.durationMs = nil
 
+        case .liveUsage:
+            // Live usage events are high-volume (per usage_update during a
+            // run). Consumed live by the Activity window, NOT logged to JSONL.
+            // See #544 live progress.
+            self.eventType = .liveUsage
+            self.itemID = nil
+            self.queue = nil
+            self.wikiID = nil
+            self.providerID = nil
+            self.itemState = nil
+            self.runState = nil
+            self.orderingKey = nil
+            self.attempt = nil
+            self.error = nil
+            self.startedAt = nil
+            self.finishedAt = nil
+            self.durationMs = nil
+
         case .usage:
             // Usage events carry cumulative token/cost data per run (#528
             // spike). Consumed live by the Activity window, NOT logged to
@@ -358,6 +377,7 @@ public actor QueueEventLog {
         // UI consumes them live via the event stream.
         if case .progress = event { return }
         if case .transcript = event { return }
+        if case .liveUsage = event { return }
         if case .usage = event { return }
 
         ensureOpenForToday()
