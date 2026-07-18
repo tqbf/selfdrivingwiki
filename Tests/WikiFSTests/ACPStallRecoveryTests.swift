@@ -85,15 +85,6 @@ import WikiFSEngine
         #expect(AgentEvent.endsGeneration(.messageStop) == true)
     }
 
-    /// `ACPBackendError.turnStalled` produces a user-readable error message.
-    @Test func turnStalledErrorIsDescriptive() {
-        let error = ACPBackendError.turnStalled(idleSeconds: 137)
-        let message = error.errorDescription ?? ""
-        #expect(message.contains("stalled"))
-        #expect(message.contains("137"))
-        #expect(message.contains("cancelled"))
-    }
-
     /// `ACPBackendError.turnCeilingExceeded` produces a user-readable error
     /// message.
     @Test func turnCeilingErrorIsDescriptive() {
@@ -101,30 +92,6 @@ import WikiFSEngine
         let message = error.errorDescription ?? ""
         #expect(message.contains("maximum"))
         #expect(message.contains("1800"))
-    }
-
-    /// `turnEndEvents` with a stall error produces the expected sequence:
-    /// a `.turnFailed(.stalled)` banner, then `.messageStop` — the exact
-    /// sequence the watchdog yields to end a stalled turn. The structured
-    /// reason persists and renders as an amber banner in the UI. (#422)
-    @Test func turnEndEventsForStallSynthesizeMessageStop() {
-        let error = ACPBackendError.turnStalled(idleSeconds: 120)
-        let events = ACPBackend.turnEndEvents(error: error)
-
-        #expect(events.count == 2)
-        // First: a .turnFailed carrying the idle seconds.
-        if case .turnFailed(let reason) = events[0] {
-            if case .stalled(let idle) = reason {
-                #expect(idle == 120)
-            } else {
-                Issue.record("expected .stalled reason, got \(reason)")
-            }
-        } else {
-            Issue.record("expected .turnFailed event, got \(events[0])")
-        }
-        // Second: .messageStop (the generation-ending event).
-        #expect(events[1] == .messageStop)
-        #expect(AgentEvent.endsGeneration(events[1]) == true)
     }
 
     /// `turnEndEvents` with a ceiling error also synthesizes `.messageStop`.

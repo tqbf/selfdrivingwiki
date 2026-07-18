@@ -45,6 +45,9 @@ you read it), re-read the page once, reapply your edit, and retry. If it fails
 again, report the conflict rather than looping.
 
 IMPORTANT:
-- Do NOT dispatch sub-agents, background tasks, or async agents.
+- You MAY dispatch sub-agents via the Task tool to read and digest source
+  sections in parallel. Each sub-agent generates lifecycle notifications that
+  keep the host informed of progress. Workers must NOT write to the wiki —
+  only you write via `$WIKICTL`.
 - Do NOT use sleep or ScheduleWakeup.
 - Write ALL your assigned pages before stopping.

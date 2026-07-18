@@ -118,6 +118,11 @@ public final class AgentLauncher {
     /// process with an old `lastActivityAt` is not necessarily dead, but the UI can
     /// name that it is quiet.
     public private(set) var lastActivityAt: Date?
+    /// The current ingestion phase ("planner", "executor[filename]", "finalizer"),
+    /// or nil when not ingesting or between phases. Surfaced so the UI and the
+    /// heartbeat watchdog can name *what* is running when page creation takes a
+    /// long time — beyond a context-free spinner.
+    public private(set) var currentIngestPhase: String?
     /// The spawned process ID while running, useful context when a run looks quiet.
     public private(set) var currentProcessID: Int32?
 
@@ -430,9 +435,9 @@ public final class AgentLauncher {
     /// Backstop poller that reconciles the UI if the process `terminationHandler`
     /// is ever missed (see `startCompletionWatchdog`). Cancelled on teardown.
     private var watchdogTask: Task<Void, Never>?
-    /// True once the launcher watchdog has escalated (stopAgent + kill sequence).
-    /// Prevents double-escalation. Reset in `resetRunArtifacts()`.
-    private var watchdogHasEscalated = false
+    /// True once the "still working" check-in has fired for the current quiet
+    /// period. Reset when activity resumes or in `resetRunArtifacts()`.
+    private var watchdogHasWarned = false
     /// True while the last row in `events` is an in-progress `.assistantText` row
     /// being grown by streamed `.assistantTextDelta` chunks (issue #121). Reset by
     /// any other event (a tool call, a turn boundary, …) so unrelated `.assistantText`
@@ -1076,6 +1081,7 @@ public final class AgentLauncher {
 
         // --- Phase 1: Planner ---
         DebugLog.agent("runACPIngest: Phase 1 — Planner")
+        currentIngestPhase = "planner"
         guard let plannerRouting = resolveStageRouting(.planner, policy: policy, cache: &stageBackendCache) else {
             DebugLog.agent("runACPIngest: planner routing failed (\(preflightError ?? "?")) — aborting")
             finish(status: -1)
@@ -1159,6 +1165,7 @@ public final class AgentLauncher {
                 // main actor as batches on each turn-end (avoiding interleaved
                 // streaming deltas that would garble the transcript).
                 DebugLog.agent("runACPIngest: Phase 2 — Parallel executors (maxConcurrent=\(maxConcurrent), \(plan.distinctSourceFiles.count) source file(s))")
+                currentIngestPhase = "executor[parallel]"
                 await runParallelExecutors(
                     executorRouting: executorRouting,
                     executorProfile: executorProfile,
@@ -1184,6 +1191,7 @@ public final class AgentLauncher {
                         allPageTitles: plan.allPageTitles,
                         sourceIDs: sourceIDs)
                     DebugLog.agent("runACPIngest: Phase 2 — Executor[\(sourceFile)] (\(assignments.count) page(s))")
+                    currentIngestPhase = "executor[\(sourceFile)]"
                     // Partial failure: log and continue to next executor.
                     // Phase 3: if the planner session is still alive, try to fork it
                     // so the executor inherits the planner's source context. If fork
@@ -1251,6 +1259,7 @@ public final class AgentLauncher {
             sourceFileNames: sourceFileNames,
             sourceIDs: sourceIDs)
         DebugLog.agent("runACPIngest: Phase 3 — Finalizer")
+        currentIngestPhase = "finalizer"
         if let session = await runPhase(
             backend: finalizerRouting.backend,
             profile: finalizerProfile,
@@ -1564,6 +1573,7 @@ public final class AgentLauncher {
         makeCLIProfile: (WikiOperation) -> CLIProfile,
         routing: StageRouting
     ) async {
+        currentIngestPhase = "fallback-single"
         let profile = BackendProfile(
             providerHints: routing.providerHints,
             scratchDirectory: scratch,
@@ -1646,46 +1656,31 @@ public final class AgentLauncher {
         return (resolvedCommand, acpCredentialStore.apiKey(forProvider: provider.id))
     }
 
-    /// Stall threshold for the launcher-level watchdog. More generous than the
-    /// ACPBackend's per-turn 120s `TurnLivenessPolicy` — this is the backstop
-    /// that fires when the backend watchdog's recovery fails (cancelSession
-    /// didn't unblock sendPrompt) and the process is truly wedged.
-    nonisolated static let watchdogStallThreshold: TimeInterval = 180
+    /// Warning threshold for the "still working" check-in. When the agent has
+    /// been idle (no notifications) for this long, the heartbeat logs a
+    /// prominent "still working" check-in so the operator (and Console.app)
+    /// can see that page creation is taking a long time. This does NOT kill
+    /// the process — it's observability only. The idle stall was removed
+    /// because ACP agents produce notifications for every activity, so a
+    /// silent agent is either dead (caught by `sendPrompt` throwing) or
+    /// genuinely working on something long.
+    nonisolated static let watchdogWarningThreshold: TimeInterval = 120
 
     /// Watchdog heartbeat poll interval (seconds). The loop sleeps this long
-    /// between idle-seconds checks.
+    /// between checks.
     nonisolated static let watchdogPollInterval: TimeInterval = 3
 
-    /// Grace period (seconds) after `stopAgent()` before escalating to SIGTERM.
-    nonisolated static let sigtermGracePeriod: TimeInterval = 10
-
-    /// Grace period (seconds) after SIGTERM before escalating to SIGKILL.
-    nonisolated static let sigkillGracePeriod: TimeInterval = 5
-
-    /// Pure stall-detection decision for the launcher watchdog. Extracted so
-    /// the threshold logic is unit-testable without driving launcher state.
-    /// - Returns: true if the watchdog should escalate (stopAgent + kill).
-    nonisolated static func shouldEscalateWatchdog(
-        isRunning: Bool,
-        idleSeconds: TimeInterval,
-        stallThreshold: TimeInterval,
-        alreadyEscalated: Bool
-    ) -> Bool {
-        isRunning && !alreadyEscalated && idleSeconds >= stallThreshold
-    }
-
-    /// Heartbeat logger + stall escalation. Replaces the old liveness-poller
-    /// (which polled `process?.isRunning` — impossible now that `Process` lives
-    /// behind the `AgentBackend` port). The backend's `onExit` callback is the
-    /// sole completion signal: it fires exactly once from `terminationHandler`
-    /// and drives `finish()`.
+    /// Heartbeat logger — observability only. The backend's `onExit` callback
+    /// is the sole completion signal: it fires exactly once from
+    /// `terminationHandler` and drives `finish()`.
     ///
-    /// **Phase 3 escalation (plans/acp-stall-recovery.md §3):** if the session
-    /// has been idle for `watchdogStallThreshold` (180s) and hasn't already
-    /// escalated, this watchdog calls `stopAgent()` (cancel + finish) and
-    /// spawns a separate kill-escalation task: wait 10s → `SIGTERM` the process
-    /// group → wait 5s → `SIGKILL`. The `terminationHandler` fires after the
-    /// kill → `onExit` → `finish()`.
+    /// This loop logs phase, idle time, and elapsed time every `pollInterval`
+    /// seconds, and emits a "still working" check-in when idle exceeds the
+    /// warning threshold. It does NOT kill the process for inactivity — the
+    /// idle stall was removed because ACP agents emit notifications for every
+    /// activity (thinking, tool calls, sub-agent lifecycle), so a live agent
+    /// is almost never truly idle. Process death is detected by `sendPrompt`
+    /// throwing; the turn ceiling (30 min) is the remaining hard backstop.
     private func startCompletionWatchdog() {
         watchdogTask?.cancel()
         watchdogTask = Task { @MainActor [weak self] in
@@ -1694,59 +1689,31 @@ public final class AgentLauncher {
                 guard let self, self.isRunning else { return }
                 let pid = self.currentProcessID ?? -1
                 let idle = self.lastActivityAt.map { Date().timeIntervalSince($0) } ?? -1
+                let phase = self.currentIngestPhase ?? "running"
+                let elapsed = self.runStartedAt.map { Date().timeIntervalSince($0) } ?? -1
                 DebugLog.agent(
-                    "heartbeat pid=\(pid) isRunning=\(self.isRunning) "
-                    + "events=\(self.events.count) idleSec=\(String(format: "%.1f", idle))")
+                    "heartbeat pid=\(pid) phase=\(phase) isRunning=\(self.isRunning) "
+                    + "events=\(self.events.count) idleSec=\(String(format: "%.1f", idle)) "
+                    + "elapsedSec=\(String(format: "%.1f", elapsed))")
 
-                // Stall escalation: if idle exceeds threshold, stop + kill.
-                if Self.shouldEscalateWatchdog(
-                    isRunning: self.isRunning,
-                    idleSeconds: idle,
-                    stallThreshold: Self.watchdogStallThreshold,
-                    alreadyEscalated: self.watchdogHasEscalated
-                ) {
-                    self.watchdogHasEscalated = true
-                    DebugLog.agent("watchdog: STALL detected (idle \(Int(idle))s pid=\(pid)) — escalating: stopAgent() + kill sequence")
-                    self.stopAgent()
-                    self.startKillEscalation(pid: pid)
+                // "Still working" check-in: idle has exceeded the warning
+                // threshold. Page creation can legitimately take minutes of
+                // reasoning — this assures the operator the process is alive
+                // and names which phase is long.
+                if idle >= Self.watchdogWarningThreshold && !self.watchdogHasWarned {
+                    self.watchdogHasWarned = true
+                    DebugLog.agent(
+                        "heartbeat: CHECK-IN — phase=\(phase) has been quiet for \(Int(idle))s "
+                        + "(elapsed \(Int(elapsed))s). Still working — page creation "
+                        + "may take several minutes.")
+                }
+                // Reset the warning flag when activity resumes so the check-in
+                // can fire again on the next long pause.
+                if idle < Self.watchdogWarningThreshold {
+                    self.watchdogHasWarned = false
                 }
             }
         }
-    }
-
-    /// After `stopAgent()`, if the process doesn't die within the escalation
-    /// timeouts, escalate to `SIGTERM` → `SIGKILL`. Runs as a separate Task
-    /// because `stopAgent()` sets `isRunning = false` (which exits the heartbeat
-    /// loop above). Checks `kill(pid, 0)` directly — not `isRunning` — to detect
-    /// whether the process is actually dead. Sends to the process GROUP
-    /// (`kill(-pid, ...)`) so agent-spawned children are also killed.
-    private func startKillEscalation(pid: Int32) {
-        guard pid > 0 else { return }
-        Task { @MainActor in
-            // Phase 1: wait for cancel to take effect.
-            try? await Task.sleep(for: .seconds(Self.sigtermGracePeriod))
-            if Self.isProcessAlive(pid) {
-                DebugLog.agent("watchdog: cancel didn't kill pid=\(pid), sending SIGTERM to process group")
-                kill(-pid, SIGTERM)
-
-                // Phase 2: wait for SIGTERM.
-                try? await Task.sleep(for: .seconds(Self.sigkillGracePeriod))
-                if Self.isProcessAlive(pid) {
-                    DebugLog.agent("watchdog: SIGTERM didn't kill pid=\(pid), sending SIGKILL to process group")
-                    kill(-pid, SIGKILL)
-                }
-            }
-            // After SIGKILL (or if already dead), the terminationHandler fires
-            // → onExit → finish(). No manual finish() needed here.
-            DebugLog.agent("watchdog: kill escalation complete for pid=\(pid)")
-        }
-    }
-
-    /// Check if a process is alive via `kill(pid, 0)`. Returns true if the
-    /// process exists (including if we don't have permission to signal it).
-    private static func isProcessAlive(_ pid: Int32) -> Bool {
-        if kill(pid, 0) == 0 { return true }
-        return errno == EPERM
     }
 
     /// Resolve the `created_by`/`last_edited_by` provenance string stamped on
@@ -2374,7 +2341,7 @@ public final class AgentLauncher {
         DebugLog.agent("finish: status=\(status) events=\(events.count) activeChatID=\(activeChatID ?? "nil")")
         watchdogTask?.cancel()
         watchdogTask = nil
-        watchdogHasEscalated = false
+        watchdogHasWarned = false
         // Session over: flush any remaining tail (a killed/died session still
         // persists its last events) THEN detach the sink — no further writes.
         flushTranscript()
@@ -2444,7 +2411,7 @@ public final class AgentLauncher {
         DebugLog.agent("resetRunArtifacts: clearing per-run artifacts (prior activeChatID=\(activeChatID ?? "nil"))")
         watchdogTask?.cancel()
         watchdogTask = nil
-        watchdogHasEscalated = false
+        watchdogHasWarned = false
         events = []
         eventTimestamps = []
         isStreamingAssistantRow = false
@@ -2457,6 +2424,7 @@ public final class AgentLauncher {
         runningKind = nil
         logFileURL = nil
         lastActivityAt = nil
+        currentIngestPhase = nil
         currentProcessID = nil
         sessionHandle = nil
         plannerSessionHandle = nil
