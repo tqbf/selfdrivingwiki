@@ -534,7 +534,18 @@ public protocol WikiStore: Sendable {
     /// the vec extension or embedding model is unavailable. Search indexes (FTS
     /// + chunk embeddings) are populated automatically on open, so all content
     /// is searchable.
-    func searchSimilar(query: String, limit: Int) throws -> [WikiPageSummary]
+    ///
+    /// - Parameter bm25Leg: Optional **pre-computed, best-first BM25 leg** for
+    ///   Phase 2 Tantivy cutover (`plans/tantivy-search-sidecar.md` §4.4).
+    ///   When non-`nil` and non-empty, the store uses this ranked list INSTEAD
+    ///   of running FTS5 (`searchPagesFTS`), then fuses it with the semantic
+    ///   cosine leg via `RankFusion.rrf` exactly as today. When `nil`/empty,
+    ///   the store runs its own FTS5 (the legacy path — wikictl, tests). This
+    ///   keeps the proven RRF in-store path unchanged while letting the model
+    ///   supply a Tantivy BM25 leg (with FTS5 fallback handled at the model).
+    ///   The 2-arg convenience is in the `WikiStore` extension below (protocol
+    ///   requirements can't carry default arguments).
+    func searchSimilar(query: String, limit: Int, bm25Leg: [WikiPageSummary]?) throws -> [WikiPageSummary]
 
     // MARK: - Semantic source search (v14 source chunk embeddings)
 
@@ -549,7 +560,10 @@ public protocol WikiStore: Sendable {
     /// Search sources semantically (cosine similarity via `vec_distance_cosine`,
     /// ranked by each source's best-matching chunk). Falls back to FTS5 only when
     /// the vec extension or embedding model is unavailable. Mirrors `searchSimilar`.
-    func searchSimilarSources(query: String, limit: Int) throws -> [SourceSummary]
+    ///
+    /// - Parameter bm25Leg: Optional pre-computed best-first BM25 leg (Phase 2
+    ///   Tantivy cutover — see `searchSimilar(query:limit:bm25Leg:)`).
+    func searchSimilarSources(query: String, limit: Int, bm25Leg: [SourceSummary]?) throws -> [SourceSummary]
 
     // MARK: - Bookmark nodes (Bookmarks sidebar tree)
 
@@ -638,7 +652,10 @@ public protocol WikiStore: Sendable {
     /// Search chats semantically + lexically (hybrid RRF, same as
     /// `searchSimilar`/`searchSimilarSources`). Falls back to FTS5 only when the
     /// vec extension or embedding model is unavailable.
-    func searchSimilarChats(query: String, limit: Int) throws -> [ChatSummary]
+    ///
+    /// - Parameter bm25Leg: Optional pre-computed best-first BM25 leg (Phase 2
+    ///   Tantivy cutover — see `searchSimilar(query:limit:bm25Leg:)`).
+    func searchSimilarChats(query: String, limit: Int, bm25Leg: [ChatSummary]?) throws -> [ChatSummary]
 
     // MARK: - Blob GC (#253)
 
@@ -680,6 +697,33 @@ public protocol WikiStore: Sendable {
     /// Set a metadata value for `key` (upsert). NO-EMIT: metadata flags don't
     /// change projected content — they only gate one-time maintenance work.
     func setMetadata(_ key: String, value: String) throws
+}
+
+// MARK: - searchSimilar default-argument convenience (Phase 2 bm25Leg)
+//
+// Protocol requirements can't carry default arguments, so the 2-arg legacy entry
+// points live here. Every caller that omits `bm25Leg` (wikictl, tests, the
+// model's sync `searchSimilar` wrappers) resolves to these and gets the FTS5
+// path — "zero caller breakage" for the Phase 2 cutover.
+
+extension WikiStore {
+    /// Legacy 2-arg entry point — `nil` bm25Leg means the store runs its own
+    /// FTS5 (the pre-Phase-2 path). See `searchSimilar(query:limit:bm25Leg:)`.
+    public func searchSimilar(query: String, limit: Int) throws -> [WikiPageSummary] {
+        try searchSimilar(query: query, limit: limit, bm25Leg: nil)
+    }
+
+    /// Legacy 2-arg entry point for sources. See
+    /// `searchSimilarSources(query:limit:bm25Leg:)`.
+    public func searchSimilarSources(query: String, limit: Int) throws -> [SourceSummary] {
+        try searchSimilarSources(query: query, limit: limit, bm25Leg: nil)
+    }
+
+    /// Legacy 2-arg entry point for chats. See
+    /// `searchSimilarChats(query:limit:bm25Leg:)`.
+    public func searchSimilarChats(query: String, limit: Int) throws -> [ChatSummary] {
+        try searchSimilarChats(query: query, limit: limit, bm25Leg: nil)
+    }
 }
 
 // MARK: - addSource default-argument convenience

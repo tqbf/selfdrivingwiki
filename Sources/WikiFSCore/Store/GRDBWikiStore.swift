@@ -4631,38 +4631,48 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func searchSimilar(query: String, limit: Int) throws -> [WikiPageSummary] {
+    public func searchSimilar(query: String, limit: Int, bm25Leg: [WikiPageSummary]?) throws -> [WikiPageSummary] {
         try dbQueue.read { db in
             let pool = max(limit * 2, limit)
             // --- FTS (lexical) pass ---
-            let q = Self.ftsMatch(query)
-            var ftsRows: [WikiPageSummary] = []
-            if !q.isEmpty {
-                ftsRows = try Row.fetchAll(
-                    db,
-                    sql: """
-                    SELECT p.id, p.title, p.updated_at, p.created_at
-                    FROM pages_fts
-                    JOIN pages p ON p.rowid = pages_fts.rowid
-                    WHERE pages_fts MATCH ?
-                    ORDER BY rank
-                    LIMIT ?;
-                    """,
-                    arguments: [q, pool]
-                ).map { row in
-                    WikiPageSummary(
-                        id: PageID(rawValue: row["id"]),
-                        title: row["title"],
-                        updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
-                        createdAt: Date(timeIntervalSince1970: row["created_at"])
-                    )
+            // Phase 2 Tantivy cutover (plans/tantivy-search-sidecar.md §4.4): a
+            // caller-supplied `bm25Leg` (Tantivy search mapped to summaries)
+            // REPLACES the FTS5 query when non-empty; otherwise run FTS5.
+            // Semantic leg + RankFusion.rrf run unchanged either way.
+            let ftsRows: [WikiPageSummary]
+            if let bm25Leg, !bm25Leg.isEmpty {
+                ftsRows = bm25Leg
+            } else {
+                let q = Self.ftsMatch(query)
+                var rows: [WikiPageSummary] = []
+                if !q.isEmpty {
+                    rows = try Row.fetchAll(
+                        db,
+                        sql: """
+                        SELECT p.id, p.title, p.updated_at, p.created_at
+                        FROM pages_fts
+                        JOIN pages p ON p.rowid = pages_fts.rowid
+                        WHERE pages_fts MATCH ?
+                        ORDER BY rank
+                        LIMIT ?;
+                        """,
+                        arguments: [q, pool]
+                    ).map { row in
+                        WikiPageSummary(
+                            id: PageID(rawValue: row["id"]),
+                            title: row["title"],
+                            updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
+                            createdAt: Date(timeIntervalSince1970: row["created_at"])
+                        )
+                    }
                 }
+                ftsRows = rows
             }
 
             // --- Semantic (vec cosine) pass + RRF ---
             if Self.isVecAvailable(db),
                let queryBlob = EmbeddingService.embeddingBlob(for: query) {
-                DebugLog.store("search[pages]: query=\(query) hybrid (semantic+FTS) → RRF, vec=true")
+                DebugLog.store("search[pages]: query=\(query) \(bm25Leg == nil ? "FTS-only" : "Tantivy-BM25"), vec=true")
                 let semRows = try Row.fetchAll(
                     db,
                     sql: """
@@ -4686,7 +4696,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 }
                 return Array(RankFusion.rrf([semRows, ftsRows], id: \.id).prefix(limit))
             }
-            DebugLog.store("search[pages]: query=\(query) FTS-only, vec=false")
+            DebugLog.store("search[pages]: query=\(query) \(bm25Leg == nil ? "FTS-only" : "Tantivy-BM25"), vec=false")
             return Array(ftsRows.prefix(limit))
         }
     }
@@ -4726,35 +4736,43 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func searchSimilarSources(query: String, limit: Int) throws -> [SourceSummary] {
+    public func searchSimilarSources(query: String, limit: Int, bm25Leg: [SourceSummary]?) throws -> [SourceSummary] {
         try dbQueue.read { db in
             let pool = max(limit * 2, limit)
             // --- FTS (lexical) pass ---
-            let q = Self.ftsMatch(query)
-            var ftsRows: [SourceSummary] = []
-            if !q.isEmpty {
-                ftsRows = try Row.fetchAll(
-                    db,
-                    sql: """
-                    SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size, s.created_at, s.updated_at,
-                           s.version, s.zotero_item_key, s.zotero_item_title, s.display_name, s.role
-                    FROM sources_fts
-                    JOIN source_search ss ON ss.rowid = sources_fts.rowid
-                    JOIN sources s ON s.id = ss.source_id
-                    WHERE sources_fts MATCH ?
-                    ORDER BY rank
-                    LIMIT ?;
-                    """,
-                    arguments: [q, pool]
-                ).map { row in
-                    try Self.readSourceSummary(from: row)
+            // Phase 2 Tantivy cutover — bm25Leg replaces FTS5 when supplied (see
+            // searchSimilar(query:limit:bm25Leg:) above for the full rationale).
+            let ftsRows: [SourceSummary]
+            if let bm25Leg, !bm25Leg.isEmpty {
+                ftsRows = bm25Leg
+            } else {
+                let q = Self.ftsMatch(query)
+                var rows: [SourceSummary] = []
+                if !q.isEmpty {
+                    rows = try Row.fetchAll(
+                        db,
+                        sql: """
+                        SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size, s.created_at, s.updated_at,
+                               s.version, s.zotero_item_key, s.zotero_item_title, s.display_name, s.role
+                        FROM sources_fts
+                        JOIN source_search ss ON ss.rowid = sources_fts.rowid
+                        JOIN sources s ON s.id = ss.source_id
+                        WHERE sources_fts MATCH ?
+                        ORDER BY rank
+                        LIMIT ?;
+                        """,
+                        arguments: [q, pool]
+                    ).map { row in
+                        try Self.readSourceSummary(from: row)
+                    }
                 }
+                ftsRows = rows
             }
 
             // --- Semantic (vec cosine) pass + RRF ---
             if Self.isVecAvailable(db),
                let queryBlob = EmbeddingService.embeddingBlob(for: query) {
-                DebugLog.store("search[sources]: query=\(query) hybrid (semantic+FTS) → RRF, vec=true")
+                DebugLog.store("search[sources]: query=\(query) \(bm25Leg == nil ? "FTS-only" : "Tantivy-BM25"), vec=true")
                 let semRows = try Row.fetchAll(
                     db,
                     sql: """
@@ -4774,7 +4792,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 }
                 return Array(RankFusion.rrf([semRows, ftsRows], id: \.id).prefix(limit))
             }
-            DebugLog.store("search[sources]: query=\(query) FTS-only, vec=false")
+            DebugLog.store("search[sources]: query=\(query) \(bm25Leg == nil ? "FTS-only" : "Tantivy-BM25"), vec=false")
             return Array(ftsRows.prefix(limit))
         }
     }
@@ -5293,35 +5311,43 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func searchSimilarChats(query: String, limit: Int) throws -> [ChatSummary] {
+    public func searchSimilarChats(query: String, limit: Int, bm25Leg: [ChatSummary]?) throws -> [ChatSummary] {
         try dbQueue.read { db in
             let pool = max(limit * 2, limit)
             // --- FTS (lexical) pass ---
-            let q = Self.ftsMatch(query)
-            var ftsRows: [ChatSummary] = []
-            if !q.isEmpty {
-                ftsRows = try Row.fetchAll(
-                    db,
-                    sql: """
-                    SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
-                           (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count
-                    FROM chats_fts
-                    JOIN chat_search cs ON cs.rowid = chats_fts.rowid
-                    JOIN chats c ON c.id = cs.chat_id
-                    WHERE chats_fts MATCH ?
-                    ORDER BY rank
-                    LIMIT ?;
-                    """,
-                    arguments: [q, pool]
-                ).map { row in
-                    Self.readChatSummary(from: row, summary: nil, summaryAt: nil)
+            // Phase 2 Tantivy cutover — bm25Leg replaces FTS5 when supplied (see
+            // searchSimilar(query:limit:bm25Leg:) above for the full rationale).
+            let ftsRows: [ChatSummary]
+            if let bm25Leg, !bm25Leg.isEmpty {
+                ftsRows = bm25Leg
+            } else {
+                let q = Self.ftsMatch(query)
+                var rows: [ChatSummary] = []
+                if !q.isEmpty {
+                    rows = try Row.fetchAll(
+                        db,
+                        sql: """
+                        SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
+                               (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count
+                        FROM chats_fts
+                        JOIN chat_search cs ON cs.rowid = chats_fts.rowid
+                        JOIN chats c ON c.id = cs.chat_id
+                        WHERE chats_fts MATCH ?
+                        ORDER BY rank
+                        LIMIT ?;
+                        """,
+                        arguments: [q, pool]
+                    ).map { row in
+                        Self.readChatSummary(from: row, summary: nil, summaryAt: nil)
+                    }
                 }
+                ftsRows = rows
             }
 
             // --- Semantic (vec cosine) pass + RRF ---
             if Self.isVecAvailable(db),
                let queryBlob = EmbeddingService.embeddingBlob(for: query) {
-                DebugLog.store("search[chats]: query=\(query) hybrid (semantic+FTS) → RRF, vec=true")
+                DebugLog.store("search[chats]: query=\(query) \(bm25Leg == nil ? "FTS-only" : "Tantivy-BM25"), vec=true")
                 let semRows = try Row.fetchAll(
                     db,
                     sql: """
@@ -5341,7 +5367,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 }
                 return Array(RankFusion.rrf([semRows, ftsRows], id: \.id).prefix(limit))
             }
-            DebugLog.store("search[chats]: query=\(query) FTS-only, vec=false")
+            DebugLog.store("search[chats]: query=\(query) \(bm25Leg == nil ? "FTS-only" : "Tantivy-BM25"), vec=false")
             return Array(ftsRows.prefix(limit))
         }
     }

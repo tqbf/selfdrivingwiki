@@ -7794,24 +7794,35 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
         query: String,
         limit: Int,
         id: KeyPath<Row, PageID>,
+        bm25Leg: [Row]?,
         fts: (_ pool: Int) throws -> [Row],
         semantic: (_ queryBlob: Data, _ pool: Int) throws -> [Row]
     ) throws -> [Row] {
         let pool = max(limit * 2, limit)
-        let ftsRows = try fts(pool)
+        // Phase 2 Tantivy cutover (plans/tantivy-search-sidecar.md §4.4): when
+        // the caller supplies a pre-computed best-first BM25 leg (a Tantivy
+        // search mapped to typed summaries), use it INSTEAD of running FTS5.
+        // `nil`/empty → legacy FTS5 path (wikictl, tests, Tantivy unavailable).
+        // The semantic leg + RankFusion.rrf run unchanged either way.
+        let ftsRows: [Row]
+        if let bm25Leg, !bm25Leg.isEmpty {
+            ftsRows = bm25Leg
+        } else {
+            ftsRows = try fts(pool)
+        }
         if isVecAvailable(), let queryBlob = EmbeddingService.embeddingBlob(for: query) {
-            DebugLog.store("search[\(kind)]: query=\(query) hybrid (semantic+FTS) → RRF, vec=true")
+            DebugLog.store("search[\(kind)]: query=\(query) \(bm25Leg == nil ? "FTS-only" : "Tantivy-BM25"), vec=true")
             let semRows = try semantic(queryBlob, pool)
             return Array(RankFusion.rrf([semRows, ftsRows], id: id).prefix(limit))
         }
-        DebugLog.store("search[\(kind)]: query=\(query) FTS-only, vec=false")
+        DebugLog.store("search[\(kind)]: query=\(query) \(bm25Leg == nil ? "FTS-only" : "Tantivy-BM25"), vec=false")
         return Array(ftsRows.prefix(limit))
     }
 
-    public func searchSimilar(query: String, limit: Int) throws -> [WikiPageSummary] {
+    public func searchSimilar(query: String, limit: Int, bm25Leg: [WikiPageSummary]?) throws -> [WikiPageSummary] {
         lock.lock(); defer { lock.unlock() }
         return try hybridSearch(
-            kind: "pages", query: query, limit: limit, id: \.id,
+            kind: "pages", query: query, limit: limit, id: \.id, bm25Leg: bm25Leg,
             fts: { try searchPagesFTS(query: query, limit: $0) },
             semantic: { try searchPagesSemantic(blob: $0, limit: $1) })
     }
@@ -8265,10 +8276,10 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// it at index 5 and shift every later column, so `sourceSummary(from:)`
     /// (which reads index 5 as `created_at`) would dereference the BLOB as a
     /// Double. `listSources()` already names its columns for the same reason.
-    public func searchSimilarSources(query: String, limit: Int) throws -> [SourceSummary] {
+    public func searchSimilarSources(query: String, limit: Int, bm25Leg: [SourceSummary]?) throws -> [SourceSummary] {
         lock.lock(); defer { lock.unlock() }
         return try hybridSearch(
-            kind: "sources", query: query, limit: limit, id: \.id,
+            kind: "sources", query: query, limit: limit, id: \.id, bm25Leg: bm25Leg,
             fts: { try searchSourcesFTS(query: query, limit: $0) },
             semantic: { try searchSourcesSemantic(blob: $0, limit: $1) })
     }
@@ -8305,10 +8316,10 @@ public final class SQLiteWikiStore: WikiStore, @unchecked Sendable {
     /// `chat_chunks`, ranked by each chat's best-matching message chunk). Falls
     /// back to FTS-only when vec or the model is unavailable. Mirrors
     /// `searchSimilar`/`searchSimilarSources`.
-    public func searchSimilarChats(query: String, limit: Int) throws -> [ChatSummary] {
+    public func searchSimilarChats(query: String, limit: Int, bm25Leg: [ChatSummary]?) throws -> [ChatSummary] {
         lock.lock(); defer { lock.unlock() }
         return try hybridSearch(
-            kind: "chats", query: query, limit: limit, id: \.id,
+            kind: "chats", query: query, limit: limit, id: \.id, bm25Leg: bm25Leg,
             fts: { try searchChatsFTS(query: query, limit: $0) },
             semantic: { try searchChatsSemantic(blob: $0, limit: $1) })
     }

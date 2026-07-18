@@ -92,10 +92,9 @@ public final class WikiSession {
     /// blob and activity orphans; cleared on Cancel / Vacuum.
     public var pendingVacuumAll: VacuumReport?
 
-    /// Phase 1 Tantivy SHADOW search index (plans/tantivy-search-sidecar.md).
-    /// EXPERIMENTAL: built and kept in sync alongside FTS5, but NOT wired into
-    /// the production search path yet — FTS5 + sqlite-vec + RRF remains
-    /// primary. `nil` if construction failed (session never breaks over a
+    /// Phase 2 Tantivy search index (plans/tantivy-search-sidecar.md §4.4).
+    /// Tantivy is now the PRIMARY BM25 leg of the hybrid search; FTS5 is kept
+    /// as fallback. `nil` if construction failed (session never breaks over a
     /// derived index). Retained for the lifetime of the session so the
     /// `TantivyShadowSync` bus subscription stays alive.
     public let tantivyShadowSearch: TantivySearchService?
@@ -200,13 +199,15 @@ public final class WikiSession {
         self.store = model
         self.descriptor = sessionDescriptor
 
-        // Phase 1 Tantivy SHADOW index (plans/tantivy-search-sidecar.md).
-        // Built and synced alongside FTS5; NOT wired into the production
-        // search path. Failures are non-fatal — the session never breaks over
-        // a derived, rebuildable index; a failed start just means no shadow
-        // results (FTS5 still answers). Reads happen off-main on the indexer
-        // actor; the content source reads committed SQLite state through its
-        // own recursive lock (no statement handle crosses a boundary).
+        // Phase 2 Tantivy search index (plans/tantivy-search-sidecar.md §4.4).
+        // Phase 2 CUTOVER: Tantivy is now the PRIMARY BM25 leg of the hybrid
+        // search. The service is injected into the model (`model.tantivySearch =
+        // svc`) so the search path queries Tantivy first, falling back to FTS5
+        // when Tantivy is unavailable/empty. Failures are non-fatal — the session
+        // never breaks over a derived, rebuildable index; a failed start just
+        // means no Tantivy results (FTS5 still answers). Reads happen off-main on
+        // the indexer actor; the content source reads committed SQLite state
+        // through its own recursive lock (no statement handle crosses a boundary).
         var shadowSearch: TantivySearchService?
         var shadowSync: TantivyShadowSync?
         if let shadowStore, let bus = shadowStore.eventBus {
@@ -221,8 +222,10 @@ public final class WikiSession {
                 sync.start()
                 shadowSearch = svc
                 shadowSync = sync
+                // Wire the service into the model's search path (Phase 2 cutover).
+                model.tantivySearch = svc
             } catch {
-                DebugLog.store("WikiSession: Tantivy shadow index disabled for wiki \(wikiID): \(error)")
+                DebugLog.store("WikiSession: Tantivy search index disabled for wiki \(wikiID): \(error)")
             }
         }
         self.tantivyShadowSearch = shadowSearch
@@ -299,5 +302,27 @@ public final class WikiSession {
     /// SQLite).
     public func upgradeSearchIndex() async {
         await store.upgradeSearchIndex()
+    }
+
+    // MARK: - Tantivy search (Phase 2)
+
+    /// Free-text search over this session's Tantivy index (Phase 2 primary BM25
+    /// leg — plans/tantivy-search-sidecar.md §4.4). Returns kind-tagged hits with
+    /// id/title/kind/score, decoupled from the store's typed summaries. Returns
+    /// `nil` (not an empty list) when the Tantivy index was never built or
+    /// failed to open, so a caller can distinguish "index unavailable (fall back
+    /// to FTS5)" from "index queried, no matches."
+    ///
+    /// The production hybrid search uses this internally via
+    /// `WikiStoreModel.resolveTantivyLeg(...)` — this public accessor is for
+    /// direct/CLI/check queries that want the raw Tantivy hits without the
+    /// semantic-cosine + RRF fusion the model applies.
+    public func searchTantivy(
+        query: String,
+        kinds: [TantivyDocumentKind] = [],
+        limit: Int = 20
+    ) async -> [TantivyShadowSearchResult]? {
+        guard let svc = tantivyShadowSearch else { return nil }
+        return await svc.search(query: query, kinds: kinds, limit: limit)
     }
 }

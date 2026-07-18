@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import UniformTypeIdentifiers
+import WikiFSSearch
 
 /// Progress of the blocking search-index upgrade (see
 /// `WikiStoreModel.searchUpgrade`). Shown in a non-dismissible sheet while the
@@ -268,6 +269,14 @@ public final class WikiStoreModel {
     /// different, empty database) and in tests — callers fall back to the
     /// main-actor store. See `WikiReadPool` for the safety argument.
     @ObservationIgnored public var readPool: WikiReadPool?
+
+    /// Phase 2 Tantivy BM25 search service (plans/tantivy-search-sidecar.md §4.4).
+    /// Injected by `WikiSession` after init (the service is built from the same
+    /// store + bus the model wraps, but construction happens post-init so this is
+    /// set rather than a constructor param — same lifecycle as `readPool`).
+    /// `nil` when Tantivy construction failed (the session never breaks over a
+    /// derived index) — search silently falls back to FTS5 in that case.
+    @ObservationIgnored public var tantivySearch: TantivySearchService?
     private var autosaveTask: Task<Void, Never>?
     private var systemPromptAutosaveTask: Task<Void, Never>?
     /// The page whose text currently lives in the draft buffers.
@@ -2842,6 +2851,68 @@ public final class WikiStoreModel {
         }.value
     }
 
+    // MARK: - Phase 2: Tantivy BM25 leg (cutover)
+    //
+    // Tantivy is now the PRIMARY lexical/BM25 leg of the hybrid search
+    // (plans/tantivy-search-sidecar.md §4.4). Flow:
+    //   1. `resolveTantivyLeg(...)` queries the Tantivy index (async, actor) and
+    //      maps hits to full typed summaries via the cached catalog, preserving
+    //      Tantivy's best-first rank order.
+    //   2. The leg is passed to `store.searchSimilar(query:limit:bm25Leg:)`.
+    //      The store uses the leg INSTEAD of FTS5, then fuses it with the
+    //      semantic cosine leg via `RankFusion.rrf` (unchanged, in-store).
+    //   3. `nil` leg → the store falls back to FTS5 (Tantivy unavailable, empty,
+    //      or all hits resolved to nothing). wikictl/tests always pass `nil`.
+    //
+    // FTS5 is kept fully intact for Phase 2 fallback; Phase 3 retires it.
+
+    /// Resolve Tantivy BM25 hits into full typed summaries from a cached
+    /// catalog, preserving Tantivy's best-first rank order. Returns `nil` when
+    /// Tantivy is unavailable, the index returned nothing, or every hit was
+    /// missing from the catalog (e.g. a resource deleted since the last Tantivy
+    /// sync). A `nil` return makes the store fall back to FTS5.
+    ///
+    /// `catalog` is a value-type copy captured at the call site, so a main-actor
+    /// mutation during the `await svc.search` suspension can't race the lookup.
+    private func resolveTantivyLeg<T: Identifiable & Sendable>(
+        query: String,
+        kind: TantivyDocumentKind,
+        limit: Int,
+        catalog: [T]
+    ) async -> [T]? where T.ID == PageID {
+        guard let svc = tantivySearch else { return nil }
+        let hits = await svc.search(query: query, kinds: [kind], limit: limit)
+        guard !hits.isEmpty else { return nil }
+        let byID = Dictionary(catalog.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let resolved = hits.compactMap { hit -> T? in
+            let id = PageID(rawValue: hit.ulid)
+            return byID[id]
+        }
+        return resolved.isEmpty ? nil : resolved
+    }
+
+    /// Phase 2 shadow-comparison log. With Option B the FTS5 leg isn't run
+    /// separately when Tantivy succeeds, so the meaningful Phase 2 signal is: of
+    /// the Tantivy BM25 hits fed into RRF, how many survive into the final fused
+    /// output (a high overlap means Tantivy's lexical signal is well-represented;
+    /// a low overlap means the semantic leg dominated). Latency is total hybrid
+    /// time (Tantivy query + store semantic + RRF). Raw FTS5-vs-Tantivy BM25
+    /// parity was already validated in Phase 1 shadow tests
+    /// (`TantivyShadowIndexTests`).
+    private func logShadowComparison<T: Identifiable & Hashable & Sendable>(
+        kind: String,
+        query: String,
+        leg: [T]?,
+        fused: [T],
+        t0: DispatchTime
+    ) where T.ID == PageID {
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
+        let legIDs = Set((leg ?? []).map { $0.id })
+        let fusedIDs = Set(fused.map { $0.id })
+        let overlap = legIDs.intersection(fusedIDs).count
+        DebugLog.store("search[\(kind)]: query=\"\(query)\" Tantivy-BM25=\(leg?.count ?? 0) fused=\(fused.count) overlap=\(overlap) ms=\(String(format: "%.1f", ms))")
+    }
+
     private func scheduleSearch() {
         searchTask?.cancel()
         guard !searchQuery.isEmpty else {
@@ -2855,15 +2926,19 @@ public final class WikiStoreModel {
             // never contends with the main-actor write store; fall back to the
             // main store when no pool exists (in-memory wiki, tests).
             let query = self.searchQuery
+            let t0 = DispatchTime.now()
+            let bm25Leg = await self.resolveTantivyLeg(
+                query: query, kind: .page, limit: 20, catalog: self.summaries)
             let results: [WikiPageSummary]
             if let pool = self.readPool {
                 results = (try? await pool.asyncRead { reader in
-                    try reader.searchSimilar(query: query, limit: 20)
+                    try reader.searchSimilar(query: query, limit: 20, bm25Leg: bm25Leg)
                 }) ?? []
             } else {
-                results = (try? self.store.searchSimilar(query: query, limit: 20)) ?? []
+                results = (try? self.store.searchSimilar(query: query, limit: 20, bm25Leg: bm25Leg)) ?? []
             }
             guard !Task.isCancelled else { return }
+            self.logShadowComparison(kind: "pages", query: query, leg: bm25Leg, fused: results, t0: t0)
             self.searchResults = results
         }
     }
@@ -2878,15 +2953,19 @@ public final class WikiStoreModel {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, let self else { return }
             let query = self.sourceSearchQuery
+            let t0 = DispatchTime.now()
+            let bm25Leg = await self.resolveTantivyLeg(
+                query: query, kind: .source, limit: 20, catalog: self.sources)
             let results: [SourceSummary]
             if let pool = self.readPool {
                 results = (try? await pool.asyncRead { reader in
-                    try reader.searchSimilarSources(query: query, limit: 20)
+                    try reader.searchSimilarSources(query: query, limit: 20, bm25Leg: bm25Leg)
                 }) ?? []
             } else {
-                results = (try? self.store.searchSimilarSources(query: query, limit: 20)) ?? []
+                results = (try? self.store.searchSimilarSources(query: query, limit: 20, bm25Leg: bm25Leg)) ?? []
             }
             guard !Task.isCancelled else { return }
+            self.logShadowComparison(kind: "sources", query: query, leg: bm25Leg, fused: results, t0: t0)
             self.sourceSearchResults = results
         }
     }
@@ -2901,13 +2980,17 @@ public final class WikiStoreModel {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, let self else { return }
             let query = self.chatSearchQuery
+            let t0 = DispatchTime.now()
+            let bm25Leg = await self.resolveTantivyLeg(
+                query: query, kind: .chat, limit: 20, catalog: self.chats)
             // Use the main store (same connection as chatMessages load) so the
             // search results and the body load see the same WAL snapshot —
             // eliminates cross-connection staleness where the read pool could
             // return a chat_id that's been renamed/reordered since the last
             // checkpoint (issue #383).
-            let results = (try? self.store.searchSimilarChats(query: query, limit: 20)) ?? []
+            let results = (try? self.store.searchSimilarChats(query: query, limit: 20, bm25Leg: bm25Leg)) ?? []
             guard !Task.isCancelled else { return }
+            self.logShadowComparison(kind: "chats", query: query, leg: bm25Leg, fused: results, t0: t0)
             self.chatSearchResults = results
         }
     }
