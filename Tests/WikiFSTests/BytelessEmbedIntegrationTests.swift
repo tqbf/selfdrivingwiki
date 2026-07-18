@@ -118,8 +118,21 @@ struct BytelessEmbedIntegrationTests {
     @Test func youtubeURLRoutesToBytelessVideoEmbed() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
+        // Pass nil as the YouTube transcript fetcher so only the byteless embed
+        // is created (this test verifies the embed routing, not transcript
+        // extraction — that's covered by youtubeURLWithTranscriptCreatesEmbedAndMarkdown).
+        #if PODCAST_TRANSCRIPTS
         let outcome = try await model.addURL(
-            "https://www.youtube.com/watch?v=dQw4w9WgXcQ", fetcher: ExplodingFetcher())
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            fetcher: ExplodingFetcher(),
+            podcastFetcher: nil,
+            youtubeFetcher: nil)
+        #else
+        let outcome = try await model.addURL(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            fetcher: ExplodingFetcher(),
+            youtubeFetcher: nil)
+        #endif
         #expect(outcome.kind == .videoEmbed)
         let source = try #require(try store.listSources().first)
         #expect(source.byteSize == 0)  // byteless
@@ -162,6 +175,113 @@ struct BytelessEmbedIntegrationTests {
         let outcome = try await model.addURL(
             "https://example.com/article", fetcher: HTMLFetcher())
         #expect(outcome.kind == .htmlConverted)
+    }
+
+    // MARK: - #564: YouTube transcript extraction
+
+    /// A fake YouTube fetcher that serves canned watch-page HTML + caption XML.
+    struct YouTubeFixtureFetcher: URLFetchService.URLResourceFetcher {
+        func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse {
+            let absolute = url.absoluteString
+            if absolute.contains("/watch") {
+                return URLFetchService.FetchResponse(
+                    data: Data(Self.watchPageHTML.utf8), contentType: "text/html", finalURL: url)
+            }
+            if absolute.contains("timedtext") {
+                return URLFetchService.FetchResponse(
+                    data: Data(Self.captionXML.utf8), contentType: "text/xml", finalURL: url)
+            }
+            throw URLFetchService.FetchError.network("no canned response")
+        }
+        static let watchPageHTML = """
+        <script>var ytInitialPlayerResponse = {
+            "videoDetails": {"title": "Test Talk"},
+            "captions": {"playerCaptionsTracklistRenderer": {"captionTracks": [
+                {"baseUrl": "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en",
+                 "languageCode": "en", "name": {"simpleText": "English"}}
+            ]}}
+        };</script>
+        """
+        static let captionXML = """
+        <transcript>
+            <text start="0.5" dur="2.3">Hello world</text>
+            <text start="2.8" dur="1.5">Second cue</text>
+        </transcript>
+        """
+    }
+
+    @Test func youtubeURLWithTranscriptCreatesEmbedAndMarkdown() async throws {
+        let store = try tempStore()
+        store.eventBus = WikiEventBus(wikiID: "test")
+        let model = WikiStoreModel(store: store)
+        #if PODCAST_TRANSCRIPTS
+        let outcome = try await model.addURL(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            fetcher: YouTubeFixtureFetcher(),
+            podcastFetcher: nil,
+            youtubeFetcher: YouTubeTranscriptService(fetcher: YouTubeFixtureFetcher()))
+        #else
+        let outcome = try await model.addURL(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            fetcher: YouTubeFixtureFetcher())
+        #endif
+        // The outcome reports the transcript (markdown content), not just the embed.
+        #expect(outcome.kind == .videoTranscript)
+        #expect(outcome.filename.hasSuffix("-transcript.md"))
+        let sources = try store.listSources()
+        #expect(sources.count == 1)  // one byteless source, transcript is a derived version
+        let source = try #require(sources.first)
+        #expect(source.byteSize == 0)  // byteless embed
+        // The processed markdown (transcript) is stored as a derived version.
+        let md = try #require(try store.processedMarkdownHead(sourceID: source.id))
+        #expect(md.content.contains("Hello world"))
+        #expect(md.content.contains("Second cue"))
+        #expect(md.content.contains("[Watch on YouTube]"))
+        #expect(md.origin == .transcript)
+        #expect(md.technique == "youtube-captions")
+    }
+
+    @Test func youtubeURLWithNoCaptionsFallsBackToEmbedOnly() async throws {
+        let store = try tempStore()
+        store.eventBus = WikiEventBus(wikiID: "test")
+        let model = WikiStoreModel(store: store)
+        let emptyFetcher = YouTubeNoCaptionsFetcher()
+        #if PODCAST_TRANSCRIPTS
+        let outcome = try await model.addURL(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            fetcher: emptyFetcher,
+            podcastFetcher: nil,
+            youtubeFetcher: YouTubeTranscriptService(fetcher: emptyFetcher))
+        #else
+        let outcome = try await model.addURL(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            fetcher: emptyFetcher)
+        #endif
+        // No captions → embed only (current behavior), transcript failure swallowed.
+        #expect(outcome.kind == .videoEmbed)
+        let sources = try store.listSources()
+        #expect(sources.count == 1)
+        let source = try #require(sources.first)
+        #expect(source.byteSize == 0)  // byteless embed, no transcript stored
+        // No processed markdown version was created.
+        #expect(try store.processedMarkdownHead(sourceID: source.id) == nil)
+    }
+
+    /// Serves a watch page that has no caption tracks → `.noCaptions`.
+    struct YouTubeNoCaptionsFetcher: URLFetchService.URLResourceFetcher {
+        func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse {
+            if url.absoluteString.contains("/watch") {
+                let html = """
+                <script>var ytInitialPlayerResponse = {
+                    "videoDetails": {"title": "No Captions"},
+                    "captions": {"playerCaptionsTracklistRenderer": {"captionTracks": []}}
+                };</script>
+                """
+                return URLFetchService.FetchResponse(
+                    data: Data(html.utf8), contentType: "text/html", finalURL: url)
+            }
+            throw URLFetchService.FetchError.network("no canned response")
+        }
     }
 
     // MARK: - AC.8: new providers are not refreshable
