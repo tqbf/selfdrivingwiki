@@ -34,6 +34,15 @@ final class LiveUsageEmitBox: @unchecked Sendable {
     var emit: (@Sendable (QueueItem.ID, SessionUsage) -> Void)?
 }
 
+/// A mutable box for a `@Sendable` log-paths-emit closure. Same pattern as
+/// the other emit boxes — breaks the circular dependency between the ingestion
+/// worker factory (needs the closure) and the engine (provides it). Carries
+/// the run's `run.jsonl` log URL and `debug/` folder URL so the Activity
+/// window can offer "Reveal Log" / "Reveal Debug Folder".
+final class LogPathsEmitBox: @unchecked Sendable {
+    var emit: (@Sendable (QueueItem.ID, URL?, URL?) -> Void)?
+}
+
 /// Observes `QueueEngine.events` and maintains `@Observable` UI state for
 /// extraction activity. Replaces the launcher's extraction slot machinery
 /// (`isExtracting`, `extractionLog`, `extractionPID`,
@@ -141,6 +150,15 @@ final class QueueActivityTracker {
     /// aggregate line.
     private(set) var itemUsageByModel: [QueueItem.ID: [String: ModelUsageBreakdown]] = [:]
 
+    /// Per-item lightweight log file URL (`run.jsonl`) — the raw stream-json
+    /// trace. Set once when `.runPaths` arrives after the run starts.
+    private(set) var itemLogURLs: [QueueItem.ID: URL] = [:]
+
+    /// Per-item verbose debug folder URL (`debug/`) — the complete ACP wire
+    /// trace (per-turn JSON, permissions, stderr, summary). Set once when
+    /// `.runPaths` arrives after the run starts.
+    private(set) var itemDebugURLs: [QueueItem.ID: URL] = [:]
+
     /// Accumulated progress log for the most recent extraction. Cleared on
     /// `.started`, appended on `.progress`. Drives the sidebar log text.
     private(set) var extractionLog: String = ""
@@ -224,11 +242,10 @@ final class QueueActivityTracker {
         transcripts.removeAll()
         progressLogs.removeAll()
         itemUsage.removeAll()
-<<<<<<< HEAD
         liveUsage.removeAll()
-=======
         itemUsageByModel.removeAll()
->>>>>>> 65f6340 (feat(#583): per-model usage breakdown in menu bar + Activity window)
+        itemLogURLs.removeAll()
+        itemDebugURLs.removeAll()
         streamingTranscriptItemIDs.removeAll()
         streamingThinkingItemIDs.removeAll()
     }
@@ -333,11 +350,10 @@ final class QueueActivityTracker {
         transcripts.removeValue(forKey: itemID)
         progressLogs.removeValue(forKey: itemID)
         itemUsage.removeValue(forKey: itemID)
-<<<<<<< HEAD
         liveUsage.removeValue(forKey: itemID)
-=======
         itemUsageByModel.removeValue(forKey: itemID)
->>>>>>> 65f6340 (feat(#583): per-model usage breakdown in menu bar + Activity window)
+        itemLogURLs.removeValue(forKey: itemID)
+        itemDebugURLs.removeValue(forKey: itemID)
         streamingTranscriptItemIDs.remove(itemID)
         streamingThinkingItemIDs.remove(itemID)
     }
@@ -358,20 +374,31 @@ final class QueueActivityTracker {
         itemUsage[itemID]
     }
 
-<<<<<<< HEAD
     /// The in-progress token/cost usage for a running item, or `nil` if no
     /// `usage_update` has arrived yet. Read by the Activity window to render
     /// live token counts + model name during a run (#544 live progress).
     func liveUsage(for itemID: QueueItem.ID) -> SessionUsage? {
         liveUsage[itemID]
-=======
+    }
+
     /// The per-model usage breakdown for a completed item (#583). Returns an
     /// empty dict when usage wasn't captured or no model id was reported. Read
     /// by the Activity window's per-item detail to show a model breakdown below
     /// the aggregate line.
     func usageBreakdown(for itemID: QueueItem.ID) -> [String: ModelUsageBreakdown] {
         itemUsageByModel[itemID] ?? [:]
->>>>>>> 65f6340 (feat(#583): per-model usage breakdown in menu bar + Activity window)
+    }
+
+    /// The lightweight `run.jsonl` log file URL for an item, or `nil` if the
+    /// run didn't create one. Read by the Activity window for "Reveal Log".
+    func logURL(for itemID: QueueItem.ID) -> URL? {
+        itemLogURLs[itemID]
+    }
+
+    /// The verbose `debug/` folder URL for an item, or `nil` if the run
+    /// didn't create one. Read by the Activity window for "Reveal Debug Folder".
+    func debugURL(for itemID: QueueItem.ID) -> URL? {
+        itemDebugURLs[itemID]
     }
 
     // MARK: - Event handling
@@ -430,7 +457,7 @@ final class QueueActivityTracker {
             todayUsage.add(usage)
             todayUsageByModel.add(usage)
             DailyUsage.save(todayUsage)
-<<<<<<< HEAD
+            DailyUsageByModel.save(todayUsageByModel)
             // The run is complete — drop the in-progress snapshot so the
             // Activity window renders the final totals, not a stale live one.
             liveUsage.removeValue(forKey: id)
@@ -441,9 +468,13 @@ final class QueueActivityTracker {
             // usage_update carries the current cumulative totals + the latest
             // model/cost). Cleared on terminal state in removeItem().
             liveUsage[id] = usage
-=======
-            DailyUsageByModel.save(todayUsageByModel)
->>>>>>> 65f6340 (feat(#583): per-model usage breakdown in menu bar + Activity window)
+
+        case .runPaths(let id, let logURL, let debugURL):
+            // Store the run's log/debug URLs so the Activity window can offer
+            // "Reveal Log" / "Reveal Debug Folder". Either may be nil if the
+            // run didn't create the files (not started, preflight failure).
+            if let logURL { itemLogURLs[id] = logURL }
+            if let debugURL { itemDebugURLs[id] = debugURL }
 
         case .progress(let id, let line):
             // Accumulate per-item progress (for extraction items and any
@@ -894,7 +925,6 @@ enum UsageFormatter {
         return parts.joined(separator: " · ")
     }
 
-<<<<<<< HEAD
     /// A live in-progress summary line for a RUNNING row (#544 live progress).
     /// Combines the stream's current model/provider with running token counts:
     ///
@@ -919,7 +949,10 @@ enum UsageFormatter {
             if let thought = usage.thoughtTokens, thought > 0 {
                 parts.append("\(tokens(thought)) thought")
             }
-=======
+        }
+        return parts.joined(separator: " · ")
+    }
+
     /// A single per-model menu line: "Sonnet 4 · 52K in · 8K out · 1.2K thought
     /// · $0.89". The model display name is resolved best-effort: the daily
     /// store is keyed by raw `modelId` (the menu bar doesn't hold
@@ -992,7 +1025,6 @@ enum UsageFormatter {
         if let c = usage?.cost, c > 0,
            let cost = cost(c, currency: usage?.currency) {
             parts.append(cost)
->>>>>>> 65f6340 (feat(#583): per-model usage breakdown in menu bar + Activity window)
         }
         return parts.joined(separator: " · ")
     }
