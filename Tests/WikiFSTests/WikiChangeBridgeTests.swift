@@ -122,7 +122,7 @@ struct WikiChangeBridgeTests {
         // Create a second wiki.
         let descriptorB = WikiDescriptor.make(displayName: "Wiki B")
         let urlB = dir.appendingPathComponent("\(descriptorB.id).sqlite", isDirectory: false)
-        _ = try? SQLiteWikiStore(databaseURL: urlB)
+        _ = try? GRDBWikiStore(databaseURL: urlB)
 
         let sessionA = makeSession(wikiID: descriptorA.id, descriptor: descriptorA, dir: dir)
         let sessionB = makeSession(wikiID: descriptorB.id, descriptor: descriptorB, dir: dir)

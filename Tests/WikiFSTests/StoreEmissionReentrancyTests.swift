@@ -40,8 +40,8 @@ struct StoreEmissionReentrancyTests {
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    private func makeHarness() throws -> (SQLiteWikiStore, WikiEventBus, Recorder) {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+    private func makeHarness() throws -> (GRDBWikiStore, WikiEventBus, Recorder) {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let bus = WikiEventBus(wikiID: "W")
         store.eventBus = bus
         let recorder = Recorder()

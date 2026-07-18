@@ -16,11 +16,11 @@ import Testing
 @MainActor
 struct WorkspaceStagingTests {
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("ws-stage-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     // MARK: - AC5.1: Created page is invisible on main before merge
@@ -215,7 +215,7 @@ struct WorkspaceStagingTests {
 
 // MARK: - Test helper extension
 
-extension SQLiteWikiStore {
+extension GRDBWikiStore {
     /// Returns all page IDs (for counting purposes in tests).
     fileprivate func allPageIDs() throws -> [PageID] {
         return try listPages(sortBy: .titleAZ).map { $0.id }

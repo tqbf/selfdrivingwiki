@@ -9,7 +9,7 @@ import Foundation
 /// many-row table: each `wikictl log append` inserts a fresh ULID-keyed row
 /// (`id` is sortable == chronological), so it never UPSERTs and never bumps a
 /// per-row version. `changeToken()` folds in the row COUNT instead (see
-/// `SQLiteWikiStore.changeToken()`).
+/// `GRDBWikiStore.changeToken()`).
 public struct LogEntry: Equatable, Sendable {
     public var id: PageID
     public var timestamp: Date

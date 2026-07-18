@@ -97,7 +97,7 @@ struct ChatSummaryTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        let store = try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
         let chat = try store.createChat(kind: .edit, title: "Test Chat")
 
         // Before: no summary.
@@ -121,7 +121,7 @@ struct ChatSummaryTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        let store = try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
         let chat = try store.createChat(kind: .edit, title: "No Summary Chat")
 
         let row = try store.listChats().first { $0.id == chat.id }
@@ -137,7 +137,7 @@ struct ChatSummaryTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        let store = try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
         let chat = try store.createChat(kind: .edit, title: "Timestamp Chat")
         let before = try store.listChats().first { $0.id == chat.id }
         let originalUpdatedAt = before?.updatedAt

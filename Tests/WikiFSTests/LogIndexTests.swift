@@ -19,8 +19,8 @@ struct LogIndexTests {
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    private func tempStore() throws -> SQLiteWikiStore {
-        try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+    private func tempStore() throws -> GRDBWikiStore {
+        try GRDBWikiStore(databaseURL: tempDatabaseURL())
     }
 
     // MARK: - Seeded defaults on a fresh DB
@@ -110,14 +110,14 @@ struct LogIndexTests {
     @Test func updateWikiIndexPersistsAndBumpsVersion() throws {
         let url = tempDatabaseURL()
         do {
-            let store = try SQLiteWikiStore(databaseURL: url)
+            let store = try GRDBWikiStore(databaseURL: url)
             try store.updateWikiIndex(body: "# My Catalog")
             let after = try store.getWikiIndex()
             #expect(after.body == "# My Catalog")
             #expect(after.version == 2)  // seeded at 1, +1 on write
         }
         // Persists across reopen.
-        let reopened = try SQLiteWikiStore(databaseURL: url)
+        let reopened = try GRDBWikiStore(databaseURL: url)
         let index = try reopened.getWikiIndex()
         #expect(index.body == "# My Catalog")
         #expect(index.version == 2)
@@ -135,7 +135,7 @@ struct LogIndexTests {
 
     @Test func updateWikiIndexRecreatesRowIfDeleted() throws {
         let url = tempDatabaseURL()
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
 
         // Hard-delete the seeded row via a raw connection.
         var raw: OpaquePointer?
@@ -226,7 +226,7 @@ struct LogIndexTests {
         sqlite3_close(raw)
 
         // Open via the store → runs ONLY the v3→4 + v4→5 steps.
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
 
         // wiki_index now exists, seeded with the default; log exists and is empty.
         let index = try store.getWikiIndex()
@@ -252,7 +252,7 @@ struct LogIndexTests {
         #expect(sqlite3_prepare_v2(check, "PRAGMA user_version;", -1, &stmt, nil) == SQLITE_OK)
         defer { sqlite3_finalize(stmt) }
         #expect(sqlite3_step(stmt) == SQLITE_ROW)
-        #expect(sqlite3_column_int(stmt, 0) == SQLiteWikiStore.currentSchemaVersion)
+        #expect(sqlite3_column_int(stmt, 0) == GRDBWikiStore.schemaVersion)
         _ = store
     }
 }

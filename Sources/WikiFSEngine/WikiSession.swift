@@ -131,7 +131,7 @@ public final class WikiSession {
     ///     `<ulid>.sqlite` file.
     ///   - extractionCoordinator: Shared, app-wide extraction backend resolver.
     ///   - makeStore: Injection seam for tests; defaults to
-    ///     `SQLiteWikiStore(databaseURL:)`.
+    ///     `GRDBWikiStore(databaseURL:)`.
     ///   - pdf2mdScriptPathResolver: Resolves the bundled `pdf2md` script path
     ///     for the agent seatbelt. The app passes a closure delegating to
     ///     `PdfExtractionService.resolveScript()`; tests / the daemon default
@@ -195,9 +195,9 @@ public final class WikiSession {
             // store so the app stays usable — the user sees an empty wiki rather
             // than a crash, and the on-disk file is left untouched for recovery.
             DebugLog.store("WikiSession: failed to open wiki \(wikiID), using in-memory: \(error)")
-            let memory: SQLiteWikiStore
+            let memory: GRDBWikiStore
             do {
-                memory = try SQLiteWikiStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+                memory = try GRDBWikiStore(databaseURL: URL(fileURLWithPath: ":memory:"))
             } catch {
                 // A fresh in-memory store builds only the current schema (no
                 // ladder, no existing data), so this is unreachable in practice.

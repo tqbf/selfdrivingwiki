@@ -3,7 +3,7 @@ import Foundation
 /// Rewrites plain CommonMark image srcs (`![alt](src)`) in source-markdown
 /// content that were downloaded during website-snapshot ingestion
 /// (`WebsiteSnapshotExtractor`) and stored as flat sibling `sources` rows
-/// (`SQLiteWikiStore.addSnapshotImage`). The extractor rewrites `<img src>` to
+/// (`GRDBWikiStore.addSnapshotImage`). The extractor rewrites `<img src>` to
 /// a relative path like `potluck/diagram.png` as if a nested folder existed
 /// next to the markdown, but the FileProvider projection places every source
 /// flat under `sources/by-name/` — so that relative path never resolves on
@@ -11,7 +11,7 @@ import Foundation
 ///
 /// Mirrors `MarkdownHTMLRenderer.resolvedImageSrc` (`Sources/WikiFS/MarkdownHTMLRenderer.swift`),
 /// the in-app renderer's EXACT-STRING resolution of the same `original_path`
-/// data (`SQLiteWikiStore.siblingImageResolvers()`) — but implemented as a
+/// data (`GRDBWikiStore.siblingImageResolvers()`) — but implemented as a
 /// regex pass here (no `swift-markdown`/`import Markdown`, which is an
 /// app-target-only dependency not linked into `WikiFSCore`/`WikiFSFileProvider` —
 /// see `Package.swift`). Filtering rule is IDENTICAL: absolute (`http`/`https`),

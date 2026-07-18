@@ -21,7 +21,7 @@ struct ProjectionTreeTests {
     /// pdf source WITH a processed-markdown head (emits a `.md` sibling).
     private struct Seeded {
         let projection: Projection
-        let store: SQLiteWikiStore
+        let store: GRDBWikiStore
         let pages: [WikiPage]
         let textSource: SourceSummary
         let pdfSource: SourceSummary
@@ -30,7 +30,7 @@ struct ProjectionTreeTests {
     private func seed() throws -> Seeded {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-proj-\(UUID().uuidString).sqlite")
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let alpha = try store.createPage(title: "Alpha")
         try store.updatePage(id: alpha.id, title: "Alpha", body: "Alpha body")
         _ = try store.createPage(title: "Beta")
@@ -93,7 +93,7 @@ struct ProjectionTreeTests {
         // size equal to the rewritten bytes — a mismatch truncates `cat` (#216).
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-proj-links-\(UUID().uuidString).sqlite")
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let target = try store.createPage(title: "Target Page")
         let pdf = try store.addSource(
             filename: "paper.pdf", data: Data("%PDF fake".utf8), mimeType: "application/pdf")
@@ -175,7 +175,7 @@ struct ProjectionTreeTests {
         // Create a markdown-native source with an image that has a sibling.
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-image-snapshot-\(UUID().uuidString).sqlite")
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
 
         // Create a fetch activity for the snapshot.
         let provenance = SourceProvenance(agentName: "test", activityKind: "website-snapshot")
@@ -219,7 +219,7 @@ struct ProjectionTreeTests {
         // and size should match byteSize, same as today (regression guard).
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-no-image-\(UUID().uuidString).sqlite")
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
 
         let originalData = Data("This markdown has ![alt](missing.png) but no siblings.".utf8)
         let textSource = try store.addSource(
@@ -367,7 +367,7 @@ struct ProjectionTreeTests {
     /// nested "Papers" folder, plus a page ref and a source ref at the root.
     private struct Bookmarked {
         let projection: Projection
-        let store: SQLiteWikiStore
+        let store: GRDBWikiStore
         let pages: [WikiPage]
         let pdfSource: SourceSummary
         let folderNode: BookmarkNode
@@ -379,7 +379,7 @@ struct ProjectionTreeTests {
     private func seedBookmarks() throws -> Bookmarked {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-bm-\(UUID().uuidString).sqlite")
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let alpha = try store.createPage(title: "Alpha")
         try store.updatePage(id: alpha.id, title: "Alpha", body: "Alpha body")
         let pdfSource = try store.addSource(
@@ -500,7 +500,7 @@ struct ProjectionTreeTests {
         // equal to the rewritten bytes — a mismatch truncates `cat` (#216).
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-bm-links-\(UUID().uuidString).sqlite")
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let target = try store.createPage(title: "Target Page")
         let home = try store.createPage(title: "Home")
         try store.updatePage(
@@ -533,7 +533,7 @@ struct ProjectionTreeTests {
         // two `../` to reach the root.
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-bm-nested-\(UUID().uuidString).sqlite")
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let target = try store.createPage(title: "Target")
         let home = try store.createPage(title: "Home")
         try store.updatePage(
@@ -563,7 +563,7 @@ struct ProjectionTreeTests {
         // chatRef, must rewrite the link AND keep size == served bytes (#216).
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-bm-chat-\(UUID().uuidString).sqlite")
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let target = try store.createPage(title: "Referenced Page")
         let chat = try store.createChat(kind: .edit, title: "Chat With Link")
         _ = try store.appendChatMessages(
@@ -592,7 +592,7 @@ struct ProjectionTreeTests {
         // and node.size must equal the byte count (#216).
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-bm-source-\(UUID().uuidString).sqlite")
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let pdfBytes = Data("%PDF-1.4 test content".utf8)
         let pdf = try store.addSource(
             filename: "doc.pdf", data: pdfBytes, mimeType: "application/pdf")
@@ -618,7 +618,7 @@ struct ProjectionTreeTests {
     /// transcript. Mirrors `seed()` / `seedBookmarks()` (own temp DB + store).
     private struct Chatted {
         let projection: Projection
-        let store: SQLiteWikiStore
+        let store: GRDBWikiStore
         let chats: [ChatSummary]
     }
 
@@ -628,7 +628,7 @@ struct ProjectionTreeTests {
     private func seedChats() throws -> Chatted {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-chat-\(UUID().uuidString).sqlite")
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let first = try store.createChat(kind: .edit, title: "Test Chat")
         _ = try store.appendChatMessages(
             chatID: first.id, events: [.userText("Hello"), .assistantText("Hi there")])
@@ -703,7 +703,7 @@ struct ProjectionTreeTests {
         // No chats at all, but the `chats` folder still appears at root.
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-chat-empty-\(UUID().uuidString).sqlite")
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let projection = Projection(wikiID: "proj-chat-empty-\(UUID().uuidString)", databaseURL: url)
         _ = store  // seed nothing
         let names = projection.children(of: .rootContainer).map(\.name)

@@ -475,7 +475,7 @@ public final class WikiStoreModel {
     /// content to the WKWebView for `![[source:…]]` embeds. Looks up the MIME
     /// type from the loaded `sources` list (which mirrors `store.listSources()`)
     /// rather than calling the store directly, since `getSource(id:)` is concrete
-    /// on `SQLiteWikiStore`, not on the `WikiStore` protocol.
+    /// on `GRDBWikiStore`, not on the `WikiStore` protocol.
     @MainActor public func sourceContentAndMIME(id: PageID) -> (data: Data, mimeType: String?)? {
         guard let summary = sources.first(where: { $0.id == id }) else { return nil }
         let data = (try? store.sourceContent(id: id)) ?? Data()
@@ -1799,7 +1799,7 @@ public final class WikiStoreModel {
 
     /// Pre-resolve a source's display name off the main actor. Only PDFs
     /// trigger the expensive PDFKit whole-file parse, so this is a no-op
-    /// (returns `nil` → ``SQLiteWikiStore/addSource`` resolves inline) for all
+    /// (returns `nil` → ``GRDBWikiStore/addSource`` resolves inline) for all
     /// other types whose metadata parsing is fast. For PDFs, the result is
     /// computed on a detached task and handed to ``storeMaterialized`` via
     /// ``resolvedDisplayName``, keeping the PDFKit work off the main actor and

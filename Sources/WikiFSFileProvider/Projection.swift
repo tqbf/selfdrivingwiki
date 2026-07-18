@@ -343,7 +343,7 @@ struct Projection {
         private let databaseURL: URL?
         private let wikiID: String
         private let lock = NSLock()
-        private var cachedStore: SQLiteWikiStore?
+        private var cachedStore: GRDBWikiStore?
         private var cachedToken: String?
         /// Token-invalidated `LinkMaps` cache (#490). Built once per scope
         /// (on the first `cachedLinkMaps()` call) and reused for every leaf
@@ -368,13 +368,13 @@ struct Projection {
         }
 
         /// Lazily open ONE store; subsequent calls return the same connection.
-        var store: SQLiteWikiStore? {
+        var store: GRDBWikiStore? {
             lock.lock(); defer { lock.unlock() }
             if cachedStore == nil {
                 let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID)
                 if let url, FileManager.default.fileExists(atPath: url.path) {
                     DebugLog.fileprovider("ReadScope opening cached read-only connection wikiID=\(wikiID) thread=\(Thread.current)")
-                    cachedStore = try? SQLiteWikiStore(readOnlyURL: url)
+                    cachedStore = try? GRDBWikiStore(readOnlyURL: url)
                 }
             }
             return cachedStore
@@ -429,12 +429,12 @@ struct Projection {
     /// is reused for every call; outside a scope a fresh, short-lived store is
     /// opened each time (the historical behavior). Returns nil if the
     /// container/DB is unavailable.
-    private func openReadStore() -> SQLiteWikiStore? {
+    private func openReadStore() -> GRDBWikiStore? {
         if let scope = readStoreHolder { return scope.store }
         let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID)
         guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
         DebugLog.fileprovider("openReadStore opening short-lived read-only connection wikiID=\(wikiID) thread=\(Thread.current)")
-        return try? SQLiteWikiStore(readOnlyURL: url)
+        return try? GRDBWikiStore(readOnlyURL: url)
     }
 
     // MARK: - System prompt (CLAUDE.md / AGENTS.md)
@@ -551,7 +551,7 @@ struct Projection {
 
     /// The whole-database change token used as the File Provider sync anchor.
     /// Advances on ANY page create/update/delete (count:sum — see
-    /// `SQLiteWikiStore.changeToken()`). Opens a short-lived read store; returns
+    /// `GRDBWikiStore.changeToken()`). Opens a short-lived read store; returns
     /// a safe `"0:0"` default if the DB is unavailable so the enumerator can
     /// still answer (and a later real token simply differs → re-sync).
     ///
@@ -986,7 +986,7 @@ struct Projection {
     /// the tree shape is preserved. All bookmark nodes are versioned by the
     /// change token so any mutation re-fetches them.
     private func bookmarkNodeItem(
-        for node: BookmarkNode, in store: SQLiteWikiStore,
+        for node: BookmarkNode, in store: GRDBWikiStore,
         maps: LinkMaps, allNodes: [BookmarkNode]
     ) -> ProjectedNode {
         let id = Self.bookmarkID(for: node)
@@ -1651,7 +1651,7 @@ struct Projection {
     private func cachedChatTranscript(
         for id: NSFileProviderItemIdentifier,
         chat: ChatSummary,
-        in store: SQLiteWikiStore
+        in store: GRDBWikiStore
     ) -> Data? {
         Self.chatContentCache.data(
             forKey: "\(wikiID)/\(id.rawValue)", token: changeToken()
@@ -1673,7 +1673,7 @@ struct Projection {
     /// the node. Like `pageFileNode(for:page:)`.
     static func chatFileNode(for id: NSFileProviderItemIdentifier,
                              chat: ChatSummary,
-                             in store: SQLiteWikiStore,
+                             in store: GRDBWikiStore,
                              contentData: Data? = nil) -> ProjectedNode {
         let raw = id.rawValue
         let isByName = raw.hasPrefix(Identity.chatByNamePrefix)

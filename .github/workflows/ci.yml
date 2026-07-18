@@ -50,7 +50,7 @@ jobs:
         # merge for fast iteration — see AGENTS.md.
         # To add a slow suite: tag it `.integration` AND append its name here.
         env:
-          SKIP: 'EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests|SQLiteStatementLifecycleIntegrationTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SplitDiffSnapshotTests|QuoteHighlightWebViewTests'
+          SKIP: 'EnumeratorDeletionTests|StoreEmissionTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SplitDiffSnapshotTests|QuoteHighlightWebViewTests'
         run: $SWIFT test --skip "$SKIP"
 
   swift-integration:

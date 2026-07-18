@@ -17,7 +17,7 @@ struct Phase6PinningStoreTests {
     // MARK: - AC.3 — replaceLinks writes pinned_version_id
 
     @Test func replaceLinksWritesResolvedPin() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let page = try store.createPage(title: "P")
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
 
@@ -34,7 +34,7 @@ struct Phase6PinningStoreTests {
     }
 
     @Test func replaceLinksOutOfRangePinWritesNULL() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let page = try store.createPage(title: "P")
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
 
@@ -50,7 +50,7 @@ struct Phase6PinningStoreTests {
     }
 
     @Test func replaceLinksUnpinnedWritesNULL() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let page = try store.createPage(title: "P")
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
 
@@ -64,7 +64,7 @@ struct Phase6PinningStoreTests {
     }
 
     @Test func citeEmbedAndDistinctPinsCoexist() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let page = try store.createPage(title: "P")
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
 
@@ -91,7 +91,7 @@ struct Phase6PinningStoreTests {
     // MARK: - AC.4 — ordinal is chronological (ULID-asc)
 
     @Test func ordinalResolvesChronologically() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
 
         let v1 = try store.appendProcessedMarkdown(sourceID: source.id, content: "oldest", origin: .extraction, note: nil)
@@ -118,7 +118,7 @@ struct Phase6PinningStoreTests {
     }
 
     @Test func ordinalStableUnderAppend() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
 
         let v1 = try store.appendProcessedMarkdown(sourceID: source.id, content: "v1", origin: .extraction, note: nil)
@@ -137,7 +137,7 @@ struct Phase6PinningStoreTests {
     // MARK: - AC.6 — processedMarkdownVersion(id:)
 
     @Test func processedMarkdownVersionReturnsCorrectRow() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
 
         _ = try store.appendProcessedMarkdown(sourceID: source.id, content: "first", origin: .extraction, note: nil)
@@ -150,7 +150,7 @@ struct Phase6PinningStoreTests {
     }
 
     @Test func processedMarkdownVersionNilForUnknownID() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let resolved = try store.processedMarkdownVersion(id: PageID(rawValue: "01JZZZZZZZZZZZZZZZZZZZZZZZ"))
         #expect(resolved == nil)
     }

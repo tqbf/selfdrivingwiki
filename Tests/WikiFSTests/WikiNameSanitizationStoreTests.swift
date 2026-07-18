@@ -14,8 +14,8 @@ struct WikiNameSanitizationStoreTests {
         return dir
     }
 
-    private func tempStore() throws -> SQLiteWikiStore {
-        try SQLiteWikiStore(databaseURL: tempDir().appendingPathComponent("WikiFS.sqlite"))
+    private func tempStore() throws -> GRDBWikiStore {
+        try GRDBWikiStore(databaseURL: tempDir().appendingPathComponent("WikiFS.sqlite"))
     }
 
     // MARK: - Write-boundary enforcement
@@ -84,7 +84,7 @@ struct WikiNameSanitizationStoreTests {
         do {
             // Fresh v18 store with clean rows, released at scope end so the
             // raw connection below sees a closed database.
-            let store = try SQLiteWikiStore(databaseURL: url)
+            let store = try GRDBWikiStore(databaseURL: url)
             pageID = try store.createPage(title: "Clean Page").id
             sourceID = try store.addSource(filename: "doc.md", data: Data("hi".utf8)).id
         }
@@ -103,8 +103,8 @@ struct WikiNameSanitizationStoreTests {
         sqlite3_close(db)
 
         // Reopen → the 17→18 step sweeps the dirty names.
-        let reopened = try SQLiteWikiStore(databaseURL: url)
-        #expect(reopened.pragmaValue("user_version") == "\(SQLiteWikiStore.currentSchemaVersion)")
+        let reopened = try GRDBWikiStore(databaseURL: url)
+        #expect(reopened.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
         let page = try reopened.getPage(id: pageID!)
         #expect(page.title == "(Draft) Bad - #Title") // inner # is fine, kept
         #expect(try reopened.getSource(id: sourceID!).displayName == "Foo - Bar)")
@@ -117,7 +117,7 @@ struct WikiNameSanitizationStoreTests {
         var pageID: PageID?
         var pageVersion: Int?
         do {
-            let store = try SQLiteWikiStore(databaseURL: url)
+            let store = try GRDBWikiStore(databaseURL: url)
             let page = try store.createPage(title: "C# Guide") // # inside: linkable
             pageID = page.id
             pageVersion = page.version
@@ -128,7 +128,7 @@ struct WikiNameSanitizationStoreTests {
         #expect(sqlite3_exec(db, "PRAGMA user_version=17;", nil, nil, nil) == SQLITE_OK)
         sqlite3_close(db)
 
-        let reopened = try SQLiteWikiStore(databaseURL: url)
+        let reopened = try GRDBWikiStore(databaseURL: url)
         let page = try reopened.getPage(id: pageID!)
         #expect(page.title == "C# Guide")
         #expect(page.version == pageVersion!) // no gratuitous version bump

@@ -5,7 +5,7 @@ import Foundation
 /// it (resolved from the PROV agent name → `ExtractionBackend.displayName`), the
 /// model id, the body size, and whether it is the currently active HEAD.
 ///
-/// Built by `SQLiteWikiStore.processedMarkdownAlternatives(sourceID:)` from a
+/// Built by `GRDBWikiStore.processedMarkdownAlternatives(sourceID:)` from a
 /// single joined query (smv → activity → agent), consolidating the old
 /// two-call pattern (`processedMarkdownHistory` + `processedMarkdownAgentNames`).
 /// `.version.content` is always the fully-resolved body (the resolved-body

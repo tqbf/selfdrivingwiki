@@ -17,8 +17,8 @@ struct FullTextSearchTests {
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    private func tempStore() throws -> SQLiteWikiStore {
-        try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+    private func tempStore() throws -> GRDBWikiStore {
+        try GRDBWikiStore(databaseURL: tempDatabaseURL())
     }
 
     // MARK: - Body search (the new capability — AC.1)
@@ -119,7 +119,7 @@ struct FullTextSearchTests {
     /// term index and rebuild it.
     @Test func emptyFtsTermIndexIsHealedOnOpen() throws {
         let url = tempDatabaseURL()
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let page = try store.createPage(title: "Claim Notes")
         try store.updatePage(id: page.id, title: "Claim Notes",
                              body: "Details about the insurance claim and appeal process.")
@@ -133,7 +133,7 @@ struct FullTextSearchTests {
 
         // Re-opening runs ensureSearchIndexes, which must now see zero terms and
         // rebuild → the body term is findable again.
-        let reopened = try SQLiteWikiStore(databaseURL: url)
+        let reopened = try GRDBWikiStore(databaseURL: url)
         let hits = try reopened.searchSimilar(query: "insurance", limit: 10)
         #expect(hits.contains { $0.id == page.id })
     }

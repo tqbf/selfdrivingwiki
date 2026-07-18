@@ -22,7 +22,7 @@ struct BookmarkInsertPositionTests {
     /// nil `position` (the default / append path) is unchanged by the new
     /// parameter — this guards the existing callers.
     @Test func addPageRefWithNilPositionAppends() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let p1 = try store.createPage(title: "One")
         let p2 = try store.createPage(title: "Two")
         let model = WikiStoreModel(store: store)
@@ -39,7 +39,7 @@ struct BookmarkInsertPositionTests {
 
     /// Inserting at position 0 pushes the existing first node down.
     @Test func addPageRefAtPositionZeroPrepends() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let first = try store.createPage(title: "First")
         let model = WikiStoreModel(store: store)
         model.addPageRef(parentID: nil, pageID: first.id) // position 0
@@ -56,7 +56,7 @@ struct BookmarkInsertPositionTests {
 
     /// Inserting in the middle shifts only the nodes at/after the index.
     @Test func addPageRefAtMiddlePositionShiftsLaterSiblings() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let a = try store.createPage(title: "A")
         let b = try store.createPage(title: "B")
         let c = try store.createPage(title: "C")
@@ -75,14 +75,14 @@ struct BookmarkInsertPositionTests {
         let nodes = model.bookmarkNodes.sorted { $0.position < $1.position }
         #expect(nodes.map(\.position) == [0, 1, 2, 3])
         // A, MID, B, C
-        let titles = nodes.compactMap { $0.targetID }
+        let titles: [String] = nodes.compactMap { $0.targetID }
             .compactMap { id in [a, b, c, mid].first { $0.id == id }?.title }
         #expect(titles == ["A", "MID", "B", "C"])
     }
 
     /// Source refs honor the same position contract as page refs.
     @Test func addSourceRefAtPositionInsertsBetweenSiblings() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let s1 = try store.addSource(filename: "a.pdf", data: Data("x".utf8))
         let s2 = try store.addSource(filename: "b.pdf", data: Data("y".utf8))
         let model = WikiStoreModel(store: store)
@@ -104,7 +104,7 @@ struct BookmarkInsertPositionTests {
     /// A positioned insert is scoped to its folder — it must not disturb root
     /// ordering or a sibling folder's children.
     @Test func positionedInsertIsScopedToParent() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let folder = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder, label: "F", targetID: nil)
         let model = WikiStoreModel(store: store)
@@ -139,7 +139,7 @@ struct BookmarkInsertPositionTests {
     /// Inserting past the end (a stale/out-of-range index) still yields a
     /// contiguous, correct ordering — the store's renumber pass defends this.
     @Test func outOfRangePositionClampsViaRenumber() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let a = try store.createPage(title: "A")
         let model = WikiStoreModel(store: store)
         model.addPageRef(parentID: nil, pageID: a.id) // 0

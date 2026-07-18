@@ -16,8 +16,8 @@ struct SystemPromptTests {
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    private func tempStore() throws -> SQLiteWikiStore {
-        try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+    private func tempStore() throws -> GRDBWikiStore {
+        try GRDBWikiStore(databaseURL: tempDatabaseURL())
     }
 
     // MARK: - Seeded default on a fresh DB
@@ -99,14 +99,14 @@ struct SystemPromptTests {
     @Test func updatePersistsBodyAndBumpsVersion() throws {
         let url = tempDatabaseURL()
         do {
-            let store = try SQLiteWikiStore(databaseURL: url)
+            let store = try GRDBWikiStore(databaseURL: url)
             try store.updateSystemPrompt(body: "Be concise.")
             let after = try store.getSystemPrompt()
             #expect(after.body == "Be concise.")
             #expect(after.version == 2)   // seeded at 1, +1 on edit
         }
         // Persists across reopen (a new connection).
-        let reopened = try SQLiteWikiStore(databaseURL: url)
+        let reopened = try GRDBWikiStore(databaseURL: url)
         let prompt = try reopened.getSystemPrompt()
         #expect(prompt.body == "Be concise.")
         #expect(prompt.version == 2)
@@ -131,18 +131,18 @@ struct SystemPromptTests {
         let url = tempDatabaseURL()
         // First open seeds the row with the current defaultBody.
         do {
-            let store = try SQLiteWikiStore(databaseURL: url)
+            let store = try GRDBWikiStore(databaseURL: url)
             #expect(try store.getSystemPrompt().body == SystemPrompt.defaultBody)
         }
         // Simulate a wiki carrying a DIFFERENT body than today's default (an older
         // seed, or the user's edits).
         let preExisting = "# My co-evolved schema\n\nDo not clobber me.\n"
         do {
-            let store = try SQLiteWikiStore(databaseURL: url)
+            let store = try GRDBWikiStore(databaseURL: url)
             try store.updateSystemPrompt(body: preExisting)
         }
         // Reopening must NOT reset it back to defaultBody — the seed is create-only.
-        let reopened = try SQLiteWikiStore(databaseURL: url)
+        let reopened = try GRDBWikiStore(databaseURL: url)
         let prompt = try reopened.getSystemPrompt()
         #expect(prompt.body == preExisting)
         #expect(prompt.body != SystemPrompt.defaultBody)
@@ -181,7 +181,7 @@ struct SystemPromptTests {
 
     @Test func updateRecreatesRowIfDeleted() throws {
         let url = tempDatabaseURL()
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
 
         // Hard-delete the seeded row via a raw connection.
         var raw: OpaquePointer?
@@ -231,7 +231,7 @@ struct SystemPromptTests {
 
         // Open via the store → runs the v2→3 step (and the later v3→4 + v4→5
         // steps up to head).
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
 
         // system_prompt now exists, seeded with the default.
         let prompt = try store.getSystemPrompt()
@@ -253,7 +253,7 @@ struct SystemPromptTests {
         #expect(sqlite3_prepare_v2(check, "PRAGMA user_version;", -1, &stmt, nil) == SQLITE_OK)
         defer { sqlite3_finalize(stmt) }
         #expect(sqlite3_step(stmt) == SQLITE_ROW)
-        #expect(sqlite3_column_int(stmt, 0) == SQLiteWikiStore.currentSchemaVersion)
+        #expect(sqlite3_column_int(stmt, 0) == GRDBWikiStore.schemaVersion)
         _ = store
     }
 }

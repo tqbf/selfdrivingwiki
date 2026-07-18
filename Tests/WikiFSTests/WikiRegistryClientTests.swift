@@ -63,7 +63,7 @@ struct WikiRegistryClientTests {
         let first = registry.activeWikiID!
 
         // Write a uniquely-titled page into wiki A via the store directly.
-        let storeA = try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("\(first).sqlite"))
+        let storeA = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(first).sqlite"))
         let pageA = try storeA.createPage(title: "Only-In-A")
         try storeA.updatePage(id: pageA.id, title: "Only-In-A", body: "A")
 
@@ -73,7 +73,7 @@ struct WikiRegistryClientTests {
         #expect(b.id != first)
 
         // B has its own DB: it must NOT contain A's page.
-        let storeB = try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("\(b.id).sqlite"))
+        let storeB = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(b.id).sqlite"))
         let bTitles = (try storeB.listPages(sortBy: .lastUpdated)).map(\.title)
         #expect(!bTitles.contains("Only-In-A"))
 
@@ -175,14 +175,14 @@ struct WikiRegistryClientTests {
         let id = try #require(registry.activeWikiID)
 
         // Write a page via the store directly.
-        let store = try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("\(id).sqlite"))
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(id).sqlite"))
         let page = try store.createPage(title: "Exported Page")
         try store.updatePage(id: page.id, title: "Exported Page", body: "backup body")
 
         let backupURL = dir.appendingPathComponent("backup.sqlite")
         try registry.exportWiki(id: id, to: backupURL)
 
-        let restoredStore = try SQLiteWikiStore(databaseURL: backupURL)
+        let restoredStore = try GRDBWikiStore(databaseURL: backupURL)
         let resolvedPageID = try restoredStore.resolveTitleToID("Exported Page")
         let pageID = try #require(resolvedPageID)
         let restoredPage = try restoredStore.getPage(id: pageID)
@@ -209,7 +209,7 @@ struct WikiRegistryClientTests {
         let originalID = try #require(registry.activeWikiID)
 
         // Write a page via the store directly.
-        let store = try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("\(originalID).sqlite"))
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(originalID).sqlite"))
         let page = try store.createPage(title: "Restored Page")
         try store.updatePage(id: page.id, title: "Restored Page", body: "restored body")
 
@@ -226,7 +226,7 @@ struct WikiRegistryClientTests {
             atPath: dir.appendingPathComponent("\(imported.id).sqlite").path))
 
         // Verify the imported page is present.
-        let restoredStore = try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("\(imported.id).sqlite"))
+        let restoredStore = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(imported.id).sqlite"))
         let titles = (try? restoredStore.listPages(sortBy: .lastUpdated))?.map(\.title) ?? []
         #expect(titles.contains("Restored Page"))
         let pageID = try restoredStore.resolveTitleToID("Restored Page")
@@ -241,7 +241,7 @@ struct WikiRegistryClientTests {
 
         let legacy = dir.appendingPathComponent(DatabaseLocation.legacyDatabaseFileName)
         do {
-            let store = try SQLiteWikiStore(databaseURL: legacy)
+            let store = try GRDBWikiStore(databaseURL: legacy)
             let page = try store.createPage(title: "Legacy Home")
             try store.updatePage(id: page.id, title: "Legacy Home", body: "VERIFY-V0-CONTENT")
         }
@@ -258,7 +258,7 @@ struct WikiRegistryClientTests {
         #expect(FileManager.default.fileExists(
             atPath: dir.appendingPathComponent("\(descriptor.id).sqlite").path))
 
-        let store = try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("\(descriptor.id).sqlite"))
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(descriptor.id).sqlite"))
         let titles = (try? store.listPages(sortBy: .lastUpdated))?.map(\.title) ?? []
         #expect(titles.contains("Legacy Home"))
         let pageID = try store.resolveTitleToID("Legacy Home")
@@ -269,7 +269,7 @@ struct WikiRegistryClientTests {
     @Test func migrationDoesNotRerunOnSecondLaunch() throws {
         let dir = tempDirectory()
         let legacy = dir.appendingPathComponent(DatabaseLocation.legacyDatabaseFileName)
-        _ = try SQLiteWikiStore(databaseURL: legacy)
+        _ = try GRDBWikiStore(databaseURL: legacy)
 
         let first = WikiRegistryClient(containerDirectory: dir)
         first.bootstrap()
@@ -284,7 +284,7 @@ struct WikiRegistryClientTests {
         let dir = tempDirectory()
         let legacy = dir.appendingPathComponent(DatabaseLocation.legacyDatabaseFileName)
 
-        _ = try SQLiteWikiStore(databaseURL: legacy)
+        _ = try GRDBWikiStore(databaseURL: legacy)
         let first = WikiRegistryClient(containerDirectory: dir)
         first.bootstrap()
         #expect(first.wikis.count == 1)
@@ -293,7 +293,7 @@ struct WikiRegistryClientTests {
 
         // Simulate the Application Support layer re-copying the legacy file back.
         #expect(!FileManager.default.fileExists(atPath: legacy.path))
-        _ = try SQLiteWikiStore(databaseURL: legacy)
+        _ = try GRDBWikiStore(databaseURL: legacy)
         #expect(FileManager.default.fileExists(atPath: legacy.path))
 
         let second = WikiRegistryClient(containerDirectory: dir)
@@ -301,7 +301,7 @@ struct WikiRegistryClientTests {
         #expect(second.wikis.count == 1)
         #expect(second.activeWikiID == migratedID)
 
-        _ = try SQLiteWikiStore(databaseURL: legacy)
+        _ = try GRDBWikiStore(databaseURL: legacy)
         let third = WikiRegistryClient(containerDirectory: dir)
         third.bootstrap()
         #expect(third.wikis.count == 1)
@@ -317,7 +317,7 @@ struct WikiRegistryClientTests {
         let existingID = manager.activeWikiID
 
         let legacy = dir.appendingPathComponent(DatabaseLocation.legacyDatabaseFileName)
-        _ = try SQLiteWikiStore(databaseURL: legacy)
+        _ = try GRDBWikiStore(databaseURL: legacy)
 
         let relaunched = WikiRegistryClient(containerDirectory: dir)
         relaunched.bootstrap()

@@ -14,8 +14,8 @@ import Foundation
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    private func tempStore() throws -> any WikiStore {
-        try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
+    private func tempStore() throws -> GRDBWikiStore {
+        try GRDBWikiStore(databaseURL: tempDatabaseURL())
     }
 
     private let noEnv: (String) -> String? = { _ in nil }

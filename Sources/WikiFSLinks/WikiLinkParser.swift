@@ -5,7 +5,7 @@ import Foundation
 /// Kept deliberately free of any storage / File Provider knowledge so it is
 /// trivially unit-testable: it turns a Markdown body into the list of links it
 /// mentions. Resolution of a target *title* to a concrete page id, and writing
-/// the `page_links` rows, happens in `SQLiteWikiStore` — parsing is pure, the
+/// the `page_links` rows, happens in `GRDBWikiStore` — parsing is pure, the
 /// write is the store's job.
 ///
 /// Supported forms:

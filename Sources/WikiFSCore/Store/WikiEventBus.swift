@@ -14,7 +14,7 @@ public enum ChangeKind: String, Sendable {
 /// bridge as a coarse "reload everything" event. Events are *hints*:
 /// subscribers (the File Provider signaler, the model's reload path) react to
 /// them, but the authoritative change-detection token is still
-/// `SQLiteWikiStore.changeToken()`.
+/// `GRDBWikiStore.changeToken()`.
 ///
 /// `kind` is optional: a `nil` kind means a coarse, whole-wiki change (the
 /// Darwin notification carries no per-resource detail), which only matches
@@ -61,7 +61,7 @@ public struct SubscriptionToken: Sendable, Hashable {
 }
 
 /// A per-wiki resource-change event bus (`plans/architecture-roadmap.md` §3 —
-/// "one signal, four hosts"). `SQLiteWikiStore` emits one
+/// "one signal, four hosts"). `GRDBWikiStore` emits one
 /// ``ResourceChangeEvent`` per public mutating method (outside its recursive
 /// lock, via the `mutate()` seam), and the cross-process `WikiChangeBridge`
 /// emits a coarse event as a Darwin-notification adapter. The File Provider

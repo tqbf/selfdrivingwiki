@@ -11,16 +11,16 @@ import Testing
 /// revert, cascade, source immutability, seeding, and pre-migration fallback.
 struct ProcessedMarkdownTests {
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-pm-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     /// Create an ingested file row so FK constraints are satisfied for version tests.
     @discardableResult
-    private func seedSource(in store: SQLiteWikiStore, filename: String = "test.txt",
+    private func seedSource(in store: GRDBWikiStore, filename: String = "test.txt",
                                   data: Data = Data("hello".utf8)) throws -> SourceSummary {
         try store.addSource(filename: filename, data: data)
     }
@@ -51,7 +51,7 @@ struct ProcessedMarkdownTests {
     }
 
     /// Build a v7 DB by hand (pages + sources + system_prompt + log +
-    /// wiki_index + page_embeddings), then open it with SQLiteWikiStore — the
+    /// wiki_index + page_embeddings), then open it with GRDBWikiStore — the
     /// store runs the v7→v8 migration step. Used to verify stepwise upgrade.
     private func tempV7DatabaseURL() throws -> URL {
         let dir = FileManager.default.temporaryDirectory
@@ -115,7 +115,7 @@ struct ProcessedMarkdownTests {
 
     @Test func freshDBHasV8Schema() throws {
         let store = try tempStore()
-        #expect(store.pragmaValue("user_version") == "\(SQLiteWikiStore.currentSchemaVersion)")
+        #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 
     @Test func v7DBUpgradesToV8PreservingData() throws {
@@ -130,8 +130,8 @@ struct ProcessedMarkdownTests {
         sqlite3_close(db)
 
         // Opening runs v7→v8→…→v15 migration.
-        let store = try SQLiteWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "\(SQLiteWikiStore.currentSchemaVersion)")
+        let store = try GRDBWikiStore(databaseURL: url)
+        #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
         // Pre-existing file is intact.
         let content = try store.sourceContent(
             id: PageID(rawValue: "01J00000000000000000000000"))
@@ -141,12 +141,12 @@ struct ProcessedMarkdownTests {
     @Test func reopenIsIdempotent() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-pm-reopen-\(UUID().uuidString).sqlite")
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let file = try store.addSource(filename: "test.md", data: Data("hello".utf8))
         _ = try store.appendProcessedMarkdown(
             sourceID: file.id, content: "v1", origin: .extraction, note: nil)
         // Reopen — must not fail from duplicate DDL.
-        let reopened = try SQLiteWikiStore(databaseURL: url)
+        let reopened = try GRDBWikiStore(databaseURL: url)
         let head = try reopened.processedMarkdownHead(sourceID: file.id)
         #expect(head?.content == "v1")
     }
@@ -302,7 +302,7 @@ struct ProcessedMarkdownTests {
 
     @Test func readSeamsReturnSafeDefaultsForPreV8DB() throws {
         let url = try tempV7DatabaseURL()
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let arbitraryID = PageID(rawValue: "01J00000000000000000000000")
         // Read seams must return safe defaults (nil / false / []) without
         // crashing even though file_markdown_versions doesn't exist.
@@ -348,7 +348,7 @@ struct ProcessedMarkdownTests {
 
     @Test func processedMarkdownHeadsBySourceReturnsEmptyForPreV8DB() throws {
         let url = try tempV7DatabaseURL()
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let heads = try store.processedMarkdownHeadsBySource()
         #expect(heads.isEmpty)
     }

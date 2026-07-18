@@ -9,11 +9,11 @@ import Testing
 @MainActor
 struct PageVersionTests {
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("w0-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     // MARK: - CAS conflict detection
@@ -216,7 +216,7 @@ struct PageVersionTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let dbURL = dir.appendingPathComponent("WikiFS.sqlite")
 
-        let store1 = try SQLiteWikiStore(databaseURL: dbURL)
+        let store1 = try GRDBWikiStore(databaseURL: dbURL)
         let page = try store1.createPage(title: "Idempotent Page")
         _ = try store1.appendPageVersion(
             pageID: page.id, title: "Idempotent Page", body: "body",
@@ -226,7 +226,7 @@ struct PageVersionTests {
 
         // Reopen the same DB — migrations re-run but v34 finds all pages
         // already have refs, so it's a no-op.
-        let store2 = try SQLiteWikiStore(databaseURL: dbURL)
+        let store2 = try GRDBWikiStore(databaseURL: dbURL)
         let headAfter = try store2.pageHeadVersionID(pageID: page.id)
         let historyAfter = try store2.pageVersionHistory(pageID: page.id)
         #expect(headBefore == headAfter)

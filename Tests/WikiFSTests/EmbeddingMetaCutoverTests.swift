@@ -8,11 +8,11 @@ import Testing
 /// EmbeddingService (which is app-bundle-gated and does NLEmbedder in tests).
 struct EmbeddingMetaCutoverTests {
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-cutover-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     // MARK: - Fresh DB seeds nlembedding-512
@@ -20,7 +20,7 @@ struct EmbeddingMetaCutoverTests {
     @Test func freshDBSeedsNLEmbedderIdentifier() throws {
         let store = try tempStore()
         let stored = store.pragmaValue("user_version")
-        #expect(stored == "\(SQLiteWikiStore.currentSchemaVersion)")
+        #expect(stored == "\(GRDBWikiStore.schemaVersion)")
         // ensureEmbedderConsistency with the default identifier (nlembedding-512)
         // is a no-op: the seed matches, so nothing is wiped.
         store.ensureEmbedderConsistency(activeIdentifierOverride: NLEmbedder.identifier)

@@ -70,8 +70,8 @@ struct FPIfSubscriberDebounceTests {
     /// Wire the production seam: a store's bus → a `ChangeCoalescer` (with the
     /// given scheduler) whose flush records the wikiID, mirroring
     /// `FileProviderFacade.subscribeBus(for:bus:)`.
-    private func wireSeam(scheduler: ManualScheduler, flushes: @escaping (String) -> Void) throws -> (SQLiteWikiStore, WikiEventBus, SignalBox) {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+    private func wireSeam(scheduler: ManualScheduler, flushes: @escaping (String) -> Void) throws -> (GRDBWikiStore, WikiEventBus, SignalBox) {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let bus = WikiEventBus(wikiID: "W")
         store.eventBus = bus
         let box = SignalBox(ChangeCoalescer(

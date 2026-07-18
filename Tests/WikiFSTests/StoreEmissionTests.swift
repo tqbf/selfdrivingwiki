@@ -48,8 +48,8 @@ struct StoreEmissionTests {
     }
 
     /// Fresh temp-file store + per-wiki bus + spy subscriber.
-    private func makeHarness() throws -> (SQLiteWikiStore, WikiEventBus, Recorder) {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+    private func makeHarness() throws -> (GRDBWikiStore, WikiEventBus, Recorder) {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let bus = WikiEventBus(wikiID: "W")
         store.eventBus = bus
         let recorder = Recorder()
@@ -61,7 +61,7 @@ struct StoreEmissionTests {
         SourceProvenance(agentName: "test", activityKind: "import")
     }
 
-    private func addSeedSource(_ store: SQLiteWikiStore) throws -> SourceSummary {
+    private func addSeedSource(_ store: GRDBWikiStore) throws -> SourceSummary {
         try store.addSource(filename: "blob.bin", data: Data("bytes".utf8))
     }
 
@@ -370,7 +370,7 @@ struct StoreEmissionTests {
     @Test func nilBusStoreEmitsSilently() throws {
         // A store with no bus (the wikictl path) must not crash on mutation and
         // must not emit anything (there is nothing to emit into).
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         #expect(store.eventBus == nil)
         let page = try store.createPage(title: "Silent")
         #expect(page.title == "Silent")

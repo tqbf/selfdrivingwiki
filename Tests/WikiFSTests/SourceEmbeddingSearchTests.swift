@@ -21,8 +21,8 @@ struct SourceEmbeddingSearchTests {
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    private func tempStore() throws -> SQLiteWikiStore {
-        try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+    private func tempStore() throws -> GRDBWikiStore {
+        try GRDBWikiStore(databaseURL: tempDatabaseURL())
     }
 
     private func scalarInt(_ db: OpaquePointer?, _ sql: String) -> Int32 {
@@ -42,14 +42,14 @@ struct SourceEmbeddingSearchTests {
 
     @Test func freshDBCreatesSourceEmbeddingsTableAtV12() throws {
         let url = tempDatabaseURL()
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         _ = store
 
         var db: OpaquePointer?
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
         defer { sqlite3_close(db) }
 
-        #expect(scalarInt(db, "PRAGMA user_version;") == SQLiteWikiStore.currentSchemaVersion)
+        #expect(scalarInt(db, "PRAGMA user_version;") == GRDBWikiStore.schemaVersion)
         #expect(tableExists(db, "source_chunks"))
         // page chunk table mirrors the source one.
         #expect(tableExists(db, "page_chunks"))
@@ -151,7 +151,7 @@ struct SourceEmbeddingSearchTests {
 
     @Test func deletingSourceRemovesItsChunkRows() throws {
         let url = tempDatabaseURL()
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let s = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
         try store.storeSourceChunks(id: s.id, chunks: [Data(count: 512 * 4), Data(count: 512 * 4)])
 

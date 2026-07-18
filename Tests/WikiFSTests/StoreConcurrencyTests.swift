@@ -9,12 +9,12 @@ import Testing
 @Suite("Store concurrency & transactions (graph-model Phase 0)")
 struct StoreConcurrencyTests {
 
-    private func makeStore() throws -> (store: SQLiteWikiStore, url: URL) {
+    private func makeStore() throws -> (store: GRDBWikiStore, url: URL) {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("StoreConcurrencyTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("wiki.sqlite")
-        return (try SQLiteWikiStore(databaseURL: url), url)
+        return (try GRDBWikiStore(databaseURL: url), url)
     }
 
     // MARK: - Method atomicity
@@ -76,7 +76,7 @@ struct StoreConcurrencyTests {
             } catch { /* best-effort caller: inner work must be gone */ }
             _ = try store.createPage(title: "C")
         }
-        let titles = Set(try store.listPages(sortBy: .titleAZ).map(\.title))
+        let titles: Set<String> = Set(try store.listPages(sortBy: .titleAZ).map(\.title))
         #expect(titles == ["A", "C"])
     }
 

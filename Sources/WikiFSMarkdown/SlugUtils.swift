@@ -1,7 +1,7 @@
 import Foundation
 
 /// Shared slug *base* for the two slug callers in the app:
-/// - `SQLiteWikiStore.slugify` (page-title slugs → DB `pages.slug`)
+/// - `GRDBWikiStore.slugify` (page-title slugs → DB `pages.slug`)
 /// - `AnchorBlock.makeSlug` (in-memory heading anchor ids)
 ///
 /// `slugBase` is the pure normalization both share: lowercase → whitespace→`-`
