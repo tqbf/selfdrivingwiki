@@ -40,6 +40,12 @@ let package = Package(
         // discarded stderr, unexposed PID). The fork fixes all four. Upstream PRs
         // offered when the upstream resumes.
         .package(url: "https://github.com/wsargent/swift-acp", from: "0.2.0"),
+        // GRDB.swift — GRDB toolkit for SQLite. Phase 1 pilot: QueueStore uses
+        // DatabaseQueue + DatabaseMigrator replacing hand-rolled sqlite3_* calls
+        // (plans/grdb-adoption.md §6). The default GRDB product uses the system
+        // SQLite (same as our CSqliteVec / SQLiteWikiStore) — they coexist on
+        // different database files with no conflict.
+        .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
     ],
     targets: [
         // Statically-linked sqlite-vec (semantic vector search). The amalgamation
@@ -121,11 +127,11 @@ let package = Package(
                 "WikiFSLinks",
                 "WikiFSMarkdown",
                 "WikiFSSearch",
+                .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Sources/WikiFSCore",
             swiftSettings: strictSwiftSettings,
         ),
-        // App-only MiniLM (MLX/Metal) embeddings. Links MLX (Metal/Accelerate)
         // — which the File Provider extension must NOT (com.apple.fileprovider-
         // nonui forbids Metal on macOS 26). Core reaches the implementation via
         // the injectable EmbeddingService.miniLMFactory seam; the app installs it

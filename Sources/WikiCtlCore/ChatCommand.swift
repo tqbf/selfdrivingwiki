@@ -108,7 +108,7 @@ public enum ChatCommand {
         query: String, limit: Int, in store: WikiStore
     ) throws -> Result {
         let results = try store.searchSimilarChats(query: query, limit: limit)
-        let output = results.map { chat in
+        let output: String = results.map { chat in
             let title = chat.title.replacingOccurrences(of: "\t", with: " ")
             return "\(chat.id.rawValue)\t\(title)\t\(chat.kind.rawValue)\t\(chat.messageCount)"
         }.joined(separator: "\n")

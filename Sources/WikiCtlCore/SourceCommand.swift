@@ -233,7 +233,7 @@ public enum SourceCommand {
         query: String, limit: Int, in store: WikiStore
     ) throws -> Result {
         let results = try store.searchSimilarSources(query: query, limit: limit)
-        let output = results.map { summary in
+        let output: String = results.map { summary in
             // `effectiveName` falls back to filename on nil OR empty display_name,
             // matching how sources are labeled app-wide (sidebar/file-provider).
             let name = summary.effectiveName.replacingOccurrences(of: "\t", with: " ")

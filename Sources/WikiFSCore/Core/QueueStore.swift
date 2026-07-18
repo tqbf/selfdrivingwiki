@@ -1,5 +1,10 @@
 import Foundation
-import SQLite3
+
+// `internal import` (SE-0409, Swift 6.0+) keeps GRDB types from leaking into
+// downstream modules. Without this, GRDB's `SQL` type (which is
+// `ExpressibleByStringInterpolation`) competes with `String` in string
+// interpolation contexts in WikiCtlCore/WikiFS, causing type mismatches.
+internal import GRDB
 
 // MARK: - QueueStoreError
 
@@ -37,83 +42,74 @@ public enum QueueStoreError: Error, CustomStringConvertible, LocalizedError {
 
 /// Persistent, durable store for the extraction / ingestion work queue.
 ///
-/// Owns one serial SQLite connection (`queue.sqlite`) with a prepared-statement
-/// cache, replicating `SQLiteWikiStore`'s proven concurrency discipline:
+/// Backed by GRDB.swift (`DatabaseQueue`) — a lightweight, well-tested Swift
+/// SQLite toolkit. The store owns one serial connection to `queue.sqlite`,
+/// configured with WAL mode, foreign keys, busy timeout, and the same set of
+/// performance PRAGMAs as `SQLiteWikiStore` (#523).
 ///
-/// - **Method-atomic:** every public method acquires `lock` (an
-///   `NSRecursiveLock`) for its entire body, so no two callers share a cached
-///   `sqlite3_stmt*` or mutate the `statements` dictionary concurrently.
-/// - **Savepoint nesting:** multi-step writes compose via `withTransaction`,
-///   which uses `BEGIN IMMEDIATE` at depth 0 and `SAVEPOINT spN` for nesting —
-///   never raw `BEGIN`.
-/// - **No leaked read snapshots:** every stepped `SQLiteStatement` is covered
-///   by `defer { stmt.reset() }`, so no statement is left at `SQLITE_ROW`
-///   (which would pin the WAL read snapshot, causing stale reads and
-///   `BEGIN IMMEDIATE` failures — issue #332).
-/// - **No connection state crosses a method boundary:** statement handles and
-///   column pointers are never returned or shared.
-/// - **WAL + busy_timeout:** `PRAGMA journal_mode=WAL`,
-///   `PRAGMA foreign_keys=ON`, `PRAGMA busy_timeout=5000`.
-/// - **Versioned idempotent migrations:** `PRAGMA user_version` drives the
-///   schema ladder; re-opening a store is a no-op.
+/// **Concurrency model:** GRDB's `DatabaseQueue` serializes all reads and
+/// writes through a single dispatch queue — every `dbQueue.read { }` /
+/// `dbQueue.write { }` call runs without overlap. This replaces the prior
+/// `NSRecursiveLock` + `withTransaction` + prepared-statement cache with
+/// GRDB's built-in statement caching and automatic transaction management.
+///
+/// **Migrations:** `DatabaseMigrator` provides named, idempotent, auto-tracked
+/// migrations (via the `grdb_migrations` table). Existing databases that were
+/// created by the hand-rolled `user_version` ladder are detected automatically
+/// — the migrator sees there is no `grdb_migrations` table and runs all
+/// registered migrations, which are all `IF NOT EXISTS` / idempotent so
+/// re-running them on an already-current schema is a no-op.
 ///
 /// The store has **no scheduling opinions** — it owns CRUD and state
-/// transitions only. The `QueueEngine` actor (Phase 2) will call these methods
-/// to drive the processing lifecycle. The store emits **no**
-/// `ResourceChangeEvent` (it is not a `WikiStore` and has no event bus).
+/// transitions only. The `QueueEngine` actor calls these methods to drive the
+/// processing lifecycle. The store emits **no** `ResourceChangeEvent` (it is
+/// not a `WikiStore` and has no event bus).
 public final class QueueStore: @unchecked Sendable {
 
     // MARK: - Stored properties
 
-    /// The single serial SQLite connection. `FULLMUTEX` (serialized) at the C
-    /// level; the recursive lock adds method-level atomicity on top.
-    private let db: OpaquePointer
-
-    /// Prepared-statement cache keyed by SQL text; reused via `reset()`.
-    private var statements: [String: SQLiteStatement] = [:]
-
-    /// Serializes whole method bodies (bind → step → column reads) against the
-    /// single connection. Recursive so public methods may compose without
-    /// self-deadlock.
-    private let lock = NSRecursiveLock()
-
-    /// Current `withTransaction` nesting depth (0 = no open transaction).
-    /// Only ever touched while holding `lock`.
-    private var transactionDepth = 0
+    /// The serial GRDB connection. Reads and writes are serialized through
+    /// GRDB's internal dispatch queue — no external lock needed.
+    private var dbQueue: DatabaseQueue?
 
     /// Guards against double-close (`close()` then `deinit`).
+    private let closeLock = NSLock()
     private var closed = false
 
     // MARK: - Init
 
     /// Open (creating if needed) the queue database at `databaseURL`.
-    /// Phase 1 tests inject a temp-directory URL; the app will inject
+    /// Phase 1 tests inject a temp-directory URL; the app injects
     /// `DatabaseLocation.queueDatabaseURL()` in Phase 2.
     public init(databaseURL: URL) throws {
-        var handle: OpaquePointer?
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
-        let rc = sqlite3_open_v2(databaseURL.path, &handle, flags, nil)
-        guard rc == SQLITE_OK, let handle else {
-            let msg = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "rc \(rc)"
-            if let handle { sqlite3_close(handle) }
-            throw QueueStoreError.open(msg)
+        var config = Configuration()
+        config.foreignKeysEnabled = true
+        config.busyMode = .timeout(5)
+
+        // Performance PRAGMAs matching SQLiteWikiStore (#523).
+        // `prepareDatabase` runs on the connection before any app code —
+        // journal_mode is set to WAL by GRDB when requested, but we also
+        // set it explicitly here for clarity.
+        config.prepareDatabase { db in
+            try db.execute(sql: "PRAGMA journal_mode=WAL")
+            try db.execute(sql: "PRAGMA synchronous=NORMAL")
+            try db.execute(sql: "PRAGMA mmap_size=268435456")
+            try db.execute(sql: "PRAGMA cache_size=-65536")
+            try db.execute(sql: "PRAGMA temp_store=MEMORY")
         }
-        self.db = handle
 
         do {
-            try configurePragmas()
-            try bootstrapSchema()
+            let queue = try DatabaseQueue(path: databaseURL.path, configuration: config)
+            try Self.migrator.migrate(queue)
+            self.dbQueue = queue
         } catch {
-            sqlite3_close(db)
-            throw error
+            throw QueueStoreError.open("\(error)")
         }
     }
 
     deinit {
-        guard !closed else { return }
-        closed = true
-        statements.removeAll()
-        Self.checkpointAndClose(db)
+        checkpoint()
+        dbQueue = nil
     }
 
     /// Explicitly close the database connection. After calling this, the store
@@ -121,285 +117,150 @@ public final class QueueStore: @unchecked Sendable {
     /// that need to quiesce the WAL before opening a new connection on the same
     /// file (e.g. tests verifying persistence across reopen) must call this.
     public func close() {
-        lock.lock()
-        defer { lock.unlock() }
+        closeLock.lock()
+        defer { closeLock.unlock() }
         guard !closed else { return }
         closed = true
-        statements.removeAll()
-        Self.checkpointAndClose(db)
+        checkpoint()
+        dbQueue = nil
     }
 
-    /// Force-checkpoint the WAL to zero length, then close. Mirrors
-    /// `SQLiteWikiStore.checkpointAndClose` — the explicit TRUNCATE checkpoint
-    /// flushes committed frames into the main file first so `sqlite3_close`
-    /// has nothing left to do (avoids intermittent `SQLITE_ERROR` on a
-    /// reopening connection under CI load — #223, #234).
-    nonisolated private static func checkpointAndClose(_ db: OpaquePointer) {
-        sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE);", nil, nil, nil)
-        sqlite3_close(db)
-    }
-
-    // MARK: - Open-time configuration
-
-    private func configurePragmas() throws {
-        let mode = try queryScalarText("PRAGMA journal_mode=WAL;")
-        guard mode.lowercased() == "wal" else {
-            throw QueueStoreError.sqlite(code: -1, message: "journal_mode is '\(mode)', expected 'wal'")
-        }
-        try exec("PRAGMA foreign_keys=ON;")
-        try exec("PRAGMA busy_timeout=5000;")
-    }
-
-    // MARK: - Schema + migrations
-
-    /// Current schema version for `queue.sqlite`.
-    /// v2: `queue_item_events` (per-item agent transcripts). The table was
-    /// originally added to the FRESH schema only, without a migration step —
-    /// existing v1 databases silently lacked it, and `try? appendItemEvent`
-    /// swallowed the "no such table" error on every write, so transcripts
-    /// never survived a relaunch.
-    /// v3: Namespace `QueueRunState.running` rawValue from `"running"` to
-    /// `"queue-running"` in the `queue_state` table. Disambiguates from
-    /// `QueueItemState.running` (`"running"`) — issue #508.
-    private static let currentSchemaVersion = 3
-
-    /// Stepwise, idempotent schema migration keyed on `PRAGMA user_version`.
-    /// A fresh DB (version 0) runs `createFreshSchemaV1()`; an existing DB at
-    /// version >= 1 is a no-op (no migration steps beyond v1 yet, but the
-    /// ladder structure is ready for future phases).
-    private func bootstrapSchema() throws {
-        var version = Int(try queryScalarText("PRAGMA user_version;")) ?? 0
-        if version == 0 {
-            try createFreshSchemaV1()
-            return
-        }
-        try migrate(from: &version)
-        // Defensive cleanup: remove any rows persisted with the now-removed
-        // `queue = 'lint'` kind from a partial earlier execution. The enum
-        // case was reverted — lint is a payload variant of `.ingestion`.
-        // Safe + idempotent (no-op if no such rows exist).
-        try exec("DELETE FROM queue_items WHERE queue = 'lint';")
-    }
-
-    /// Stepwise migration ladder. Each `if version < N` block runs one step
-    /// and stamps `user_version = N`.
-    ///
-    /// Mirrors `SQLiteWikiStore.migrate(from:)` — versioned, idempotent,
-    /// each step runs only when the DB is below that step's target version.
-    private func migrate(from version: inout Int) throws {
-        if version < 2 {
-            try migrateV1ToV2()
-            version = 2
-            try exec("PRAGMA user_version=2;")
-        }
-        if version < 3 {
-            try migrateV2ToV3()
-            version = 3
-            try exec("PRAGMA user_version=3;")
-        }
-    }
-
-    /// v1 → v2: add the per-item transcript table to databases created before
-    /// it existed. `IF NOT EXISTS` keeps this idempotent for fresh databases
-    /// (whose `createFreshSchemaV1()` already built it) and for DBs from a
-    /// partial earlier run.
-    private func migrateV1ToV2() throws {
-        try exec("""
-        CREATE TABLE IF NOT EXISTS queue_item_events (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            item_id       TEXT NOT NULL,
-            seq           INTEGER NOT NULL,
-            event_json    TEXT NOT NULL,
-            created_at    INTEGER NOT NULL,
-            FOREIGN KEY (item_id) REFERENCES queue_items(id) ON DELETE CASCADE
-        );
-        """)
-        try exec("""
-        CREATE INDEX IF NOT EXISTS idx_queue_item_events
-            ON queue_item_events(item_id, seq);
-        """)
-    }
-
-    /// v2 → v3: Namespace the `QueueRunState.running` rawValue in the
-    /// `queue_state` table from `"running"` to `"queue-running"`. This
-    /// disambiguates it from `QueueItemState.running` (`"running"`)
-    /// — issue #508. Safe + idempotent (no-op if already migrated).
-    private func migrateV2ToV3() throws {
-        try exec("UPDATE queue_state SET state = 'queue-running' WHERE state = 'running';")
-    }
-
-    /// Build the complete v1 schema for a fresh database and stamp
-    /// `user_version = 1`.
-    private func createFreshSchemaV1() throws {
-        try exec("""
-        CREATE TABLE queue_items (
-            id            TEXT PRIMARY KEY,
-            queue         TEXT NOT NULL,
-            wiki_id       TEXT NOT NULL,
-            payload       TEXT NOT NULL,
-            state         TEXT NOT NULL,
-            ordering_key  INTEGER NOT NULL,
-            provider_id   TEXT,
-            attempt       INTEGER NOT NULL DEFAULT 0,
-            error         TEXT,
-            created_at    INTEGER NOT NULL,
-            started_at    INTEGER,
-            finished_at   INTEGER
-        );
-        """)
-
-        try exec("""
-        CREATE INDEX idx_queue_items_active
-            ON queue_items(queue, state, ordering_key);
-        """)
-
-        try exec("""
-        CREATE TABLE queue_state (
-            queue  TEXT PRIMARY KEY,
-            state  TEXT NOT NULL
-        );
-        """)
-
-        // Seed default run states: both queues start running.
-        try exec("INSERT INTO queue_state(queue, state) VALUES ('extraction', 'queue-running');")
-        try exec("INSERT INTO queue_state(queue, state) VALUES ('ingestion', 'queue-running');")
-
-        try exec("""
-        CREATE TABLE queue_item_events (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            item_id       TEXT NOT NULL,
-            seq           INTEGER NOT NULL,
-            event_json    TEXT NOT NULL,
-            created_at    INTEGER NOT NULL,
-            FOREIGN KEY (item_id) REFERENCES queue_items(id) ON DELETE CASCADE
-        );
-        """)
-
-        try exec("""
-        CREATE INDEX idx_queue_item_events
-            ON queue_item_events(item_id, seq);
-        """)
-
-        try exec("PRAGMA user_version=\(Self.currentSchemaVersion);")
-    }
-
-    // MARK: - Statement helpers
-
-    /// Get (or prepare-and-cache) a `SQLiteStatement` for `sql`. Keyed by the
-    /// raw SQL text so the same string always returns the same cached
-    /// `sqlite3_stmt*`.
-    private func statement(_ sql: String) throws -> SQLiteStatement {
-        if let cached = statements[sql] { return cached }
-        let stmt = try SQLiteStatement(db: db, sql: sql)
-        statements[sql] = stmt
-        return stmt
-    }
-
-    /// Execute a statement that returns no rows (DDL / PRAGMA assignment).
-    /// Not cached — these run once at open time or are simple UPSERTs.
-    private func exec(_ sql: String) throws {
-        var errmsg: UnsafeMutablePointer<CChar>?
-        let rc = sqlite3_exec(db, sql, nil, nil, &errmsg)
-        defer { sqlite3_free(errmsg) }
-        guard rc == SQLITE_OK else {
-            let msg = errmsg.map { String(cString: $0) } ?? SQLiteStatement.message(db)
-            if rc == SQLITE_BUSY || rc == SQLITE_LOCKED {
-                DebugLog.store("QueueStore exec BUSY/LOCKED rc=\(rc) sql=\(sql) msg=\(msg)")
-            }
-            throw QueueStoreError.sqlite(code: rc, message: msg)
-        }
-    }
-
-    /// Run a one-row PRAGMA/SELECT and return column 0 as text. Uses a
-    /// throwaway prepared statement (not cached) so pragmas like
-    /// `journal_mode=WAL` (which return a row) can be observed.
-    private func queryScalarText(_ sql: String) throws -> String {
-        var handle: OpaquePointer?
-        let rc = sqlite3_prepare_v2(db, sql, -1, &handle, nil)
-        guard rc == SQLITE_OK, let handle else {
-            throw QueueStoreError.sqlite(code: rc, message: SQLiteStatement.message(db))
-        }
-        defer { sqlite3_finalize(handle) }
-        let step = sqlite3_step(handle)
-        guard step == SQLITE_ROW else { return "" }
-        guard let c = sqlite3_column_text(handle, 0) else { return "" }
-        return String(cString: c)
-    }
-
-    #if DEBUG
-    /// Assert no cached statement is left busy. A busy statement pins the
-    /// connection's WAL read snapshot, causing stale reads and write-lock
-    /// failures after external commits (#332). Called before `BEGIN IMMEDIATE`
-    /// in `withTransaction` as a DEBUG guardrail.
-    private func assertNoBusyStatements() throws {
-        for (sql, stmt) in statements {
-            if stmt.isBusy {
-                throw QueueStoreError.sqlite(
-                    code: -1,
-                    message: "Busy cached statement detected: \(sql.prefix(80))")
-            }
-        }
-    }
-    #endif
-
-    /// Nested transaction wrapper. Depth 0 uses `BEGIN IMMEDIATE`;
-    /// deeper calls use `SAVEPOINT spN` so public methods may compose. Never
-    /// raw `BEGIN`. Includes the DEBUG `assertNoBusyStatements()` guard before
-    /// `BEGIN IMMEDIATE` — the #332 guardrail.
-    private func withTransaction<T>(_ body: () throws -> T) throws -> T {
-        lock.lock(); defer { lock.unlock() }
-        let depth = transactionDepth
-        let savepoint = "queue_txn_\(depth)"
-        if depth == 0 {
-            #if DEBUG
-            try assertNoBusyStatements()
-            #endif
-            let start = DispatchTime.now()
-            do {
-                try exec("BEGIN IMMEDIATE;")
-            } catch {
-                let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
-                DebugLog.store("QueueStore BEGIN IMMEDIATE failed after \(elapsedMs)ms — \(error)")
-                throw error
-            }
-        } else {
-            try exec("SAVEPOINT \(savepoint);")
-        }
-        transactionDepth += 1
-        defer { transactionDepth -= 1 }
+    /// Force-checkpoint the WAL to zero length, then let GRDB close the
+    /// connection on deinit. Mirrors `SQLiteWikiStore.checkpointAndClose` —
+    /// the explicit TRUNCATE checkpoint flushes committed frames into the
+    /// main file first so reopening the same file has nothing pending
+    /// (avoids intermittent `SQLITE_ERROR` under CI load — #223, #234).
+    private func checkpoint() {
+        guard let dbQueue else { return }
         do {
-            let result = try rewrap(body)
-            if depth == 0 {
-                try exec("COMMIT;")
-            } else {
-                try exec("RELEASE \(savepoint);")
+            try dbQueue.writeWithoutTransaction { db in
+                // TRUNCATE checkpoint — flush WAL frames, then truncate WAL to zero.
+                if let row = try Row.fetchOne(db, sql: "PRAGMA wal_checkpoint(TRUNCATE)") {
+                    let busy: Int = row["busy"]
+                    if busy != 0 {
+                        let log: Int = row["log"]
+                        let checkpointed: Int = row["checkpointed"]
+                        DebugLog.store("QueueStore WAL checkpoint busy: busy=\(busy) log=\(log) checkpointed=\(checkpointed)")
+                    }
+                }
             }
-            return result
         } catch {
-            if depth == 0 {
-                try? exec("ROLLBACK;")
-            } else {
-                try? exec("ROLLBACK TO \(savepoint);")
-                try? exec("RELEASE \(savepoint);")
-            }
-            throw error
+            DebugLog.store("QueueStore WAL checkpoint failed: \(error)")
         }
     }
 
-    // MARK: - Error rewrapping
+    // MARK: - GRDB connection helper
 
-    /// Rewrap `WikiStoreError.sqlite` (thrown by `SQLiteStatement`'s `init` /
-    /// `bind` / `step`) into `QueueStoreError.sqlite`. All other errors
-    /// (including `QueueStoreError`) pass through unchanged. This is the
-    /// boundary that keeps `QueueStore`'s public surface clean — callers
-    /// catching `QueueStoreError` never miss a `WikiStoreError` from a
-    /// SQLite-level failure.
-    private func rewrap<T>(_ body: () throws -> T) throws -> T {
-        do { return try body() }
-        catch let WikiStoreError.sqlite(code, message) {
-            throw QueueStoreError.sqlite(code: code, message: message)
+    /// Returns the live `DatabaseQueue`, or throws if the store has been closed.
+    private func queue() throws -> DatabaseQueue {
+        guard let dbQueue else {
+            throw QueueStoreError.sqlite(code: -1, message: "Database is closed")
         }
+        return dbQueue
     }
+
+    // MARK: - Migrations
+
+    /// Named, auto-tracked migrations replacing the `PRAGMA user_version` ladder.
+    ///
+    /// All migrations are idempotent (`IF NOT EXISTS`, `INSERT OR IGNORE`, etc.)
+    /// because GRDB's `DatabaseMigrator` detects databases created by the
+    /// old hand-rolled code (no `grdb_migrations` table) and runs all
+    /// registered migrations from scratch. The `IF NOT EXISTS` guards make
+    /// this a no-op for existing databases that already have the schema.
+    ///
+    /// Migration history:
+    /// - v1: `queue_items`, `queue_state`, `queue_item_events` (+ indexes + seed).
+    /// - v2: `queue_item_events` table (originally added to fresh-schema only
+    ///   without a migration step; existing v1 DBs silently lacked it — #450).
+    /// - v3: Namespace `QueueRunState.running` rawValue from `"running"` to
+    ///   `"queue-running"` to disambiguate from `QueueItemState.running` (#508).
+    private static let migrator: DatabaseMigrator = {
+        var m = DatabaseMigrator()
+
+        m.registerMigration("v1_create_queue_schema") { db in
+            try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS queue_items (
+                id            TEXT PRIMARY KEY,
+                queue         TEXT NOT NULL,
+                wiki_id       TEXT NOT NULL,
+                payload       TEXT NOT NULL,
+                state         TEXT NOT NULL,
+                ordering_key  INTEGER NOT NULL,
+                provider_id   TEXT,
+                attempt       INTEGER NOT NULL DEFAULT 0,
+                error         TEXT,
+                created_at    INTEGER NOT NULL,
+                started_at    INTEGER,
+                finished_at   INTEGER
+            );
+            """)
+
+            try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_queue_items_active
+                ON queue_items(queue, state, ordering_key);
+            """)
+
+            try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS queue_state (
+                queue  TEXT PRIMARY KEY,
+                state  TEXT NOT NULL
+            );
+            """)
+
+            // Seed default run states: both queues start queue-running.
+            try db.execute(sql: "INSERT OR IGNORE INTO queue_state(queue, state) VALUES ('extraction', 'queue-running');")
+            try db.execute(sql: "INSERT OR IGNORE INTO queue_state(queue, state) VALUES ('ingestion', 'queue-running');")
+
+            try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS queue_item_events (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_id       TEXT NOT NULL,
+                seq           INTEGER NOT NULL,
+                event_json    TEXT NOT NULL,
+                created_at    INTEGER NOT NULL,
+                FOREIGN KEY (item_id) REFERENCES queue_items(id) ON DELETE CASCADE
+            );
+            """)
+
+            try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_queue_item_events
+                ON queue_item_events(item_id, seq);
+            """)
+
+            // Defensive cleanup: remove any rows persisted with the now-removed
+            // `queue = 'lint'` kind from a partial earlier execution. The enum
+            // case was reverted — lint is a payload variant of `.ingestion`.
+            // Safe + idempotent (no-op if no such rows exist).
+            try db.execute(sql: "DELETE FROM queue_items WHERE queue = 'lint';")
+        }
+
+        m.registerMigration("v2_add_item_events") { db in
+            // v2 is subsumed by v1's `IF NOT EXISTS` migration (which builds
+            // queue_item_events). This migration is kept for explicit
+            // provenance and to advance the grdb_migrations tracking.
+            try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS queue_item_events (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_id       TEXT NOT NULL,
+                seq           INTEGER NOT NULL,
+                event_json    TEXT NOT NULL,
+                created_at    INTEGER NOT NULL,
+                FOREIGN KEY (item_id) REFERENCES queue_items(id) ON DELETE CASCADE
+            );
+            """)
+            try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_queue_item_events
+                ON queue_item_events(item_id, seq);
+            """)
+        }
+
+        m.registerMigration("v3_namespace_run_state") { db in
+            try db.execute(sql: "UPDATE queue_state SET state = 'queue-running' WHERE state = 'running';")
+        }
+
+        return m
+    }()
 
     // MARK: - Timestamp helper
 
@@ -426,43 +287,44 @@ public final class QueueStore: @unchecked Sendable {
         return try JSONDecoder().decode(QueueItemPayload.self, from: data)
     }
 
+    // MARK: - GRDB error wrapping
+
+    /// Wrap `DatabaseError` into `QueueStoreError.sqlite` so callers catching
+    /// `QueueStoreError` never see a raw `DatabaseError`. All other errors
+    /// (including `QueueStoreError`) pass through unchanged.
+    private static func wrap<T>(_ body: () throws -> T) throws -> T {
+        do { return try body() }
+        catch let error as DatabaseError {
+            throw QueueStoreError.sqlite(
+                code: error.extendedResultCode.rawValue,
+                message: error.message ?? "\(error)")
+        }
+    }
+
     // MARK: - Row decoding
 
-    /// The SELECT column list for `queue_items`, shared by all read queries so
-    /// `readItem` can use fixed column indexes.
+    /// Shared SELECT column list for `queue_items`.
     private static let selectColumns = """
         id, queue, wiki_id, payload, state, ordering_key,
         provider_id, attempt, error, created_at, started_at, finished_at
     """
 
-    /// Read a `QueueItem` from the current row of `stmt`. Column order matches
-    /// `selectColumns`. Must be called while the statement is at `SQLITE_ROW`
-    /// and before `reset()` — no column pointer crosses the method boundary
-    /// (all values are copied out into value types).
-    private func readItem(from stmt: SQLiteStatement) throws -> QueueItem {
-        let id = stmt.text(at: 0)
-        let queueRaw = stmt.text(at: 1)
-        let wikiID = stmt.text(at: 2)
-        let payloadText = stmt.text(at: 3)
-        let stateRaw = stmt.text(at: 4)
-        let orderingKey = stmt.int(at: 5)
-
-        // Nullable TEXT columns: check SQLITE_NULL explicitly.
-        let providerIDNil = sqlite3_column_type(stmt.handle, 6) == SQLITE_NULL
-        let providerID = providerIDNil ? nil : stmt.text(at: 6)
-
-        let attempt = Int(stmt.int(at: 7))
-
-        let errorNil = sqlite3_column_type(stmt.handle, 8) == SQLITE_NULL
-        let errorText = errorNil ? nil : stmt.text(at: 8)
-
-        let createdAt = stmt.int(at: 9)
-
-        let startedAtNil = sqlite3_column_type(stmt.handle, 10) == SQLITE_NULL
-        let startedAt = startedAtNil ? nil : stmt.int(at: 10)
-
-        let finishedAtNil = sqlite3_column_type(stmt.handle, 11) == SQLITE_NULL
-        let finishedAt = finishedAtNil ? nil : stmt.int(at: 11)
+    /// Read a `QueueItem` from a GRDB `Row`. Named column access (not positional)
+    /// so column order changes are harmless — a key safety improvement over
+    /// the old `stmt.text(at: 0)` positional access.
+    private static func readItem(from row: Row) throws -> QueueItem {
+        let id: String = row["id"]
+        let queueRaw: String = row["queue"]
+        let wikiID: String = row["wiki_id"]
+        let payloadText: String = row["payload"]
+        let stateRaw: String = row["state"]
+        let orderingKey: Int64 = row["ordering_key"]
+        let providerID: String? = row["provider_id"]
+        let attempt: Int = row["attempt"]
+        let errorText: String? = row["error"]
+        let createdAt: Int64 = row["created_at"]
+        let startedAt: Int64? = row["started_at"]
+        let finishedAt: Int64? = row["finished_at"]
 
         guard let queue = QueueKind(rawValue: queueRaw) else {
             throw QueueStoreError.sqlite(code: -1, message: "Unknown queue kind: \(queueRaw)")
@@ -470,7 +332,7 @@ public final class QueueStore: @unchecked Sendable {
         guard let state = QueueItemState(rawValue: stateRaw) else {
             throw QueueStoreError.sqlite(code: -1, message: "Unknown item state: \(stateRaw)")
         }
-        let payload = try Self.decodePayload(payloadText)
+        let payload = try decodePayload(payloadText)
 
         return QueueItem(
             id: id,
@@ -491,15 +353,14 @@ public final class QueueStore: @unchecked Sendable {
     // MARK: - Ordering key helper
 
     /// The next ordering key for `queue` (current max + 1000, or 1000 if the
-    /// queue is empty). Called inside `enqueue` and `retryItem` while holding
-    /// the lock.
-    private func nextOrderingKey(for queue: QueueKind) throws -> Int64 {
-        let sql = "SELECT COALESCE(MAX(ordering_key), 0) + 1000 FROM queue_items WHERE queue = ?1;"
-        let stmt = try statement(sql)
-        defer { stmt.reset() }
-        try stmt.bind(queue.rawValue, at: 1)
-        _ = try stmt.step()
-        return stmt.int(at: 0)
+    /// queue is empty). Called inside `enqueue` and `retryItem` within a
+    /// write transaction.
+    private static func nextOrderingKey(_ db: Database, for queue: QueueKind) throws -> Int64 {
+        let maxKey = try Int64.fetchOne(
+            db,
+            sql: "SELECT COALESCE(MAX(ordering_key), 0) + 1000 FROM queue_items WHERE queue = ?;",
+            arguments: [queue.rawValue]) ?? 0
+        return maxKey
     }
 
     // MARK: - Public API: Enqueue
@@ -509,47 +370,42 @@ public final class QueueStore: @unchecked Sendable {
     /// and records `createdAt`. Returns the fully-populated item.
     @discardableResult
     public func enqueue(_ request: QueueItemRequest) throws -> QueueItem {
-        lock.lock(); defer { lock.unlock() }
+        try Self.wrap {
+            let queue = try self.queue()
+            return try queue.write { db in
+                let id = ULID.generate()
+                let orderingKey = try Self.nextOrderingKey(db, for: request.queue)
+                let now = Self.nowMillis()
+                let payloadJSON = try Self.encodePayload(request.payload)
 
-        return try withTransaction {
-            let id = ULID.generate()
-            let orderingKey = try nextOrderingKey(for: request.queue)
-            let now = Self.nowMillis()
-            let payloadJSON = try Self.encodePayload(request.payload)
+                try db.execute(
+                    sql: """
+                    INSERT INTO queue_items
+                        (id, queue, wiki_id, payload, state, ordering_key,
+                         provider_id, attempt, error, created_at, started_at, finished_at)
+                    VALUES
+                        (?, ?, ?, ?, ?, ?, NULL, 0, NULL, ?, NULL, NULL);
+                    """,
+                    arguments: [
+                        id, request.queue.rawValue, request.wikiID, payloadJSON,
+                        QueueItemState.queued.rawValue, orderingKey, now,
+                    ])
 
-            let sql = """
-            INSERT INTO queue_items
-                (id, queue, wiki_id, payload, state, ordering_key,
-                 provider_id, attempt, error, created_at, started_at, finished_at)
-            VALUES
-                (?1, ?2, ?3, ?4, ?5, ?6,
-                 NULL, 0, NULL, ?7, NULL, NULL);
-            """
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            try stmt.bind(id, at: 1)
-            try stmt.bind(request.queue.rawValue, at: 2)
-            try stmt.bind(request.wikiID, at: 3)
-            try stmt.bind(payloadJSON, at: 4)
-            try stmt.bind(QueueItemState.queued.rawValue, at: 5)
-            try stmt.bind(orderingKey, at: 6)
-            try stmt.bind(now, at: 7)
-            _ = try stmt.step()
-
-            return QueueItem(
-                id: id,
-                queue: request.queue,
-                wikiID: request.wikiID,
-                payload: request.payload,
-                state: .queued,
-                orderingKey: orderingKey,
-                providerID: nil,
-                attempt: 0,
-                error: nil,
-                createdAt: now,
-                startedAt: nil,
-                finishedAt: nil
-            )
+                return QueueItem(
+                    id: id,
+                    queue: request.queue,
+                    wikiID: request.wikiID,
+                    payload: request.payload,
+                    state: .queued,
+                    orderingKey: orderingKey,
+                    providerID: nil,
+                    attempt: 0,
+                    error: nil,
+                    createdAt: now,
+                    startedAt: nil,
+                    finishedAt: nil
+                )
+            }
         }
     }
 
@@ -557,21 +413,20 @@ public final class QueueStore: @unchecked Sendable {
 
     /// Fetch a single item by ID, or `nil` if no row matches.
     public func getItem(_ id: QueueItem.ID) throws -> QueueItem? {
-        lock.lock(); defer { lock.unlock() }
-
-        do {
-            let sql = """
-            SELECT \(Self.selectColumns)
-            FROM queue_items
-            WHERE id = ?1;
-            """
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            try stmt.bind(id, at: 1)
-            guard try stmt.step() else { return nil }
-            return try readItem(from: stmt)
-        } catch let WikiStoreError.sqlite(code, message) {
-            throw QueueStoreError.sqlite(code: code, message: message)
+        try Self.wrap {
+            let queue = try self.queue()
+            return try queue.read { db in
+                let row = try Row.fetchOne(
+                    db,
+                    sql: """
+                    SELECT \(Self.selectColumns)
+                    FROM queue_items
+                    WHERE id = ?;
+                    """,
+                    arguments: [id])
+                guard let row else { return nil }
+                return try Self.readItem(from: row)
+            }
         }
     }
 
@@ -579,59 +434,53 @@ public final class QueueStore: @unchecked Sendable {
     /// `ordering_key` ascending. If `queue` is `nil`, returns items from both
     /// queues; otherwise restricted to the specified queue.
     public func loadActive(for queue: QueueKind? = nil) throws -> [QueueItem] {
-        lock.lock(); defer { lock.unlock() }
-
-        return try rewrap {
-            let sql: String
-            if queue != nil {
-                sql = """
-                SELECT \(Self.selectColumns)
-                FROM queue_items
-                WHERE state IN ('queued', 'running') AND queue = ?1
-                ORDER BY ordering_key ASC;
-                """
-            } else {
-                sql = """
-                SELECT \(Self.selectColumns)
-                FROM queue_items
-                WHERE state IN ('queued', 'running')
-                ORDER BY ordering_key ASC;
-                """
+        try Self.wrap {
+            let dbQueue = try self.queue()
+            return try dbQueue.read { db in
+                let rows: [Row]
+                if let queue {
+                    rows = try Row.fetchAll(
+                        db,
+                        sql: """
+                        SELECT \(Self.selectColumns)
+                        FROM queue_items
+                        WHERE state IN ('queued', 'running') AND queue = ?
+                        ORDER BY ordering_key ASC;
+                        """,
+                        arguments: [queue.rawValue])
+                } else {
+                    rows = try Row.fetchAll(
+                        db,
+                        sql: """
+                        SELECT \(Self.selectColumns)
+                        FROM queue_items
+                        WHERE state IN ('queued', 'running')
+                        ORDER BY ordering_key ASC;
+                        """)
+                }
+                return try rows.map { try Self.readItem(from: $0) }
             }
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            if let queue { try stmt.bind(queue.rawValue, at: 1) }
-
-            var items: [QueueItem] = []
-            while try stmt.step() {
-                items.append(try readItem(from: stmt))
-            }
-            return items
         }
     }
 
     /// Load terminal items (`.completed`, `.failed`, `.cancelled`), newest
     /// first (by `finished_at` descending), bounded by `limit`.
     public func loadRecent(limit: Int = 200) throws -> [QueueItem] {
-        lock.lock(); defer { lock.unlock() }
-
-        return try rewrap {
-            let sql = """
-            SELECT \(Self.selectColumns)
-            FROM queue_items
-            WHERE state IN ('completed', 'failed', 'cancelled')
-            ORDER BY finished_at DESC
-            LIMIT ?1;
-            """
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            try stmt.bind(Int64(limit), at: 1)
-
-            var items: [QueueItem] = []
-            while try stmt.step() {
-                items.append(try readItem(from: stmt))
+        try Self.wrap {
+            let queue = try self.queue()
+            return try queue.read { db in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT \(Self.selectColumns)
+                    FROM queue_items
+                    WHERE state IN ('completed', 'failed', 'cancelled')
+                    ORDER BY finished_at DESC
+                    LIMIT ?;
+                    """,
+                    arguments: [Int64(limit)])
+                return try rows.map { try Self.readItem(from: $0) }
             }
-            return items
         }
     }
 
@@ -641,69 +490,61 @@ public final class QueueStore: @unchecked Sendable {
     /// that claimed it and the start time. Throws if the item is not in
     /// `.queued` state.
     public func markRunning(id: QueueItem.ID, providerID: String) throws {
-        lock.lock(); defer { lock.unlock() }
-
         try validateTransition(id: id, allowedFrom: [.queued], to: .running)
-
         let now = Self.nowMillis()
-        try withTransaction {
-            let sql = """
-            UPDATE queue_items
-            SET state = 'running', provider_id = ?1, started_at = ?2,
-                finished_at = NULL, error = NULL
-            WHERE id = ?3;
-            """
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            try stmt.bind(providerID, at: 1)
-            try stmt.bind(now, at: 2)
-            try stmt.bind(id, at: 3)
-            _ = try stmt.step()
+
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                try db.execute(
+                    sql: """
+                    UPDATE queue_items
+                    SET state = 'running', provider_id = ?, started_at = ?,
+                        finished_at = NULL, error = NULL
+                    WHERE id = ?;
+                    """,
+                    arguments: [providerID, now, id])
+            }
         }
     }
 
     /// Transition an item from `.running` → `.completed`, recording the finish
     /// time. Throws if the item is not in `.running` state.
     public func markCompleted(id: QueueItem.ID) throws {
-        lock.lock(); defer { lock.unlock() }
-
         try validateTransition(id: id, allowedFrom: [.running], to: .completed)
-
         let now = Self.nowMillis()
-        try withTransaction {
-            let sql = """
-            UPDATE queue_items
-            SET state = 'completed', finished_at = ?1
-            WHERE id = ?2;
-            """
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            try stmt.bind(now, at: 1)
-            try stmt.bind(id, at: 2)
-            _ = try stmt.step()
+
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                try db.execute(
+                    sql: """
+                    UPDATE queue_items
+                    SET state = 'completed', finished_at = ?
+                    WHERE id = ?;
+                    """,
+                    arguments: [now, id])
+            }
         }
     }
 
     /// Transition an item from `.running` → `.failed`, recording the finish
     /// time and the error message. Throws if the item is not in `.running` state.
     public func markFailed(id: QueueItem.ID, error: String) throws {
-        lock.lock(); defer { lock.unlock() }
-
         try validateTransition(id: id, allowedFrom: [.running], to: .failed)
-
         let now = Self.nowMillis()
-        try withTransaction {
-            let sql = """
-            UPDATE queue_items
-            SET state = 'failed', finished_at = ?1, error = ?2
-            WHERE id = ?3;
-            """
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            try stmt.bind(now, at: 1)
-            try stmt.bind(error, at: 2)
-            try stmt.bind(id, at: 3)
-            _ = try stmt.step()
+
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                try db.execute(
+                    sql: """
+                    UPDATE queue_items
+                    SET state = 'failed', finished_at = ?, error = ?
+                    WHERE id = ?;
+                    """,
+                    arguments: [now, error, id])
+            }
         }
     }
 
@@ -711,22 +552,20 @@ public final class QueueStore: @unchecked Sendable {
     /// recording the finish time. Preserves the `orderingKey`. Throws if the
     /// item is in a terminal state.
     public func markCancelled(id: QueueItem.ID) throws {
-        lock.lock(); defer { lock.unlock() }
-
         try validateTransition(id: id, allowedFrom: [.queued, .running], to: .cancelled)
-
         let now = Self.nowMillis()
-        try withTransaction {
-            let sql = """
-            UPDATE queue_items
-            SET state = 'cancelled', finished_at = ?1
-            WHERE id = ?2;
-            """
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            try stmt.bind(now, at: 1)
-            try stmt.bind(id, at: 2)
-            _ = try stmt.step()
+
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                try db.execute(
+                    sql: """
+                    UPDATE queue_items
+                    SET state = 'cancelled', finished_at = ?
+                    WHERE id = ?;
+                    """,
+                    arguments: [now, id])
+            }
         }
     }
 
@@ -734,20 +573,19 @@ public final class QueueStore: @unchecked Sendable {
     /// Clears `providerID` and `startedAt`. Preserves the `orderingKey` so the
     /// item retains its position. Throws if the item is not in `.running` state.
     public func requeue(id: QueueItem.ID) throws {
-        lock.lock(); defer { lock.unlock() }
-
         try validateTransition(id: id, allowedFrom: [.running], to: .queued)
 
-        try withTransaction {
-            let sql = """
-            UPDATE queue_items
-            SET state = 'queued', provider_id = NULL, started_at = NULL
-            WHERE id = ?1;
-            """
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            try stmt.bind(id, at: 1)
-            _ = try stmt.step()
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                try db.execute(
+                    sql: """
+                    UPDATE queue_items
+                    SET state = 'queued', provider_id = NULL, started_at = NULL
+                    WHERE id = ?;
+                    """,
+                    arguments: [id])
+            }
         }
     }
 
@@ -755,25 +593,23 @@ public final class QueueStore: @unchecked Sendable {
     /// and assign a NEW `orderingKey` (back of the queue). Clears the error
     /// message. Throws if the item is not in `.failed` state.
     public func retryItem(id: QueueItem.ID) throws {
-        lock.lock(); defer { lock.unlock() }
-
         try validateTransition(id: id, allowedFrom: [.failed], to: .queued)
 
-        try withTransaction {
-            let kind = try fetchQueueKind(id: id)
-            let newOrderingKey = try nextOrderingKey(for: kind)
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                let kind = try Self.fetchQueueKind(db, id: id)
+                let newOrderingKey = try Self.nextOrderingKey(db, for: kind)
 
-            let sql = """
-            UPDATE queue_items
-            SET state = 'queued', ordering_key = ?1, attempt = attempt + 1,
-                error = NULL, finished_at = NULL
-            WHERE id = ?2;
-            """
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            try stmt.bind(newOrderingKey, at: 1)
-            try stmt.bind(id, at: 2)
-            _ = try stmt.step()
+                try db.execute(
+                    sql: """
+                    UPDATE queue_items
+                    SET state = 'queued', ordering_key = ?, attempt = attempt + 1,
+                        error = NULL, finished_at = NULL
+                    WHERE id = ?;
+                    """,
+                    arguments: [newOrderingKey, id])
+            }
         }
     }
 
@@ -785,17 +621,13 @@ public final class QueueStore: @unchecked Sendable {
     /// Returns the updated item, or `nil` if the item was not found.
     @discardableResult
     public func updateOrderingKey(id: QueueItem.ID, key: Int64) throws -> QueueItem? {
-        lock.lock(); defer { lock.unlock() }
-
-        try withTransaction {
-            let sql = """
-            UPDATE queue_items SET ordering_key = ?1 WHERE id = ?2;
-            """
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            try stmt.bind(key, at: 1)
-            try stmt.bind(id, at: 2)
-            _ = try stmt.step()
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                try db.execute(
+                    sql: "UPDATE queue_items SET ordering_key = ? WHERE id = ?;",
+                    arguments: [key, id])
+            }
         }
         return try getItem(id)
     }
@@ -803,14 +635,16 @@ public final class QueueStore: @unchecked Sendable {
     /// The current maximum ordering key for a queue. Used by the engine
     /// when moving an item to the end of a queue.
     public func maxOrderingKey(for queue: QueueKind) throws -> Int64 {
-        lock.lock(); defer { lock.unlock() }
-
-        let sql = "SELECT COALESCE(MAX(ordering_key), 0) FROM queue_items WHERE queue = ?1;"
-        let stmt = try statement(sql)
-        defer { stmt.reset() }
-        try stmt.bind(queue.rawValue, at: 1)
-        _ = try stmt.step()
-        return stmt.int(at: 0)
+        try Self.wrap {
+            let dbQueue = try self.queue()
+            return try dbQueue.read { db in
+                let value = try Int64.fetchOne(
+                    db,
+                    sql: "SELECT COALESCE(MAX(ordering_key), 0) FROM queue_items WHERE queue = ?;",
+                    arguments: [queue.rawValue])
+                return value ?? 0
+            }
+        }
     }
 
     // MARK: - Public API: Crash recovery
@@ -820,18 +654,16 @@ public final class QueueStore: @unchecked Sendable {
     /// recover from crashes. Returns the count of reset rows.
     @discardableResult
     public func resetRunningToQueued() throws -> Int {
-        lock.lock(); defer { lock.unlock() }
-
-        return try withTransaction {
-            let sql = """
-            UPDATE queue_items
-            SET state = 'queued', provider_id = NULL, started_at = NULL
-            WHERE state = 'running';
-            """
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            _ = try stmt.step()
-            return Int(sqlite3_changes(db))
+        try Self.wrap {
+            let queue = try self.queue()
+            return try queue.write { db in
+                try db.execute(sql: """
+                UPDATE queue_items
+                SET state = 'queued', provider_id = NULL, started_at = NULL
+                WHERE state = 'running';
+                """)
+                return db.changesCount
+            }
         }
     }
 
@@ -841,33 +673,30 @@ public final class QueueStore: @unchecked Sendable {
     /// `.running` if the row is somehow missing (shouldn't happen — seeded at
     /// schema creation).
     public func queueRunState(for queue: QueueKind) throws -> QueueRunState {
-        lock.lock(); defer { lock.unlock() }
-
-        return try rewrap {
-            let sql = "SELECT state FROM queue_state WHERE queue = ?1;"
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            try stmt.bind(queue.rawValue, at: 1)
-            guard try stmt.step() else { return QueueRunState.running }
-            let raw = stmt.text(at: 0)
-            return QueueRunState(rawValue: raw) ?? .running
+        try Self.wrap {
+            let dbQueue = try self.queue()
+            return try dbQueue.read { db in
+                let raw = try String.fetchOne(
+                    db,
+                    sql: "SELECT state FROM queue_state WHERE queue = ?;",
+                    arguments: [queue.rawValue])
+                return QueueRunState(rawValue: raw ?? "") ?? .running
+            }
         }
     }
 
     /// Set the run state for a queue (persisted across app restarts).
     public func setQueueRunState(_ queue: QueueKind, _ state: QueueRunState) throws {
-        lock.lock(); defer { lock.unlock() }
-
-        try withTransaction {
-            let sql = """
-            INSERT INTO queue_state (queue, state) VALUES (?1, ?2)
-            ON CONFLICT(queue) DO UPDATE SET state = ?2;
-            """
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            try stmt.bind(queue.rawValue, at: 1)
-            try stmt.bind(state.rawValue, at: 2)
-            _ = try stmt.step()
+        try Self.wrap {
+            let dbQueue = try self.queue()
+            try dbQueue.write { db in
+                try db.execute(
+                    sql: """
+                    INSERT INTO queue_state (queue, state) VALUES (?, ?)
+                    ON CONFLICT(queue) DO UPDATE SET state = ?;
+                    """,
+                    arguments: [queue.rawValue, state.rawValue, state.rawValue])
+            }
         }
     }
 
@@ -877,29 +706,23 @@ public final class QueueStore: @unchecked Sendable {
     /// `maxPerQueue` per queue kind, keeping the most recent (by
     /// `finished_at`). Non-terminal items are never pruned.
     public func pruneHistory(maxPerQueue: Int = 200) throws {
-        lock.lock(); defer { lock.unlock() }
-
-        try withTransaction {
-            for queue in [QueueKind.extraction, QueueKind.ingestion] {
-                // Delete terminal items whose finished_at falls below the
-                // Nth newest (i.e. outside the top `maxPerQueue` most recent
-                // terminal items for this queue). `LIMIT -1 OFFSET N` selects
-                // all rows after skipping the first N.
-                let sql = """
-                DELETE FROM queue_items
-                WHERE id IN (
-                    SELECT id FROM queue_items
-                    WHERE queue = ?1
-                      AND state IN ('completed', 'failed', 'cancelled')
-                    ORDER BY finished_at DESC
-                    LIMIT -1 OFFSET ?2
-                );
-                """
-                let stmt = try statement(sql)
-                defer { stmt.reset() }
-                try stmt.bind(queue.rawValue, at: 1)
-                try stmt.bind(Int64(maxPerQueue), at: 2)
-                _ = try stmt.step()
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                for kind in [QueueKind.extraction, QueueKind.ingestion] {
+                    try db.execute(
+                        sql: """
+                        DELETE FROM queue_items
+                        WHERE id IN (
+                            SELECT id FROM queue_items
+                            WHERE queue = ?
+                              AND state IN ('completed', 'failed', 'cancelled')
+                            ORDER BY finished_at DESC
+                            LIMIT -1 OFFSET ?
+                        );
+                        """,
+                        arguments: [kind.rawValue, Int64(maxPerQueue)])
+                }
             }
         }
     }
@@ -908,61 +731,53 @@ public final class QueueStore: @unchecked Sendable {
 
     /// Append a typed agent event to the persisted transcript for a queue item.
     /// Events are stored in insertion order (seq is auto-incremented by SQLite).
-    /// Safe to call from a background thread — the store has an internal lock.
+    /// Safe to call from a background thread — the store serializes via GRDB.
     public func appendItemEvent(itemID: QueueItem.ID, event: AgentEvent) throws {
-        lock.lock(); defer { lock.unlock() }
-
         let data = try JSONEncoder().encode(event)
         let json = String(data: data, encoding: .utf8) ?? "{}"
         let now = Self.nowMillis()
 
-        let sql = """
-        INSERT INTO queue_item_events (item_id, seq, event_json, created_at)
-        VALUES (?1, COALESCE((SELECT MAX(seq) FROM queue_item_events WHERE item_id = ?1), -1) + 1, ?2, ?3);
-        """
-        let stmt = try statement(sql)
-        defer { stmt.reset() }
-        try stmt.bind(itemID, at: 1)
-        try stmt.bind(json, at: 2)
-        try stmt.bind(now, at: 3)
-        _ = try stmt.step()
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                try db.execute(
+                    sql: """
+                    INSERT INTO queue_item_events (item_id, seq, event_json, created_at)
+                    VALUES (?, COALESCE((SELECT MAX(seq) FROM queue_item_events WHERE item_id = ?), -1) + 1, ?, ?);
+                    """,
+                    arguments: [itemID, itemID, json, now])
+            }
+        }
     }
 
     /// Load all persisted agent events for a queue item, ordered by seq.
     public func loadItemEvents(itemID: QueueItem.ID) throws -> [AgentEvent] {
-        lock.lock(); defer { lock.unlock() }
-
-        let sql = """
-        SELECT event_json FROM queue_item_events
-        WHERE item_id = ?1
-        ORDER BY seq;
-        """
-        // Use a fresh statement (not cached) so we can step through multiple rows
-        // without interfering with cached single-row statements.
-        let stmt = try SQLiteStatement(db: db, sql: sql)
-        defer { stmt.reset() }
-        try stmt.bind(itemID, at: 1)
-
-        var events: [AgentEvent] = []
-        while try stmt.step() {
-            let json = stmt.text(at: 0)
-            guard let data = json.data(using: String.Encoding.utf8) else { continue }
-            if let event = try? JSONDecoder().decode(AgentEvent.self, from: data) {
-                events.append(event)
+        try Self.wrap {
+            let queue = try self.queue()
+            return try queue.read { db in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: "SELECT event_json FROM queue_item_events WHERE item_id = ? ORDER BY seq;",
+                    arguments: [itemID])
+                return rows.compactMap { row in
+                    let json: String = row["event_json"]
+                    guard let data = json.data(using: .utf8) else { return nil }
+                    return try? JSONDecoder().decode(AgentEvent.self, from: data)
+                }
             }
         }
-        return events
     }
 
     /// Delete all persisted events for an item (e.g. on retry — clears the old transcript).
     public func deleteItemEvents(itemID: QueueItem.ID) throws {
-        lock.lock(); defer { lock.unlock() }
-
-        let sql = "DELETE FROM queue_item_events WHERE item_id = ?1;"
-        let stmt = try statement(sql)
-        defer { stmt.reset() }
-        try stmt.bind(itemID, at: 1)
-        _ = try stmt.step()
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                try db.execute(
+                    sql: "DELETE FROM queue_item_events WHERE item_id = ?;",
+                    arguments: [itemID])
+            }
+        }
     }
 
     // MARK: - Internal transition helpers
@@ -983,33 +798,32 @@ public final class QueueStore: @unchecked Sendable {
 
     /// Get the current state of an item by ID. Throws `.notFound` if no row.
     private func currentState(id: QueueItem.ID) throws -> QueueItemState {
-        try rewrap {
-            let sql = "SELECT state FROM queue_items WHERE id = ?1;"
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            try stmt.bind(id, at: 1)
-            guard try stmt.step() else { throw QueueStoreError.notFound(id) }
-            let raw = stmt.text(at: 0)
-            guard let state = QueueItemState(rawValue: raw) else {
-                throw QueueStoreError.sqlite(code: -1, message: "Unknown item state: \(raw)")
+        try Self.wrap {
+            let queue = try self.queue()
+            return try queue.read { db in
+                let raw = try String.fetchOne(
+                    db,
+                    sql: "SELECT state FROM queue_items WHERE id = ?;",
+                    arguments: [id])
+                guard let raw else { throw QueueStoreError.notFound(id) }
+                guard let state = QueueItemState(rawValue: raw) else {
+                    throw QueueStoreError.sqlite(code: -1, message: "Unknown item state: \(raw)")
+                }
+                return state
             }
-            return state
         }
     }
 
     /// Fetch the `QueueKind` of an item by ID. Throws `.notFound` if no row.
-    private func fetchQueueKind(id: QueueItem.ID) throws -> QueueKind {
-        try rewrap {
-            let sql = "SELECT queue FROM queue_items WHERE id = ?1;"
-            let stmt = try statement(sql)
-            defer { stmt.reset() }
-            try stmt.bind(id, at: 1)
-            guard try stmt.step() else { throw QueueStoreError.notFound(id) }
-            let raw = stmt.text(at: 0)
-            guard let kind = QueueKind(rawValue: raw) else {
-                throw QueueStoreError.sqlite(code: -1, message: "Unknown queue kind: \(raw)")
-            }
-            return kind
+    private static func fetchQueueKind(_ db: Database, id: QueueItem.ID) throws -> QueueKind {
+        let raw = try String.fetchOne(
+            db,
+            sql: "SELECT queue FROM queue_items WHERE id = ?;",
+            arguments: [id])
+        guard let raw else { throw QueueStoreError.notFound(id) }
+        guard let kind = QueueKind(rawValue: raw) else {
+            throw QueueStoreError.sqlite(code: -1, message: "Unknown queue kind: \(raw)")
         }
+        return kind
     }
 }
