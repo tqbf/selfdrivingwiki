@@ -1,5 +1,5 @@
 {
-  "originHash" : "f495eb7c340008e24bcd2e913028c25905324fcabcc82a570de70e0401efbec2",
+  "originHash" : "3a48c4b0426543780125b80080b43d5577c1ea0fd7a9237770c274cd19418315",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -146,6 +146,15 @@
       }
     },
     {
+      "identity" : "swift-syntax",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-syntax.git",
+      "state" : {
+        "revision" : "0687f71944021d616d34d922343dcef086855920",
+        "version" : "600.0.1"
+      }
+    },
+    {
       "identity" : "swift-system",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-system.git",
@@ -161,6 +170,15 @@
       "state" : {
         "revision" : "58c4bc11963a140358d791f678a60a2745a23146",
         "version" : "1.2.1"
+      }
+    },
+    {
+      "identity" : "tantivy.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/botisan-ai/tantivy.swift.git",
+      "state" : {
+        "revision" : "dae1d224ef5ea5f1fa5e68c0f363585a2876e7b3",
+        "version" : "0.3.4"
       }
     },
     {

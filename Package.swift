@@ -46,6 +46,13 @@ let package = Package(
         // SQLite (same as our CSqliteVec / SQLiteWikiStore) — they coexist on
         // different database files with no conflict.
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
+        // tantivy.swift — Rust Tantivy full-text search via UniFFI bindings + an
+        // @TantivyDocument macro. Phase 0 build spike (plans/tantivy-search-sidecar.md):
+        // verify the pre-built XCFramework (libtantivy-rs.xcframework) resolves under
+        // bare `swift build` (no Xcode) and links for aarch64-apple-darwin. Ships a
+        // macOS arm64 slice; no x86_64 (acceptable — MLX already requires Apple Silicon).
+        // NOT wired into the search pipeline yet — spike only.
+        .package(url: "https://github.com/botisan-ai/tantivy.swift.git", from: "0.3.4"),
     ],
     targets: [
         // Statically-linked sqlite-vec (semantic vector search). The amalgamation
@@ -110,7 +117,12 @@ let package = Package(
         // NaturalLanguage: NLEmbedder uses NLEmbedding for on-device vectors.
         .target(
             name: "WikiFSSearch",
-            dependencies: ["WikiFSTypes"],
+            dependencies: [
+                "WikiFSTypes",
+                // Phase 0 spike: TantivySwift (Rantivy FFI + @TantivyDocument macro).
+                // Natural home for search-engine integration (plans/tantivy-search-sidecar.md §8.1).
+                .product(name: "TantivySwift", package: "tantivy.swift"),
+            ],
             path: "Sources/WikiFSSearch",
             swiftSettings: strictSwiftSettings,
             linkerSettings: [.linkedFramework("NaturalLanguage")]
@@ -245,7 +257,10 @@ let package = Package(
             name: "WikiFSTests",
             dependencies: ["WikiFSCore", "WikiCtlCore", "WikiFS", "WikiFSMLX", "WikiFSEngine", "WikiFSFileProvider", "wikid",
                            // ACP model types for ACPBackendTests (no live subprocess — pure translator tests).
-                           .product(name: "ACPModel", package: "swift-acp")],
+                           .product(name: "ACPModel", package: "swift-acp"),
+                           // Phase 0 spike: TantivySmokeTests exercises the @TantivyDocument
+                           // macro + UniFFI FFI bridge end-to-end.
+                           .product(name: "TantivySwift", package: "tantivy.swift")],
             path: "Tests/WikiFSTests",
             // Matches WikiFSCore so the gated podcast test files compile in/out too.
             swiftSettings: strictSwiftSettings
