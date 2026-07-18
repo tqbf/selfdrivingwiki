@@ -217,7 +217,8 @@ struct TimedTextTranscriptTests {
             .init(start: 65.0, end: 67.0, speaker: nil, text: "One minute in."),
         ])
         let text = transcript.markedText
-        #expect(text.contains("<!-- 00:00 -->"))
+        // 0.5s rounds to 1 → "00:01"; 65s → "01:05".
+        #expect(text.contains("<!-- 00:01 -->"))
         #expect(text.contains("<!-- 01:05 -->"))
     }
 

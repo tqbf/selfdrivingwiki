@@ -118,8 +118,21 @@ struct BytelessEmbedIntegrationTests {
     @Test func youtubeURLRoutesToBytelessVideoEmbed() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
+        // Pass nil as the YouTube transcript fetcher so only the byteless embed
+        // is created (this test verifies the embed routing, not transcript
+        // extraction — that's covered by youtubeURLWithTranscriptCreatesEmbedAndMarkdown).
+        #if PODCAST_TRANSCRIPTS
         let outcome = try await model.addURL(
-            "https://www.youtube.com/watch?v=dQw4w9WgXcQ", fetcher: ExplodingFetcher())
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            fetcher: ExplodingFetcher(),
+            podcastFetcher: nil,
+            youtubeFetcher: nil)
+        #else
+        let outcome = try await model.addURL(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            fetcher: ExplodingFetcher(),
+            youtubeFetcher: nil)
+        #endif
         #expect(outcome.kind == .videoEmbed)
         let source = try #require(try store.listSources().first)
         #expect(source.byteSize == 0)  // byteless
@@ -220,7 +233,7 @@ struct BytelessEmbedIntegrationTests {
         let source = try #require(sources.first)
         #expect(source.byteSize == 0)  // byteless embed
         // The processed markdown (transcript) is stored as a derived version.
-        let md = try #require(store.processedMarkdownHead(sourceID: source.id))
+        let md = try #require(try store.processedMarkdownHead(sourceID: source.id))
         #expect(md.content.contains("Hello world"))
         #expect(md.content.contains("Second cue"))
         #expect(md.content.contains("[Watch on YouTube]"))
@@ -251,7 +264,7 @@ struct BytelessEmbedIntegrationTests {
         let source = try #require(sources.first)
         #expect(source.byteSize == 0)  // byteless embed, no transcript stored
         // No processed markdown version was created.
-        #expect(store.processedMarkdownHead(sourceID: source.id) == nil)
+        #expect(try store.processedMarkdownHead(sourceID: source.id) == nil)
     }
 
     /// Serves a watch page that has no caption tracks → `.noCaptions`.

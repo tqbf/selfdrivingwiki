@@ -153,8 +153,13 @@ struct YouTubeTranscriptServiceTests {
 
     @Test func invalidVideoIDThrows() async {
         let service = YouTubeTranscriptService()
-        await #expect(throws: YouTubeTranscriptError.network(_)) {
+        do {
             _ = try await service.transcript(forVideoID: "tooshort")
+            Issue.record("Should have thrown for an invalid video ID")
+        } catch YouTubeTranscriptError.network {
+            // Expected: the invalid ID is reported as a network-ish error.
+        } catch {
+            Issue.record("Threw unexpected error: \(error)")
         }
     }
 

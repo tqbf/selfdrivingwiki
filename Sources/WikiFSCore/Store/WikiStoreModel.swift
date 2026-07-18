@@ -1913,14 +1913,15 @@ public final class WikiStoreModel {
     @discardableResult
     public func addURL(
         _ rawInput: String,
-        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
+        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher(),
+        youtubeFetcher: (any YouTubeTranscriptFetching)?? = nil
     ) async throws -> URLFetchService.FetchOutcome {
         #if PODCAST_TRANSCRIPTS
         // Delegate to the podcast-aware overload so routing is in one place.
         return try await addURL(
             rawInput, fetcher: fetcher,
             podcastFetcher: ApplePodcastTranscriptService.bundled(),
-            youtubeFetcher: YouTubeTranscriptService(fetcher: fetcher))
+            youtubeFetcher: youtubeFetcher ?? YouTubeTranscriptService(fetcher: fetcher))
         #else
         // Phase 4b: byteless external-embed media works without the podcast
         // helper too. YouTube is routed FIRST so its caption transcript is
@@ -1928,7 +1929,7 @@ public final class WikiStoreModel {
         // providers (Vimeo/Spotify/SoundCloud/remote-media) fall through to the
         // pure-URL byteless path.
         if let outcome = try await youtubeEmbedAndTranscriptOutcome(
-            rawInput, youtubeFetcher: YouTubeTranscriptService(fetcher: fetcher))
+            rawInput, youtubeFetcher: youtubeFetcher ?? YouTubeTranscriptService(fetcher: fetcher))
         {
             return outcome
         }
