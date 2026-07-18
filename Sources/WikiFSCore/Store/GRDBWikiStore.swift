@@ -2662,7 +2662,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func createPage(title: String, createdBy: String?) throws -> WikiPage {
+    public func createPage(title: String, createdBy: String? = nil) throws -> WikiPage {
         try mutate(event: { page in
             self.localEvent(.page, id: page.id.rawValue, change: .created)
         }) { db in
@@ -2958,8 +2958,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
 
     public func addBytelessSource(
-        filename: String, mimeType: String?,
-        provenance: SourceProvenance, role: SourceRole
+        filename: String, mimeType: String? = nil,
+        provenance: SourceProvenance, role: SourceRole = .primary
     ) throws -> SourceSummary {
         try mutate(event: { source in
             self.localEvent(.source, id: source.id.rawValue, change: .created)
@@ -3249,8 +3249,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     // MARK: - WikiStore protocol: Processed markdown versions
 
     public func appendContentVersion(
-        sourceID: PageID, data: Data, mimeType: String?,
-        provenance: SourceProvenance?
+        sourceID: PageID, data: Data, mimeType: String? = nil,
+        provenance: SourceProvenance? = nil
     ) throws -> SourceVersion {
         try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
@@ -3831,7 +3831,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     public func recordMarkdownExtraction(
         sourceID: PageID, content: String, backend: ExtractionBackend,
-        sourceVersionID: String?, note: String?, modelVersion: String?
+        sourceVersionID: String? = nil, note: String? = nil, modelVersion: String? = nil
     ) throws -> SourceMarkdownVersion {
         let (version, reembed): (SourceMarkdownVersion, Bool) = try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
