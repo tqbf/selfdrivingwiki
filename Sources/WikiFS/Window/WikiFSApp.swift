@@ -191,6 +191,11 @@ struct WikiFSApp: App {
         // extraction state directly via @Environment.
         let activityTracker = QueueActivityTracker()
         activityTracker.attach(engine: queueEngine)
+        // Rehydrate persisted activity metadata (usage, log/debug URLs, progress
+        // logs) so the Activity window shows completed/failed/cancelled
+        // ingestion + lint runs immediately after launch — before any new
+        // events arrive. Transcripts lazy-load from the DB on detail-view open.
+        Task { await activityTracker.rehydrate(from: queueEngine) }
         _queueEngine = State(initialValue: queueEngine)
         _extractionProvider = State(initialValue: extractionProvider)
         _ingestionProvider = State(initialValue: ingestionProvider)

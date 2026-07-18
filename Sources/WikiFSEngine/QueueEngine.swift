@@ -341,8 +341,16 @@ public actor QueueEngine {
     /// actor-isolated). The broadcaster is `Sendable`, so this is safe to
     /// call from the worker's detached `Task`.
     public func makeEmitProgress() -> @Sendable (QueueItem.ID, String) -> Void {
-        return { [broadcaster] id, line in
+        return { [broadcaster, store] id, line in
             broadcaster.yield(.progress(id, line: line))
+            // Persist progress lines (primarily extraction output) so the
+            // Activity window can show them after an app restart. Mirrors the
+            // per-event persistence in `makeEmitTranscript`.
+            do {
+                try store.appendItemProgress(itemID: id, line: line)
+            } catch {
+                DebugLog.store("QueueEngine: persist progress failed for item=\(id): \(error)")
+            }
         }
     }
 
@@ -371,8 +379,19 @@ public actor QueueEngine {
     /// events onto the engine's broadcaster. #528 spike — surfaces per-run
     /// token/cost usage to the activity tracker (no persistence needed).
     public func makeEmitUsage() -> @Sendable (QueueItem.ID, SessionUsage) -> Void {
-        return { [broadcaster] id, usage in
+        return { [broadcaster, store] id, usage in
             broadcaster.yield(.usage(id, usage))
+            // Persist the final cumulative usage so the Activity window can
+            // show the per-run summary line after an app restart. The store
+            // holds it as an opaque JSON string (it cannot reference
+            // `SessionUsage`, which lives in this module).
+            do {
+                let data = try JSONEncoder().encode(usage)
+                let json = String(data: data, encoding: .utf8)
+                try store.upsertItemActivity(itemID: id, usageJSON: json, logURL: nil, debugURL: nil)
+            } catch {
+                DebugLog.store("QueueEngine: persist usage failed for item=\(id): \(error)")
+            }
         }
     }
 
@@ -392,8 +411,19 @@ public actor QueueEngine {
     /// Activity window can offer "Reveal Log" / "Reveal Debug Folder" (no
     /// persistence needed — URLs are runtime-only).
     public func makeEmitLogPaths() -> @Sendable (QueueItem.ID, URL?, URL?) -> Void {
-        return { [broadcaster] id, logURL, debugURL in
+        return { [broadcaster, store] id, logURL, debugURL in
             broadcaster.yield(.runPaths(id, logURL: logURL, debugURL: debugURL))
+            // Persist the run's log/debug URLs so "Reveal Log"/"Reveal Debug
+            // Folder" survive an app restart.
+            do {
+                try store.upsertItemActivity(
+                    itemID: id,
+                    usageJSON: nil,
+                    logURL: logURL?.absoluteString,
+                    debugURL: debugURL?.absoluteString)
+            } catch {
+                DebugLog.store("QueueEngine: persist log paths failed for item=\(id): \(error)")
+            }
         }
     }
 
@@ -408,6 +438,57 @@ public actor QueueEngine {
     /// Delete persisted events for an item (e.g. on retry).
     public func clearTranscript(for itemID: QueueItem.ID) async {
         try? store.deleteItemEvents(itemID: itemID)
+    }
+
+    /// Decoded per-item activity metadata for rehydration. The engine layer
+    /// decodes the opaque `usageJSON` blob that `QueueStore` persists (the
+    /// store lives in `WikiFSCore` and cannot reference `SessionUsage`).
+    public struct ActivitySnapshot: Sendable {
+        public let usage: SessionUsage?
+        public let logURL: URL?
+        public let debugURL: URL?
+        public let progressLog: String
+
+        public init(usage: SessionUsage?, logURL: URL?, debugURL: URL?, progressLog: String) {
+            self.usage = usage
+            self.logURL = logURL
+            self.debugURL = debugURL
+            self.progressLog = progressLog
+        }
+    }
+
+    /// Load persisted activity metadata for all items with recorded activity,
+    /// decoded into typed values. Used by the Activity tracker to rehydrate
+    /// `itemUsage` / `itemLogURLs` / `itemDebugURLs` / `progressLogs` after an
+    /// app restart so the Activity window shows completed/failed/cancelled runs
+    /// (usage summary, "Reveal Log"/"Reveal Debug Folder", progress). Bounded
+    /// by `pruneHistory` (rows cascade-delete with their item). A decode
+    /// failure for one row leaves that field `nil` rather than aborting the
+    /// whole rehydration.
+    public func loadAllActivitySnapshots() async -> [QueueItem.ID: ActivitySnapshot] {
+        let raw = (try? store.loadAllActivity()) ?? [:]
+        var result: [QueueItem.ID: ActivitySnapshot] = [:]
+        result.reserveCapacity(raw.count)
+        for (id, activity) in raw {
+            let usage: SessionUsage?
+            if let json = activity.usageJSON,
+               let data = json.data(using: .utf8) {
+                do {
+                    usage = try JSONDecoder().decode(SessionUsage.self, from: data)
+                } catch {
+                    DebugLog.store("QueueEngine.loadAllActivitySnapshots: usage decode failed for item=\(id): \(error)")
+                    usage = nil
+                }
+            } else {
+                usage = nil
+            }
+            result[id] = ActivitySnapshot(
+                usage: usage,
+                logURL: activity.logURL.flatMap { URL(string: $0) },
+                debugURL: activity.debugURL.flatMap { URL(string: $0) },
+                progressLog: activity.progressLog ?? "")
+        }
+        return result
     }
 
     // MARK: - Dispatch (internal)
