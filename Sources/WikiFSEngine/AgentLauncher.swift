@@ -1035,12 +1035,12 @@ public final class AgentLauncher {
         // finalizer each resolve independently via `resolvedProvider(for:)` and
         // may land on different providers. `stageBackendCache` keeps at most one
         // live backend per distinct (providerId, modelId) resolution for the
-        // whole run — stages sharing a resolution reuse it; each phase still
-        // spawns its own subprocess/session (`ACPBackend.start`/`.cancel`
-        // per-phase, unchanged), so the cache only avoids constructing redundant
-        // backend actor instances. Nothing further to tear down at run end: every
-        // phase below already calls `backend.cancel(session)` (or the
-        // fallback does), which fully tears down that phase's subprocess.
+        // whole run — stages sharing a resolution reuse it. Phase 1
+        // (plans/acp-session-efficiency.md) changes the lifecycle: each phase
+        // now calls `backend.start()` (which reuses the warm subprocess for the
+        // second+ call on the same backend) and `closeSession()` at the phase
+        // boundary (frees session context, keeps the subprocess alive). The
+        // subprocess is terminated via `backend.cancel()` only at the very end.
         let policy: PermissionPolicy = resolvePermissionMode()
         var stageBackendCache: [String: AgentBackend] = [:]
 
@@ -1094,7 +1094,14 @@ public final class AgentLauncher {
         // Capture models (provider-level, not phase-level).
         captureAndCacheModels(provider: plannerRouting.provider, session: plannerSession)
         captureProcessID(session: plannerSession)
-        await plannerRouting.backend.cancel(plannerSession)
+        // Phase 1: close the session (frees context, keeps the subprocess alive
+        // for the next phase). Old code called `cancel()` which killed the
+        // subprocess — now we only kill at the very end.
+        if let acp = plannerRouting.backend as? ACPBackend {
+            await acp.closeSession(plannerSession)
+        } else {
+            await plannerRouting.backend.cancel(plannerSession)
+        }
 
         // Check for cancellation (user hit Stop during planner).
         guard isRunning else {
@@ -1142,7 +1149,11 @@ public final class AgentLauncher {
                     prompt: executorPrompt,
                     phaseName: "executor[\(sourceFile)]"
                 ) {
-                    await executorRouting.backend.cancel(session)
+                    if let acp = executorRouting.backend as? ACPBackend {
+                        await acp.closeSession(session)
+                    } else {
+                        await executorRouting.backend.cancel(session)
+                    }
                 } else {
                     DebugLog.agent("runACPIngest: executor[\(sourceFile)] FAILED — skipping (partial failure)")
                 }
@@ -1182,7 +1193,22 @@ public final class AgentLauncher {
             prompt: finalizerPrompt,
             phaseName: "finalizer"
         ) {
-            await finalizerRouting.backend.cancel(session)
+            if let acp = finalizerRouting.backend as? ACPBackend {
+                await acp.closeSession(session)
+            } else {
+                await finalizerRouting.backend.cancel(session)
+            }
+        }
+
+        // Phase 1: terminate ALL warm subprocesses now that all phases are done.
+        // Each backend in the cache may have a warm process still alive (its
+        // session was closed via `closeSession`, which frees the session context
+        // but keeps the subprocess). `cancel()` tears down the warm process even
+        // when the session record is already gone (closed). We pass a dummy
+        // SessionHandle — cancel() checks `warmProcess` independently of the
+        // session map.
+        for (_, backend) in stageBackendCache {
+            await backend.cancel(SessionHandle(id: ""))
         }
 
         finish(status: 0)

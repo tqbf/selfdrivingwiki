@@ -119,6 +119,34 @@ public actor ACPBackend: AgentBackend {
 
     private var sessions: [String: ACPSession] = [:]
 
+    /// A launched + initialized + authenticated subprocess with no active session,
+    /// or one that has sessions opened on it. This is the warm-process state from
+    /// `plans/acp-session-efficiency.md` Phase 1: the process lifecycle (launch +
+    /// initialize + authenticate) is separated from the session lifecycle
+    /// (newSession + setModel), so multiple sessions can be created and closed on
+    /// one subprocess without killing it. Cleared in `cancel()`.
+    ///
+    /// The notification drain + stderr forwarding are process-lifetime tasks owned
+    /// here — started in `startProcess()`, cancelled in `cancel()`. Each
+    /// `createSession()` creates an `ACPSession` that subscribes to the same
+    /// `NotificationFanout`. `closeSession()` does NOT finish the fanout (only
+    /// `cancel()` does) — safe because the generation gate serializes turns, so at
+    /// most one session is actively prompting at a time.
+    private struct WarmProcess: Sendable {
+        let client: Client
+        let permissionDelegate: ACPPermissionDelegate
+        let initResponse: InitializeResponse
+        let notificationFanout: NotificationFanout
+        let drainTask: Task<Void, Never>
+        let stderrTask: Task<Void, Never>?
+        /// Whether the agent advertised `sessionCapabilities.close` at `initialize`
+        /// time. If not supported, `closeSession()` degrades to a no-op (the
+        /// session context is freed when the process eventually terminates).
+        let canCloseSession: Bool
+    }
+
+    private var warmProcess: WarmProcess?
+
     /// The injected permission policy (yolo vs alwaysAsk). Defaults to `yolo`
     /// — the safe default per the design doc's caveat (always-ask enforcement
     /// depends on the agent emitting `request_permission`, which not all do).
@@ -174,8 +202,33 @@ public actor ACPBackend: AgentBackend {
         onExit: @escaping @Sendable (Int) -> Void
     ) async throws -> SessionHandle {
         DebugLog.agent("ACPBackend.start: enter providerHints=\(profile.providerHints)") // TEMP DEBUG (existed; re-tagged)
+        // Warm-subprocess reuse (Phase 1, plans/acp-session-efficiency.md): if a
+        // warm process already exists (spawned by a prior `start()` call on this
+        // backend), skip the expensive launch+initialize+authenticate and just
+        // create a new session on it. This is how the multi-phase ingest
+        // orchestrator achieves one subprocess across all phases.
+        if warmProcess == nil {
+            try await startProcess(profile: profile, onExit: onExit)
+        }
+        return try await createSession(profile: profile, systemPrompt: systemPrompt, onExit: onExit)
+    }
+
+    /// Launch + initialize + authenticate the agent subprocess and start the
+    /// process-lifetime notification drain + stderr forwarding. Returns nothing
+    /// — call `createSession()` to open an ACP session on the warm process.
+    ///
+    /// This is the process-lifecycle half of the split `start()` (Phase 1,
+    /// `plans/acp-session-efficiency.md` §2.1). The session-lifecycle half is
+    /// `createSession()`. The drain + fanout started here are process-lifetime
+    /// (cancelled in `cancel()`, NOT in `closeSession()`), because the
+    /// generation gate serializes turns so at most one session is actively
+    /// prompting at a time.
+    private func startProcess(
+        profile: BackendProfile,
+        onExit: @escaping @Sendable (Int) -> Void
+    ) async throws {
         guard let spawn = Self.resolveSpawnConfig(from: profile) else {
-            DebugLog.agent("ACPBackend.start: FAIL noAgentConfigured (no acpAgentPath/model in profile)") // TEMP DEBUG (existed; re-tagged)
+            DebugLog.agent("ACPBackend.startProcess: FAIL noAgentConfigured") // TEMP DEBUG
             throw ACPBackendError.noAgentConfigured
         }
 
@@ -185,7 +238,7 @@ public actor ACPBackend: AgentBackend {
         let permissionDelegate = ACPPermissionDelegate(policy: permissionPolicy)
         await client.setDelegate(permissionDelegate)
 
-        DebugLog.agent("ACPBackend.start: launching \(spawn.executablePath) \(spawn.arguments.joined(separator: " "))") // TEMP DEBUG (existed; re-tagged)
+        DebugLog.agent("ACPBackend.startProcess: launching \(spawn.executablePath) \(spawn.arguments.joined(separator: " "))") // TEMP DEBUG
         // Build the environment so the agent can find wikictl + the wiki DB.
         // Exports WIKI_DB/WIKICTL/PATH (NOT WIKI_ROOT — mount is optional;
         // wikictl is the primary read surface, issue #441).
@@ -206,7 +259,7 @@ public actor ACPBackend: AgentBackend {
             environment: env
         )
 
-        DebugLog.agent("ACPBackend.start: process launched, sending initialize") // TEMP DEBUG (existed; re-tagged)
+        DebugLog.agent("ACPBackend.startProcess: process launched, sending initialize") // TEMP DEBUG
         // Slice 3: initialize, then authenticate if the agent advertises
         // authMethods. The DECISION is a pure helper (`ACPAuthResolver.resolve`)
         // so it's unit-tested directly; here we just execute it. A key is never
@@ -216,14 +269,14 @@ public actor ACPBackend: AgentBackend {
             capabilities: capabilities,
             clientInfo: ClientInfo(name: "SelfDrivingWiki", title: "Self Driving Wiki", version: GeneratedVersion.appVersion)
         )
-        DebugLog.agent("ACPBackend.start: initialize OK agent=\(initResponse.agentInfo?.name ?? "?") authMethods=\(initResponse.authMethods?.count ?? 0)") // TEMP DEBUG (existed; re-tagged)
+        DebugLog.agent("ACPBackend.startProcess: initialize OK agent=\(initResponse.agentInfo?.name ?? "?") authMethods=\(initResponse.authMethods?.count ?? 0)") // TEMP DEBUG
 
         switch ACPAuthResolver.resolve(authMethods: initResponse.authMethods, apiKey: spawn.apiKey) {
         case .skip:
             // Agent needs no auth — proceed straight to newSession.
-            DebugLog.agent("ACPBackend.start: agent advertised no authMethods, skipping authenticate") // TEMP DEBUG (existed; re-tagged)
+            DebugLog.agent("ACPBackend.startProcess: agent advertised no authMethods, skipping authenticate") // TEMP DEBUG
         case .authenticate(let methodId, let credentials):
-            DebugLog.agent("ACPBackend.start: authenticating method=\(methodId)") // TEMP DEBUG (existed; re-tagged)
+            DebugLog.agent("ACPBackend.startProcess: authenticating method=\(methodId)") // TEMP DEBUG
             let authResponse = try await client.authenticate(
                 authMethodId: methodId,
                 credentials: credentials
@@ -238,10 +291,104 @@ public actor ACPBackend: AgentBackend {
             // client-provided key. Skip client-side `authenticate` and proceed to
             // newSession; if the agent truly requires client creds, the prompt will
             // surface that error (clearer than blocking at start).
-            DebugLog.agent("ACPBackend.start: no API key configured — skipping client auth (agent may self-authenticate)") // TEMP DEBUG (existed; re-tagged)
+            DebugLog.agent("ACPBackend.startProcess: no API key configured — skipping client auth (agent may self-authenticate)") // TEMP DEBUG
         }
 
-        let workingDir = profile.scratchDirectory?.path ?? spawn.workingDirectory ?? FileManager.default.currentDirectoryPath
+        // Capture the CLI profile's log callbacks so ACP stderr and notifications
+        // flow into run.stderr.log / run.jsonl (same hooks the old CLI backend used
+        // via onStdoutChunk/onStderrChunk). Without this the log files stay empty
+        // and "Reveal Log" opens a blank file.
+        let onStdoutChunk = profile.cli?.onStdoutChunk
+        let onStderrChunk = profile.cli?.onStderrChunk
+
+        // Process-lifetime notification drain (cause 6 fix,
+        // `plans/acp-stall-recovery.md` §1b + Phase 1 warm-subprocess change).
+        // Acquire `client.notifications` ONCE here and fan events into a
+        // process-lifetime `NotificationFanout`. Each turn subscribes to the
+        // fanout instead of re-acquiring the SDK stream (AsyncStream is
+        // single-consumer — two concurrent iterators split elements, silently
+        // dropping notifications). The drain is cancelled in `cancel()`, NOT in
+        // `closeSession()` — safe because the generation gate serializes turns.
+        let fanout = NotificationFanout()
+        let drainTask = Task { [client, fanout, onStdoutChunk] in
+            let notifications = await client.notifications
+            for await notification in notifications {
+                if Task.isCancelled { break }
+                // Mirror raw JSON-RPC notification to run.jsonl for debugging.
+                if let onStdoutChunk {
+                    let line = "{\"method\":\"\(notification.method)\"}\n"
+                    onStdoutChunk(line)
+                }
+                fanout.yield(notification)
+            }
+            fanout.finish()
+        }
+        DebugLog.agent("ACPBackend.startProcess: process-lifetime notification drain started") // TEMP DEBUG
+
+        // Forward agent stderr to DebugLog.agent + run.stderr.log (via the CLI
+        // profile's onStderrChunk callback). Best-effort: the stream finishes
+        // on terminate, so this task exits naturally.
+        let stderrTask = Task { [client, onStderrChunk] in
+            guard let stderrStream = await client.stderrLines() else { return }
+            for await line in stderrStream {
+                if Task.isCancelled { break }
+                DebugLog.agent("ACP stderr: \(line)")
+                onStderrChunk?(line + "\n")
+            }
+        }
+
+        // Check capabilities for session/close support (Phase 1). If the agent
+        // doesn't advertise sessionCapabilities.close, closeSession() degrades
+        // to a no-op — the session context is freed when the process terminates.
+        let canCloseSession = initResponse.agentCapabilities.sessionCapabilities?.close != nil
+
+        warmProcess = WarmProcess(
+            client: client,
+            permissionDelegate: permissionDelegate,
+            initResponse: initResponse,
+            notificationFanout: fanout,
+            drainTask: drainTask,
+            stderrTask: stderrTask,
+            canCloseSession: canCloseSession)
+
+        // Wire onExit to the agent process termination. `Client.terminate()` is
+        // the teardown; there's no direct terminationHandler on the SDK actor,
+        // so we rely on `cancel`/`terminate` to fire onExit. (The launcher's
+        // watchdog reconciles against this single completion channel.)
+        // Note: with a warm subprocess, `createSession()` may rebind this per
+        // session — the last binding wins.
+        permissionDelegate.bindOnExit(onExit)
+
+        DebugLog.agent("ACPBackend.startProcess: warm process ready canCloseSession=\(canCloseSession)") // TEMP DEBUG
+    }
+
+    /// Create a new ACP session on an already-started (warm) subprocess.
+    /// Returns a new `SessionHandle` for the session. The subprocess must
+    /// already be launched + initialized + authenticated (via `start()` or
+    /// `startProcess()`).
+    ///
+    /// This is the session-lifecycle half of the split `start()` (Phase 1,
+    /// `plans/acp-session-efficiency.md` §2.1). The process-lifecycle half is
+    /// `startProcess()`. The orchestrator calls `createSession()` per phase
+    /// and `closeSession()` at phase boundaries, keeping the subprocess alive
+    /// across phases.
+    func createSession(
+        profile: BackendProfile,
+        systemPrompt: String,
+        onExit: @escaping @Sendable (Int) -> Void
+    ) async throws -> SessionHandle {
+        guard let warm = warmProcess else {
+            // No warm process — caller forgot to call start()/startProcess() first.
+            // This is a programming error, not a runtime condition.
+            throw ACPBackendError.noAgentConfigured
+        }
+
+        let client = warm.client
+        let permissionDelegate = warm.permissionDelegate
+        let fanout = warm.notificationFanout
+        let spawn = Self.resolveSpawnConfig(from: profile)
+
+        let workingDir = profile.scratchDirectory?.path ?? spawn?.workingDirectory ?? FileManager.default.currentDirectoryPath
         // Deliver the system prompt via the spec-compliant on-disk mechanism
         // (issue #427). ACP's NewSessionRequest has no systemPrompt field — the
         // spec models system context as CLAUDE.md/AGENTS.md in the cwd. The File
@@ -249,13 +396,13 @@ public actor ACPBackend: AgentBackend {
         // unsigned dev builds; this makes delivery reliable regardless. Both
         // files match the projection (same `currentSystemPromptBody()` source).
         Self.deliverSystemPrompt(systemPrompt, to: workingDir)
-        DebugLog.agent("ACPBackend.start: newSession cwd=\(workingDir)") // TEMP DEBUG (existed; re-tagged)
+        DebugLog.agent("ACPBackend.createSession: newSession cwd=\(workingDir)") // TEMP DEBUG
         let session = try await client.newSession(workingDirectory: workingDir)
         let sessionId = session.sessionId
         let modelsInfo = session.models
         let discoveredCount = modelsInfo?.availableModels.count ?? 0
         let currentModel = modelsInfo?.currentModelId ?? "(none)"
-        DebugLog.agent("ACPBackend.start: discovered \(discoveredCount) model(s), current=\(currentModel)") // TEMP DEBUG (existed; re-tagged)
+        DebugLog.agent("ACPBackend.createSession: discovered \(discoveredCount) model(s), current=\(currentModel)") // TEMP DEBUG
 
         // #329: if the user picked a model for this provider, apply it right
         // after newSession — BEFORE the first prompt — so the agent uses a
@@ -273,58 +420,17 @@ public actor ACPBackend: AgentBackend {
                 currentModelId: modelsInfo?.currentModelId,
                 advertisedModelIds: advertisedIds)
             if case .apply(let id) = decision {
-                DebugLog.agent("ACPBackend.start: setModel \(id)") // TEMP DEBUG (existed; re-tagged)
+                DebugLog.agent("ACPBackend.createSession: setModel \(id)") // TEMP DEBUG
                 do {
                     _ = try await client.setModel(sessionId: sessionId, modelId: id)
                 } catch {
                     // setModel failed — log and proceed to the prompt anyway; the
                     // agent's default may still work, and a clearer error will
                     // surface from the prompt if not. Non-fatal by design.
-                    DebugLog.agent("ACPBackend.start: setModel \(id) failed: \(error.localizedDescription)") // TEMP DEBUG (existed; re-tagged)
+                    DebugLog.agent("ACPBackend.createSession: setModel \(id) failed: \(error.localizedDescription)") // TEMP DEBUG
                 }
             } else {
-                DebugLog.agent("ACPBackend.start: keeping agent default model (selected=\(selectedModelId) → \(decision))") // TEMP DEBUG (existed; re-tagged)
-            }
-        }
-
-        // Capture the CLI profile's log callbacks so ACP stderr and notifications
-        // flow into run.stderr.log / run.jsonl (same hooks the old CLI backend used
-        // via onStdoutChunk/onStderrChunk). Without this the log files stay empty
-        // and "Reveal Log" opens a blank file.
-        let onStdoutChunk = profile.cli?.onStdoutChunk
-        let onStderrChunk = profile.cli?.onStderrChunk
-
-        // Session-lifetime notification drain (cause 6 fix,
-        // `plans/acp-stall-recovery.md` §1b). Acquire `client.notifications`
-        // ONCE here and fan events into a per-session `NotificationFanout`.
-        // Each turn subscribes to the fanout instead of re-acquiring the SDK
-        // stream (AsyncStream is single-consumer — two concurrent iterators
-        // split elements, silently dropping notifications).
-        let fanout = NotificationFanout()
-        let drainTask = Task { [client, fanout, onStdoutChunk] in
-            let notifications = await client.notifications
-            for await notification in notifications {
-                if Task.isCancelled { break }
-                // Mirror raw JSON-RPC notification to run.jsonl for debugging.
-                if let onStdoutChunk {
-                    let line = "{\"method\":\"\(notification.method)\"}\n"
-                    onStdoutChunk(line)
-                }
-                fanout.yield(notification)
-            }
-            fanout.finish()
-        }
-        DebugLog.agent("ACPBackend.start: session-lifetime notification drain started") // TEMP DEBUG (existed; re-tagged)
-
-        // Forward agent stderr to DebugLog.agent + run.stderr.log (via the CLI
-        // profile's onStderrChunk callback). Best-effort: the stream finishes
-        // on terminate, so this task exits naturally.
-        Task { [client, onStderrChunk] in
-            guard let stderrStream = await client.stderrLines() else { return }
-            for await line in stderrStream {
-                if Task.isCancelled { break }
-                DebugLog.agent("ACP stderr: \(line)")
-                onStderrChunk?(line + "\n")
+                DebugLog.agent("ACPBackend.createSession: keeping agent default model (selected=\(selectedModelId) → \(decision))") // TEMP DEBUG
             }
         }
 
@@ -335,18 +441,18 @@ public actor ACPBackend: AgentBackend {
             permissionDelegate: permissionDelegate,
             modelsInfo: modelsInfo,
             notificationFanout: fanout,
-            drainTask: drainTask,
+            drainTask: nil,
             systemPrompt: systemPrompt,
             systemPromptInjected: false
         )
 
-        // Wire onExit to the agent process termination. `Client.terminate()` is
-        // the teardown; there's no direct terminationHandler on the SDK actor,
-        // so we rely on `cancel`/`terminate` to fire onExit. (The launcher's
-        // watchdog reconciles against this single completion channel.)
+        // Rebind onExit so the latest caller's callback fires on process exit.
+        // With a warm subprocess, multiple sessions share one permission delegate;
+        // the last binding wins (each phase's onExit is phase-tracking telemetry
+        // that does NOT call finish() — the orchestrator owns finish()).
         permissionDelegate.bindOnExit(onExit)
 
-        DebugLog.agent("ACPBackend.start: session \(sessionId.value) (handle \(sessionID)) ready") // TEMP DEBUG (existed; re-tagged)
+        DebugLog.agent("ACPBackend.createSession: session \(sessionId.value) (handle \(sessionID)) ready") // TEMP DEBUG
         return SessionHandle(id: sessionID)
     }
 
@@ -505,26 +611,87 @@ public actor ACPBackend: AgentBackend {
     }
 
     public func cancel(_ session: SessionHandle) async {
-        guard let record = sessions.removeValue(forKey: session.id) else {
-            DebugLog.agent("ACPBackend.cancel: no session for handle \(session.id) — no-op") // TEMP DEBUG
-            return
+        let record = sessions.removeValue(forKey: session.id)
+        // No session record? Could be a warm-subprocess cancel where the session
+        // was already closed via closeSession but the process is still alive.
+        // Tear down the warm process if present.
+        if record == nil {
+            DebugLog.agent("ACPBackend.cancel: no session for handle \(session.id)") // TEMP DEBUG
         }
-        DebugLog.agent("ACPBackend.cancel: cancelling session=\(record.sessionId.value) handle=\(session.id)") // TEMP DEBUG
-        // Tear down the session-lifetime notification drain (cause 6 fix) BEFORE
-        // terminating — so no notifications arrive after the fanout is finished.
-        record.drainTask?.cancel()
-        record.notificationFanout.finish()
+        DebugLog.agent("ACPBackend.cancel: cancelling session=\(record?.sessionId.value ?? "(none)") handle=\(session.id)") // TEMP DEBUG
         // Drain any in-flight always-ask continuations BEFORE tearing down, so a
         // pending `request_permission` never leaks its `CheckedContinuation`
         // (leaked continuations warn/trap at task end). The agent receives a
         // `cancelled` outcome for each, which it treats as denied.
+        record?.permissionDelegate.cancelAllPending()
+
+        // Tear down the warm process (drain + stderr + fanout + terminate).
+        // This is the full teardown — the warm subprocess is killed.
+        if let warm = warmProcess {
+            DebugLog.agent("ACPBackend.cancel: tearing down warm process") // TEMP DEBUG
+            warm.drainTask.cancel()
+            warm.stderrTask?.cancel()
+            warm.notificationFanout.finish()
+            // Cancel any in-flight prompt for the session being torn down.
+            if let record {
+                try? await warm.client.cancelSession(sessionId: record.sessionId)
+            }
+            await warm.client.terminate()
+            warm.permissionDelegate.fireOnExit(status: 0)
+            warmProcess = nil
+        } else if let record {
+            // No warm process (pre-Phase-1 path or process already gone) —
+            // cancel + terminate via the session's own client reference.
+            try? await record.client.cancelSession(sessionId: record.sessionId)
+            await record.client.terminate()
+            record.permissionDelegate.fireOnExit(status: 0)
+        }
+    }
+
+    /// Close a session WITHOUT terminating the subprocess. Frees the session's
+    /// context and resources but keeps the agent process alive for the next
+    /// `start()` / `createSession()` to create a new session on the same
+    /// subprocess.
+    ///
+    /// This is the Phase 1 change from `plans/acp-session-efficiency.md`:
+    /// separate the session lifecycle (per-phase) from the process lifecycle
+    /// (per-run). The orchestrator calls `closeSession` at phase boundaries
+    /// and `cancel` only at run end.
+    ///
+    /// Checks `sessionCapabilities.close` (captured at `initialize` time). If
+    /// not supported, falls back to cancelling the session via `cancelSession`
+    /// without closing — the session context will be freed when the process
+    /// eventually terminates (leaked memory, not correctness). The session is
+    /// removed from the sessions map either way so subsequent `send` calls
+    /// return an empty stream (the turn is done).
+    func closeSession(_ handle: SessionHandle) async {
+        guard let record = sessions.removeValue(forKey: handle.id) else {
+            DebugLog.agent("ACPBackend.closeSession: no session for handle \(handle.id) — no-op") // TEMP DEBUG
+            return
+        }
+        DebugLog.agent("ACPBackend.closeSession: closing session=\(record.sessionId.value) handle=\(handle.id)") // TEMP DEBUG
+        // Drain any in-flight always-ask continuations so a pending
+        // `request_permission` never leaks its `CheckedContinuation`.
         record.permissionDelegate.cancelAllPending()
-        // Cancel any in-flight prompt, then terminate the agent subprocess.
-        // `terminate()` resumes pending requests with an error and finishes the
-        // notification stream. The permission delegate's onExit binding fires.
+        // Cancel any in-flight prompt best-effort.
         try? await record.client.cancelSession(sessionId: record.sessionId)
-        await record.client.terminate()
-        record.permissionDelegate.fireOnExit(status: 0)
+        // If the agent supports session/close, free the session context.
+        // Otherwise degrade gracefully — the session context is leaked until
+        // the process terminates (fine for Phase 1: one process per run).
+        if warmProcess?.canCloseSession ?? false {
+            DebugLog.agent("ACPBackend.closeSession: sending session/close") // TEMP DEBUG
+            do {
+                _ = try await record.client.closeSession(sessionId: record.sessionId)
+            } catch {
+                // closeSession failed — log and proceed; the session is already
+                // removed from the map, so no further sends will use it. The
+                // context will be freed on process termination.
+                DebugLog.agent("ACPBackend.closeSession: session/close failed: \(error.localizedDescription)") // TEMP DEBUG
+            }
+        } else {
+            DebugLog.agent("ACPBackend.closeSession: agent does not support session/close — skipping (context freed at terminate)") // TEMP DEBUG
+        }
+        DebugLog.agent("ACPBackend.closeSession: session closed, subprocess stays alive") // TEMP DEBUG
     }
 
     // MARK: - Model discovery (#329)
