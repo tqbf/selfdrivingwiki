@@ -111,6 +111,26 @@ public final class AgentLauncher {
     /// `run.stderr.log` holds the agent's stderr. The UI offers a "Reveal Log"
     /// affordance via `logFileURL`.
     public private(set) var logFileURL: URL?
+    /// The per-run `debug/` folder URL (verbose, complete ACP wire trace).
+    /// The companion to `logFileURL`: where `logFileURL` is the lightweight
+    /// `run.jsonl`, `debugFolderURL` is the full `session/new` +
+    /// per-turn `turn-N-prompt.json` / `turn-N-updates.jsonl` /
+    /// `turn-N-response.json` + `permissions.jsonl` + `stderr.log` +
+    /// `summary.json` folder a user can zip and share for debugging. nil
+    /// when no run has started or the folder couldn't be created. Survives
+    /// `finish()` so the UI can reveal it after the run completes.
+    public private(set) var debugFolderURL: URL?
+    /// The wall-clock start time of the current/last run, captured at spawn
+    /// commit so `summary.json`'s duration is accurate even if `runStartedAt`
+    /// (set inside `setGenerating(true)`) is reset.nil when no run has started.
+    private var runCommitedAt: Date?
+    /// The provider label/id for the current/last run — captured at spawn commit
+    /// so `finish()` can write it to `summary.json`. nil when no run has started.
+    private var runProviderLabel: String?
+    /// The model id the current/last run's session used — captured after
+    /// `backend.start` (from the ACP session's advertised models) so `finish()`
+    /// can write it to `summary.json`. nil when not yet resolved.
+    private var runModelId: String?
     /// Wall-clock start time for the current/last run. Used by the UI to show a
     /// heartbeat instead of a context-free spinner.
     public private(set) var runStartedAt: Date?
@@ -872,6 +892,8 @@ public final class AgentLauncher {
         let now = Date()
         runningKind = operation.kind
         lastActivityAt = now
+        runCommitedAt = now
+        runProviderLabel = provider.id
         openLogFiles(in: scratch)
         // A one-shot run is "generating" for its whole duration. The edit lock
         // for one-shot runs is owned by `onLock`/`onUnlock` around the spawn.
@@ -934,7 +956,8 @@ public final class AgentLauncher {
             providerHints: providerHints,
             scratchDirectory: scratch,
             isReadOnly: false,
-            cli: cli)
+            cli: cli,
+            debugLogURL: debugFolderURL)
 
         do {
             DebugLog.agent("run: spawning kind=\(operation.kind.rawValue) wikiID=\(wikiID) exe=\(resolvedPath)")
@@ -1141,7 +1164,7 @@ public final class AgentLauncher {
             providerHints: plannerRouting.providerHints,
             scratchDirectory: scratch,
             isReadOnly: false,
-            cli: makeCLIProfile(operation))
+            cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
         let plannerPrompt = ACPIngestPrompts.plannerPrompt(
             stateFilePath: stateFilePath,
             stagedSourcePaths: stagedSourcePaths,
@@ -1205,7 +1228,7 @@ public final class AgentLauncher {
                 providerHints: executorRouting.providerHints,
                 scratchDirectory: scratch,
                 isReadOnly: false,
-                cli: makeCLIProfile(operation))
+                cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
             let maxConcurrent = await (executorRouting.backend as? ACPBackend)?.maxConcurrentExecutorCount() ?? 1
 
             if maxConcurrent > 1 && plan.distinctSourceFiles.count > 1 {
@@ -1234,7 +1257,7 @@ public final class AgentLauncher {
                         providerHints: executorRouting.providerHints,
                         scratchDirectory: scratch,
                         isReadOnly: false,
-                        cli: makeCLIProfile(operation))
+                        cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
                     let executorPrompt = ACPIngestPrompts.executorPrompt(
                         stateFilePath: stateFilePath,
                         assignments: assignments,
@@ -1303,7 +1326,7 @@ public final class AgentLauncher {
             providerHints: finalizerRouting.providerHints,
             scratchDirectory: scratch,
             isReadOnly: false,
-            cli: makeCLIProfile(operation))
+            cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
         let finalizerPrompt = ACPIngestPrompts.finalizerPrompt(
             stateFilePath: stateFilePath,
             sourceFileNames: sourceFileNames,
@@ -1628,7 +1651,7 @@ public final class AgentLauncher {
             providerHints: routing.providerHints,
             scratchDirectory: scratch,
             isReadOnly: false,
-            cli: makeCLIProfile(operation))
+            cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
         var promptText = operation.prompt(wikiRoot: wikiRoot)
         promptText += "\n\nIMPORTANT: Do NOT dispatch sub-agents, background tasks, or async agents. Do NOT use sleep or ScheduleWakeup. Read all sources, process them, and write all wiki pages directly in THIS session — everything must complete before you stop."
 
@@ -1964,6 +1987,8 @@ public final class AgentLauncher {
         let now = Date()
         runningKind = operation.kind
         lastActivityAt = now
+        runCommitedAt = now
+        runProviderLabel = provider.id
         openLogFiles(in: scratch)
         // SPAWN COMMIT: a query chat never ingests, so the agent-phase flag
         // is empty — clearing any stale value (mirrors `run`'s spawn-commit).
@@ -2027,7 +2052,8 @@ public final class AgentLauncher {
             }(),
             scratchDirectory: scratch,
             isReadOnly: false,
-            cli: cli)
+            cli: cli,
+            debugLogURL: debugFolderURL)
         DebugLog.agent("startInteractiveQuery: profile built providerHints keys=\(profile.providerHints.keys.sorted()) scratch=\(scratch.lastPathComponent)")
 
         do {
@@ -2498,6 +2524,11 @@ public final class AgentLauncher {
         // store with the last turn's events still missing → truncated flash.)
         activeChatID = nil
         closeLogFiles()
+        // Write the verbose debug summary (summary.json) capturing provider,
+        // model, kind, duration, and total usage. No-op when no debug folder
+        // was created for this run. The model id is read from the backend's
+        // last session (a detached task so finish doesn't block on the actor).
+        writeDebugSummary(finishedAt: Date(), status: status)
         exitStatus = status
         // Clear process-alive state.
         isRunning = false
@@ -2559,6 +2590,10 @@ public final class AgentLauncher {
         setGenerating(false)
         runningKind = nil
         logFileURL = nil
+        debugFolderURL = nil
+        runCommitedAt = nil
+        runProviderLabel = nil
+        runModelId = nil
         lastActivityAt = nil
         currentIngestPhase = nil
         currentProcessID = nil
@@ -2587,8 +2622,9 @@ public final class AgentLauncher {
     // MARK: - Backend log files
 
     /// Create `run.jsonl` (raw stream-json) and `run.stderr.log` under the run's
-    /// scratch dir and open append handles. Best-effort: if a handle can't open, the
-    /// in-memory transcript still works.
+    /// scratch dir and open append handles. Also creates the `debug/` folder for
+    /// the verbose ACP wire trace (see `DebugRunLogger`). Best-effort: if a
+    /// handle can't open, the in-memory transcript still works.
     private func openLogFiles(in scratch: URL) {
         let jsonl = scratch.appendingPathComponent("run.jsonl", isDirectory: false)
         let stderrLog = scratch.appendingPathComponent("run.stderr.log", isDirectory: false)
@@ -2598,11 +2634,53 @@ public final class AgentLauncher {
         logHandle = try? FileHandle(forWritingTo: jsonl)
         stderrLogHandle = try? FileHandle(forWritingTo: stderrLog)
         logFileURL = jsonl
+        // Create the debug/ subfolder. `DebugRunLogger` creates the actual
+        // `debug/` + `debug/turns/` directories lazily when instantiated in
+        // `ACPBackend.startProcess` from this URL; we just expose the path here
+        // so the UI can reveal it and the backend profile can carry it.
+        debugFolderURL = scratch.appendingPathComponent("debug", isDirectory: true)
     }
 
     private func writeLog(_ text: String, to handle: FileHandle?) {
         guard let handle, let data = text.data(using: .utf8) else { return }
         try? handle.write(contentsOf: data)
+    }
+
+    /// Write `summary.json` to the run's `debug/` folder with provider, model,
+    /// kind, duration, and total usage. Reads the model id from the backend (a
+    /// short actor hop) and the accumulated usage from `runTotalUsage`. Runs as
+    /// a detached `@MainActor` task so `finish()` doesn't block on the actor hop
+    /// — the debug folder persists on disk, the task writes to it if it still
+    /// exists. Best-effort: non-fatal if the write fails (logged via DebugLog).
+    private func writeDebugSummary(finishedAt: Date, status: Int32) {
+        guard debugFolderURL != nil else { return }
+        let startedAt = runCommitedAt
+        let providerLabel = runProviderLabel
+        let kind = runningKind
+        let totalUsage = runTotalUsage
+        let session = sessionHandle
+        let backend = self.backend
+        Task { @MainActor in
+            // Try to read the model id from the ACP backend (last session's
+            // advertised current model). Non-fatal if nil — the field is
+            // optional in the summary.
+            var modelId: String?
+            if let session, let acp = backend as? ACPBackend {
+                modelId = await acp.sessionUsage(for: session)?.modelId
+            }
+            let summary = DebugRunSummary.from(
+                provider: providerLabel,
+                model: modelId,
+                kind: kind?.rawValue,
+                startedAt: startedAt,
+                finishedAt: finishedAt,
+                usage: totalUsage,
+                phases: [])
+            DebugLog.agent("writeDebugSummary: writing summary.json provider=\(providerLabel ?? "nil") model=\(modelId ?? "nil") kind=\(kind?.rawValue ?? "nil")")
+            if let acp = backend as? ACPBackend {
+                await acp.writeDebugSummary(summary)
+            }
+        }
     }
 
     private func closeLogFiles() {

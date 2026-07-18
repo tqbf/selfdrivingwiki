@@ -73,19 +73,27 @@ public struct BackendProfile: Sendable {
     /// `WIKI_DB`/`WIKICTL` visible. nil for sessions that don't
     /// need them (none today — every launcher call site sets it).
     public var cli: CLIProfile?
+    /// The `debug/` folder URL under the scratch dir. When set, `ACPBackend`
+    /// captures the complete ACP wire trace (session/new, per-turn
+    /// prompt/updates/response, permissions, stderr) as machine-readable JSON
+    /// files for post-hoc debugging — the verbose companion to the lightweight
+    /// `run.jsonl`. nil = debug logging disabled.
+    public var debugLogURL: URL?
 
     public init(
         model: String? = nil,
         providerHints: [String: String] = [:],
         scratchDirectory: URL? = nil,
         isReadOnly: Bool = false,
-        cli: CLIProfile? = nil
+        cli: CLIProfile? = nil,
+        debugLogURL: URL? = nil
     ) {
         self.model = model
         self.providerHints = providerHints
         self.scratchDirectory = scratchDirectory
         self.isReadOnly = isReadOnly
         self.cli = cli
+        self.debugLogURL = debugLogURL
     }
 }
 

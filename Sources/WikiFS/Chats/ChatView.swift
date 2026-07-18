@@ -228,6 +228,12 @@ struct ChatView: View {
                             NSWorkspace.shared.activateFileViewerSelecting([logURL])
                         }
                     }
+                    if let debugURL = launcher.debugFolderURL {
+                        Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
+                            NSWorkspace.shared.activateFileViewerSelecting([debugURL])
+                        }
+                        .help("Open the complete debug trace folder (ACP messages, permissions, usage)")
+                    }
                 } label: {
                     Label("Activity", systemImage: "ellipsis.circle")
                 }
