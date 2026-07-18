@@ -349,6 +349,10 @@ struct ActivityWindowView: View {
             VStack(spacing: 0) {
                 detailHeader(for: item)
                 Divider()
+                if item.payload.lintPageIDs != nil {
+                    lintedPagesSection(for: item)
+                    Divider()
+                }
                 transcriptContent(for: item)
             }
             .task(id: itemID) {
@@ -493,6 +497,110 @@ struct ActivityWindowView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+    }
+
+    // MARK: - Lint page navigation
+
+    /// Lint jobs carry `lintPageIDs` in their payload. For a page-level lint we
+    /// list every linted page with an "Open" action that opens it in the wiki's
+    /// main window (the shared `WikiStoreModel`); for a whole-wiki lint
+    /// (`lintPageIDs == []`) we show "All pages linted" with a "Browse Pages"
+    /// button that focuses the wiki window on its Pages sidebar.
+    @ViewBuilder
+    private func lintedPagesSection(for item: QueueItem) -> some View {
+        let pageIDs = item.payload.lintPageIDs ?? []
+        VStack(alignment: .leading, spacing: 8) {
+            Text(pageIDs.isEmpty ? "Lint Scope" : "Linted Pages")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            if pageIDs.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "books.vertical")
+                        .foregroundStyle(.secondary)
+                    Text("All pages linted")
+                        .font(.callout)
+                    Spacer(minLength: 4)
+                    Button("Browse Pages", systemImage: "sidebar.left") {
+                        browsePages(in: item.wikiID)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Switch to the Pages list in the wiki window")
+                }
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(pageIDs, id: \.self) { pageID in
+                        lintPageRow(pageID: pageID, wikiID: item.wikiID)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    /// A single linted page: title (resolved from the wiki's store) with an
+    /// "Open" button. Pages deleted since the lint ran resolve to a placeholder.
+    @ViewBuilder
+    private func lintPageRow(pageID: PageID, wikiID: String) -> some View {
+        let title = pageTitle(pageID, wikiID: wikiID) ?? "Deleted page"
+        HStack(spacing: 6) {
+            Image(systemName: "doc.text")
+                .foregroundStyle(.secondary)
+            Text(title)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(title)
+            Spacer(minLength: 4)
+            Button("Open", systemImage: "arrow.up.forward.app") {
+                openPage(pageID, in: wikiID)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Open this page in the wiki window")
+        }
+    }
+
+    /// Resolve a page ID to its current title via the wiki's store, or `nil`
+    /// if the page no longer exists / the session isn't live.
+    private func pageTitle(_ pageID: PageID, wikiID: String) -> String? {
+        sessionManager?.sessions[wikiID]?.store
+            .summaries.first { $0.id == pageID }?.title
+    }
+
+    /// Open a linted page in its wiki's main window. The `WikiStoreModel` is
+    /// shared across windows (one session per wiki), so `openTab` mutates the
+    /// same model the main window observes; `openWiki` then focuses that window
+    /// — mirroring the bookmark "Go to Original" navigation (#570).
+    private func openPage(_ pageID: PageID, in wikiID: String) {
+        guard let store = sessionManager?.sessions[wikiID]?.store else {
+            DebugLog.tabs("Lint Open Page: no live session for wiki \(wikiID.prefix(8)); cannot open page")
+            return
+        }
+        store.openTab(.page(pageID))
+        openWindowBridge?.openWiki?(wikiID)
+        DebugLog.tabs("Lint Open Page: opened page \(pageID) in wiki \(wikiID.prefix(8))")
+    }
+
+    /// Whole-wiki lint "Browse Pages": reveal the wiki's home page (switches the
+    /// shared model's sidebar to the Pages section via the same
+    /// `requestSidebarReveal` mechanism the bookmark "Go to Original" action
+    /// uses, #570), then focus the wiki window. Falls back to the first page if
+    /// there's no home page, and to focusing the window only if the wiki has no
+    /// pages / no live session.
+    private func browsePages(in wikiID: String) {
+        let session = sessionManager?.sessions[wikiID]
+        let store = session?.store
+        if store != nil, let homeID = session?.descriptor.homePageID {
+            store?.requestSidebarReveal(.page(homeID))
+            DebugLog.tabs("Lint Browse Pages: revealed home page in wiki \(wikiID.prefix(8))")
+        } else if let firstID = store?.summaries.first?.id {
+            store?.requestSidebarReveal(.page(firstID))
+            DebugLog.tabs("Lint Browse Pages: revealed first page in wiki \(wikiID.prefix(8))")
+        } else {
+            DebugLog.tabs("Lint Browse Pages: no pages to reveal in wiki \(wikiID.prefix(8)); focusing window only")
+        }
+        openWindowBridge?.openWiki?(wikiID)
     }
 
     // MARK: - Copy
