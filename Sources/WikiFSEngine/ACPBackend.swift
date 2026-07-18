@@ -173,6 +173,12 @@ public actor ACPBackend: AgentBackend {
 
     private var warmProcess: WarmProcess?
 
+    /// The per-run debug logger (verbose ACP wire trace). Created in
+    /// `startProcess()` from `profile.debugLogURL`. nil when debug logging is
+    /// disabled or the folder can't be created. Captured into off-actor tasks
+    /// (drain/prompt/permission) — it's `Sendable`.
+    private var debugLogger: DebugRunLogger?
+
     /// Phase 2: the ACP `SessionId` of the last active session, tracked for
     /// crash recovery. Set in `createSession()`, cleared in `closeSession()`
     /// (intentional close — not a crash) and `cancel()` (full teardown).
@@ -276,10 +282,15 @@ public actor ACPBackend: AgentBackend {
             throw ACPBackendError.noAgentConfigured
         }
 
+        // Create the verbose debug logger (complete ACP wire trace) from the
+        // profile's debugLogURL. Returns nil (no-op) when disabled or the
+        // folder can't be created — the run proceeds regardless.
+        self.debugLogger = DebugRunLogger(folderURL: profile.debugLogURL)
+
         let client = Client()
         // The permission delegate owns the always-ask/yolo policy. It is the
         // `ClientDelegate` that the agent's `session/request_permission` lands on.
-        let permissionDelegate = ACPPermissionDelegate(policy: permissionPolicy)
+        let permissionDelegate = ACPPermissionDelegate(policy: permissionPolicy, debugLogger: debugLogger)
         await client.setDelegate(permissionDelegate)
 
         DebugLog.agent("ACPBackend.startProcess: launching \(spawn.executablePath) \(spawn.arguments.joined(separator: " "))")
@@ -372,12 +383,13 @@ public actor ACPBackend: AgentBackend {
         // Forward agent stderr to DebugLog.agent + run.stderr.log (via the CLI
         // profile's onStderrChunk callback). Best-effort: the stream finishes
         // on terminate, so this task exits naturally.
-        let stderrTask = Task { [client, onStderrChunk] in
+        let stderrTask = Task { [client, onStderrChunk, debugLogger] in
             guard let stderrStream = await client.stderrLines() else { return }
             for await line in stderrStream {
                 if Task.isCancelled { break }
                 DebugLog.agent("ACP stderr: \(line)")
                 onStderrChunk?(line + "\n")
+                debugLogger?.logStderr(line + "\n")
             }
         }
 
@@ -462,6 +474,9 @@ public actor ACPBackend: AgentBackend {
         let discoveredCount = modelsInfo?.availableModels.count ?? 0
         let currentModel = modelsInfo?.currentModelId ?? "(none)"
         DebugLog.agent("ACPBackend.createSession: discovered \(discoveredCount) model(s), current=\(currentModel)")
+        // Capture the full session/new response (model, capabilities,
+        // configOptions) in the debug folder for post-hoc analysis.
+        debugLogger?.logSessionNew(session, sessionId: sessionId, workingDirectory: workingDir)
         // #566: capture the config options the agent advertised (e.g. a
         // `thought_level` select). nil when the agent advertises none — the UI
         // hides the Thinking dropdown in that case.
@@ -561,6 +576,12 @@ public actor ACPBackend: AgentBackend {
         // drain task (UsageUpdate) and prompt task (Usage). Same
         // @unchecked Sendable pattern as TurnCompletionFlag / ProcessHealthFlag.
         let usageState = usageStates[handle.id]
+        // Debug: assign this turn's 1-based index and capture the logger for
+        // off-actor use in the drain/prompt tasks. nil when debug logging is
+        // disabled — all logger calls are no-ops via optional chaining.
+        let debugLogger = self.debugLogger
+        let debugTurn = debugLogger?.nextTurn()
+        debugLogger?.logPromptRequest(text: promptText, sessionId: sessionId, turn: debugTurn ?? 0)
 
         // `.unbounded` buffering — the @MainActor consumer drains promptly and
         // no events may be dropped (same invariant as the CLI backend).
@@ -622,7 +643,7 @@ public actor ACPBackend: AgentBackend {
             // stopReason), while notifications stream in via the fanout
             // subscription. The prompt task and watchdog are both cancelled on
             // consumer termination.
-            let promptTask = Task { [client, sessionId, fanout, completionFlag, processHealth, promptText, usageState, handle] in
+            let promptTask = Task { [client, sessionId, fanout, completionFlag, processHealth, promptText, usageState, handle, debugLogger, debugTurn] in
                 // Subscribe to the session-lifetime fanout (NOT the SDK's
                 // `client.notifications` — that's single-consumer; re-acquiring
                 // it per turn was cause 6). Turns are serialized by the
@@ -631,6 +652,10 @@ public actor ACPBackend: AgentBackend {
                 let drainTask = Task {
                     for await notification in updates {
                         if Task.isCancelled { return }
+                        // Debug: write the full notification to turn-N-updates.jsonl.
+                        if let debugTurn {
+                            debugLogger?.logUpdate(notification, turn: debugTurn)
+                        }
                         guard notification.method == "session/update" else { continue }
                         guard let params = notification.params else { continue }
                         let result = ACPBackend.translateNotification(params: params, sessionId: sessionId, translator: translator)
@@ -680,6 +705,9 @@ public actor ACPBackend: AgentBackend {
                     guard !completionFlag.isDone else { return }
                     completionFlag.markDone()
                     DebugLog.agent("ACPBackend: prompt completed stopReason=\(response.stopReason.rawValue)")
+                    if let debugTurn {
+                        debugLogger?.logPromptResponse(response, turn: debugTurn)
+                    }
                     for event in Self.turnEndEvents(error: nil) {
                         continuation.yield(event)
                     }
@@ -695,6 +723,9 @@ public actor ACPBackend: AgentBackend {
                     // attempt resume().
                     processHealth.markDied()
                     DebugLog.agent("ACPBackend: prompt failed: \(error.localizedDescription)")
+                    if let debugTurn {
+                        debugLogger?.logPromptError(error, turn: debugTurn)
+                    }
                     for event in Self.turnEndEvents(error: error) {
                         continuation.yield(event)
                     }
@@ -921,6 +952,10 @@ public actor ACPBackend: AgentBackend {
             await record.client.terminate()
             record.permissionDelegate.fireOnExit(status: 0)
         }
+        // Clear the debug logger — a new run creates a fresh one via a new
+        // `startProcess` call. The debug files on disk remain for "Reveal
+        // Debug Folder" after the run.
+        debugLogger = nil
     }
 
     /// Close a session WITHOUT terminating the subprocess. Frees the session's
@@ -1049,6 +1084,16 @@ public actor ACPBackend: AgentBackend {
 
         DebugLog.agent("ACPBackend.forkSession: forked session \(forkedSessionId.value) (handle \(sessionID)) ready")
         return SessionHandle(id: sessionID)
+    }
+
+    // MARK: - Debug logging
+
+    /// Write the run-level summary to `debug/summary.json`. Called by the
+    /// launcher after a run completes (in `finish()`). No-op when debug logging
+    /// is disabled. The logger already owns the file writes; this reuses the
+    /// same instance so all debug files land in the same folder.
+    func writeDebugSummary(_ summary: DebugRunSummary) {
+        debugLogger?.logSummary(summary)
     }
 
     // MARK: - Usage tracking (Phase 4)

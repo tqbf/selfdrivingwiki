@@ -320,6 +320,10 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
     }
 
     private let policy: PermissionPolicy
+    /// The per-run debug logger, for capturing permission request/response
+    /// exchanges to `permissions.jsonl`. nil when debug logging is disabled —
+    /// all calls are no-ops via optional chaining.
+    private let debugLogger: DebugRunLogger?
     /// Synchronized state (pending map + one-shot onExit). A dedicated struct
     /// (not a tuple) — `OSAllocatedUnfairLock`'s tuple initializer can't infer
     /// the heterogeneous element types, so a named struct is the clean form.
@@ -329,42 +333,49 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
     }
     private let lock = OSAllocatedUnfairLock<LockedState>(initialState: LockedState())
 
-    init(policy: PermissionPolicy) {
+    init(policy: PermissionPolicy, debugLogger: DebugRunLogger? = nil) {
         self.policy = policy
+        self.debugLogger = debugLogger
     }
 
     // MARK: - ClientDelegate: the permission seam
 
     public func handlePermissionRequest(request: RequestPermissionRequest) async throws -> RequestPermissionResponse {
+        let response: RequestPermissionResponse
         switch policy {
         case .bypass:
             // Auto-approve: resolve immediately with the request's allow option.
             if let allow = Self.allowOption(in: request.options) {
                 DebugLog.agent("ACPBackend: bypass auto-allow toolCallId=\(request.toolCall.toolCallId)")
-                return RequestPermissionResponse(outcome: PermissionOutcome(optionId: allow.optionId))
+                response = RequestPermissionResponse(outcome: PermissionOutcome(optionId: allow.optionId))
+            } else {
+                response = RequestPermissionResponse(outcome: PermissionOutcome(cancelled: true))
             }
-            return RequestPermissionResponse(outcome: PermissionOutcome(cancelled: true))
 
         case .acceptEdits:
             // Auto-approve tools that look like file edits/writes; defer others.
             if Self.isEditTool(request.toolCall), let allow = Self.allowOption(in: request.options) {
                 DebugLog.agent("ACPBackend: acceptEdits auto-allow edit toolCallId=\(request.toolCall.toolCallId)")
-                return RequestPermissionResponse(outcome: PermissionOutcome(optionId: allow.optionId))
+                response = RequestPermissionResponse(outcome: PermissionOutcome(optionId: allow.optionId))
+            } else {
+                // Non-edit tool → defer to the user (same as alwaysAsk).
+                response = await Self.deferPermission(request: request, lock: lock)
             }
-            // Non-edit tool → defer to the user (same as alwaysAsk).
-            return await Self.deferPermission(request: request, lock: lock)
 
         case .plan:
             // Deny all writes — auto-cancel every permission request.
             DebugLog.agent("ACPBackend: plan auto-deny toolCallId=\(request.toolCall.toolCallId)")
-            return RequestPermissionResponse(outcome: PermissionOutcome(cancelled: true))
+            response = RequestPermissionResponse(outcome: PermissionOutcome(cancelled: true))
 
         case .alwaysAsk:
             // Defer: record pending and SUSPEND until resolve(optionId:). The
             // future UI calls ACPBackend.resolvePermission, which calls into
             // here. This is the pending-permission-blocking pattern from paseo.
-            return await Self.deferPermission(request: request, lock: lock)
+            response = await Self.deferPermission(request: request, lock: lock)
         }
+        // Debug: log the full request/response exchange to permissions.jsonl.
+        debugLogger?.logPermission(request: request, response: response, policy: policy.rawValue)
+        return response
     }
 
     // MARK: - Shared helpers
