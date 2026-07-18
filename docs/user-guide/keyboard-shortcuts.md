@@ -18,6 +18,8 @@ A complete quick-reference for Self-Driving Wiki keyboard shortcuts.
 
 | Shortcut | Action |
 |---|---|
+| ⇧⌘[ | Show previous tab (wraps to last) |
+| ⇧⌘] | Show next tab (wraps to first) |
 | ⌘W | Close active tab |
 | ⌘⇧T | Reopen last closed tab (up to 10 remembered) |
 
@@ -74,5 +76,8 @@ A complete quick-reference for Self-Driving Wiki keyboard shortcuts.
 - **⌘E** is context-sensitive: in a page, it enters page edit mode; from the
   menu bar, it opens the Extraction Queue. The menu bar shortcut takes priority
   when no detail view is focused.
+- **⌘[ / ⌘]** navigate back/forward within a tab; **⇧⌘[ / ⇧⌘]** cycle between
+  tabs. Don't confuse the two — the Shift modifier switches from
+  in-tab navigation to tab switching.
 - **Edit mode is per-tab.** Switching tabs preserves each tab's edit state.
   Closing a tab while editing asks for confirmation.
