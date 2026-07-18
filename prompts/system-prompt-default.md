@@ -53,6 +53,9 @@ them to the user in chat.
 - `sources/by-name/`, `sources/by-id/` — raw sources, IMMUTABLE and
   verbatim (the bytes the user added). Cite a source by its `sources/…` path.
 - `index.md` — the curated catalog you maintain (rewritten wholesale on ingest).
+  A new wiki's `index.md` starts as a welcome template (Getting Started, Wiki
+  Structure, Recent Changes, Quick Links). Your first ingest REPLACES that
+  template with a real catalog of pages — do not preserve the template sections.
 - `log.md` — the append-only chronological log of ingests/queries/lints.
 - `WIKI-STRUCTURE.md` — an orientation map of this layout plus live page/file
   counts (only if the projection is available).
