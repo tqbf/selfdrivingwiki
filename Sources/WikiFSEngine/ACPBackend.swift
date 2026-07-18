@@ -100,6 +100,14 @@ public actor ACPBackend: AgentBackend {
         /// list (older agents). Captured at start so the launcher can cache them
         /// per-provider for the model picker (#329).
         let modelsInfo: ModelsInfo?
+        /// The config options the agent advertised (`session/new` →
+        /// `NewSessionResponse.configOptions`), e.g. the `thought_level`
+        /// select (high/medium/low). nil when the agent advertises none. Captured
+        /// at start so the launcher can surface the current thinking effort in
+        /// the chat toolbar + Activity window (#566). Updated in-place when a
+        /// `.configOptionUpdate` notification arrives (the session record is a
+        /// struct stored in the actor's `sessions` map, so we reassign).
+        var configOptions: [SessionConfigOption]?
         /// Session-lifetime notification fanout (cause 6 fix,
         /// `plans/acp-stall-recovery.md` §1b). Replaces the per-turn
         /// re-acquisition of `client.notifications`.
@@ -450,9 +458,17 @@ public actor ACPBackend: AgentBackend {
         let session = try await client.newSession(workingDirectory: workingDir)
         let sessionId = session.sessionId
         let modelsInfo = session.models
+        let configOptions = session.configOptions
         let discoveredCount = modelsInfo?.availableModels.count ?? 0
         let currentModel = modelsInfo?.currentModelId ?? "(none)"
         DebugLog.agent("ACPBackend.createSession: discovered \(discoveredCount) model(s), current=\(currentModel)")
+        // #566: capture the config options the agent advertised (e.g. a
+        // `thought_level` select). nil when the agent advertises none — the UI
+        // hides the Thinking dropdown in that case.
+        if let configOptions, !configOptions.isEmpty {
+            let ids = configOptions.map { $0.id.value }.joined(separator: ", ")
+            DebugLog.agent("ACPBackend.createSession: agent advertised \(configOptions.count) config option(s): \(ids)")
+        }
 
         // #329: if the user picked a model for this provider, apply it right
         // after newSession — BEFORE the first prompt — so the agent uses a
@@ -490,6 +506,7 @@ public actor ACPBackend: AgentBackend {
             sessionId: sessionId,
             permissionDelegate: permissionDelegate,
             modelsInfo: modelsInfo,
+            configOptions: configOptions,
             notificationFanout: fanout,
             drainTask: nil,
             systemPrompt: systemPrompt,
@@ -605,7 +622,7 @@ public actor ACPBackend: AgentBackend {
             // stopReason), while notifications stream in via the fanout
             // subscription. The prompt task and watchdog are both cancelled on
             // consumer termination.
-            let promptTask = Task { [client, sessionId, fanout, completionFlag, processHealth, promptText, usageState] in
+            let promptTask = Task { [client, sessionId, fanout, completionFlag, processHealth, promptText, usageState, handle] in
                 // Subscribe to the session-lifetime fanout (NOT the SDK's
                 // `client.notifications` — that's single-consumer; re-acquiring
                 // it per turn was cause 6). Turns are serialized by the
@@ -629,6 +646,13 @@ public actor ACPBackend: AgentBackend {
                                 size: usageUpdate.size,
                                 cost: usageUpdate.cost?.amount,
                                 currency: usageUpdate.cost?.currency)
+                        }
+                        // #566: write the refreshed config options back to the
+                        // session record so the `thought_level` current value
+                        // the toolbar displays tracks `config_option_update`s.
+                        // The drain runs off-actor; hop back to update `sessions`.
+                        if let configOptions = result.configOptions {
+                            await updateConfigOptions(for: handle, options: configOptions)
                         }
                     }
                 }
@@ -766,7 +790,8 @@ public actor ACPBackend: AgentBackend {
                 return registerResumedSession(
                     acpSessionId: acpSessionId,
                     warm: newWarm,
-                    modelsInfo: response.models
+                    modelsInfo: response.models,
+                    configOptions: response.configOptions
                 )
             } catch {
                 // Resume failed (session GC'd, protocol error). Fall through to
@@ -789,7 +814,8 @@ public actor ACPBackend: AgentBackend {
                 return registerResumedSession(
                     acpSessionId: resumedId,
                     warm: newWarm,
-                    modelsInfo: response.models
+                    modelsInfo: response.models,
+                    configOptions: response.configOptions
                 )
             } catch {
                 DebugLog.agent("ACPBackend.resume: loadSession failed: \(error.localizedDescription) — giving up")
@@ -811,7 +837,8 @@ public actor ACPBackend: AgentBackend {
     private func registerResumedSession(
         acpSessionId: SessionId,
         warm: WarmProcess,
-        modelsInfo: ModelsInfo?
+        modelsInfo: ModelsInfo?,
+        configOptions: [SessionConfigOption]? = nil
     ) -> SessionHandle {
         let sessionID = UUID().uuidString
         sessions[sessionID] = ACPSession(
@@ -819,6 +846,7 @@ public actor ACPBackend: AgentBackend {
             sessionId: acpSessionId,
             permissionDelegate: warm.permissionDelegate,
             modelsInfo: modelsInfo,
+            configOptions: configOptions,
             notificationFanout: warm.notificationFanout,
             drainTask: nil,
             systemPrompt: "",
@@ -1012,6 +1040,7 @@ public actor ACPBackend: AgentBackend {
             sessionId: forkedSessionId,
             permissionDelegate: warm.permissionDelegate,
             modelsInfo: parent.modelsInfo,
+            configOptions: parent.configOptions,
             notificationFanout: warm.notificationFanout,
             drainTask: nil,
             systemPrompt: parent.systemPrompt,
@@ -1036,7 +1065,11 @@ public actor ACPBackend: AgentBackend {
         // Enrich with the session's current model id (the actual model used),
         // if the agent advertised one. Provider label is attached by the
         // launcher's capturePhaseUsage (it knows the configured provider).
-        let modelId = sessions[sessionHandle.id]?.modelsInfo?.currentModelId
+        let session = sessions[sessionHandle.id]
+        let modelId = session?.modelsInfo?.currentModelId
+        // #566: surface the active `thought_level` value (if advertised) in the
+        // Activity window between the model id and the token counts.
+        let thinkingLevel = session.flatMap { Self.currentThoughtLevel(from: $0.configOptions) }
         return SessionUsage(
             inputTokens: snapshot.inputTokens,
             outputTokens: snapshot.outputTokens,
@@ -1048,7 +1081,24 @@ public actor ACPBackend: AgentBackend {
             contextUsed: snapshot.contextUsed,
             contextSize: snapshot.contextSize,
             providerLabel: nil,
-            modelId: modelId)
+            modelId: modelId,
+            thinkingLevel: thinkingLevel)
+    }
+
+    /// #566: read the `thought_level` option's current value from a config
+    /// option set. Matches by `id.value == "thought_level"` OR
+    /// `category == "thought_level"` (the daemon vs the spec use different
+    /// conventions). Returns the select's `currentValue.value` (e.g.
+    /// `"high"`), or `nil` when the agent advertises no such option.
+    private static func currentThoughtLevel(
+        from configOptions: [SessionConfigOption]?
+    ) -> String? {
+        guard let configOptions,
+              let option = configOptions.first(where: { $0.id.value == "thought_level" || $0.category == "thought_level" }),
+              case .select(let select) = option.kind else {
+            return nil
+        }
+        return select.currentValue.value
     }
 
     /// The current context window usage for a session — `used` tokens consumed
@@ -1086,6 +1136,99 @@ public actor ACPBackend: AgentBackend {
     func availableModels(for sessionHandle: SessionHandle) async -> [ModelInfo] {
         guard let session = sessions[sessionHandle.id] else { return [] }
         return session.modelsInfo?.availableModels ?? []
+    }
+
+    // MARK: - Session config options (#566 — thinking effort)
+
+    /// The config options the agent advertised for a session (`session/new` →
+    /// `NewSessionResponse.configOptions` + refreshed by
+    /// `config_option_update` notifications). Includes the `thought_level`
+    /// select (high/medium/low) when the agent supports it. The launcher / UI
+    /// reads this to render the "Thinking" dropdown; an empty return hides the
+    /// affordance (agent-dependent capability detection).
+    func sessionConfigOptions(for sessionHandle: SessionHandle) async -> [SessionConfigOption] {
+        guard let session = sessions[sessionHandle.id] else { return [] }
+        return session.configOptions ?? []
+    }
+
+    /// Set a config option value on the agent — e.g. the `thought_level`
+    /// select (high/medium/low). The agent responds with the refreshed config
+    /// option set, which it then broadcasts as a `config_option_update`
+    /// notification; `updateConfigOptions(for:options:)` writes that snapshot
+    /// back here so the toolbar reflects the new value. Throws if the agent
+    /// rejects the value (it propagates the SDK's `ClientError`).
+    func setConfigOption(
+        sessionHandle: SessionHandle,
+        configId: String,
+        value: String
+    ) async throws {
+        guard let session = sessions[sessionHandle.id] else {
+            throw ACPBackendError.noAgentConfigured
+        }
+        let configIdValue = SessionConfigId(value)
+        let valueId = SessionConfigValueId(value)
+        DebugLog.agent("ACPBackend.setConfigOption: configId=\(configId) value=\(value) session=\(session.sessionId.value)")
+        _ = try await session.client.setConfigOption(
+            sessionId: session.sessionId,
+            configId: configIdValue,
+            value: valueId
+        )
+        // Optimistically patch the local snapshot so the toolbar flips
+        // immediately — the `config_option_update` that follows confirms it
+        // (or corrects it if the agent rewrote the value).
+        if var session = sessions[sessionHandle.id] {
+            session.configOptions = patchConfigOption(
+                in: session.configOptions ?? [],
+                configId: configId,
+                newValue: value)
+            sessions[sessionHandle.id] = session
+        }
+    }
+
+    /// Merge a refreshed `config_option_update` payload into the session record.
+    /// Called off-actor from the per-turn drain task. No-op if the session is
+    /// gone (cancelled/finished) — the update is informational, not load-bearing.
+    private func updateConfigOptions(
+        for handle: SessionHandle,
+        options: [SessionConfigOption]
+    ) async {
+        guard var session = sessions[handle.id] else { return }
+        // The notification carries the FULL option set (per ACP spec), so we
+        // replace wholesale rather than merge — simplest correct behavior.
+        session.configOptions = options
+        sessions[handle.id] = session
+        let changed = options.first(where: { $0.id.value == "thought_level" })
+        if case .select(let sel) = changed?.kind {
+            DebugLog.agent("ACPBackend: thought_level now \(sel.currentValue.value)")
+        }
+    }
+
+    /// Return a copy of `options` with the select option identified by
+    /// `configId` updated to carry `newValue` as its current value. Used for
+    /// the optimistic local patch in `setConfigOption`. Options that aren't a
+    /// matching `.select`, or whose select options list doesn't contain the
+    /// value, are passed through unchanged.
+    private func patchConfigOption(
+        in options: [SessionConfigOption],
+        configId: String,
+        newValue: String
+    ) -> [SessionConfigOption] {
+        options.map { option in
+            guard option.id.value == configId else { return option }
+            switch option.kind {
+            case .select(var select):
+                select.currentValue = SessionConfigValueId(newValue)
+                return SessionConfigOption(
+                    id: option.id,
+                    name: option.name,
+                    description: option.description,
+                    category: option.category,
+                    kind: .select(select),
+                    _meta: option._meta)
+            case .boolean:
+                return option
+            }
+        }
     }
 
     /// The agent process identifier for a session (SDK fork Fix 4). nil when
@@ -1298,18 +1441,25 @@ public actor ACPBackend: AgentBackend {
         params: AnyCodable,
         sessionId: SessionId,
         translator: ACPEventTranslator
-    ) -> (events: [AgentEvent], usageUpdate: UsageUpdate?) {
+    ) -> (events: [AgentEvent], usageUpdate: UsageUpdate?, configOptions: [SessionConfigOption]?) {
         do {
             let data = try JSONEncoder().encode(params)
             let envelope = try JSONDecoder().decode(SessionUpdateNotification.self, from: data)
             // Scope to our session (the shared notification stream is global).
-            guard envelope.sessionId.value == sessionId.value else { return ([], nil) }
+            guard envelope.sessionId.value == sessionId.value else { return ([], nil, nil) }
             let events = translator.translate(envelope.update)
             // Phase 4: extract the UsageUpdate for context/cost monitoring.
             let usageUpdate = envelope.update.usage
-            return (events, usageUpdate)
+            // #566: extract the refreshed config options from a
+            // `config_option_update`. The agent sends these after a
+            // `set_config_option` request succeeds (and sometimes unprompted
+            // when the model switches variants). The backend writes them back
+            // to the session record so the `thought_level` current value the
+            // toolbar displays stays in sync.
+            let configOptions = envelope.update.configOptions
+            return (events, usageUpdate, configOptions)
         } catch {
-            return ([.raw("ACP session/update decode error: \(error.localizedDescription)")], nil)
+            return ([.raw("ACP session/update decode error: \(error.localizedDescription)")], nil, nil)
         }
     }
 }
@@ -1350,6 +1500,11 @@ public struct SessionUsage: Sendable {
     /// The model id the session actually used (`ModelsInfo.currentModelId`),
     /// if reported. Point-in-time — latest non-nil wins on merge.
     public let modelId: String?
+    /// #566: the active thinking-effort level (`thought_level` config option's
+    /// current value, e.g. `"high"`/`"medium"`/`"low"`), if the agent advertises
+    /// one. Point-in-time — latest non-nil wins on merge. Surfaced in the
+    /// Activity window between the model id and the token counts.
+    public let thinkingLevel: String?
 
     public init(
         inputTokens: Int,
@@ -1362,7 +1517,8 @@ public struct SessionUsage: Sendable {
         contextUsed: Int,
         contextSize: Int,
         providerLabel: String? = nil,
-        modelId: String? = nil
+        modelId: String? = nil,
+        thinkingLevel: String? = nil
     ) {
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
@@ -1375,6 +1531,7 @@ public struct SessionUsage: Sendable {
         self.contextSize = contextSize
         self.providerLabel = providerLabel
         self.modelId = modelId
+        self.thinkingLevel = thinkingLevel
     }
 
     /// Merge two usage snapshots for run-total accumulation (#528 spike).
@@ -1400,7 +1557,8 @@ public struct SessionUsage: Sendable {
             contextUsed: new.contextUsed,
             contextSize: new.contextSize,
             providerLabel: new.providerLabel ?? existing.providerLabel,
-            modelId: new.modelId ?? existing.modelId)
+            modelId: new.modelId ?? existing.modelId,
+            thinkingLevel: new.thinkingLevel ?? existing.thinkingLevel)
     }
 }
 

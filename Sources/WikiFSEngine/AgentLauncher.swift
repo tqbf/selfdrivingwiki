@@ -351,6 +351,48 @@ public final class AgentLauncher {
         }
     }
 
+    /// #566: After a successful `backend.start`, mirror the agent-advertised
+    /// config options into `thinkingOption` so the chat toolbar can render a
+    /// "Thinking" dropdown. Non-blocking: runs as a detached `@MainActor` Task.
+    /// Sets `thinkingOption` to `nil` when the agent advertises no
+    /// `thought_level` select (capability detection → the toolbar hides the
+    /// affordance). Mirrors `captureAndCacheModels` / `captureProcessID`.
+    public func captureThinkingOption(session: SessionHandle) {
+        guard let acp = backend as? ACPBackend else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let options = await acp.sessionConfigOptions(for: session)
+            self.thinkingOption = ThinkingEffortOption.from(configOptions: options)
+        }
+    }
+
+    /// #566: Set the `thought_level` config option on the live ACP session.
+    /// Called by the chat toolbar's "Thinking" dropdown. No-op when no session
+    /// is live or the backend isn't ACP. Errors are logged (not surfaced) —
+    /// the dropdown optimistically flips and a `config_option_update` confirms
+    /// or reverts; surfacing a modal on every error is heavier than warranted.
+    public func setThinkingEffort(_ value: String) {
+        guard let acp = backend as? ACPBackend,
+              let handle = sessionHandle,
+              let option = thinkingOption else { return }
+        DebugLog.agent("setThinkingEffort: value=\(value) configId=\(option.configId)")
+        // Optimistic local flip — the backend also patches its snapshot, but
+        // updating here keeps the dropdown snappy before the actor hop returns.
+        thinkingOption = option.withCurrentValue(value)
+        Task { @MainActor [weak self] in
+            do {
+                try await acp.setConfigOption(
+                    sessionHandle: handle,
+                    configId: option.configId,
+                    value: value)
+            } catch {
+                DebugLog.agent("setThinkingEffort: failed value=\(value) \(error.localizedDescription)")
+                // Revert the optimistic flip on failure.
+                self?.thinkingOption = option
+            }
+        }
+    }
+
     /// The currently-pending write-permission requests surfaced from the backend
     /// (always-ask mode). When non-empty AND this surface is the live chat, the
     /// UI renders an inline Approve/Reject affordance (slice 2). Mirrors how
@@ -358,6 +400,14 @@ public final class AgentLauncher {
     /// state → `ChatView`. Refreshed by `pendingPollTask` while a turn generates.
     /// Empty for the CLI backend (no permission channel) and while idle.
     public var pendingPermissions: [PendingPermission] = []
+
+    /// #566: the live thinking-effort config option for the current ACP
+    /// session, mirrored from `ACPBackend.sessionConfigOptions(for:)`. The
+    /// chat toolbar's "Thinking" dropdown binds to this — it's `nil` when no
+    /// session is live OR the agent doesn't advertise a `thought_level`
+    /// option (capability detection: only show UI when present). Refreshed
+    /// after `backend.start` and (future) on `config_option_update`.
+    public var thinkingOption: ThinkingEffortOption?
 
     /// Backstop poller that refreshes `pendingPermissions` from the backend while
     /// a turn is generating (always-ask blocks the turn until resolved, so no
@@ -1955,6 +2005,10 @@ public final class AgentLauncher {
             // turn.
             captureAndCacheModels(provider: provider, session: session)
             captureProcessID(session: session)
+            // #566: mirror the agent-advertised config options (e.g. the
+            // `thought_level` select) so the chat toolbar can render a
+            // "Thinking" dropdown. No-op for agents that advertise none.
+            captureThinkingOption(session: session)
             DebugLog.agent("startInteractiveQuery: spawned")
             // Start the first turn — this acquires the generation gate for turn 1.
             // Compose the full task prompt (chat.md, write rules, citation rules,
@@ -2457,6 +2511,7 @@ public final class AgentLauncher {
         sessionHandle = nil
         plannerSessionHandle = nil
         runTotalUsage = nil
+        thinkingOption = nil
         onUnlockHandler = nil
         // A reset starts a new run: a stale sink must never receive a new
         // session's events (issue #119).

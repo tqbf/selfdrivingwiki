@@ -425,6 +425,7 @@ struct ChatView: View {
             // Inside ContentView the session is always non-nil (a wiki is
             // open), so the provider/model chips are always shown.
             ProviderSelector(launcher: launcher)
+            ThinkingEffortSelector(launcher: launcher)
             PermissionModeSelector(rawValue: $permissionModeRaw)
             Spacer(minLength: 0)
             if showsStopButton {
