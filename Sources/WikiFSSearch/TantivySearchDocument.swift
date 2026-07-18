@@ -164,4 +164,18 @@ public struct TantivyShadowSearchResult: Sendable, Equatable {
         self.title = title
         self.score = score
     }
+
+    /// The raw ULID of the underlying resource, extracted from the composite
+    /// `documentID` (`"<kind>:<ULID>"` — see `TantivyDocumentKind.documentID(for:)`).
+    /// Empty when the prefix doesn't match (shouldn't happen for index-produced
+    /// results), so callers can treat an empty ulid as "no resolvable id".
+    ///
+    /// Phase 2 uses this to map a Tantivy BM25 hit back to a typed store
+    /// summary (`WikiPageSummary` / `SourceSummary` / `ChatSummary`) for the
+    /// hybrid search's `bm25Leg`.
+    public var ulid: String {
+        let prefix = kind.idPrefix
+        guard documentID.hasPrefix(prefix) else { return "" }
+        return String(documentID.dropFirst(prefix.count))
+    }
 }
