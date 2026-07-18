@@ -1155,6 +1155,15 @@ public actor ACPBackend: AgentBackend {
         // launcher's capturePhaseUsage (it knows the configured provider).
         let session = sessions[sessionHandle.id]
         let modelId = session?.modelsInfo?.currentModelId
+        // Resolve the human-readable model name (e.g. "Claude Sonnet 4.5")
+        // from the agent's advertised `availableModels`, matching `modelId`.
+        // Falls back to `nil` when the agent didn't advertise a list, no entry
+        // matches, or the name is empty. Used by the per-model usage breakdown
+        // (#583).
+        let rawModelName = modelId.flatMap { id in
+            session?.modelsInfo?.availableModels.first { $0.modelId == id }?.name
+        }
+        let modelName: String? = (rawModelName?.isEmpty == false) ? rawModelName : nil
         // #566: surface the active `thought_level` value (if advertised) in the
         // Activity window between the model id and the token counts.
         let thinkingLevel = session.flatMap { Self.currentThoughtLevel(from: $0.configOptions) }
@@ -1170,6 +1179,7 @@ public actor ACPBackend: AgentBackend {
             contextSize: snapshot.contextSize,
             providerLabel: nil,
             modelId: modelId,
+            modelName: modelName,
             thinkingLevel: thinkingLevel)
     }
 
@@ -1588,6 +1598,13 @@ public struct SessionUsage: Sendable, Codable {
     /// The model id the session actually used (`ModelsInfo.currentModelId`),
     /// if reported. Point-in-time — latest non-nil wins on merge.
     public let modelId: String?
+    /// The human-readable model name (e.g. "Claude Sonnet 4.5") resolved from
+    /// the agent's advertised `ModelsInfo.availableModels` by matching
+    /// `modelId`. Falls back to `nil` when the agent didn't advertise a list
+    /// or no entry matches `currentModelId` (caller can fall back to `modelId`
+    /// for display). Point-in-time — latest non-nil wins on merge, matching
+    /// `modelId`. Used by the per-model usage breakdown (#583).
+    public let modelName: String?
     /// #566: the active thinking-effort level (`thought_level` config option's
     /// current value, e.g. `"high"`/`"medium"`/`"low"`), if the agent advertises
     /// one. Point-in-time — latest non-nil wins on merge. Surfaced in the
@@ -1606,6 +1623,7 @@ public struct SessionUsage: Sendable, Codable {
         contextSize: Int,
         providerLabel: String? = nil,
         modelId: String? = nil,
+        modelName: String? = nil,
         thinkingLevel: String? = nil
     ) {
         self.inputTokens = inputTokens
@@ -1619,6 +1637,7 @@ public struct SessionUsage: Sendable, Codable {
         self.contextSize = contextSize
         self.providerLabel = providerLabel
         self.modelId = modelId
+        self.modelName = modelName
         self.thinkingLevel = thinkingLevel
     }
 
@@ -1646,6 +1665,7 @@ public struct SessionUsage: Sendable, Codable {
             contextSize: new.contextSize,
             providerLabel: new.providerLabel ?? existing.providerLabel,
             modelId: new.modelId ?? existing.modelId,
+            modelName: new.modelName ?? existing.modelName,
             thinkingLevel: new.thinkingLevel ?? existing.thinkingLevel)
     }
 }

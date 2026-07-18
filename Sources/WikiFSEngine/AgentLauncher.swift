@@ -1749,6 +1749,7 @@ public final class AgentLauncher {
                 contextSize: usage.contextSize,
                 providerLabel: providerLabel,
                 modelId: usage.modelId,
+                modelName: usage.modelName,
                 thinkingLevel: usage.thinkingLevel)
         } else {
             enriched = usage

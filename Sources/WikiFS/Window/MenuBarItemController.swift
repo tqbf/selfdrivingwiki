@@ -202,7 +202,11 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        // #528 spike: today's cumulative token/cost usage.
+        // #528 spike: today's cumulative token/cost usage. The summary line
+        // stays unchanged; #583 adds per-model inline disabled items below it
+        // (heaviest model first) so the user sees which model drove the
+        // aggregate. Kept compact — one segment per token kind, middle-dot
+        // separator, 6pt left indent so the group reads as a sub-section.
         if activityTracker.todayUsage.hasData {
             let usageItem = NSMenuItem(
                 title: UsageFormatter.dailySummary(usage: activityTracker.todayUsage),
@@ -210,6 +214,33 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
                 keyEquivalent: "")
             usageItem.isEnabled = false
             menu.addItem(usageItem)
+
+            // #583: per-model breakdown. One disabled indented item per model.
+            let breakdown = activityTracker.todayUsageByModel
+            if breakdown.hasData {
+                for entry in breakdown.sortedForDisplay {
+                    let line = UsageFormatter.modelBreakdownLine(
+                        modelId: entry.modelId,
+                        breakdown: entry.breakdown,
+                        displayNameProvider: nil)
+                    let item = NSMenuItem(
+                        title: "    \(line)",
+                        action: nil,
+                        keyEquivalent: "")
+                    item.isEnabled = false
+                    // Secondary-label gray so the breakdown reads as
+                    // supporting detail under the summary line, not as
+                    // primary content matching the summary's weight.
+                    let attrTitle = NSAttributedString(
+                        string: "    \(line)",
+                        attributes: [
+                            .foregroundColor: NSColor.secondaryLabelColor,
+                            .font: NSFont.menuFont(ofSize: 0)
+                        ])
+                    item.attributedTitle = attrTitle
+                    menu.addItem(item)
+                }
+            }
             menu.addItem(.separator())
         }
 

@@ -237,4 +237,160 @@ import Foundation
         let result = UsageFormatter.fullSummary(usage: usage, startedAt: nil, finishedAt: nil)
         #expect(result == "Claude · sonnet-4 · 797 tokens in · 203 tokens out")
     }
+
+    // MARK: - modelName preference (#583)
+
+    @Test func fullSummaryPrefersModelNameOverId() {
+        let usage = SessionUsage(
+            inputTokens: 100, outputTokens: 50, totalTokens: 150,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 0, contextSize: 0,
+            providerLabel: "Claude", modelId: "claude-sonnet-4-5-20250929",
+            modelName: "Claude Sonnet 4.5",
+            thinkingLevel: nil)
+        let result = UsageFormatter.fullSummary(usage: usage, startedAt: nil, finishedAt: nil)
+        #expect(result == "Claude · Claude Sonnet 4.5 · 100 tokens in · 50 tokens out")
+    }
+
+    @Test func fullSummaryFallsBackToModelIdWhenNameIsNil() {
+        let usage = SessionUsage(
+            inputTokens: 100, outputTokens: 50, totalTokens: 150,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 0, contextSize: 0,
+            providerLabel: nil, modelId: "glm-4-7",
+            modelName: nil,
+            thinkingLevel: nil)
+        let result = UsageFormatter.fullSummary(usage: usage, startedAt: nil, finishedAt: nil)
+        #expect(result == "glm-4-7 · 100 tokens in · 50 tokens out")
+    }
+
+    // MARK: - Per-model breakdown line (#583)
+
+    @Test func modelBreakdownLineRendersAllSegments() {
+        let b = ModelUsageBreakdown(
+            inputTokens: 52_000, outputTokens: 8_000, thoughtTokens: 1_200,
+            totalTokens: 61_200, cost: 0.89, currency: "USD", runCount: 1)
+        let line = UsageFormatter.modelBreakdownLine(
+            modelId: "sonnet-4", breakdown: b, displayNameProvider: { _ in "Sonnet 4" })
+        #expect(line == "Sonnet 4 · 52.0K in · 8.0K out · 1.2K thought · $0.89")
+    }
+
+    @Test func modelBreakdownLineOmitsThoughtWhenZero() {
+        let b = ModelUsageBreakdown(
+            inputTokens: 12_000, outputTokens: 3_000, thoughtTokens: 0,
+            totalTokens: 15_000, cost: 0.34, currency: "USD", runCount: 1)
+        let line = UsageFormatter.modelBreakdownLine(
+            modelId: "opus-4", breakdown: b, displayNameProvider: nil)
+        #expect(line == "opus-4 · 12.0K in · 3.0K out · $0.34")
+    }
+
+    @Test func modelBreakdownLineAppendsRunCountWhenGreaterThanOne() {
+        let b = ModelUsageBreakdown(
+            inputTokens: 100_000, outputTokens: 20_000, thoughtTokens: 0,
+            totalTokens: 120_000, cost: 2.50, currency: "USD", runCount: 4)
+        let line = UsageFormatter.modelBreakdownLine(
+            modelId: "sonnet-4", breakdown: b, displayNameProvider: nil)
+        #expect(line == "sonnet-4 · 100.0K in · 20.0K out · $2.50 · 4 runs")
+    }
+
+    @Test func modelBreakdownLineRendersUnknownBucket() {
+        let b = ModelUsageBreakdown(
+            inputTokens: 500, outputTokens: 100, thoughtTokens: 0,
+            totalTokens: 600, cost: 0, currency: "USD", runCount: 1)
+        let line = UsageFormatter.modelBreakdownLine(
+            modelId: ModelUsageBreakdown.unknownModelKey, breakdown: b,
+            displayNameProvider: nil)
+        #expect(line == "Unknown model · 500 in · 100 out")
+    }
+
+    // MARK: - ModelUsageBreakdown accumulation (#583)
+
+    @Test func breakdownSumsTokensAndRunCountAcrossAdds() {
+        var b = ModelUsageBreakdown()
+        b.add(SessionUsage(
+            inputTokens: 100, outputTokens: 50, totalTokens: 150,
+            cachedReadTokens: nil, thoughtTokens: 10,
+            cost: 0.20, currency: "USD", contextUsed: 0, contextSize: 0))
+        b.add(SessionUsage(
+            inputTokens: 200, outputTokens: 30, totalTokens: 230,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: 0.10, currency: "USD", contextUsed: 0, contextSize: 0))
+        #expect(b.inputTokens == 300)
+        #expect(b.outputTokens == 80)
+        #expect(b.thoughtTokens == 10)
+        #expect(b.totalTokens == 380)
+        // Floating-point sums of cost values can drift; the break may be
+        // 0.30000000000000004 instead of exactly 0.3.
+        #expect(abs(b.cost - 0.30) < 0.0001)
+        #expect(b.runCount == 2)
+        #expect(b.hasData)
+    }
+
+    @Test func breakdownHasDataIsFalseWhenAllZero() {
+        let b = ModelUsageBreakdown()
+        #expect(!b.hasData)
+    }
+
+    // MARK: - DailyUsageByModel (#583)
+
+    @Test func dailyByModelAccumulatesPerModelKey() {
+        var d = DailyUsageByModel(date: "2026-07-18")
+        d.add(SessionUsage(
+            inputTokens: 1000, outputTokens: 200, totalTokens: 1200,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: 0.10, currency: "USD", contextUsed: 0, contextSize: 0,
+            modelId: "sonnet-4", modelName: "Sonnet 4"))
+        d.add(SessionUsage(
+            inputTokens: 500, outputTokens: 100, totalTokens: 600,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: 0.05, currency: "USD", contextUsed: 0, contextSize: 0,
+            modelId: "opus-4", modelName: "Opus 4"))
+        d.add(SessionUsage(
+            inputTokens: 50, outputTokens: 10, totalTokens: 60,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 0, contextSize: 0,
+            modelId: nil, modelName: nil))
+        #expect(d.byModel.count == 3)
+        #expect(d.byModel["sonnet-4"]?.inputTokens == 1000)
+        #expect(d.byModel["opus-4"]?.inputTokens == 500)
+        #expect(d.byModel[ModelUsageBreakdown.unknownModelKey]?.inputTokens == 50)
+        #expect(d.hasData)
+    }
+
+    @Test func dailyByModelSortedForDisplayPutsHeaviestFirstAndUnknownLast() {
+        var d = DailyUsageByModel(date: "2026-07-18")
+        d.add(SessionUsage(
+            inputTokens: 100, outputTokens: 50, totalTokens: 150,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 0, contextSize: 0,
+            modelId: "light-model", modelName: nil))
+        d.add(SessionUsage(
+            inputTokens: 5_000, outputTokens: 1_000, totalTokens: 6_000,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 0, contextSize: 0,
+            modelId: "heavy-model", modelName: nil))
+        d.add(SessionUsage(
+            inputTokens: 50, outputTokens: 10, totalTokens: 60,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 0, contextSize: 0,
+            modelId: nil, modelName: nil))
+        let sorted = d.sortedForDisplay
+        #expect(sorted.map(\.modelId) == ["heavy-model", "light-model", ModelUsageBreakdown.unknownModelKey])
+    }
+
+    // MARK: - itemModelBreakdownLine (#583)
+
+    @Test func itemModelLinePrefersModelNameFromUsage() {
+        let b = ModelUsageBreakdown(
+            inputTokens: 100, outputTokens: 50, thoughtTokens: 20,
+            totalTokens: 170, cost: 0.10, currency: "USD", runCount: 1)
+        let usage = SessionUsage(
+            inputTokens: 100, outputTokens: 50, totalTokens: 170,
+            cachedReadTokens: nil, thoughtTokens: 20,
+            cost: 0.10, currency: "USD", contextUsed: 0, contextSize: 0,
+            modelId: "claude-sonnet-4", modelName: "Claude Sonnet 4")
+        let line = UsageFormatter.itemModelBreakdownLine(
+            modelId: "claude-sonnet-4", breakdown: b, usage: usage)
+        #expect(line == "Claude Sonnet 4 · 100 in · 50 out · 20 thought · $0.10")
+    }
 }

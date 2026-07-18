@@ -132,6 +132,24 @@ final class QueueActivityTracker {
     /// final cumulative totals come from `itemUsage` via the `.usage` event.
     private(set) var liveUsage: [QueueItem.ID: SessionUsage] = [:]
 
+    /// Today's cumulative token usage across all completed runs (#528 spike).
+    /// Persists to UserDefaults with a date key so it survives app restarts
+    /// and resets daily. Driven by `.usage` events.
+    private(set) var todayUsage: DailyUsage = DailyUsage.load()
+
+    /// Today's per-model token/cost breakdown (#583). Persists to UserDefaults
+    /// with a daily-reset key, mirroring `todayUsage`. The menu bar renders one
+    /// disabled menu item per entry below the summary line.
+    private(set) var todayUsageByModel: DailyUsageByModel = DailyUsageByModel.load()
+
+    /// Per-run per-model usage breakdown (#583). Keyed by item ID, then by
+    /// model ID. Populated from `.usage` events (today each run emits one
+    /// merged snapshot, so most runs have a single entry — the structure
+    /// is ready for future per-phase usage events). The Activity window's
+    /// per-item detail reads this to show a model breakdown below the
+    /// aggregate line.
+    private(set) var itemUsageByModel: [QueueItem.ID: [String: ModelUsageBreakdown]] = [:]
+
     /// Per-item lightweight log file URL (`run.jsonl`) — the raw stream-json
     /// trace. Set once when `.runPaths` arrives after the run starts.
     private(set) var itemLogURLs: [QueueItem.ID: URL] = [:]
@@ -140,11 +158,6 @@ final class QueueActivityTracker {
     /// trace (per-turn JSON, permissions, stderr, summary). Set once when
     /// `.runPaths` arrives after the run starts.
     private(set) var itemDebugURLs: [QueueItem.ID: URL] = [:]
-
-    /// Today's cumulative token usage across all completed runs (#528 spike).
-    /// Persists to UserDefaults with a date key so it survives app restarts
-    /// and resets daily. Driven by `.usage` events.
-    private(set) var todayUsage: DailyUsage = DailyUsage.load()
 
     /// Accumulated progress log for the most recent extraction. Cleared on
     /// `.started`, appended on `.progress`. Drives the sidebar log text.
@@ -254,6 +267,7 @@ final class QueueActivityTracker {
         progressLogs.removeAll()
         itemUsage.removeAll()
         liveUsage.removeAll()
+        itemUsageByModel.removeAll()
         itemLogURLs.removeAll()
         itemDebugURLs.removeAll()
         streamingTranscriptItemIDs.removeAll()
@@ -361,6 +375,7 @@ final class QueueActivityTracker {
         progressLogs.removeValue(forKey: itemID)
         itemUsage.removeValue(forKey: itemID)
         liveUsage.removeValue(forKey: itemID)
+        itemUsageByModel.removeValue(forKey: itemID)
         itemLogURLs.removeValue(forKey: itemID)
         itemDebugURLs.removeValue(forKey: itemID)
         streamingTranscriptItemIDs.remove(itemID)
@@ -388,6 +403,14 @@ final class QueueActivityTracker {
     /// live token counts + model name during a run (#544 live progress).
     func liveUsage(for itemID: QueueItem.ID) -> SessionUsage? {
         liveUsage[itemID]
+    }
+
+    /// The per-model usage breakdown for a completed item (#583). Returns an
+    /// empty dict when usage wasn't captured or no model id was reported. Read
+    /// by the Activity window's per-item detail to show a model breakdown below
+    /// the aggregate line.
+    func usageBreakdown(for itemID: QueueItem.ID) -> [String: ModelUsageBreakdown] {
+        itemUsageByModel[itemID] ?? [:]
     }
 
     /// The lightweight `run.jsonl` log file URL for an item, or `nil` if the
@@ -447,8 +470,18 @@ final class QueueActivityTracker {
             // #528 spike: store per-item usage for the Activity window, and
             // accumulate today's daily total (persists to UserDefaults).
             itemUsage[id] = usage
+            // #583: also accumulate the per-model breakdown. Keyed by model id
+            // (or "unknown" when the backend didn't report one — still tracked
+            // so the numbers reconcile against the aggregate line). Each `.usage`
+            // event bumps the per-model runCount by 1, so a multi-model breakdown
+            // across many runs shows realistic counts.
+            let modelKey = usage.modelId ?? ModelUsageBreakdown.unknownModelKey
+            itemUsageByModel[id, default: [:]][modelKey, default: ModelUsageBreakdown()]
+                .add(usage)
             todayUsage.add(usage)
+            todayUsageByModel.add(usage)
             DailyUsage.save(todayUsage)
+            DailyUsageByModel.save(todayUsageByModel)
             // The run is complete — drop the in-progress snapshot so the
             // Activity window renders the final totals, not a stale live one.
             liveUsage.removeValue(forKey: id)
@@ -627,6 +660,157 @@ struct DailyUsage: Sendable, Equatable {
     }
 }
 
+// MARK: - Per-model usage breakdown (#583)
+
+/// One model's contribution to a day's (or a run's) token/cost usage. Tokens
+/// are summed across all runs that used this model; cost is the sum of the
+/// per-run `SessionUsage.cost` amounts. Kept as a plain struct (no `EventLoop`
+/// concerns) so it can be accumulated on the main actor and persisted to
+/// `UserDefaults`. Mirrors `DailyUsage`'s shape but per-model.
+struct ModelUsageBreakdown: Codable, Sendable, Equatable {
+    var inputTokens: Int = 0
+    var outputTokens: Int = 0
+    var thoughtTokens: Int = 0
+    var totalTokens: Int = 0
+    var cost: Double = 0
+    var currency: String = "USD"
+    var runCount: Int = 0
+
+    /// Placeholder model id used when the backend didn't report one (older
+    /// agents, non-ACP backends). Kept as a constant so the bucket is stable
+    /// across loads/persists, and so the formatter can render a friendly
+    /// label ("Unknown model") rather than the literal sentinel.
+    static let unknownModelKey = "__unknown__"
+
+    /// Accumulate a `SessionUsage` snapshot into this breakdown. Each call
+    /// represents one run's contribution — `runCount` is bumped by 1 so a
+    /// multi-model day shows sensible per-model run counts.
+    mutating func add(_ usage: SessionUsage) {
+        inputTokens += usage.inputTokens
+        outputTokens += usage.outputTokens
+        thoughtTokens += (usage.thoughtTokens ?? 0)
+        totalTokens += usage.totalTokens
+        if let c = usage.cost { cost += c }
+        if let cur = usage.currency, !cur.isEmpty { currency = cur }
+        runCount += 1
+    }
+
+    /// True if this breakdown has any non-zero data.
+    var hasData: Bool {
+        totalTokens > 0 || cost > 0 || runCount > 0
+    }
+}
+
+// MARK: - DailyUsageByModel (#583)
+
+/// Per-model breakdown for a single calendar day. Persists to `UserDefaults`
+/// with a date key that resets daily — mirrors `DailyUsage`'s lifecycle. Used
+/// by the menu bar to render one disabled item per model below the summary
+/// line: "Sonnet 4 · 52K in · 8K out · 1.2K thought · $0.89".
+struct DailyUsageByModel: Sendable, Equatable {
+    /// `[modelId: breakdown]`. Keyed by the raw model id reported by the
+    /// agent (e.g. "claude-sonnet-4-5") — the display name is resolved lazily
+    /// by the formatter, since the friendly name isn't on the usage event
+    /// (only on `ModelsInfo.availableModels`, which the menu bar controller
+    /// doesn't hold).
+    var byModel: [String: ModelUsageBreakdown] = [:]
+    var date: String
+
+    private static let storageKey = "sdw_dailyUsageByModel_v1"
+
+    /// Load today's per-model usage from UserDefaults. If the stored date is
+    /// stale (yesterday or older), returns a fresh empty total for today.
+    static func load() -> DailyUsageByModel {
+        let today = Self.todayString()
+        guard let dict = UserDefaults.standard.dictionary(forKey: storageKey),
+              let storedDate = dict["date"] as? String,
+              storedDate == today,
+              let modelsDict = dict["byModel"] as? [String: [String: Any]]
+        else {
+            return DailyUsageByModel(date: today)
+        }
+        var byModel: [String: ModelUsageBreakdown] = [:]
+        for (modelId, raw) in modelsDict {
+            guard let b = ModelUsageBreakdown(from: raw) else { continue }
+            byModel[modelId] = b
+        }
+        return DailyUsageByModel(byModel: byModel, date: storedDate)
+    }
+
+    /// Persist to UserDefaults. Called after each `.usage` event.
+    static func save(_ usage: DailyUsageByModel) {
+        let modelsDict: [String: [String: Any]] = usage.byModel.mapValues { b in
+            [
+                "inputTokens": b.inputTokens,
+                "outputTokens": b.outputTokens,
+                "thoughtTokens": b.thoughtTokens,
+                "totalTokens": b.totalTokens,
+                "cost": b.cost,
+                "currency": b.currency,
+                "runCount": b.runCount
+            ]
+        }
+        UserDefaults.standard.set([
+            "byModel": modelsDict,
+            "date": usage.date
+        ] as [String: Any], forKey: storageKey)
+    }
+
+    /// Accumulate a run's usage into the per-model breakdown for this day.
+    mutating func add(_ usage: SessionUsage) {
+        // Guard against double-counting if the date rolled over mid-session.
+        if date != Self.todayString() {
+            self = DailyUsageByModel(date: Self.todayString())
+        }
+        let key = usage.modelId ?? ModelUsageBreakdown.unknownModelKey
+        byModel[key, default: ModelUsageBreakdown()].add(usage)
+    }
+
+    /// True if any model has tracked data.
+    var hasData: Bool {
+        byModel.values.contains { $0.hasData }
+    }
+
+    /// The breakdowns sorted for menu display: largest total tokens first
+    /// (so the heaviest model is at the top of the per-model list), with the
+    /// unknown-model bucket always last.
+    var sortedForDisplay: [(modelId: String, breakdown: ModelUsageBreakdown)] {
+        byModel
+            .filter { $0.value.hasData }
+            .sorted { lhs, rhs in
+                let lhsUnknown = lhs.key == ModelUsageBreakdown.unknownModelKey
+                let rhsUnknown = rhs.key == ModelUsageBreakdown.unknownModelKey
+                if lhsUnknown != rhsUnknown { return rhsUnknown }
+                return lhs.value.totalTokens > rhs.value.totalTokens
+            }
+            .map { (modelId: $0.key, breakdown: $0.value) }
+    }
+
+    private static func todayString() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = .current
+        return formatter.string(from: Date())
+    }
+}
+
+private extension ModelUsageBreakdown {
+    /// Decode from the `[String: Any]` shape written to UserDefaults by
+    /// `DailyUsageByModel.save`. Returns nil if the dict is malformed.
+    init?(from dict: [String: Any]) {
+        self.inputTokens = dict["inputTokens"] as? Int ?? 0
+        self.outputTokens = dict["outputTokens"] as? Int ?? 0
+        self.thoughtTokens = dict["thoughtTokens"] as? Int ?? 0
+        self.totalTokens = dict["totalTokens"] as? Int ?? 0
+        self.cost = dict["cost"] as? Double ?? 0
+        self.currency = dict["currency"] as? String ?? "USD"
+        self.runCount = dict["runCount"] as? Int ?? 0
+        // A malformed dict isn't an error worth crashing on — the day's
+        // breakdown is best-effort cosmetic data, not the source of truth.
+        guard self.hasData else { return nil }
+    }
+}
+
 // MARK: - Usage formatting (#528 spike)
 
 /// Pure formatting helpers for token/cost usage display. No UI — just
@@ -729,11 +913,13 @@ enum UsageFormatter {
             }
         }
 
-        // Provider (harness) + model — the "what ran it" context.
+        // Provider (harness) + model — the "what ran it" context. Prefer the
+        // human-readable name (e.g. "Claude Sonnet 4.5") when reported; fall
+        // back to the raw `modelId` so a stale model id is still visible.
         if let label = usage.providerLabel {
             parts.append(label)
         }
-        if let model = usage.modelId {
+        if let model = usage.modelName ?? usage.modelId {
             parts.append(model)
         }
 
@@ -787,6 +973,82 @@ enum UsageFormatter {
             if let thought = usage.thoughtTokens, thought > 0 {
                 parts.append("\(tokens(thought)) thought")
             }
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// A single per-model menu line: "Sonnet 4 · 52K in · 8K out · 1.2K thought
+    /// · $0.89". The model display name is resolved best-effort: the daily
+    /// store is keyed by raw `modelId` (the menu bar doesn't hold
+    /// `ModelsInfo.availableModels`), so we render the id as-is. Callers may
+    /// pass a friendly-name lookup if one is available.
+    ///
+    /// The format mirrors the issue spec:
+    ///
+    ///     "  Sonnet 4 · 52K in · 8K out · 1.2K thought · $0.89"
+    ///
+    /// Tokens use the compact form (`XK`/`XM`); cost renders as `$X.XX` or is
+    /// omitted when zero. `runCount > 1` appends " · N runs" so the user can
+    /// see when many small runs added up to a model's total — that's the
+    /// signal a flat aggregate hides.
+    static func modelBreakdownLine(
+        modelId: String,
+        breakdown: ModelUsageBreakdown,
+        displayNameProvider: ((String) -> String?)? = nil
+    ) -> String {
+        let label: String
+        if modelId == ModelUsageBreakdown.unknownModelKey {
+            label = "Unknown model"
+        } else if let friendly = displayNameProvider?(modelId) {
+            label = friendly
+        } else {
+            label = modelId
+        }
+        var parts: [String] = [
+            label,
+            "\(tokens(breakdown.inputTokens)) in",
+            "\(tokens(breakdown.outputTokens)) out"
+        ]
+        if breakdown.thoughtTokens > 0 {
+            parts.append("\(tokens(breakdown.thoughtTokens)) thought")
+        }
+        if let cost = cost(breakdown.cost, currency: breakdown.currency) {
+            parts.append(cost)
+        }
+        if breakdown.runCount > 1 {
+            parts.append("\(breakdown.runCount) runs")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// A per-item per-model line — same shape as the daily version but pulled
+    /// from the per-item `ModelUsageBreakdown` (today a run's single snapshot
+    /// produces a one-entry breakdown). Reads `SessionUsage`-style fields where
+    /// available so the label can show the friendly `modelName`.
+    static func itemModelBreakdownLine(
+        modelId: String,
+        breakdown: ModelUsageBreakdown,
+        usage: SessionUsage?
+    ) -> String {
+        let label: String
+        if modelId == ModelUsageBreakdown.unknownModelKey {
+            label = usage?.modelName ?? "Unknown model"
+        } else if let name = usage?.modelName {
+            label = name
+        } else {
+            label = modelId
+        }
+        var parts: [String] = [
+            label,
+            "\(tokens(breakdown.inputTokens)) in",
+            "\(tokens(breakdown.outputTokens)) out"
+        ]
+        if breakdown.thoughtTokens > 0 {
+            parts.append("\(tokens(breakdown.thoughtTokens)) thought")
+        }
+        if let c = usage?.cost, c > 0,
+           let cost = cost(c, currency: usage?.currency) {
+            parts.append(cost)
         }
         return parts.joined(separator: " · ")
     }
