@@ -481,4 +481,84 @@ import ACPModel
         #expect(result.contains("Use `wikictl` to read and write."))
         #expect(result.contains("Ingest this paper"))
     }
+
+    // MARK: - Phase 4: Usage/cost capture
+
+    /// The translator still returns `[]` for `.usageUpdate` — the data is
+    /// consumed internally by the backend's notification drain, not surfaced
+    /// as an AgentEvent in the transcript. This test pins that contract.
+    @Test
+    func usageUpdateStillEmitsNoAgentEvents() {
+        let translator = ACPEventTranslator()
+        let update = SessionUpdate.usageUpdate(UsageUpdate(
+            used: 5000,
+            size: 10000,
+            cost: Cost(amount: 0.03, currency: "USD")))
+        #expect(translator.translate(update) == [])
+    }
+
+    /// The `SessionUsage` snapshot struct carries both context window data
+    /// (from `UsageUpdate`) and cumulative token totals (from `Usage`).
+    @Test
+    func sessionUsageStructCarriesAllFields() {
+        let usage = SessionUsage(
+            inputTokens: 100,
+            outputTokens: 200,
+            totalTokens: 300,
+            cachedReadTokens: 50,
+            thoughtTokens: 10,
+            cost: 0.05,
+            currency: "USD",
+            contextUsed: 5000,
+            contextSize: 10000)
+        #expect(usage.inputTokens == 100)
+        #expect(usage.outputTokens == 200)
+        #expect(usage.totalTokens == 300)
+        #expect(usage.cachedReadTokens == 50)
+        #expect(usage.thoughtTokens == 10)
+        #expect(usage.cost == 0.05)
+        #expect(usage.currency == "USD")
+        #expect(usage.contextUsed == 5000)
+        #expect(usage.contextSize == 10000)
+    }
+
+    /// `SessionUsage` with optional fields set to nil (agent didn't report them).
+    @Test
+    func sessionUsageStructWithNilOptionals() {
+        let usage = SessionUsage(
+            inputTokens: 10,
+            outputTokens: 20,
+            totalTokens: 30,
+            cachedReadTokens: nil,
+            thoughtTokens: nil,
+            cost: nil,
+            currency: nil,
+            contextUsed: 0,
+            contextSize: 0)
+        #expect(usage.cachedReadTokens == nil)
+        #expect(usage.thoughtTokens == nil)
+        #expect(usage.cost == nil)
+        #expect(usage.currency == nil)
+        #expect(usage.contextUsed == 0)
+        #expect(usage.contextSize == 0)
+    }
+
+    // MARK: - Phase 4: Default config
+
+    /// Parallel executors default to false (conservative — requires Phase 3
+    /// fork + concurrent session probe).
+    @Test
+    func parallelExecutorsDefaultsToFalse() async {
+        let backend = ACPBackend()
+        let enabled = await backend.isParallelExecutorsEnabled()
+        #expect(enabled == false)
+    }
+
+    /// Parallel executors can be explicitly enabled (for future probe tests).
+    @Test
+    func parallelExecutorsCanBeEnabled() async {
+        let backend = ACPBackend(parallelExecutors: true)
+        let enabled = await backend.isParallelExecutorsEnabled()
+        #expect(enabled == true)
+    }
 }

@@ -175,6 +175,13 @@ public actor ACPBackend: AgentBackend {
     /// saved so `resume()` can re-bind it on a new subprocess.
     private var savedOnExit: (@Sendable (Int) -> Void)?
 
+    /// Phase 4: per-session usage trackers (cumulative token/cost from
+    /// `UsageUpdate` + `SessionPromptResponse.usage`). Keyed by
+    /// `SessionHandle.id`. Created in `createSession()` /
+    /// `registerResumedSession()`; cleaned up in `closeSession()` / `cancel()`.
+    /// Read by `sessionUsage(for:)` / `contextUsage(for:)` after a turn drains.
+    private var usageStates: [String: SessionUsageState] = [:]
+
     /// The injected permission policy (yolo vs alwaysAsk). Defaults to `yolo`
     /// — the safe default per the design doc's caveat (always-ask enforcement
     /// depends on the agent emitting `request_permission`, which not all do).
@@ -195,18 +202,29 @@ public actor ACPBackend: AgentBackend {
     /// Watchdog poll interval (seconds).
     private let watchdogPollInterval: TimeInterval
 
+    /// Phase 4: whether to run executor sessions in parallel via
+    /// `withTaskGroup`. Defaults to `false` (serial executors — current
+    /// behavior). This requires the agent to handle concurrent `session/prompt`
+    /// calls on different sessions of the same subprocess, plus Phase 3's
+    /// `forkSession` for the parallel-fork pattern. A probe test (Phase 4
+    /// prerequisite) confirms whether the agent supports this. Until then, the
+    /// conservative serial default is safe.
+    private let parallelExecutors: Bool
+
     init(
         permissionPolicy: PermissionPolicy = .bypass,
         capabilities: ClientCapabilities = ACPBackend.defaultCapabilities,
         turnIdleTimeout: TimeInterval = TurnLivenessPolicy.defaultIdleTimeout,
         turnCeilingTimeout: TimeInterval = TurnLivenessPolicy.defaultCeilingTimeout,
-        watchdogPollInterval: TimeInterval = TurnLivenessPolicy.defaultPollInterval
+        watchdogPollInterval: TimeInterval = TurnLivenessPolicy.defaultPollInterval,
+        parallelExecutors: Bool = false
     ) {
         self.permissionPolicy = permissionPolicy
         self.capabilities = capabilities
         self.turnIdleTimeout = turnIdleTimeout
         self.turnCeilingTimeout = turnCeilingTimeout
         self.watchdogPollInterval = watchdogPollInterval
+        self.parallelExecutors = parallelExecutors
     }
 
     /// `fs` read/write + `terminal` — mirrors paseo's `BASE_ACP_CLIENT_CAPABILITIES`
@@ -488,6 +506,9 @@ public actor ACPBackend: AgentBackend {
             systemPromptInjected: false
         )
 
+        // Phase 4: create a usage tracker for this session.
+        usageStates[sessionID] = SessionUsageState()
+
         // Rebind onExit so the latest caller's callback fires on process exit.
         // With a warm subprocess, multiple sessions share one permission delegate;
         // the last binding wins (each phase's onExit is phase-tracking telemetry
@@ -530,6 +551,10 @@ public actor ACPBackend: AgentBackend {
         let idleTimeout = turnIdleTimeout
         let ceilingTimeout = turnCeilingTimeout
         let pollInterval = watchdogPollInterval
+        // Phase 4: per-session usage tracker. Captured by reference into the
+        // drain task (UsageUpdate) and prompt task (Usage). Same
+        // @unchecked Sendable pattern as TurnCompletionFlag / ProcessHealthFlag.
+        let usageState = usageStates[handle.id]
 
         // `.unbounded` buffering — the @MainActor consumer drains promptly and
         // no events may be dropped (same invariant as the CLI backend).
@@ -615,7 +640,7 @@ public actor ACPBackend: AgentBackend {
             // stopReason), while notifications stream in via the fanout
             // subscription. The prompt task and watchdog are both cancelled on
             // consumer termination.
-            let promptTask = Task { [client, sessionId, fanout, completionFlag, processHealth, promptText] in
+            let promptTask = Task { [client, sessionId, fanout, completionFlag, processHealth, promptText, usageState] in
                 // Subscribe to the session-lifetime fanout (NOT the SDK's
                 // `client.notifications` — that's single-consumer; re-acquiring
                 // it per turn was cause 6). Turns are serialized by the
@@ -626,10 +651,19 @@ public actor ACPBackend: AgentBackend {
                         if Task.isCancelled { return }
                         guard notification.method == "session/update" else { continue }
                         guard let params = notification.params else { continue }
-                        let events = ACPBackend.translateNotification(params: params, sessionId: sessionId, translator: translator)
-                        DebugLog.agent("ACPBackend: session/update → \(events.count) AgentEvent(s)") // TEMP DEBUG (existed; re-tagged)
-                        for event in events {
+                        let result = ACPBackend.translateNotification(params: params, sessionId: sessionId, translator: translator)
+                        DebugLog.agent("ACPBackend: session/update → \(result.events.count) AgentEvent(s)") // TEMP DEBUG (existed; re-tagged)
+                        for event in result.events {
                             continuation.yield(event)
+                        }
+                        // Phase 4: capture usage_update (context window + cost).
+                        // Consumed internally — not surfaced as an AgentEvent.
+                        if let usageUpdate = result.usageUpdate {
+                            usageState?.captureUsageUpdate(
+                                used: usageUpdate.used,
+                                size: usageUpdate.size,
+                                cost: usageUpdate.cost?.amount,
+                                currency: usageUpdate.cost?.currency)
                         }
                     }
                 }
@@ -641,6 +675,17 @@ public actor ACPBackend: AgentBackend {
                         sessionId: sessionId,
                         content: [.text(TextContent(text: promptText))]
                     )
+                    // Phase 4: capture per-turn final usage (token totals from
+                    // SessionPromptResponse.usage). Previously discarded — now
+                    // accumulated for budget tracking (#528).
+                    if let turnUsage = response.usage {
+                        usageState?.captureTurnUsage(
+                            inputTokens: turnUsage.inputTokens,
+                            outputTokens: turnUsage.outputTokens,
+                            totalTokens: turnUsage.totalTokens,
+                            cachedReadTokens: turnUsage.cachedReadTokens,
+                            thoughtTokens: turnUsage.thoughtTokens)
+                    }
                     // If the watchdog already resolved the turn (e.g. it fired
                     // just as sendPrompt returned), skip — continuation is done.
                     guard !completionFlag.isDone else { return }
@@ -814,6 +859,8 @@ public actor ACPBackend: AgentBackend {
             systemPrompt: "",
             systemPromptInjected: false  // resumed session already has context
         )
+        // Phase 4: create a usage tracker for this resumed session.
+        usageStates[sessionID] = SessionUsageState()
         resumableSessionId = acpSessionId
         DebugLog.agent("ACPBackend.resume: resumed session \(acpSessionId.value) (handle \(sessionID)) ready") // TEMP DEBUG
         return SessionHandle(id: sessionID)
@@ -841,6 +888,8 @@ public actor ACPBackend: AgentBackend {
 
     public func cancel(_ session: SessionHandle) async {
         let record = sessions.removeValue(forKey: session.id)
+        // Phase 4: clean up the usage tracker.
+        usageStates.removeValue(forKey: session.id)
         // Phase 2: clear crash-recovery state — this is a full teardown, not
         // a crash. No session should be resumed from a cancelled run.
         resumableSessionId = nil
@@ -902,6 +951,8 @@ public actor ACPBackend: AgentBackend {
             DebugLog.agent("ACPBackend.closeSession: no session for handle \(handle.id) — no-op") // TEMP DEBUG
             return
         }
+        // Phase 4: clean up the usage tracker for this session.
+        usageStates.removeValue(forKey: handle.id)
         // Phase 2: clear the resumable session ID — this was an intentional
         // close (phase boundary), not a crash. We should NOT resume a closed
         // session on a new subprocess.
@@ -1004,6 +1055,45 @@ public actor ACPBackend: AgentBackend {
 
         DebugLog.agent("ACPBackend.forkSession: forked session \(forkedSessionId.value) (handle \(sessionID)) ready") // TEMP DEBUG
         return SessionHandle(id: sessionID)
+    }
+
+    // MARK: - Usage tracking (Phase 4)
+
+    /// Cumulative token usage and cost for a session. Returns nil if the
+    /// session is gone (closed/cancelled) or never existed. Read after each
+    /// phase's stream drains — the orchestrator accumulates this into a
+    /// per-run total for budget-aware ingestion (#528).
+    ///
+    /// The returned struct is a snapshot: it reflects all `usage_update`
+    /// notifications and `SessionPromptResponse.usage` values captured so far.
+    func sessionUsage(for sessionHandle: SessionHandle) async -> SessionUsage? {
+        usageStates[sessionHandle.id]?.snapshot()
+    }
+
+    /// The current context window usage for a session — `used` tokens consumed
+    /// out of `size` total. Returns nil if the session is gone or no
+    /// `usage_update` has been received yet. The orchestrator checks this to
+    /// proactively manage context windows (64% → artifact write; 80% → close +
+    /// fresh session).
+    func contextUsage(for sessionHandle: SessionHandle) async -> (used: Int, size: Int)? {
+        usageStates[sessionHandle.id]?.contextUsage()
+    }
+
+    /// Whether the context window has exceeded 80% — the orchestrator checks
+    /// this after each turn to decide whether to close + restart the session
+    /// (context rot pollutes quality at high usage ratios).
+    func isContextCritical(for sessionHandle: SessionHandle) async -> Bool {
+        usageStates[sessionHandle.id]?.contextCritical ?? false
+    }
+
+    // MARK: - Parallel executors config (Phase 4, deferred)
+
+    /// Phase 4: whether parallel executor sessions are enabled. Defaults to
+    /// `false`. Requires Phase 3 (`forkSession`) + a concurrent-session probe
+    /// test. When `true`, the orchestrator runs executors via `withTaskGroup`;
+    /// when `false` (current), executors run serially.
+    func isParallelExecutorsEnabled() -> Bool {
+        parallelExecutors
     }
 
     // MARK: - Model discovery (#329)
@@ -1198,21 +1288,183 @@ public actor ACPBackend: AgentBackend {
     /// pure translator. Tolerant: a decode failure yields a `.raw` event rather
     /// than throwing (a malformed update must never crash a turn — same
     /// invariant as `AgentEventParser`).
+    ///
+    /// Phase 4: also extracts the `UsageUpdate` (if the notification is a
+    /// `usage_update`) so the backend can capture context window + cost data.
+    /// The translator still returns `[]` for `.usageUpdate` (no AgentEvent —
+    /// the data is consumed internally, not displayed in the transcript).
     private static func translateNotification(
         params: AnyCodable,
         sessionId: SessionId,
         translator: ACPEventTranslator
-    ) -> [AgentEvent] {
+    ) -> (events: [AgentEvent], usageUpdate: UsageUpdate?) {
         do {
             let data = try JSONEncoder().encode(params)
             let envelope = try JSONDecoder().decode(SessionUpdateNotification.self, from: data)
             // Scope to our session (the shared notification stream is global).
-            guard envelope.sessionId.value == sessionId.value else { return [] }
+            guard envelope.sessionId.value == sessionId.value else { return ([], nil) }
             let events = translator.translate(envelope.update)
-            return events
+            // Phase 4: extract the UsageUpdate for context/cost monitoring.
+            let usageUpdate = envelope.update.usage
+            return (events, usageUpdate)
         } catch {
-            return [.raw("ACP session/update decode error: \(error.localizedDescription)")]
+            return ([.raw("ACP session/update decode error: \(error.localizedDescription)")], nil)
         }
+    }
+}
+
+// MARK: - Session usage tracking (Phase 4)
+
+/// Cumulative token usage and cost for a session. This is the data surface for
+/// #528 (budget-aware ingestion) — the orchestrator reads it after each phase
+/// to enforce spend/token caps. Both the streamed `UsageUpdate` (context
+/// window size + used + per-turn cost) and the final `Usage` (per-turn token
+/// totals from `SessionPromptResponse.usage`) are captured and merged here.
+///
+/// Created in `createSession()` / `registerResumedSession()` — one per
+/// `SessionHandle`. The thread-safe `SessionUsageState` (internal) is the
+/// live accumulator; this snapshot struct is what callers read.
+public struct SessionUsage: Sendable {
+    /// Cumulative input tokens across all turns (from `Usage.inputTokens`).
+    public let inputTokens: Int
+    /// Cumulative output tokens across all turns (from `Usage.outputTokens`).
+    public let outputTokens: Int
+    /// Cumulative total tokens (from `Usage.totalTokens`).
+    public let totalTokens: Int
+    /// Cumulative cached-read tokens (from `Usage.cachedReadTokens`), if reported.
+    public let cachedReadTokens: Int?
+    /// Cumulative thought/reasoning tokens (from `Usage.thoughtTokens`), if reported.
+    public let thoughtTokens: Int?
+    /// The last reported cost amount (from `UsageUpdate.cost.amount`), if any.
+    public let cost: Double?
+    /// The cost currency (e.g. "USD"), if cost was reported.
+    public let currency: String?
+    /// Tokens used in the context window (from `UsageUpdate.used`).
+    public let contextUsed: Int
+    /// Total context window size (from `UsageUpdate.size`).
+    public let contextSize: Int
+
+    public init(
+        inputTokens: Int,
+        outputTokens: Int,
+        totalTokens: Int,
+        cachedReadTokens: Int?,
+        thoughtTokens: Int?,
+        cost: Double?,
+        currency: String?,
+        contextUsed: Int,
+        contextSize: Int
+    ) {
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.totalTokens = totalTokens
+        self.cachedReadTokens = cachedReadTokens
+        self.thoughtTokens = thoughtTokens
+        self.cost = cost
+        self.currency = currency
+        self.contextUsed = contextUsed
+        self.contextSize = contextSize
+    }
+}
+
+/// Thread-safe accumulator for per-session usage data. Captured in the
+/// `ACPBackend.send()` continuation closure alongside `TurnCompletionFlag` and
+/// `ProcessHealthFlag` — the off-actor drain Task + prompt Task write to it,
+/// and the actor reads it via `sessionUsage(for:)` / `contextUsage(for:)` after
+/// the turn stream finishes.
+///
+/// `@unchecked Sendable` with an internal lock — same pattern as
+/// `TurnCompletionFlag` and `ProcessHealthFlag`.
+private final class SessionUsageState: @unchecked Sendable {
+    private let lock = NSLock()
+
+    // Cumulative per-turn token totals (from SessionPromptResponse.usage)
+    private var _cumulativeInputTokens = 0
+    private var _cumulativeOutputTokens = 0
+    private var _cumulativeTotalTokens = 0
+    private var _cumulativeCachedReadTokens = 0
+    private var _cumulativeThoughtTokens = 0
+
+    // Last streamed usage_update (context window + cost)
+    private var _lastContextUsed = 0
+    private var _lastContextSize = 0
+    private var _lastCost: Double?
+    private var _lastCurrency: String?
+
+    // Phase 4 context monitoring thresholds
+    private var _contextCritical = false  // >= 80%
+
+    /// Capture a streamed `UsageUpdate` (context window + cost). Called from
+    /// the notification drain Task.
+    func captureUsageUpdate(
+        used: Int,
+        size: Int,
+        cost: Double?,
+        currency: String?
+    ) {
+        lock.lock()
+        _lastContextUsed = used
+        _lastContextSize = size
+        _lastCost = cost
+        _lastCurrency = currency
+        // Check context monitoring thresholds
+        if size > 0 {
+            let ratio = Double(used) / Double(size)
+            if ratio >= 0.64 && ratio < 0.80 {
+                DebugLog.agent("ACPBackend: context window at \(Int(ratio * 100))% — proactive artifact write recommended")
+            } else if ratio >= 0.80 {
+                DebugLog.agent("ACPBackend: context window at \(Int(ratio * 100))% — cycling session recommended")
+                _contextCritical = true
+            }
+        }
+        lock.unlock()
+    }
+
+    /// Capture per-turn final `Usage` (token totals). Called from the prompt
+    /// Task after `sendPrompt` returns.
+    func captureTurnUsage(
+        inputTokens: Int,
+        outputTokens: Int,
+        totalTokens: Int,
+        cachedReadTokens: Int?,
+        thoughtTokens: Int?
+    ) {
+        lock.lock()
+        _cumulativeInputTokens += inputTokens
+        _cumulativeOutputTokens += outputTokens
+        _cumulativeTotalTokens += totalTokens
+        if let cached = cachedReadTokens { _cumulativeCachedReadTokens += cached }
+        if let thought = thoughtTokens { _cumulativeThoughtTokens += thought }
+        lock.unlock()
+    }
+
+    /// Read a snapshot of the current cumulative usage. Called from the actor.
+    func snapshot() -> SessionUsage {
+        lock.lock(); defer { lock.unlock() }
+        return SessionUsage(
+            inputTokens: _cumulativeInputTokens,
+            outputTokens: _cumulativeOutputTokens,
+            totalTokens: _cumulativeTotalTokens,
+            cachedReadTokens: _cumulativeCachedReadTokens > 0 ? _cumulativeCachedReadTokens : nil,
+            thoughtTokens: _cumulativeThoughtTokens > 0 ? _cumulativeThoughtTokens : nil,
+            cost: _lastCost,
+            currency: _lastCurrency,
+            contextUsed: _lastContextUsed,
+            contextSize: _lastContextSize
+        )
+    }
+
+    /// Read the current context window usage ratio. Called from the actor.
+    func contextUsage() -> (used: Int, size: Int) {
+        lock.lock(); defer { lock.unlock() }
+        return (_lastContextUsed, _lastContextSize)
+    }
+
+    /// Whether the context window has exceeded 80% — the orchestrator checks
+    /// this after each turn to decide whether to close + restart the session.
+    var contextCritical: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _contextCritical
     }
 }
 
