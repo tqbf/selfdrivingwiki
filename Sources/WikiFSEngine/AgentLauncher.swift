@@ -1439,6 +1439,16 @@ public final class AgentLauncher {
     /// didn't unblock sendPrompt) and the process is truly wedged.
     nonisolated static let watchdogStallThreshold: TimeInterval = 180
 
+    /// Watchdog heartbeat poll interval (seconds). The loop sleeps this long
+    /// between idle-seconds checks.
+    nonisolated static let watchdogPollInterval: TimeInterval = 3
+
+    /// Grace period (seconds) after `stopAgent()` before escalating to SIGTERM.
+    nonisolated static let sigtermGracePeriod: TimeInterval = 10
+
+    /// Grace period (seconds) after SIGTERM before escalating to SIGKILL.
+    nonisolated static let sigkillGracePeriod: TimeInterval = 5
+
     /// Pure stall-detection decision for the launcher watchdog. Extracted so
     /// the threshold logic is unit-testable without driving launcher state.
     /// - Returns: true if the watchdog should escalate (stopAgent + kill).
@@ -1467,7 +1477,7 @@ public final class AgentLauncher {
         watchdogTask?.cancel()
         watchdogTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
+                try? await Task.sleep(for: .seconds(Self.watchdogPollInterval))
                 guard let self, self.isRunning else { return }
                 let pid = self.currentProcessID ?? -1
                 let idle = self.lastActivityAt.map { Date().timeIntervalSince($0) } ?? -1
@@ -1501,13 +1511,13 @@ public final class AgentLauncher {
         guard pid > 0 else { return }
         Task { @MainActor in
             // Phase 1: wait for cancel to take effect.
-            try? await Task.sleep(for: .seconds(10))
+            try? await Task.sleep(for: .seconds(Self.sigtermGracePeriod))
             if Self.isProcessAlive(pid) {
                 DebugLog.agent("watchdog: cancel didn't kill pid=\(pid), sending SIGTERM to process group")
                 kill(-pid, SIGTERM)
 
                 // Phase 2: wait for SIGTERM.
-                try? await Task.sleep(for: .seconds(5))
+                try? await Task.sleep(for: .seconds(Self.sigkillGracePeriod))
                 if Self.isProcessAlive(pid) {
                     DebugLog.agent("watchdog: SIGTERM didn't kill pid=\(pid), sending SIGKILL to process group")
                     kill(-pid, SIGKILL)
