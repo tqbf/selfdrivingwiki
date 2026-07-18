@@ -223,8 +223,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
         // Settings — moved here from the "Self Driving Wiki" app menu (the
         // status item is reachable even in accessory mode; the app menu
-        // isn't). Opens the Settings scene via the same selector the gear
-        // buttons use (`showSettingsWindow:`).
+        // isn't). Opens the Settings scene via the `OpenWindowBridge`
+        // `openSettings` closure, which is wired from `@Environment(\.openSettings)`
+        // — the same supported SwiftUI API the gear buttons use. The old
+        // `sendAction(showSettingsWindow:)` selector was unreliable: it walks
+        // the responder chain, which has no handler when all windows are
+        // closed (accessory mode) or after the auto-generated Settings menu
+        // item was removed by `removeRedundantAppMenuItems`.
         let settingsItem = NSMenuItem(
             title: "Settings…",
             action: #selector(openSettings(_:)),
@@ -303,12 +308,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         activateWikiWindow()
     }
 
-    /// Open the Settings window. Sends the Settings scene's action
-    /// (`showSettingsWindow:`) — the same selector the activity-window gear
-    /// buttons use — so a single code path opens Settings everywhere.
+    /// Open the Settings window. Calls the `OpenWindowBridge`'s
+    /// `openSettings` closure — wired from `@Environment(\.openSettings)`
+    /// inside `WindowBridgeProbe` — so a single supported code path opens
+    /// Settings everywhere (gear buttons, "Open Settings…", status item).
     @objc private func openSettings(_ sender: NSMenuItem?) {
         NSApplication.shared.activate(ignoringOtherApps: true)
-        NSApplication.shared.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        openWindowBridge.openSettings?()
     }
 
     /// Bring a wiki window to the front. `openTab` switches the tab inside
