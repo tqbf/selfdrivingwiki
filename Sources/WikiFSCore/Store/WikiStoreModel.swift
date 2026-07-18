@@ -1917,10 +1917,21 @@ public final class WikiStoreModel {
     ) async throws -> URLFetchService.FetchOutcome {
         #if PODCAST_TRANSCRIPTS
         // Delegate to the podcast-aware overload so routing is in one place.
-        return try await addURL(rawInput, fetcher: fetcher, podcastFetcher: ApplePodcastTranscriptService.bundled())
+        return try await addURL(
+            rawInput, fetcher: fetcher,
+            podcastFetcher: ApplePodcastTranscriptService.bundled(),
+            youtubeFetcher: YouTubeTranscriptService(fetcher: fetcher))
         #else
         // Phase 4b: byteless external-embed media works without the podcast
-        // helper too (it needs no network — pure URL parsing).
+        // helper too. YouTube is routed FIRST so its caption transcript is
+        // extracted (best-effort, no API key) alongside the embed; the other
+        // providers (Vimeo/Spotify/SoundCloud/remote-media) fall through to the
+        // pure-URL byteless path.
+        if let outcome = try await youtubeEmbedAndTranscriptOutcome(
+            rawInput, youtubeFetcher: YouTubeTranscriptService(fetcher: fetcher))
+        {
+            return outcome
+        }
         if let outcome = try bytelessMediaOutcome(rawInput) {
             return outcome
         }
@@ -1937,7 +1948,8 @@ public final class WikiStoreModel {
     public func addURL(
         _ rawInput: String,
         fetcher: any URLFetchService.URLResourceFetcher,
-        podcastFetcher: (any PodcastTranscriptFetching)?
+        podcastFetcher: (any PodcastTranscriptFetching)?,
+        youtubeFetcher: (any YouTubeTranscriptFetching)? = nil
     ) async throws -> URLFetchService.FetchOutcome {
         // An Apple Podcasts EPISODE link is recognized before the generic web
         // fetch: its HTML is the useless player page, so we route to the
@@ -1976,8 +1988,14 @@ public final class WikiStoreModel {
                 kind: .podcastTranscript)
         }
         // Phase 4b: byteless external-embed media (provider iframes + direct-
-        // remote). Recognized by pure URL parsing, after apple-podcast and
-        // before the website fetch. Creates a byteless source (no bytes fetched).
+        // remote). YouTube is routed to the transcript-extracting path FIRST so
+        // its captions are extracted (best-effort, no API key) alongside the
+        // embed; the other providers fall through to the pure-URL byteless path.
+        if let outcome = try await youtubeEmbedAndTranscriptOutcome(
+            rawInput, youtubeFetcher: youtubeFetcher)
+        {
+            return outcome
+        }
         if let outcome = try bytelessMediaOutcome(rawInput) {
             return outcome
         }
@@ -2021,6 +2039,89 @@ public final class WikiStoreModel {
         openTab(.source(summary.id), title: summary.effectiveName)
         return URLFetchService.FetchOutcome(
             filename: match.filename, byteSize: 0, kind: kind)
+    }
+
+    /// YouTube URL → byteless embed source + best-effort caption transcript.
+    /// Mirrors the podcast §11 byteless model: the source is byteless (a pointer
+    /// to the YouTube player), and the transcript markdown is stored as the
+    /// source's derived markdown version — `appendProcessedMarkdown(
+    /// origin: .transcript)` — so the reader shows the transcript alongside the
+    /// player iframe (`ExternalEmbed` renders the iframe from the synthetic mime).
+    ///
+    /// Best-effort: a transcript failure (no captions, network, restricted video)
+    /// is logged via `DebugLog` but NEVER blocks the embed — the embed source is
+    /// created first, then the transcript fetch runs off-main. Returns `nil` for
+    /// non-YouTube URLs so the caller falls through to `bytelessMediaOutcome`.
+    /// Issue #564.
+    private func youtubeEmbedAndTranscriptOutcome(
+        _ rawInput: String,
+        youtubeFetcher: (any YouTubeTranscriptFetching)?
+    ) async throws -> URLFetchService.FetchOutcome? {
+        guard let match = MediaEmbedURL.youtube(rawInput) else { return nil }
+        let videoID = match.externalIdentity
+
+        // Always create the byteless embed source first (current behavior), so a
+        // transcript failure can't lose the player. `role: .primary` matches the
+        // byteless-podcast + provider precedent (first-class, referenceable).
+        let summary = try store.addBytelessSource(
+            filename: match.filename,
+            mimeType: match.mimeType,
+            provenance: SourceProvenance(
+                agentName: match.agentName,
+                activityKind: match.activityKind,
+                plan: match.planURL,
+                externalRef: match.planURL,
+                externalIdentity: match.externalIdentity),
+            role: .primary)
+
+        // No transcript fetcher → embed-only (e.g. app-store build, or a test).
+        guard let fetcher = youtubeFetcher else {
+            openTab(.source(summary.id), title: summary.effectiveName)
+            return URLFetchService.FetchOutcome(
+                filename: match.filename, byteSize: 0, kind: .videoEmbed)
+        }
+
+        // Attempt the caption transcript off-main (the watch-page fetch + caption
+        // download shouldn't stall the UI). On failure, keep the embed and log —
+        // never throw, so the sheet still reports success.
+        let transcript: YouTubeTranscript?
+        do {
+            let videoIDCopy = videoID
+            let fetcherCopy = fetcher
+            transcript = try await Task.detached(priority: .userInitiated) {
+                try await fetcherCopy.transcript(forVideoID: videoIDCopy)
+            }.value
+        } catch {
+            // Surface the reason in Console.app but DON'T block the embed. A
+            // video with no captions is a normal, expected case (`.noCaptions`).
+            DebugLog.ingest("YouTube transcript for \(videoID) failed: \(error)")
+            transcript = nil
+        }
+
+        if let transcript {
+            do {
+                try store.appendProcessedMarkdown(
+                    sourceID: summary.id, content: transcript.markdown,
+                    origin: .transcript, note: nil, technique: "youtube-captions")
+            } catch {
+                // #475: don't silently swallow — the transcript would be lost
+                // with no trace. The embed source is already saved, so this is a
+                // partial-failure log, not a throw.
+                DebugLog.store("YouTube transcript store failed (source=\(summary.id.rawValue)): \(error)")
+                openTab(.source(summary.id), title: summary.effectiveName)
+                return URLFetchService.FetchOutcome(
+                    filename: match.filename, byteSize: 0, kind: .videoEmbed)
+            }
+            openTab(.source(summary.id), title: summary.effectiveName)
+            return URLFetchService.FetchOutcome(
+                filename: transcript.filename,
+                byteSize: transcript.markdown.utf8.count,
+                kind: .videoTranscript)
+        }
+        // No transcript available — embed only (current behavior).
+        openTab(.source(summary.id), title: summary.effectiveName)
+        return URLFetchService.FetchOutcome(
+            filename: match.filename, byteSize: 0, kind: .videoEmbed)
     }
 
     /// The web-fetch ingest path (HTML→md / PDF / text / binary), shared by both

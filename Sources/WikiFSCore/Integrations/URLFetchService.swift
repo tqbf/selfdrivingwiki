@@ -52,6 +52,7 @@ public struct URLFetchService {
             case videoEmbed      // byteless provider video embed (YouTube/Vimeo)
             case audioEmbed      // byteless provider audio embed (Spotify/SoundCloud)
             case remoteMedia     // byteless direct-remote media (mp3 stream / remote video)
+            case videoTranscript // YouTube embed + extracted caption transcript → markdown
         }
 
         public init(filename: String, byteSize: Int, kind: Kind) {
