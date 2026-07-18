@@ -33,7 +33,7 @@ public enum EmbeddingService {
 
     /// The identifier of the embedder selected for the current bundle, WITHOUT
     /// loading the model. Cheap + safe to call synchronously from any context.
-    /// Used by `SQLiteWikiStore.ensureEmbedderConsistency()` for the
+    /// Used by `GRDBWikiStore.ensureEmbedderConsistency()` for the
     /// `embedding_meta` cutover check.
     public static func selectedEmbedderIdentifier() -> String {
         guard Bundle.main.bundlePath.hasSuffix(".app") else {

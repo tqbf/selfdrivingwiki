@@ -9,11 +9,11 @@ import Testing
 @MainActor
 struct WikiLinkNavigationTests {
 
-    private func tempModel() throws -> (WikiStoreModel, SQLiteWikiStore) {
+    private func tempModel() throws -> (WikiStoreModel, GRDBWikiStore) {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-nav-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let store = try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
         return (WikiStoreModel(store: store), store)
     }
 

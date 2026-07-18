@@ -80,7 +80,7 @@ func run() async -> Int32 {
             throw PageCommand.Failure.message(
                 "no wiki matching \(invocation.wikiSelector.debugDescription) in the registry")
         }
-        let store = try SQLiteWikiStore(databaseURL: resolver.databaseURL(for: descriptor))
+        let store = try GRDBWikiStore(databaseURL: resolver.databaseURL(for: descriptor))
 
         let result = try execute(command, in: store)
 
@@ -125,7 +125,7 @@ func run() async -> Int32 {
 /// `LogIndexCommand` (the Phase-B `log append` / `index set`), or `SourceCommand`
 /// (the `source …` family for raw source reads). The deferred body read (`-` = stdin,
 /// else a file path) happens here — the only I/O the parser left for `main`.
-func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throws -> SourceCommand.Result {
+func execute(_ command: ArgumentParser.Command, in store: GRDBWikiStore) throws -> SourceCommand.Result {
     switch command {
     case .list(let json):
         let r = try PageCommand.run(.list(json: json), in: store)

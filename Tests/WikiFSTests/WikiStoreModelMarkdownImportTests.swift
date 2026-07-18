@@ -4,16 +4,16 @@ import Testing
 
 /// Verifies `WikiStoreModel.importFromMarkdownFolder` lands every `.md` file from a
 /// real temp directory into `sources`, byte-identical, and correctly reports
-/// errors. Uses a real `SQLiteWikiStore` + real temp directory fixtures — no external
+/// errors. Uses a real `GRDBWikiStore` + real temp directory fixtures — no external
 /// dependencies.
 @MainActor
 struct WikiStoreModelMarkdownImportTests {
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-mdimport-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     /// Creates a temp directory with the given file tree: `[relativePath: content]`.

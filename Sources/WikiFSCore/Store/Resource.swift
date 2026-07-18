@@ -1,4 +1,5 @@
 import Foundation
+internal import GRDB
 
 /// One fold's structured contribution to the whole-wiki change token.
 ///
@@ -103,7 +104,7 @@ public struct ChangeToken: Sendable, Equatable {
 }
 
 /// Declares one resource kind's contribution to the whole-wiki
-/// `SQLiteWikiStore.changeToken()`.
+/// `GRDBWikiStore.changeToken()`.
 ///
 /// The token stays ONE whole-database value (``ChangeToken``) — it is the File
 /// Provider sync anchor and the durable, per-wiki ground truth
@@ -113,11 +114,9 @@ public struct ChangeToken: Sendable, Equatable {
 /// ``ChangeTokenFold``, joined in registration order. **Adding a kind =
 /// appending a contributor (and a fold), not editing a positional literal.**
 ///
-/// Each contributor runs under the store's recursive lock (called from inside
-/// `changeToken()`) and reads committed state via the store's read seam. It
-/// must return values only — never a statement handle or column pointer
-/// (`docs/skills/sqlite-concurrency/SKILL.md`).
-public protocol ChangeTokenContributor: Sendable {
+/// Each contributor runs inside `changeToken()`'s read transaction and reads
+/// committed state. It must return values only.
+internal protocol ChangeTokenContributor: Sendable {
     /// The kind whose folds this contributor owns. A kind MAY have more than
     /// one contributor (the historical token interleaves the system-prompt/log/
     /// index folds between the source-table fold and the graph-model source
@@ -126,5 +125,5 @@ public protocol ChangeTokenContributor: Sendable {
     /// One structured fold for this kind. Computed under the store's lock from
     /// a read connection. The fold's case carries the named values;
     /// ``ChangeToken.apply(_:)`` routes them into the matching field.
-    func fold(in store: SQLiteWikiStore) throws -> ChangeTokenFold
+    func fold(in store: GRDBWikiStore, on db: Database) throws -> ChangeTokenFold
 }

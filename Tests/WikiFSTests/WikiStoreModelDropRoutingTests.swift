@@ -15,11 +15,11 @@ struct WikiStoreModelDropRoutingTests {
         func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse { response }
     }
 
-    private func tempStore() throws -> any WikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-droproute-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     /// Write a real `.webloc` plist (XML) wrapping `urlString` and return its URL.

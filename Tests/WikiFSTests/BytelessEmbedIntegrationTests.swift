@@ -9,11 +9,11 @@ import Testing
 @MainActor
 struct BytelessEmbedIntegrationTests {
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-embed-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     /// Fails if reached for an HTML website fetch — a recognized media URL must

@@ -6,11 +6,11 @@ import Testing
 /// JSON, counts matching a seeded DB, and deterministic bytes for fixed input.
 struct IndexGeneratorTests {
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-index-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     private func page(_ id: String, _ title: String, updatedAt: Double) -> WikiPage {
@@ -179,7 +179,7 @@ struct IndexGeneratorTests {
         let store = try tempStore()
         // Add a source and append a processed-markdown version to create a chain.
         let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
-        try store.appendProcessedMarkdown(
+        _ = try store.appendProcessedMarkdown(
             sourceID: ingested.id, content: "v1", origin: .extraction, note: nil)
         let sources = try store.listAllSourcesOrderedByID()
         #expect(sources.count == 1)

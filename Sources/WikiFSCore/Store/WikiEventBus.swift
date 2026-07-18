@@ -14,7 +14,7 @@ public enum ChangeKind: String, Sendable {
 /// bridge as a coarse "reload everything" event. Events are *hints*:
 /// subscribers (the File Provider signaler, the model's reload path) react to
 /// them, but the authoritative change-detection token is still
-/// `SQLiteWikiStore.changeToken()`.
+/// `GRDBWikiStore.changeToken()`.
 ///
 /// `kind` is optional: a `nil` kind means a coarse, whole-wiki change (the
 /// Darwin notification carries no per-resource detail), which only matches
@@ -61,7 +61,7 @@ public struct SubscriptionToken: Sendable, Hashable {
 }
 
 /// A per-wiki resource-change event bus (`plans/architecture-roadmap.md` §3 —
-/// "one signal, four hosts"). `SQLiteWikiStore` emits one
+/// "one signal, four hosts"). `GRDBWikiStore` emits one
 /// ``ResourceChangeEvent`` per public mutating method (outside its recursive
 /// lock, via the `mutate()` seam), and the cross-process `WikiChangeBridge`
 /// emits a coarse event as a Darwin-notification adapter. The File Provider
@@ -126,7 +126,11 @@ public final class WikiEventBus: @unchecked Sendable {
     }
 
     /// Stamp `seq`, snapshot the matching handlers, then dispatch each to the
-    /// main actor. Callable from any thread.
+    /// main actor via `Task { @MainActor }`. The async hop is load-bearing: it
+    /// guarantees handlers never run inside the store's write closure (emit
+    /// fires post-commit, and the Task can only land after the write returns),
+    /// so a subscriber's read always sees committed state without re-entering
+    /// the serial queue. This also matches the behavior #596/#591 validated.
     public func emit(_ event: ResourceChangeEvent) {
         lock.lock()
         seqCounter &+= 1

@@ -6,11 +6,11 @@ import Testing
 /// including the Phase-4 FK-safety regression on `deletePage`.
 struct WikiLinkStoreTests {
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-link-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     // MARK: - resolveTitleToID
@@ -179,7 +179,7 @@ struct WikiLinkStoreTests {
         try store.replaceLinks(from: a.id, parsedLinks:
             WikiLinkParser.parse("[[C# Guide]] and [[C# Notes]]"))
 
-        let targets = Set(try store.listAllLinks().map(\.to))
+        let targets: Set<String> = Set(try store.listAllLinks().map(\.to))
         #expect(targets == [guide.id.rawValue, notes.id.rawValue])
     }
 

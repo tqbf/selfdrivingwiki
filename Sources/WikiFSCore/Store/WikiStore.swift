@@ -116,7 +116,7 @@ public struct VacuumReport: Equatable, Sendable {
 /// implementation is the source of truth; the Phase 2 File Provider extension
 /// will adopt a read-only subset (`WikiReadStore`) of this.
 public protocol WikiStore: Sendable {
-    /// Per-wiki resource-change event bus. `SQLiteWikiStore` emits one event per
+    /// Per-wiki resource-change event bus. `GRDBWikiStore` emits one event per
     /// public mutating method (outside its recursive lock, via `mutate()`);
     /// `nil` for stores that never surface changes (e.g. `wikictl`'s own store,
     /// where emit is a silent no-op). Set once by the app wiring during wiki
@@ -158,7 +158,7 @@ public protocol WikiStore: Sendable {
     //
     // Only the three methods `WikiStoreModel` actually calls live on the
     // protocol. The read-projection helpers (listAllSourcesOrderedByID,
-    // getSource, sourceContent) stay concrete on `SQLiteWikiStore` —
+    // getSource, sourceContent) stay concrete on `GRDBWikiStore` —
     // the File Provider extension uses the concrete read store, exactly as it
     // does for `listAllPagesOrderedByID` / `listAllLinks`.
 
@@ -244,7 +244,7 @@ public protocol WikiStore: Sendable {
     /// nil when the source has no version rows at all. On the protocol (not only
     /// the concrete read helper) so callers — notably the website snapshot store
     /// and the refresh guard — can read it through `any WikiStore` without
-    /// downcasting to a concrete backend. Both `SQLiteWikiStore` and
+    /// downcasting to a concrete backend. Both `GRDBWikiStore` and
     /// `GRDBWikiStore` implement this identically.
     func activeContentVersion(sourceID: PageID) throws -> SourceVersion?
 
@@ -497,7 +497,7 @@ public protocol WikiStore: Sendable {
     // on the protocol so the `wikictl log append` / `index set` commands run
     // against `WikiStore` (testable against any conforming store), mirroring how
     // the `page` commands do. The `log.md` read-projection helper
-    // (`listAllLogEntriesOrderedByID`) stays concrete on `SQLiteWikiStore`, exactly
+    // (`listAllLogEntriesOrderedByID`) stays concrete on `GRDBWikiStore`, exactly
     // like `listAllPagesOrderedByID` / `listAllSourcesOrderedByID`.
 
     /// Append one row to the append-only chronological log, returning the inserted

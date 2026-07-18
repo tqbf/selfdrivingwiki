@@ -26,7 +26,7 @@ struct WikiRenderContextTests {
     /// Fixture: one page, one byteful source ("Paper.pdf") with a 3-deep
     /// `@vN` chain, one byteless YouTube source ("youtube-dQw4w9WgXcQ") for the
     /// external embed path. Returns the store + model + the key ids.
-    private func makeFixture() throws -> (store: SQLiteWikiStore,
+    private func makeFixture() throws -> (store: GRDBWikiStore,
                                           model: WikiStoreModel,
                                           homeID: PageID,
                                           paperID: PageID,
@@ -34,7 +34,7 @@ struct WikiRenderContextTests {
                                           v2ID: PageID,
                                           v3ID: PageID,
                                           ytID: PageID) {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
 
         // A page.

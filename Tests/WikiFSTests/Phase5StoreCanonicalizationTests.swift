@@ -21,7 +21,7 @@ struct Phase5StoreCanonicalizationTests {
     // MARK: - AC.1 — save canonicalizes (the shared PageUpsert seam)
 
     @Test func upsertCanonicalizesPageAndSourceLinks() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         // Create the targets first so the link resolvers find them.
         let target = try PageUpsert.upsert(in: store, id: nil, title: "Some Page", body: "")
         let source = try store.addSource(filename: "a-paper.pdf", data: Data("%PDF".utf8))
@@ -47,7 +47,7 @@ struct Phase5StoreCanonicalizationTests {
     // MARK: - AC.3 — forward link stored verbatim, no edge
 
     @Test func unresolvedForwardLinkStoredVerbatim() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let outcome = try PageUpsert.upsert(in: store, id: nil, title: "Page",
             body: "Link to [[No Such Page]] here.")
 
@@ -61,7 +61,7 @@ struct Phase5StoreCanonicalizationTests {
     // MARK: - 5.1.4 — ULID-shaped title resolves by name (collision fallback)
 
     @Test func ulidShapedTitleResolvesByNameFallback() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         // A page whose TITLE is a valid 26-char Crockford string. After
         // canonicalization, a link to it is `[[page:ULID|ULID]]`. The validate-
         // -by-id path finds no row by that id (it's a title, not an id), so it
@@ -85,7 +85,7 @@ struct Phase5StoreCanonicalizationTests {
     // MARK: - AC.6 — rename self-heals at render, zero body writes
 
     @Test func pageRenameSelfHealsAtRenderWithNoBodyRewrite() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let target = try PageUpsert.upsert(in: store, id: nil, title: "Old Title", body: "content")
 
         // 50 inbound links from 50 pages, canonicalized on save.
@@ -127,7 +127,7 @@ struct Phase5StoreCanonicalizationTests {
     // MARK: - AC.9 — source rename self-heals, no body rewrite
 
     @Test func sourceRenameSelfHealsAtRenderNoBodyRewrite() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let source = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
         try store.renameSource(id: source.id, to: "Old Paper")
 
@@ -167,7 +167,7 @@ struct Phase5StoreCanonicalizationTests {
         let token: ChangeToken
         let version: Int
         do {
-            let store = try SQLiteWikiStore(databaseURL: url)
+            let store = try GRDBWikiStore(databaseURL: url)
             targetID = try PageUpsert.upsert(in: store, id: nil, title: "Target", body: "").id
             // Raw updatePage (no canonicalization) plants a legacy body.
             let linker = try store.createPage(title: "Linker")
@@ -190,8 +190,8 @@ struct Phase5StoreCanonicalizationTests {
         let (url, linkerID, targetID, tokenBefore, versionBefore) = try buildRewoundV22DB()
 
         // Reopen → v23 sweep runs.
-        let reopened = try SQLiteWikiStore(databaseURL: url)
-        #expect(reopened.pragmaValue("user_version") == "\(SQLiteWikiStore.currentSchemaVersion)")
+        let reopened = try GRDBWikiStore(databaseURL: url)
+        #expect(reopened.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
 
         let migrated = try reopened.getPage(id: linkerID)
         // Resolvable link canonicalized; forward link left verbatim.
@@ -208,14 +208,14 @@ struct Phase5StoreCanonicalizationTests {
         let (url, linkerID, targetID, _, _) = try buildRewoundV22DB()
 
         // First reopen: migrates.
-        let first = try SQLiteWikiStore(databaseURL: url)
+        let first = try GRDBWikiStore(databaseURL: url)
         let afterFirst = try first.getPage(id: linkerID)
         #expect(afterFirst.bodyMarkdown.contains("[[page:\(targetID.rawValue)|Target]]"))
         let tokenAfterFirst = try first.changeToken()
         let bodyAfterFirst = afterFirst.bodyMarkdown
 
         // Second reopen: no-op (already v23).
-        let second = try SQLiteWikiStore(databaseURL: url)
+        let second = try GRDBWikiStore(databaseURL: url)
         let afterSecond = try second.getPage(id: linkerID)
         #expect(afterSecond.bodyMarkdown == bodyAfterFirst)
         #expect(try second.changeToken() == tokenAfterFirst)

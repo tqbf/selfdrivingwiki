@@ -23,11 +23,11 @@ struct WebsiteSnapshotStoreTests {
         0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
     ])
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-snapshot-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     private func pngResponse(url: String) -> URLFetchService.FetchResponse {
@@ -105,13 +105,13 @@ struct WebsiteSnapshotStoreTests {
         _ = try await model.addURL("https://example.com/p", fetcher: fetcher)
 
         let allSources = try store.listSources()
-        let mediaIDs = Set(allSources.filter { $0.role == .media }.map { $0.id })
+        let mediaIDs: Set<String> = Set(allSources.filter { $0.role == .media }.map { $0.id.rawValue })
         #expect(mediaIDs.count == 2)
         // The model's observable `sources` includes all; `isPrimary` filters them.
         #expect(allSources.filter { $0.isPrimary }.count == 1)
         // Every media source is not primary.
         for id in mediaIDs {
-            let src = allSources.first { $0.id == id }!
+            let src = allSources.first { $0.id.rawValue == id }!
             #expect(!src.isPrimary)
         }
     }

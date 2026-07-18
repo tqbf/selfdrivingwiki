@@ -17,21 +17,21 @@ struct ChangeTokenContributorTests {
     /// change-detection isn't silently forgotten (the same discipline as
     /// `StoreEmissionExhaustivenessTests` for mutating methods).
     @Test func contributorsCoverAllResourceKinds() throws {
-        let contributing = Set(SQLiteWikiStore.tokenContributors.map(\.kind))
+        let contributing = Set(GRDBWikiStore.tokenContributors.map(\.kind))
         // Every ResourceKind now contributes a token fragment (Phase D added
         // the bookmark fold). Adding a new case to `ResourceKind` without
         // registering a contributor fails this test.
         #expect(contributing == Set(ResourceKind.allCases))
         // The registry is never empty (a deleted contributor would silently
         // shrink the token and break byte-identity).
-        #expect(!SQLiteWikiStore.tokenContributors.isEmpty)
+        #expect(!GRDBWikiStore.tokenContributors.isEmpty)
     }
 
     /// The registry order is the token layout — assert it is the documented
     /// historical sequence, so a careless reorder (which would produce a
     /// different `rawString` only by luck) is caught here directly.
     @Test func contributorOrderMatchesHistoricalLayout() throws {
-        let kinds = SQLiteWikiStore.tokenContributors.map(\.kind)
+        let kinds = GRDBWikiStore.tokenContributors.map(\.kind)
         // pages | sources(table) | systemPrompt | log | wikiIndex |
         // source(derived) | source(graph folds) | bookmark | chat
         #expect(kinds == [.page, .source, .systemPrompt, .log, .wikiIndex,
@@ -46,7 +46,7 @@ struct ChangeTokenContributorTests {
     /// If a fold is added/removed/reordered and `rawString` is not updated in
     /// lockstep, this test fails.
     @Test func rawStringMatchesHistoricalLayout() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let token = try store.changeToken()
         // 14 fields: pages(c:0,s:0) sourceTable(c:0,s:0) systemPrompt(1)
         // log(0) wikiIndex(1) sourceMarkdownVersions(0)

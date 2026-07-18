@@ -24,11 +24,11 @@ import WikiFSEngine
 @MainActor
 struct OrphanChatSeedingTests {
 
-    private func tempModel() throws -> (WikiStoreModel, any WikiStore) {
+    private func tempModel() throws -> (WikiStoreModel, GRDBWikiStore) {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-orphan-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let store = try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
         return (WikiStoreModel(store: store), store)
     }
 

@@ -17,7 +17,7 @@ struct Phase6PinningModelTests {
     }
 
     private func makeModel() throws -> (WikiStoreModel, PageID, PageID) {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
         _ = try store.appendProcessedMarkdown(sourceID: source.id, content: "v1", origin: .extraction, note: nil)

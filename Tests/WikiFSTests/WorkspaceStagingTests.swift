@@ -16,11 +16,11 @@ import Testing
 @MainActor
 struct WorkspaceStagingTests {
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("ws-stage-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     // MARK: - AC5.1: Created page is invisible on main before merge
@@ -58,7 +58,7 @@ struct WorkspaceStagingTests {
             _ = try store.getPage(id: newPageID)
         }
 
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
 
         // After merge: page exists with staged body + title.
         let page = try store.getPage(id: newPageID)
@@ -163,10 +163,10 @@ struct WorkspaceStagingTests {
         let ws2 = try store.createWorkspace(name: nil, activityID: nil)
         _ = try store.workspaceWritePage(
             workspaceID: ws2, pageID: newPageID, title: "Collision Page", body: "other body")
-        try store.workspaceMerge(workspaceID: ws2)
+        _ = try store.workspaceMerge(workspaceID: ws2)
 
         // Now merge ws1 — should conflict (main ref already exists).
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
 
         let summary = try store.workspaceSummary(id: wsID)
         #expect(summary?.status == .conflicted)
@@ -186,7 +186,7 @@ struct WorkspaceStagingTests {
         // Stage and merge → status is 'merged'.
         _ = try store.workspaceWritePage(
             workspaceID: wsID, pageID: existingPage.id, title: "Pre-existing", body: "ws edit")
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
 
         // A subsequent write to the merged workspace must throw, not silently
         // succeed (which would vanish the edit — the workspace will never merge
@@ -215,7 +215,7 @@ struct WorkspaceStagingTests {
 
 // MARK: - Test helper extension
 
-extension SQLiteWikiStore {
+extension GRDBWikiStore {
     /// Returns all page IDs (for counting purposes in tests).
     fileprivate func allPageIDs() throws -> [PageID] {
         return try listPages(sortBy: .titleAZ).map { $0.id }

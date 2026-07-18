@@ -18,8 +18,8 @@ import SQLite3
 
     @Test func freshDBHasBookmarkNodesTable() throws {
         let url = tempDatabaseURL()
-        let store = try SQLiteWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "\(SQLiteWikiStore.currentSchemaVersion)")
+        let store = try GRDBWikiStore(databaseURL: url)
+        #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
 
         // The table exists.
         let nodes = try store.listBookmarkNodes()
@@ -30,14 +30,14 @@ import SQLite3
         let url = tempDatabaseURL()
         // Create a v15 DB by writing pages + sources, then reopen (it will
         // migrate v15→v16 on open).
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let page = try store.createPage(title: "Test Page")
         _ = try store.addSource(filename: "test.txt", data: Data("hello".utf8))
         _ = page
 
         // Reopen — triggers migration to v16.
-        let reopened = try SQLiteWikiStore(databaseURL: url)
-        #expect(reopened.pragmaValue("user_version") == "\(SQLiteWikiStore.currentSchemaVersion)")
+        let reopened = try GRDBWikiStore(databaseURL: url)
+        #expect(reopened.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
 
         // Existing data is intact.
         let pages = try reopened.listPages(sortBy: .lastUpdated)
@@ -55,7 +55,7 @@ import SQLite3
     // MARK: - Folder CRUD (AC.2)
 
     @Test func createFolderAtRoot() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let folder = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder,
             label: "My Folder", targetID: nil)
@@ -70,7 +70,7 @@ import SQLite3
     }
 
     @Test func createNestedFolder() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let parent = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder,
             label: "Parent", targetID: nil)
@@ -84,7 +84,7 @@ import SQLite3
     }
 
     @Test func renameFolder() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let folder = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder,
             label: "Old", targetID: nil)
@@ -95,7 +95,7 @@ import SQLite3
     }
 
     @Test func deleteFolderCascadesChildren() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let parent = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder,
             label: "Parent", targetID: nil)
@@ -116,7 +116,7 @@ import SQLite3
     // MARK: - Position management
 
     @Test func createBookmarkNodeAtPositionShiftsSiblings() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         _ = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder, label: "A",
             targetID: nil)
@@ -136,7 +136,7 @@ import SQLite3
     }
 
     @Test func deleteRenumbersSiblings() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         _ = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder, label: "A",
             targetID: nil)
@@ -157,7 +157,7 @@ import SQLite3
     // MARK: - Page/source ref CRUD (AC.3)
 
     @Test func addPageRef() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let page = try store.createPage(title: "AI")
         let ref = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .pageRef,
@@ -171,7 +171,7 @@ import SQLite3
     }
 
     @Test func addSourceRef() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let source = try store.addSource(filename: "paper.pdf", data: Data("x".utf8))
         let ref = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .sourceRef,
@@ -181,7 +181,7 @@ import SQLite3
     }
 
     @Test func deleteRefDoesNotDeleteTarget() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let page = try store.createPage(title: "Keep Me")
         let ref = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .pageRef,
@@ -199,7 +199,7 @@ import SQLite3
     }
 
     @Test func targetDeletedRefBecomesStale() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let page = try store.createPage(title: "Doomed")
         let ref = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .pageRef,
@@ -217,7 +217,7 @@ import SQLite3
     // MARK: - Move/reorder (AC.4)
 
     @Test func moveNodeToDifferentParent() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let parentA = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder, label: "A",
             targetID: nil)
@@ -238,7 +238,7 @@ import SQLite3
     }
 
     @Test func reorderWithinParent() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         _ = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder, label: "A",
             targetID: nil)
@@ -260,7 +260,7 @@ import SQLite3
     }
 
     @Test func moveLeavesNoPositionGaps() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let parent = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder, label: "Parent",
             targetID: nil)
@@ -287,7 +287,7 @@ import SQLite3
     // MARK: - Cycle prevention (H3)
 
     @Test func moveIntoSelfThrows() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let folder = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder, label: "F",
             targetID: nil)
@@ -303,7 +303,7 @@ import SQLite3
     }
 
     @Test func moveIntoDirectChildThrows() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let parent = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder, label: "P",
             targetID: nil)
@@ -323,7 +323,7 @@ import SQLite3
     }
 
     @Test func moveIntoDeepDescendantThrows() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let l1 = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder, label: "L1",
             targetID: nil)
@@ -346,7 +346,7 @@ import SQLite3
     }
 
     @Test func moveIntoUnrelatedFolderSucceeds() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let a = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder, label: "A",
             targetID: nil)
@@ -365,7 +365,7 @@ import SQLite3
     // MARK: - Timestamps (issue #242)
 
     @Test func createBookmarkNodeStampsCreatedAtAndUpdatedAt() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let before = Date().addingTimeInterval(-1)
         let node = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder, label: "F", targetID: nil)
@@ -383,7 +383,7 @@ import SQLite3
     }
 
     @Test func updateBookmarkNodeBumpsUpdatedAtNotCreatedAt() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let node = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder, label: "Old", targetID: nil)
         let originalCreatedAt = node.createdAt
@@ -397,7 +397,7 @@ import SQLite3
     }
 
     @Test func moveAcrossParentBumpsUpdatedAt() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let parentA = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder, label: "A", targetID: nil)
         let parentB = try store.createBookmarkNode(
@@ -415,7 +415,7 @@ import SQLite3
     }
 
     @Test func reorderWithinSameParentDoesNotBumpUpdatedAt() throws {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         _ = try store.createBookmarkNode(
             parentID: nil, position: 0, kind: .folder, label: "A", targetID: nil)
         _ = try store.createBookmarkNode(

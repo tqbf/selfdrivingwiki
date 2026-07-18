@@ -11,11 +11,11 @@ import WikiFSCore
 @MainActor
 struct BlobSchemeHandlerTests {
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-blob-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     /// A minimal `WKURLSchemeTask` mock that captures the response + data.
@@ -39,8 +39,8 @@ struct BlobSchemeHandlerTests {
     @Test func servesKnownSourceBytesAndMIME() throws {
         let store = try tempStore()
         let imageData = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A])  // PNG header bytes
-        let source = try store.addSource(filename: "photo.png", data: imageData,
-                                         mimeType: "image/png")
+        let source: SourceSummary = try store.addSource(filename: "photo.png", data: imageData,
+                                          mimeType: "image/png")
         let model = WikiStoreModel(store: store)
 
         let handler = BlobSchemeHandler(store: model)

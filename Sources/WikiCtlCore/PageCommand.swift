@@ -4,7 +4,7 @@ import WikiFSCore
 /// The `wikictl page …` subcommands, executed against an already-opened
 /// `WikiStore`. Deliberately split from process concerns (arg parsing, stdin,
 /// the Darwin post, opening the DB) so the whole command surface is unit-testable
-/// against a temp DB: a test builds a `SQLiteWikiStore`, runs a `PageCommand`,
+/// against a temp DB: a test builds a `GRDBWikiStore`, runs a `PageCommand`,
 /// and asserts on the returned `Result`.
 public enum PageCommand {
 

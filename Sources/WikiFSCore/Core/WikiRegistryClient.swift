@@ -41,7 +41,7 @@ public final class WikiRegistryClient {
     private let containerDirectory: URL
 
     /// Build the read-write store for a wiki's DB. Injected so tests can stub
-    /// it; the app passes `SQLiteWikiStore(databaseURL:)`. Used by
+    /// it; the app passes `GRDBWikiStore(databaseURL:)`. Used by
     /// `createDatabaseIfNeeded` / `importWiki` — store *opening* (the heavier
     /// path that also attaches the event bus + creates the model) is
     /// delegated to ``WikiSession``.
@@ -169,7 +169,7 @@ public final class WikiRegistryClient {
     public func createWiki(displayName: String) async -> WikiDescriptor {
         let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         var descriptor = WikiDescriptor.make(displayName: trimmed.isEmpty ? "Untitled Wiki" : trimmed)
-        // Opening a fresh SQLiteWikiStore runs the full bootstrap ladder (pages +
+        // Opening a fresh GRDBWikiStore runs the full bootstrap ladder (pages +
         // system_prompt seed). A new wiki should have a Home page so its mount
         // is non-empty, mirroring the app's launch behavior. The seeded page
         // becomes the wiki's home page so the home button works without a

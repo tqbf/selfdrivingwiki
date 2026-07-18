@@ -186,7 +186,7 @@ struct AgentTranscriptRenderContextTests {
                                           homeID: PageID,
                                           paperID: PageID,
                                           v2ID: PageID) {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         let home = try store.createPage(title: "Home")
         let paper = try store.addSource(

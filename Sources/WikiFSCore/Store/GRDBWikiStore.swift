@@ -18,7 +18,7 @@ internal import GRDB
 /// The default is still `SQLiteWikiStore`; this store is opt-in.
 ///
 /// **Architecture** (per `plans/grdb-adoption.md`):
-/// - `DatabaseQueue` serializes all reads/writes through one dispatch queue —
+/// - `DatabasePool` serializes all reads/writes through one dispatch queue —
 ///   no external `NSRecursiveLock` needed (replaces `SQLiteWikiStore`'s lock).
 /// - `DatabaseMigrator` provides named, idempotent, auto-tracked migrations
 ///   (via the `grdb_migrations` table), replacing the 37-version `user_version`
@@ -59,11 +59,36 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
     private static let currentSchemaVersion = 37
+    /// The current schema version (mirrors the former
+    /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
+    /// migration ladder landed at the expected `user_version`.
+    public static var schemaVersion: Int { currentSchemaVersion }
+
+    /// Read a `PRAGMA` value as text (e.g. `user_version`). Resilient: returns
+    /// `""` on error. Mirrors the former `SQLiteWikiStore.pragmaValue`.
+    public func pragmaValue(_ name: String) -> String {
+        do {
+            return try dbQueue.read { db in
+                try String.fetchOne(db, sql: "PRAGMA \(name);") ?? ""
+            }
+        } catch { return "" }
+    }
+
+    /// Read one scalar text value from `sql`. Resilient: returns `""` on
+    /// error. Mirrors the former `SQLiteWikiStore.scalarText` (used by tests).
+    public func scalarText(_ sql: String) -> String {
+        do {
+            return try dbQueue.read { db in try Self.queryScalarText(sql, in: db) }
+        } catch { return "" }
+    }
 
     /// The serial GRDB connection. All reads and writes are serialized through
     /// GRDB's internal dispatch queue — no external `NSRecursiveLock` needed
     /// (the equivalent of `SQLiteWikiStore.lock`).
-    private let dbQueue: DatabaseQueue
+    private let dbQueue: DatabasePool
+    /// True for read-only connections (File Provider). `checkpoint()` skips on
+    /// read-only connections (DatabasePool with readonly=true).
+    private let isReadOnly: Bool
 
     /// Guards against double-close (`close()` then `deinit`).
     private let closeLock = NSLock()
@@ -117,7 +142,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
 
         do {
-            dbQueue = try DatabaseQueue(path: databaseURL.path, configuration: config)
+            dbQueue = try DatabasePool(path: databaseURL.path, configuration: config)
+            isReadOnly = false
             // Mirrors `SQLiteWikiStore.bootstrapSchema`: a FRESH db (user_version
             // 0) gets the consolidated current schema in one block; an EXISTING db
             // at any version runs the proven 37-step `if version < N` ladder
@@ -161,6 +187,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     try migrateIfNeeded(db)
                 }
             }
+            // Heal any FTS5 index whose term b-tree is empty (e.g. pages that
+            // predate the FTS triggers, or a restored-from-backup DB). Mirrors
+            // SQLiteWikiStore.ensureSearchIndexesPopulated's FTS step. NOT run by
+            // the read-only File Provider open.
+            ensureSearchIndexesPopulated()
         } catch {
             throw WikiStoreError.open("\(error)")
         }
@@ -175,6 +206,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         var config = Configuration()
         config.foreignKeysEnabled = true
         config.busyMode = .timeout(5)
+        // `readonly = true` opens the connection with SQLITE_OPEN_READONLY —
+        // DatabasePool needs this (not just PRAGMA query_only) because
+        // DatabasePool's pool setup writes WAL metadata (BEGIN IMMEDIATE)
+        // which fails on a read-only file.
+        config.readonly = true
 
         config.prepareDatabase { db in
             try db.execute(sql: "PRAGMA query_only=ON")
@@ -192,7 +228,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
 
         do {
-            dbQueue = try DatabaseQueue(path: readOnlyURL.path, configuration: config)
+            dbQueue = try DatabasePool(path: readOnlyURL.path, configuration: config)
+            isReadOnly = true
             // Do NOT run migrations on a read-only connection — the File
             // Provider must never author schema.
         } catch {
@@ -221,6 +258,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// intermittent `SQLITE_ERROR` under CI load — #223, #234). Best-effort:
     /// errors are logged, not thrown.
     private func checkpoint() {
+        // Skip checkpoint on read-only connections (DatabasePool with readonly=true).
+        guard !isReadOnly else { return }
         do {
             try dbQueue.writeWithoutTransaction { db in
                 if let row = try Row.fetchOne(db, sql: "PRAGMA wal_checkpoint(TRUNCATE)") {
@@ -263,12 +302,26 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         _ body: (Database) throws -> T
     ) throws -> T {
         var pending: ResourceChangeEvent?
-        let result = try dbQueue.write { db -> T in
-            let r = try body(db)
-            // Compute the event inside the transaction (committed state).
-            pending = try? event(r)
-            return r
-        }   // COMMIT happens here
+        var result: T!
+        // Use `unsafeReentrantWrite` + `db.inSavepoint` (instead of
+        // `dbQueue.write`) so that `mutate` is **truly reentrant**: when called
+        // from inside `withTransaction` (which already opened a write on the
+        // serial queue), `unsafeReentrantWrite` runs inline (GRDB Case 2) and
+        // `inSavepoint` nests as a SAVEPOINT — no reentrance trap, no "cannot
+        // start a transaction within a transaction". When called standalone
+        // (the common case), `unsafeReentrantWrite` dispatches normally (GRDB
+        // Case 1) and `inSavepoint` opens its own IMMEDIATE transaction. The
+        // event is computed inside the transaction (committed state) and
+        // emitted after the write returns.
+        try dbQueue.unsafeReentrantWrite { db in
+            try db.inSavepoint {
+                let r = try body(db)
+                result = r
+                // Compute the event inside the transaction (committed state).
+                pending = try? event(r)
+                return .commit
+            }
+        }
         // Post-commit: emit outside the writer queue.
         if let pending {
             eventBus?.emit(pending)
@@ -319,6 +372,19 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // Existing DB: run the stepwise ladder (data-preserving). A rewind-of-
         // select steps never runs for a genuinely-current DB (the early-return
         // `guard` above fired).
+        #if DEBUG
+        // Test hook: simulate a corrupt FTS index tripping the first migration
+        // write with SQLITE_CORRUPT (see `init`'s catch). Fires once, then
+        // clears itself so the retry proceeds normally. Mirrors
+        // `SQLiteWikiStore.bootstrapSchema`.
+        if let fault = Self.migrationCorruptFaultForTesting {
+            Self.migrationCorruptFaultForTesting = nil
+            throw DatabaseError(
+                resultCode: .SQLITE_CORRUPT,
+                message: fault.isEmpty ? "database disk image is malformed" : fault
+            )
+        }
+        #endif
         var v = version
         try migrate(from: &v, in: db)
     }
@@ -1894,8 +1960,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         return nil
     }
 
-    /// `resolveSourceByName` taking a `Database` directly.
+    /// `resolveSourceByName` taking a `Database` directly. Faithful port of
+    /// `SQLiteWikiStore.resolveSourceByName` (3-pass: exact → extension-stripped
+    /// → loose-key unique). Safe to call from inside a `mutate`/transaction
+    /// closure — never re-enters `dbQueue`.
     private func resolveSourceByNameLocked(_ displayName: String, in db: Database) throws -> PageID? {
+        // Pass 1: exact (display_name or filename) match, newest first.
         if let id = try String.fetchOne(
             db,
             sql: """
@@ -1908,7 +1978,94 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         ) {
             return PageID(rawValue: id)
         }
+        // Pass 2 + 3: scan all sources — extension-stripped match (immediate)
+        // and loose-key collection (unique-only at the end).
+        let queryLooseKey = WikiNameRules.looseMatchKey(displayName)
+        var looseMatches: [PageID] = []
+        let rows = try Row.fetchAll(
+            db,
+            sql: "SELECT id, COALESCE(display_name, filename) AS name FROM sources ORDER BY updated_at DESC;"
+        )
+        for row in rows {
+            let id: String = row["id"]
+            let name: String = row["name"]
+            if (name as NSString).deletingPathExtension.caseInsensitiveCompare(displayName) == .orderedSame {
+                return PageID(rawValue: id)
+            }
+            if !queryLooseKey.isEmpty, WikiNameRules.looseMatchKey(name) == queryLooseKey {
+                looseMatches.append(PageID(rawValue: id))
+            }
+        }
+        // Pass 3: lenient, unique-only.
+        return looseMatches.count == 1 ? looseMatches[0] : nil
+    }
+
+    /// Resolve a parsed link's target to an id, trying every candidate
+    /// (name, fragment) reading of the raw target — longest name first — via
+    /// `WikiLinkResolver`, so names containing `#` resolve whole. Ported from
+    /// `SQLiteWikiStore.resolveLinkTarget`, but takes a `Database` and a
+    /// resolver closure `(String, Database) throws -> PageID?` (the `*Locked`
+    /// variants) so it can run inside the write transaction without re-entering
+    /// `dbQueue`.
+    private func resolveLinkTarget(
+        _ link: ParsedLink,
+        using resolve: (String, Database) throws -> PageID?,
+        in db: Database
+    ) throws -> PageID? {
+        let raw = link.fragment.map { "\(link.target)#\($0)" } ?? link.target
+        for split in WikiLinkResolver.candidateSplits(of: raw) {
+            if let id = try resolve(split.base, db) { return id }
+        }
         return nil
+    }
+
+    /// If `link.target` is a canonical ULID naming an existing row, return that
+    /// id directly (Phase 5). Ported from `SQLiteWikiStore.canonicalLinkID` but
+    /// does the existence check via `String.fetchOne` rather than the public
+    /// `getPage`/`getSource` (those open their own `dbQueue.read` and would
+    /// re-enter). Returns `nil` for non-canonical targets or ids naming no row
+    /// so the caller can fall back to name resolution.
+    private func canonicalLinkID(_ link: ParsedLink, in db: Database) throws -> PageID? {
+        guard WikiLinkParser.isCanonicalULID(link.target) else { return nil }
+        let id = PageID(rawValue: link.target)
+        switch link.linkType {
+        case .page:
+            return try String.fetchOne(
+                db, sql: "SELECT id FROM pages WHERE id = ?;", arguments: [id.rawValue]
+            ) != nil ? id : nil
+        case .source:
+            return try String.fetchOne(
+                db, sql: "SELECT id FROM sources WHERE id = ?;", arguments: [id.rawValue]
+            ) != nil ? id : nil
+        case .chat:
+            return try String.fetchOne(
+                db, sql: "SELECT id FROM chats WHERE id = ?;", arguments: [id.rawValue]
+            ) != nil ? id : nil
+        }
+    }
+
+    /// The derived-markdown chain (`[smvID]`) for `sourceID`, ULID-asc =
+    /// chronological (index 0 = v1). Locked variant of
+    /// `SQLiteWikiStore.derivedVersionIDs` — runs against the given `db`.
+    private func derivedVersionIDsLocked(sourceID: PageID, in db: Database) throws -> [PageID] {
+        let rows = try String.fetchAll(
+            db,
+            sql: "SELECT id FROM source_markdown_versions WHERE file_id = ? ORDER BY id ASC;",
+            arguments: [sourceID.rawValue]
+        )
+        return rows.map { PageID(rawValue: $0) }
+    }
+
+    /// Resolve an `@vN` ordinal (1-based) to the concrete smv id for
+    /// `sourceID`, or `nil` when out of range. Locked variant of
+    /// `SQLiteWikiStore.resolveVersionPin` — runs against the given `db`.
+    private func resolveVersionPin(
+        _ pin: String, sourceID: PageID, in db: Database
+    ) throws -> PageID? {
+        guard let ordinal = Int(pin), ordinal >= 1 else { return nil }
+        let ids = try derivedVersionIDsLocked(sourceID: sourceID, in: db)
+        let idx = ordinal - 1
+        return idx < ids.count ? ids[idx] : nil
     }
 
     /// `resolveChatByTitle` taking a `Database` directly.
@@ -2405,6 +2562,179 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         return id
     }
 
+    // MARK: - changeToken (File Provider sync anchor)
+
+    /// The whole-database change token — the File Provider sync anchor and
+    /// durable per-wiki ground truth. Folds `COUNT`/`SUM` over every table
+    /// into one ``ChangeToken``, assembled from per-kind
+    /// ``ChangeTokenContributor``s in registration order.
+    ///
+    /// The registry order is load-bearing: it reproduces the historical
+    /// 14-field ``ChangeToken/rawString`` byte-for-byte. The
+    /// `ChangeTokenContributorTests` contributor-order test + the rawString
+    /// round-trip test enforce that.
+    public func changeToken() throws -> ChangeToken {
+        try dbQueue.read { db in
+            var token = ChangeToken()
+            for contributor in Self.tokenContributors {
+                token.apply(try contributor.fold(in: self, on: db))
+            }
+            return token
+        }
+    }
+
+    /// Resilient single-value read: returns `0` if the table doesn't exist
+    /// (a read connection opened against a pre-migration DB), so
+    /// `changeToken()` always answers. Mirrors the `try?` resilience of the
+    /// historical SQLiteWikiStore helpers.
+    internal func resilientScalar(_ sql: String, on db: Database) -> Int64 {
+        (try? Int64.fetchOne(db, sql: sql)) ?? 0
+    }
+
+    /// `COUNT`/`SUM(version)` over `pages`. Unlike the resilient helpers
+    /// below, this `try`s and throws if the `pages` table is absent — matching
+    /// the pre-2b behavior (the pages fold was the only one that could throw).
+    internal func pageCountSum(on db: Database) throws -> (Int64, Int64) {
+        let row = try Row.fetchOne(db, sql: "SELECT COUNT(*), COALESCE(SUM(version), 0) FROM pages;")
+        return (row?[0] ?? 0, row?[1] ?? 0)
+    }
+
+    /// COUNT/SUM(version) over `sources`, resilient to a missing table.
+    internal func sourceCountSum(on db: Database) -> (Int64, Int64) {
+        guard let row = try? Row.fetchOne(db, sql: "SELECT COUNT(*), COALESCE(SUM(version), 0) FROM sources;") else {
+            return (0, 0)
+        }
+        return (row[0] ?? 0, row[1] ?? 0)
+    }
+
+    internal func systemPromptVersion(on db: Database) -> Int64 {
+        resilientScalar("SELECT COALESCE(version, 0) FROM system_prompt WHERE id = 1;", on: db)
+    }
+    internal func logRowCount(on db: Database) -> Int64 { resilientScalar("SELECT COUNT(*) FROM log;", on: db) }
+    internal func wikiIndexVersion(on db: Database) -> Int64 {
+        resilientScalar("SELECT COALESCE(version, 0) FROM wiki_index WHERE id = 1;", on: db)
+    }
+    internal func sourceMarkdownVersionCount(on db: Database) -> Int64 {
+        resilientScalar("SELECT COUNT(*) FROM source_markdown_versions;", on: db)
+    }
+    internal func sourceVersionCount(on db: Database) -> Int64 {
+        resilientScalar("SELECT COUNT(*) FROM source_versions;", on: db)
+    }
+    internal func refsGenerationSum(on db: Database) -> Int64 {
+        resilientScalar("SELECT COALESCE(SUM(generation), 0) FROM refs;", on: db)
+    }
+    internal func activitiesCount(on db: Database) -> Int64 {
+        resilientScalar("SELECT COUNT(*) FROM activities;", on: db)
+    }
+    internal func bookmarkNodesCount(on db: Database) -> Int64 {
+        resilientScalar("SELECT COUNT(*) FROM bookmark_nodes;", on: db)
+    }
+    internal func chatCount(on db: Database) -> Int64 {
+        resilientScalar("SELECT COUNT(*) FROM chats;", on: db)
+    }
+    internal func chatMessageCount(on db: Database) -> Int64 {
+        resilientScalar("SELECT COUNT(*) FROM chat_messages;", on: db)
+    }
+
+    // MARK: - changeToken contributors (slice 2b)
+
+    /// The per-kind contributors whose folds assemble into ``changeToken()``.
+    /// Order is load-bearing: it reproduces the historical 14-field
+    /// ``ChangeToken/rawString`` byte-for-byte. A kind may appear more than
+    /// once (the historical layout interleaves the system-prompt/log/index
+    /// folds between the `sources` table fold and the graph-model source
+    /// folds). `internal` so the contributor-exhaustiveness test can read it
+    /// (`@testable import`).
+    static let tokenContributors: [any ChangeTokenContributor] = [
+        PagesTokenContributor(),
+        SourceTableTokenContributor(),
+        SystemPromptTokenContributor(),
+        LogTokenContributor(),
+        WikiIndexTokenContributor(),
+        SourceDerivedTokenContributor(),
+        SourceGraphTokenContributor(),
+        BookmarkTokenContributor(),
+        ChatTokenContributor(),
+    ]
+
+    internal struct PagesTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .page
+        func fold(in store: GRDBWikiStore, on db: Database) throws -> ChangeTokenFold {
+            let (count, sum) = try store.pageCountSum(on: db)
+            return .pages(count: count, versionSum: sum)
+        }
+    }
+
+    internal struct SourceTableTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .source
+        func fold(in store: GRDBWikiStore, on db: Database) throws -> ChangeTokenFold {
+            let (count, sum) = store.sourceCountSum(on: db)
+            return .sourceTable(count: count, versionSum: sum)
+        }
+    }
+
+    internal struct SystemPromptTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .systemPrompt
+        func fold(in store: GRDBWikiStore, on db: Database) throws -> ChangeTokenFold {
+            .systemPrompt(version: store.systemPromptVersion(on: db))
+        }
+    }
+
+    internal struct LogTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .log
+        func fold(in store: GRDBWikiStore, on db: Database) throws -> ChangeTokenFold {
+            .log(rowCount: store.logRowCount(on: db))
+        }
+    }
+
+    internal struct WikiIndexTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .wikiIndex
+        func fold(in store: GRDBWikiStore, on db: Database) throws -> ChangeTokenFold {
+            .wikiIndex(version: store.wikiIndexVersion(on: db))
+        }
+    }
+
+    /// The derived-alternative fold: the `source_markdown_versions` row count.
+    /// Logically a source concern; appears after the index fold in the
+    /// historical layout, so it is its own contributor in registry order.
+    internal struct SourceDerivedTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .source
+        func fold(in store: GRDBWikiStore, on db: Database) throws -> ChangeTokenFold {
+            .sourceMarkdownVersions(count: store.sourceMarkdownVersionCount(on: db))
+        }
+    }
+
+    /// The graph-model source folds: `source_versions` count, `refs` generation
+    /// sum, `activities` count. Appended at the token tail by Phase 1 (v20);
+    /// logically source provenance/version state.
+    internal struct SourceGraphTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .source
+        func fold(in store: GRDBWikiStore, on db: Database) throws -> ChangeTokenFold {
+            .sourceGraph(versionCount: store.sourceVersionCount(on: db),
+                         refsGenerationSum: store.refsGenerationSum(on: db),
+                         activitiesCount: store.activitiesCount(on: db))
+        }
+    }
+
+    /// Phase D fold: the `bookmark_nodes` row count. A bookmark create/delete
+    /// bumps the token so the File Provider re-enumerates the `bookmarks/` tree.
+    internal struct BookmarkTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .bookmark
+        func fold(in store: GRDBWikiStore, on db: Database) throws -> ChangeTokenFold {
+            .bookmarks(count: store.bookmarkNodesCount(on: db))
+        }
+    }
+
+    /// Chat fold (#119 follow-on): the `chats` row count + `chat_messages` row
+    /// count. A chat create/delete bumps the count; a message append bumps the
+    /// message count. Both advance the token so the FP re-enumerates `chats/`.
+    internal struct ChatTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .chat
+        func fold(in store: GRDBWikiStore, on db: Database) throws -> ChangeTokenFold {
+            .chat(count: store.chatCount(on: db), messageCount: store.chatMessageCount(on: db))
+        }
+    }
+
     // MARK: - WikiStore protocol: Pages
 
     public func listPages(sortBy: PageSortOrder) throws -> [WikiPageSummary] {
@@ -2461,7 +2791,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func createPage(title: String, createdBy: String?) throws -> WikiPage {
+    public func createPage(title: String, createdBy: String? = nil) throws -> WikiPage {
         try mutate(event: { page in
             self.localEvent(.page, id: page.id.rawValue, change: .created)
         }) { db in
@@ -2521,7 +2851,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try createPage(title: title, createdBy: nil)
     }
 
-    public func updatePage(id: PageID, title: String, body: String, lastEditedBy: String?) throws {
+    public func updatePage(id: PageID, title: String, body: String, lastEditedBy: String? = nil) throws {
         try mutate(event: { _ in
             self.localEvent(.page, id: id.rawValue, change: .updated)
         }) { db in
@@ -2535,6 +2865,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             """, arguments: [title, slug, body,
                             Date().timeIntervalSince1970, lastEditedBy,
                             id.rawValue])
+            // Match SQLiteWikiStore: a 0-row UPDATE means the id is gone, so
+            // throw .notFound inside `mutate`'s body. The savepoint rolls back
+            // and `mutate` discards the buffered event (no emit on failure).
+            guard db.changesCount > 0 else { throw WikiStoreError.notFound(id) }
         }
     }
 
@@ -2575,22 +2909,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func resolveSourceByName(_ displayName: String) throws -> PageID? {
-        // TODO: complex three-pass resolution (exact, extension-stripped, lenient).
-        // For now, the exact-match pass (most common case).
         try dbQueue.read { db in
-            if let id = try String.fetchOne(
-                db,
-                sql: """
-                SELECT id FROM sources
-                WHERE COALESCE(display_name, filename) = ? COLLATE NOCASE
-                   OR filename = ? COLLATE NOCASE
-                ORDER BY updated_at DESC LIMIT 1;
-                """,
-                arguments: [displayName, displayName]
-            ) {
-                return PageID(rawValue: id)
-            }
-            return nil
+            try self.resolveSourceByNameLocked(displayName, in: db)
         }
     }
 
@@ -2598,17 +2918,63 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try mutate(event: { _ in
             self.localEvent(.page, id: pageID.rawValue, change: .updated)
         }) { db in
-            // Delete all existing outgoing links, then insert the resolved
-            // subset. Targets that don't resolve to a page are omitted (the
-            // schema forbids a NULL to_page_id). Self-links allowed.
+            // Delete all existing outgoing page + source links, then insert the
+            // resolved subset. Faithful port of `SQLiteWikiStore.replaceLinks`:
+            // canonical-ULID targets validate by id (direct row fetch); legacy
+            // and forward links resolve by name via `resolveLinkTarget`. All
+            // resolvers used here are the `*Locked` variants that take the
+            // in-transaction `db` — the public `resolveTitleToID` /
+            // `resolveSourceByName` open their own `dbQueue.read`, which would
+            // re-enter the DatabasePool's serial queue and hit GRDB's fatal
+            // "Database methods are not reentrant".
             try db.execute(sql: "DELETE FROM page_links WHERE from_page_id = ?;",
                            arguments: [pageID.rawValue])
+            try db.execute(sql: "DELETE FROM source_links WHERE from_page_id = ?;",
+                           arguments: [pageID.rawValue])
             for link in parsedLinks {
-                guard let target = try self.resolveTitleToID(link.target) else { continue }
-                try db.execute(sql: """
-                INSERT OR IGNORE INTO page_links (from_page_id, to_page_id, link_text)
-                VALUES (?, ?, ?);
-                """, arguments: [pageID.rawValue, target.rawValue, link.linkText])
+                switch link.linkType {
+                case .page:
+                    let resolved: PageID?
+                    if let id = try self.canonicalLinkID(link, in: db) {
+                        resolved = id
+                    } else {
+                        resolved = try self.resolveLinkTarget(
+                            link, using: self.resolveTitleToIDLocked, in: db)
+                    }
+                    guard let resolved else { continue }
+                    try db.execute(sql: """
+                    INSERT OR IGNORE INTO page_links (from_page_id, to_page_id, link_text)
+                    VALUES (?, ?, ?);
+                    """, arguments: [pageID.rawValue, resolved.rawValue, link.linkText])
+                case .source:
+                    let resolved: PageID?
+                    if let id = try self.canonicalLinkID(link, in: db) {
+                        resolved = id
+                    } else {
+                        resolved = try self.resolveLinkTarget(
+                            link, using: self.resolveSourceByNameLocked, in: db)
+                    }
+                    guard let resolved else { continue }
+                    // Resolve the `@vN` ordinal (1-based) to a concrete smv id;
+                    // NULL when unpinned or out-of-range (follows the active ref).
+                    let pinID = try link.versionPin.flatMap {
+                        try self.resolveVersionPin($0, sourceID: resolved, in: db)
+                    }
+                    // Embed source links (`![[source:…]]`) write a DISTINCT edge
+                    // with role='embed' — the `source_links_edge` unique index
+                    // treats (from, to, role, pin) as distinct, so a cite + embed
+                    // to the same source coexist as separate rows (Phase 4a, AC.3).
+                    let role = link.isEmbed ? "embed" : "cite"
+                    try db.execute(sql: """
+                    INSERT OR IGNORE INTO source_links
+                        (from_page_id, to_source_id, link_text, role, pinned_version_id)
+                    VALUES (?, ?, ?, ?, ?);
+                    """, arguments: [pageID.rawValue, resolved.rawValue, link.linkText,
+                                     role, pinID?.rawValue])
+                case .chat:
+                    // Chat links resolve at render time (no persisted graph edge).
+                    continue
+                }
             }
         }
     }
@@ -2617,10 +2983,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     public func addSource(
         filename: String, data: Data,
-        zoteroItemKey: String?, zoteroItemTitle: String?,
-        mimeType: String?, provenance: SourceProvenance?,
-        role: SourceRole, originalPath: String?,
-        activityID: String?, resolvedDisplayName: String??
+        zoteroItemKey: String? = nil, zoteroItemTitle: String? = nil,
+        mimeType: String? = nil, provenance: SourceProvenance? = nil,
+        role: SourceRole = .primary, originalPath: String? = nil,
+        activityID: String? = nil, resolvedDisplayName: String?? = nil
     ) throws -> SourceSummary {
         // Resolve the display name BEFORE entering the locked mutate path
         // (a CSV-ish PDFKit parse would extend the write transaction past the
@@ -2757,8 +3123,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
 
     public func addBytelessSource(
-        filename: String, mimeType: String?,
-        provenance: SourceProvenance, role: SourceRole
+        filename: String, mimeType: String? = nil,
+        provenance: SourceProvenance, role: SourceRole = .primary
     ) throws -> SourceSummary {
         try mutate(event: { source in
             self.localEvent(.source, id: source.id.rawValue, change: .created)
@@ -3048,8 +3414,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     // MARK: - WikiStore protocol: Processed markdown versions
 
     public func appendContentVersion(
-        sourceID: PageID, data: Data, mimeType: String?,
-        provenance: SourceProvenance?
+        sourceID: PageID, data: Data, mimeType: String? = nil,
+        provenance: SourceProvenance? = nil
     ) throws -> SourceVersion {
         try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
@@ -3519,7 +3885,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func appendProcessedMarkdown(
         sourceID: PageID, content: String,
         origin: SourceMarkdownOrigin, note: String?,
-        technique: String?
+        technique: String? = nil
     ) throws -> SourceMarkdownVersion {
         let version: SourceMarkdownVersion = try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
@@ -3630,7 +3996,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     public func recordMarkdownExtraction(
         sourceID: PageID, content: String, backend: ExtractionBackend,
-        sourceVersionID: String?, note: String?, modelVersion: String?
+        sourceVersionID: String? = nil, note: String? = nil, modelVersion: String? = nil
     ) throws -> SourceMarkdownVersion {
         let (version, reembed): (SourceMarkdownVersion, Bool) = try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
@@ -3722,7 +4088,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func appendPageVersion(
         pageID: PageID, title: String, body: String,
         expectedHeadVersionID: String?,
-        lastEditedBy: String?
+        lastEditedBy: String? = nil
     ) throws -> String {
         try mutate(event: { _ in
             self.localEvent(.page, id: pageID.rawValue, change: .updated)
@@ -3919,13 +4285,18 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             FROM workspace_refs WHERE workspace_id = ?;
             """, arguments: [workspaceID])
             return rows.map { row in
-                WorkspaceRef(
+                // blob_hash and title are nullable (INSERTs use NULL for refs
+                // without a blob/title). Decode as String? explicitly so GRDB
+                // doesn't try to force-decode NULL → String.
+                let blobHash: String? = row["blob_hash"]
+                let title: String? = row["title"]
+                return WorkspaceRef(
                     workspaceID: row["workspace_id"],
                     ownerID: PageID(rawValue: row["owner_id"]),
                     baseVersionID: row["base_version_id"],
                     versionID: row["version_id"],
-                    blobHash: row["blob_hash"],
-                    title: row["title"],
+                    blobHash: blobHash,
+                    title: title,
                     updatedAt: Date(timeIntervalSince1970: row["updated_at"]))
             }
         }
@@ -4108,7 +4479,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     let base: String? = ref["base_version_id"]
                     let wsVersion: String? = ref["version_id"]
                     let blobHash: String? = ref["blob_hash"]
-                    let title: String = ref["title"]
+                    // title is nullable (staging INSERTs use NULL).
+                    let title: String? = ref["title"]
                     let pageID = PageID(rawValue: pageIDStr)
 
                     // Resolve main head.
@@ -4127,7 +4499,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                             conflicts.append((pageIDStr, nil, stagedHash, mainHead))
                             continue
                         }
-                        try self.mintCreatedPage(db: db, pageID: pageID, blobHash: stagedHash, title: title)
+                        try self.mintCreatedPage(db: db, pageID: pageID, blobHash: stagedHash, title: title ?? "")
                         mergedPageIDs.append(pageIDStr)
                     } else if base == nil {
                         // Old-style created page (pre-v35: version_id set, base nil).
@@ -4481,11 +4853,27 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             count > 0 ? self.localEvent(.page, id: "workspace-reap", change: .updated) : nil
         }) { db in
             let cutoff = Date().timeIntervalSince1970 - ttl
-            try db.execute(sql: """
-            UPDATE workspaces SET status = 'abandoned', updated_at = ?
-            WHERE status = 'open' AND updated_at < ?;
-            """, arguments: [Date().timeIntervalSince1970, cutoff])
-            return db.changesCount
+            // Select stale open workspace IDs.
+            let staleIDs = try String.fetchAll(
+                db,
+                sql: "SELECT id FROM workspaces WHERE status = 'open' AND updated_at < ?;",
+                arguments: [cutoff]
+            )
+            // Delete refs + conflicts, then mark abandoned (mirrors
+            // SQLiteWikiStore.reapStaleWorkspaces — the refs are the staging
+            // rows, which must not survive a reap).
+            let now = Date().timeIntervalSince1970
+            for id in staleIDs {
+                try db.execute(sql: "DELETE FROM workspace_refs WHERE workspace_id = ?;",
+                               arguments: [id])
+                try db.execute(sql: "DELETE FROM workspace_conflicts WHERE workspace_id = ?;",
+                               arguments: [id])
+                try db.execute(
+                    sql: "UPDATE workspaces SET status = 'abandoned', updated_at = ? WHERE id = ?;",
+                    arguments: [now, id]
+                )
+            }
+            return staleIDs.count
         }
     }
 
@@ -4718,16 +5106,24 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func missingSourceEmbeddingWork() -> [(id: PageID, text: String)] {
         do {
             return try dbQueue.read { db in
+                // Mirrors SQLiteWikiStore: text is the source's title + its
+                // processed-markdown HEAD body (title-only when un-extracted).
+                // The body is the CAS-resolved HEAD version (`smvHeadBodySQL`),
+                // NOT the filename — guards the regression where the embed text
+                // silently emptied to just the filename (AC.9a).
                 let rows = try Row.fetchAll(db, sql: """
-                SELECT s.id, COALESCE(s.display_name, s.filename) AS text
+                SELECT s.id, COALESCE(s.display_name, s.filename) AS title,
+                       \(Self.smvHeadBodySQL) AS body
                 FROM sources s
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM source_chunks WHERE source_id = s.id
-                )
+                LEFT JOIN source_chunks sc ON sc.source_id = s.id
+                WHERE sc.source_id IS NULL
                 ORDER BY s.id;
                 """)
                 return rows.map { row in
-                    (id: PageID(rawValue: row["id"]), text: row["text"])
+                    let id = PageID(rawValue: row["id"])
+                    let title: String = row["title"]
+                    let body: String = row["body"]
+                    return (id, body.isEmpty ? title : "\(title)\n\n\(body)")
                 }
             }
         } catch {
@@ -5184,6 +5580,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             UPDATE chats SET title = ?, updated_at = ?
             WHERE id = ?;
             """, arguments: [title, Date().timeIntervalSince1970, id.rawValue])
+            // A 0-row UPDATE means the chat id is gone — throw .notFound inside
+            // `mutate`'s body so the savepoint rolls back and no event is emitted
+            // (mirrors updatePage / SQLiteWikiStore.renameChat).
+            guard db.changesCount > 0 else { throw WikiStoreError.notFound(id) }
 
             // Refresh the FTS sidecar title so keyword search reflects the new
             // name (the body is unchanged). A no-op if no chat_search row exists
@@ -5608,8 +6008,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     /// The ingest byte cap (100 MiB). Mirrors `SQLiteWikiStore.ingestByteCap`
     /// — defined locally so GRDBWikiStore is self-contained (no cross-store
-    /// reference).
-    private static let ingestByteCap = 100 * 1024 * 1024
+    /// reference). Public so tests can assert the cap (e.g. `SourcesTests`).
+    public static let ingestByteCap = 100 * 1024 * 1024
 
     /// Get-or-create an agent by (name, kind), returning its id. Idempotent.
     /// Mirrors `SQLiteWikiStore.ensureAgent`. `db:`-taking so it is safe inside
@@ -6386,5 +6786,619 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
         return .merged
     }
+
+    // MARK: - File Provider read-projection helpers
+
+    /// Roll the source-content ref back to `versionID`, refreshing the
+    /// denormalized `sources` mirror (byte_size, mime_type, content_hash).
+    /// Ported from the former `SQLiteWikiStore.rollbackSourceContent`.
+    public func rollbackSourceContent(sourceID: PageID, to versionID: PageID) throws {
+        try mutate(event: { _ in
+            self.localEvent(.source, id: sourceID.rawValue, change: .updated)
+        }) { db in
+            try self.rollbackSourceContentBody(db: db, sourceID: sourceID, versionID: versionID)
+        }
+    }
+
+    private func rollbackSourceContentBody(db: Database, sourceID: PageID, versionID: PageID) throws {
+        // Use inSavepoint (not inTransaction) — this method is called from inside
+        // mutate()'s inSavepoint, so inSavepoint nests as a SAVEPOINT instead
+        // of failing with "cannot start a transaction within a transaction".
+        try db.inSavepoint {
+            guard let target = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT blob_hash, mime_type FROM source_versions
+                WHERE id = ? AND source_id = ?;
+                """,
+                arguments: [versionID.rawValue, sourceID.rawValue]
+            ) else {
+                throw WikiStoreError.notFound(versionID)
+            }
+            let blobHash: String? = target["blob_hash"]
+            let mime: String? = target["mime_type"]
+
+            var byteSize: Int64 = 0
+            if let blobHash {
+                byteSize = (try Int64.fetchOne(
+                    db, sql: "SELECT byte_size FROM blobs WHERE hash = ?;",
+                    arguments: [blobHash]
+                )) ?? 0
+            }
+
+            let prevGeneration: Int = try self.refGeneration(sourceID: sourceID, on: db) ?? 0
+            let nextGeneration: Int64 = Int64(prevGeneration + 1)
+            let nowTS: Double = Date().timeIntervalSince1970
+            try db.execute(sql: """
+            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+            VALUES ('source-content', ?, ?, ?, ?)
+            ON CONFLICT(kind, owner_id) DO UPDATE SET
+                version_id = excluded.version_id,
+                generation = excluded.generation,
+                updated_at = excluded.updated_at;
+            """, arguments: [sourceID.rawValue, versionID.rawValue, nextGeneration, nowTS])
+
+            try db.execute(sql: """
+            UPDATE sources SET byte_size = ?, content_hash = ?, updated_at = ?,
+                                version = version + 1
+            WHERE id = ?;
+            """, arguments: [byteSize, blobHash, nowTS, sourceID.rawValue])
+            if let mime {
+                try db.execute(sql: "UPDATE sources SET mime_type = ? WHERE id = ?;",
+                               arguments: [mime, sourceID.rawValue])
+            }
+            return .commit
+        }
+    }
+
+    /// All pages ordered by id (for the File Provider index projection).
+    /// Ported from the former SQLiteWikiStore.listAllPagesOrderedByID.
+    public func listAllPagesOrderedByID() throws -> [WikiPage] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+            SELECT id, title, slug, body_markdown, created_at, updated_at, version
+            FROM pages ORDER BY id ASC;
+            """)
+            return rows.map { row in
+                WikiPage(
+                    id: PageID(rawValue: row["id"]),
+                    title: row["title"],
+                    slug: row["slug"],
+                    bodyMarkdown: row["body_markdown"],
+                    createdAt: Date(timeIntervalSince1970: row["created_at"]),
+                    updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
+                    version: row["version"]
+                )
+            }
+        }
+    }
+
+    /// The source summary for `id`. Ported from the former
+    /// SQLiteWikiStore.getSource(id:).
+    public func getSource(id: PageID) throws -> SourceSummary {
+        try dbQueue.read { db in try Self.getSourceSummary(id: id, on: db) }
+    }
+
+    /// One chat summary by id. Ported from the former
+    /// SQLiteWikiStore.getChat(id:).
+    public func getChat(id: PageID) throws -> ChatSummary {
+        try dbQueue.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
+                       (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
+                       c.summary, c.summary_at
+                FROM chats c WHERE c.id = ?;
+                """,
+                arguments: [id.rawValue]
+            ) else { throw WikiStoreError.notFound(id) }
+            let summary: String? = row["summary"]
+            let summaryAt: Double? = row["summary_at"]
+            return Self.readChatSummary(
+                from: row,
+                summary: summary,
+                summaryAt: summaryAt.map { Date(timeIntervalSince1970: $0) }
+            )
+        }
+    }
+
+    /// All page-to-page links ordered (for the File Provider link index).
+    /// Ported from the former SQLiteWikiStore.listAllLinks().
+    public func listAllLinks() throws -> [IndexGenerators.LinkRow] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+            SELECT from_page_id, to_page_id, link_text
+            FROM page_links ORDER BY from_page_id, to_page_id;
+            """)
+            return rows.map { row in
+                IndexGenerators.LinkRow(
+                    from: row["from_page_id"],
+                    to: row["to_page_id"],
+                    linkText: row["link_text"],
+                    type: "page"
+                )
+            }
+        }
+    }
+
+    /// All page-to-source links ordered (for the File Provider link index).
+    /// Ported from the former SQLiteWikiStore.listAllSourceLinks().
+    public func listAllSourceLinks() throws -> [IndexGenerators.LinkRow] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+            SELECT from_page_id, to_source_id, link_text
+            FROM source_links ORDER BY from_page_id, to_source_id;
+            """)
+            return rows.map { row in
+                IndexGenerators.LinkRow(
+                    from: row["from_page_id"],
+                    to: row["to_source_id"],
+                    linkText: row["link_text"],
+                    type: "source"
+                )
+            }
+        }
+    }
+
+    /// All log entries ordered (for the File Provider log projection).
+    /// Ported from the former SQLiteWikiStore.listAllLogEntriesOrderedByID().
+    public func listAllLogEntriesOrderedByID() throws -> [LogEntry] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+            SELECT id, ts, kind, title, note FROM log ORDER BY ts ASC, rowid ASC;
+            """)
+            return rows.map { row in
+                let note: String? = row["note"]
+                return LogEntry(
+                    id: PageID(rawValue: row["id"]),
+                    timestamp: Date(timeIntervalSince1970: row["ts"]),
+                    kind: LogEntry.Kind(rawValue: row["kind"]) ?? .ingest,
+                    title: row["title"],
+                    note: note
+                )
+            }
+        }
+    }
+    /// All sources ordered by id with a has_markdown flag (for the File
+    /// Provider index projection). Ported from the former
+    /// SQLiteWikiStore.listAllSourcesOrderedByID.
+    public func listAllSourcesOrderedByID() throws -> [IndexGenerators.SourceIndexRow] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+            SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size,
+                   s.created_at, s.updated_at, s.version, s.display_name,
+                   (SELECT 1 FROM source_markdown_versions WHERE file_id = s.id LIMIT 1) IS NOT NULL AS has_markdown
+            FROM sources s ORDER BY s.id ASC;
+            """)
+            return rows.map { row in
+                let mime: String? = row["mime_type"]
+                let displayName: String? = row["display_name"]
+                return IndexGenerators.SourceIndexRow(
+                    id: row["id"],
+                    filename: row["filename"],
+                    ext: row["ext"],
+                    mime: mime,
+                    byteSize: row["byte_size"],
+                    createdAt: Date(timeIntervalSince1970: row["created_at"]),
+                    updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
+                    version: row["version"],
+                    displayName: displayName,
+                    hasMarkdown: (row["has_markdown"] as Int?) == 1
+                )
+            }
+        }
+    }
+
+    /// Head `source_markdown_versions` row per source (ref-resolved or
+    /// default-active MAX), for the File Provider's `.md`-sibling projection.
+    /// Resilient: returns `[:]` if the tables don't exist (pre-migration read
+    /// connection). Ported from the former
+    /// SQLiteWikiStore.processedMarkdownHeadsBySource.
+    public func processedMarkdownHeadsBySource() throws -> [String: SourceMarkdownVersion] {
+        do {
+            return try dbQueue.read { db in
+                let rows = try Row.fetchAll(db, sql: """
+                WITH heads(source_id, head_id) AS (
+                    SELECT s.id,
+                           COALESCE(
+                             (SELECT r.version_id FROM refs r
+                              WHERE r.kind = 'source-derived' AND r.owner_id = s.id),
+                             (SELECT MAX(id) FROM source_markdown_versions WHERE file_id = s.id)
+                           )
+                    FROM sources s
+                )
+                SELECT \(Self.smvSelectColumns)
+                FROM heads
+                JOIN source_markdown_versions smv ON smv.id = heads.head_id
+                \(Self.smvBlobJoin);
+                """)
+                var result: [String: SourceMarkdownVersion] = [:]
+                for row in rows {
+                    let version = Self.readMarkdownVersion(from: row)
+                    result[version.sourceID.rawValue] = version
+                }
+                return result
+            }
+        } catch {
+            return [:]
+        }
+    }
+
+    // MARK: - Ported from SQLiteWikiStore (test/protocol parity)
+
+    /// The SQL fragment that selects the HEAD processed-markdown body text for a
+    /// source `s`. Resolves the active ref first (if any), else falls back to
+    /// `MAX(id)` on the version chain — the same default-active rule used
+    /// throughout the store. Mirrors `SQLiteWikiStore.smvHeadBodySQL`.
+    private static let smvHeadBodySQL = """
+    COALESCE((
+      SELECT CAST(b.content AS TEXT)
+      FROM source_markdown_versions smv
+      LEFT JOIN blobs b ON b.hash = smv.blob_hash
+      WHERE smv.id = COALESCE(
+        (SELECT r.version_id FROM refs r
+         WHERE r.kind = 'source-derived' AND r.owner_id = s.id
+         AND EXISTS (SELECT 1 FROM source_markdown_versions smv3
+                     WHERE smv3.id = r.version_id)),
+        (SELECT MAX(smv2.id) FROM source_markdown_versions smv2
+         WHERE smv2.file_id = s.id)
+      )
+    ), '')
+    """
+
+    // MARK: - withTransaction (reentrant savepoint wrapper)
+
+    /// Wraps a closure in a transaction (BEGIN IMMEDIATE at the outermost level,
+    /// SAVEPOINT when nested). Public methods called inside (e.g. `createPage`,
+    /// `storePageChunks`) re-enter `mutate` → `dbQueue.writeWithoutTransaction`
+    /// → `db.inSavepoint`, which nests as a SAVEPOINT — no deadlock, no
+    /// "cannot start a transaction within a transaction". Mirrors
+    /// `SQLiteWikiStore.withTransaction`.
+    ///
+    /// Internal (not private) so tests can exercise nesting directly.
+    func withTransaction<T>(_ body: () throws -> T) throws -> T {
+        var result: T!
+        // `unsafeReentrantWrite` (not `writeWithoutTransaction`) so a `mutate`
+        // call inside `body` re-enters inline (GRDB Case 2) instead of tripping
+        // DatabasePool's "not reentrant" fatal error. `inSavepoint` nests as a
+        // SAVEPOINT inside the outer write.
+        try dbQueue.unsafeReentrantWrite { db in
+            try db.inSavepoint {
+                result = try body()
+                return .commit
+            }
+        }
+        return result
+    }
+
+    // MARK: - Source version history
+
+    /// The full content-version chain for a source, newest-first (parallel to
+    /// `processedMarkdownHistory`). Empty when the source has no versions.
+    /// Mirrors `SQLiteWikiStore.contentVersionHistory(sourceID:)`.
+    public func contentVersionHistory(sourceID: PageID) throws -> [SourceVersion] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT id, source_id, parent_id, blob_hash, mime_type,
+                       activity_id, external_identity, fetched_at
+                FROM source_versions WHERE source_id = ? ORDER BY id DESC;
+                """,
+                arguments: [sourceID.rawValue]
+            )
+            return rows.map { row in
+                SourceVersion(
+                    id: row["id"],
+                    sourceID: PageID(rawValue: row["source_id"]),
+                    parentID: row["parent_id"],
+                    blobHash: row["blob_hash"],
+                    mimeType: row["mime_type"],
+                    activityID: row["activity_id"],
+                    externalIdentity: row["external_identity"],
+                    fetchedAt: Date(timeIntervalSince1970: row["fetched_at"])
+                )
+            }
+        }
+    }
+
+    // MARK: - Embedder consistency
+
+    /// Check the stored embedder identifier in `embedding_meta` against the
+    /// currently selected embedder. On mismatch, wipes `page_chunks` and
+    /// `source_chunks` so the async backfill re-embeds everything with the new
+    /// embedder. Mirrors `SQLiteWikiStore.ensureEmbedderConsistency`.
+    ///
+    /// `activeIdentifierOverride` is injected by tests; production passes `nil`
+    /// and the live `EmbeddingService.selectedEmbedderIdentifier()` is used.
+    func ensureEmbedderConsistency(activeIdentifierOverride: String? = nil) {
+        // Only the app owns embeddings — it's the sole producer of chunk vectors —
+        // so only it reconciles `embedding_meta`. The CLI (`wikictl`) and the File
+        // Provider extension open the store writable too, but they never embed; in
+        // those contexts `selectedEmbedderIdentifier()` returns the NLEmbedder
+        // fallback (no bundled model). Letting them assert that fallback would
+        // create an app⇄CLI tug-of-war that wipes every chunk on each launch
+        // (issue #165). Tests inject `activeIdentifierOverride` to bypass this gate.
+        guard activeIdentifierOverride != nil
+                || Bundle.main.bundlePath.hasSuffix(".app") else { return }
+        let activeIdentifier = activeIdentifierOverride ?? EmbeddingService.selectedEmbedderIdentifier()
+        do {
+            try dbQueue.writeWithoutTransaction { db in
+                let stored = (try? String.fetchOne(
+                    db,
+                    sql: "SELECT embedder FROM embedding_meta WHERE id = 1;"
+                )) ?? ""
+                guard stored != activeIdentifier else { return }
+                try db.execute(sql: "DELETE FROM page_chunks;")
+                try db.execute(sql: "DELETE FROM source_chunks;")
+                try db.execute(sql: "DELETE FROM chat_chunks;")
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO embedding_meta(id, embedder) VALUES (1, ?);",
+                    arguments: [activeIdentifier]
+                )
+                DebugLog.store("ensureEmbedderConsistency: \(stored.isEmpty ? "(empty)" : stored) -> \(activeIdentifier), chunks wiped")
+            }
+        } catch {
+            DebugLog.store("ensureEmbedderConsistency: failed — \(error)")
+        }
+    }
+
+    // MARK: - FTS rebuild
+
+    /// Backfill the FTS indexes for pre-existing content. Pages rebuild from
+    /// `pages` via the FTS5 'rebuild' command; sources first backfill
+    /// `source_search` from the HEAD of each version chain, then rebuild.
+    /// Idempotent. Returns counts. Mirrors `SQLiteWikiStore.rebuildFTS`.
+    public func rebuildFTS() -> (pages: Int, sources: Int) {
+        dbQueue.writeWithoutTransaction { db in
+            do {
+                try db.execute(sql: "INSERT INTO pages_fts(pages_fts) VALUES ('rebuild');")
+            } catch {
+                DebugLog.store("rebuildFTS: pages rebuild failed — \(error)")
+            }
+            do {
+                try db.execute(sql: """
+                INSERT OR IGNORE INTO source_search (source_id, title, body)
+                SELECT s.id, COALESCE(s.display_name, s.filename),
+                       \(Self.smvHeadBodySQL)
+                FROM sources s
+                WHERE s.id NOT IN (SELECT source_id FROM source_search);
+                """)
+                try db.execute(sql: "INSERT INTO sources_fts(sources_fts) VALUES ('rebuild');")
+            } catch {
+                DebugLog.store("rebuildFTS: sources rebuild failed — \(error)")
+            }
+        }
+        let pages = (try? dbQueue.read { db in
+            try Int.fetchOne(db, sql: "SELECT count(*) FROM pages_fts;") ?? 0
+        }) ?? 0
+        let sources = (try? dbQueue.read { db in
+            try Int.fetchOne(db, sql: "SELECT count(*) FROM sources_fts;") ?? 0
+        }) ?? 0
+        return (pages, sources)
+    }
+
+    // MARK: - Launch search-index self-heal
+
+    /// Self-heal search indexes on every writable open. Idempotent + near-zero
+    /// cost when nothing is missing, so search "just works" without a manual
+    /// reindex. NOT run by the read-only File Provider connection. Mirrors
+    /// `SQLiteWikiStore.ensureSearchIndexesPopulated`.
+    ///
+    /// Steps:
+    /// 0. Reconcile the stored embedder identifier against the active one.
+    /// 0a. Ensure the byteless-source dedup UNIQUE partial index exists (for
+    ///     pre-v20 DBs that predate Phase 3b).
+    /// 1. Seed a v1 processed-markdown version for markdown-native sources
+    ///    that have none, so their body is searchable.
+    /// 2. Backfill the `source_search` / `chat_search` sidecars for rows
+    ///    lacking one.
+    /// 3. Rebuild an FTS index only when its `_idx` shadow term b-tree is empty.
+    ///    NOTE: `count(*) FROM pages_fts` on an external-content table is
+    ///    optimized to read the CONTENT table, so it always equals `pages`' row
+    ///    count — a rowid-count health check can NEVER detect an empty index
+    ///    (the launch ranking bug). The `_idx` b-tree holds the actual terms; 0
+    ///    there means "never built" → rebuild.
+    private func ensureSearchIndexesPopulated() {
+        // 0. Reconcile embedder (app-gated internally).
+        ensureEmbedderConsistency()
+
+        // Steps 0a, 2, 2b, 3 are pure SQL → one write block. Each operation
+        // catches its own errors (best-effort, idempotent) so the write block
+        // itself does not throw.
+        dbQueue.writeWithoutTransaction { db in
+            // 0a. Byteless-source dedup index (idempotent; no-op once it exists).
+            do {
+                try db.execute(sql: """
+                CREATE UNIQUE INDEX IF NOT EXISTS source_versions_byteless_eid
+                    ON source_versions(external_identity) WHERE blob_hash IS NULL;
+                """)
+            } catch {
+                DebugLog.store("ensureSearchIndexes: byteless index create failed — \(error)")
+            }
+
+            // 2. Backfill source_search for sources lacking a row (PDFs/binaries
+            //    → name-only). The AFTER-INSERT trigger on source_search keeps
+            //    sources_fts in sync.
+            do {
+                try db.execute(sql: """
+                INSERT OR IGNORE INTO source_search (source_id, title, body)
+                SELECT s.id, COALESCE(s.display_name, s.filename),
+                       \(Self.smvHeadBodySQL)
+                FROM sources s;
+                """)
+            } catch {
+                DebugLog.store("ensureSearchIndexes: source_search backfill failed — \(error)")
+            }
+
+            // 2b. Backfill chat_search for chats lacking a row (created before v28,
+            //     or whose append predates the sidecar). One row per chat:
+            //     title + concatenated message text.
+            do {
+                try db.execute(sql: """
+                INSERT OR IGNORE INTO chat_search (chat_id, title, body)
+                SELECT c.id, c.title,
+                       COALESCE((SELECT GROUP_CONCAT(m.text, '\n')
+                                 FROM chat_messages m WHERE m.chat_id = c.id), '')
+                FROM chats c
+                WHERE c.id NOT IN (SELECT chat_id FROM chat_search);
+                """)
+            } catch {
+                DebugLog.store("ensureSearchIndexes: chat_search backfill failed — \(error)")
+            }
+
+            // 3. Rebuild an FTS index only when its term index is empty.
+            for (fts, content) in [("pages_fts", "pages"),
+                                   ("sources_fts", "sources"),
+                                   ("chats_fts", "chats")] {
+                guard rowCount(content, on: db) > 0,
+                      ftsIndexRowCount(fts, on: db) == 0 else { continue }
+                do {
+                    try db.execute(sql: "INSERT INTO \(fts)(\(fts)) VALUES ('rebuild');")
+                    DebugLog.store("ensureSearchIndexes: rebuilt empty \(fts) term index")
+                } catch {
+                    DebugLog.store("ensureSearchIndexes: \(fts) rebuild failed — \(error)")
+                }
+            }
+        }
+
+        // 1. Seed markdown-native sources lacking a version. Done outside the
+        //    write block because `appendProcessedMarkdown` opens its own
+        //    transaction (via `mutate`) and fires post-commit re-embed/event work.
+        _ = seedNativeMarkdownSources()
+    }
+
+    /// Seed the first processed-markdown version for markdown-native sources that
+    /// lack one, by decoding their raw bytes as UTF-8 — the same lazy seeding the
+    /// UI used to do on first view. Returns the count seeded. Best-effort.
+    /// Mirrors `SQLiteWikiStore.seedNativeMarkdownSources`.
+    private func seedNativeMarkdownSources() -> Int {
+        // Collect IDs first (read), then seed each outside any write block so
+        // `appendProcessedMarkdown`'s own `mutate` transaction + post-commit work
+        // (re-embed, event emit) run cleanly.
+        let ids: [PageID]
+        do {
+            ids = try dbQueue.read { db in
+                try String.fetchAll(
+                    db,
+                    sql: """
+                    SELECT s.id FROM sources s
+                    WHERE s.mime_type LIKE 'text/%'
+                      AND NOT EXISTS (SELECT 1 FROM source_markdown_versions smv
+                                      WHERE smv.file_id = s.id);
+                    """
+                ).map { PageID(rawValue: $0) }
+            }
+        } catch {
+            DebugLog.store("seedNativeMarkdownSources: id query failed — \(error)")
+            return 0
+        }
+        var seeded = 0
+        for id in ids {
+            guard let bytes = try? sourceContent(id: id),
+                  let text = String(data: bytes, encoding: .utf8) else { continue }
+            _ = try? appendProcessedMarkdown(
+                sourceID: id, content: text, origin: .source, note: nil)
+            seeded += 1
+        }
+        if seeded > 0 {
+            DebugLog.store("seedNativeMarkdownSources: seeded \(seeded) source(s)")
+        }
+        return seeded
+    }
+
+    /// `SELECT count(*) FROM <table>` as an Int (0 on any error), on a given
+    /// `Database` handle. `<table>` is interpolated from trusted internal
+    /// callers only — never user input. Mirrors `SQLiteWikiStore.rowCount`.
+    private func rowCount(_ table: String, on db: Database) -> Int {
+        (try? Int.fetchOne(db, sql: "SELECT count(*) FROM \(table);")) ?? 0
+    }
+
+    /// Row count of an FTS5 table's `_idx` shadow segment b-tree. This is NOT
+    /// the distinct-term count (that's the `fts5vocab` virtual table) — but it
+    /// IS a reliable "has the index ever been built?" probe: 0 means the index
+    /// exists as a table but has never been populated (no terms indexed), which
+    /// is exactly the launch-ranking-bug state `ensureSearchIndexesPopulated`
+    /// must detect and rebuild. On a healthy index it is non-zero. Mirrors
+    /// `SQLiteWikiStore.ftsIndexRowCount`.
+    private func ftsIndexRowCount(_ table: String, on db: Database) -> Int {
+        (try? Int.fetchOne(db, sql: "SELECT count(*) FROM \(table)_idx;")) ?? 0
+    }
+
+    // MARK: - Source link queries
+
+    /// Read the `pinned_version_id` for a source-link edge `(from, to, role)`.
+    /// Returns the resolved version id, or nil when the edge has no pin (NULL)
+    /// or doesn't exist. Mirrors `SQLiteWikiStore.sourceLinkPin`.
+    public func sourceLinkPin(from pageID: PageID, to sourceID: PageID,
+                              role: WikiLinkParser.LinkRole = .cite) throws -> PageID? {
+        try dbQueue.read { db in
+            let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT pinned_version_id FROM source_links
+                WHERE from_page_id = ? AND to_source_id = ? AND role = ?;
+                """,
+                arguments: [pageID.rawValue, sourceID.rawValue, role.rawValue]
+            )
+            guard let row else { return nil }
+            // Distinguish NULL (no pin) from a TEXT value.
+            let value: String? = row["pinned_version_id"]
+            return value.map { PageID(rawValue: $0) }
+        }
+    }
+
+    /// Pages whose bodies link to `sourceID` via `[[source:…]]` (by source ID —
+    /// stable across renames). Used by `renameSource` to find candidate pages
+    /// for link rewriting. One query, zero false positives. Mirrors
+    /// `SQLiteWikiStore.sourceLinkingPages`.
+    public func sourceLinkingPages(to sourceID: PageID) throws -> [PageID] {
+        try dbQueue.read { db in
+            let rows = try String.fetchAll(
+                db,
+                sql: "SELECT DISTINCT from_page_id FROM source_links WHERE to_source_id = ?;",
+                arguments: [sourceID.rawValue]
+            )
+            return rows.map { PageID(rawValue: $0) }
+        }
+    }
+
+    // MARK: - Test hooks (#if DEBUG)
+
+    #if DEBUG
+    /// Test hook: whether sqlite-vec is registered on this connection — proves
+    /// the statically-linked extension loaded. The semantic cosine path still
+    /// can't RANK under `swift test` (NLEmbedding is app-gated), but this
+    /// confirms the scalar functions are available. Mirrors
+    /// `SQLiteWikiStore.vecRegisteredForTesting`.
+    var vecRegisteredForTesting: Bool {
+        (try? dbQueue.read { db in Self.isVecAvailable(db) }) ?? false
+    }
+
+    /// Test hook: when non-nil, the next `migrateIfNeeded` migration throws
+    /// `SQLITE_CORRUPT` (with this message) before running any step, simulating
+    /// a corrupt FTS shadow index tripping a migration write. The hook clears
+    /// itself so the catch's rebuild-and-retry proceeds normally. Mirrors
+    /// `SQLiteWikiStore.migrationCorruptFaultForTesting`.
+    nonisolated(unsafe) static var migrationCorruptFaultForTesting: String?
+
+    /// Test-only: recreate `pages_fts` as an external-content table with an
+    /// EMPTY term index, reproducing the launch ranking bug (content rows that
+    /// predate the FTS triggers). The triggers remain; the index simply has no
+    /// terms until `ensureSearchIndexes` rebuilds it on the next open. Mirrors
+    /// `SQLiteWikiStore._breakPagesFtsIndexForTesting`.
+    internal func _breakPagesFtsIndexForTesting() throws {
+        try dbQueue.writeWithoutTransaction { db in
+            try db.execute(sql: "DROP TABLE pages_fts;")
+            try db.execute(sql: """
+            CREATE VIRTUAL TABLE pages_fts USING fts5(
+                title, body_markdown,
+                content='pages', content_rowid='rowid',
+                tokenize='porter');
+            """)
+        }
+    }
+    #endif
 
 }

@@ -17,13 +17,13 @@ struct ReadOnlyStoreTests {
         let url = tempDatabaseURL()
         let id: PageID
         do {
-            let writer = try SQLiteWikiStore(databaseURL: url)
+            let writer = try GRDBWikiStore(databaseURL: url)
             let page = try writer.createPage(title: "Home")
             id = page.id
             try writer.updatePage(id: id, title: "Home", body: "# Welcome\n\nlive body")
         }
 
-        let reader = try SQLiteWikiStore(readOnlyURL: url)
+        let reader = try GRDBWikiStore(readOnlyURL: url)
         let page = try reader.getPage(id: id)
         #expect(page.title == "Home")
         #expect(page.bodyMarkdown == "# Welcome\n\nlive body")
@@ -38,11 +38,11 @@ struct ReadOnlyStoreTests {
 
     @Test func enumeratesMultiplePagesOrderedByID() throws {
         let url = tempDatabaseURL()
-        let writer = try SQLiteWikiStore(databaseURL: url)
+        let writer = try GRDBWikiStore(databaseURL: url)
         let a = try writer.createPage(title: "Alpha")
         let b = try writer.createPage(title: "Bravo")
 
-        let reader = try SQLiteWikiStore(readOnlyURL: url)
+        let reader = try GRDBWikiStore(readOnlyURL: url)
         let ids = try reader.listAllPagesOrderedByID().map(\.id.rawValue)
         // ULIDs sort lexicographically in creation order.
         #expect(ids == [a.id.rawValue, b.id.rawValue].sorted())
@@ -52,11 +52,11 @@ struct ReadOnlyStoreTests {
         let url = tempDatabaseURL()
         let page: WikiPage
         do {
-            let writer = try SQLiteWikiStore(databaseURL: url)
+            let writer = try GRDBWikiStore(databaseURL: url)
             page = try writer.createPage(title: "Home")
         }
 
-        let reader = try SQLiteWikiStore(readOnlyURL: url)
+        let reader = try GRDBWikiStore(readOnlyURL: url)
         // query_only=ON must reject the write at the SQLite layer.
         #expect(throws: (any Error).self) {
             try reader.updatePage(id: page.id, title: "Hacked", body: "nope")

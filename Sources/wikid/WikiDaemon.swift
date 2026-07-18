@@ -3,7 +3,7 @@ import WikiFSCore
 
 /// The daemon's in-process state. Holds the live wiki registry + open stores.
 ///
-/// `SQLiteWikiStore` is `@unchecked Sendable` (method-atomic with an internal
+/// `GRDBWikiStore` is `@unchecked Sendable` (method-atomic with an internal
 /// recursive lock), so it is safe to hold here and serve from XPC handlers.
 /// All mutations are serialized on the daemon's dispatch queue for thread safety.
 ///
@@ -19,14 +19,14 @@ final class WikiDaemon {
 
     private let queue = DispatchQueue(label: "com.selfdrivingwiki.wikid")
     private var registry: WikiRegistry
-    private var openStores: [String: SQLiteWikiStore] = [:]
+    private var openStores: [String: GRDBWikiStore] = [:]
 
     // MARK: - Init
 
     /// Inject `containerDirectory` + `makeStore` for testability.
     init(
         containerDirectory: URL,
-        makeStore: @escaping (URL) throws -> WikiStore = { try SQLiteWikiStore(databaseURL: $0) }
+        makeStore: @escaping (URL) throws -> WikiStore = { try GRDBWikiStore(databaseURL: $0) }
     ) {
         self.containerDirectory = containerDirectory
         self.makeStore = makeStore
@@ -50,7 +50,7 @@ final class WikiDaemon {
             // Open + seed the DB (runs the bootstrap ladder — pages, system prompt, search tables)
             let dbURL = databaseURL(forWikiID: descriptor.id)
             do {
-                let store = try makeStore(dbURL) as? SQLiteWikiStore
+                let store = try makeStore(dbURL) as? GRDBWikiStore
                 openStores[descriptor.id] = store
             } catch {
                 DebugLog.store("wikid: createWiki failed for \(descriptor.id): \(error)")
@@ -131,7 +131,7 @@ final class WikiDaemon {
             let dbURL = databaseURL(forWikiID: wikiID)
             do {
                 // Read-write open (runs bootstrap ladder on first open)
-                let store = try SQLiteWikiStore(databaseURL: dbURL)
+                let store = try GRDBWikiStore(databaseURL: dbURL)
                 openStores[wikiID] = store
                 return true
             } catch {
@@ -176,9 +176,9 @@ final class WikiDaemon {
             // during open/read → sentinel (logs + forces caller re-sync).
             guard registry.descriptor(id: wikiID) != nil else { return "" }
             let dbURL = databaseURL(forWikiID: wikiID)
-            let store: SQLiteWikiStore
+            let store: GRDBWikiStore
             do {
-                store = try SQLiteWikiStore(databaseURL: dbURL)
+                store = try GRDBWikiStore(databaseURL: dbURL)
             } catch {
                 DebugLog.store("wikid: changeToken() failed to open transient store for \(wikiID): \(error)")
                 return Self.errorTokenSentinel

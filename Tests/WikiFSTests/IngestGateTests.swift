@@ -23,17 +23,17 @@ import WikiFSEngine
 @Suite(.tags(.integration))
 struct IngestGateTests {
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("ingestgate-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     /// A byteless YouTube source — synthetic mime `video/youtube`,
     /// `byteSize == 0`, no blob. This is the regression source.
     @discardableResult
-    private func addBytelessYouTube(to store: SQLiteWikiStore) throws -> SourceSummary {
+    private func addBytelessYouTube(to store: GRDBWikiStore) throws -> SourceSummary {
         try store.addBytelessSource(
             filename: "youtube-dQw4w9WgXcQ",
             mimeType: "video/youtube",

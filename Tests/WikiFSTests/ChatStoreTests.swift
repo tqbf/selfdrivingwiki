@@ -4,7 +4,7 @@ import SQLite3
 @testable import WikiFSCore
 
 /// Store-level tests for persisted chat history (issue #119 phase 1): the
-/// `chats` + `chat_messages` tables (schema v23), CRUD on `SQLiteWikiStore`,
+/// `chats` + `chat_messages` tables (schema v23), CRUD on `GRDBWikiStore`,
 /// dense per-chat `seq` assignment, `event_json` round-tripping through the
 /// exact same typed `AgentEvent` pipeline as the live transcript, and
 /// tolerant reads that skip a corrupt row instead of failing the whole chat.
@@ -17,8 +17,8 @@ import SQLite3
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    private func tempStore() throws -> SQLiteWikiStore {
-        try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+    private func tempStore() throws -> GRDBWikiStore {
+        try GRDBWikiStore(databaseURL: tempDatabaseURL())
     }
 
     /// `Date` round-tripped through `timeIntervalSince1970` → SQLite `REAL` →
@@ -188,7 +188,7 @@ import SQLite3
         // recurred. `store.close()` closes the connection synchronously:
         // `sqlite3_close` checkpoints + quiesces the WAL when it's the last open
         // connection, so the raw write runs against a clean file.
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let chat = try store.createChat(kind: .edit, title: "Conversation")
         let inserted = try store.appendChatMessages(chatID: chat.id, events: [
             .userText("before"), .assistantText("after"),
@@ -214,7 +214,7 @@ import SQLite3
         sqlite3_close(raw)
 
         // Reopen and read: the corrupt row is skipped, the two valid ones survive.
-        let reader = try SQLiteWikiStore(databaseURL: url)
+        let reader = try GRDBWikiStore(databaseURL: url)
         let messages = try reader.chatMessages(chatID: chatID)
         #expect(messages.count == 2)
         #expect(messages.map(\.event) == [.userText("before"), .assistantText("after")])

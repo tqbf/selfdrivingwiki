@@ -49,14 +49,14 @@ struct EnumeratorDeletionTests {
     /// siblings). The enumerator under test drives `sources/by-id`.
     private struct Seeded {
         let projection: Projection
-        let store: SQLiteWikiStore
+        let store: GRDBWikiStore
         let sources: [SourceSummary]
     }
 
     private func seed() throws -> Seeded {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-enum-\(UUID().uuidString).sqlite")
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let s1 = try store.addSource(filename: "a.txt", data: Data("aaa".utf8), mimeType: "text/plain")
         let s2 = try store.addSource(filename: "b.txt", data: Data("bbb".utf8), mimeType: "text/plain")
         let s3 = try store.addSource(filename: "c.txt", data: Data("ccc".utf8), mimeType: "text/plain")

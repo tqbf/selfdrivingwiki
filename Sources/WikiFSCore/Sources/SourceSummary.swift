@@ -17,7 +17,7 @@ public enum SourceRole: String, Sendable {
 /// Metadata for one source — the verbatim bytes ingested into the app and
 /// stored in the `sources` table (NOT a wiki page). The raw `content`
 /// BLOB is deliberately NOT part of this summary: it is fetched on demand via
-/// `SQLiteWikiStore.sourceContent(id:)` so the list and the projection's
+/// `GRDBWikiStore.sourceContent(id:)` so the list and the projection's
 /// `getattr`/enumeration never hold large blobs in memory.
 ///
 /// `id` reuses `PageID` (a ULID-string wrapper) since the source id is also a

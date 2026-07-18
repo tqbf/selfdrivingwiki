@@ -19,8 +19,8 @@ struct ExternalWriteBookmarkRefreshTests {
             .appendingPathComponent("wikifs-ext-bm-\(UUID().uuidString).sqlite")
     }
 
-    private func makeModel() throws -> (WikiStoreModel, SQLiteWikiStore) {
-        let store = try SQLiteWikiStore(databaseURL: tempURL())
+    private func makeModel() throws -> (WikiStoreModel, GRDBWikiStore) {
+        let store = try GRDBWikiStore(databaseURL: tempURL())
         store.eventBus = WikiEventBus(wikiID: "test")
         let model = WikiStoreModel(store: store)
         return (model, store)

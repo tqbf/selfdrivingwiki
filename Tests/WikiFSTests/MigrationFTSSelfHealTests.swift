@@ -13,7 +13,7 @@ import Testing
 /// the resolvers and writes page bodies, firing the FTS sync triggers).
 ///
 /// Before the fix, that threw out of `bootstrapSchema`, and `WikiSession`'s
-/// `catch` then hit `try! SQLiteWikiStore(":memory:")` → the whole app crashed.
+/// `catch` then hit `try! GRDBWikiStore(":memory:")` → the whole app crashed.
 /// The fix rebuilds the FTS indexes from their (intact) content tables and
 /// retries the migration once, so an old-schema DB with a corrupt search index
 /// opens and upgrades cleanly.
@@ -37,7 +37,7 @@ struct MigrationFTSSelfHealTests {
     private func buildRewoundV22DB(pageCount: Int) throws -> URL {
         let url = tempDatabaseURL()
         do {
-            let store = try SQLiteWikiStore(databaseURL: url)
+            let store = try GRDBWikiStore(databaseURL: url)
             for i in 1...pageCount {
                 _ = try store.createPage(title: "Page \(i) alpha beta gamma")
             }
@@ -56,15 +56,15 @@ struct MigrationFTSSelfHealTests {
         // step, exactly as a corrupt FTS shadow index would when the v22→23
         // sweep first writes a page body. The store must catch it, rebuild the
         // FTS indexes, and retry the migration to completion.
-        SQLiteWikiStore.migrationCorruptFaultForTesting = "database disk image is malformed"
-        defer { SQLiteWikiStore.migrationCorruptFaultForTesting = nil }
+        GRDBWikiStore.migrationCorruptFaultForTesting = "database disk image is malformed"
+        defer { GRDBWikiStore.migrationCorruptFaultForTesting = nil }
 
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
 
         // The fault was consumed (heal path ran), not left armed.
-        #expect(SQLiteWikiStore.migrationCorruptFaultForTesting == nil)
+        #expect(GRDBWikiStore.migrationCorruptFaultForTesting == nil)
         // Migrated to the current schema with all pages intact.
-        #expect(store.pragmaValue("user_version") == "\(SQLiteWikiStore.currentSchemaVersion)")
+        #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
         #expect(store.scalarText("SELECT COUNT(*) FROM pages;") == "20")
         // The rebuilt FTS index is usable — a MATCH returns every page.
         #expect(store.scalarText("SELECT COUNT(*) FROM pages_fts WHERE pages_fts MATCH 'alpha';") == "20")
@@ -74,8 +74,8 @@ struct MigrationFTSSelfHealTests {
     /// only taken on the corrupt-write failure, never spuriously.
     @Test func healthyV22MigratesWithoutRebuild() throws {
         let url = try buildRewoundV22DB(pageCount: 1)
-        let store = try SQLiteWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "\(SQLiteWikiStore.currentSchemaVersion)")
+        let store = try GRDBWikiStore(databaseURL: url)
+        #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
         #expect(store.scalarText("SELECT COUNT(*) FROM pages;") == "1")
     }
 }

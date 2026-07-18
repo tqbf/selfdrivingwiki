@@ -19,11 +19,11 @@ import Testing
 @Suite(.tags(.integration))
 struct IngestIsolationTests {
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("iso-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     // MARK: - AC7.1: Workspace-stage write leaves main untouched until merge
@@ -51,7 +51,7 @@ struct IngestIsolationTests {
         #expect(headVersion == originalHead)
 
         // Merge brings the workspace's changes to main.
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
 
         // Now main has the workspace's body.
         let mergedPage = try store.getPage(id: page.id)
@@ -84,7 +84,7 @@ struct IngestIsolationTests {
         #expect(wsBody == "new content")
 
         // Merge mints the pages row + root version.
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
 
         // Now the page exists on main with the staged body.
         let mainPage = try store.getPage(id: newPageID)

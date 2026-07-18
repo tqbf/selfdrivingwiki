@@ -27,8 +27,8 @@ struct SourceMaterializerTests {
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    private func tempStore() throws -> SQLiteWikiStore {
-        try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+    private func tempStore() throws -> GRDBWikiStore {
+        try GRDBWikiStore(databaseURL: tempDatabaseURL())
     }
 
     private func htmlResponse(_ body: String, url: String) -> URLFetchService.FetchResponse {
@@ -38,7 +38,7 @@ struct SourceMaterializerTests {
     }
 
     /// `#require` can't wrap a throwing call directly, so resolve first.
-    private func requireOrigin(_ store: SQLiteWikiStore, _ id: PageID) throws -> SourceOrigin {
+    private func requireOrigin(_ store: GRDBWikiStore, _ id: PageID) throws -> SourceOrigin {
         let origin = try store.sourceOrigin(sourceID: id)
         return try #require(origin)
     }
@@ -116,7 +116,7 @@ struct SourceMaterializerTests {
     /// "website" (idempotent ensureAgent).
     @Test func providerAgentIsIdempotent() async throws {
         let url = tempDatabaseURL()
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let html = { (title: String, body: String) in
             "<html><head><title>\(title)</title></head><body>\(body)</body></html>"
         }
@@ -278,7 +278,7 @@ struct SourceMaterializerTests {
     /// the legacy-import agent + an 'import' activity, NULL external_identity.
     @Test func addSourceNoProvenanceUsesLegacyAgent() throws {
         let url = tempDatabaseURL()
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
         let summary = try store.addSource(filename: "legacy.txt", data: Data("x".utf8))
 
         var db: OpaquePointer?

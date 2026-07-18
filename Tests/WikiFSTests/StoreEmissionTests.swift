@@ -48,8 +48,8 @@ struct StoreEmissionTests {
     }
 
     /// Fresh temp-file store + per-wiki bus + spy subscriber.
-    private func makeHarness() throws -> (SQLiteWikiStore, WikiEventBus, Recorder) {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+    private func makeHarness() throws -> (GRDBWikiStore, WikiEventBus, Recorder) {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let bus = WikiEventBus(wikiID: "W")
         store.eventBus = bus
         let recorder = Recorder()
@@ -61,7 +61,7 @@ struct StoreEmissionTests {
         SourceProvenance(agentName: "test", activityKind: "import")
     }
 
-    private func addSeedSource(_ store: SQLiteWikiStore) throws -> SourceSummary {
+    private func addSeedSource(_ store: GRDBWikiStore) throws -> SourceSummary {
         try store.addSource(filename: "blob.bin", data: Data("bytes".utf8))
     }
 
@@ -160,7 +160,7 @@ struct StoreEmissionTests {
         let (store, _, rec) = try makeHarness()
         let s = try addSeedSource(store)
         try await drain(rec)
-        try store.appendContentVersion(sourceID: s.id, data: Data("b2".utf8), mimeType: nil, provenance: nil)
+        _ = try store.appendContentVersion(sourceID: s.id, data: Data("b2".utf8), mimeType: nil, provenance: nil)
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .source)
         #expect(events.last?.change == .updated)
@@ -207,7 +207,7 @@ struct StoreEmissionTests {
         let (store, _, rec) = try makeHarness()
         let s = try addSeedSource(store)
         try await drain(rec)
-        try store.appendProcessedMarkdown(sourceID: s.id, content: "# md", origin: .extraction, note: nil)
+        _ = try store.appendProcessedMarkdown(sourceID: s.id, content: "# md", origin: .extraction, note: nil)
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .source)
         #expect(events.last?.change == .updated)
@@ -218,7 +218,7 @@ struct StoreEmissionTests {
         let (store, _, rec) = try makeHarness()
         let s = try addSeedSource(store)
         try await drain(rec)
-        try store.recordMarkdownExtraction(sourceID: s.id, content: "# md", backend: .anthropic, sourceVersionID: nil, note: nil, modelVersion: "x")
+        _ = try store.recordMarkdownExtraction(sourceID: s.id, content: "# md", backend: .anthropic, sourceVersionID: nil, note: nil, modelVersion: "x")
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .source)
         #expect(events.last?.change == .updated)
@@ -231,7 +231,7 @@ struct StoreEmissionTests {
         let v1 = try store.appendProcessedMarkdown(sourceID: s.id, content: "v1", origin: .extraction, note: nil)
         _ = try store.appendProcessedMarkdown(sourceID: s.id, content: "v2", origin: .extraction, note: nil)
         try await drain(rec)
-        try store.revertProcessedMarkdown(sourceID: s.id, to: v1.id)
+        _ = try store.revertProcessedMarkdown(sourceID: s.id, to: v1.id)
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .source)
         #expect(events.last?.change == .updated)
@@ -370,7 +370,7 @@ struct StoreEmissionTests {
     @Test func nilBusStoreEmitsSilently() throws {
         // A store with no bus (the wikictl path) must not crash on mutation and
         // must not emit anything (there is nothing to emit into).
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         #expect(store.eventBus == nil)
         let page = try store.createPage(title: "Silent")
         #expect(page.title == "Silent")

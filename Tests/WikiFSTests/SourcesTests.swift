@@ -18,8 +18,8 @@ struct SourcesTests {
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    private func tempStore() throws -> SQLiteWikiStore {
-        try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+    private func tempStore() throws -> GRDBWikiStore {
+        try GRDBWikiStore(databaseURL: tempDatabaseURL())
     }
 
     // MARK: - Ingest inserts a row with the right metadata
@@ -149,7 +149,7 @@ struct SourcesTests {
     @Test func oversizeFileIsRejected() throws {
         let store = try tempStore()
         // One byte past the cap. (Allocating exactly cap+1 of zeros is cheap.)
-        let huge = Data(count: SQLiteWikiStore.ingestByteCap + 1)
+        let huge = Data(count: GRDBWikiStore.ingestByteCap + 1)
         #expect(throws: (any Error).self) {
             _ = try store.addSource(filename: "huge.bin", data: huge)
         }
@@ -229,7 +229,7 @@ struct SourcesTests {
         #expect(model.isSourceIngested(raw) == false)
         #expect(model.isSourceIngested(untouched) == false)
 
-        try store.appendLog(kind: .ingest, title: "files/by-id/\(raw.id.rawValue).pdf", note: nil)
+        _ = try store.appendLog(kind: .ingest, title: "files/by-id/\(raw.id.rawValue).pdf", note: nil)
         model.reloadFromStore()
 
         #expect(model.isSourceIngested(raw) == true)
@@ -259,7 +259,7 @@ struct SourcesTests {
         sqlite3_close(raw)
 
         // Open via the store → runs the v1→2 step (and the later v2→3 step).
-        let store = try SQLiteWikiStore(databaseURL: url)
+        let store = try GRDBWikiStore(databaseURL: url)
 
         // sources now exists and is usable.
         let summary = try store.addSource(filename: "after.txt", data: Data("after".utf8))
@@ -279,7 +279,7 @@ struct SourcesTests {
         #expect(sqlite3_prepare_v2(check, "PRAGMA user_version;", -1, &stmt, nil) == SQLITE_OK)
         defer { sqlite3_finalize(stmt) }
         #expect(sqlite3_step(stmt) == SQLITE_ROW)
-        #expect(sqlite3_column_int(stmt, 0) == SQLiteWikiStore.currentSchemaVersion)
+        #expect(sqlite3_column_int(stmt, 0) == GRDBWikiStore.schemaVersion)
         _ = store
     }
 

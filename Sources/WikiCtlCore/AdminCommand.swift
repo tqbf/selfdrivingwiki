@@ -36,7 +36,7 @@ public enum AdminCommand {
     /// (a dry run commits nothing, so it never wakes the app's change bridge —
     /// and since GC changes no projected `ResourceKind`, an applied vacuum has
     /// nothing for the model to refresh either).
-    public static func run(_ action: Action, in store: SQLiteWikiStore) throws -> SourceCommand.Result {
+    public static func run(_ action: Action, in store: GRDBWikiStore) throws -> SourceCommand.Result {
         switch action {
         case .vacuumBlobs(let dryRun, let json):
             let report = try store.vacuumBlobs(dryRun: dryRun)

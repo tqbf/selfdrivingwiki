@@ -13,11 +13,11 @@ struct WikiStoreModelAddURLTests {
         func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse { response }
     }
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-addurl-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     @Test func htmlURLLandsAsMarkdownFileInList() async throws {

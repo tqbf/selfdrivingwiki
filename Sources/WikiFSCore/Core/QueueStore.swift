@@ -45,7 +45,7 @@ public enum QueueStoreError: Error, CustomStringConvertible, LocalizedError {
 /// Backed by GRDB.swift (`DatabaseQueue`) — a lightweight, well-tested Swift
 /// SQLite toolkit. The store owns one serial connection to `queue.sqlite`,
 /// configured with WAL mode, foreign keys, busy timeout, and the same set of
-/// performance PRAGMAs as `SQLiteWikiStore` (#523).
+/// performance PRAGMAs as `GRDBWikiStore` (#523).
 ///
 /// **Concurrency model:** GRDB's `DatabaseQueue` serializes all reads and
 /// writes through a single dispatch queue — every `dbQueue.read { }` /
@@ -86,7 +86,7 @@ public final class QueueStore: @unchecked Sendable {
         config.foreignKeysEnabled = true
         config.busyMode = .timeout(5)
 
-        // Performance PRAGMAs matching SQLiteWikiStore (#523).
+        // Performance PRAGMAs matching GRDBWikiStore (#523).
         // `prepareDatabase` runs on the connection before any app code —
         // journal_mode is set to WAL by GRDB when requested, but we also
         // set it explicitly here for clarity.
@@ -126,7 +126,7 @@ public final class QueueStore: @unchecked Sendable {
     }
 
     /// Force-checkpoint the WAL to zero length, then let GRDB close the
-    /// connection on deinit. Mirrors `SQLiteWikiStore.checkpointAndClose` —
+    /// connection on deinit. Mirrors `GRDBWikiStore.checkpointAndClose` —
     /// the explicit TRUNCATE checkpoint flushes committed frames into the
     /// main file first so reopening the same file has nothing pending
     /// (avoids intermittent `SQLITE_ERROR` under CI load — #223, #234).

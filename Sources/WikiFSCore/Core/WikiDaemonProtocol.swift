@@ -32,7 +32,7 @@ import Foundation
     // MARK: - Store lifecycle
 
     /// Open (or confirm open) the store for a wiki. The daemon holds a
-    /// `SQLiteWikiStore` instance alive for this wiki. Returns true on success.
+    /// `GRDBWikiStore` instance alive for this wiki. Returns true on success.
     /// Does NOT grant the client write access — the client still opens its own
     /// store for writes (sole-writer is deferred to Phase 2+).
     func openStore(wikiID: String, reply: @escaping (Bool) -> Void)

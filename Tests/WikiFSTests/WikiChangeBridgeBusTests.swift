@@ -21,8 +21,8 @@ struct WikiChangeBridgeBusTests {
     /// (bypassing the model), so the model's `summaries` only update via a bus
     /// event — exactly the situation an external `wikictl` write creates.
     @MainActor
-    private func makeModel() throws -> (SQLiteWikiStore, WikiEventBus, WikiStoreModel) {
-        let store = try SQLiteWikiStore(databaseURL: tempDatabaseURL())
+    private func makeModel() throws -> (GRDBWikiStore, WikiEventBus, WikiStoreModel) {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let bus = WikiEventBus(wikiID: "W")
         store.eventBus = bus
         let model = WikiStoreModel(store: store)
@@ -86,7 +86,7 @@ struct WikiChangeBridgeBusTests {
     // MARK: - Issue #303: cross-process (wikictl) writes surfaced by the bridge
 
     /// Simulates the exact #303 scenario: `wikictl` writes through its own
-    /// `SQLiteWikiStore` (no event bus — `bus?.emit` is a silent no-op in the
+    /// `GRDBWikiStore` (no event bus — `bus?.emit` is a silent no-op in the
     /// subprocess), and the running app's model only learns about the change via
     /// the coarse bus event that `WikiChangeBridge.flush` emits after the Darwin
     /// notification. Verifies the model picks up the page purely from the coarse
@@ -94,14 +94,14 @@ struct WikiChangeBridgeBusTests {
     @MainActor @Test func crossProcessWriteSurfacedByCoarseEvent() async throws {
         let url = tempDatabaseURL()
         // Store A = the app's store (has the bus + model).
-        let storeA = try SQLiteWikiStore(databaseURL: url)
+        let storeA = try GRDBWikiStore(databaseURL: url)
         let bus = WikiEventBus(wikiID: "W")
         storeA.eventBus = bus
         let model = WikiStoreModel(store: storeA)
         #expect(model.summaries.isEmpty)
 
         // Store B = wikictl's store (same DB file, no bus).
-        let storeB = try SQLiteWikiStore(databaseURL: url)
+        let storeB = try GRDBWikiStore(databaseURL: url)
         _ = try storeB.createPage(title: "Chat-Created Page")
 
         // No bus event has fired yet → model is stale.
@@ -122,14 +122,14 @@ struct WikiChangeBridgeBusTests {
     /// everything fresh.
     @MainActor @Test func burstOfWritesOneCoarseEventSurfacesAll() async throws {
         let url = tempDatabaseURL()
-        let storeA = try SQLiteWikiStore(databaseURL: url)
+        let storeA = try GRDBWikiStore(databaseURL: url)
         let bus = WikiEventBus(wikiID: "W")
         storeA.eventBus = bus
         let model = WikiStoreModel(store: storeA)
 
         // wikictl creates several pages in quick succession (one subprocess call
         // per page, but the bridge collapses them into one flush).
-        let storeB = try SQLiteWikiStore(databaseURL: url)
+        let storeB = try GRDBWikiStore(databaseURL: url)
         for title in ["Alpha", "Beta", "Gamma"] {
             _ = try storeB.createPage(title: title)
         }
