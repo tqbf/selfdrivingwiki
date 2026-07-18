@@ -76,7 +76,7 @@ struct SourceDetailView: View {
     /// ingested — prompts before re-ingesting, since that may create duplicate
     /// pages. (Replaces the old always-on "already ingested" warning banner.)
     @State private var showReingestConfirmation = false
-    @State private var selectedTab = FileContentTab.markdown
+    @State private var selectedTab = FileContentTab.reader
     /// Quote to highlight in the PDF view, set when a `[[source:Name#"…"]]` link
     /// targets an un-extracted PDF. Consumed from `store.pendingScrollAnchor`.
     @State private var pdfQuote: String?
@@ -95,8 +95,9 @@ struct SourceDetailView: View {
     @State private var findVersion = 0
 
     private enum FileContentTab: String, CaseIterable {
-        case markdown = "Markdown"
+        case reader = "Reader"
         case pdf = "PDF"
+        case video = "Video"
         case split = "Split"
     }
 
@@ -153,7 +154,26 @@ struct SourceDetailView: View {
         }
     }
 
-    private var showTabs: Bool { isPDF && hasMarkdown }
+    /// The tabs applicable to this source. PDFs with extracted markdown show
+    /// Reader / PDF / Split (the classic three-way). Byteless media embeds
+    /// (YouTube/Vimeo/Spotify/SoundCloud/direct-remote) show Reader (the
+    /// transcript) / Video (the player) / Split (both side-by-side); a video
+    /// without a transcript drops Split (nothing to split) but keeps Reader so
+    /// the "no transcript" placeholder is discoverable. Empty for a PDF with
+    /// no extraction yet — that branch renders the bare PDF with no picker.
+    private var availableTabs: [FileContentTab] {
+        if isBytelessEmbedWithPlayer {
+            var tabs: [FileContentTab] = [.reader, .video]
+            if hasMarkdown { tabs.append(.split) }
+            return tabs
+        }
+        if isPDF && hasMarkdown {
+            return [.reader, .pdf, .split]
+        }
+        return []
+    }
+
+    private var showTabs: Bool { !availableTabs.isEmpty }
 
     /// A PDF with no markdown derivation yet — the gate for the prominent
     /// "Extract" call-to-action. Also the exclusivity guard for the source's
@@ -238,7 +258,7 @@ struct SourceDetailView: View {
             headVersion = nil
             origin = nil
             isRefreshable = false
-            selectedTab = .markdown
+            selectedTab = .reader
             pdfQuote = nil
             pinnedExtraction = nil
             // Cancel any pending edit-mode restoration so it doesn't apply to
@@ -451,11 +471,11 @@ struct SourceDetailView: View {
                                 editBuffer = headVersion?.content ?? ""
                                 isEditing = true
                                 // #211: focus the editor even if the user had
-                                // switched to the PDF tab, where the markdown
-                                // editor isn't rendered. Leave Split alone —
-                                // the editor is already visible there.
-                                if selectedTab == .pdf {
-                                    selectedTab = .markdown
+                                // switched to the PDF or Video tab, where the
+                                // markdown editor isn't rendered. Leave Split
+                                // alone — the editor is already visible there.
+                                if selectedTab == .pdf || selectedTab == .video {
+                                    selectedTab = .reader
                                 }
                             }
                             .keyboardShortcut("e", modifiers: .command)
@@ -640,9 +660,11 @@ struct SourceDetailView: View {
 
     @ViewBuilder
     private var contentArea: some View {
-        if isBytelessEmbedWithPlayer, let target = embedTarget {
-            embedContent(target: target)
-        } else if showTabs {
+        if showTabs || isBytelessEmbedWithPlayer {
+            // Video sources (byteless embeds) route through the same tabbed
+            // viewer as PDFs: the transcript renders in the Reader tab, the
+            // player in the Video tab, and Split shows both. A video with no
+            // transcript has only the Video tab and a Reader placeholder.
             tabbedContent
         } else if isPDF {
             pdfOnlyContent
@@ -653,43 +675,41 @@ struct SourceDetailView: View {
         }
     }
 
-    // MARK: Byteless embed player + transcript
+    // MARK: Video player (Video tab content)
 
-    /// The layout for a byteless embed source: the provider player iframe on
-    /// top (fixed height), the transcript (or other derived markdown) rendered
-    /// below it as readable text in the reader, which owns its own scroll.
-    /// Mirrors the reader's iframe attributes via `MediaEmbedPlayerHTML`. When
-    /// no derived markdown exists yet (e.g. a video with no captions, or a
-    /// Spotify track), a calm placeholder sits beneath the player. Issue #572.
+    /// The byteless embed player as a standalone tab content view. Renders in
+    /// the Video tab (and as the player half of Split). Reuses
+    /// `MediaEmbedPlayerView` unchanged. When the embed target can't be
+    /// resolved, a calm placeholder stands in (mirrors the empty-transcript
+    /// copy so the tab is never blank).
     @ViewBuilder
-    private func embedContent(target: EmbedTarget) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+    private var videoPlayerContent: some View {
+        if let target = embedTarget {
             MediaEmbedPlayerView(target: target)
-                .padding(.horizontal, PageEditorMetrics.contentInset)
-                .padding(.top, PageEditorMetrics.contentInset)
-                .padding(.bottom, PageEditorMetrics.sectionSpacing)
-            Divider().opacity(PageEditorMetrics.dividerOpacity)
-            if let head = headVersion {
-                WikiReaderView(
-                    markdown: pinnedExtraction?.content ?? head.content,
-                    currentSelection: store.selection,
-                    store: store,
-                    findText: findText,
-                    findVersion: findVersion,
-                    findOccurrence: findOccurrence)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .zoomShortcuts($readerZoom)
-                    .zoomScroll($readerZoom)
-            } else {
-                ContentUnavailableView {
-                    Label(embedEmptyLabel, systemImage: "waveform")
-                } description: {
-                    Text(embedEmptyDescription)
-                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(PageEditorMetrics.contentInset)
+        } else {
+            ContentUnavailableView {
+                Label("Player Unavailable", systemImage: "play.slash")
+            } description: {
+                Text("This media source's embed couldn't be resolved.")
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    // MARK: Byteless embed placeholder reader
+
+    /// The Reader tab content for a byteless embed with no extracted
+    /// transcript. Kept so the tab picker shows a Reader row whose body is a
+    /// meaningful empty state rather than a blank reader. Issue #575.
+    private var embedEmptyReaderContent: some View {
+        ContentUnavailableView {
+            Label(embedEmptyLabel, systemImage: "waveform")
+        } description: {
+            Text(embedEmptyDescription)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// The placeholder copy when a byteless embed has no transcript yet.
@@ -713,7 +733,7 @@ struct SourceDetailView: View {
 
     private var tabPicker: some View {
         HStack(spacing: 8) {
-            ForEach(FileContentTab.allCases, id: \.self) { tab in
+            ForEach(availableTabs, id: \.self) { tab in
                 Button {
                     selectedTab = tab
                 } label: {
@@ -734,13 +754,22 @@ struct SourceDetailView: View {
         .padding(.vertical, 6)
     }
 
-    // MARK: Split Markdown ⇄ PDF
+    // MARK: Split Markdown ⇄ companion
 
+    /// Split view: the markdown reader on the left, and the source's primary
+    /// visual companion — the PDF for a PDF source, or the video player for a
+    /// byteless embed — on the right. Only callable when there is markdown to
+    /// show on the left (gate by `hasMarkdown` before appending `.split` to
+    /// `availableTabs`).
     @ViewBuilder
     private var splitContent: some View {
         HSplitView {
             markdownContent
-            pdfView
+            if isBytelessEmbedWithPlayer {
+                videoPlayerContent
+            } else {
+                pdfView
+            }
         }
     }
 
@@ -749,10 +778,16 @@ struct SourceDetailView: View {
     @ViewBuilder
     private var tabbedContent: some View {
         switch selectedTab {
-        case .markdown:
-            markdownContent
+        case .reader:
+            if isBytelessEmbedWithPlayer, !hasMarkdown {
+                embedEmptyReaderContent
+            } else {
+                markdownContent
+            }
         case .pdf:
             pdfView
+        case .video:
+            videoPlayerContent
         case .split:
             splitContent
         }
