@@ -52,6 +52,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     // MARK: - Stored properties
 
+    /// The latest schema version stamped by `createFreshSchema()` (for a fresh
+    /// DB) and by `migrateIfNeeded(_:in:)` after running the ladder (for an
+    /// existing DB). MUST match `SQLiteWikiStore.currentSchemaVersion`: existing
+    /// databases produced by that store carry `PRAGMA user_version` up to 37, and
+    /// this store must recognize them as already-current so the ladder is a no-op
+    /// on re-open (the proven `if version < N`)
+    private static let currentSchemaVersion = 37
+
     /// The serial GRDB connection. All reads and writes are serialized through
     /// GRDB's internal dispatch queue — no external `NSRecursiveLock` needed
     /// (the equivalent of `SQLiteWikiStore.lock`).
@@ -110,7 +118,49 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
         do {
             dbQueue = try DatabaseQueue(path: databaseURL.path, configuration: config)
-            try Self.migrator.migrate(dbQueue)
+            // Mirrors `SQLiteWikiStore.bootstrapSchema`: a FRESH db (user_version
+            // 0) gets the consolidated current schema in one block; an EXISTING db
+            // at any version runs the proven 37-step `if version < N` ladder
+            // translated to GRDB's API. Either path stamps `user_version` to
+            // `currentSchemaVersion`, so re-opening is a no-op (idempotent,
+            // exactly like the `SQLiteWikiStore` store).
+            //
+            // `writeWithoutTransaction` (not `write`): the proven ladder commits
+            // each step independently — `PRAGMA user_version = N` is stamped
+            // inside each helper's `db.inTransaction(.immediate)`. If we wrapped
+            // the whole migration in one outer transaction, a failure in step
+            // N+1 would roll back steps 1..N (and their `user_version` bumps),
+            // forcing a full restart-from-scratch on retry. The per-step commit
+            // (matching `SQLiteWikiStore.withTransaction`) lets a retry resume
+            // from the last successfully-stamped version.
+            //
+            // This deliberately replaces the prior single consolidated
+            // `DatabaseMigrator`: it was unsound for a pre-existing DB (the
+            // `grdb_migrations` table absence made every migration "unrun", but
+            // `IF NOT EXISTS` guards cannot reproduce the data-backfill steps
+            // (v18 name sanitize, v19 content_hash backfill, v20–23 graph-model
+            // CAS-moves, v29 chat-kind sweep, v33→34 ref seeding) — those MUST
+            // actually run once for a genuine upgrade). The ladder is PROVEN
+            // (running fine in `SQLiteWikiStore` across 37 versions in
+            // production); we reuse it verbatim, only translating the API calls.
+            try dbQueue.writeWithoutTransaction { db in
+                do {
+                    try migrateIfNeeded(db)
+                } catch let error as DatabaseError where error.resultCode == .SQLITE_CORRUPT {
+                    // A migration step that writes to `pages`/`sources` (e.g. the
+                    // v22→23 link-canonicalization sweep) fires the external-content
+                    // FTS5 sync triggers. A cross-host copy (rsync) can corrupt an
+                    // FTS5 shadow index in a way `PRAGMA integrity_check` misses —
+                    // it validates the main tables, not FTS5 shadow b-trees — so the
+                    // corruption only surfaces as SQLITE_CORRUPT when the trigger
+                    // writes the index. The content tables are intact, so rebuild
+                    // the FTS indexes from them and retry the migration once.
+                    // Mirrors `SQLiteWikiStore.bootstrapSchema`'s catch.
+                    DebugLog.store("GRDBWikiStore: migration hit SQLITE_CORRUPT (\(error.message ?? "")); rebuilding FTS indexes and retrying")
+                    Self.healCorruptFTSIndexes(in: db)
+                    try migrateIfNeeded(db)
+                }
+            }
         } catch {
             throw WikiStoreError.open("\(error)")
         }
@@ -237,30 +287,1641 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     // MARK: - Migrations
 
-    /// Named, auto-tracked migrations replacing the `PRAGMA user_version` ladder.
+    /// The schema-bootstrap entry point — the GRDB equivalent of
+    /// `SQLiteWikiStore.bootstrapSchema`. Reads `PRAGMA user_version` and:
+    /// - **Fresh DB (version == 0):** runs `createFreshSchema(on:)` (the v37
+    ///   end-state in one consolidated block) and stamps
+    ///   `user_version = currentSchemaVersion`. The fresh path skips the
+    ///   historical create→rename→drop churn of the ladder, exactly as
+    ///   `createFreshSchemaV20()` does.
+    /// - **Existing DB (version >= 1):** runs `migrate(from:in:)`, the proven
+    ///   37-step `if version < N` ladder translated to GRDB's API. Each step
+    ///   is guarded so a re-open at the same version (the steady-state case
+    ///   for a store that's already migrated) is a no-op; genuine upgrades run
+    ///   only the steps they owe.
     ///
-    /// Uses one consolidated fresh-schema migration that mirrors
-    /// `SQLiteWikiStore.createFreshSchemaV20()` (all 37 versions of schema,
-    /// the end-state shape). All DDL is `IF NOT EXISTS`-guarded, so:
-    /// - A FRESH DB: runs the one migration, creating everything.
-    /// - An EXISTING DB (already at v37 from the hand-rolled ladder): the
-    ///   `grdb_migrations` table doesn't exist yet, so GRDB runs all
-    ///   registered migrations — but the `IF NOT EXISTS` guards make them
-    ///   no-ops on an already-current schema. The only mutation that runs is
-    ///   seeding the singleton rows (system_prompt, wiki_index) — guarded by
-    ///   `INSERT OR IGNORE` so existing rows are untouched.
+    /// Both paths end at `user_version = currentSchemaVersion` (37), so the
+    /// File Provider's read-only handle to the same WAL file never sees a
+    /// half-migrated schema.
     ///
-    /// This eliminates the fresh-schema-vs-ladder duality: one path for all
-    /// DBs, enforced by `DatabaseMigrator`'s per-migration tracking.
-    private static let migrator: DatabaseMigrator = {
-        var m = DatabaseMigrator()
+    /// `"PRAGMA user_version"` returns an `Int32` (SQLite pragma scalar). GRDB
+    /// binds it as `Int` directly — `Int.fetchOne` avoids the
+    /// `queryScalarText`→`Int(...) ?? 0` round-trip used by `SQLiteWikiStore`.
+    private func migrateIfNeeded(_ db: Database) throws {
+        let version = try Int.fetchOne(db, sql: "PRAGMA user_version") ?? 0
+        guard version < Self.currentSchemaVersion else { return }
+        if version == 0 {
+            // Fresh DB: create the complete v37 schema in one block, then stamp.
+            try Self.createFreshSchema(on: db)
+            try db.execute(sql: "PRAGMA user_version = \(Self.currentSchemaVersion);")
+            return
+        }
+        // Existing DB: run the stepwise ladder (data-preserving). A rewind-of-
+        // select steps never runs for a genuinely-current DB (the early-return
+        // `guard` above fired).
+        var v = version
+        try migrate(from: &v, in: db)
+    }
 
-        m.registerMigration("v1_fresh_schema") { db in
-            try createFreshSchema(on: db)
+    /// The stepwise, idempotent migration ladder keyed on `PRAGMA user_version`.
+    ///
+    /// This is a faithful, line-by-line translation of
+    /// `SQLiteWikiStore.migrate(from:)` to GRDB's API. Every SQL statement is
+    /// preserved verbatim — the ladder is PROVEN (running in production across
+    /// 37 schema versions); only the API calls change:
+    /// - `exec(sql)` → `db.execute(sql: sql)`
+    /// - `statement(sql)` + `bind(x, at: n)` + `step()` →
+    ///   `db.execute(sql: sql, arguments: [x])` (one-shot; GRDB caches
+    ///   prepared statements internally, no manual reset needed)
+    /// - cursor `while try select.step()` loops → `Row.fetchAll(db, sql:)` into
+    ///   a Swift array first (the SQLite statement discipline forbids stepping a
+    ///   cursor at `SQLITE_ROW` across other operations on the same connection;
+    ///   materializing first is the documented workaround, and GRDB's
+    ///   `Row.fetchAll` does this by construction)
+    /// - `withTransaction` → `db.inTransaction(.immediate)` (BEGIN IMMEDIATE →
+    ///   savepoint nesting via `db.execute(sql: "SAVEPOINT …")` is automatic
+    ///   in GRDB when nesting `inTransaction`, see `Database.inTransaction`)
+    /// - `queryScalarText` COUNT checks → `Int.fetchOne(db, sql:) ?? 0`
+    ///
+    /// **Do not collapse these steps.** Each performs irreversible data
+    /// migrations (renames, column adds, table rebuilds, content-addressed
+    /// CAS-moves) that databases at every intermediate version depend on running
+    /// in order. The `if version < N` guards keep a re-open idempotent.
+    private func migrate(from version: inout Int, in db: Database) throws {
+
+        // Step 0 → 1: the original v0 schema — pages, the unique slug index,
+        // attachments, page_links. UNCHANGED from the v0 cut.
+        if version < 1 {
+            try db.execute(sql: """
+            CREATE TABLE pages (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                slug TEXT NOT NULL,
+                body_markdown TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1
+            );
+            """)
+            try db.execute(sql: "CREATE UNIQUE INDEX pages_slug_unique ON pages(slug);")
+            try db.execute(sql: """
+            CREATE TABLE attachments (
+                id TEXT PRIMARY KEY,
+                page_id TEXT,
+                filename TEXT NOT NULL,
+                mime_type TEXT,
+                data BLOB NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1,
+                FOREIGN KEY(page_id) REFERENCES pages(id)
+            );
+            """)
+            try db.execute(sql: """
+            CREATE TABLE page_links (
+                from_page_id TEXT NOT NULL,
+                to_page_id TEXT NOT NULL,
+                link_text TEXT NOT NULL,
+                PRIMARY KEY (from_page_id, to_page_id),
+                FOREIGN KEY(from_page_id) REFERENCES pages(id),
+                FOREIGN KEY(to_page_id) REFERENCES pages(id)
+            );
+            """)
+            try db.execute(sql: "PRAGMA user_version = 1;")
+            version = 1
         }
 
-        return m
-    }()
+        // Step 1 → 2 (Phase 5): the `ingested_files` table holds verbatim
+        // dropped files — raw bytes + metadata, a NEW object kind, NOT tied to
+        // a page (so it does NOT reuse `attachments`, which has a `page_id` FK).
+        // Stored and served byte-for-byte; surfaced read-only under the
+        // `sources/` tree.
+        if version < 2 {
+            try db.execute(sql: """
+            CREATE TABLE ingested_files (
+                id TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                ext TEXT NOT NULL DEFAULT '',
+                mime_type TEXT,
+                byte_size INTEGER NOT NULL,
+                content BLOB NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1
+            );
+            """)
+            try db.execute(sql: "CREATE INDEX ingested_files_created ON ingested_files(created_at);")
+            try db.execute(sql: "PRAGMA user_version = 2;")
+            version = 2
+        }
+
+        // Step 2 → 3: the singleton `system_prompt` table — the user-editable
+        // "system prompt" document the managing agent reads each run,
+        // projected read-only at the wiki root as `CLAUDE.md` AND `AGENTS.md`.
+        // One row, pinned to `id = 1` by a CHECK so there can only ever be one.
+        // Seeded with `SystemPrompt.defaultBody` so the document exists from
+        // day one.
+        if version < 3 {
+            try db.execute(sql: """
+            CREATE TABLE system_prompt (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                body_markdown TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1
+            );
+            """)
+            // Seed the singleton via a bound statement (the default body has
+            // quotes/newlines — never interpolate it into the DDL string).
+            try db.execute(sql: """
+            INSERT INTO system_prompt (id, body_markdown, updated_at, version)
+            VALUES (1, ?, ?, 1);
+            """, arguments: [SystemPrompt.defaultBody, Date().timeIntervalSince1970])
+            try db.execute(sql: "PRAGMA user_version = 3;")
+            version = 3
+        }
+
+        // Step 3 → 4 (Phase B): the append-only `log` table — one ULID-keyed
+        // row per agent operation (an ingest, a query, a lint). `id` is a ULID
+        // so it sorts == chronological; `ts` carries the wall-clock time the
+        // row was appended; `note` is optional. NOT a singleton: each
+        // `wikictl log append` INSERTs a fresh row. Projected read-only at the
+        // root as `log.md`.
+        if version < 4 {
+            try db.execute(sql: """
+            CREATE TABLE log (
+                id TEXT PRIMARY KEY,
+                ts REAL NOT NULL,
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                note TEXT
+            );
+            """)
+            try db.execute(sql: "PRAGMA user_version = 4;")
+            version = 4
+        }
+
+        // Step 4 → 5 (Phase B): the singleton `wiki_index` table — the curated
+        // catalog document the managing agent rewrites wholesale on each ingest,
+        // projected read-only at the root as `index.md`. Modeled EXACTLY on
+        // `system_prompt` (v2→3): one row pinned to `id = 1` by a CHECK, a
+        // `version` bumped on every write, seeded with
+        // `WikiIndex.defaultBody` so the document exists from day one.
+        if version < 5 {
+            try db.execute(sql: """
+            CREATE TABLE wiki_index (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                body_markdown TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1
+            );
+            """)
+            // Seed the singleton via a bound statement (the default body has
+            // newlines — never interpolate it into the DDL string).
+            try db.execute(sql: """
+            INSERT INTO wiki_index (id, body_markdown, updated_at, version)
+            VALUES (1, ?, ?, 1);
+            """, arguments: [WikiIndex.defaultBody, Date().timeIntervalSince1970])
+            try db.execute(sql: "PRAGMA user_version = 5;")
+            version = 5
+        }
+
+        // Step 5 → 6: record WHICH ingested files the agent has actually
+        // summarized into the wiki. `ingested_at` stays NULL until the agent
+        // finishes an ingest and stamps it via `wikictl log append --kind
+        // ingest --source <id>`. The UI's "Processed" badge reads this
+        // deterministic flag instead of fuzzy-matching the agent's free-text
+        // log titles (which the agent is free to phrase however it likes, so
+        // the match silently failed).
+        if version < 6 {
+            try db.execute(sql: "ALTER TABLE ingested_files ADD COLUMN ingested_at REAL;")
+            try db.execute(sql: "PRAGMA user_version = 6;")
+            version = 6
+        }
+
+        // v6 → v7: page embeddings for semantic search (sqlite-vec).
+        // The BLOB holds 512 × Float32 (2048 bytes) produced by Apple
+        // NLEmbedding. ON DELETE CASCADE mirrors the v0 attachment FK:
+        // removing a page removes its embedding.
+        if version < 7 {
+            try db.execute(sql: """
+            CREATE TABLE page_embeddings (
+                page_id TEXT PRIMARY KEY REFERENCES pages(id) ON DELETE CASCADE,
+                embedding BLOB NOT NULL
+            );
+            """)
+            try db.execute(sql: "PRAGMA user_version = 7;")
+            version = 7
+        }
+
+        // v7 → v8: append-only version chain for processed markdown.
+        // Full-text snapshots (never deltas). ULID-sorted: MAX(id) == HEAD.
+        // ON DELETE CASCADE so removing a file cleans up its version chain.
+        // Migration is additive; no backfill — versions are seeded lazily.
+        if version < 8 {
+            try db.execute(sql: """
+            CREATE TABLE file_markdown_versions (
+                id          TEXT PRIMARY KEY,
+                file_id     TEXT NOT NULL REFERENCES ingested_files(id) ON DELETE CASCADE,
+                parent_id   TEXT,
+                content     TEXT NOT NULL,
+                origin      TEXT NOT NULL,
+                note        TEXT,
+                created_at  REAL NOT NULL
+            );
+            """)
+            try db.execute(sql: """
+            CREATE INDEX file_markdown_versions_file
+                ON file_markdown_versions(file_id, id);
+            """)
+            try db.execute(sql: "PRAGMA user_version = 8;")
+            version = 8
+        }
+
+        // v8 → v9: provenance for files ingested from Zotero. Two nullable TEXT
+        // columns capture the parent library item at ingest time so the detail
+        // view can show "From Zotero: <title>" and link back without re-hitting
+        // the API (the item could be renamed/deleted between ingest and view).
+        // NULL for drag-drop / URL / folder-import (no Zotero provenance).
+        if version < 9 {
+            try db.execute(sql: "ALTER TABLE ingested_files ADD COLUMN zotero_item_key TEXT;")
+            try db.execute(sql: "ALTER TABLE ingested_files ADD COLUMN zotero_item_title TEXT;")
+            try db.execute(sql: "PRAGMA user_version = 9;")
+            version = 9
+        }
+
+        // v9 → v10: rename "ingested file" → "source" throughout. The main
+        // table becomes `sources`; the processed-markdown version chain
+        // becomes `source_markdown_versions`. A new `display_name` column
+        // defaults to the original filename. `source_links` records
+        // [[source:…]] references from wiki pages (mirrors `page_links` but
+        // FKs to `sources(id)`).
+        // SQLite's ALTER TABLE RENAME TO automatically updates FK references
+        // in `source_markdown_versions.file_id` to point to `sources(id)`.
+        if version < 10 {
+            try db.execute(sql: "ALTER TABLE ingested_files RENAME TO sources;")
+            try db.execute(sql: "ALTER TABLE sources ADD COLUMN display_name TEXT;")
+            try db.execute(sql: "UPDATE sources SET display_name = filename;")
+            try db.execute(sql: "ALTER TABLE file_markdown_versions RENAME TO source_markdown_versions;")
+            try db.execute(sql: """
+            CREATE TABLE source_links (
+                from_page_id TEXT NOT NULL REFERENCES pages(id),
+                to_source_id TEXT NOT NULL REFERENCES sources(id),
+                link_text    TEXT NOT NULL,
+                PRIMARY KEY (from_page_id, to_source_id)
+            );
+            """)
+            try db.execute(sql: "PRAGMA user_version = 10;")
+            version = 10
+        }
+
+        // v10 → v11: add ON DELETE CASCADE to source_links.to_source_id.
+        // SQLite cannot ALTER an FK constraint in place, so rebuild the table
+        // (rename old → create new with the cascade → copy rows → drop old).
+        // source_links is a leaf join table (nothing FKs to it), so the rename
+        // is safe. The rebuild is data-preserving for DBs that already have
+        // Phase B rows, and a no-op rebuild on empty ones. Mirrors the cascade
+        // already on source_markdown_versions (v8).
+        if version < 11 {
+            try db.execute(sql: "ALTER TABLE source_links RENAME TO source_links_v10;")
+            try db.execute(sql: """
+            CREATE TABLE source_links (
+                from_page_id TEXT NOT NULL REFERENCES pages(id),
+                to_source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                link_text    TEXT NOT NULL,
+                PRIMARY KEY (from_page_id, to_source_id)
+            );
+            """)
+            try db.execute(sql: """
+            INSERT INTO source_links (from_page_id, to_source_id, link_text)
+            SELECT from_page_id, to_source_id, link_text FROM source_links_v10;
+            """)
+            try db.execute(sql: "DROP TABLE source_links_v10;")
+            try db.execute(sql: "PRAGMA user_version = 11;")
+            version = 11
+        }
+
+        // v11 → v12: source embeddings for semantic source search
+        // (sqlite-vec). Mirrors page_embeddings (v7). ON DELETE CASCADE:
+        // removing a source removes its embedding. FK target is sources(id)
+        // (renamed from ingested_files in v10). `foreign_keys=ON` is set in
+        // the configuration block.
+        if version < 12 {
+            try db.execute(sql: """
+            CREATE TABLE source_embeddings (
+                source_id TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                embedding BLOB NOT NULL
+            );
+            """)
+            try db.execute(sql: "PRAGMA user_version = 12;")
+            version = 12
+        }
+
+        // v12 → v13: FTS5/BM25 full-text search over title + body. FTS5 is
+        // CORE SQLite (ENABLE_FTS5 on the system build) — no loadable
+        // extension needed, so it works in wikictl and under `swift test`,
+        // unlike the vec layer.
+        //
+        // PAGES: body (body_markdown) is inline on `pages`, so use
+        // external-content FTS5 keyed on pages.rowid, maintained by AFTER
+        // INSERT/UPDATE/DELETE triggers. This needs NO changes to the
+        // page-write path — createPage / updatePage / deletePage already write
+        // `pages`, so the triggers fire. Existing rows are backfilled lazily by
+        // rebuildFTS() (Reindex), via the FTS5 'rebuild' command; new rows index
+        // immediately.
+        //
+        // SOURCES: body is the HEAD of the version chain
+        // (source_markdown_versions), NOT inline on `sources`, so we index a
+        // sidecar `source_search` — one row per source holding the current
+        // title + head body — maintained by appendProcessedMarkdown /
+        // renameSource via upsertSourceSearch(). The trigger keeps sources_fts
+        // in sync; deleting a source cascades to source_search (FK ON DELETE
+        // CASCADE) whose trigger removes the FTS row.
+        if version < 13 {
+            try db.execute(sql: """
+            CREATE VIRTUAL TABLE pages_fts USING fts5(
+                title, body_markdown,
+                content='pages', content_rowid='rowid',
+                tokenize='porter');
+            """)
+            try db.execute(sql: """
+            CREATE TRIGGER pages_fts_ai AFTER INSERT ON pages BEGIN
+              INSERT INTO pages_fts(rowid, title, body_markdown)
+                VALUES (new.rowid, new.title, new.body_markdown);
+            END;
+            """)
+            try db.execute(sql: """
+            CREATE TRIGGER pages_fts_ad AFTER DELETE ON pages BEGIN
+              INSERT INTO pages_fts(pages_fts, rowid, title, body_markdown)
+                VALUES ('delete', old.rowid, old.title, old.body_markdown);
+            END;
+            """)
+            try db.execute(sql: """
+            CREATE TRIGGER pages_fts_au AFTER UPDATE ON pages BEGIN
+              INSERT INTO pages_fts(pages_fts, rowid, title, body_markdown)
+                VALUES ('delete', old.rowid, old.title, old.body_markdown);
+              INSERT INTO pages_fts(rowid, title, body_markdown)
+                VALUES (new.rowid, new.title, new.body_markdown);
+            END;
+            """)
+
+            try db.execute(sql: """
+            CREATE TABLE source_search (
+                source_id TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                title     TEXT NOT NULL,
+                body      TEXT NOT NULL
+            );
+            """)
+            try db.execute(sql: """
+            CREATE VIRTUAL TABLE sources_fts USING fts5(
+                title, body,
+                content='source_search', content_rowid='rowid',
+                tokenize='porter');
+            """)
+            try db.execute(sql: """
+            CREATE TRIGGER sources_fts_ai AFTER INSERT ON source_search BEGIN
+              INSERT INTO sources_fts(rowid, title, body)
+                VALUES (new.rowid, new.title, new.body);
+            END;
+            """)
+            try db.execute(sql: """
+            CREATE TRIGGER sources_fts_ad AFTER DELETE ON source_search BEGIN
+              INSERT INTO sources_fts(sources_fts, rowid, title, body)
+                VALUES ('delete', old.rowid, old.title, old.body);
+            END;
+            """)
+            try db.execute(sql: """
+            CREATE TRIGGER sources_fts_au AFTER UPDATE ON source_search BEGIN
+              INSERT INTO sources_fts(sources_fts, rowid, title, body)
+                VALUES ('delete', old.rowid, old.title, old.body);
+              INSERT INTO sources_fts(rowid, title, body)
+                VALUES (new.rowid, new.title, new.body);
+            END;
+            """)
+            try db.execute(sql: "PRAGMA user_version = 13;")
+            version = 13
+        }
+
+        // v13 → v14: per-chunk embeddings (RAG-style). Replaces the old
+        // one-embedding-per-document model (`page_embeddings`,
+        // `source_embeddings`) with one embedding BLOB per text chunk, so a
+        // query can match the single best passage of a large document
+        // (best-chunk-per-doc ranking) instead of a blurry document centroid.
+        // Also fixes NLEmbedding's hard limit: a whole document fed to
+        // NLEmbedding throws an uncatchable std::bad_alloc above ~250k chars;
+        // chunking keeps each embedding input small.
+        //
+        // FK ON DELETE CASCADE: deleting a page/source removes its chunks. The
+        // vec query uses the `vec_distance_cosine` scalar in a GROUP-BY to
+        // pick each document's best (lowest-distance) chunk.
+        if version < 14 {
+            try db.execute(sql: """
+            CREATE TABLE page_chunks (
+                page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+                chunk_idx INTEGER NOT NULL,
+                embedding BLOB NOT NULL,
+                PRIMARY KEY (page_id, chunk_idx)
+            ) WITHOUT ROWID;
+            """)
+            try db.execute(sql: """
+            CREATE TABLE source_chunks (
+                source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                chunk_idx INTEGER NOT NULL,
+                embedding BLOB NOT NULL,
+                PRIMARY KEY (source_id, chunk_idx)
+            ) WITHOUT ROWID;
+            """)
+            // The old single-embedding tables are superseded and unused after
+            // v14.
+            try db.execute(sql: "DROP TABLE IF EXISTS page_embeddings;")
+            try db.execute(sql: "DROP TABLE IF EXISTS source_embeddings;")
+            try db.execute(sql: "PRAGMA user_version = 14;")
+            version = 14
+        }
+
+        if version < 15 {
+            try db.execute(sql: """
+            CREATE TABLE embedding_meta (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                embedder TEXT NOT NULL
+            );
+            """)
+            try db.execute(sql: "INSERT INTO embedding_meta(id, embedder) VALUES (1, 'nlembedding-512');")
+            try db.execute(sql: "PRAGMA user_version = 15;")
+            version = 15
+        }
+
+        if version < 16 {
+            try db.execute(sql: """
+            CREATE TABLE view_nodes (
+                id            TEXT PRIMARY KEY,
+                parent_id     TEXT REFERENCES view_nodes(id) ON DELETE CASCADE,
+                position      INTEGER NOT NULL DEFAULT 0,
+                kind          TEXT NOT NULL,
+                label         TEXT,
+                target_id     TEXT
+            );
+            """)
+            try db.execute(sql: "CREATE INDEX view_nodes_parent ON view_nodes(parent_id, position);")
+            try db.execute(sql: "PRAGMA user_version = 16;")
+            version = 16
+        }
+
+        if version < 17 {
+            // Rename view_nodes → bookmark_nodes.
+            try db.execute(sql: "ALTER TABLE view_nodes RENAME TO bookmark_nodes;")
+            try db.execute(sql: "DROP INDEX IF EXISTS view_nodes_parent;")
+            try db.execute(sql: "CREATE INDEX bookmark_nodes_parent ON bookmark_nodes(parent_id, position);")
+            try db.execute(sql: "PRAGMA user_version = 17;")
+            version = 17
+        }
+
+        // Step 17 → 18: one-time CONTENT fix, no schema change — sanitize
+        // unlinkable characters out of page titles and source display names
+        // (`|`, `[`/`]`, leading `#` — see WikiNameRules; those break the
+        // `[[wiki-link]]` grammar with no escape, so such names could never be
+        // linked/cited). New writes are sanitized at the store boundary from
+        // v18 on; this sweeps rows that predate the rule. Nothing referenced
+        // the dirty names (they were unlinkable), so no link rewriting is
+        // needed. Versions bump so the File Provider re-syncs; FTS/embeddings
+        // refresh on the row's next save (staleness only for renamed rows).
+        if version < 18 {
+            try sanitizeStoredNames(in: db)
+            try db.execute(sql: "PRAGMA user_version = 18;")
+            version = 18
+        }
+
+        // Step 18 → 19: add content_hash for duplicate-content detection at
+        // addSource time (issue #126). Backfilled here so existing rows are
+        // immediately eligible for dedup matching against newly-added sources.
+        // Column/index existence is checked first: a db built by the fresh-schema
+        // fast path (which already includes content_hash) and then rewound to an
+        // older `user_version` for ladder testing would otherwise hit "duplicate
+        // column name" here.
+        if version < 19 {
+            let hasColumn = try Self.hasColumn("content_hash", on: "sources", in: db)
+            if !hasColumn {
+                try db.execute(sql: "ALTER TABLE sources ADD COLUMN content_hash TEXT;")
+            }
+            let hasIndex = try Self.hasIndex("sources_content_hash", in: db)
+            if !hasIndex {
+                try db.execute(sql: "CREATE INDEX sources_content_hash ON sources(content_hash);")
+            }
+            try Self.backfillContentHashes(in: db)
+            try db.execute(sql: "PRAGMA user_version = 19;")
+            version = 19
+        }
+
+        // ---- v19 → v37: graph-model phases + chat + workspaces (data
+        // migrations that must run for a genuine upgrade). Each helper below
+        // is a faithful translation of the SQLiteWikiStore counterpart. ----
+
+        if version < 20 {
+            try Self.migrateV19ToV20(in: db)
+            try db.execute(sql: "PRAGMA user_version = 20;")
+            version = 20
+        }
+
+        if version < 21 {
+            try Self.migrateV20ToV21(in: db)
+            try db.execute(sql: "PRAGMA user_version = 21;")
+            version = 21
+        }
+
+        if version < 22 {
+            try Self.migrateV21ToV22(in: db)
+            try db.execute(sql: "PRAGMA user_version = 22;")
+            version = 22
+        }
+
+        if version < 23 {
+            try migrateV22ToV23(in: db)
+            try db.execute(sql: "PRAGMA user_version = 23;")
+            version = 23
+        }
+
+        // Step 23 → 25 (issue #119 phase 1): persisted chat history — `chats` +
+        // `chat_messages`. Purely additive. `IF NOT EXISTS` — a no-op on a DB
+        // that already has them. (v24 is a reserved slot, never stamped; the
+        // smv.content drop is appended as v26 below so DBs already at v25 run
+        // it.)
+        if version < 25 {
+            try Self.createChatTablesV23(in: db)
+            try db.execute(sql: "PRAGMA user_version = 25;")
+            version = 25
+        }
+
+        // Step 25 → 26 (graph-model Phase 2 close-out): drop the now-dead
+        // `source_markdown_versions.content` column. Post-v21 every derived-
+        // markdown row is content-addressed in `blobs` (the inline column was
+        // `''` and unread), so finishing the CAS-only model removes it
+        // entirely. Appended at the TOP — not inserted at the reserved v24
+        // slot — because a DB already at v25 would skip a
+        // `version < 24` step; the drop must be the newest version to run on
+        // every existing DB. Idempotent: a no-op where the column is already
+        // gone (fresh DBs never create it). Without this, the store's
+        // blob-only readers throw `no such column: smv.content` against a
+        // column-less DB — the bug that left byteless podcast transcripts
+        // projecting as empty `.md` files.
+        if version < 26 {
+            let hasSMVContent = try Self.hasColumn("content", on: "source_markdown_versions", in: db)
+            if hasSMVContent {
+                try db.execute(sql: "ALTER TABLE source_markdown_versions DROP COLUMN content;")
+            }
+            try db.execute(sql: "PRAGMA user_version = 26;")
+            version = 26
+        }
+
+        // Step 26 → 27 (issue #242): add `created_at`/`updated_at` to
+        // `bookmark_nodes` so the UI can show "date added"/"date updated"
+        // (companion sort/filter in #241). Additive ALTER (NOT NULL DEFAULT 0),
+        // then backfill every existing row to `now` — legacy nodes have no
+        // recorded creation time, so migration time is the best available proxy
+        // (and on a brand-new DB forced through the ladder there are no rows).
+        // Column defs match the fresh-path CREATE TABLE byte-for-byte. 
+        // Idempotent: pragma_table_info-guarded so a rewound-for-testing DB
+        // stamps v27 without re-adding the columns.
+        if version < 27 {
+            // `bookmark_nodes` is created at v16, so any DB that reached here
+            // through the real ladder already has it. But hand-crafted test
+            // fixtures (e.g. a minimal v19 DB with only `sources`) may be
+            // stamped at ≥16 without the table — skip the column work in that
+            // case rather than crash mid-migration. There's nothing to backfill
+            // when the table is absent.
+            let tableExists = try Self.tableExists("bookmark_nodes", in: db)
+            if tableExists {
+                let hasCreatedAt = try Self.hasColumn("created_at", on: "bookmark_nodes", in: db)
+                if !hasCreatedAt {
+                    try db.execute(sql: "ALTER TABLE bookmark_nodes ADD COLUMN created_at REAL NOT NULL DEFAULT 0;")
+                    try db.execute(sql: "ALTER TABLE bookmark_nodes ADD COLUMN updated_at REAL NOT NULL DEFAULT 0;")
+                    let now = Date().timeIntervalSince1970
+                    try db.execute(sql: "UPDATE bookmark_nodes SET created_at = \(now), updated_at = \(now);")
+                }
+            }
+            try db.execute(sql: "PRAGMA user_version = 27;")
+            version = 27
+        }
+
+        // Step 27 → 28 (issue #245): semantic + FTS search over chats. Adds
+        // `chat_chunks` (per-chunk cosine embeddings) + the `chat_search` FTS
+        // sidecar + `chats_fts` external-content index, mirroring the existing
+        // pages/sources search pipeline. Purely additive (`IF NOT EXISTS`); a
+        // brand-new DB forced through the ladder has no chat rows to index.
+        if version < 28 {
+            try Self.createChatSearchTables(in: db)
+            try db.execute(sql: "PRAGMA user_version = 28;")
+            version = 28
+        }
+
+        // Step 28 → 29 (remove-readonly-chat-mode): data-only sweep — the
+        // read-only Ask chat mode is deleted; every chat is now write-capable
+        // (`.edit`). Rewrite any legacy `kind = 'ask'` rows to `'edit'` so the
+        // single-case `ChatKind` enum decodes them. No schema change —
+        // `user_version=29` is only a run-once guard (the v23 precedent). A
+        // fresh DB has no chat rows, so the UPDATE is a no-op there.
+        if version < 29 {
+            try Self.migrateV28ToV29(in: db)
+            try db.execute(sql: "PRAGMA user_version = 29;")
+            version = 29
+        }
+
+        // Step 29 → 30 (W0 — page versioning, PR #312): adds the
+        // `page_versions` table (append-only, blob-backed page body chain),
+        // rebuilds `refs` to drop the `owner_id REFERENCES sources(id)` FK
+        // (replaced by a CHECK on `kind` so `page-content` refs can use a page
+        // id as `owner_id`), and seeds one root version per existing page
+        // (blob of current body_markdown). No ref rows are written for the root
+        // versions — the default-active rule (no ref → head is MAX(id)) means
+        // main tracks latest, exactly like sources did at v20.
+        if version < 30 {
+            try migrateV29ToV30(in: db)
+            try db.execute(sql: "PRAGMA user_version = 30;")
+            version = 30
+        }
+
+        // Step 30 → 31 (W1 — workspaces, PR #312): creates the `workspaces` +
+        // `workspace_refs` tables for multi-writer ingestion isolation. Purely
+        // additive (`IF NOT EXISTS`); no existing data to backfill.
+        if version < 31 {
+            try Self.createWorkspacesV31(in: db)
+            try db.execute(sql: "PRAGMA user_version = 31;")
+            version = 31
+        }
+
+        // Step 31 → 32 (W3 — conflict resolution, PR #312): creates the
+        // `workspace_conflicts` table for persisting per-page conflict
+        // details when a workspace is parked as `conflicted`. Purely
+        // additive.
+        if version < 32 {
+            try Self.createWorkspaceConflictsV32(in: db)
+            try db.execute(sql: "PRAGMA user_version = 32;")
+            version = 32
+        }
+
+        // Step 32 → 33 (#131 — provenance frontmatter): adds `created_by` and
+        // `last_edited_by` nullable text columns to `pages` (agent/model
+        // attribution), and a `technique` nullable text column to
+        // `source_markdown_versions` (which extraction backend produced it).
+        // All additive — existing rows get NULL, which the frontmatter layer
+        // treats as "unknown" and omits.
+        if version < 33 {
+            try Self.migrateV32ToV33(in: db)
+            try db.execute(sql: "PRAGMA user_version = 33;")
+            version = 33
+        }
+
+        // Step 33 → 34 (#multi-writer-hardening Phase 3 — head-ref invariant):
+        // backfills a `page-content` ref for every page that lacks one, and
+        // seeds a root version for pages that have none (agent-created pages
+        // via blind `wikictl page upsert` never created a version row). After
+        // v34, every page has an explicit ref → the MAX(id) fallback in
+        // `pageHeadVersionIDLocked` is dead code for migrated data.
+        if version < 34 {
+            try migrateV33ToV34(in: db)
+            try db.execute(sql: "PRAGMA user_version = 34;")
+            version = 34
+        }
+
+        // Step 34 → 35 (#multi-writer-hardening Phase 5 — created-page
+        // staging): Rebuilds `workspace_refs` to make `version_id` nullable
+        // and add `blob_hash` + `title` columns. SQLite cannot ALTER TABLE to
+        // relax a NOT NULL constraint, so a table rebuild
+        // (CREATE-INSERT-DROP-RENAME) is required. Existing rows are preserved
+        // with their original `version_id` values; new `blob_hash`/`title`
+        // columns are NULL.
+        if version < 35 {
+            try Self.migrateV34ToV35(in: db)
+            try db.execute(sql: "PRAGMA user_version = 35;")
+            version = 35
+        }
+
+        // Step 35 → 36 (issue #411 — chat summary): adds nullable `summary`
+        // and `summary_at` columns to `chats` so the sidebar can show a
+        // one-line summary of the model's first response. Simple ALTER — no
+        // table rebuild needed for nullable columns.
+        if version < 36 {
+            try Self.migrateV35ToV36(in: db)
+            try db.execute(sql: "PRAGMA user_version = 36;")
+            version = 36
+        }
+
+        // Step 36 → 37 (issue #477 — wiki metadata): creates a
+        // `wiki_metadata` key-value table for persisting one-time work flags
+        // (e.g. the link-reconcile version) so they survive model recreation
+        // between launches. Purely additive — `CREATE TABLE IF NOT EXISTS`.
+        if version < Self.currentSchemaVersion {
+            try Self.createWikiMetadataTable(in: db)
+            try db.execute(sql: "PRAGMA user_version = \(Self.currentSchemaVersion);")
+            version = Self.currentSchemaVersion
+        }
+    }
+
+    // MARK: - Schema introspection helpers (idempotency guards)
+
+    /// True when `table.column` exists. Mirrors the
+    /// `pragma_table_info` COUNT column-existence check used throughout the
+    /// `SQLiteWikiStore` ladder.
+    private static func hasColumn(
+        _ column: String, on table: String, in db: Database
+    ) throws -> Bool {
+        let count = try Int.fetchOne(
+            db,
+            sql: "SELECT COUNT(*) FROM pragma_table_info('\(table)') WHERE name='\(column)';"
+        ) ?? 0
+        return count != 0
+    }
+
+    /// True when a named index exists in `sqlite_master`.
+    private static func hasIndex(_ name: String, in db: Database) throws -> Bool {
+        let count = try Int.fetchOne(
+            db,
+            sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='\(name)';"
+        ) ?? 0
+        return count != 0
+    }
+
+    /// True when a table named `name` exists.
+    private static func tableExists(_ name: String, in db: Database) throws -> Bool {
+        let count = try Int.fetchOne(
+            db,
+            sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='\(name)';"
+        ) ?? 0
+        return count != 0
+    }
+
+    /// Returns the column-name set of `table` via `pragma_table_info`. Mirrors
+    /// `SQLiteWikiStore.tableColumnInfo`.
+    private static func tableColumnInfo(_ table: String, in db: Database) throws -> Set<String> {
+        let rows = try String.fetchAll(
+            db,
+            sql: "SELECT name FROM pragma_table_info('\(table)');"
+        )
+        return Set(rows)
+    }
+
+    /// Run a one-row PRAGMA/SELECT and return column 0 as `String`. Mirrors
+    /// `SQLiteWikiStore.queryScalarText` for the few ladder sites that need a
+    /// scalar text value (e.g. `SELECT sql FROM sqlite_master …`).
+    private static func queryScalarText(_ sql: String, in db: Database) throws -> String {
+        try String.fetchOne(db, sql: sql) ?? ""
+    }
+
+    // MARK: - Shared table builders (fresh-path + migration step parity)
+
+    /// Create the five graph-model objects tables (§4.1–4.3): `blobs`,
+    /// `agents`, `activities`, `source_versions`, `refs`. Idempotent
+    /// (`IF NOT EXISTS`) — called by both the fresh path (via
+    /// `createFreshSchema`) and the v19→20 migration step so the two stay
+    /// schema-identical.
+    private static func createObjectsTablesV20(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS blobs (
+            hash       TEXT PRIMARY KEY,
+            byte_size  INTEGER NOT NULL,
+            content    BLOB NOT NULL
+        );
+        """)
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS agents (
+            id           TEXT PRIMARY KEY,
+            kind         TEXT NOT NULL,
+            name         TEXT NOT NULL,
+            version      TEXT,
+            external_ref TEXT
+        );
+        """)
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS activities (
+            id           TEXT PRIMARY KEY,
+            kind         TEXT NOT NULL,
+            agent_id     TEXT NOT NULL REFERENCES agents(id),
+            plan         TEXT,
+            external_ref TEXT,
+            started_at   REAL NOT NULL,
+            ended_at     REAL
+        );
+        """)
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS source_versions (
+            id                TEXT PRIMARY KEY,
+            source_id         TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+            parent_id         TEXT,
+            blob_hash         TEXT REFERENCES blobs(hash),
+            mime_type         TEXT,
+            original_path     TEXT,
+            thumbnail_hash    TEXT REFERENCES blobs(hash),
+            activity_id       TEXT REFERENCES activities(id),
+            external_identity TEXT,
+            fetched_at        REAL NOT NULL
+        );
+        """)
+        try db.execute(sql: "CREATE INDEX IF NOT EXISTS source_versions_source ON source_versions(source_id, id);")
+        // UNIQUE partial index for byteless-source dedup: keeps the
+        // external_identity lookup O(log n) AND provides a DB-level backstop
+        // against the SELECT-then-INSERT TOCTOU (a concurrent wikictl writer
+        // could pass the dedup check and both insert). NULL external_identity
+        // values are not equal in SQLite, so multiple NULLs coexist fine.
+        try db.execute(sql: """
+        CREATE UNIQUE INDEX IF NOT EXISTS source_versions_byteless_eid
+            ON source_versions(external_identity) WHERE blob_hash IS NULL;
+        """)
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS refs (
+            kind       TEXT NOT NULL CHECK (kind IN ('source-content','source-derived','page-content')),
+            owner_id   TEXT NOT NULL,
+            version_id TEXT NOT NULL,
+            generation INTEGER NOT NULL DEFAULT 1,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (kind, owner_id)
+        );
+        """)
+    }
+
+    /// Create the `page_versions` table (v30, W0 — PR #312). Mirrors the
+    /// `source_versions` pattern: append-only, ULID-ordered chain, blob-backed
+    /// body, PROV activity linkage. `IF NOT EXISTS`: idempotent so a DB rewound
+    /// for testing already has it.
+    private static func createPageVersionsV30(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS page_versions (
+            id               TEXT PRIMARY KEY,
+            page_id          TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+            parent_id        TEXT,
+            merge_parent_id  TEXT,
+            blob_hash        TEXT NOT NULL REFERENCES blobs(hash),
+            title            TEXT NOT NULL,
+            activity_id      TEXT REFERENCES activities(id),
+            saved_at         REAL NOT NULL
+        );
+        """)
+        try db.execute(sql: "CREATE INDEX IF NOT EXISTS page_versions_page ON page_versions(page_id, id);")
+    }
+
+    /// Create the workspace tables (v31, W1 — PR #312). Called by both the
+    /// fresh path and the v30→31 migration step so the two stay
+    /// schema-identical.
+    private static func createWorkspacesV31(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS workspaces (
+            id               TEXT PRIMARY KEY,
+            name             TEXT,
+            status           TEXT NOT NULL DEFAULT 'open',
+            activity_id      TEXT REFERENCES activities(id),
+            index_body       TEXT,
+            index_base_version TEXT,
+            created_at       REAL NOT NULL,
+            updated_at       REAL NOT NULL
+        );
+        """)
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS workspace_refs (
+            workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            kind           TEXT NOT NULL CHECK (kind = 'page-content'),
+            owner_id       TEXT NOT NULL,
+            base_version_id TEXT,
+            version_id     TEXT,
+            blob_hash      TEXT REFERENCES blobs(hash),
+            title          TEXT,
+            updated_at     REAL NOT NULL,
+            PRIMARY KEY (workspace_id, kind, owner_id)
+        );
+        """)
+    }
+
+    /// Create the `workspace_conflicts` table (v32, W3 — PR #312). 
+    /// `IF NOT EXISTS`: idempotent.
+    private static func createWorkspaceConflictsV32(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS workspace_conflicts (
+            workspace_id    TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            page_id         TEXT NOT NULL,
+            base_version_id TEXT,
+            main_version_id TEXT,
+            ws_version_id   TEXT NOT NULL,
+            created_at      REAL NOT NULL,
+            PRIMARY KEY (workspace_id, page_id)
+        );
+        """)
+    }
+
+    /// Create the two persisted-chat-history tables (issue #119 phase 1):
+    /// `chats` (one row per chat) and `chat_messages` (one row per
+    /// persistable `AgentEvent`, `event_json` verbatim). Called by both the
+    /// fresh path and the v23→25 migration step so the two stay
+    /// schema-identical.
+    private static func createChatTablesV23(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS chats (
+            id         TEXT PRIMARY KEY,
+            kind       TEXT NOT NULL,
+            title      TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            summary    TEXT,
+            summary_at REAL
+        );
+        """)
+        try db.execute(sql: "CREATE INDEX IF NOT EXISTS chats_updated ON chats(updated_at);")
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id         TEXT PRIMARY KEY,
+            chat_id    TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+            seq        INTEGER NOT NULL,
+            role       TEXT NOT NULL,
+            event_json TEXT NOT NULL,
+            text       TEXT NOT NULL DEFAULT '',
+            created_at REAL NOT NULL
+        );
+        """)
+        try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_seq ON chat_messages(chat_id, seq);")
+    }
+
+    /// Create the chat-search tables (issue #245): `chat_chunks` (per-chunk
+    /// cosine embeddings, mirroring `page_chunks`/`source_chunks`) and the
+    /// `chat_search` FTS sidecar + `chats_fts` external-content index
+    /// (mirroring `source_search`/`sources_fts`).
+    private static func createChatSearchTables(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS chat_chunks (
+            chat_id   TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+            chunk_idx INTEGER NOT NULL,
+            embedding BLOB NOT NULL,
+            PRIMARY KEY (chat_id, chunk_idx)
+        ) WITHOUT ROWID;
+        """)
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS chat_search (
+            chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+            title   TEXT NOT NULL,
+            body    TEXT NOT NULL
+        );
+        """)
+        // FTS5/BM25 (v28): external-content over `chat_search`, kept in sync
+        // by AFTER INSERT/UPDATE/DELETE triggers — mirrors `sources_fts`.
+        try db.execute(sql: """
+        CREATE VIRTUAL TABLE IF NOT EXISTS chats_fts USING fts5(
+            title, body,
+            content='chat_search', content_rowid='rowid',
+            tokenize='porter');
+        """)
+        try db.execute(sql: """
+        CREATE TRIGGER IF NOT EXISTS chats_fts_ai AFTER INSERT ON chat_search BEGIN
+          INSERT INTO chats_fts(rowid, title, body)
+            VALUES (new.rowid, new.title, new.body);
+        END;
+        """)
+        try db.execute(sql: """
+        CREATE TRIGGER IF NOT EXISTS chats_fts_ad AFTER DELETE ON chat_search BEGIN
+          INSERT INTO chats_fts(chats_fts, rowid, title, body)
+            VALUES ('delete', old.rowid, old.title, old.body);
+        END;
+        """)
+        try db.execute(sql: """
+        CREATE TRIGGER IF NOT EXISTS chats_fts_au AFTER UPDATE ON chat_search BEGIN
+          INSERT INTO chats_fts(chats_fts, rowid, title, body)
+            VALUES ('delete', old.rowid, old.title, old.body);
+          INSERT INTO chats_fts(rowid, title, body)
+            VALUES (new.rowid, new.title, new.body);
+        END;
+        """)
+    }
+
+    /// Create the `wiki_metadata` key-value table (v37, issue #477). Stores
+    /// one-time work flags like the link-reconcile version so they survive
+    /// model recreation between launches. `IF NOT EXISTS` — idempotent for DBs
+    /// rewound in testing.
+    private static func createWikiMetadataTable(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS wiki_metadata (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """)
+    }
+
+    // MARK: - FTS5 corruption heal (migration safety net)
+
+    /// Rebuild the FTS5 external-content indexes from their content tables.
+    /// Called when a migration write trips `SQLITE_CORRUPT` on a shadow index
+    /// (see `init(databaseURL:)`). The `'rebuild'` command drops and re-derives
+    /// the index from `pages`/`source_search`/`chat_search`, so a corrupt shadow
+    /// b-tree is replaced by a consistent one. Best-effort per index: a missing
+    /// table (minimal fixture) or an already-healthy index is a harmless no-op.
+    /// Mirrors `SQLiteWikiStore.healCorruptFTSIndexes`.
+    private static func healCorruptFTSIndexes(in db: Database) {
+        for table in ["pages_fts", "sources_fts", "chats_fts"] {
+            let exists = (try? Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='\(table)';"
+            ) ?? 0) != 0
+            guard exists else { continue }
+            do {
+                try db.execute(sql: "INSERT INTO \(table)(\(table)) VALUES ('rebuild');")
+            } catch {
+                DebugLog.store("GRDBWikiStore healCorruptFTSIndexes: \(table) rebuild failed — \(error)")
+            }
+        }
+    }
+
+    // MARK: - Data-migration helpers (v19 → v37)
+
+    /// The v19→20 migration step (graph-model Phase 1): move source content
+    /// out of the mutable `sources.content` column into immutable,
+    /// content-addressed `blobs`, an append-only `source_versions` chain, a
+    /// PROV-DM `agents`/`activities` substrate, and a single mutable `refs`
+    /// pointer. Each existing source gets one v1 version + one ref + a blob
+    /// whose hash reuses the v19 `content_hash` (same SHA-256). Then
+    /// `sources.content` is DROPPED.
+    ///
+    /// Faithful translation of `SQLiteWikiStore.migrateV19ToV20`. All DML is
+    /// inside one `db.inTransaction(.immediate)` (the GRDB equivalent of
+    /// `withTransaction`): if the pre-migration assertion fails, the whole step
+    /// rolls back harmlessly.
+    private static func migrateV19ToV20(in db: Database) throws {
+        try db.inTransaction(.immediate) {
+            // 1. Create the five objects tables (idempotent — IF NOT EXISTS).
+            try createObjectsTablesV20(in: db)
+
+            let hasContentColumn = try Self.hasColumn("content", on: "sources", in: db)
+            guard hasContentColumn else { return .commit }
+
+            // 0. Pre-migration assertion (silent-data-loss guard).
+            let unhashed = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM sources WHERE content_hash IS NULL OR content_hash = '';"
+            ) ?? 0
+            if unhashed != 0 {
+                try Self.backfillContentHashes(in: db)
+                let recheck = try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM sources WHERE content_hash IS NULL OR content_hash = '';"
+                ) ?? 0
+                guard recheck == 0 else {
+                    throw WikiStoreError.unexpected(
+                        "v20 migration: \(recheck) source(s) still lack a content_hash after backfill — refusing to drop content")
+                }
+            }
+
+            // 2. Seed one legacy agent.
+            let legacyAgentID = ULID.generate()
+            try db.execute(
+                sql: "INSERT INTO agents (id, kind, name) VALUES (?, 'software', 'legacy-import');",
+                arguments: [legacyAgentID])
+
+            // 3. For each existing source: blob + activity + v1 version + ref.
+            let now = Date().timeIntervalSince1970
+            struct SourceRow {
+                let id: String; let content: Data; let hash: String
+                let mime: String?; let byteSize: Int; let createdAt: Double
+            }
+            let sourceRows = try Row.fetchAll(db, sql: """
+            SELECT id, content, content_hash, mime_type, byte_size, created_at
+            FROM sources;
+            """).map { row -> SourceRow in
+                // GRDB's optional binding: `String?` is nil for SQL NULL.
+                let mime: String? = row["mime_type"]
+                return SourceRow(
+                    id: row["id"],
+                    content: row["content"],
+                    hash: row["content_hash"],
+                    mime: mime,
+                    byteSize: row["byte_size"],
+                    createdAt: row["created_at"]
+                )
+            }
+
+            for source in sourceRows {
+                try db.execute(
+                    sql: "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);",
+                    arguments: [source.hash, source.byteSize, source.content])
+
+                let activityID = ULID.generate()
+                try db.execute(sql: """
+                INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+                VALUES (?, 'import', ?, ?, ?);
+                """, arguments: [activityID, legacyAgentID, source.createdAt, source.createdAt])
+
+                let versionID = ULID.generate()
+                try db.execute(sql: """
+                INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
+                                             mime_type, activity_id, fetched_at)
+                VALUES (?, ?, NULL, ?, ?, ?, ?);
+                """, arguments: [versionID, source.id, source.hash, source.mime, activityID, source.createdAt])
+
+                try db.execute(sql: """
+                INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+                VALUES ('source-content', ?, ?, 1, ?);
+                """, arguments: [source.id, versionID, now])
+            }
+
+            // 4. Drop the content column.
+            try db.execute(sql: "ALTER TABLE sources DROP COLUMN content;")
+        return .commit
+        }
+    }
+
+    /// The v20→21 migration step (graph-model Phase 2). CAS-moves each legacy
+    /// row's inline `content` into a blob. Faithful translation of
+    /// `SQLiteWikiStore.migrateV20ToV21`.
+    private static func migrateV20ToV21(in db: Database) throws {
+        try db.inTransaction(.immediate) {
+            let hasSMV = try Self.tableExists("source_markdown_versions", in: db)
+            guard hasSMV else { return .commit }
+
+            for (col, decl) in [
+                ("activity_id", "TEXT REFERENCES activities(id)"),
+                ("source_version_id", "TEXT"),
+                ("blob_hash", "TEXT REFERENCES blobs(hash)"),
+                ("mime_type", "TEXT NOT NULL DEFAULT 'text/markdown'"),
+            ] {
+                let present = try Self.hasColumn(col, on: "source_markdown_versions", in: db)
+                guard !present else { continue }
+                try db.execute(sql: "ALTER TABLE source_markdown_versions ADD COLUMN \(col) \(decl);")
+            }
+
+            let unmigrated = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM source_markdown_versions WHERE blob_hash IS NULL;"
+            ) ?? 0
+            guard unmigrated != 0 else { return .commit }
+
+            let legacyAgentID: String
+            if let existing = try String.fetchOne(
+                db,
+                sql: "SELECT id FROM agents WHERE name = ? LIMIT 1;",
+                arguments: [ExtractionBackend.legacyAgentName]
+            ) {
+                legacyAgentID = existing
+            } else {
+                legacyAgentID = ULID.generate()
+                try db.execute(
+                    sql: "INSERT INTO agents (id, kind, name) VALUES (?, 'software', ?);",
+                    arguments: [legacyAgentID, ExtractionBackend.legacyAgentName])
+            }
+
+            struct LegacyRow {
+                let id: String; let fileID: String
+                let content: String; let origin: String; let createdAt: Double
+            }
+            let rows = try Row.fetchAll(db, sql: """
+            SELECT id, file_id, content, origin, created_at
+            FROM source_markdown_versions WHERE blob_hash IS NULL;
+            """).map { row -> LegacyRow in
+                LegacyRow(
+                    id: row["id"], fileID: row["file_id"],
+                    content: row["content"], origin: row["origin"],
+                    createdAt: row["created_at"])
+            }
+            for row in rows {
+                guard !row.content.isEmpty else {
+                    throw WikiStoreError.unexpected(
+                        "v21 migration: source_markdown_versions row \(row.id) has empty content — refusing to backfill")
+                }
+            }
+
+            for row in rows {
+                let data = Data(row.content.utf8)
+                let hash = SHA256.hash(data: data)
+                    .map { String(format: "%02x", $0) }.joined()
+
+                try db.execute(
+                    sql: "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);",
+                    arguments: [hash, Int64(data.count), data])
+
+                var activityID: String? = nil
+                if SourceMarkdownOrigin(rawValue: row.origin) == .extraction {
+                    let id = ULID.generate()
+                    try db.execute(sql: """
+                    INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+                    VALUES (?, 'extract', ?, ?, ?);
+                    """, arguments: [id, legacyAgentID, row.createdAt, row.createdAt])
+                    activityID = id
+                }
+
+                var sourceVersionID: String?
+                if let svID = try String.fetchOne(
+                    db,
+                    sql: """
+                    SELECT sv.id
+                    FROM refs r
+                    JOIN source_versions sv ON sv.id = r.version_id
+                    WHERE r.kind = 'source-content' AND r.owner_id = ?;
+                    """,
+                    arguments: [row.fileID]
+                ) {
+                    sourceVersionID = svID
+                } else if let svID = try String.fetchOne(
+                    db,
+                    sql: "SELECT id FROM source_versions WHERE source_id = ? ORDER BY id DESC LIMIT 1;",
+                    arguments: [row.fileID]
+                ) {
+                    sourceVersionID = svID
+                }
+
+                try db.execute(sql: """
+                UPDATE source_markdown_versions
+                   SET blob_hash = ?, activity_id = ?, source_version_id = ?,
+                       mime_type = 'text/markdown', content = ''
+                 WHERE id = ?;
+                """, arguments: [hash, activityID, sourceVersionID, row.id])
+            }
+        return .commit
+        }
+    }
+
+    /// The v21→v22 migration step (graph-model Phase 4 foundation):
+    /// `sources.role` + `source_links` rebuild. Faithful translation of
+    /// `SQLiteWikiStore.migrateV21ToV22`.
+    private static func migrateV21ToV22(in db: Database) throws {
+        try db.inTransaction(.immediate) {
+            let hasRole = try Self.hasColumn("role", on: "sources", in: db)
+            guard !hasRole else { return .commit }
+
+            try db.execute(sql: "ALTER TABLE sources ADD COLUMN role TEXT NOT NULL DEFAULT 'primary';")
+
+            let hasSourceLinks = try Self.tableExists("source_links", in: db)
+            guard hasSourceLinks else { return .commit }
+            let hasRoleCol = try Self.hasColumn("role", on: "source_links", in: db)
+            guard !hasRoleCol else { return .commit }
+            try db.execute(sql: "ALTER TABLE source_links RENAME TO source_links_v21;")
+            try db.execute(sql: """
+            CREATE TABLE source_links (
+                from_page_id TEXT NOT NULL REFERENCES pages(id),
+                to_source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                link_text    TEXT NOT NULL,
+                role         TEXT NOT NULL DEFAULT 'cite',
+                pinned_version_id TEXT
+            );
+            """)
+            try db.execute(sql: """
+            INSERT INTO source_links (from_page_id, to_source_id, link_text, role, pinned_version_id)
+            SELECT from_page_id, to_source_id, link_text, 'cite', NULL FROM source_links_v21;
+            """)
+            try db.execute(sql: "DROP TABLE source_links_v21;")
+            try db.execute(sql: """
+            CREATE UNIQUE INDEX source_links_edge
+                ON source_links(from_page_id, to_source_id, role,
+                                COALESCE(pinned_version_id, ''));
+            """)
+        return .commit
+        }
+    }
+
+    /// The v22→23 step: canonicalize `[[…]]` links to ULID-stable form.
+    /// Faithful translation of `SQLiteWikiStore.migrateV22ToV23`.
+    ///
+    /// Uses `_Locked` resolver variants that take a `Database` directly — the
+    /// public resolvers re-enter `dbQueue.read` and would deadlock inside a
+    /// `writeWithoutTransaction` migration.
+    private func migrateV22ToV23(in db: Database) throws {
+        try db.inTransaction(.immediate) {
+            let hasPages = try Self.tableExists("pages", in: db)
+            guard hasPages else { return .commit }
+
+            let hasSources = try Self.tableExists("sources", in: db)
+            let resolveSource: (String) throws -> PageID? = hasSources
+                ? { [self] in try self.resolveSourceByNameLocked($0, in: db) }
+                : { _ in nil }
+
+            let hasChats = try Self.tableExists("chats", in: db)
+            let resolveChat: (String) throws -> PageID? = hasChats
+                ? { [self] in try self.resolveChatByTitleLocked($0, in: db) }
+                : { _ in nil }
+
+            let rows = try Row.fetchAll(db, sql: "SELECT id, body_markdown FROM pages;")
+            let now = Date().timeIntervalSince1970
+            for row in rows {
+                let id: String = row["id"]
+                let body: String = row["body_markdown"]
+                guard let canonical = try WikiLinkRewriter.canonicalize(
+                    in: body,
+                    resolvePage: { [self] in try self.resolveTitleToIDLocked($0, in: db) },
+                    resolveSource: resolveSource,
+                    resolveChat: resolveChat) else { continue }
+                try db.execute(sql: """
+                UPDATE pages SET body_markdown = ?, updated_at = ?, version = version + 1 WHERE id = ?;
+                """, arguments: [canonical, now, id])
+            }
+        return .commit
+        }
+    }
+
+    /// The v28→29 step: rewrite `kind = 'ask'` → `'edit'`.
+    private static func migrateV28ToV29(in db: Database) throws {
+        let hasChats = try Self.tableExists("chats", in: db)
+        guard hasChats else { return }
+        try db.execute(sql: "UPDATE chats SET kind = 'edit' WHERE kind = 'ask';")
+    }
+
+    /// The v29→30 migration step (W0 — page versioning).
+    /// Faithful translation of `SQLiteWikiStore.migrateV29ToV30`.
+    private func migrateV29ToV30(in db: Database) throws {
+        try db.inTransaction(.immediate) {
+            try Self.createPageVersionsV30(in: db)
+
+            let refsExists = try Self.tableExists("refs", in: db)
+            if refsExists {
+                let refsSQL = try Self.queryScalarText(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='refs';", in: db)
+                if !refsSQL.contains("CHECK") {
+                    try db.execute(sql: """
+                    CREATE TABLE _refs_new (
+                        kind       TEXT NOT NULL CHECK (kind IN ('source-content','source-derived','page-content')),
+                        owner_id   TEXT NOT NULL,
+                        version_id TEXT NOT NULL,
+                        generation INTEGER NOT NULL DEFAULT 1,
+                        updated_at REAL NOT NULL,
+                        PRIMARY KEY (kind, owner_id)
+                    );
+                    """)
+                    try db.execute(sql: "INSERT INTO _refs_new (kind, owner_id, version_id, generation, updated_at) SELECT kind, owner_id, version_id, generation, updated_at FROM refs;")
+                    try db.execute(sql: "DROP TABLE refs;")
+                    try db.execute(sql: "ALTER TABLE _refs_new RENAME TO refs;")
+                }
+            } else {
+                try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS refs (
+                    kind       TEXT NOT NULL CHECK (kind IN ('source-content','source-derived','page-content')),
+                    owner_id   TEXT NOT NULL,
+                    version_id TEXT NOT NULL,
+                    generation INTEGER NOT NULL DEFAULT 1,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (kind, owner_id)
+                );
+                """)
+            }
+
+            let pageCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM page_versions;") ?? 0
+            guard pageCount == 0 else { return .commit }
+
+            let hasPages = try Self.tableExists("pages", in: db)
+            guard hasPages else { return .commit }
+
+            let legacyAgentID = try legacyImportAgentID(on: db)
+
+            struct PageRow {
+                let id: String; let title: String; let body: Data; let createdAt: Double
+            }
+            let pages = try Row.fetchAll(db, sql: """
+            SELECT id, title, body_markdown, created_at FROM pages;
+            """).map { row -> PageRow in
+                PageRow(
+                    id: row["id"], title: row["title"],
+                    body: Data((row["body_markdown"] as String).utf8), createdAt: row["created_at"])
+            }
+
+            for page in pages {
+                let hash = SHA256.hash(data: page.body)
+                    .map { String(format: "%02x", $0) }.joined()
+
+                try db.execute(
+                    sql: "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);",
+                    arguments: [hash, Int64(page.body.count), page.body])
+
+                let activityID = ULID.generate()
+                try db.execute(sql: """
+                INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+                VALUES (?, 'import', ?, ?, ?);
+                """, arguments: [activityID, legacyAgentID, page.createdAt, page.createdAt])
+
+                let versionID = ULID.generate()
+                try db.execute(sql: """
+                INSERT INTO page_versions (id, page_id, parent_id, blob_hash, title, activity_id, saved_at)
+                VALUES (?, ?, NULL, ?, ?, ?, ?);
+                """, arguments: [versionID, page.id, hash, page.title, activityID, page.createdAt])
+            }
+        return .commit
+        }
+    }
+
+    /// v32 → v33 (#131): provenance columns.
+    private static func migrateV32ToV33(in db: Database) throws {
+        try db.inTransaction(.immediate) {
+            let hasPages = try Self.tableExists("pages", in: db)
+            if hasPages {
+                let pagesCols = try tableColumnInfo("pages", in: db)
+                if !pagesCols.contains("created_by") {
+                    try db.execute(sql: "ALTER TABLE pages ADD COLUMN created_by TEXT;")
+                }
+                if !pagesCols.contains("last_edited_by") {
+                    try db.execute(sql: "ALTER TABLE pages ADD COLUMN last_edited_by TEXT;")
+                }
+            }
+            let hasSMV = try Self.tableExists("source_markdown_versions", in: db)
+            if hasSMV {
+                let smvCols = try tableColumnInfo("source_markdown_versions", in: db)
+                if !smvCols.contains("technique") {
+                    try db.execute(sql: "ALTER TABLE source_markdown_versions ADD COLUMN technique TEXT;")
+                }
+            }
+        return .commit
+        }
+    }
+
+    /// v33 → v34 (#multi-writer-hardening Phase 3 — head-ref invariant).
+    /// Faithful translation of `SQLiteWikiStore.migrateV33ToV34`.
+    private func migrateV33ToV34(in db: Database) throws {
+        try db.inTransaction(.immediate) {
+            let hasPages = try Self.tableExists("pages", in: db)
+            guard hasPages else { return .commit }
+            let hasRefs = try Self.tableExists("refs", in: db)
+            guard hasRefs else { return .commit }
+
+            let legacyAgentID = try legacyImportAgentID(on: db)
+            let now = Date().timeIntervalSince1970
+
+            struct PageRow {
+                let id: String; let title: String; let body: Data; let createdAt: Double
+            }
+            let pages = try Row.fetchAll(db, sql: """
+            SELECT p.id, p.title, p.body_markdown, p.created_at
+            FROM pages p
+            WHERE NOT EXISTS (
+                SELECT 1 FROM refs r
+                WHERE r.kind = 'page-content' AND r.owner_id = p.id
+            );
+            """).map { row -> PageRow in
+                PageRow(
+                    id: row["id"], title: row["title"],
+                    body: Data((row["body_markdown"] as String).utf8), createdAt: row["created_at"])
+            }
+
+            guard !pages.isEmpty else { return .commit }
+
+            for page in pages {
+                var headVersionID: String
+                if let maxID = try String.fetchOne(
+                    db,
+                    sql: "SELECT id FROM page_versions WHERE page_id = ? ORDER BY id DESC LIMIT 1;",
+                    arguments: [page.id]
+                ) {
+                    headVersionID = maxID
+                } else {
+                    let hash = SHA256.hash(data: page.body)
+                        .map { String(format: "%02x", $0) }.joined()
+
+                    try db.execute(
+                        sql: "INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);",
+                        arguments: [hash, Int64(page.body.count), page.body])
+
+                    let activityID = ULID.generate()
+                    try db.execute(sql: """
+                    INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+                    VALUES (?, 'import', ?, ?, ?);
+                    """, arguments: [activityID, legacyAgentID, page.createdAt, page.createdAt])
+
+                    headVersionID = ULID.generate()
+                    try db.execute(sql: """
+                    INSERT INTO page_versions (id, page_id, parent_id, blob_hash, title, activity_id, saved_at)
+                    VALUES (?, ?, NULL, ?, ?, ?, ?);
+                    """, arguments: [headVersionID, page.id, hash, page.title, activityID, page.createdAt])
+                }
+
+                try db.execute(sql: """
+                INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+                VALUES ('page-content', ?, ?, 1, ?);
+                """, arguments: [page.id, headVersionID, now])
+            }
+        return .commit
+        }
+    }
+
+    /// v34 → v35 (#multi-writer-hardening Phase 5 — created-page staging).
+    private static func migrateV34ToV35(in db: Database) throws {
+        let columns = try tableColumnInfo("workspace_refs", in: db)
+        guard !columns.contains("blob_hash") else { return }
+
+        try db.inTransaction(.immediate) {
+            try db.execute(sql: """
+            CREATE TABLE _workspace_refs_new (
+                workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                kind           TEXT NOT NULL CHECK (kind = 'page-content'),
+                owner_id       TEXT NOT NULL,
+                base_version_id TEXT,
+                version_id     TEXT,
+                blob_hash      TEXT REFERENCES blobs(hash),
+                title          TEXT,
+                updated_at     REAL NOT NULL,
+                PRIMARY KEY (workspace_id, kind, owner_id)
+            );
+            """)
+            try db.execute(sql: """
+            INSERT INTO _workspace_refs_new
+                (workspace_id, kind, owner_id, base_version_id, version_id, blob_hash, title, updated_at)
+            SELECT workspace_id, kind, owner_id, base_version_id, version_id, NULL, NULL, updated_at
+            FROM workspace_refs;
+            """)
+            try db.execute(sql: "DROP TABLE workspace_refs;")
+            try db.execute(sql: "ALTER TABLE _workspace_refs_new RENAME TO workspace_refs;")
+        return .commit
+        }
+    }
+
+    /// The v35→36 migration step (issue #411 — chat summary).
+    private static func migrateV35ToV36(in db: Database) throws {
+        let columns = try tableColumnInfo("chats", in: db)
+        guard !columns.contains("summary") else { return }
+
+        try db.inTransaction(.immediate) {
+            try db.execute(sql: "ALTER TABLE chats ADD COLUMN summary TEXT;")
+            try db.execute(sql: "ALTER TABLE chats ADD COLUMN summary_at REAL;")
+        return .commit
+        }
+    }
+
+    /// One-time backfill for the v18→19 step: hash every existing source's
+    /// `content` (SHA-256, hex) into the new `content_hash` column.
+    private static func backfillContentHashes(in db: Database) throws {
+        let hasContentColumn = try Self.hasColumn("content", on: "sources", in: db)
+        guard hasContentColumn else { return }
+
+        struct SourceRow { let id: String; let data: Data }
+        let rows = try Row.fetchAll(db, sql: "SELECT id, content FROM sources;")
+            .map { row -> SourceRow in
+                SourceRow(id: row["id"], data: row["content"])
+            }
+        for row in rows {
+            let hash = SHA256.hash(data: row.data)
+                .map { String(format: "%02x", $0) }.joined()
+            try db.execute(
+                sql: "UPDATE sources SET content_hash = ? WHERE id = ?;",
+                arguments: [hash, row.id])
+        }
+    }
+
+    /// The v17→18 sweep: rewrite unlinkable page titles and source display names.
+    private func sanitizeStoredNames(in db: Database) throws {
+        let now = Date().timeIntervalSince1970
+
+        let pages = try Row.fetchAll(db, sql: "SELECT id, title FROM pages;")
+            .map { row -> (id: String, title: String) in
+                (id: row["id"], title: row["title"])
+            }
+        for page in pages where !WikiNameRules.isLinkable(page.title) {
+            let clean = WikiNameRules.sanitized(page.title)
+            let slug = try uniqueSlug(from: clean, id: PageID(rawValue: page.id), on: db)
+            try db.execute(sql: """
+            UPDATE pages SET title = ?, slug = ?, updated_at = ?,
+                             version = version + 1 WHERE id = ?;
+            """, arguments: [clean, slug, now, page.id])
+        }
+
+        let sources = try Row.fetchAll(
+            db, sql: "SELECT id, COALESCE(display_name, filename) FROM sources;"
+        ).map { row -> (id: String, effectiveName: String) in
+            (id: row["id"], effectiveName: row[1])
+        }
+        for source in sources where !WikiNameRules.isLinkable(source.effectiveName) {
+            try db.execute(sql: """
+            UPDATE sources SET display_name = ?, updated_at = ?,
+                               version = version + 1 WHERE id = ?;
+            """, arguments: [WikiNameRules.sanitized(source.effectiveName), now, source.id])
+        }
+    }
+
+    // MARK: - Locked resolvers (Database-taking, no dbQueue re-entry)
+
+    /// `resolveTitleToID` taking a `Database` directly — safe to call from
+    /// inside a migration. The public `resolveTitleToID(_:)` re-enters
+    /// `dbQueue.read` and would deadlock.
+    private func resolveTitleToIDLocked(_ title: String, in db: Database) throws -> PageID? {
+        if let id = try String.fetchOne(
+            db,
+            sql: "SELECT id FROM pages WHERE title = ? COLLATE NOCASE ORDER BY id ASC LIMIT 1;",
+            arguments: [title]
+        ) {
+            return PageID(rawValue: id)
+        }
+        return nil
+    }
+
+    /// `resolveSourceByName` taking a `Database` directly.
+    private func resolveSourceByNameLocked(_ displayName: String, in db: Database) throws -> PageID? {
+        if let id = try String.fetchOne(
+            db,
+            sql: """
+            SELECT id FROM sources
+            WHERE COALESCE(display_name, filename) = ? COLLATE NOCASE
+               OR filename = ? COLLATE NOCASE
+            ORDER BY updated_at DESC LIMIT 1;
+            """,
+            arguments: [displayName, displayName]
+        ) {
+            return PageID(rawValue: id)
+        }
+        return nil
+    }
+
+    /// `resolveChatByTitle` taking a `Database` directly.
+    private func resolveChatByTitleLocked(_ title: String, in db: Database) throws -> PageID? {
+        if let id = try String.fetchOne(
+            db,
+            sql: "SELECT id FROM chats WHERE title = ? COLLATE NOCASE ORDER BY id ASC LIMIT 1;",
+            arguments: [title]
+        ) {
+            return PageID(rawValue: id)
+        }
+        return nil
+    }
 
     /// Build the complete current schema (v37 end-state) on a fresh `Database`.
     /// Mirrors `SQLiteWikiStore.createFreshSchemaV20()` + the additive tables
