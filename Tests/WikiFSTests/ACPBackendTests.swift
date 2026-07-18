@@ -512,7 +512,8 @@ import ACPModel
             contextUsed: 5000,
             contextSize: 10000,
             providerLabel: "Claude",
-            modelId: "sonnet-4")
+            modelId: "sonnet-4",
+            thinkingLevel: "high")
         #expect(usage.inputTokens == 100)
         #expect(usage.outputTokens == 200)
         #expect(usage.totalTokens == 300)
@@ -524,6 +525,7 @@ import ACPModel
         #expect(usage.contextSize == 10000)
         #expect(usage.providerLabel == "Claude")
         #expect(usage.modelId == "sonnet-4")
+        #expect(usage.thinkingLevel == "high")
     }
 
     /// `SessionUsage` with optional fields set to nil (agent didn't report them).
@@ -597,6 +599,53 @@ import ACPModel
         let merged = SessionUsage.merging(first, second)
         #expect(merged.providerLabel == "Claude")
         #expect(merged.modelId == "sonnet-4")
+    }
+
+    /// `SessionUsage.merging` carries the latest non-nil `thinkingLevel`
+    /// (point-in-time, like `providerLabel`/`modelId`). Regression test for #569:
+    /// the enrichment path in `capturePhaseUsage` must thread `thinkingLevel`
+    /// through — otherwise the Activity window's thinking-effort segment is
+    /// always blank.
+    @Test
+    func mergingCarriesLatestThinkingLevel() {
+        let first = SessionUsage(
+            inputTokens: 100, outputTokens: 200, totalTokens: 300,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 0, contextSize: 10000,
+            providerLabel: "Claude", modelId: "sonnet-4",
+            thinkingLevel: "low")
+
+        let second = SessionUsage(
+            inputTokens: 50, outputTokens: 30, totalTokens: 80,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 5000, contextSize: 10000,
+            providerLabel: "Claude", modelId: "sonnet-4",
+            thinkingLevel: "high")
+
+        let merged = SessionUsage.merging(first, second)
+        #expect(merged.thinkingLevel == "high")
+    }
+
+    /// `SessionUsage.merging` preserves the existing `thinkingLevel` when the
+    /// new snapshot doesn't supply one (nil) — the latest-non-nil-wins rule.
+    @Test
+    func mergingPreservesExistingThinkingLevelWhenNewIsNil() {
+        let first = SessionUsage(
+            inputTokens: 100, outputTokens: 200, totalTokens: 300,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 0, contextSize: 10000,
+            providerLabel: "Claude", modelId: "sonnet-4",
+            thinkingLevel: "medium")
+
+        let second = SessionUsage(
+            inputTokens: 50, outputTokens: 30, totalTokens: 80,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 5000, contextSize: 10000,
+            providerLabel: nil, modelId: nil,
+            thinkingLevel: nil)
+
+        let merged = SessionUsage.merging(first, second)
+        #expect(merged.thinkingLevel == "medium")
     }
 
     /// `SessionUsage.merging(nil, new)` returns `new` directly.
