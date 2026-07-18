@@ -195,6 +195,17 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        // #528 spike: today's cumulative token/cost usage.
+        if activityTracker.todayUsage.hasData {
+            let usageItem = NSMenuItem(
+                title: UsageFormatter.dailySummary(usage: activityTracker.todayUsage),
+                action: nil,
+                keyEquivalent: "")
+            usageItem.isEnabled = false
+            menu.addItem(usageItem)
+            menu.addItem(.separator())
+        }
+
         // Wiki maintenance actions.
         let maintenanceItem = NSMenuItem(
             title: "Maintenance",

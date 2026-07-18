@@ -84,7 +84,7 @@ final class OperationNotifier {
         case .failed(let item, let error):
             post(item: item, outcome: .failed(error))
         // Cancelled is user-initiated — not worth a notification.
-        case .cancelled, .enqueued, .started, .progress, .transcript,
+        case .cancelled, .enqueued, .started, .progress, .transcript, .usage,
              .runStateChanged, .reordered:
             break
         }

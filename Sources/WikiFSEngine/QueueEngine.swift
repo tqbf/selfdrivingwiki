@@ -367,6 +367,15 @@ public actor QueueEngine {
         }
     }
 
+    /// A `Sendable` closure the worker factory captures to yield `.usage`
+    /// events onto the engine's broadcaster. #528 spike — surfaces per-run
+    /// token/cost usage to the activity tracker (no persistence needed).
+    public func makeEmitUsage() -> @Sendable (QueueItem.ID, SessionUsage) -> Void {
+        return { [broadcaster] id, usage in
+            broadcaster.yield(.usage(id, usage))
+        }
+    }
+
     /// Load persisted agent events (transcript) for a queue item from the DB.
     /// Used by the Activity tracker to show transcripts for items rehydrated
     /// from a previous session. Deltas are folded into whole rows on the way
