@@ -101,6 +101,11 @@ public enum QueueEvent: Sendable {
     /// A queued item was reordered (dragged to a new position). Carries the
     /// updated item with its new `orderingKey`.
     case reordered(QueueItem)
+    /// The run's lightweight log file (`run.jsonl`) and verbose debug folder
+    /// (`debug/`) URLs, forwarded from the launcher after the run starts so
+    /// the Activity window can offer "Reveal Log" / "Reveal Debug Folder".
+    /// `nil` when the run didn't create them (not started, preflight failure).
+    case runPaths(QueueItem.ID, logURL: URL?, debugURL: URL?)
 
     /// The item this event pertains to (if any).
     public var item: QueueItem? {
@@ -110,7 +115,7 @@ public enum QueueEvent: Sendable {
             return i
         case .failed(let i, _):
             return i
-        case .progress, .transcript, .liveUsage, .usage, .runStateChanged:
+        case .progress, .transcript, .liveUsage, .usage, .runPaths, .runStateChanged:
             return nil
         }
     }

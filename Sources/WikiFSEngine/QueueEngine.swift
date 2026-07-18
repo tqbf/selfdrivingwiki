@@ -386,6 +386,17 @@ public actor QueueEngine {
         }
     }
 
+    /// A `Sendable` closure the worker factory captures to yield `.runPaths`
+    /// events onto the engine's broadcaster. Surfaces the run's `run.jsonl`
+    /// log file URL and `debug/` folder URL to the activity tracker so the
+    /// Activity window can offer "Reveal Log" / "Reveal Debug Folder" (no
+    /// persistence needed — URLs are runtime-only).
+    public func makeEmitLogPaths() -> @Sendable (QueueItem.ID, URL?, URL?) -> Void {
+        return { [broadcaster] id, logURL, debugURL in
+            broadcaster.yield(.runPaths(id, logURL: logURL, debugURL: debugURL))
+        }
+    }
+
     /// Load persisted agent events (transcript) for a queue item from the DB.
     /// Used by the Activity tracker to show transcripts for items rehydrated
     /// from a previous session. Deltas are folded into whole rows on the way
