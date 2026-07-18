@@ -126,11 +126,11 @@ public final class WikiEventBus: @unchecked Sendable {
     }
 
     /// Stamp `seq`, snapshot the matching handlers, then dispatch each to the
-    /// main actor. When already on the main actor, handlers run synchronously
-    /// (preventing a deferred Task from reentering a subsequent write). When
-    /// called from a background context (wikictl/daemon), handlers run via a
-    /// deferred `Task { @MainActor in ... }` — safe because the caller won't
-    /// do another write on the same actor.
+    /// main actor via `Task { @MainActor }`. The async hop is load-bearing: it
+    /// guarantees handlers never run inside the store's write closure (emit
+    /// fires post-commit, and the Task can only land after the write returns),
+    /// so a subscriber's read always sees committed state without re-entering
+    /// the serial queue. This also matches the behavior #596/#591 validated.
     public func emit(_ event: ResourceChangeEvent) {
         lock.lock()
         seqCounter &+= 1
@@ -149,13 +149,7 @@ public final class WikiEventBus: @unchecked Sendable {
             // its own kind — so a coarse (`kind == nil`) event reaches only
             // nil-filter (all-events) subscribers.
             if let kindFilter, kindFilter != stamped.kind { continue }
-            if Thread.isMainThread {
-                // Already on main actor — call synchronously to prevent
-                // reentering a subsequent write on the same actor.
-                MainActor.assumeIsolated { handler(stamped) }
-            } else {
-                Task { @MainActor in handler(stamped) }
-            }
+            Task { @MainActor in handler(stamped) }
         }
     }
 }
