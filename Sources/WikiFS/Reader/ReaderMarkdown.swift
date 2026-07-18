@@ -29,7 +29,7 @@ enum ReaderMarkdown {
         // reference (`wiki-footnote://note?id=…`) can scroll to it. The anchor is
         // inline HTML at the start of the (tight) list item; swift-markdown emits
         // it verbatim, giving the reader a stable `getElementById` target.
-        let footnotes = renderedFootnotes.footnotes
+        let footnotes: String = renderedFootnotes.footnotes
             .map { footnote in
                 let anchor = "<a id=\"\(WikiFootnoteMarkdown.footnoteAnchorID(for: footnote.id))\"></a>"
                 let def = WikiLinkMarkdown.linkified(footnote.markdown, isResolved: isResolved,

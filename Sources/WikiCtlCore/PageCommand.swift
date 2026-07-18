@@ -304,7 +304,7 @@ public enum PageCommand {
         query: String, limit: Int, in store: WikiStore
     ) throws -> Result {
         let results = try store.searchSimilar(query: query, limit: limit)
-        let output = results.map { summary in
+        let output: String = results.map { summary in
             let title = summary.title.replacingOccurrences(of: "\t", with: " ")
             return "\(summary.id.rawValue)\t\(title)"
         }.joined(separator: "\n")
