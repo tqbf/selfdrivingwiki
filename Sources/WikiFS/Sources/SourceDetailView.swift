@@ -116,6 +116,20 @@ struct SourceDetailView: View {
 
     private var hasMarkdown: Bool { headVersion != nil }
 
+    /// Mirrors `WikiStoreModel.canIngest` — the single "can this source be
+    /// ingested?" rule shared with the sources outline context menu and the
+    /// `enqueueIngestion` chokepoint. A source is ingestible iff it has a
+    /// processed-markdown version (`hasMarkdown`) **or** raw bytes
+    /// (`byteSize > 0`) the staging path hands the agent directly. Gating the
+    /// Ingest button on `hasMarkdown` alone greyed it for a not-yet-extracted
+    /// PDF (raw bytes present, no markdown) while the context menu stayed
+    /// enabled — a state mismatch, since the row also showed "Ready to ingest".
+    /// Computed from already-loaded `headVersion` (reactive) rather than a DB
+    /// read in the body; `byteSize > 0` covers byteful sources on first render.
+    private var canIngest: Bool {
+        hasMarkdown || file.byteSize > 0
+    }
+
     /// The byteless-embed descriptor for THIS source, built from the loaded
     /// origin + the source mime — so `ExternalEmbed` can resolve an iframe
     /// target without the full reader's embed-info precompute. `nil` when the
@@ -1133,11 +1147,13 @@ struct SourceDetailView: View {
         // Don't disable during an active ingestion or extraction — the queue
         // engine serializes both (ingestion maxConcurrent=1 per provider;
         // extraction limit 1 for local pdf2md). A second tap just appends to
-        // the queue. `isRunning` still blocks when a *chat* agent is running
-        // (no ingest active) to avoid a launcher preflight refusal.
+        // the queue. `isRunning` (the ingest/lint launcher — NOT the separate
+        // chat launcher) blocks only when a lint is mid-run with no ingest
+        // active, to avoid a launcher preflight refusal; a chat run leaves this
+        // launcher idle, so it does not block.
         .disabled((isRunning && !isAnySourceIngesting)
                   || isEditLockedExternally
-                  || !hasMarkdown)
+                  || !canIngest)
         .confirmationDialog(
             "Ingest Again?",
             isPresented: $showReingestConfirmation,
@@ -1151,13 +1167,13 @@ struct SourceDetailView: View {
             Text("This document has already been ingested. Running ingest again may create duplicate pages.")
         }
 
-        // Ingested → a calm green "done" affordance. Otherwise prominent only
-        // when Ingest is the actual next step; a source without markdown (an
-        // unextracted PDF, or a byteless video with no transcript) can't be
-        // ingested, so Ingest stays secondary here and is disabled above.
+        // Ingested → a calm green "done" affordance. Otherwise prominent when
+        // Ingest is a real next step; a source that can't be ingested at all
+        // (byteless with no processed markdown — e.g. a video whose transcript
+        // never arrived) stays secondary and is disabled above.
         if hasBeenIngested {
             button.tint(.green)
-        } else if !hasMarkdown {
+        } else if !canIngest {
             button
         } else {
             button.buttonStyle(.borderedProminent)
