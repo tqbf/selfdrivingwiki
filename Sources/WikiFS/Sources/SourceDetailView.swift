@@ -97,6 +97,10 @@ struct SourceDetailView: View {
     private enum FileContentTab: String, CaseIterable {
         case reader = "Reader"
         case pdf = "PDF"
+        /// The rendered Mermaid diagram (inline SVG). Only shown for Mermaid
+        /// sources (`.mmd` or markdown containing a ```mermaid block); the raw
+        /// value is the picker label.
+        case rendered = "Rendered"
         /// The embedded media player pane — covers both video (YouTube/Vimeo/
         /// direct-remote `<video>`) and audio (Apple Podcasts/Spotify/
         /// SoundCloud/direct-remote `<audio>`). The picker label is dynamic
@@ -115,6 +119,18 @@ struct SourceDetailView: View {
     private var isPDF: Bool { MimeType.isPDF(file.mimeType) }
 
     private var hasMarkdown: Bool { headVersion != nil }
+
+    /// Whether this source should expose the Mermaid diagram tabs
+    /// (Reader / Rendered / Split). Detection is content-aware: a standalone
+    /// `.mmd` file or a `text/mermaid` source is always a Mermaid source, and a
+    /// markdown document carrying a fenced ` ```mermaid ` block becomes one once
+    /// its content loads. See `MermaidSourceDetector` (pure + unit-tested).
+    private var isMermaidSource: Bool {
+        MermaidSourceDetector.isMermaidSource(
+            mimeType: file.mimeType,
+            filename: file.filename,
+            content: currentMarkdownContent)
+    }
 
     /// Mirrors `WikiStoreModel.canIngest` — the single "can this source be
     /// ingested?" rule shared with the sources outline context menu and the
@@ -208,6 +224,13 @@ struct SourceDetailView: View {
         }
         if isPDF && hasMarkdown {
             return [.reader, .pdf, .split]
+        }
+        // A Mermaid source (standalone `.mmd` / `text/mermaid`, or markdown
+        // carrying a fenced ```mermaid block): Reader (raw source) ⇄ Rendered
+        // (the SVG diagram) ⇄ Split (both). Checked after PDF so a PDF whose
+        // extracted text happens to mention mermaid stays a PDF.
+        if isMermaidSource {
+            return [.reader, .rendered, .split]
         }
         return []
     }
@@ -507,13 +530,19 @@ struct SourceDetailView: View {
                     HStack(spacing: 10) {
                         if isMarkdownEditable {
                             Button("Edit", systemImage: "pencil") {
-                                editBuffer = headVersion?.content ?? ""
+                                // Source the buffer from the resolved content so
+                                // a native `.mmd` (no processed-markdown head)
+                                // edits its raw diagram source, not an empty
+                                // buffer. `currentMarkdownContent` falls back to
+                                // the raw bytes for native text sources.
+                                editBuffer = currentMarkdownContent ?? ""
                                 isEditing = true
                                 // #211: focus the editor even if the user had
-                                // switched to the PDF or Media tab, where the
-                                // markdown editor isn't rendered. Leave Split
-                                // alone — the editor is already visible there.
-                                if selectedTab == .pdf || selectedTab == .media {
+                                // switched to the PDF, Media, or Rendered tab,
+                                // where the markdown editor isn't rendered.
+                                // Leave Split alone — the editor is already
+                                // visible there.
+                                if selectedTab == .pdf || selectedTab == .media || selectedTab == .rendered {
                                     selectedTab = .reader
                                 }
                             }
@@ -806,6 +835,8 @@ struct SourceDetailView: View {
             markdownContent
             if isBytelessEmbedWithPlayer {
                 videoPlayerContent
+            } else if isMermaidSource {
+                renderedMermaidContent
             } else {
                 pdfView
             }
@@ -825,6 +856,8 @@ struct SourceDetailView: View {
             }
         case .pdf:
             pdfView
+        case .rendered:
+            renderedMermaidContent
         case .media:
             videoPlayerContent
         case .split:
@@ -860,6 +893,17 @@ struct SourceDetailView: View {
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)
                 .zoomScroll($readerZoom)
+        } else if let content = currentMarkdownContent {
+            // A native text source with no processed-markdown head (e.g. a
+            // `.mmd` Mermaid diagram) renders its raw bytes as readable text —
+            // the source code for a diagram, or the body of a `.txt`. Binary
+            // sources never reach here (they hit `binaryFallback`).
+            WikiReaderView(markdown: content,
+                            currentSelection: store.selection,
+                            store: store,
+                            findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
+                .zoomShortcuts($readerZoom)
+                .zoomScroll($readerZoom)
         } else {
             ContentUnavailableView {
                 Label("No Processed Markdown", systemImage: "doc.plaintext")
@@ -886,6 +930,34 @@ struct SourceDetailView: View {
                     Text("The source bytes for this file could not be read.")
                 }
             }
+        }
+    }
+
+    // MARK: Rendered Mermaid diagram
+
+    /// The "Rendered" tab (and the right pane of the Mermaid split view): draws
+    /// the source's Mermaid diagram as inline SVG. A standalone `.mmd` source is
+    /// wrapped in a ` ```mermaid ` fence by `MermaidSourceDetector.renderableMarkdown`
+    /// so the reader's existing render pipeline (Mermaid 10.9.6 in WKWebView)
+    /// picks it up unchanged — no separate web view or JS wiring. Embedded
+    /// mermaid markdown passes through as-is so surrounding prose stays intact.
+    /// Falls back to a calm placeholder when there's nothing to draw.
+    @ViewBuilder
+    private var renderedMermaidContent: some View {
+        if let content = currentMarkdownContent,
+           let renderable = MermaidSourceDetector.renderableMarkdown(from: content) {
+            WikiReaderView(markdown: renderable,
+                           currentSelection: store.selection,
+                           store: store)
+                .zoomShortcuts($readerZoom)
+                .zoomScroll($readerZoom)
+        } else {
+            ContentUnavailableView {
+                Label("No Diagram", systemImage: "flowchart.fill")
+            } description: {
+                Text("This source has no Mermaid diagram to render yet.")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
