@@ -97,7 +97,11 @@ struct SourceDetailView: View {
     private enum FileContentTab: String, CaseIterable {
         case reader = "Reader"
         case pdf = "PDF"
-        case video = "Video"
+        /// The embedded media player pane — covers both video (YouTube/Vimeo/
+        /// direct-remote `<video>`) and audio (Apple Podcasts/Spotify/
+        /// SoundCloud/direct-remote `<audio>`). The picker label is dynamic
+        /// ("Video"/"Audio"/"Media"); the raw value is the generic fallback.
+        case media = "Media"
         case split = "Split"
     }
 
@@ -156,6 +160,26 @@ struct SourceDetailView: View {
     /// than the PDF/markdown/binary branches.
     private var isBytelessEmbedWithPlayer: Bool { embedTarget != nil }
 
+    /// The dynamic label for the media tab — "Video" / "Audio" / "Media" —
+    /// derived from the embed descriptor's classification (audio vs video via
+    /// MIME prefix or `agentName`, with Apple Podcasts → Audio). Falls back to
+    /// "Media" before the origin loads; the picker only renders once the embed
+    /// resolves (`availableTabs` gates on `isBytelessEmbedWithPlayer`), so the
+    /// fallback is never user-visible in practice.
+    private var mediaTabLabel: String {
+        guard let descriptor = embedDescriptor,
+              let label = ExternalEmbed.mediaTabLabel(for: descriptor) else {
+            return FileContentTab.media.rawValue
+        }
+        return label
+    }
+
+    /// Per-tab label for the picker. Most tabs use their `rawValue`; the media
+    /// tab's label is dynamic ("Video"/"Audio"/"Media") per the source kind.
+    private func tabLabel(for tab: FileContentTab) -> String {
+        tab == .media ? mediaTabLabel : tab.rawValue
+    }
+
     /// Phase 6: consume a pending pinned-extraction id (if any) for the current
     /// source and load that extraction into `pinnedExtraction`. Called from
     /// `.onAppear` so the pinned DOM is ready before the body first evaluates.
@@ -170,14 +194,15 @@ struct SourceDetailView: View {
 
     /// The tabs applicable to this source. PDFs with extracted markdown show
     /// Reader / PDF / Split (the classic three-way). Byteless media embeds
-    /// (YouTube/Vimeo/Spotify/SoundCloud/direct-remote) show Reader (the
-    /// transcript) / Video (the player) / Split (both side-by-side); a video
-    /// without a transcript drops Split (nothing to split) but keeps Reader so
-    /// the "no transcript" placeholder is discoverable. Empty for a PDF with
-    /// no extraction yet — that branch renders the bare PDF with no picker.
+    /// (YouTube/Vimeo/Spotify/SoundCloud/Apple Podcasts/direct-remote audio &
+    /// video) show Reader (the transcript) / Media (the player) / Split (both
+    /// side-by-side); a media source without a transcript drops Split (nothing
+    /// to split) but keeps Reader so the "no transcript" placeholder is
+    /// discoverable. Empty for a PDF with no extraction yet — that branch
+    /// renders the bare PDF with no picker.
     private var availableTabs: [FileContentTab] {
         if isBytelessEmbedWithPlayer {
-            var tabs: [FileContentTab] = [.reader, .video]
+            var tabs: [FileContentTab] = [.reader, .media]
             if hasMarkdown { tabs.append(.split) }
             return tabs
         }
@@ -485,10 +510,10 @@ struct SourceDetailView: View {
                                 editBuffer = headVersion?.content ?? ""
                                 isEditing = true
                                 // #211: focus the editor even if the user had
-                                // switched to the PDF or Video tab, where the
+                                // switched to the PDF or Media tab, where the
                                 // markdown editor isn't rendered. Leave Split
                                 // alone — the editor is already visible there.
-                                if selectedTab == .pdf || selectedTab == .video {
+                                if selectedTab == .pdf || selectedTab == .media {
                                     selectedTab = .reader
                                 }
                             }
@@ -692,7 +717,7 @@ struct SourceDetailView: View {
     // MARK: Video player (Video tab content)
 
     /// The byteless embed player as a standalone tab content view. Renders in
-    /// the Video tab (and as the player half of Split). Reuses
+    /// the Media tab (and as the player half of Split). Reuses
     /// `MediaEmbedPlayerView` unchanged. When the embed target can't be
     /// resolved, a calm placeholder stands in (mirrors the empty-transcript
     /// copy so the tab is never blank).
@@ -751,7 +776,7 @@ struct SourceDetailView: View {
                 Button {
                     selectedTab = tab
                 } label: {
-                    Text(tab.rawValue)
+                    Text(tabLabel(for: tab))
                         .font(.callout)
                         .fontWeight(selectedTab == tab ? .semibold : .regular)
                         .padding(.horizontal, 10)
@@ -771,10 +796,10 @@ struct SourceDetailView: View {
     // MARK: Split Markdown ⇄ companion
 
     /// Split view: the markdown reader on the left, and the source's primary
-    /// visual companion — the PDF for a PDF source, or the video player for a
-    /// byteless embed — on the right. Only callable when there is markdown to
-    /// show on the left (gate by `hasMarkdown` before appending `.split` to
-    /// `availableTabs`).
+    /// visual companion — the PDF for a PDF source, or the media player for a
+    /// byteless embed (video or audio) — on the right. Only callable when there
+    /// is markdown to show on the left (gate by `hasMarkdown` before appending
+    /// `.split` to `availableTabs`).
     @ViewBuilder
     private var splitContent: some View {
         HSplitView {
@@ -800,7 +825,7 @@ struct SourceDetailView: View {
             }
         case .pdf:
             pdfView
-        case .video:
+        case .media:
             videoPlayerContent
         case .split:
             splitContent
