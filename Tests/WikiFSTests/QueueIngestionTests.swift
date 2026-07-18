@@ -89,8 +89,15 @@ actor FakeIngestionProvider: QueueIngestionProvider {
     var calledLintWikiID: String?
     var calledLintPageIDs: [PageID] = []
     var transcriptEvents: [AgentEvent] = []
+    /// When non-nil, `readiness()` returns this message (simulating a
+    /// not-ready provider). When nil, `readiness()` returns nil (ready).
+    var readinessMessage: String?
 
     func setShouldThrow(_ val: Bool) { shouldThrow = val }
+
+    func readiness() async -> String? { readinessMessage }
+
+    func setReadinessMessage(_ val: String?) { readinessMessage = val }
 
     func runIngestion(
         wikiID: String,
@@ -200,6 +207,58 @@ struct QueueIngestionWorkerTests {
                 state: .queued, orderingKey: 1000, attempt: 0,
                 createdAt: 0))
         }
+    }
+
+    @Test("Worker fails with notReady when provider is not ready (#440)")
+    func workerFailsWhenNotReady() async throws {
+        let provider = FakeIngestionProvider()
+        let notReadyMsg = "‘bun’ was not found on your PATH. Install bun (bun.sh) or configure a different agent provider. Open Settings → Agents to configure one."
+        await provider.setReadinessMessage(notReadyMsg)
+        let worker = QueueIngestionWorker(
+            provider: provider,
+            emitProgress: { _, _ in },
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in })
+
+        do {
+            try await worker.execute(QueueItem(
+                id: "test-ready", queue: .ingestion, wikiID: "wiki1",
+                payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
+                state: .queued, orderingKey: 1000, attempt: 0,
+                createdAt: 0))
+            Issue.record("Expected notReady error was not thrown")
+        } catch let err as QueueIngestionError {
+            // The readiness gate should throw .notReady (not .spawnFailed),
+            // carrying the readiness message verbatim.
+            guard case .notReady(let msg) = err else {
+                Issue.record("Expected .notReady, got \(err)")
+                return
+            }
+            #expect(msg == notReadyMsg)
+            // The provider should NOT have been called (fast-fail).
+            let wikiID = await provider.getCalledWikiID()
+            #expect(wikiID == nil)
+        } catch {
+            Issue.record("Expected QueueIngestionError.notReady, got \(error)")
+        }
+    }
+
+    @Test("Worker proceeds when provider is ready (#440)")
+    func workerProceedsWhenReady() async throws {
+        let provider = FakeIngestionProvider()
+        // readinessMessage is nil by default → ready.
+        let worker = QueueIngestionWorker(
+            provider: provider,
+            emitProgress: { _, _ in },
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in })
+
+        try await worker.execute(QueueItem(
+            id: "test-ready-ok", queue: .ingestion, wikiID: "wiki1",
+            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
+            state: .queued, orderingKey: 1000, attempt: 0,
+            createdAt: 0))
+
+        let wikiID = await provider.getCalledWikiID()
+        #expect(wikiID == "wiki1")
     }
 }
 

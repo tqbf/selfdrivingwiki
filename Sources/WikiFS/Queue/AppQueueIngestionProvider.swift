@@ -27,14 +27,37 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     private let fileProviderBox: FileProviderBox
     private let wikictlDirectory: String
 
+    /// Resolves the selected agent provider (from `agent-providers.json`) for
+    /// the readiness probe. Injectable so tests can stub it without touching the
+    /// filesystem or spawning `zsh`. Defaults to reading from the App Group
+    /// container, exactly like `AgentLauncher.resolveSelectedProvider`.
+    private let resolveSelectedProvider: () -> AgentProvider
+
     init(
         sessionBox: SessionLookupBox,
         fileProviderBox: FileProviderBox,
-        wikictlDirectory: String
+        wikictlDirectory: String,
+        resolveSelectedProvider: @escaping () -> AgentProvider = {
+            let dir = (try? DatabaseLocation.appGroupContainerDirectory())
+                ?? FileManager.default.temporaryDirectory
+            return AgentProvidersConfig.loadOrSeed(from: dir).selectedProvider()
+        }
     ) {
         self.sessionBox = sessionBox
         self.fileProviderBox = fileProviderBox
         self.wikictlDirectory = wikictlDirectory
+        self.resolveSelectedProvider = resolveSelectedProvider
+    }
+
+    // MARK: - Readiness (#440)
+
+    func readiness() async -> String? {
+        let provider = resolveSelectedProvider()
+        let message = AgentLauncher.readinessMessage(for: provider)
+        if message != nil {
+            DebugLog.ingest("AppQueueIngestionProvider.readiness: NOT READY provider=\(provider.id) label=\(provider.label)")
+        }
+        return message
     }
 
     // MARK: - QueueIngestionProvider

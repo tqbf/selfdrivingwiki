@@ -74,6 +74,18 @@ public protocol QueueIngestionProvider: Sendable {
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?
     ) async throws
+
+    /// Quick readiness probe: checks whether the selected agent provider's
+    /// command binary exists on PATH (or is the bundled bun helper). Returns
+    /// `nil` when ready, or a user-facing message explaining what to fix and
+    /// how. Called before `runIngestion`/`runLint`/`runLintPages` so the user
+    /// gets actionable guidance instead of a cryptic spawn error like
+    /// `"bun: not found"`.
+    ///
+    /// **Not a network call** — a synchronous `which`-style check wrapped in
+    /// async for actor-hopping. Fast enough to run on every dispatch without
+    /// blocking the queue engine.
+    func readiness() async -> String?
 }
 
 // MARK: - QueueIngestionError
@@ -81,11 +93,15 @@ public protocol QueueIngestionProvider: Sendable {
 public enum QueueIngestionError: Error, LocalizedError {
     case noSources
     case spawnFailed(String)
+    /// The agent provider's binary was not found on PATH (or the provider has
+    /// no command configured). Carries the readiness message for the user.
+    case notReady(String)
 
     public var errorDescription: String? {
         switch self {
         case .noSources: return "Ingestion item has no valid sources"
         case .spawnFailed(let msg): return "Agent spawn failed: \(msg)"
+        case .notReady(let msg): return msg
         }
     }
 }
@@ -153,6 +169,15 @@ struct QueueIngestionWorker: QueueWorker {
     let emitUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
 
     func execute(_ item: QueueItem) async throws {
+        // Pre-dispatch readiness gate (#440): check the agent provider's binary
+        // is on PATH BEFORE running the full pipeline. If the binary is missing,
+        // fail the item with a clear, user-facing message instead of a cryptic
+        // spawn error like "bun: not found". This mirrors the extraction worker's
+        // `readiness()` check on `MarkdownExtractor`.
+        if let message = await provider.readiness() {
+            throw QueueIngestionError.notReady(message)
+        }
+
         let onTranscript: (@Sendable (AgentEvent) -> Void)? = { [itemID = item.id] event in
             emitTranscript(itemID, event)
         }

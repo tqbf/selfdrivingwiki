@@ -1707,6 +1707,60 @@ public final class AgentLauncher {
         return FileManager.default.isExecutableFile(atPath: path) ? path : nil
     }
 
+    /// A quick readiness probe for an agent provider — checks whether
+    /// `provider.command[0]` is resolvable on the login-shell PATH (or is the
+    /// bundled bun helper). Returns `nil` when ready, or a user-facing message
+    /// explaining what to fix and pointing at Settings → Agents.
+    ///
+    /// PURE + injectable (the `resolveCommand` closure) so this can be called
+    /// from a headless queue worker AND unit-tested without spawning a
+    /// subprocess or a login-shell hop. Mirrors
+    /// `ACPExtractionClient.resolveProvider`'s `resolveCommand` seam.
+    ///
+    /// `bun` is given special treatment: if the bundled bun helper exists
+    /// (`Contents/Helpers/bun`), it is preferred over a PATH lookup — so the
+    /// app works without a system-wide bun install. This matches
+    /// `resolveACPProviderSpawn` and `ACPExtractionClient.resolveCommand`.
+    ///
+    /// #440 — replaces the cryptic `"bun: not found"` spawn error with
+    /// actionable guidance. The returned message is shown verbatim in the
+    /// Activity window (and carries a CTA to open Settings → Agents).
+    public static nonisolated func readinessMessage(
+        for provider: AgentProvider,
+        resolveCommand: ((AgentProvider) -> [String]?)? = nil
+    ) -> String? {
+        let resolver = resolveCommand ?? { provider in
+            guard let command = provider.command, let exe = command.first else {
+                return nil
+            }
+            if exe == "bun", let bundled = Self.bundledHelperPath("bun") {
+                return [bundled] + Array(command.dropFirst())
+            }
+            switch PathPreflight.resolveOnLoginShell(executable: ShellArgv.expandTilde(exe)) {
+            case .found(let path):
+                return [path] + Array(command.dropFirst())
+            case .missing:
+                return nil
+            }
+        }
+        guard let command = provider.command, let exe = command.first else {
+            return "Provider ‘\(provider.label)’ has no command configured. Open Settings → Agents to fix it."
+        }
+        guard resolver(provider) != nil else {
+            // The binary wasn't found on the login-shell PATH (and no bundled
+            // helper matched). Give the user the actionable guidance.
+            var msg = "‘\(exe)’ was not found on your PATH. "
+            if exe == "bun" {
+                msg += "Install bun (bun.sh) or configure a different agent provider."
+            } else {
+                msg += "Install ‘\(exe)’ and make sure it is on your login shell PATH, or configure a different agent provider."
+            }
+            msg += " Open Settings → Agents to configure one."
+            return msg
+        }
+        return nil
+    }
+
     /// Resolve a `.acp` provider's spawn command (PATH-resolved, since the
     /// swift-acp SDK's `launch()` does no PATH lookup itself) + its
     /// Keychain-backed API key. `bun` prefers the helper bundled in

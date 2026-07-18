@@ -341,7 +341,8 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
                 queue: queue,
                 queueEngine: queueEngine,
                 activityTracker: activityTracker,
-                sessionManager: sessionManager
+                sessionManager: sessionManager,
+                openWindowBridge: openWindowBridge
             )
             // NSHostingController (not a bare NSHostingView) so SwiftUI can
             // install the window's unified toolbar from the view's `.toolbar`.
