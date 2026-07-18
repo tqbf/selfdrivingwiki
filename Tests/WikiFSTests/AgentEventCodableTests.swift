@@ -77,6 +77,9 @@ import Foundation
     }
 
     @Test func turnFailedStalledRoundTrips() throws {
+        // The .stalled case is still in TurnFailureReason for backward
+        // compatibility with persisted chat history, even though the engine
+        // no longer produces it (idle stall was removed).
         let event = AgentEvent.turnFailed(reason: .stalled(idleSeconds: 130))
         #expect(try roundTrip(event) == event)
     }

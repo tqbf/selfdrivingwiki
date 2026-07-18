@@ -191,10 +191,6 @@ public actor ACPBackend: AgentBackend {
     /// terminal (the structural second gate from the design doc).
     private let capabilities: ClientCapabilities
 
-    /// Turn inactivity watchdog: how long without a `session/update`
-    /// notification before declaring a stall (`plans/acp-stall-recovery.md` §1a).
-    private let turnIdleTimeout: TimeInterval
-
     /// Hard ceiling on total turn duration — backstop against a chatty agent
     /// that streams forever without finishing.
     private let turnCeilingTimeout: TimeInterval
@@ -214,14 +210,12 @@ public actor ACPBackend: AgentBackend {
     init(
         permissionPolicy: PermissionPolicy = .bypass,
         capabilities: ClientCapabilities = ACPBackend.defaultCapabilities,
-        turnIdleTimeout: TimeInterval = TurnLivenessPolicy.defaultIdleTimeout,
         turnCeilingTimeout: TimeInterval = TurnLivenessPolicy.defaultCeilingTimeout,
         watchdogPollInterval: TimeInterval = TurnLivenessPolicy.defaultPollInterval,
         maxConcurrentExecutors: Int = 1
     ) {
         self.permissionPolicy = permissionPolicy
         self.capabilities = capabilities
-        self.turnIdleTimeout = turnIdleTimeout
         self.turnCeilingTimeout = turnCeilingTimeout
         self.watchdogPollInterval = watchdogPollInterval
         self.maxConcurrentExecutors = max(1, maxConcurrentExecutors)
@@ -544,7 +538,6 @@ public actor ACPBackend: AgentBackend {
         let sessionId = session.sessionId
         let translator = ACPEventTranslator()
         let fanout = session.notificationFanout
-        let idleTimeout = turnIdleTimeout
         let ceilingTimeout = turnCeilingTimeout
         let pollInterval = watchdogPollInterval
         // Phase 4: per-session usage tracker. Captured by reference into the
@@ -566,12 +559,15 @@ public actor ACPBackend: AgentBackend {
             let processHealth = ProcessHealthFlag()
             let turnStartedAt = fanout.activityTimestamp
 
-            // --- Watchdog task (cause 5 fix, plans/acp-stall-recovery.md §1a) ---
-            // Polls every `pollInterval`; if the prompt hasn't completed AND no
-            // notification has arrived for `idleTimeout`, or the total duration
-            // exceeds `ceilingTimeout`, fail the turn: cancelSession best-effort,
-            // synthesize turn-end events, finish the continuation.
-            let watchdogTask = Task { [client, sessionId, fanout, completionFlag, processHealth] in
+            // --- Watchdog task ---
+            // Polls every `pollInterval`; if the prompt hasn't completed AND
+            // the total duration exceeds `ceilingTimeout`, fail the turn:
+            // cancelSession best-effort, synthesize turn-end events, finish the
+            // continuation. The idle/stall path was removed — ACP agents
+            // produce notifications for every activity (thinking, tool calls,
+            // sub-agent lifecycle), so a live agent is almost never truly idle.
+            // Process death is detected separately by `sendPrompt` throwing.
+            let watchdogTask = Task { [client, sessionId, completionFlag, processHealth] in
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(pollInterval))
                     if Task.isCancelled { return }
@@ -585,38 +581,11 @@ public actor ACPBackend: AgentBackend {
                         now: Date(),
                         promptDone: completionFlag.isDone,
                         turnStartedAt: turnStartedAt,
-                        lastActivityAt: fanout.activityTimestamp,
-                        idleTimeout: idleTimeout,
                         ceilingTimeout: ceilingTimeout
                     )
                     switch decision {
                     case .healthy:
                         continue
-                    case .stalled(let idle):
-                        // Phase 2: before declaring a stall, check if the
-                        // subprocess actually died (issue #338 — silent death
-                        // looks like a stall because no notifications arrive).
-                        // `kill(pid, 0)` is a zero-signal liveness probe.
-                        if let pid = await client.processIdentifier(), pid > 0 {
-                            if kill(pid, 0) != 0 {
-                                DebugLog.agent("ACPBackend: process dead (kill(\(pid), 0) != 0) — marking for resume")
-                                processHealth.markDied()
-                                completionFlag.markDone()
-                                for event in Self.turnEndEvents(error: ACPBackendError.processDied) {
-                                    continuation.yield(event)
-                                }
-                                continuation.finish()
-                                return
-                            }
-                        }
-                        DebugLog.agent("ACPBackend: TURN STALLED — idle \(Int(idle))s, recovering (cancelSession + turnEnd)")
-                        completionFlag.markDone()
-                        for event in Self.turnEndEvents(error: ACPBackendError.turnStalled(idleSeconds: idle)) {
-                            continuation.yield(event)
-                        }
-                        continuation.finish()
-                        try? await client.cancelSession(sessionId: sessionId)
-                        return
                     case .ceilingExceeded(let total):
                         DebugLog.agent("ACPBackend: TURN CEILING exceeded (\(Int(total))s), recovering")
                         completionFlag.markDone()
@@ -1286,8 +1255,6 @@ public actor ACPBackend: AgentBackend {
         let reason: TurnFailureReason
         if let acpError = error as? ACPBackendError {
             switch acpError {
-            case .turnStalled(let idle):
-                reason = .stalled(idleSeconds: idle)
             case .turnCeilingExceeded(let total):
                 reason = .ceilingExceeded(totalSeconds: total)
             case .processDied:
@@ -1559,10 +1526,6 @@ enum ACPBackendError: Error, LocalizedError {
     case missingAPIKey
     /// `Client.authenticate` returned `success: false` (bad/expired key, etc.).
     case authenticationFailed(String?)
-    /// The turn went silent — no `session/update` notification arrived for
-    /// `idleSeconds`. The turn was cancelled; the user can retry.
-    /// (`plans/acp-stall-recovery.md` §1a.)
-    case turnStalled(idleSeconds: TimeInterval)
     /// The turn exceeded the hard ceiling duration — the agent was still
     /// streaming but took too long. The turn was cancelled.
     case turnCeilingExceeded(totalSeconds: TimeInterval)
@@ -1588,11 +1551,6 @@ enum ACPBackendError: Error, LocalizedError {
         case .authenticationFailed(let detail):
             let suffix = detail.map { " (\($0))" } ?? ""
             return "ACP agent authentication failed.\(suffix)"
-        case .turnStalled(let idle):
-            return """
-            ACP agent stalled — no activity for \(Int(idle))s. \
-            The turn was cancelled; try sending again.
-            """
         case .turnCeilingExceeded(let total):
             return """
             ACP agent exceeded the maximum turn duration (\(Int(total))s). \
