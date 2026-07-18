@@ -366,6 +366,12 @@ public final class AgentLauncher {
     /// The active session handle (nil when no session is live). Replaces the
     /// old `process: Process?` — the launcher never touches a `Process` directly.
     @ObservationIgnored private var sessionHandle: SessionHandle?
+
+    /// The planner session handle kept alive during the executor phase so it
+    /// can be forked (Phase 3, `plans/acp-session-efficiency.md` §4). nil unless
+    /// we're in the planner-executors ingest flow AND the planner session is
+    /// still alive (not yet closed). Cleared in `finish()` and `stopAgent()`.
+    @ObservationIgnored private var plannerSessionHandle: SessionHandle?
     /// Per-session token: `onExit` captures the token current at session start
     /// and only calls `finish` if it's STILL current. Prevents a stale `onExit`
     /// (a prior session terminating after a new one started — e.g. D3's
@@ -1094,14 +1100,13 @@ public final class AgentLauncher {
         // Capture models (provider-level, not phase-level).
         captureAndCacheModels(provider: plannerRouting.provider, session: plannerSession)
         captureProcessID(session: plannerSession)
-        // Phase 1: close the session (frees context, keeps the subprocess alive
-        // for the next phase). Old code called `cancel()` which killed the
-        // subprocess — now we only kill at the very end.
-        if let acp = plannerRouting.backend as? ACPBackend {
-            await acp.closeSession(plannerSession)
-        } else {
-            await plannerRouting.backend.cancel(plannerSession)
-        }
+        // Phase 3: keep the planner session ALIVE through the executor phase so
+        // it can be forked — the forked executor inherits the planner's
+        // understanding of the source layout without the reasoning noise. The
+        // session is closed after all executors are done.
+        // (Pre-Phase-3: the session was closed here immediately. Now we store the
+        // handle and close it later — see `closePlannerSession()`)
+        plannerSessionHandle = plannerSession
 
         // Check for cancellation (user hit Stop during planner).
         guard isRunning else {
@@ -1142,12 +1147,18 @@ public final class AgentLauncher {
                     sourceIDs: sourceIDs)
                 DebugLog.agent("runACPIngest: Phase 2 — Executor[\(sourceFile)] (\(assignments.count) page(s))")
                 // Partial failure: log and continue to next executor.
+                // Phase 3: if the planner session is still alive, try to fork it
+                // so the executor inherits the planner's source context. If fork
+                // is unsupported (or the planner session was already closed), the
+                // runPhase helper falls back to a fresh `backend.start()`.
+                let forkFrom = (executorRouting.backend as? ACPBackend != nil) ? plannerSessionHandle : nil
                 if let session = await runPhase(
                     backend: executorRouting.backend,
                     profile: executorProfile,
                     systemPrompt: systemPrompt,
                     prompt: executorPrompt,
-                    phaseName: "executor[\(sourceFile)]"
+                    phaseName: "executor[\(sourceFile)]",
+                    forkFrom: forkFrom
                 ) {
                     if let acp = executorRouting.backend as? ACPBackend {
                         await acp.closeSession(session)
@@ -1161,6 +1172,19 @@ public final class AgentLauncher {
         } else {
             DebugLog.agent("runACPIngest: executor routing failed (\(preflightError ?? "?")) — skipping executor phase")
             preflightError = nil
+        }
+
+        // Phase 3: all executor forks are done — close the planner session now.
+        // It has served its purpose as the fork source. If it was never kept
+        // alive (e.g., the planner failed early and we fell back), this is nil.
+        if let plannerSession = plannerSessionHandle {
+            DebugLog.agent("runACPIngest: closing planner session (all forks done)")
+            if let acp = plannerRouting.backend as? ACPBackend {
+                await acp.closeSession(plannerSession)
+            } else {
+                await plannerRouting.backend.cancel(plannerSession)
+            }
+            plannerSessionHandle = nil
         }
 
         // Check for cancellation before finalizer.
@@ -1226,25 +1250,54 @@ public final class AgentLauncher {
     ///
     /// Updates `sessionHandle` + `currentRunToken` so `stopAgent()` and the
     /// watchdog target the live phase. Returns `nil` if `backend.start` throws.
+    ///
+    /// Phase 3 (`plans/acp-session-efficiency.md` §4): when `forkFrom` is non-nil,
+    /// the method tries `forkSession(from:forkFrom)` FIRST. If fork succeeds, the
+    /// forked session inherits the parent's context — no `backend.start()` call
+    /// is needed. If fork returns nil (unsupported), falls back to `backend.start()`
+    /// (fresh session, current behavior).
     private func runPhase(
         backend: AgentBackend,
         profile: BackendProfile,
         systemPrompt: String,
         prompt: String,
-        phaseName: String
+        phaseName: String,
+        forkFrom: SessionHandle? = nil
     ) async -> SessionHandle? {
         self.backend = backend
         let runToken = UUID()
         do {
-            DebugLog.agent("runACPIngest[\(phaseName)]: starting")
-            let session = try await backend.start(
-                profile: profile,
-                systemPrompt: systemPrompt,
-                onExit: { status in
-                    // Phase tracker: does NOT call finish(). The orchestrator
-                    // owns finish(); a per-phase exit is just telemetry.
-                    DebugLog.agent("runACPIngest[\(phaseName)]: onExit status=\(status) (phase-tracked)")
-                })
+            // Phase 3: try to fork the planner session so the executor inherits
+            // the planner's source-layout understanding without the reasoning
+            // noise. If fork is unsupported (returns nil), fall back to a fresh
+            // `backend.start()` — current pre-Phase-3 behavior.
+            let session: SessionHandle
+            if let parentHandle = forkFrom, let acp = backend as? ACPBackend {
+                DebugLog.agent("runACPIngest[\(phaseName)]: attempting fork from parent session")
+                let workingDir = profile.scratchDirectory?.path
+                if let forked = try? await acp.forkSession(from: parentHandle, cwd: workingDir) {
+                    DebugLog.agent("runACPIngest[\(phaseName)]: fork succeeded, using forked session")
+                    session = forked
+                } else {
+                    DebugLog.agent("runACPIngest[\(phaseName)]: fork unsupported/failed, falling back to fresh start")
+                    session = try await backend.start(
+                        profile: profile,
+                        systemPrompt: systemPrompt,
+                        onExit: { status in
+                            DebugLog.agent("runACPIngest[\(phaseName)]: onExit status=\(status) (phase-tracked)")
+                        })
+                }
+            } else {
+                DebugLog.agent("runACPIngest[\(phaseName)]: starting")
+                session = try await backend.start(
+                    profile: profile,
+                    systemPrompt: systemPrompt,
+                    onExit: { status in
+                        // Phase tracker: does NOT call finish(). The orchestrator
+                        // owns finish(); a per-phase exit is just telemetry.
+                        DebugLog.agent("runACPIngest[\(phaseName)]: onExit status=\(status) (phase-tracked)")
+                    })
+            }
             sessionHandle = session
             currentRunToken = runToken
 
@@ -1826,6 +1879,11 @@ public final class AgentLauncher {
             let backend = self.backend
             Task { await backend.cancel(session) }
         }
+        // Phase 3: if the planner session is still alive (kept open as a fork
+        // source during the executor phase), close it. `cancel` on the current
+        // session terminates the subprocess, which kills all sessions anyway,
+        // but this prevents the plannerSessionHandle from dangling after teardown.
+        plannerSessionHandle = nil
         if isRunning {
             finish(status: -1)  // -1 sentinel = user-cancelled / forced teardown
         }
@@ -2089,6 +2147,7 @@ public final class AgentLauncher {
         isInteractiveSession = false
         runningKind = nil
         sessionHandle = nil
+        plannerSessionHandle = nil
         currentProcessID = nil
         ingestingSourceIDs = []
         // Cancel any in-flight send task (gate wait or stream consumer). Clear the
@@ -2146,6 +2205,7 @@ public final class AgentLauncher {
         lastActivityAt = nil
         currentProcessID = nil
         sessionHandle = nil
+        plannerSessionHandle = nil
         onUnlockHandler = nil
         // A reset starts a new run: a stale sink must never receive a new
         // session's events (issue #119).

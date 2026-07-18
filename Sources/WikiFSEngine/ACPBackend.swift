@@ -155,6 +155,12 @@ public actor ACPBackend: AgentBackend {
         /// Phase 2: set to false when the subprocess dies (sendPrompt error or
         /// `kill(pid, 0) != 0`). When false, `resume()` spawns a new process.
         var processIsAlive: Bool
+        /// Whether the agent advertised `sessionCapabilities.fork` at `initialize`
+        /// time (Phase 3, `plans/acp-session-efficiency.md` §4). If not supported,
+        /// `forkSession()` returns `nil` and the caller falls back to a fresh
+        /// `createSession()` (current behavior — no context inheritance but no
+        /// correctness risk).
+        let canForkSession: Bool
     }
 
     private var warmProcess: WarmProcess?
@@ -368,6 +374,10 @@ public actor ACPBackend: AgentBackend {
         let canResume = sessionCaps?.resume != nil
         let canLoadSession = initResponse.agentCapabilities.loadSession == true
         let canListSessions = sessionCaps?.list != nil
+        // Check session/fork support (Phase 3, plans/acp-session-efficiency.md §4).
+        // If not supported, forkSession() returns nil and the caller falls back
+        // to a fresh createSession() (no context inheritance, no correctness risk).
+        let canForkSession = sessionCaps?.fork != nil
 
         warmProcess = WarmProcess(
             client: client,
@@ -380,7 +390,8 @@ public actor ACPBackend: AgentBackend {
             canResume: canResume,
             canLoadSession: canLoadSession,
             canListSessions: canListSessions,
-            processIsAlive: true)
+            processIsAlive: true,
+            canForkSession: canForkSession)
 
         // Wire onExit to the agent process termination. `Client.terminate()` is
         // the teardown; there's no direct terminationHandler on the SDK actor,
@@ -390,7 +401,7 @@ public actor ACPBackend: AgentBackend {
         // session — the last binding wins.
         permissionDelegate.bindOnExit(onExit)
 
-        DebugLog.agent("ACPBackend.startProcess: warm process ready canCloseSession=\(canCloseSession) canResume=\(canResume) canLoadSession=\(canLoadSession)") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.startProcess: warm process ready canCloseSession=\(canCloseSession) canResume=\(canResume) canLoadSession=\(canLoadSession) canForkSession=\(canForkSession)") // TEMP DEBUG
     }
 
     /// Create a new ACP session on an already-started (warm) subprocess.
@@ -920,6 +931,79 @@ public actor ACPBackend: AgentBackend {
             DebugLog.agent("ACPBackend.closeSession: agent does not support session/close — skipping (context freed at terminate)") // TEMP DEBUG
         }
         DebugLog.agent("ACPBackend.closeSession: session closed, subprocess stays alive") // TEMP DEBUG
+    }
+
+    /// Fork a session: creates a new session that inherits the parent's
+    /// conversation context but diverges from that point. The parent session
+    /// stays unchanged. Used by executors to get the planner's understanding
+    /// of the source layout without the reasoning noise (Phase 3,
+    /// `plans/acp-session-efficiency.md` §4).
+    ///
+    /// Checks `sessionCapabilities.fork` (captured at `initialize` time from
+    /// the `WarmProcess`). If fork is not supported, returns `nil` — the caller
+    /// must fall back to `createSession()` (a fresh session with no inherited
+    /// context, which is the current pre-Phase-3 behavior).
+    ///
+    /// The forked session:
+    /// - Shares the same `Client` (subprocess) and `NotificationFanout` as the
+    ///   parent — it's the same process, just a new session id.
+    /// - Inherits the parent's `systemPrompt` but sets `systemPromptInjected = true`
+    ///   because the forked context already contains the injected system prompt.
+    /// - Gets its own entry in the `sessions` map under a new `SessionHandle.id`.
+    ///
+    /// The parent session remains active and must be separately closed via
+    /// `closeSession()` when all forks are done.
+    ///
+    /// - Parameters:
+    ///   - parentHandle: The session to fork from (typically the planner session).
+    ///   - cwd: The working directory for the forked session. If nil, uses the
+    ///     warm process's working directory.
+    /// - Returns: A new `SessionHandle` for the forked session, or `nil` if fork
+    ///   is not supported.
+    func forkSession(
+        from parentHandle: SessionHandle,
+        cwd: String? = nil
+    ) async throws -> SessionHandle? {
+        guard let warm = warmProcess else {
+            DebugLog.agent("ACPBackend.forkSession: no warm process — cannot fork") // TEMP DEBUG
+            return nil
+        }
+        guard warm.canForkSession else {
+            DebugLog.agent("ACPBackend.forkSession: agent does not support session/fork — returning nil (caller falls back to createSession)") // TEMP DEBUG
+            return nil
+        }
+        guard let parent = sessions[parentHandle.id] else {
+            DebugLog.agent("ACPBackend.forkSession: no parent session for handle \(parentHandle.id) — returning nil") // TEMP DEBUG
+            return nil
+        }
+
+        let workingDir = cwd ?? FileManager.default.currentDirectoryPath
+
+        DebugLog.agent("ACPBackend.forkSession: forking session=\(parent.sessionId.value) cwd=\(workingDir)") // TEMP DEBUG
+        let response = try await warm.client.forkSession(
+            sessionId: parent.sessionId,
+            cwd: workingDir
+        )
+        let forkedSessionId = response.sessionId
+        DebugLog.agent("ACPBackend.forkSession: forked → session=\(forkedSessionId.value)") // TEMP DEBUG
+
+        // The forked session inherits the parent's conversation context —
+        // including the already-injected system prompt. Mark it as injected so
+        // `send()` doesn't re-inject it on the first turn.
+        let sessionID = UUID().uuidString
+        sessions[sessionID] = ACPSession(
+            client: warm.client,
+            sessionId: forkedSessionId,
+            permissionDelegate: warm.permissionDelegate,
+            modelsInfo: parent.modelsInfo,
+            notificationFanout: warm.notificationFanout,
+            drainTask: nil,
+            systemPrompt: parent.systemPrompt,
+            systemPromptInjected: true
+        )
+
+        DebugLog.agent("ACPBackend.forkSession: forked session \(forkedSessionId.value) (handle \(sessionID)) ready") // TEMP DEBUG
+        return SessionHandle(id: sessionID)
     }
 
     // MARK: - Model discovery (#329)
