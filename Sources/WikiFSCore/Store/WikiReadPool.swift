@@ -1,5 +1,9 @@
 import Foundation
 
+/// ⚠️ **DEPRECATED:** `GRDBWikiStore` is the default backend (#545–#561).
+/// The manual `WikiReadPool` connection pool is no longer needed — GRDB's
+/// `DatabasePool` replaces it. This type will be removed in a future version.
+///
 /// A pool of **read-only** snapshot connections over one wiki database, for
 /// reads that should not run on the main-actor write store (debounced search,
 /// bulk existence checks, future projection-style reads).

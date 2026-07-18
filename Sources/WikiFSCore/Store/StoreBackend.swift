@@ -13,19 +13,21 @@ import Foundation
 /// export WIKIFS_STORE_BACKEND=grdb
 /// ```
 ///
-/// The default (unset / any other value) keeps the battle-tested
-/// `SQLiteWikiStore`, so production behaviour is unchanged unless explicitly
-/// opted in. This is the affordance used by the GRDB-parity test harness (#545,
-/// #550, #557): it exercises the 2,400+ test suite against `GRDBWikiStore` to
-/// verify identical behaviour before any rollout.
+/// The default is `GRDBWikiStore` — the GRDB migration is complete (all 88
+/// methods implemented #545/#550, 37-version migration ladder #557, 2,480
+/// parity tests pass #561). Set `WIKIFS_STORE_BACKEND=sqlite` to opt back in
+/// to the legacy `SQLiteWikiStore` (deprecated, will be removed in a future
+/// version). This escape hatch preserves the old behaviour for anyone who
+/// needs it during the deprecation period.
 public enum StoreBackend: String, Sendable {
     case sqlite
     case grdb
 
     /// The backend selected for this process. Reads `WIKIFS_STORE_BACKEND` once;
-    /// any value other than `"grdb"` resolves to `.sqlite`.
+    /// `"sqlite"` resolves to `.sqlite`, any other value (including unset)
+    /// resolves to `.grdb`.
     public static var current: StoreBackend {
-        ProcessInfo.processInfo.environment["WIKIFS_STORE_BACKEND"] == "grdb" ? .grdb : .sqlite
+        ProcessInfo.processInfo.environment["WIKIFS_STORE_BACKEND"] == "sqlite" ? .sqlite : .grdb
     }
 
     /// Construct a read/write store at `databaseURL`, mirroring

@@ -5,6 +5,10 @@ import Darwin
 import CSqliteVec
 import CryptoKit
 
+/// ⚠️ **DEPRECATED:** `GRDBWikiStore` is the default backend as of the GRDB
+/// migration (#545–#561). `SQLiteWikiStore` will be removed in a future
+/// version. Set `WIKIFS_STORE_BACKEND=sqlite` to temporarily opt back in.
+///
 /// SQLite-backed `WikiStore`. Hand-wraps the system `SQLite3` C API — no
 /// third-party dependency (per the BRINGUP decision). Owns one serial
 /// connection with a prepared-statement cache.

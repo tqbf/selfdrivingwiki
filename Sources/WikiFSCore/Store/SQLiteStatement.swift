@@ -7,6 +7,10 @@ import SQLite3
 /// freed memory. The transient destructor is `(sqlite3_destructor_type)(-1)`.
 let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
+/// ⚠️ **DEPRECATED:** `GRDBWikiStore` is the default backend (#545–#561).
+/// The hand-rolled `SQLiteStatement` wrapper is no longer needed — GRDB's
+/// `Statement` type replaces it. This type will be removed in a future version.
+///
 /// Thin wrapper over a prepared `sqlite3_stmt`. One instance per distinct SQL
 /// string; reused across calls via `reset()` (which clears bindings). Owned and
 /// finalized by `SQLiteWikiStore`.
