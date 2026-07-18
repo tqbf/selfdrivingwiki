@@ -24,6 +24,7 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
     let fileProvider: FileProviderFacade
     var onOpen: ([WikiSelection]) -> Void
     var onOpenBackground: ([WikiSelection]) -> Void
+    var onGoToOriginal: (WikiSelection) -> Void
     var onEdit: (String) -> Void
     var onDelete: ([String]) -> Void
     var onAddPage: (String?) -> Void
@@ -37,6 +38,7 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
         vc.fileProvider = fileProvider
         vc.callbacks = .init(
             onOpen: onOpen, onOpenBackground: onOpenBackground,
+            onGoToOriginal: onGoToOriginal,
             onEdit: onEdit, onDelete: onDelete,
             onAddPage: onAddPage, onAddSource: onAddSource,
             onNewFolder: onNewFolder, onNewSubfolder: onNewSubfolder
@@ -51,6 +53,7 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
         vc.fileProvider = fileProvider
         vc.callbacks = .init(
             onOpen: onOpen, onOpenBackground: onOpenBackground,
+            onGoToOriginal: onGoToOriginal,
             onEdit: onEdit, onDelete: onDelete,
             onAddPage: onAddPage, onAddSource: onAddSource,
             onNewFolder: onNewFolder, onNewSubfolder: onNewSubfolder
@@ -69,6 +72,7 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
 struct BookmarksCallbacks {
     var onOpen: ([WikiSelection]) -> Void
     var onOpenBackground: ([WikiSelection]) -> Void
+    var onGoToOriginal: (WikiSelection) -> Void
     var onEdit: (String) -> Void
     var onDelete: ([String]) -> Void
     var onAddPage: (String?) -> Void
@@ -660,6 +664,20 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
 
         let menu = NSMenu()
 
+        // "Go to Original" — reveal the bookmark's target in its sidebar
+        // section (Pages/Sources/Chats) without opening a reader tab. Uses the
+        // same "Show in List" mechanism (requestSidebarReveal) as the
+        // detail-view buttons. Single selection only, openable leaves only
+        // (pageRef / sourceRef / chatRef) — folders have no target, and batches
+        // are ambiguous about which item to reveal.
+        if !isBatch, !openableNodes.isEmpty {
+            menu.addItem(menuItem("Go to Original",
+                                  systemImage: "arrow.turn.up.right",
+                                  action: #selector(goToOriginalAction(_:)),
+                                  payload: payload))
+            menu.addItem(.separator())
+        }
+
         // Open / Open in Background — only when there are openable leaves.
         if !openableNodes.isEmpty {
             menu.addItem(menuItem(
@@ -751,15 +769,27 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
 
     /// Filters effective nodes to openable leaves and maps them to `WikiSelection`.
     private func openableSelections(from nodes: [BookmarkNode]) -> [WikiSelection] {
-        nodes.compactMap { node -> WikiSelection? in
-            guard let targetID = node.targetID else { return nil }
-            switch node.kind {
-            case .pageRef: return .page(targetID)
-            case .sourceRef: return .source(targetID)
-            case .chatRef: return .chat(targetID)
-            case .folder: return nil
-            }
+        nodes.compactMap { revealSelection(for: $0) }
+    }
+
+    /// Maps a single bookmark node to the `WikiSelection` its target represents.
+    /// Returns `nil` for folders or nodes missing a target id. Shared by "Open"
+    /// and "Go to Original" so the kind→selection mapping lives in one place.
+    private func revealSelection(for node: BookmarkNode) -> WikiSelection? {
+        guard let targetID = node.targetID else { return nil }
+        switch node.kind {
+        case .pageRef:   return .page(targetID)
+        case .sourceRef: return .source(targetID)
+        case .chatRef:   return .chat(targetID)
+        case .folder:    return nil
         }
+    }
+
+    @objc private func goToOriginalAction(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? BookmarksMenuPayload,
+              let sel = revealSelection(for: payload.clicked) else { return }
+        DebugLog.tabs("Bookmarks goToOriginal: kind=\(payload.clicked.kind) targetID=\(payload.clicked.targetID?.rawValue ?? "nil")")
+        callbacks?.onGoToOriginal(sel)
     }
 
     @objc private func openWithAppAction(_ sender: NSMenuItem) {
