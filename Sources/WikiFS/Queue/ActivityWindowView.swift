@@ -300,6 +300,21 @@ struct ActivityWindowView: View {
                 copyTranscript(for: item)
             }
         }
+        let logURL = activityTracker.logURL(for: item.id)
+        let debugURL = activityTracker.debugURL(for: item.id)
+        if logURL != nil || debugURL != nil {
+            Divider()
+            if let logURL {
+                Button("Reveal Log", systemImage: "doc.text.magnifyingglass") {
+                    NSWorkspace.shared.activateFileViewerSelecting([logURL])
+                }
+            }
+            if let debugURL {
+                Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
+                    NSWorkspace.shared.activateFileViewerSelecting([debugURL])
+                }
+            }
+        }
         switch item.state {
         case .running, .queued:
             Button("Cancel") {
@@ -462,6 +477,7 @@ struct ActivityWindowView: View {
                 }
                 .help("Copy transcript as plain text")
             }
+            revealMenu(for: item)
             switch item.state {
             case .running, .queued:
                 Button("Cancel") {
@@ -642,6 +658,39 @@ struct ActivityWindowView: View {
             DebugLog.tabs("Lint Browse Pages: no pages to reveal in wiki \(wikiID.prefix(8)); focusing window only")
         }
         openWindowBridge?.openWiki?(wikiID)
+    }
+
+    // MARK: - Reveal log / debug folder
+
+    /// A compact menu offering "Reveal Log" and "Reveal Debug Folder" for the
+    /// selected item. Only shown when at least one path is available — items
+    /// that never spawned an agent (preflight failure, cancelled before run)
+    /// won't have either. Mirrors the ChatView's activity menu.
+    @ViewBuilder
+    private func revealMenu(for item: QueueItem) -> some View {
+        let logURL = activityTracker.logURL(for: item.id)
+        let debugURL = activityTracker.debugURL(for: item.id)
+        if logURL != nil || debugURL != nil {
+            Menu {
+                if let logURL {
+                    Button("Reveal Log", systemImage: "doc.text.magnifyingglass") {
+                        NSWorkspace.shared.activateFileViewerSelecting([logURL])
+                    }
+                    .help("Reveal the lightweight run.jsonl log in Finder")
+                }
+                if let debugURL {
+                    Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
+                        NSWorkspace.shared.activateFileViewerSelecting([debugURL])
+                    }
+                    .help("Open the complete debug trace folder (ACP messages, permissions, usage)")
+                }
+            } label: {
+                Label("Reveal", systemImage: "ellipsis.circle")
+            }
+            .labelStyle(.iconOnly)
+            .menuStyle(.borderlessButton)
+            .help("Reveal log files in Finder")
+        }
     }
 
     // MARK: - Copy

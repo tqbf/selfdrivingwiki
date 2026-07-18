@@ -105,7 +105,8 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?
     ) async throws {
         calledWikiID = wikiID
         calledSourceIDs = sourceIDs
@@ -119,7 +120,8 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?
     ) async throws {
         calledLintWikiID = wikiID
         calledLintPageIDs = []
@@ -134,7 +136,8 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?
     ) async throws {
         calledLintWikiID = wikiID
         calledLintPageIDs = pageIDs
@@ -159,7 +162,7 @@ struct QueueIngestionWorkerTests {
             provider: provider,
             emitProgress: { _, _ in },
             emitTranscript: { _, _ in }, emitUsage: { _, _ in },
-            emitLiveUsage: { _, _ in })
+            emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
         let worker = try await factory.worker(for: QueueItem(
             id: "test1", queue: .ingestion, wikiID: "wiki1",
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
@@ -184,7 +187,7 @@ struct QueueIngestionWorkerTests {
         let worker = QueueIngestionWorker(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
 
         await #expect(throws: QueueIngestionError.self) {
             try await worker.execute(QueueItem(
@@ -202,7 +205,7 @@ struct QueueIngestionWorkerTests {
         let worker = QueueIngestionWorker(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
 
         await #expect(throws: QueueIngestionError.self) {
             try await worker.execute(QueueItem(
@@ -221,7 +224,7 @@ struct QueueIngestionWorkerTests {
         let worker = QueueIngestionWorker(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
 
         do {
             try await worker.execute(QueueItem(
@@ -253,7 +256,7 @@ struct QueueIngestionWorkerTests {
         let worker = QueueIngestionWorker(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
 
         try await worker.execute(QueueItem(
             id: "test-ready-ok", queue: .ingestion, wikiID: "wiki1",
@@ -419,7 +422,7 @@ struct LintIngestionDispatchTests {
             provider: provider,
             emitProgress: { _, _ in },
             emitTranscript: { _, _ in }, emitUsage: { _, _ in },
-            emitLiveUsage: { _, _ in })
+            emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
         let worker = try await factory.worker(for: QueueItem(
             id: "lint1", queue: .ingestion, wikiID: "w1",
             payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [PageID(rawValue: "p1")]),
@@ -445,7 +448,7 @@ struct LintIngestionDispatchTests {
             provider: provider,
             emitProgress: { _, _ in },
             emitTranscript: { _, _ in }, emitUsage: { _, _ in },
-            emitLiveUsage: { _, _ in })
+            emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
         let worker = try await factory.worker(for: QueueItem(
             id: "lint2", queue: .ingestion, wikiID: "w1",
             payload: QueueItemPayload(sourceIDs: [], lintPageIDs: []),
@@ -469,7 +472,7 @@ struct LintIngestionDispatchTests {
             provider: provider,
             emitProgress: { _, _ in },
             emitTranscript: { _, _ in }, emitUsage: { _, _ in },
-            emitLiveUsage: { _, _ in })
+            emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
         let worker = try await factory.worker(for: QueueItem(
             id: "ing1", queue: .ingestion, wikiID: "w1",
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "s1")]),
@@ -564,6 +567,90 @@ struct QueueActivityTrackerTranscriptTests {
         let log = tracker.progressLog(for: "prog-1")
         #expect(log.contains("line 1"))
         #expect(log.contains("line 2"))
+    }
+}
+
+// MARK: - Run paths (log/debug folder URL) forwarding tests
+
+@Suite("QueueActivityTracker run paths")
+struct QueueActivityTrackerRunPathsTests {
+
+    private func makeItem(
+        id: String = "paths-item",
+        queue: QueueKind = .ingestion,
+        sourceIDs: [PageID] = [PageID(rawValue: "src1")],
+        state: QueueItemState = .running
+    ) -> QueueItem {
+        QueueItem(
+            id: id, queue: queue, wikiID: "wiki1",
+            payload: QueueItemPayload(sourceIDs: sourceIDs),
+            state: state, orderingKey: 1000, attempt: 0,
+            createdAt: 0)
+    }
+
+    @MainActor
+    @Test("Run paths stored per-item")
+    func runPathsStoredPerItem() {
+        let tracker = QueueActivityTracker()
+        let itemID = "paths-item"
+        let item = makeItem(id: itemID)
+        let logURL = URL(fileURLWithPath: "/tmp/scratch/run.jsonl")
+        let debugURL = URL(fileURLWithPath: "/tmp/scratch/debug", isDirectory: true)
+
+        tracker.handleForTesting(.started(item))
+        tracker.handleForTesting(.runPaths(itemID, logURL: logURL, debugURL: debugURL))
+
+        #expect(tracker.logURL(for: itemID) == logURL)
+        #expect(tracker.debugURL(for: itemID) == debugURL)
+    }
+
+    @MainActor
+    @Test("Run paths survive terminal state")
+    func runPathsSurviveCompletion() {
+        let tracker = QueueActivityTracker()
+        let itemID = "paths-item"
+        let item = makeItem(id: itemID)
+        let logURL = URL(fileURLWithPath: "/tmp/scratch/run.jsonl")
+
+        tracker.handleForTesting(.started(item))
+        tracker.handleForTesting(.runPaths(itemID, logURL: logURL, debugURL: nil))
+
+        let completed = makeItem(id: itemID, state: .completed)
+        tracker.handleForTesting(.completed(completed))
+
+        // Paths persist after completion (same as transcripts) so the user can
+        // reveal them for recently-completed items.
+        #expect(tracker.logURL(for: itemID) == logURL)
+        #expect(tracker.debugURL(for: itemID) == nil)
+    }
+
+    @MainActor
+    @Test("Run paths cleared on prune")
+    func runPathsClearedOnPrune() {
+        let tracker = QueueActivityTracker()
+        let itemID = "paths-item"
+        let item = makeItem(id: itemID)
+        let logURL = URL(fileURLWithPath: "/tmp/scratch/run.jsonl")
+        let debugURL = URL(fileURLWithPath: "/tmp/scratch/debug", isDirectory: true)
+
+        tracker.handleForTesting(.started(item))
+        tracker.handleForTesting(.runPaths(itemID, logURL: logURL, debugURL: debugURL))
+        tracker.pruneTranscripts(for: itemID)
+
+        #expect(tracker.logURL(for: itemID) == nil)
+        #expect(tracker.debugURL(for: itemID) == nil)
+    }
+
+    @MainActor
+    @Test("Nil paths produce nil accessors")
+    func nilPathsProduceNil() {
+        let tracker = QueueActivityTracker()
+        let itemID = "never-ran"
+
+        tracker.handleForTesting(.runPaths(itemID, logURL: nil, debugURL: nil))
+
+        #expect(tracker.logURL(for: itemID) == nil)
+        #expect(tracker.debugURL(for: itemID) == nil)
     }
 }
 

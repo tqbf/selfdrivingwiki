@@ -34,6 +34,15 @@ final class LiveUsageEmitBox: @unchecked Sendable {
     var emit: (@Sendable (QueueItem.ID, SessionUsage) -> Void)?
 }
 
+/// A mutable box for a `@Sendable` log-paths-emit closure. Same pattern as
+/// the other emit boxes — breaks the circular dependency between the ingestion
+/// worker factory (needs the closure) and the engine (provides it). Carries
+/// the run's `run.jsonl` log URL and `debug/` folder URL so the Activity
+/// window can offer "Reveal Log" / "Reveal Debug Folder".
+final class LogPathsEmitBox: @unchecked Sendable {
+    var emit: (@Sendable (QueueItem.ID, URL?, URL?) -> Void)?
+}
+
 /// Observes `QueueEngine.events` and maintains `@Observable` UI state for
 /// extraction activity. Replaces the launcher's extraction slot machinery
 /// (`isExtracting`, `extractionLog`, `extractionPID`,
@@ -122,6 +131,15 @@ final class QueueActivityTracker {
     /// show running token counts + model name before the run completes. The
     /// final cumulative totals come from `itemUsage` via the `.usage` event.
     private(set) var liveUsage: [QueueItem.ID: SessionUsage] = [:]
+
+    /// Per-item lightweight log file URL (`run.jsonl`) — the raw stream-json
+    /// trace. Set once when `.runPaths` arrives after the run starts.
+    private(set) var itemLogURLs: [QueueItem.ID: URL] = [:]
+
+    /// Per-item verbose debug folder URL (`debug/`) — the complete ACP wire
+    /// trace (per-turn JSON, permissions, stderr, summary). Set once when
+    /// `.runPaths` arrives after the run starts.
+    private(set) var itemDebugURLs: [QueueItem.ID: URL] = [:]
 
     /// Today's cumulative token usage across all completed runs (#528 spike).
     /// Persists to UserDefaults with a date key so it survives app restarts
@@ -212,6 +230,8 @@ final class QueueActivityTracker {
         progressLogs.removeAll()
         itemUsage.removeAll()
         liveUsage.removeAll()
+        itemLogURLs.removeAll()
+        itemDebugURLs.removeAll()
         streamingTranscriptItemIDs.removeAll()
         streamingThinkingItemIDs.removeAll()
     }
@@ -317,6 +337,8 @@ final class QueueActivityTracker {
         progressLogs.removeValue(forKey: itemID)
         itemUsage.removeValue(forKey: itemID)
         liveUsage.removeValue(forKey: itemID)
+        itemLogURLs.removeValue(forKey: itemID)
+        itemDebugURLs.removeValue(forKey: itemID)
         streamingTranscriptItemIDs.remove(itemID)
         streamingThinkingItemIDs.remove(itemID)
     }
@@ -342,6 +364,18 @@ final class QueueActivityTracker {
     /// live token counts + model name during a run (#544 live progress).
     func liveUsage(for itemID: QueueItem.ID) -> SessionUsage? {
         liveUsage[itemID]
+    }
+
+    /// The lightweight `run.jsonl` log file URL for an item, or `nil` if the
+    /// run didn't create one. Read by the Activity window for "Reveal Log".
+    func logURL(for itemID: QueueItem.ID) -> URL? {
+        itemLogURLs[itemID]
+    }
+
+    /// The verbose `debug/` folder URL for an item, or `nil` if the run
+    /// didn't create one. Read by the Activity window for "Reveal Debug Folder".
+    func debugURL(for itemID: QueueItem.ID) -> URL? {
+        itemDebugURLs[itemID]
     }
 
     // MARK: - Event handling
@@ -401,6 +435,13 @@ final class QueueActivityTracker {
             // usage_update carries the current cumulative totals + the latest
             // model/cost). Cleared on terminal state in removeItem().
             liveUsage[id] = usage
+
+        case .runPaths(let id, let logURL, let debugURL):
+            // Store the run's log/debug URLs so the Activity window can offer
+            // "Reveal Log" / "Reveal Debug Folder". Either may be nil if the
+            // run didn't create the files (not started, preflight failure).
+            if let logURL { itemLogURLs[id] = logURL }
+            if let debugURL { itemDebugURLs[id] = debugURL }
 
         case .progress(let id, let line):
             // Accumulate per-item progress (for extraction items and any

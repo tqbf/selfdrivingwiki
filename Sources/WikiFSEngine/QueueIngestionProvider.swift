@@ -40,13 +40,17 @@ public protocol QueueIngestionProvider: Sendable {
     ///     run with the in-progress token/cost snapshot. `nil` for callers
     ///     that don't need live progress (#544). May never fire if the backend
     ///     doesn't stream usage updates.
+    ///   - onLogPaths: Called after the run with the run's `run.jsonl` log URL
+    ///     and `debug/` folder URL (either may be nil if the run didn't
+    ///     create them). `nil` for callers that don't need log-reveal UI.
     func runIngestion(
         wikiID: String,
         sourceIDs: [PageID],
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?
     ) async throws
 
     /// Run a whole-wiki lint health-check. Returns when the agent finishes.
@@ -62,7 +66,8 @@ public protocol QueueIngestionProvider: Sendable {
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?
     ) async throws
 
     /// Run a page-level lint health-check for the given pages. Returns when
@@ -81,7 +86,8 @@ public protocol QueueIngestionProvider: Sendable {
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?
     ) async throws
 
     /// Quick readiness probe: checks whether the selected agent provider's
@@ -131,19 +137,22 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
     private let emitTranscript: @Sendable (QueueItem.ID, AgentEvent) -> Void
     private let emitUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
     private let emitLiveUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
+    private let emitLogPaths: @Sendable (QueueItem.ID, URL?, URL?) -> Void
 
     public init(
         provider: any QueueIngestionProvider,
         emitProgress: @escaping @Sendable (QueueItem.ID, String) -> Void,
         emitTranscript: @escaping @Sendable (QueueItem.ID, AgentEvent) -> Void,
         emitUsage: @escaping @Sendable (QueueItem.ID, SessionUsage) -> Void,
-        emitLiveUsage: @escaping @Sendable (QueueItem.ID, SessionUsage) -> Void
+        emitLiveUsage: @escaping @Sendable (QueueItem.ID, SessionUsage) -> Void,
+        emitLogPaths: @escaping @Sendable (QueueItem.ID, URL?, URL?) -> Void
     ) {
         self.provider = provider
         self.emitProgress = emitProgress
         self.emitTranscript = emitTranscript
         self.emitUsage = emitUsage
         self.emitLiveUsage = emitLiveUsage
+        self.emitLogPaths = emitLogPaths
     }
 
     public func providerID(for item: QueueItem) async -> String? {
@@ -160,7 +169,7 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
     }
 
     public func worker(for item: QueueItem) async throws -> any QueueWorker {
-        QueueIngestionWorker(provider: provider, emitProgress: emitProgress, emitTranscript: emitTranscript, emitUsage: emitUsage, emitLiveUsage: emitLiveUsage)
+        QueueIngestionWorker(provider: provider, emitProgress: emitProgress, emitTranscript: emitTranscript, emitUsage: emitUsage, emitLiveUsage: emitLiveUsage, emitLogPaths: emitLogPaths)
     }
 }
 
@@ -180,6 +189,7 @@ struct QueueIngestionWorker: QueueWorker {
     let emitTranscript: @Sendable (QueueItem.ID, AgentEvent) -> Void
     let emitUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
     let emitLiveUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
+    let emitLogPaths: @Sendable (QueueItem.ID, URL?, URL?) -> Void
 
     func execute(_ item: QueueItem) async throws {
         // Pre-dispatch readiness gate (#440): check the agent provider's binary
@@ -203,6 +213,11 @@ struct QueueIngestionWorker: QueueWorker {
         let onLiveUsage: (@Sendable (SessionUsage) -> Void)? = { [itemID = item.id] usage in
             emitLiveUsage(itemID, usage)
         }
+        // Run paths: forward the run's log/debug URLs so the Activity window
+        // can offer "Reveal Log" / "Reveal Debug Folder".
+        let onLogPaths: (@Sendable (URL?, URL?) -> Void)? = { [itemID = item.id] logURL, debugURL in
+            emitLogPaths(itemID, logURL, debugURL)
+        }
 
         if let pageIDs = item.payload.lintPageIDs, !pageIDs.isEmpty {
             // Page-level lint.
@@ -212,7 +227,8 @@ struct QueueIngestionWorker: QueueWorker {
                 onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
                 onTranscript: onTranscript,
                 onUsage: onUsage,
-                onLiveUsage: onLiveUsage
+                onLiveUsage: onLiveUsage,
+                onLogPaths: onLogPaths
             )
         } else if item.payload.lintPageIDs != nil {
             // lintPageIDs is non-nil but empty → whole-wiki lint.
@@ -221,7 +237,8 @@ struct QueueIngestionWorker: QueueWorker {
                 onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
                 onTranscript: onTranscript,
                 onUsage: onUsage,
-                onLiveUsage: onLiveUsage
+                onLiveUsage: onLiveUsage,
+                onLogPaths: onLogPaths
             )
         } else {
             // Normal ingestion.
@@ -235,7 +252,8 @@ struct QueueIngestionWorker: QueueWorker {
                 onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
                 onTranscript: onTranscript,
                 onUsage: onUsage,
-                onLiveUsage: onLiveUsage
+                onLiveUsage: onLiveUsage,
+                onLogPaths: onLogPaths
             )
         }
     }

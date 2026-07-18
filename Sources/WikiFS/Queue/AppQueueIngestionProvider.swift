@@ -68,7 +68,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?
     ) async throws {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
@@ -202,6 +203,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         // `.usage` queue event). Done here, after `run()` returns, so the
         // usage reflects all phases (planner → executors → finalizer).
         onUsage?(launcher.runTotalUsage)
+        onLogPaths?(launcher.logFileURL, launcher.debugFolderURL)
 
         // If the agent never spawned (cancelled, preflight failure), clear
         // the ingest flag. The tracker's ingestingSourceIDs will be cleared
@@ -218,7 +220,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?
     ) async throws {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
@@ -246,6 +249,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             onLiveUsage: onLiveUsage
         )
         onUsage?(launcher.runTotalUsage)
+        onLogPaths?(launcher.logFileURL, launcher.debugFolderURL)
     }
 
     func runLintPages(
@@ -254,7 +258,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?
     ) async throws {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
@@ -304,6 +309,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             onLiveUsage: onLiveUsage
         )
         onUsage?(launcher.runTotalUsage)
+        onLogPaths?(launcher.logFileURL, launcher.debugFolderURL)
     }
 
     // MARK: - Private

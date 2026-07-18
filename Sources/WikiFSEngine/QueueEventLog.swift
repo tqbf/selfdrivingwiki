@@ -20,6 +20,7 @@ enum QueueEventType: String, Codable, Sendable {
     case usage
     case runStateChanged
     case reordered
+    case runPaths
 }
 
 // MARK: - QueueLogRecord
@@ -241,6 +242,25 @@ struct QueueLogRecord: Codable, Sendable {
             self.finishedAt = nil
             self.durationMs = nil
 
+        case .runPaths:
+            // Run-path events carry the run's log/debug folder URLs so the
+            // Activity window can offer "Reveal Log" / "Reveal Debug Folder".
+            // NOT logged to JSONL (URLs are runtime-only, not Codable audit
+            // data). The write() method skips this case.
+            self.eventType = .runPaths
+            self.itemID = nil
+            self.queue = nil
+            self.wikiID = nil
+            self.providerID = nil
+            self.itemState = nil
+            self.runState = nil
+            self.orderingKey = nil
+            self.attempt = nil
+            self.error = nil
+            self.startedAt = nil
+            self.finishedAt = nil
+            self.durationMs = nil
+
         case .runStateChanged(let queue, let state):
             self.eventType = .runStateChanged
             self.itemID = nil
@@ -379,6 +399,7 @@ public actor QueueEventLog {
         if case .transcript = event { return }
         if case .liveUsage = event { return }
         if case .usage = event { return }
+        if case .runPaths = event { return }
 
         ensureOpenForToday()
         guard let handle = fileHandle else { return }
