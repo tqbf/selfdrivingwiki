@@ -642,14 +642,15 @@ struct DailyUsage: Sendable, Equatable {
 
     /// Persist to UserDefaults. Called after each `.usage` event.
     static func save(_ usage: DailyUsage) {
-        UserDefaults.standard.set([
+        var dict: [String: Any] = [
             "inputTokens": usage.inputTokens,
             "outputTokens": usage.outputTokens,
             "totalTokens": usage.totalTokens,
             "cost": usage.cost,
-            "currency": usage.currency as Any,
             "date": usage.date
-        ] as [String: Any], forKey: storageKey)
+        ]
+        if let currency = usage.currency { dict["currency"] = currency }
+        UserDefaults.standard.set(dict, forKey: storageKey)
     }
 
     /// Accumulate a run's usage into this daily total.
