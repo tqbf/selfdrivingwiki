@@ -227,6 +227,13 @@ public actor ACPBackend: AgentBackend {
     /// depends on the agent emitting `request_permission`, which not all do).
     private let permissionPolicy: PermissionPolicy
 
+    /// #606: the per-session auto-reject budget for deferred permission
+    /// requests. nil = no timer (interactive chat — current behavior); non-nil
+    /// = a stuck permission auto-rejects after this `Duration` so an unattended
+    /// pipeline (ingest/lint) can't stall for the full 1800s ceiling. Threaded
+    /// into `ACPPermissionDelegate` at `startProcess`.
+    private let permissionBudget: Duration?
+
     /// The client capabilities advertised at `initialize`. fs read/write +
     /// terminal (the structural second gate from the design doc).
     private let capabilities: ClientCapabilities
@@ -249,12 +256,14 @@ public actor ACPBackend: AgentBackend {
 
     init(
         permissionPolicy: PermissionPolicy = .bypass,
+        budget: Duration? = nil,
         capabilities: ClientCapabilities = ACPBackend.defaultCapabilities,
         turnCeilingTimeout: TimeInterval = TurnLivenessPolicy.defaultCeilingTimeout,
         watchdogPollInterval: TimeInterval = TurnLivenessPolicy.defaultPollInterval,
         maxConcurrentExecutors: Int = 1
     ) {
         self.permissionPolicy = permissionPolicy
+        self.permissionBudget = budget
         self.capabilities = capabilities
         self.turnCeilingTimeout = turnCeilingTimeout
         self.watchdogPollInterval = watchdogPollInterval
@@ -316,7 +325,9 @@ public actor ACPBackend: AgentBackend {
         let client = Client()
         // The permission delegate owns the always-ask/yolo policy. It is the
         // `ClientDelegate` that the agent's `session/request_permission` lands on.
-        let permissionDelegate = ACPPermissionDelegate(policy: permissionPolicy, debugLogger: debugLogger)
+        // #606: `permissionBudget` arms the auto-reject timer — nil (chat)
+        // means no timer; non-nil (ingest/lint) auto-rejects after the budget.
+        let permissionDelegate = ACPPermissionDelegate(policy: permissionPolicy, debugLogger: debugLogger, budget: permissionBudget)
         await client.setDelegate(permissionDelegate)
 
         DebugLog.agent("ACPBackend.startProcess: launching \(spawn.executablePath) \(spawn.arguments.joined(separator: " "))")
