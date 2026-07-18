@@ -1573,7 +1573,7 @@ public actor ACPBackend: AgentBackend {
 /// Created in `createSession()` / `registerResumedSession()` — one per
 /// `SessionHandle`. The thread-safe `SessionUsageState` (internal) is the
 /// live accumulator; this snapshot struct is what callers read.
-public struct SessionUsage: Sendable {
+public struct SessionUsage: Sendable, Codable {
     /// Cumulative input tokens across all turns (from `Usage.inputTokens`).
     public let inputTokens: Int
     /// Cumulative output tokens across all turns (from `Usage.outputTokens`).

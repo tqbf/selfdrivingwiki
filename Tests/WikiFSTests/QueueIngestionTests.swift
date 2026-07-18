@@ -662,3 +662,92 @@ struct StubWorkerFactory: QueueWorkerFactory {
         return W()
     }
 }
+
+// MARK: - QueueActivityTracker rehydration (persistence across "restart")
+
+/// Proves that activity data written in one `QueueStore` session is rehydrated
+/// into a fresh `QueueActivityTracker` over the same DB — the closest analog to
+/// an app restart testable without a running GUI.
+@Suite("QueueActivityTracker rehydration")
+struct QueueActivityTrackerRehydrateTests {
+
+    private func tempDB() -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("queue-rehydrate-tests-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("queue.sqlite")
+    }
+
+    @MainActor
+    @Test("Rehydrate populates usage, paths, and progress from the store")
+    func rehydratePopulatesActivity() async throws {
+        let db = tempDB()
+        let usage = SessionUsage(
+            inputTokens: 797, outputTokens: 203, totalTokens: 1000,
+            cachedReadTokens: nil, thoughtTokens: 412,
+            cost: 0.34, currency: "USD", contextUsed: 100, contextSize: 200,
+            providerLabel: "Claude", modelId: "sonnet-4", thinkingLevel: nil)
+        let logURL = URL(fileURLWithPath: "/tmp/scratch/run.jsonl")
+        let debugURL = URL(fileURLWithPath: "/tmp/scratch/debug", isDirectory: true)
+
+        let itemID: QueueItem.ID
+        // Persist activity directly via the store, mirroring the strings the
+        // engine's emit closures write (usage JSON + absoluteString URLs).
+        do {
+            let store = try QueueStore(databaseURL: db)
+            let item = try store.enqueue(QueueItemRequest(
+                queue: .ingestion, wikiID: "w1",
+                payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")])))
+            itemID = item.id
+            try store.markRunning(id: itemID, providerID: "p1")
+            try store.markCompleted(id: itemID)
+            let data = try JSONEncoder().encode(usage)
+            let usageJSON = String(data: data, encoding: .utf8)!
+            try store.upsertItemActivity(itemID: itemID, usageJSON: usageJSON,
+                                         logURL: nil, debugURL: nil)
+            try store.upsertItemActivity(itemID: itemID, usageJSON: nil,
+                                         logURL: logURL.absoluteString,
+                                         debugURL: debugURL.absoluteString)
+            try store.appendItemProgress(itemID: itemID, line: "extraction output")
+            store.close()
+        }
+
+        // New "app session": fresh engine + tracker over the SAME database.
+        let store = try QueueStore(databaseURL: db)
+        let engine = QueueEngine(store: store, workerFactory: StubWorkerFactory())
+        await engine.start()
+        let tracker = QueueActivityTracker()
+        tracker.attachForTesting(events: AsyncStream { _ in })
+        await tracker.rehydrate(from: engine)
+
+        // Usage round-trips (JSON → SessionUsage). Compare fields since
+        // SessionUsage isn't Equatable.
+        let rehydratedUsage = tracker.usage(for: itemID)
+        #expect(rehydratedUsage?.inputTokens == 797)
+        #expect(rehydratedUsage?.outputTokens == 203)
+        #expect(rehydratedUsage?.thoughtTokens == 412)
+        #expect(rehydratedUsage?.cost == 0.34)
+        #expect(rehydratedUsage?.providerLabel == "Claude")
+
+        // Paths round-trip via absoluteString → URL(string:).
+        #expect(tracker.logURL(for: itemID)?.path == "/tmp/scratch/run.jsonl")
+        #expect(tracker.debugURL(for: itemID)?.path == "/tmp/scratch/debug")
+        // Progress log round-trips verbatim.
+        #expect(tracker.progressLog(for: itemID) == "extraction output")
+    }
+
+    @MainActor
+    @Test("Rehydrate with no persisted activity leaves the tracker empty")
+    func rehydrateEmpty() async throws {
+        let store = try QueueStore(databaseURL: tempDB())
+        let engine = QueueEngine(store: store, workerFactory: StubWorkerFactory())
+        await engine.start()
+        let tracker = QueueActivityTracker()
+        tracker.attachForTesting(events: AsyncStream { _ in })
+        await tracker.rehydrate(from: engine)
+
+        #expect(tracker.usage(for: "never-existed") == nil)
+        #expect(tracker.logURL(for: "never-existed") == nil)
+        #expect(tracker.progressLog(for: "never-existed") == "")
+    }
+}

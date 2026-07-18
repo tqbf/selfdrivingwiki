@@ -13,6 +13,199 @@ Newest first. To get up to speed: read `PLAN.md` then this file.
 **Data flow unchanged:** `ACPBackend.sessionUsage(for:)` → `AgentLauncher.capturePhaseUsage` → `runTotalUsage` → `.usage` queue event → `QueueActivityTracker.handle(.usage)`. The only new bits are an `itemUsageByModel` dict (in-memory, per-item) and a `todayUsageByModel: DailyUsageByModel` (persisted to `UserDefaults` with a daily-reset key, mirroring `DailyUsage`).
 
 **SessionUsage grew a `modelName: String?` field.** Resolved at the `ACPBackend` seam by matching `currentModelId` against `ModelsInfo.availableModels.first(where: modelId match)?.name`. Falls back to `nil` when no list advertised, no entry matches, or the name is empty. Point-in-time (latest non-nil wins on merge), like `modelId`. `UsageFormatter.fullSummary` and the new `itemModelBreakdownLine` prefer `modelName` over `modelId` for display.
+## 2026-07-18 — Mermaid diagram tabs: Reader / Rendered / Split (branch `mermaid-source-detail-tabs`)
+
+**Problem:** Mermaid diagram sources (`.mmd` files or markdown containing
+```mermaid fenced blocks) rendered like ordinary markdown — a single Reader tab.
+A diagram source had no dedicated "rendered SVG" view or side-by-side
+source/rendered split, unlike PDFs (Reader/PDF/Split) and media
+(Reader/Media/Split, from #586/#590).
+
+**What changed (4 files), rebased onto the post-#590 `main`:**
+
+1. **`MimeType`** (`Sources/WikiFSTypes/MimeType.swift`) — added `text/mermaid` +
+   `text/x-mermaid` constants, a `mermaidVariants` set, and `isMermaid(_:)`
+   (case-insensitive predicate, `nil` → false). Mirrors the markdown predicates.
+
+2. **`MermaidSourceDetector`** (`Sources/WikiFSCore/Sources/MermaidSourceDetector.swift`,
+   new) — pure, unit-tested gate. `isMermaidSource(mimeType:filename:content:)`
+   is true when the MIME is a mermaid variant, the filename ends in `.mmd`, or
+   the content contains a fenced ```mermaid block (reuses
+   `MermaidValidator.mermaidBlocks`, the pure line scanner — no JS).
+   `renderableMarkdown(from:)` wraps a standalone `.mmd` source in a ```mermaid
+   fence so the reader's render pipeline picks it up, and passes embedded-mermaid
+   markdown through unchanged (so headings/outline stay intact).
+
+3. **`SourceDetailView`** (`Sources/WikiFS/Sources/SourceDetailView.swift`),
+   adapted to #590's `availableTabs` / `tabLabel` system:
+   - Added `.rendered` to `FileContentTab` (rawValue "Rendered"). The existing
+     `tabLabel` returns its `rawValue` for non-media tabs, so no label helper
+     change was needed.
+   - `availableTabs` gains a mermaid branch → `[.reader, .rendered, .split]`,
+     placed after the PDF branch so a PDF whose extracted text mentions mermaid
+     stays a PDF.
+   - `tabbedContent` handles `.rendered`; `splitContent`'s right pane branches
+     to `renderedMermaidContent` for mermaid (vs the player/PDF).
+   - `renderedMermaidContent` draws the diagram by wrapping the source and
+     handing it to the existing `WikiReaderView` (Mermaid 10.9.6 in WKWebView) —
+     no separate web view or JS wiring.
+   - `markdownContent` now renders a native source's raw bytes via the reader
+     when there's no processed-markdown head, so a `.mmd` Reader tab shows its
+     source instead of "No Processed Markdown".
+   - Edit button sources its buffer from `currentMarkdownContent` (so a native
+     `.mmd` edits its raw source) and switches off the `.rendered` tab when
+     editing (mirrors the PDF/Media guard).
+
+**Rendering note:** no new WKWebView or Mermaid JS plumbing. The reader already
+inlines the vendored Mermaid lib + bootstrap when a page contains a
+`language-mermaid` code block; the Rendered tab just feeds it a fenced source.
+
+**Build/Tests:** `make version prompts` ✓; `swift build` clean ✓;
+fast tier **2603 tests / 221 suites passed** (+13 new in
+`MermaidSourceDetectorTests`).
+
+## 2026-07-18 — Persist queue activity (usage, log/debug paths, progress) across app restart (branch `fix/queue-activity-persistence`)
+
+**Problem:** In the Activity window (Queue / agent view), per-item info about
+**ingestion + lint** runs — the usage summary line ("2:32 PM · 1m 3s · Claude ·
+797 tokens in · …"), the "Reveal Log"/"Reveal Debug Folder" buttons, and the
+extraction progress text — was shown while the app ran but **lost on restart**.
+Quit + relaunch and all that activity info vanished.
+
+**Root cause confirmed:** `QueueActivityTracker` (a `@MainActor @Observable`
+class) holds ALL per-item activity in in-memory dictionaries
+(`itemUsage`, `itemLogURLs`, `itemDebugURLs`, `progressLogs`, `transcripts`)
+that are cleared on `stop()` and never rehydrated on launch. The transcripts
+were the **partial exception**: write-through already existed
+(`QueueEngine.makeEmitTranscript` → `QueueStore.appendItemEvent`) and the
+detail view already lazy-loaded them via `engine.loadTranscript(for:)` on
+open. But **usage, log/debug URLs, and progress logs were neither written to
+the DB nor rehydrated** — so they evaporated with the process. (`todayUsage`
+already persisted via UserDefaults; the transient running-state sets
+`extractingSourceIDs`/`ingestingSourceIDs`/`lintingItemIDs`/… are correctly
+not persisted — they rebuild from live `.started` events after
+`resetRunningToQueued()`.)
+
+**Fix:** made the engine write those three streams through to `QueueStore`
+as they arrive, and rehydrate them into the tracker at launch.
+
+- **v4 GRDB migration (`v4_add_item_activity`)** — new `queue_item_activity`
+  table keyed by `item_id` (FK → `queue_items(id) ON DELETE CASCADE`, so rows
+  vanish with their item on `pruneHistory` — mirrors `queue_item_events`):
+  `usage_json TEXT`, `log_url TEXT`, `debug_url TEXT`, `progress_log TEXT`,
+  `updated_at INTEGER`.
+- **Module boundary:** `SessionUsage` lives in `WikiFSEngine`; `QueueStore`
+  lives in `WikiFSCore` (which `WikiFSEngine` depends on, not vice-versa). So
+  the store stores `usage_json` as an opaque `String` (a new
+  `QueueStore.QueueItemActivity` DTO of raw `String?`s); the engine
+  encodes/decodes `SessionUsage` ↔ JSON (`SessionUsage` gained `Codable`).
+- **Write-through seams (engine emit closures):**
+  - `makeEmitUsage` → `upsertItemActivity(usageJSON:)` (final cumulative usage).
+  - `makeEmitLogPaths` → `upsertItemActivity(logURL:debugURL:)` (absoluteString).
+  - `makeEmitProgress` → `appendItemProgress(line:)` (newline-appended, mirrors
+    the tracker's in-memory accumulation).
+  - The upsert is COALESCE-partial — each field is set by a different event
+    (usage fires once on `.usage`, paths once on `.runPaths`), so updating one
+    never clobbers the others.
+- **Rehydrate seam:** `QueueActivityTracker.rehydrate(from:)` (called at launch
+  in `WikiFSApp` right after `attach`, in a `Task`) calls
+  `QueueEngine.loadAllActivitySnapshots()` (which reads
+  `store.loadAllActivity()` and decodes usage JSON / reconstructs URLs) and
+  repopulates `itemUsage`/`itemLogURLs`/`itemDebugURLs`/`progressLogs`. The
+  tracker stays the single owner of observable UI state. Typed **transcripts**
+  are deliberately NOT bulk-loaded — the detail view already lazy-loads each
+  item's transcript via `engine.loadTranscript(for:)`, avoiding pulling
+  `recentLimit × maxTranscriptEvents` events into memory at launch.
+
+**Concurrency:** `rehydrate` is `@MainActor async` — it awaits the engine actor
+for the read (returns a `[ID: ActivitySnapshot]` of `Sendable` values), then
+mutates MainActor dicts. The emit closures capture `store` (`@unchecked
+Sendable`, GRDB-serialized) and write from worker Tasks — the same pattern
+`makeEmitTranscript` already used. Errors are `do/catch` → `DebugLog.store`
+(no bare `try?`).
+
+**Known limitation (pre-existing, not introduced):** on `retryItem`, old
+activity (and old transcript events) are not cleared, so a retried run's
+summary/progress can show stale-then-new data. Matches the existing transcript
+behavior; clearing on retry is a separate follow-up.
+
+**Tests added:**
+- `QueueStoreTests` (+5): activity survives close+reopen; COALESCE preserves
+  existing fields; progress appends with newline; activity cascades on prune
+  (`maxPerQueue: 0`); `loadAllActivity` returns all rows.
+- `QueueActivityTrackerRehydrateTests` (+2): a fresh engine+tracker over the
+  SAME `queue.sqlite` rehydrates usage (JSON→`SessionUsage` round-trip),
+  log/debug URLs (`absoluteString`→`URL`), and progress; empty DB leaves the
+  tracker empty.
+
+**Build/Tests:** `make version prompts` ✓; `swift build` clean (181s); targeted
+QueueStore/tracker suites 31/31 pass; fast tier **2603 tests / 222 suites**
+pass; full `swift test` **2789 tests / 235 suites pass** (incl. the 13
+integration suites — 0 failures).
+
+## 2026-07-18 — Add "Reveal Debug Folder" + "Reveal Log" UI to the Activity window (branch `feature/reveal-debug-folder-ui`)
+
+**Problem:** PR #580 added `DebugRunLogger` (a verbose ACP wire-trace under
+`<scratch>/debug/`), and `ChatView` already had "Reveal Log" / "Reveal Debug
+Folder" buttons in its activity menu. But the standalone **Activity window**
+(`ActivityWindowView`) — where users view ingestion/lint transcripts across all
+wikis — had no way to reveal either the lightweight `run.jsonl` log or the
+verbose `debug/` folder. The launcher's `logFileURL` / `debugFolderURL` existed
+(`public private(set)`) but were only reachable from the chat view's direct
+launcher reference; the Activity window works with `QueueItem` objects and the
+`QueueActivityTracker`, with no per-item log-path state.
+
+**Fix:** Threaded the run's `logFileURL` + `debugFolderURL` through the queue
+event system — mirroring the existing `.usage` / `.liveUsage` event plumbing —
+so the tracker stores per-item paths that the Activity window can reveal.
+
+**Data flow:** `AppQueueIngestionProvider` → `onLogPaths` callback →
+`QueueIngestionWorker` → `emitLogPaths` (via `LogPathsEmitBox`) →
+`QueueEngine.makeEmitLogPaths()` → `.runPaths(QueueItem.ID, logURL:, debugURL:)`
+event → `QueueActivityTracker` → `ActivityWindowView`.
+
+**New `QueueEvent.runPaths`** case (Sendable, NOT logged to JSONL — URLs are
+runtime-only, not Codable audit data). Added `runPaths` to `QueueEventType`,
+`QueueLogRecord.init` (all nil fields), and the `write()` skip list — same
+treatment as `.usage`.
+
+**`QueueActivityTracker`** gained `itemLogURLs` / `itemDebugURLs` dictionaries
++ `logURL(for:)` / `debugURL(for:)` accessors. Paths persist after terminal
+state (same as transcripts) so users can reveal them for recently-completed
+items; cleared on prune / stop.
+
+**`ActivityWindowView`** gained two affordances:
+1. A compact `ellipsis.circle` menu (`revealMenu`) in the detail header —
+   "Reveal Log" (`doc.text.magnifyingglass`) + "Reveal Debug Folder"
+   (`folder.badge.gearshape`). Only shown when at least one path exists.
+2. The same two items in the row context menu (after "Copy Transcript",
+   behind a divider).
+
+Both use `NSWorkspace.shared.activateFileViewerSelecting([url])` — matching
+`ChatView`'s existing behavior exactly.
+
+**Tests:** 4 new `QueueActivityTrackerRunPathsTests` (stored per-item, survive
+terminal state, cleared on prune, nil paths produce nil accessors). Updated all
+8 `QueueIngestionWorkerFactory` / `QueueIngestionWorker` constructor call sites
++ the `FakeIngestionProvider` mock in `QueueIngestionTests.swift`.
+
+**Build/Tests:** `make version prompts` ✓; `swift build` clean (16s);
+fast test tier **2581 tests / 219 suites pass** (4 new).
+
+
+## 2026-07-18 — Unify audio podcast source detail with the video Reader/Media/Split tab pattern (branch `feature/audio-podcast-detail-tabs`)
+
+**Problem.** PR #586 (open, `unify-video-pdf-source-tabs`) unified *video*
+sources (YouTube/Vimeo) into the same Reader / Video / Split tab layout that
+PDFs use — but audio podcast sources (Apple Podcasts), which route through the
+exact same `ExternalEmbed` byteless-embed path, would have surfaced under a
+"Video" tab label. The tab system was video-specific in name; audio needed the
+same Reader/Media/Split treatment with an "Audio" label.
+
+**Fix.** Generalized the video tab into a media tab that classifies audio vs
+video and labels the picker accordingly. Two files changed (one new pure
+helper + view wiring, one test suite). Built on top of the merged #586 pattern
+(video tab renamed → media tab).
 
 Changes:
 - `Sources/WikiFSEngine/ACPBackend.swift` — `SessionUsage.modelName` field + init param + merge propagation; `sessionUsage(for:)` resolves the friendly name from `ModelsInfo.availableModels`.

@@ -175,6 +175,8 @@ public final class QueueStore: @unchecked Sendable {
     ///   without a migration step; existing v1 DBs silently lacked it — #450).
     /// - v3: Namespace `QueueRunState.running` rawValue from `"running"` to
     ///   `"queue-running"` to disambiguate from `QueueItemState.running` (#508).
+    /// - v4: `queue_item_activity` table — per-item usage JSON, log/debug URLs,
+    ///   and progress-log text (persisted Activity-window metadata).
     private static let migrator: DatabaseMigrator = {
         var m = DatabaseMigrator()
 
@@ -257,6 +259,30 @@ public final class QueueStore: @unchecked Sendable {
 
         m.registerMigration("v3_namespace_run_state") { db in
             try db.execute(sql: "UPDATE queue_state SET state = 'queue-running' WHERE state = 'running';")
+        }
+
+        // v4: per-item Activity-window metadata — cumulative token/cost usage
+        // (JSON), the run's `run.jsonl` log URL + `debug/` folder URL, and the
+        // accumulated progress-log text. Persisted so the Activity window can
+        // show completed/failed/cancelled ingestion + lint runs (usage summary,
+        // "Reveal Log" / "Reveal Debug Folder", progress) after an app restart.
+        // Keyed by `item_id` with `ON DELETE CASCADE` so rows vanish when the
+        // item is pruned by `pruneHistory` (mirrors `queue_item_events`).
+        // `usage_json` is an opaque string here — `QueueStore` lives in
+        // `WikiFSCore` and cannot reference `SessionUsage` (in `WikiFSEngine`);
+        // the engine encodes/decodes it.
+        m.registerMigration("v4_add_item_activity") { db in
+            try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS queue_item_activity (
+                item_id       TEXT PRIMARY KEY,
+                usage_json    TEXT,
+                log_url       TEXT,
+                debug_url     TEXT,
+                progress_log  TEXT,
+                updated_at    INTEGER NOT NULL,
+                FOREIGN KEY (item_id) REFERENCES queue_items(id) ON DELETE CASCADE
+            );
+            """)
         }
 
         return m
@@ -781,6 +807,140 @@ public final class QueueStore: @unchecked Sendable {
                 try db.execute(
                     sql: "DELETE FROM queue_item_events WHERE item_id = ?;",
                     arguments: [itemID])
+            }
+        }
+    }
+
+    // MARK: - Public API: Item activity (usage / paths / progress)
+
+    /// Persisted per-item Activity-window metadata: cumulative token/cost usage
+    /// (encoded JSON), the run's `run.jsonl` log URL + `debug/` folder URL, and
+    /// the accumulated progress-log text.
+    ///
+    /// Stored as raw `String?`s so this type lives in `WikiFSCore` without
+    /// depending on `SessionUsage` (which is in `WikiFSEngine`). The engine
+    /// layer encodes/decodes `usageJSON` to/from `SessionUsage`. Persisted so
+    /// the Activity window can show completed/failed/cancelled ingestion + lint
+    /// runs (usage summary, "Reveal Log"/"Reveal Debug Folder", progress) after
+    /// an app restart. Rows cascade-delete with their item (`pruneHistory`).
+    public struct QueueItemActivity: Sendable, Equatable {
+        public let usageJSON: String?
+        public let logURL: String?
+        public let debugURL: String?
+        public let progressLog: String?
+
+        public init(usageJSON: String?, logURL: String?, debugURL: String?, progressLog: String?) {
+            self.usageJSON = usageJSON
+            self.logURL = logURL
+            self.debugURL = debugURL
+            self.progressLog = progressLog
+        }
+    }
+
+    /// Upsert per-item activity metadata. Each parameter is optional; a `nil`
+    /// argument leaves the existing value untouched (COALESCE), so callers can
+    /// update one field (e.g. just usage) without clobbering the others. Safe
+    /// to call from a background thread — the store serializes via GRDB.
+    public func upsertItemActivity(
+        itemID: QueueItem.ID,
+        usageJSON: String?,
+        logURL: String?,
+        debugURL: String?
+    ) throws {
+        let now = Self.nowMillis()
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                try db.execute(
+                    sql: """
+                    INSERT INTO queue_item_activity
+                        (item_id, usage_json, log_url, debug_url, progress_log, updated_at)
+                    VALUES (?, ?, ?, ?, NULL, ?)
+                    ON CONFLICT(item_id) DO UPDATE SET
+                        usage_json = COALESCE(excluded.usage_json, queue_item_activity.usage_json),
+                        log_url    = COALESCE(excluded.log_url, queue_item_activity.log_url),
+                        debug_url  = COALESCE(excluded.debug_url, queue_item_activity.debug_url),
+                        updated_at = excluded.updated_at;
+                    """,
+                    arguments: [itemID, usageJSON, logURL, debugURL, now])
+            }
+        }
+    }
+
+    /// Append a progress line to an item's accumulated progress log. The first
+    /// line sets the column; subsequent lines append with a newline separator
+    /// (mirrors `QueueActivityTracker`'s in-memory accumulation). Safe to call
+    /// from a background thread.
+    public func appendItemProgress(itemID: QueueItem.ID, line: String) throws {
+        let now = Self.nowMillis()
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                try db.execute(
+                    sql: """
+                    INSERT INTO queue_item_activity
+                        (item_id, usage_json, log_url, debug_url, progress_log, updated_at)
+                    VALUES (?, NULL, NULL, NULL, ?, ?)
+                    ON CONFLICT(item_id) DO UPDATE SET
+                        progress_log = CASE
+                            WHEN queue_item_activity.progress_log IS NULL
+                              OR queue_item_activity.progress_log = ''
+                            THEN excluded.progress_log
+                            ELSE queue_item_activity.progress_log || char(10) || excluded.progress_log
+                        END,
+                        updated_at = excluded.updated_at;
+                    """,
+                    arguments: [itemID, line, now])
+            }
+        }
+    }
+
+    /// Load the persisted activity metadata for a single item, or `nil`.
+    public func loadItemActivity(itemID: QueueItem.ID) throws -> QueueItemActivity? {
+        try Self.wrap {
+            let queue = try self.queue()
+            return try queue.read { db in
+                guard let row = try Row.fetchOne(
+                    db,
+                    sql: """
+                    SELECT usage_json, log_url, debug_url, progress_log
+                    FROM queue_item_activity WHERE item_id = ?;
+                    """,
+                    arguments: [itemID]) else { return nil }
+                return QueueItemActivity(
+                    usageJSON: row["usage_json"],
+                    logURL: row["log_url"],
+                    debugURL: row["debug_url"],
+                    progressLog: row["progress_log"])
+            }
+        }
+    }
+
+    /// Load all persisted activity rows, keyed by item ID. Used by the Activity
+    /// tracker to rehydrate after an app restart. Bounded by `pruneHistory`
+    /// (rows cascade-delete with their item, so only existing terminal items
+    /// have rows).
+    public func loadAllActivity() throws -> [QueueItem.ID: QueueItemActivity] {
+        try Self.wrap {
+            let queue = try self.queue()
+            return try queue.read { db in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT item_id, usage_json, log_url, debug_url, progress_log
+                    FROM queue_item_activity;
+                    """)
+                var result: [QueueItem.ID: QueueItemActivity] = [:]
+                result.reserveCapacity(rows.count)
+                for row in rows {
+                    let id: String = row["item_id"]
+                    result[id] = QueueItemActivity(
+                        usageJSON: row["usage_json"],
+                        logURL: row["log_url"],
+                        debugURL: row["debug_url"],
+                        progressLog: row["progress_log"])
+                }
+                return result
             }
         }
     }

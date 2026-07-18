@@ -213,6 +213,30 @@ final class QueueActivityTracker {
         start(events: engine.events)
     }
 
+    /// Rehydrate per-item activity (usage, log/debug URLs, progress logs) from
+    /// the persisted store so the Activity window shows completed/failed/
+    /// cancelled ingestion + lint runs after an app restart. Called once at
+    /// launch after ``attach(engine:)``.
+    ///
+    /// Only the activity metadata dictionaries are bulk-loaded here. Typed
+    /// agent-event **transcripts** are NOT bulk-loaded — the detail view
+    /// already lazy-loads each item's transcript via
+    /// `engine.loadTranscript(for:)` when opened, which avoids pulling up to
+    /// `recentLimit` × `maxTranscriptEvents` events into memory at launch.
+    /// Transient running-state sets (`extractingSourceIDs`, `ingestingSourceIDs`,
+    /// `lintingItemIDs`, …) are deliberately NOT rehydrated — on restart,
+    /// `.running` items are reset to `.queued` by `resetRunningToQueued()`, so
+    /// these sets rebuild naturally from live `.started` events.
+    func rehydrate(from engine: QueueEngine) async {
+        let snapshots = await engine.loadAllActivitySnapshots()
+        for (id, snap) in snapshots {
+            if let usage = snap.usage { itemUsage[id] = usage }
+            if let logURL = snap.logURL { itemLogURLs[id] = logURL }
+            if let debugURL = snap.debugURL { itemDebugURLs[id] = debugURL }
+            if !snap.progressLog.isEmpty { progressLogs[id] = snap.progressLog }
+        }
+    }
+
     /// Start consuming `events`. Spawns a `@MainActor` Task that iterates the
     /// stream and dispatches each event to `handle(_:)`.
     func start(events: AsyncStream<QueueEvent>) {
