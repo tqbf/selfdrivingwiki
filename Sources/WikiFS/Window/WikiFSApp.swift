@@ -67,6 +67,8 @@ struct WikiFSApp: App {
     /// when no windows are visible (accessory mode). Wired by
     /// `WindowBridgeProbe`, a hidden view inside the main `WindowGroup`.
     @State private var openWindowBridge = OpenWindowBridge()
+    /// Owns the open-windows list for the standard Window menu (issue #567).
+    @State private var windowTracker: WindowListTracker
 
     // NOTE: There must be exactly ONE @NSApplicationDelegateAdaptor. Registering
     // two adaptors with different types (e.g. a separate QuitConfirmationDelegate)
@@ -197,6 +199,7 @@ struct WikiFSApp: App {
             pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path }
         )
         _sessionManager = State(initialValue: sm)
+        _windowTracker = State(initialValue: WindowListTracker())
         // Wire the session-lookup box to the real session manager now that
         // it's constructed. The provider (already captured by the factory)
         // sees live sessions through the box.
@@ -285,6 +288,7 @@ struct WikiFSApp: App {
             registry: registry,
             openWindowBridge: openWindowBridge)
         statusController.start()
+        windowTracker.start()
         appDelegate.menuBarItemController = statusController
 
         // Operation notifier: posts macOS local notifications when extraction,
@@ -424,6 +428,11 @@ struct WikiFSApp: App {
             // "No Wikis" empty-state window (issue #396).
             CommandGroup(replacing: .newItem) { }
             VacuumCommands(sessionManager: sessionManager)
+            // Window menu: open-windows list + Show Previous/Next Tab (⇧⌘[ / ⇧⌘]).
+            WindowMenuCommands(
+                sessionManager: sessionManager,
+                windowTracker: windowTracker,
+                registry: registry)
         }
         // Additional wiki windows: value-driven by wiki ID. Opened from the
         // switcher via `openWindow(value: wiki.id)`. `WindowGroup(for:)`
