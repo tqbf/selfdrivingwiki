@@ -125,9 +125,11 @@ public enum ArgumentParser {
       search --query X [--limit N]           semantic search (cosine similarity);
                                              falls back to LIKE title match
       source list [--json]                    list sources (TSV, or JSON lines)
-      source cat  (--id X | --name N)         write raw source bytes to stdout
-      source export (--id X | --name N) [--out <path>]
-                                              materialize a source to disk, print its path
+      source cat  (--id X | --name N) [--markdown]
+                                              write raw source bytes (or extracted markdown
+                                              with --markdown) to stdout
+      source export (--id X | --name N) [--out <path>] [--markdown]
+                                              materialize a source to disk, print its path; --markdown exports the .md sibling
       source edit-markdown (--id X | --name N) (--content <md> | --file <path|->)
                                               replace the processed-markdown HEAD
       source search --query X [--limit N]    semantic search of sources (cosine;
@@ -325,18 +327,20 @@ public enum ArgumentParser {
     private static func parseSourceCommand(_ args: [String]) throws -> Command {
         guard let sub = args.first else { throw Failure.usage("source: missing subcommand") }
         let rest = Array(args.dropFirst())
-        let options = try Options(rest)
+        // `--markdown` applies to `cat` and `export`; include it here so the
+        // outer parse doesn't reject it as a value flag needing an argument.
+        let options = try Options(rest, booleanFlags: ["--json", "--markdown"])
 
         switch sub {
         case "list":
             return .source(.list(json: options.flag("--json")))
 
         case "cat":
-            return .source(.cat(try options.requireSourceSelector()))
+            return .source(.cat(try options.requireSourceSelector(), markdown: options.flag("--markdown")))
 
         case "export":
             let selector = try options.requireSourceSelector()
-            return .source(.export(selector, out: options.value("--out")))
+            return .source(.export(selector, out: options.value("--out"), markdown: options.flag("--markdown")))
 
         case "edit-markdown":
             return try parseSourceEditMarkdown(options)

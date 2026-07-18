@@ -37,8 +37,8 @@ public enum SourceCommand {
 
     public enum Action: Equatable {
         case list(json: Bool)
-        case cat(Selector)
-        case export(Selector, out: String?)
+        case cat(Selector, markdown: Bool)
+        case export(Selector, out: String?, markdown: Bool)
         case editMarkdown(Selector, content: String)
         case rename(Selector, to: String)
         case search(query: String, limit: Int)
@@ -64,10 +64,10 @@ public enum SourceCommand {
         switch action {
         case .list(let json):
             return try list(in: store, json: json)
-        case .cat(let selector):
-            return try cat(selector, in: store)
-        case .export(let selector, let out):
-            return try export(selector, out: out, in: store, cwd: cwd)
+        case .cat(let selector, let markdown):
+            return try cat(selector, markdown: markdown, in: store)
+        case .export(let selector, let out, let markdown):
+            return try export(selector, out: out, markdown: markdown, in: store, cwd: cwd)
         case .editMarkdown(let selector, let content):
             return try editMarkdown(selector, content: content, in: store)
         case .rename(let selector, let to):
@@ -131,8 +131,15 @@ public enum SourceCommand {
 
     // MARK: - cat
 
-    private static func cat(_ selector: Selector, in store: WikiStore) throws -> Result {
+    private static func cat(
+        _ selector: Selector, markdown: Bool, in store: WikiStore
+    ) throws -> Result {
         let id = try resolve(selector, in: store)
+        if markdown, let head = try store.processedMarkdownHead(sourceID: id) {
+            // --markdown: print the extracted markdown HEAD instead of raw bytes.
+            // Falls through to the raw-bytes path below when no markdown chain exists. (#553)
+            return Result(payload: .text(head.content), didCommit: false)
+        }
         let data: Data
         do {
             data = try store.sourceContent(id: id)
@@ -147,10 +154,32 @@ public enum SourceCommand {
     private static func export(
         _ selector: Selector,
         out: String?,
+        markdown: Bool,
         in store: WikiStore,
         cwd: String
     ) throws -> Result {
         let id = try resolve(selector, in: store)
+
+        // --markdown: export the extracted markdown HEAD as a .md sibling
+        // instead of the raw blob. Falls back to raw bytes when no markdown
+        // chain exists. (#553)
+        if markdown, let head = try store.processedMarkdownHead(sourceID: id) {
+            let path: String
+            if let out {
+                path = out
+            } else {
+                // Default to .md so the exported file is immediately usable.
+                let summaries = try store.listSources()
+                let baseName = summaries.first(where: { $0.id == id })?.ext ?? ""
+                let leaf = baseName.isEmpty
+                    ? "file-\(id.rawValue).md"
+                    : "file-\(id.rawValue).\(baseName).md"
+                path = "\(cwd)/\(leaf)"
+            }
+            try Data(head.content.utf8).write(to: URL(fileURLWithPath: path), options: .atomic)
+            return Result(payload: .text(path), didCommit: false)
+        }
+
         let data: Data
         do {
             data = try store.sourceContent(id: id)
@@ -183,16 +212,22 @@ public enum SourceCommand {
             return id
         case .name(let name):
             let summaries = try store.listSources()
-            let matches = summaries.filter { $0.filename == name }
-            switch matches.count {
+            // Match by display name first (display_name ?? filename), then
+            // fall back to filename — mirrors `WikiStore.resolveSourceByName` and
+            // how `source list` labels sources, so the agent can use the name it
+            // just saw. (#554)
+            let byDisplay = summaries.filter { $0.effectiveName == name }
+            if byDisplay.count == 1 { return byDisplay[0].id }
+            let byFilename = summaries.filter { $0.filename == name }
+            if byFilename.count == 1 { return byFilename[0].id }
+            let candidates = byDisplay.isEmpty ? byFilename : byDisplay
+            switch candidates.count {
             case 0:
-                throw Failure.message("no file named \(name.debugDescription)")
-            case 1:
-                return matches[0].id
+                throw Failure.message("no source named \(name.debugDescription)")
             default:
-                let ids = matches.map { $0.id.rawValue }.sorted().joined(separator: ", ")
+                let ids = candidates.map { $0.id.rawValue }.sorted().joined(separator: ", ")
                 throw Failure.message(
-                    "multiple files named \(name.debugDescription) — resolve with --id: \(ids)"
+                    "multiple sources named \(name.debugDescription) — resolve with --id: \(ids)"
                 )
             }
         }

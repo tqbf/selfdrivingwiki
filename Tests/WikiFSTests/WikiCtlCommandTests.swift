@@ -317,25 +317,25 @@ struct WikiCtlCommandTests {
     @Test func parsesFileCatByID() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "cat", "--id", "01ABC"], env: noEnv)
-        #expect(invocation.command == .source(.cat(.id(PageID(rawValue: "01ABC")))))
+        #expect(invocation.command == .source(.cat(.id(PageID(rawValue: "01ABC")), markdown: false)))
     }
 
     @Test func parsesFileCatByName() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "cat", "--name", "report.pdf"], env: noEnv)
-        #expect(invocation.command == .source(.cat(.name("report.pdf"))))
+        #expect(invocation.command == .source(.cat(.name("report.pdf"), markdown: false)))
     }
 
     @Test func parsesFileExportByID() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "export", "--id", "01Z"], env: noEnv)
-        #expect(invocation.command == .source(.export(.id(PageID(rawValue: "01Z")), out: nil)))
+        #expect(invocation.command == .source(.export(.id(PageID(rawValue: "01Z")), out: nil, markdown: false)))
     }
 
     @Test func parsesFileExportWithOut() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "export", "--id", "01Z", "--out", "/tmp/out.pdf"], env: noEnv)
-        #expect(invocation.command == .source(.export(.id(PageID(rawValue: "01Z")), out: "/tmp/out.pdf")))
+        #expect(invocation.command == .source(.export(.id(PageID(rawValue: "01Z")), out: "/tmp/out.pdf", markdown: false)))
     }
 
     @Test func fileRequiresSubcommand() {
@@ -440,7 +440,7 @@ struct WikiCtlCommandTests {
         // Binary fixture with non-UTF-8 bytes to prove the byte path works.
         let binary = Data([0x00, 0xFF, 0x89, 0x50, 0x4E, 0x47]) // includes PNG magic
         let ingested = try store.addSource(filename: "icon.png", data: binary)
-        let result = try SourceCommand.run(.cat(.id(ingested.id)), in: store, cwd: "/tmp")
+        let result = try SourceCommand.run(.cat(.id(ingested.id), markdown: false), in: store, cwd: "/tmp")
         #expect(!result.didCommit)
         #expect(result.payload == .bytes(binary))
     }
@@ -448,7 +448,7 @@ struct WikiCtlCommandTests {
     @Test func fileCatWithUnknownIDFails() throws {
         let store = try tempStore()
         #expect(throws: SourceCommand.Failure.self) {
-            try SourceCommand.run(.cat(.id(PageID(rawValue: "01NOPE"))), in: store, cwd: "/tmp")
+            try SourceCommand.run(.cat(.id(PageID(rawValue: "01NOPE")), markdown: false), in: store, cwd: "/tmp")
         }
     }
 
@@ -461,7 +461,7 @@ struct WikiCtlCommandTests {
 
         let data = Data("pdf content".utf8)
         let ingested = try store.addSource(filename: "doc.pdf", data: data)
-        let result = try SourceCommand.run(.export(.id(ingested.id), out: nil), in: store, cwd: tmpDir.path)
+        let result = try SourceCommand.run(.export(.id(ingested.id), out: nil, markdown: false), in: store, cwd: tmpDir.path)
         #expect(!result.didCommit)
         guard case .text(let path) = result.payload else {
             #expect(Bool(false), "expected .text payload"); return
@@ -485,7 +485,7 @@ struct WikiCtlCommandTests {
         let ingested = try store.addSource(filename: "notes.txt", data: data)
         let customPath = tmpDir.appendingPathComponent("custom-out.txt").path
         let result = try SourceCommand.run(
-            .export(.id(ingested.id), out: customPath), in: store, cwd: tmpDir.path)
+            .export(.id(ingested.id), out: customPath, markdown: false), in: store, cwd: tmpDir.path)
         guard case .text(let path) = result.payload else {
             #expect(Bool(false), "expected .text payload"); return
         }
@@ -498,14 +498,14 @@ struct WikiCtlCommandTests {
         let store = try tempStore()
         #expect(throws: SourceCommand.Failure.self) {
             try SourceCommand.run(
-                .export(.id(PageID(rawValue: "01NOPE")), out: nil), in: store, cwd: "/tmp")
+                .export(.id(PageID(rawValue: "01NOPE")), out: nil, markdown: false), in: store, cwd: "/tmp")
         }
     }
 
     @Test func fileNameResolutionResolvesUnambiguous() throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "unique.md", data: Data("text".utf8))
-        let result = try SourceCommand.run(.cat(.name("unique.md")), in: store, cwd: "/tmp")
+        let result = try SourceCommand.run(.cat(.name("unique.md"), markdown: false), in: store, cwd: "/tmp")
         #expect(result.payload == .bytes(Data("text".utf8)))
         _ = ingested
     }
@@ -513,7 +513,7 @@ struct WikiCtlCommandTests {
     @Test func fileNameResolutionFailsWhenMissing() throws {
         let store = try tempStore()
         #expect(throws: SourceCommand.Failure.self) {
-            try SourceCommand.run(.cat(.name("ghost.pdf")), in: store, cwd: "/tmp")
+            try SourceCommand.run(.cat(.name("ghost.pdf"), markdown: false), in: store, cwd: "/tmp")
         }
     }
 
@@ -522,7 +522,133 @@ struct WikiCtlCommandTests {
         _ = try store.addSource(filename: "same.txt", data: Data("v1".utf8))
         _ = try store.addSource(filename: "same.txt", data: Data("v2".utf8))
         #expect(throws: SourceCommand.Failure.self) {
-            try SourceCommand.run(.cat(.name("same.txt")), in: store, cwd: "/tmp")
+            try SourceCommand.run(.cat(.name("same.txt"), markdown: false), in: store, cwd: "/tmp")
+        }
+    }
+
+    // MARK: - cat --markdown (#553)
+
+    @Test func parsesFileCatWithMarkdownFlag() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "source", "cat", "--id", "01ABC", "--markdown"], env: noEnv)
+        #expect(invocation.command == .source(.cat(.id(PageID(rawValue: "01ABC")), markdown: true)))
+    }
+
+    @Test func parsesFileCatByNameWithMarkdownFlag() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "source", "cat", "--name", "report.pdf", "--markdown"], env: noEnv)
+        #expect(invocation.command == .source(.cat(.name("report.pdf"), markdown: true)))
+    }
+
+    @Test func parsesFileExportWithMarkdownFlag() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "source", "export", "--id", "01Z", "--markdown"], env: noEnv)
+        #expect(invocation.command == .source(.export(.id(PageID(rawValue: "01Z")), out: nil, markdown: true)))
+    }
+
+    @Test func catMarkdownReturnsExtractedMarkdown() throws {
+        let store = try tempStore()
+        let ingested = try store.addSource(filename: "paper.pdf", data: Data("%PDF-1.4".utf8))
+        _ = try store.appendProcessedMarkdown(
+            sourceID: ingested.id, content: "# Extracted Title\n\nBody text.", origin: .extraction, note: nil)
+        let result = try SourceCommand.run(.cat(.id(ingested.id), markdown: true), in: store, cwd: "/tmp")
+        #expect(!result.didCommit)
+        guard case .text(let output) = result.payload else {
+            #expect(Bool(false), "expected .text payload for --markdown"); return
+        }
+        #expect(output == "# Extracted Title\n\nBody text.")
+    }
+
+    @Test func catMarkdownFallsBackToRawBytesWhenNoExtraction() throws {
+        let store = try tempStore()
+        let binary = Data([0x25, 0x50, 0x44, 0x46]) // %PDF
+        let ingested = try store.addSource(filename: "raw.pdf", data: binary)
+        // No appendProcessedMarkdown — no markdown chain exists.
+        let result = try SourceCommand.run(.cat(.id(ingested.id), markdown: true), in: store, cwd: "/tmp")
+        #expect(result.payload == .bytes(binary))
+    }
+
+    @Test func catMarkdownResolvesByName() throws {
+        let store = try tempStore()
+        let ingested = try store.addSource(filename: "doc.pdf", data: Data("%PDF".utf8))
+        _ = try store.appendProcessedMarkdown(
+            sourceID: ingested.id, content: "markdown body", origin: .extraction, note: nil)
+        let result = try SourceCommand.run(.cat(.name("doc.pdf"), markdown: true), in: store, cwd: "/tmp")
+        guard case .text(let output) = result.payload else {
+            #expect(Bool(false), "expected .text payload"); return
+        }
+        #expect(output == "markdown body")
+    }
+
+    @Test func exportMarkdownWritesExtractedMarkdown() throws {
+        let store = try tempStore()
+        let ingested = try store.addSource(filename: "doc.pdf", data: Data("%PDF".utf8))
+        _ = try store.appendProcessedMarkdown(
+            sourceID: ingested.id, content: "# Title\n\nContent.", origin: .extraction, note: nil)
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-md-export-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let result = try SourceCommand.run(
+            .export(.id(ingested.id), out: nil, markdown: true), in: store, cwd: tmpDir.path)
+        guard case .text(let path) = result.payload else {
+            #expect(Bool(false), "expected .text payload"); return
+        }
+        #expect(path.hasSuffix(".pdf.md"))
+        let written = try String(contentsOfFile: path, encoding: .utf8)
+        #expect(written == "# Title\n\nContent.")
+    }
+
+    @Test func exportMarkdownFallsBackToRawBytesWhenNoExtraction() throws {
+        let store = try tempStore()
+        let binary = Data("%PDF".utf8)
+        let ingested = try store.addSource(filename: "raw.pdf", data: binary)
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-md-export-fb-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let result = try SourceCommand.run(
+            .export(.id(ingested.id), out: nil, markdown: true), in: store, cwd: tmpDir.path)
+        guard case .text(let path) = result.payload else {
+            #expect(Bool(false), "expected .text payload"); return
+        }
+        // Falls back to raw bytes path — default uses stored ext (.pdf).
+        #expect(path.hasSuffix(".pdf"))
+        let written = try Data(contentsOf: URL(fileURLWithPath: path))
+        #expect(written == binary)
+    }
+
+    // MARK: - resolve by display name (#554)
+
+    @Test func resolveByDisplayName() throws {
+        let store = try tempStore()
+        let ingested = try store.addSource(filename: "Matthews1999.pdf", data: Data("raw".utf8))
+        try store.renameSource(id: ingested.id, to: "Ericksonian Hypnosis: A Review")
+        // Agent sees display name in `source list`, should be able to use it.
+        let result = try SourceCommand.run(
+            .cat(.name("Ericksonian Hypnosis: A Review"), markdown: false), in: store, cwd: "/tmp")
+        #expect(result.payload == .bytes(Data("raw".utf8)))
+    }
+
+    @Test func resolveFallsBackToFilenameWhenDisplayNameNotSet() throws {
+        let store = try tempStore()
+        _ = try store.addSource(filename: "plain.txt", data: Data("data".utf8))
+        // No display name set — effectiveName falls back to filename.
+        let result = try SourceCommand.run(
+            .cat(.name("plain.txt"), markdown: false), in: store, cwd: "/tmp")
+        #expect(result.payload == .bytes(Data("data".utf8)))
+    }
+
+    @Test func resolveByDisplayNameAmbiguityFails() throws {
+        let store = try tempStore()
+        let a = try store.addSource(filename: "a.pdf", data: Data("v1".utf8))
+        let b = try store.addSource(filename: "b.pdf", data: Data("v2".utf8))
+        try store.renameSource(id: a.id, to: "Same Display Name")
+        try store.renameSource(id: b.id, to: "Same Display Name")
+        #expect(throws: SourceCommand.Failure.self) {
+            try SourceCommand.run(.cat(.name("Same Display Name"), markdown: false), in: store, cwd: "/tmp")
         }
     }
 
