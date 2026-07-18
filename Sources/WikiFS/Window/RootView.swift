@@ -37,5 +37,33 @@ struct RootView: View {
             extractionProvider: session.extractionProvider
         )
         .id(session.wikiID)
+        // Consume a deferred cross-window `wiki://` navigation (set on the
+        // session by `SessionManager.applyOrStashWikiLink` when a link was
+        // clicked in the Activity window while THIS wiki's window was closed).
+        // Runs once on appear — after `RootScene.resolveSession` has created
+        // the session, so `store` is ready (`WikiStoreModel.init` loads
+        // `summaries` synchronously and `selectPage` loads drafts inline).
+        // Deferred by one runloop tick so `ContentView` has mounted and the
+        // tab/selection change diff is observed by the sidebar + detail.
+        .onAppear { consumePendingWikiLink() }
+    }
+
+    /// Deliver the stashed `wiki://` link (if any) to the app-layer router
+    /// (`WikiReaderView.onWikiLinkHandler`) — same handler the in-wiki chat
+    // transcript uses. Clears the stash so a re-appear (e.g. window re-focus)
+    // never re-navigates. The explicit nil-out also keeps the session lean.
+    private func consumePendingWikiLink() {
+        guard let pending = session.pendingWikiLink else { return }
+        session.pendingWikiLink = nil
+        // `WikiReaderView.onWikiLinkHandler(for:)` is app-layer; importing it
+        // here would create a layering cycle (`WikiFS` viewing `WikiReaderView`
+        // is fine — we already do in `ChatView`). Defer via `Task @MainActor`
+        // so `ContentView`'s first layout has committed before the selection
+        // mutation travels through `store` → `.onChange` → sidebar/detail.
+        let handler = WikiReaderView.onWikiLinkHandler(for: session.store)
+        Task { @MainActor in
+            await Task.yield()
+            handler(pending.url, pending.openInNewTab)
+        }
     }
 }

@@ -99,6 +99,19 @@ public final class WikiSession {
     /// derived index). Retained for the lifetime of the session so the
     /// `TantivyShadowSync` bus subscription stays alive.
     public let tantivyShadowSearch: TantivySearchService?
+
+    /// Cross-window deferred `wiki://` navigation. Set by
+    /// ``SessionManager`` when a `wiki://` link is clicked in a window
+    /// whose wiki is NOT yet open (e.g. the Activity / queue window
+    /// rendering an ingest transcript). `SessionManager` stashes the
+    /// request keyed by wiki ID; `RootScene.resolveSession` transfers it
+    /// onto the session as soon as the session is created, and `RootView`
+    /// consumes it on appear — after the store is ready — by applying
+    /// `WikiReaderView.onWikiLinkHandler`. Holds raw `URL` + the
+    /// ⌘-click `openInNewTab` flag (Foundation types only, so the Engine
+    /// layer never references the app-layer `WikiLinkRoute`). Same
+    /// "set once / consume once" discipline as `pendingBlobVacuum`.
+    public var pendingWikiLink: (url: URL, openInNewTab: Bool)?
     @ObservationIgnored private var tantivyShadowSync: TantivyShadowSync?
 
     // MARK: - Init
