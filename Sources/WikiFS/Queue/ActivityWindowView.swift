@@ -532,7 +532,7 @@ struct ActivityWindowView: View {
     private func sourceNames(for item: QueueItem) -> [String] {
         guard let store = sessionManager?.sessions[item.wikiID]?.store else { return [] }
         return item.payload.sourceIDs.compactMap { id in
-            store.sources.first { $0.id == id }?.filename
+            store.sources.first { $0.id == id }?.effectiveName
         }
     }
 
