@@ -325,7 +325,16 @@ struct WikiFSApp: App {
             if activityTracker?.isExtracting == true {
                 return "A PDF extraction"
             }
-            if activityTracker?.isIngesting == true {
+            // A lint runs through the `.ingestion` queue kind with empty
+            // `sourceIDs` and a non-nil `lintPageIDs`, so `isIngesting` is
+            // true for both ingestion and lint. Distinguish a lint-only run
+            // via the tracker's source/lint ID sets so the quit dialog names
+            // the operation actually in flight (not always "ingestion").
+            if let tracker = activityTracker, tracker.isIngesting {
+                if !tracker.lintingItemIDs.isEmpty
+                    && tracker.ingestingSourceIDs.isEmpty {
+                    return "A lint"
+                }
                 return "A source ingestion"
             }
             if let sm = sessionManager {
