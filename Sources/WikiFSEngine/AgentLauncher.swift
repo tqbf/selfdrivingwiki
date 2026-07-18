@@ -44,6 +44,24 @@ public final class AgentLauncher {
     /// `nil` for interactive chat paths (the chat transcript is rendered
     /// inline via `events`). Cleared in `finish()`.
     @ObservationIgnored public var onAgentEvent: (@Sendable (AgentEvent) -> Void)?
+    /// Per-run callback invoked on each `usage_update` notification during a
+    /// run (#544 live progress). Receives the in-progress `SessionUsage`
+    /// snapshot (cumulative token totals + context window + cost + model id
+    /// at the moment of the update). Installed in `run(...)` after
+    /// `resetRunArtifacts()` — same lifecycle as `onAgentEvent`. The provider
+    /// runs the agent off-main; this callback hops to the main actor in
+    /// `AppQueueIngestionProvider` before emitting to the queue. Cleared in
+    /// `finish()` and `resetRunArtifacts()`.
+    ///
+    /// Note: the backend's `sessionUsage(for:)` does NOT set `providerLabel`
+    /// (the configured provider name like "Claude"). The launcher enriches
+    /// each snapshot with `liveUsageProviderLabel` before invoking this.
+    @ObservationIgnored public var onLiveUsage: (@Sendable (SessionUsage) -> Void)?
+    /// The configured provider label for the current run, attached to each
+    /// live-usage snapshot so the Activity window can show "Claude · Sonnet 4".
+    /// Set in `run(...)` from the resolved provider; cleared in `finish()` and
+    /// `resetRunArtifacts()`. Nil for runs without ACP backend usage data.
+    @ObservationIgnored private var liveUsageProviderLabel: String?
     /// The raw combined transcript (raw stream-json stdout + stderr) kept alongside
     /// the typed `events`, so the UI / a debugger can see exactly what the CLI
     /// emitted. This is the in-memory mirror of the on-disk `run.jsonl`.
@@ -788,6 +806,16 @@ public final class AgentLauncher {
     ///   window). It MUST be passed here — not assigned to `onAgentEvent`
     ///   before calling — because `resetRunArtifacts()` clears the property at
     ///   the top of every run; the launcher installs it after the reset.
+    /// - `onLiveUsage` is the per-`usage_update` callback for THIS run (#544
+    ///   live progress). Same lifecycle/install rule as `onEvent` — passed
+    ///   here, installed after `resetRunArtifacts()`. `nil` for callers that
+    ///   don't need live-progress display. May never fire if the backend
+    ///   doesn't stream usage updates.
+    /// - `providerLabel` is the configured provider's display label (e.g.
+    ///   "Claude") for the run — attached to each live-usage snapshot so the
+    ///   Activity window can show "Claude · Sonnet 4". The backend's
+    ///   `sessionUsage(for:)` does NOT know this; the launcher enriches with
+    ///   it. Nil is fine (the model id alone still shows).
     public func run(
         request: OperationRequest,
         wikiID: String,
@@ -797,6 +825,8 @@ public final class AgentLauncher {
         ingestingSourceIDs: Set<PageID> = [],
         workspaceID: String? = nil,
         onEvent: (@Sendable (AgentEvent) -> Void)? = nil,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)? = nil,
+        providerLabel: String? = nil,
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void
     ) async {
@@ -833,6 +863,12 @@ public final class AgentLauncher {
         // the property to keep a stale callback from receiving a new run's
         // events).
         onAgentEvent = onEvent
+        // #544 live progress: install the per-run live-usage callback + the
+        // provider label used to enrich each snapshot. Same lifecycle as
+        // `onAgentEvent` — installed after the reset, cleared in
+        // `finish()`/`resetRunArtifacts()`.
+        self.onLiveUsage = onLiveUsage
+        self.liveUsageProviderLabel = providerLabel
 
         // Resolved fresh at spawn time so Settings changes apply without a
         // restart.
@@ -1401,6 +1437,9 @@ public final class AgentLauncher {
         let forkFrom = (acp != nil) ? plannerSessionHandle : nil
         // Set backend + a session reference so stopAgent() can cancel.
         self.backend = backend
+        // #544 live progress: install the live-usage callback so usage_updates
+        // from the parallel executors stream to the Activity window.
+        await installLiveUsageCallback(on: backend)
         self.sessionHandle = forkFrom ?? SessionHandle(id: "parallel-executors")
 
         setGenerating(true)
@@ -1577,6 +1616,10 @@ public final class AgentLauncher {
         forkFrom: SessionHandle? = nil
     ) async -> SessionHandle? {
         self.backend = backend
+        // #544 live progress: install the live-usage callback on this phase's
+        // backend so usage_updates stream to the Activity window during the
+        // run. Idempotent for ACP backends; no-op for non-ACP / no-callback.
+        await installLiveUsageCallback(on: backend)
         let runToken = UUID()
         do {
             // Phase 3: try to fork the planner session so the executor inherits
@@ -1712,6 +1755,44 @@ public final class AgentLauncher {
         }
         runTotalUsage = SessionUsage.merging(runTotalUsage, enriched)
         DebugLog.agent("runTotalUsage: captured phase usage in=\(usage.inputTokens) out=\(usage.outputTokens) cost=\(usage.cost ?? 0) model=\(usage.modelId ?? "nil") provider=\(providerLabel ?? "nil")")
+    }
+
+    /// #544 live progress: install the live-usage callback on an ACP backend so
+    /// every `usage_update` notification during the run is forwarded to the
+    /// queue's Activity window. Enriches the raw backend snapshot (which
+    /// carries token totals + context window + cost but no display metadata)
+    /// with the configured provider label + the session's current model id
+    /// before invoking `onLiveUsage`. The thinking-effort level is omitted
+    /// (it's not exposed per-session publicly; the final `.usage` event at
+    /// completion carries it). Non-ACP backends and runs with no `onLiveUsage`
+    /// are a silent no-op.
+    ///
+    /// The enrichment reads `modelId` via an async hop to the actor
+    /// (`currentModelId(for:)`) so it stays in sync with the latest
+    /// `session/update`. `providerLabel` is known synchronously
+    /// (`liveUsageProviderLabel`, set in `run(...)`).
+    func installLiveUsageCallback(on backend: AgentBackend) async {
+        guard let acp = backend as? ACPBackend, let onLiveUsage else { return }
+        let providerLabel = liveUsageProviderLabel
+        await acp.setLiveUsageCallback { handle, snapshot in
+            Task { @MainActor in
+                let modelId = await acp.currentModelId(for: handle)
+                let enriched = SessionUsage(
+                    inputTokens: snapshot.inputTokens,
+                    outputTokens: snapshot.outputTokens,
+                    totalTokens: snapshot.totalTokens,
+                    cachedReadTokens: snapshot.cachedReadTokens,
+                    thoughtTokens: snapshot.thoughtTokens,
+                    cost: snapshot.cost,
+                    currency: snapshot.currency,
+                    contextUsed: snapshot.contextUsed,
+                    contextSize: snapshot.contextSize,
+                    providerLabel: providerLabel,
+                    modelId: modelId,
+                    thinkingLevel: nil)
+                onLiveUsage(enriched)
+            }
+        }
     }
 
     /// Resolve the path to a binary bundled in `Contents/Helpers/`, or nil if
@@ -2515,8 +2596,14 @@ public final class AgentLauncher {
         transcriptSink = nil
         summarySink = nil
         onAgentEvent = nil
+        // #544 live progress: detach the live-usage callback after the run ends,
+        // mirroring onAgentEvent. The Activity window stops receiving updates
+        // here; the final cumulative totals arrive via the AppQueueIngestion
+        // provider's onUsagecallback.
+        onLiveUsage = nil
+        liveUsageProviderLabel = nil
         // D2 flip-timing: clear activeChatID AFTER flushTranscript() has
-        // committed the final tail. flushTranscript() is synchronous — it calls
+        // committed the final tail.
         // transcriptSink?(tail) which runs store.appendChatEvents on the main
         // actor before returning. By the time we reach this line, the persisted
         // chatMessages(chatID:) and the in-memory events[] agree, so flipping the
@@ -2608,6 +2695,10 @@ public final class AgentLauncher {
         transcriptSink = nil
         summarySink = nil
         onAgentEvent = nil
+        // #544 live progress: clear the live-usage callback + provider label so
+        // a stale callback from a prior run never receives a new run's updates.
+        onLiveUsage = nil
+        liveUsageProviderLabel = nil
         summaryGenerated = false
         persistedEventCount = 0
         firstMessagePrePersisted = false

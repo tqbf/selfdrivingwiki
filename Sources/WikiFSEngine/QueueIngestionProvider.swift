@@ -36,12 +36,17 @@ public protocol QueueIngestionProvider: Sendable {
     ///   - onUsage: Called once after the run finishes with the cumulative
     ///     token/cost usage (`SessionUsage`), if captured. `nil` when the
     ///     backend did not report usage data. #528 spike.
+    ///   - onLiveUsage: Called on each `usage_update` notification during the
+    ///     run with the in-progress token/cost snapshot. `nil` for callers
+    ///     that don't need live progress (#544). May never fire if the backend
+    ///     doesn't stream usage updates.
     func runIngestion(
         wikiID: String,
         sourceIDs: [PageID],
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
     ) async throws
 
     /// Run a whole-wiki lint health-check. Returns when the agent finishes.
@@ -51,11 +56,13 @@ public protocol QueueIngestionProvider: Sendable {
     ///   - onProgress: Called with progress lines to emit as `.progress` events.
     ///   - onTranscript: Called with each typed agent event for this item.
     ///   - onUsage: Called after the run with cumulative usage, if captured.
+    ///   - onLiveUsage: Called on each `usage_update` during the run (#544).
     func runLint(
         wikiID: String,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
     ) async throws
 
     /// Run a page-level lint health-check for the given pages. Returns when
@@ -67,12 +74,14 @@ public protocol QueueIngestionProvider: Sendable {
     ///   - onProgress: Called with progress lines to emit as `.progress` events.
     ///   - onTranscript: Called with each typed agent event for this item.
     ///   - onUsage: Called after the run with cumulative usage, if captured.
+    ///   - onLiveUsage: Called on each `usage_update` during the run (#544).
     func runLintPages(
         wikiID: String,
         pageIDs: [PageID],
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?
     ) async throws
 
     /// Quick readiness probe: checks whether the selected agent provider's
@@ -121,17 +130,20 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
     private let emitProgress: @Sendable (QueueItem.ID, String) -> Void
     private let emitTranscript: @Sendable (QueueItem.ID, AgentEvent) -> Void
     private let emitUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
+    private let emitLiveUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
 
     public init(
         provider: any QueueIngestionProvider,
         emitProgress: @escaping @Sendable (QueueItem.ID, String) -> Void,
         emitTranscript: @escaping @Sendable (QueueItem.ID, AgentEvent) -> Void,
-        emitUsage: @escaping @Sendable (QueueItem.ID, SessionUsage) -> Void
+        emitUsage: @escaping @Sendable (QueueItem.ID, SessionUsage) -> Void,
+        emitLiveUsage: @escaping @Sendable (QueueItem.ID, SessionUsage) -> Void
     ) {
         self.provider = provider
         self.emitProgress = emitProgress
         self.emitTranscript = emitTranscript
         self.emitUsage = emitUsage
+        self.emitLiveUsage = emitLiveUsage
     }
 
     public func providerID(for item: QueueItem) async -> String? {
@@ -148,7 +160,7 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
     }
 
     public func worker(for item: QueueItem) async throws -> any QueueWorker {
-        QueueIngestionWorker(provider: provider, emitProgress: emitProgress, emitTranscript: emitTranscript, emitUsage: emitUsage)
+        QueueIngestionWorker(provider: provider, emitProgress: emitProgress, emitTranscript: emitTranscript, emitUsage: emitUsage, emitLiveUsage: emitLiveUsage)
     }
 }
 
@@ -167,6 +179,7 @@ struct QueueIngestionWorker: QueueWorker {
     let emitProgress: @Sendable (QueueItem.ID, String) -> Void
     let emitTranscript: @Sendable (QueueItem.ID, AgentEvent) -> Void
     let emitUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
+    let emitLiveUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
 
     func execute(_ item: QueueItem) async throws {
         // Pre-dispatch readiness gate (#440): check the agent provider's binary
@@ -185,6 +198,11 @@ struct QueueIngestionWorker: QueueWorker {
             guard let usage else { return }
             emitUsage(itemID, usage)
         }
+        // #544 live progress: forward each in-progress usage snapshot to the
+        // engine's broadcaster so the Activity window updates during the run.
+        let onLiveUsage: (@Sendable (SessionUsage) -> Void)? = { [itemID = item.id] usage in
+            emitLiveUsage(itemID, usage)
+        }
 
         if let pageIDs = item.payload.lintPageIDs, !pageIDs.isEmpty {
             // Page-level lint.
@@ -193,7 +211,8 @@ struct QueueIngestionWorker: QueueWorker {
                 pageIDs: pageIDs,
                 onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
                 onTranscript: onTranscript,
-                onUsage: onUsage
+                onUsage: onUsage,
+                onLiveUsage: onLiveUsage
             )
         } else if item.payload.lintPageIDs != nil {
             // lintPageIDs is non-nil but empty → whole-wiki lint.
@@ -201,7 +220,8 @@ struct QueueIngestionWorker: QueueWorker {
                 wikiID: item.wikiID,
                 onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
                 onTranscript: onTranscript,
-                onUsage: onUsage
+                onUsage: onUsage,
+                onLiveUsage: onLiveUsage
             )
         } else {
             // Normal ingestion.
@@ -214,7 +234,8 @@ struct QueueIngestionWorker: QueueWorker {
                 sourceIDs: sourceIDs,
                 onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
                 onTranscript: onTranscript,
-                onUsage: onUsage
+                onUsage: onUsage,
+                onLiveUsage: onLiveUsage
             )
         }
     }

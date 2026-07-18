@@ -25,6 +25,15 @@ final class UsageEmitBox: @unchecked Sendable {
     var emit: (@Sendable (QueueItem.ID, SessionUsage) -> Void)?
 }
 
+/// A mutable box for a `@Sendable` live-usage-emit closure. Same pattern as
+/// the other emit boxes — breaks the circular dependency between the ingestion
+/// worker factory (needs the closure) and the engine (provides it). #544 live
+/// progress: carries in-progress token/cost usage during a run (the final
+/// `UsageEmitBox` fires once on completion).
+final class LiveUsageEmitBox: @unchecked Sendable {
+    var emit: (@Sendable (QueueItem.ID, SessionUsage) -> Void)?
+}
+
 /// Observes `QueueEngine.events` and maintains `@Observable` UI state for
 /// extraction activity. Replaces the launcher's extraction slot machinery
 /// (`isExtracting`, `extractionLog`, `extractionPID`,
@@ -106,6 +115,13 @@ final class QueueActivityTracker {
     /// Keyed by item ID. Set once when a `.usage` event arrives. The Activity
     /// window reads this to append "12.4K in · 3.2K out · $0.34" to completed rows.
     private(set) var itemUsage: [QueueItem.ID: SessionUsage] = [:]
+
+    /// Per-item in-progress token/cost usage for RUNNING runs (#544 live
+    /// progress). Keyed by item ID. Updated on each `.liveUsage` event during
+    /// the run, cleared on terminal state. The Activity window reads this to
+    /// show running token counts + model name before the run completes. The
+    /// final cumulative totals come from `itemUsage` via the `.usage` event.
+    private(set) var liveUsage: [QueueItem.ID: SessionUsage] = [:]
 
     /// Today's cumulative token usage across all completed runs (#528 spike).
     /// Persists to UserDefaults with a date key so it survives app restarts
@@ -195,6 +211,7 @@ final class QueueActivityTracker {
         transcripts.removeAll()
         progressLogs.removeAll()
         itemUsage.removeAll()
+        liveUsage.removeAll()
         streamingTranscriptItemIDs.removeAll()
         streamingThinkingItemIDs.removeAll()
     }
@@ -299,6 +316,7 @@ final class QueueActivityTracker {
         transcripts.removeValue(forKey: itemID)
         progressLogs.removeValue(forKey: itemID)
         itemUsage.removeValue(forKey: itemID)
+        liveUsage.removeValue(forKey: itemID)
         streamingTranscriptItemIDs.remove(itemID)
         streamingThinkingItemIDs.remove(itemID)
     }
@@ -317,6 +335,13 @@ final class QueueActivityTracker {
     /// backend didn't report usage. Read by the Activity window rows.
     func usage(for itemID: QueueItem.ID) -> SessionUsage? {
         itemUsage[itemID]
+    }
+
+    /// The in-progress token/cost usage for a running item, or `nil` if no
+    /// `usage_update` has arrived yet. Read by the Activity window to render
+    /// live token counts + model name during a run (#544 live progress).
+    func liveUsage(for itemID: QueueItem.ID) -> SessionUsage? {
+        liveUsage[itemID]
     }
 
     // MARK: - Event handling
@@ -366,6 +391,16 @@ final class QueueActivityTracker {
             itemUsage[id] = usage
             todayUsage.add(usage)
             DailyUsage.save(todayUsage)
+            // The run is complete — drop the in-progress snapshot so the
+            // Activity window renders the final totals, not a stale live one.
+            liveUsage.removeValue(forKey: id)
+
+        case .liveUsage(let id, let usage):
+            // #544 live progress: store the latest in-progress usage snapshot
+            // for a running item. Overwrites the previous snapshot (each
+            // usage_update carries the current cumulative totals + the latest
+            // model/cost). Cleared on terminal state in removeItem().
+            liveUsage[id] = usage
 
         case .progress(let id, let line):
             // Accumulate per-item progress (for extraction items and any
@@ -432,6 +467,11 @@ final class QueueActivityTracker {
         if currentExtractionItemID == item.id {
             currentExtractionItemID = nil
         }
+        // #544: drop the in-progress usage snapshot on terminal state. Failed
+        // and cancelled items never emit a `.usage` event, so without this the
+        // live snapshot would linger. Completed items have already dropped it
+        // in the `.usage` handler (this is a redundant-clear safety net then).
+        liveUsage.removeValue(forKey: item.id)
     }
 
     /// Parse a PID from a progress line if the local backend reports one.
@@ -654,6 +694,34 @@ enum UsageFormatter {
         var parts: [String] = ["Today: \(tokens(usage.totalTokens)) tokens"]
         if usage.cost > 0 {
             parts.append(cost(usage.cost, currency: usage.currency) ?? "")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// A live in-progress summary line for a RUNNING row (#544 live progress).
+    /// Combines the stream's current model/provider with running token counts:
+    ///
+    ///     "Sonnet 4 · 12.4K in · 3.2K out · 412 thought"
+    ///
+    /// Omits duration/cost — the on-completion `fullSummary` carries those (cost
+    /// isn't meaningful mid-run, and elapsed time comes from the row's own
+    /// timer, not the usage snapshot). Segments are omitted when data is
+    /// unavailable (nil model, zero tokens). The caller appends elapsed time
+    /// from its own clock so the line ticks independently of usage updates.
+    static func liveSummary(usage: SessionUsage) -> String {
+        var parts: [String] = []
+        if let label = usage.providerLabel {
+            parts.append(label)
+        }
+        if let model = usage.modelId {
+            parts.append(model)
+        }
+        if usage.inputTokens > 0 || usage.outputTokens > 0 {
+            parts.append("\(tokens(usage.inputTokens)) in")
+            parts.append("\(tokens(usage.outputTokens)) out")
+            if let thought = usage.thoughtTokens, thought > 0 {
+                parts.append("\(tokens(thought)) thought")
+            }
         }
         return parts.joined(separator: " · ")
     }

@@ -376,6 +376,16 @@ public actor QueueEngine {
         }
     }
 
+    /// A `Sendable` closure the worker factory captures to yield `.liveUsage`
+    /// events onto the engine's broadcaster. #544 live progress — surfaces
+    /// in-progress token/cost usage to the activity tracker during a run (no
+    /// persistence needed; the final `.usage` event carries the totals).
+    public func makeEmitLiveUsage() -> @Sendable (QueueItem.ID, SessionUsage) -> Void {
+        return { [broadcaster] id, usage in
+            broadcaster.yield(.liveUsage(id, usage))
+        }
+    }
+
     /// Load persisted agent events (transcript) for a queue item from the DB.
     /// Used by the Activity tracker to show transcripts for items rehydrated
     /// from a previous session. Deltas are folded into whole rows on the way

@@ -80,6 +80,12 @@ public enum QueueEvent: Sendable {
     /// Carries the item ID + the event. Used by the Activity window to
     /// build per-item transcripts (decoupled from the launcher instance).
     case transcript(QueueItem.ID, AgentEvent)
+    /// Live (in-progress) token/cost usage for a running ingestion or lint
+    /// run. Emitted on each `usage_update` notification during the run so the
+    /// Activity window can show running token counts + model name before
+    /// completion. Distinct from `.usage`, which fires once after the run
+    /// finishes with the final cumulative totals. See #544 live progress.
+    case liveUsage(QueueItem.ID, SessionUsage)
     /// Final cumulative token/cost usage for a completed ingestion or lint
     /// run. Emitted once, after the run finishes. #528 spike — surfaces
     /// per-run usage in the Activity window and aggregates a daily total.
@@ -104,7 +110,7 @@ public enum QueueEvent: Sendable {
             return i
         case .failed(let i, _):
             return i
-        case .progress, .transcript, .usage, .runStateChanged:
+        case .progress, .transcript, .liveUsage, .usage, .runStateChanged:
             return nil
         }
     }

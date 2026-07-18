@@ -191,7 +191,8 @@ struct ActivityWindowView: View {
             title: kindLabel(for: item),
             subtitle: String(item.wikiID.prefix(8)),
             targetNames: [],
-            usage: nil)
+            usage: nil,
+            liveUsage: nil)
         HStack(spacing: 8) {
             statusView(for: item)
                 .frame(width: 16)
@@ -219,6 +220,21 @@ struct ActivityWindowView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
+                }
+                // #544 live progress: show running token counts + model during
+                // the run. Cleared on terminal state by the tracker. Elapsed
+                // time ticks here via TimelineView (per-second) so the line
+                // updates even between usage_updates. Not shown for queued
+                // items (no live data yet).
+                if item.state == .running, let usage = data.liveUsage {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        let elapsed = elapsedString(item.startedAt, now: context.date)
+                        let line = UsageFormatter.liveSummary(usage: usage)
+                        Text(line.isEmpty ? elapsed : "\(line) · \(elapsed)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                 }
             }
             Spacer(minLength: 4)
@@ -415,6 +431,18 @@ struct ActivityWindowView: View {
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
+                    }
+                }
+                // #544 live progress: show running token counts + model + elapsed
+                // during the run. Elapsed time ticks via TimelineView per second.
+                // Cleared on completion; the #528 full summary takes over below.
+                if item.state == .running, let usage = activityTracker.liveUsage(for: item.id) {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        let elapsed = elapsedString(item.startedAt, now: context.date)
+                        let line = UsageFormatter.liveSummary(usage: usage)
+                        Text(line.isEmpty ? elapsed : "\(line) · \(elapsed)")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 // #528 spike: show per-run usage in the detail header too.
@@ -699,6 +727,7 @@ struct ActivityWindowView: View {
         let subtitle: String
         let targetNames: [String]
         let usage: SessionUsage?
+        let liveUsage: SessionUsage?
     }
 
     /// Snapshot all `@Observable`-derived display data for the given items into
@@ -711,6 +740,7 @@ struct ActivityWindowView: View {
         // Snapshot the observable dictionaries once.
         let sessions = sessionManager?.sessions ?? [:]
         let itemUsage = activityTracker.itemUsage
+        let liveUsage = activityTracker.liveUsage
 
         var result: [QueueItem.ID: RowDisplayData] = [:]
         result.reserveCapacity(items.count)
@@ -742,7 +772,8 @@ struct ActivityWindowView: View {
                 title: computeRowTitle(for: item, wikiName: wikiName, names: names),
                 subtitle: computeRowSubtitle(for: item, wikiName: wikiName),
                 targetNames: targets,
-                usage: itemUsage[item.id])
+                usage: itemUsage[item.id],
+                liveUsage: liveUsage[item.id])
         }
         return result
     }
@@ -872,5 +903,24 @@ struct ActivityWindowView: View {
     private func date(fromMillis millis: Int64?) -> Date? {
         guard let millis else { return nil }
         return Date(timeIntervalSince1970: Double(millis) / 1000)
+    }
+
+    /// Compact elapsed-time string from an epoch-ms start timestamp to `now`.
+    /// Used by the live-usage row line (#544) so it ticks independently of
+    /// usage_updates. Mirrors `AgentRunStatusView.durationString`'s format:
+    /// "42s", "3m 12s", "1h 5m". Returns "—" when no start timestamp.
+    private func elapsedString(_ startedAtMs: Int64?, now: Date) -> String {
+        guard let startedAtMs, startedAtMs > 0 else { return "—" }
+        let start = Date(timeIntervalSince1970: Double(startedAtMs) / 1000)
+        let seconds = max(0, Int(now.timeIntervalSince(start).rounded(.down)))
+        if seconds < 60 { return "\(seconds)s elapsed" }
+        let minutes = seconds / 60
+        let remainingSeconds = seconds % 60
+        if minutes < 60 {
+            return remainingSeconds == 0 ? "\(minutes)m elapsed" : "\(minutes)m \(remainingSeconds)s elapsed"
+        }
+        let hours = minutes / 60
+        let remainingMinutes = minutes % 60
+        return remainingMinutes == 0 ? "\(hours)h elapsed" : "\(hours)h \(remainingMinutes)m elapsed"
     }
 }
