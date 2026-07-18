@@ -2,69 +2,66 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-07-18 — Make wiki links clickable in the agent/activity transcript view (branch `feature/clickable-wiki-links-transcript`)
+## 2026-07-18 — Unify video source detail with PDF tab layout (branch `unify-video-pdf-source-tabs`)
 
-**Problem:** The Activity window rendered lint/ingest transcripts as HTML in a
-`ChatWebView` (WKWebView) with `[[wiki-links]]` linkified to `wiki://page?title=…`
-URLs — but clicking them did nothing. The `ChatWebView` navigation delegate
-already intercepted `wiki://` clicks and called `onWikiLink?(url, openInNewTab)`,
-but `ActivityWindowView.transcriptContent(for:)` constructed the `ChatWebView`
-**without** passing an `onWikiLink` handler, so the call was an inert no-op.
-(The in-wiki chat transcript and `AgentQueueView` already wired the handler via
-`WikiReaderView.onWikiLinkHandler(for: store)` — the gap was exclusive to the
-Activity window, which spans transcripts across MANY wikis.)
+**Problem.** Issue #575 (PR #572) shipped the YouTube/Vimeo embed player as a
+custom `embedContent(target:)` layout in `SourceDetailView`: a fixed-height
+player iframe stacked on top of the transcript in a single scroll column. PDF
+sources, meanwhile, had a far richer detail view — a segmented **Reader / PDF /
+Split** tab picker with an outline pane. Video sources should use that *same*
+layout, with the video player standing in for PDFKit.
 
-**Fix:** Wired an `onWikiLink` handler into the Activity window transcript that
-handles both same-wiki (window open) and cross-wiki (window closed) navigation:
-
-1. **Same-wiki (window open):** The item's `wikiID` resolves to a live
-   `WikiSession` in `sessionManager.sessions`; route the click directly through
-   `WikiReaderView.onWikiLinkHandler(for: store)` — the exact handler the in-wiki
-   chat transcript uses. `selectPage`/`selectSource`/`selectChat` load drafts
-   synchronously, so navigation is immediate.
-2. **Cross-wiki (window closed):** A new deferred-navigation mechanism stashes
-   the `wiki://` URL + `openInNewTab` flag on `SessionManager.pendingWikiLinks`
-   keyed by wiki ID, then `openWindowBridge.openWiki(wikiID)` opens (or focuses)
-   the wiki window. `SessionManager.session(for:descriptor:)` transfers the
-   stash onto the new `WikiSession.pendingWikiLink`, and `RootView.onAppear`
-   consumes it after the store is ready — routing through the same
-   `onWikiLinkHandler`. The consume is deferred by one runloop tick so
-   `ContentView`'s first layout commits before the selection mutation travels
-   through `store` → `.onChange` → sidebar/detail.
-
-Also wired `renderContext` + `blobStore` into the Activity transcript's
-`ChatWebView` (from the item's wiki store) so ghost-link coloring and
-`wiki-blob://` image serving work the same as the in-wiki feed. Closed-wiki
-degrades gracefully (links render, no resolution-based styling).
-
-**Load-bearing invariant:** The `pendingWikiLink` slot holds raw `URL` + `Bool`
-(Foundation types only) — the Engine layer (`WikiSession`/`SessionManager`)
-never references the app-layer `WikiLinkRoute`. The routing decision stays in
-`RootView`, which calls the app-layer `WikiReaderView.onWikiLinkHandler`.
+**Fix.** Generalized the PDF tab system so byteless media embeds
+(YouTube/Vimeo/Spotify/SoundCloud/direct-remote) route through the same tabbed
+viewer, and deleted the bespoke stacked player+transcript layout. One file
+changed: `Sources/WikiFS/Sources/SourceDetailView.swift`.
 
 Changes:
-- `Sources/WikiFSEngine/WikiSession.swift` — new
-  `pendingWikiLink: (url: URL, openInNewTab: Bool)?` slot (set once / consume
-  once, same discipline as `pendingBlobVacuum`).
-- `Sources/WikiFSEngine/SessionManager.swift` — new
-  `pendingWikiLinks: [String: (url: URL, openInNewTab: Bool)]` stash map,
-  `stashPendingWikiLink(_:url:openInNewTab:)`, and
-  `consumePendingWikiLink(for:)`. `session(for:descriptor:)` transfers the
-  stash onto a new session.
-- `Sources/WikiFS/Window/RootView.swift` — `.onAppear { consumePendingWikiLink() }`
-  delivers the stashed link to `WikiReaderView.onWikiLinkHandler(for:)` after
-  a `Task.yield()` so `ContentView` has mounted.
-- `Sources/WikiFS/Queue/ActivityWindowView.swift` — `transcriptContent(for:)`
-  now passes `onWikiLink`, `renderContext`, and `blobStore` to `ChatWebView`.
-  New private helpers: `store(for:)`, `renderContextProvider(for:)`, and
-  `wikiLinkHandler(for:)` (the same-wiki vs. cross-wiki router).
-- `Tests/WikiFSTests/SessionManagerTests.swift` — 4 new tests covering
-  stash/consume semantics, nil-when-nothing-stashed, session-creation transfer,
-  and no-stash-leaves-nil.
+- `FileContentTab` — renamed `.markdown` → `.reader` (the tab shows the rendered
+  transcript *or* processed markdown; "Reader" matches the PDF-side label),
+  added `.video`. Kept `.pdf` and `.split`.
+- `availableTabs` (new computed[]) — replaces the boolean `showTabs`. A video
+  source gets `[.reader, .video]` plus `.split` only when a transcript
+  (`hasMarkdown`) exists; a PDF with extraction keeps `[.reader, .pdf, .split]`;
+  an un-extracted PDF / native markdown / binary source gets `[]` (bare content,
+  no picker). `showTabs` is now `!availableTabs.isEmpty`.
+- `contentArea` — the `if isBytelessEmbedWithPlayer … embedContent(…)` branch is
+  gone; video sources fall into `showTabs || isBytelessEmbedWithPlayer` →
+  `tabbedContent` (same path as PDF+extraction). PDF-only / native-markdown /
+  binary branches untouched.
+- `tabbedContent` — `.reader` shows the transcript reader (or
+  `embedEmptyReaderContent` when a byteless embed has no transcript yet);
+  `.video` shows `videoPlayerContent`; `.pdf`/`.split` unchanged.
+- `videoPlayerContent` (new) — wraps `MediaEmbedPlayerView` (unchanged,
+  reusable) as a full-pane tab body, with a `ContentUnavailableView` fallback
+  when the embed target can't resolve. Replaces the deleted
+  `embedContent(target:)`.
+- `embedEmptyReaderContent` (new) — the calm "No Transcript Available"
+  placeholder that fills the Reader tab for a video with no captions, so the
+  picker row is never blank.
+- `splitContent` — right pane now picks the source's visual companion: the PDF
+  for PDF sources, the video player for byteless embeds. Left pane (the reader)
+  identical.
+- `selectedTab` default + file-id reset → `.reader`; the Edit button's "switch
+  away from a no-editor tab" guard now also covers `.video`.
 
-**Build/Tests:** `make version prompts` ✓; `swift build` clean (342s);
-fast test tier **2577 tests / 218 suites pass** (4 new); `SessionManagerTests`
-12/12 pass.
+**Outline** works free — `contentAndOutline` keys off `currentMarkdownContent`,
+which is the transcript markdown for a video source, so `PageOutlineView`
+populates from the transcript's headings just as it does for PDF-derived
+markdown. No change needed there.
+
+**Why this is the right generalization:** the player lives where the PDFKit
+view lived and the transcript lives where processed-markdown lived. Everything
+else (toolbar, outline, zoom, find, extraction chip, provenance) stays identical
+because it already keyed off `headVersion` / `isPDF`, not the content layout.
+`MediaEmbedPlayerView` + `MediaEmbedPlayerHTML` are untouched (kept as the
+reusable WKWebView player component); only the wrapping layout changed.
+
+**Build/Tests:** `make version prompts && swift build` clean (449s);
+fast tier **2573 tests / 218 suites passed**; targeted
+`MediaEmbedPlayerTests|ExternalEmbedTests|YouTubeEmbedWebViewTests` 34/34 pass.
+
+PR: `unify-video-pdf-source-tabs` → `main` (NOT merged).
 
 ## 2026-07-18 — Fix missing activity ingestion details: thinking-level dropped in enrichment (branch `fix/missing-activity-details`)
 
