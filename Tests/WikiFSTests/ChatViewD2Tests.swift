@@ -232,7 +232,7 @@ struct ChatViewD2Tests {
     @Test func persistedChat_hasMessages_readFromStore() throws {
         let (model, store) = try tempModel()
         let chat = try store.createChat(kind: .edit, title: "Test Chat")
-        try store.appendChatMessages(chatID: chat.id, events: [
+        _ = try store.appendChatMessages(chatID: chat.id, events: [
             .userText("hello"), .assistantText("hi there")
         ])
         model.reloadChats()

@@ -229,7 +229,7 @@ struct SourcesTests {
         #expect(model.isSourceIngested(raw) == false)
         #expect(model.isSourceIngested(untouched) == false)
 
-        try store.appendLog(kind: .ingest, title: "files/by-id/\(raw.id.rawValue).pdf", note: nil)
+        _ = try store.appendLog(kind: .ingest, title: "files/by-id/\(raw.id.rawValue).pdf", note: nil)
         model.reloadFromStore()
 
         #expect(model.isSourceIngested(raw) == true)

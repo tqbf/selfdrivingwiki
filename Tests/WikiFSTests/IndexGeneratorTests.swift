@@ -179,7 +179,7 @@ struct IndexGeneratorTests {
         let store = try tempStore()
         // Add a source and append a processed-markdown version to create a chain.
         let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
-        try store.appendProcessedMarkdown(
+        _ = try store.appendProcessedMarkdown(
             sourceID: ingested.id, content: "v1", origin: .extraction, note: nil)
         let sources = try store.listAllSourcesOrderedByID()
         #expect(sources.count == 1)

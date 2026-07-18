@@ -208,7 +208,7 @@ struct ChatContinueD3Tests {
         let (model, store) = try tempModel()
         // Create a chat with two persisted messages (a prior turn).
         let chat = try store.createChat(kind: .edit, title: "Original Title")
-        try store.appendChatMessages(chatID: chat.id, events: [
+        _ = try store.appendChatMessages(chatID: chat.id, events: [
             .userText("first question"),
             .assistantText("first answer"),
         ])
@@ -225,7 +225,7 @@ struct ChatContinueD3Tests {
         #expect(firstPrompt.contains("follow up question"))
 
         // Append the new session's first events to the same row (seq continues).
-        try store.appendChatMessages(chatID: chat.id, events: [
+        _ = try store.appendChatMessages(chatID: chat.id, events: [
             .userText(firstPrompt),
             .assistantText("follow up answer"),
         ])
@@ -248,8 +248,8 @@ struct ChatContinueD3Tests {
         let (model, store) = try tempModel()
         let chat = try store.createChat(kind: .edit, title: "Older Chat")
         let other = try store.createChat(kind: .edit, title: "Newer Chat")
-        try store.appendChatMessages(chatID: chat.id, events: [.userText("a"), .assistantText("b")])
-        try store.appendChatMessages(chatID: other.id, events: [.userText("c"), .assistantText("d")])
+        _ = try store.appendChatMessages(chatID: chat.id, events: [.userText("a"), .assistantText("b")])
+        _ = try store.appendChatMessages(chatID: other.id, events: [.userText("c"), .assistantText("d")])
         model.reloadChats()
 
         // `other` was created later → it's on top initially.
@@ -257,7 +257,7 @@ struct ChatContinueD3Tests {
         #expect(initial.first?.id == other.id)
 
         // Continuing `chat` appends to it, bumping its updatedAt past `other`.
-        try store.appendChatMessages(chatID: chat.id, events: [.userText("continue")])
+        _ = try store.appendChatMessages(chatID: chat.id, events: [.userText("continue")])
         model.reloadChats()
 
         let after = model.chats.sorted { $0.updatedAt > $1.updatedAt }

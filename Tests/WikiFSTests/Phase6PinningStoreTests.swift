@@ -54,7 +54,7 @@ struct Phase6PinningStoreTests {
         let page = try store.createPage(title: "P")
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
 
-        try store.appendProcessedMarkdown(sourceID: source.id, content: "v1", origin: .extraction, note: nil)
+        _ = try store.appendProcessedMarkdown(sourceID: source.id, content: "v1", origin: .extraction, note: nil)
 
         try store.replaceLinks(from: page.id, parsedLinks: [
             .init(linkType: .source, target: source.id.rawValue, linkText: "doc")
@@ -69,7 +69,7 @@ struct Phase6PinningStoreTests {
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
 
         let v1 = try store.appendProcessedMarkdown(sourceID: source.id, content: "v1", origin: .extraction, note: nil)
-        try store.appendProcessedMarkdown(sourceID: source.id, content: "v2", origin: .extraction, note: nil)
+        _ = try store.appendProcessedMarkdown(sourceID: source.id, content: "v2", origin: .extraction, note: nil)
 
         // A cite @v1, a cite @v2, and an embed @v1 — three distinct edges under
         // source_links_edge (from, to, role, COALESCE(pin, '')).

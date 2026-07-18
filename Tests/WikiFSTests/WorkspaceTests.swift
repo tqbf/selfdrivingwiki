@@ -97,7 +97,7 @@ struct WorkspaceTests {
             workspaceID: wsID, pageID: page.id, title: "FF Page", body: "workspace v2")
 
         // Merge (main hasn't moved → fast-forward).
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
 
         // Main now has the workspace's body.
         let mainPage = try store.getPage(id: page.id)
@@ -129,7 +129,7 @@ struct WorkspaceTests {
             expectedHeadVersionID: mainHead)
 
         // Merge should park as conflicted (no throw — parks and returns).
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
 
         let summary = try store.workspaceSummary(id: wsID)
         #expect(summary?.status == .conflicted)
@@ -183,7 +183,7 @@ struct WorkspaceTests {
         }
 
         // Merge — should mint the pages row + root version from the staged blob.
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
 
         // Now the page exists on main with the staged body.
         let pageAfter = try store.getPage(id: newPageID)
@@ -214,7 +214,7 @@ struct WorkspaceTests {
             workspaceID: wsID, pageID: page2.id, title: "Page Two", body: "ws v2")
 
         // Merge — both should fast-forward.
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
 
         let p1 = try store.getPage(id: page1.id)
         let p2 = try store.getPage(id: page2.id)
@@ -248,7 +248,7 @@ struct WorkspaceTests {
             expectedHeadVersionID: mainHead)
 
         // Merge — should diff3 cleanly (different regions).
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
 
         let merged = try store.getPage(id: page.id)
         #expect(merged.bodyMarkdown.contains("ws-line1"))
@@ -280,7 +280,7 @@ struct WorkspaceTests {
             expectedHeadVersionID: mainHead)
 
         // Merge — should conflict (same line, different change).
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
 
         let summary = try store.workspaceSummary(id: wsID)
         #expect(summary?.status == .conflicted)
@@ -309,7 +309,7 @@ struct WorkspaceTests {
             body: "main-added\nline1\nline2",
             expectedHeadVersionID: mainHead)
 
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
 
         // The merge version should have two parents.
         let history = try store.pageVersionHistory(pageID: page.id)
@@ -333,7 +333,7 @@ struct WorkspaceTests {
             body: "ingest1-line1\nline2\nline3")
 
         // Merge ingestion 1 (fast-forward — main hasn't moved).
-        try store.workspaceMerge(workspaceID: ws1)
+        _ = try store.workspaceMerge(workspaceID: ws1)
 
         // Ingestion 2: touches line3 (different region from ingest1).
         let ws2 = try store.createWorkspace(name: "ingest2", activityID: nil)
@@ -342,7 +342,7 @@ struct WorkspaceTests {
             body: "ingest1-line1\nline2\ningest2-line3")
 
         // Merge ingestion 2 (main moved since base → diff3).
-        try store.workspaceMerge(workspaceID: ws2)
+        _ = try store.workspaceMerge(workspaceID: ws2)
 
         let merged = try store.getPage(id: page.id)
         #expect(merged.bodyMarkdown.contains("ingest1-line1"))
@@ -408,7 +408,7 @@ struct WorkspaceTests {
             expectedHeadVersionID: mainHead)
 
         // Merge → parks as conflicted.
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
 
         // Conflicts should be persisted and queryable.
         let conflicts = try store.workspaceConflicts(workspaceID: wsID)
@@ -439,7 +439,7 @@ struct WorkspaceTests {
             expectedHeadVersionID: mainHead)
 
         // Merge → parks.
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
         #expect(try store.workspaceSummary(id: wsID)?.status == .conflicted)
 
         // Resolve the conflict with a hand-merged body.
@@ -482,7 +482,7 @@ struct WorkspaceTests {
             pageID: page1.id, title: "Page One", body: "line1\nmain-line2",
             expectedHeadVersionID: mainHead1)
 
-        try store.workspaceMerge(workspaceID: ws1)
+        _ = try store.workspaceMerge(workspaceID: ws1)
         #expect(try store.workspaceSummary(id: ws1)?.status == .conflicted)
 
         // Workspace 2: touches a DIFFERENT page (page2, no conflict).
@@ -491,7 +491,7 @@ struct WorkspaceTests {
             workspaceID: ws2, pageID: page2.id, title: "Page Two", body: "lineA\nws2-lineB")
 
         // Merge ws2 — should succeed even though ws1 is parked.
-        try store.workspaceMerge(workspaceID: ws2)
+        _ = try store.workspaceMerge(workspaceID: ws2)
         #expect(try store.workspaceSummary(id: ws2)?.status == .merged)
 
         let merged = try store.getPage(id: page2.id)

@@ -51,7 +51,7 @@ struct IngestIsolationTests {
         #expect(headVersion == originalHead)
 
         // Merge brings the workspace's changes to main.
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
 
         // Now main has the workspace's body.
         let mergedPage = try store.getPage(id: page.id)
@@ -84,7 +84,7 @@ struct IngestIsolationTests {
         #expect(wsBody == "new content")
 
         // Merge mints the pages row + root version.
-        try store.workspaceMerge(workspaceID: wsID)
+        _ = try store.workspaceMerge(workspaceID: wsID)
 
         // Now the page exists on main with the staged body.
         let mainPage = try store.getPage(id: newPageID)
