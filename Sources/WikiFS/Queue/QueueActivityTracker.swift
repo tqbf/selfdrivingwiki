@@ -502,15 +502,99 @@ enum UsageFormatter {
         return String(format: "%@%.2f%@", symbol, amount, suffix)
     }
 
-    /// A compact one-line summary: "12.4K in · 3.2K out · $0.34". Omits the
-    /// cost segment when nil/zero. Uses middle-dot separator (macOS convention).
-    static func summary(usage: SessionUsage) -> String {
+    /// Format a duration in milliseconds as a compact string: "42s", "1m 3s",
+    /// "3m 0s". Below 1 second shows as "<1s" (avoiding "0s" for sub-second
+    /// runs). Over 1 hour shows "1h 3m".
+    static func duration(ms: Int?) -> String? {
+        guard let ms, ms > 0 else { return nil }
+        let secs = ms / 1000
+        if secs < 1 { return "<1s" }
+        let h = secs / 3600
+        let m = (secs % 3600) / 60
+        let s = secs % 60
+        if h > 0 { return "\(h)h \(m)m" }
+        if m > 0 { return "\(m)m \(s)s" }
+        return "\(s)s"
+    }
+
+    /// Format an epoch-millisecond timestamp as a compact wall-clock time:
+    /// "3:42 PM" (locale-aware). Returns nil when the timestamp is nil/zero.
+    static func startTime(ms: Int64?) -> String? {
+        guard let ms, ms > 0 else { return nil }
+        let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
+        let f = DateFormatter()
+        f.timeStyle = .short
+        f.locale = .current
+        return f.string(from: date)
+    }
+
+    /// A compact one-line summary of token usage with explicit units:
+    /// "12.4K tokens in · 3.2K tokens out". Omits nothing — this is the
+    /// token-only segment (no model/duration), used when the caller builds
+    /// its own composite line.
+    static func tokenSummary(usage: SessionUsage) -> String {
         var parts: [String] = []
-        parts.append("\(tokens(usage.inputTokens)) in")
-        parts.append("\(tokens(usage.outputTokens)) out")
+        parts.append("\(tokens(usage.inputTokens)) tokens in")
+        parts.append("\(tokens(usage.outputTokens)) tokens out")
+        if let thought = usage.thoughtTokens, thought > 0 {
+            parts.append("\(tokens(thought)) thought")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// A compact one-line summary: "12.4K tokens in · 3.2K tokens out · $0.34".
+    /// Omits the cost segment when nil/zero. Uses middle-dot separator (macOS
+    /// convention). Kept for backward compat (menu bar, simple callers).
+    static func summary(usage: SessionUsage) -> String {
+        var parts = [tokenSummary(usage: usage)]
         if let cost = cost(usage.cost, currency: usage.currency) {
             parts.append(cost)
         }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The full per-run summary line for the Activity window. Combines run
+    /// metadata (provider, model, start time, duration) with token usage:
+    ///
+    ///     "14:32 · 1m 3s · Claude · Sonnet 4 · 797 tokens in · 203 tokens out · 412 thought · $0.34"
+    ///
+    /// Segments are omitted when data is unavailable (nil model, no duration,
+    /// zero cost, etc.). The `startedAt`/`finishedAt` epoch-ms timestamps
+    /// come from the `QueueItem` — the activity tracker doesn't own them.
+    static func fullSummary(
+        usage: SessionUsage,
+        startedAt: Int64?,
+        finishedAt: Int64?
+    ) -> String {
+        var parts: [String] = []
+
+        // Start time first — anchors the run in time.
+        if (startedAt ?? 0) > 0 {
+            if let time = startTime(ms: startedAt) {
+                parts.append(time)
+            }
+            if let dur = duration(
+                ms: finishedAt.map { Int($0 - (startedAt ?? $0)) }
+            ) {
+                parts.append(dur)
+            }
+        }
+
+        // Provider (harness) + model — the "what ran it" context.
+        if let label = usage.providerLabel {
+            parts.append(label)
+        }
+        if let model = usage.modelId {
+            parts.append(model)
+        }
+
+        // Token usage with explicit units.
+        parts.append(tokenSummary(usage: usage))
+
+        if let cost = cost(usage.cost, currency: usage.currency) {
+            parts.append(cost)
+        }
+
         return parts.joined(separator: " · ")
     }
 

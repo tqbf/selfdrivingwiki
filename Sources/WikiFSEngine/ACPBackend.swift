@@ -1063,7 +1063,23 @@ public actor ACPBackend: AgentBackend {
     /// The returned struct is a snapshot: it reflects all `usage_update`
     /// notifications and `SessionPromptResponse.usage` values captured so far.
     func sessionUsage(for sessionHandle: SessionHandle) async -> SessionUsage? {
-        usageStates[sessionHandle.id]?.snapshot()
+        guard let snapshot = usageStates[sessionHandle.id]?.snapshot() else { return nil }
+        // Enrich with the session's current model id (the actual model used),
+        // if the agent advertised one. Provider label is attached by the
+        // launcher's capturePhaseUsage (it knows the configured provider).
+        let modelId = sessions[sessionHandle.id]?.modelsInfo?.currentModelId
+        return SessionUsage(
+            inputTokens: snapshot.inputTokens,
+            outputTokens: snapshot.outputTokens,
+            totalTokens: snapshot.totalTokens,
+            cachedReadTokens: snapshot.cachedReadTokens,
+            thoughtTokens: snapshot.thoughtTokens,
+            cost: snapshot.cost,
+            currency: snapshot.currency,
+            contextUsed: snapshot.contextUsed,
+            contextSize: snapshot.contextSize,
+            providerLabel: nil,
+            modelId: modelId)
     }
 
     /// The current context window usage for a session — `used` tokens consumed
@@ -1361,6 +1377,12 @@ public struct SessionUsage: Sendable {
     public let contextUsed: Int
     /// Total context window size (from `UsageUpdate.size`).
     public let contextSize: Int
+    /// The provider label (e.g. "Claude", "Hermes") for the run, if known.
+    /// Point-in-time (latest non-nil wins on merge), like cost/currency.
+    public let providerLabel: String?
+    /// The model id the session actually used (`ModelsInfo.currentModelId`),
+    /// if reported. Point-in-time — latest non-nil wins on merge.
+    public let modelId: String?
 
     public init(
         inputTokens: Int,
@@ -1371,7 +1393,9 @@ public struct SessionUsage: Sendable {
         cost: Double?,
         currency: String?,
         contextUsed: Int,
-        contextSize: Int
+        contextSize: Int,
+        providerLabel: String? = nil,
+        modelId: String? = nil
     ) {
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
@@ -1382,6 +1406,8 @@ public struct SessionUsage: Sendable {
         self.currency = currency
         self.contextUsed = contextUsed
         self.contextSize = contextSize
+        self.providerLabel = providerLabel
+        self.modelId = modelId
     }
 
     /// Merge two usage snapshots for run-total accumulation (#528 spike).
@@ -1405,7 +1431,9 @@ public struct SessionUsage: Sendable {
             cost: mergedCost,
             currency: new.currency ?? existing.currency,
             contextUsed: new.contextUsed,
-            contextSize: new.contextSize)
+            contextSize: new.contextSize,
+            providerLabel: new.providerLabel ?? existing.providerLabel,
+            modelId: new.modelId ?? existing.modelId)
     }
 }
 
