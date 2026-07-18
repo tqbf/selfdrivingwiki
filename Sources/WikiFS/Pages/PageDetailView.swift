@@ -35,6 +35,14 @@ struct PageDetailView: View {
     @Environment(FindModel.self) private var findModel
     @State private var findVersion = 0
 
+    /// The app-wide queue activity tracker — used to reflect an in-flight lint
+    /// on this page's "Lint" button (icon + disable + warning when tapped).
+    @Environment(QueueActivityTracker.self) private var activityTracker
+    /// Shown when the Lint button is tapped while a lint is already running on
+    /// this page (whole-wiki or page-level). Explains the running state rather
+    /// than silently enqueuing a duplicate.
+    @State private var isShowingLintActiveAlert = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header — title always visible; date + action buttons expandable.
@@ -76,17 +84,8 @@ struct PageDetailView: View {
                         Button("Edit",
                                systemImage: "pencil") { isEditing = true }
                             .help("Edit this page manually")
-                        if case .page(let id) = store.selection {
-                            Button("Lint", systemImage: "checkmark.seal") {
-                                Task {
-                                    try? await session.queueEngine.enqueue(QueueItemRequest(
-                                        queue: .ingestion,
-                                        wikiID: session.wikiID,
-                                        payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [id])
-                                    ))
-                                }
-                            }
-                            .help("Fix [[wiki-link]] syntax and run LLM lint on this page")
+                        if case .page = store.selection {
+                            lintButton
                         }
                         if case .page(let pageID) = store.selection {
                             Button("Show in List", systemImage: "sidebar.left") {
@@ -143,6 +142,11 @@ struct PageDetailView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
+        .alert("Lint Already Running", isPresented: $isShowingLintActiveAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("A lint job is already running on this page. It will appear in the Activity window when it finishes.")
+        }
         .onAppear { lastKnownActiveTabID = store.activeTabID }
         .onChange(of: store.selection) {
             // In-tab navigation (wiki-link click, sidebar navigation within the
@@ -193,6 +197,44 @@ struct PageDetailView: View {
             if let title = store.renameConflictingTitle {
                 Text("A page with the title “\(title)” already exists. Please choose a different name.")
             }
+        }
+    }
+
+    // MARK: - Lint button
+
+    /// The page-level "Lint" action button. Reflects an in-flight lint on this
+    /// page: when a lint (whole-wiki or page-level) is running, the button swaps
+    /// to a filled "Linting…" state, disables itself, and would warn if tapped
+    /// — though `.disabled` prevents the tap. The alert covers the keyboard /
+    /// accessibility path where the action could still fire.
+    @ViewBuilder
+    private var lintButton: some View {
+        if case .page(let id) = store.selection {
+            let pageIsLinting = activityTracker.isLinting(
+                pageID: id, wikiID: session.wikiID)
+            Button(pageIsLinting ? "Linting…" : "Lint",
+                   systemImage: pageIsLinting
+                   ? "checkmark.seal.fill"
+                   : "checkmark.seal") {
+                if pageIsLinting {
+                    // A lint is already active for this page (whole-wiki or
+                    // page-level) — warn instead of enqueuing a duplicate.
+                    isShowingLintActiveAlert = true
+                    DebugLog.ingest("Lint button: already running for page \(id) in wiki \(session.wikiID.prefix(8)); warning shown")
+                } else {
+                    Task {
+                        try? await session.queueEngine.enqueue(QueueItemRequest(
+                            queue: .ingestion,
+                            wikiID: session.wikiID,
+                            payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [id])
+                        ))
+                    }
+                }
+            }
+            .disabled(pageIsLinting)
+            .help(pageIsLinting
+                  ? "A lint is already running on this page"
+                  : "Fix [[wiki-link]] syntax and run LLM lint on this page")
         }
     }
 

@@ -64,11 +64,34 @@ final class QueueActivityTracker {
     /// `isIngesting` covers lint-only runs.
     private(set) var lintingItemIDs: Set<QueueItem.ID> = []
 
+    /// Page IDs currently being linted by a page-level lint (`.ingestion`
+    /// items with non-empty `lintPageIDs`). Page IDs are ULIDs — globally
+    /// unique across wikis — so this set is wiki-agnostic like
+    /// `extractingSourceIDs` / `ingestingSourceIDs`. Used to reflect the
+    /// running state on a page's "Lint" button.
+    private(set) var lintingPageIDs: Set<PageID> = []
+
+    /// Wiki IDs with an active whole-wiki lint (`.ingestion` items with
+    /// `lintPageIDs == []`). A whole-wiki lint covers every page in that
+    /// wiki, so every page-detail "Lint" button in that wiki should reflect
+    /// the running state. Wiki-scoped (not page-scoped) so a whole-wiki
+    /// lint on one wiki doesn't mark another wiki's pages as linting.
+    private(set) var wholeWikiLintingWikiIDs: Set<String> = []
+
     /// True while any extraction is running. Drives the sidebar spinner.
     var isExtracting: Bool { !extractingSourceIDs.isEmpty }
 
     /// True while any ingestion or lint is running.
     var isIngesting: Bool { !ingestingSourceIDs.isEmpty || !lintingItemIDs.isEmpty }
+
+    /// True if a lint job (page-level or whole-wiki) is actively processing
+    /// `pageID` in `wikiID`. A whole-wiki lint (`lintPageIDs == []`) covers
+    /// every page in its wiki. Used by `PageDetailView` to disable its Lint
+    /// button and reflect the running state. Page IDs are ULIDs (globally
+    /// unique), so the page-level branch needs no wiki check.
+    func isLinting(pageID: PageID, wikiID: String) -> Bool {
+        lintingPageIDs.contains(pageID) || wholeWikiLintingWikiIDs.contains(wikiID)
+    }
 
     /// Per-item typed agent events, for the Activity window's transcript view.
     /// Bounded — pruned only when items are pruned from history (not on
@@ -163,6 +186,8 @@ final class QueueActivityTracker {
         extractingSourceIDs = []
         ingestingSourceIDs = []
         lintingItemIDs = []
+        lintingPageIDs = []
+        wholeWikiLintingWikiIDs = []
         extractionLog = ""
         extractionPID = nil
         currentExtractionItemID = nil
@@ -315,9 +340,18 @@ final class QueueActivityTracker {
                 currentExtractionItemID = item.id
                 progressLogs[item.id] = ""
             case .ingestion:
-                if item.payload.lintPageIDs != nil {
+                if let pageIDs = item.payload.lintPageIDs {
                     // Lint item — track separately (empty sourceIDs).
                     lintingItemIDs.insert(item.id)
+                    if pageIDs.isEmpty {
+                        // Whole-wiki lint: covers every page in this wiki.
+                        wholeWikiLintingWikiIDs.insert(item.wikiID)
+                        DebugLog.ingest("LintActivity: started whole-wiki lint for wiki \(item.wikiID.prefix(8)) (item \(item.id.prefix(8)))")
+                    } else {
+                        // Page-level lint: track the specific pages.
+                        lintingPageIDs.formUnion(pageIDs)
+                        DebugLog.ingest("LintActivity: started page-level lint for \(pageIDs.count) page(s) in wiki \(item.wikiID.prefix(8)) (item \(item.id.prefix(8)))")
+                    }
                 } else {
                     ingestingSourceIDs.formUnion(sourceIDs)
                 }
@@ -385,6 +419,16 @@ final class QueueActivityTracker {
         }
         // Lint items are tracked separately — always remove on terminal state.
         lintingItemIDs.remove(item.id)
+        if let pageIDs = item.payload.lintPageIDs {
+            if pageIDs.isEmpty {
+                // Whole-wiki lint. Safe to remove by wiki ID: the `.ingest`
+                // lane limit is 1 per session, so at most one whole-wiki lint
+                // runs per wiki at a time — this item was the only one.
+                wholeWikiLintingWikiIDs.remove(item.wikiID)
+            } else {
+                for pageID in pageIDs { lintingPageIDs.remove(pageID) }
+            }
+        }
         if currentExtractionItemID == item.id {
             currentExtractionItemID = nil
         }
