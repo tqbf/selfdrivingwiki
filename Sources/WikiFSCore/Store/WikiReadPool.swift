@@ -4,7 +4,7 @@ import Foundation
 /// reads that should not run on the main-actor write store (debounced search,
 /// bulk existence checks, future projection-style reads).
 ///
-/// GRDB's `DatabaseQueue` (used by `GRDBWikiStore`) serializes all reads/writes
+/// GRDB's `DatabasePool` (used by `GRDBWikiStore`) serializes all reads/writes
 /// through one dispatch queue. A single store instance therefore cannot run a
 /// concurrent off-main read alongside a main-actor write — this pool holds
 /// several read-only stores so debounced search never contends with the UI.
@@ -12,8 +12,8 @@ import Foundation
 /// - Each pooled store is opened via `GRDBWikiStore(readOnlyURL:)` —
 ///   `PRAGMA query_only=ON`, no migrations — so a pool member can never write
 ///   or author schema.
-/// - Each pooled store owns its own `DatabaseQueue`, so pooled readers can
-///   never alias the writer's connection.
+/// - Each pooled store owns its own `DatabasePool` (separate pool of reader
+///   connections), so pooled readers can never alias the writer's connection.
 /// - WAL gives every read a consistent snapshot concurrent with any writer.
 ///
 /// Connections open lazily on first use — constructing a pool is free and

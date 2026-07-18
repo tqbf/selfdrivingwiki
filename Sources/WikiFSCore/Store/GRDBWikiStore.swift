@@ -18,7 +18,7 @@ internal import GRDB
 /// The default is still `SQLiteWikiStore`; this store is opt-in.
 ///
 /// **Architecture** (per `plans/grdb-adoption.md`):
-/// - `DatabaseQueue` serializes all reads/writes through one dispatch queue —
+/// - `DatabasePool` serializes all reads/writes through one dispatch queue —
 ///   no external `NSRecursiveLock` needed (replaces `SQLiteWikiStore`'s lock).
 /// - `DatabaseMigrator` provides named, idempotent, auto-tracked migrations
 ///   (via the `grdb_migrations` table), replacing the 37-version `user_version`
@@ -85,7 +85,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// The serial GRDB connection. All reads and writes are serialized through
     /// GRDB's internal dispatch queue — no external `NSRecursiveLock` needed
     /// (the equivalent of `SQLiteWikiStore.lock`).
-    private let dbQueue: DatabaseQueue
+    private let dbQueue: DatabasePool
+    /// True for read-only connections (File Provider). `checkpoint()` skips on
+    /// read-only connections (DatabasePool with readonly=true).
+    private let isReadOnly: Bool
 
     /// Guards against double-close (`close()` then `deinit`).
     private let closeLock = NSLock()
@@ -139,7 +142,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
 
         do {
-            dbQueue = try DatabaseQueue(path: databaseURL.path, configuration: config)
+            dbQueue = try DatabasePool(path: databaseURL.path, configuration: config)
+            isReadOnly = false
             // Mirrors `SQLiteWikiStore.bootstrapSchema`: a FRESH db (user_version
             // 0) gets the consolidated current schema in one block; an EXISTING db
             // at any version runs the proven 37-step `if version < N` ladder
@@ -202,6 +206,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         var config = Configuration()
         config.foreignKeysEnabled = true
         config.busyMode = .timeout(5)
+        // `readonly = true` opens the connection with SQLITE_OPEN_READONLY —
+        // DatabasePool needs this (not just PRAGMA query_only) because
+        // DatabasePool's pool setup writes WAL metadata (BEGIN IMMEDIATE)
+        // which fails on a read-only file.
+        config.readonly = true
 
         config.prepareDatabase { db in
             try db.execute(sql: "PRAGMA query_only=ON")
@@ -219,7 +228,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
 
         do {
-            dbQueue = try DatabaseQueue(path: readOnlyURL.path, configuration: config)
+            dbQueue = try DatabasePool(path: readOnlyURL.path, configuration: config)
+            isReadOnly = true
             // Do NOT run migrations on a read-only connection — the File
             // Provider must never author schema.
         } catch {
@@ -248,6 +258,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// intermittent `SQLITE_ERROR` under CI load — #223, #234). Best-effort:
     /// errors are logged, not thrown.
     private func checkpoint() {
+        // Skip checkpoint on read-only connections (DatabasePool with readonly=true).
+        guard !isReadOnly else { return }
         do {
             try dbQueue.writeWithoutTransaction { db in
                 if let row = try Row.fetchOne(db, sql: "PRAGMA wal_checkpoint(TRUNCATE)") {
@@ -291,15 +303,17 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     ) throws -> T {
         var pending: ResourceChangeEvent?
         var result: T!
-        // Use `writeWithoutTransaction` + `db.inSavepoint` (instead of
-        // `dbQueue.write`) so that `mutate` is **reentrant**: when called from
-        // inside `withTransaction` (which already opened a transaction),
-        // `inSavepoint` nests as a SAVEPOINT instead of failing with "cannot
+        // Use `unsafeReentrantWrite` + `db.inSavepoint` (instead of
+        // `dbQueue.write`) so that `mutate` is **truly reentrant**: when called
+        // from inside `withTransaction` (which already opened a write on the
+        // serial queue), `unsafeReentrantWrite` runs inline (GRDB Case 2) and
+        // `inSavepoint` nests as a SAVEPOINT — no reentrance trap, no "cannot
         // start a transaction within a transaction". When called standalone
-        // (the common case), `inSavepoint` opens its own IMMEDIATE transaction
-        // — identical to `dbQueue.write`. The event is computed inside the
-        // transaction (committed state) and emitted after the write returns.
-        try dbQueue.writeWithoutTransaction { db in
+        // (the common case), `unsafeReentrantWrite` dispatches normally (GRDB
+        // Case 1) and `inSavepoint` opens its own IMMEDIATE transaction. The
+        // event is computed inside the transaction (committed state) and
+        // emitted after the write returns.
+        try dbQueue.unsafeReentrantWrite { db in
             try db.inSavepoint {
                 let r = try body(db)
                 result = r
@@ -2911,7 +2925,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // resolvers used here are the `*Locked` variants that take the
             // in-transaction `db` — the public `resolveTitleToID` /
             // `resolveSourceByName` open their own `dbQueue.read`, which would
-            // re-enter the DatabaseQueue's serial queue and hit GRDB's fatal
+            // re-enter the DatabasePool's serial queue and hit GRDB's fatal
             // "Database methods are not reentrant".
             try db.execute(sql: "DELETE FROM page_links WHERE from_page_id = ?;",
                            arguments: [pageID.rawValue])
@@ -4271,13 +4285,18 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             FROM workspace_refs WHERE workspace_id = ?;
             """, arguments: [workspaceID])
             return rows.map { row in
-                WorkspaceRef(
+                // blob_hash and title are nullable (INSERTs use NULL for refs
+                // without a blob/title). Decode as String? explicitly so GRDB
+                // doesn't try to force-decode NULL → String.
+                let blobHash: String? = row["blob_hash"]
+                let title: String? = row["title"]
+                return WorkspaceRef(
                     workspaceID: row["workspace_id"],
                     ownerID: PageID(rawValue: row["owner_id"]),
                     baseVersionID: row["base_version_id"],
                     versionID: row["version_id"],
-                    blobHash: row["blob_hash"],
-                    title: row["title"],
+                    blobHash: blobHash,
+                    title: title,
                     updatedAt: Date(timeIntervalSince1970: row["updated_at"]))
             }
         }
@@ -4460,7 +4479,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     let base: String? = ref["base_version_id"]
                     let wsVersion: String? = ref["version_id"]
                     let blobHash: String? = ref["blob_hash"]
-                    let title: String = ref["title"]
+                    // title is nullable (staging INSERTs use NULL).
+                    let title: String? = ref["title"]
                     let pageID = PageID(rawValue: pageIDStr)
 
                     // Resolve main head.
@@ -4479,7 +4499,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                             conflicts.append((pageIDStr, nil, stagedHash, mainHead))
                             continue
                         }
-                        try self.mintCreatedPage(db: db, pageID: pageID, blobHash: stagedHash, title: title)
+                        try self.mintCreatedPage(db: db, pageID: pageID, blobHash: stagedHash, title: title ?? "")
                         mergedPageIDs.append(pageIDStr)
                     } else if base == nil {
                         // Old-style created page (pre-v35: version_id set, base nil).
@@ -4833,11 +4853,27 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             count > 0 ? self.localEvent(.page, id: "workspace-reap", change: .updated) : nil
         }) { db in
             let cutoff = Date().timeIntervalSince1970 - ttl
-            try db.execute(sql: """
-            UPDATE workspaces SET status = 'abandoned', updated_at = ?
-            WHERE status = 'open' AND updated_at < ?;
-            """, arguments: [Date().timeIntervalSince1970, cutoff])
-            return db.changesCount
+            // Select stale open workspace IDs.
+            let staleIDs = try String.fetchAll(
+                db,
+                sql: "SELECT id FROM workspaces WHERE status = 'open' AND updated_at < ?;",
+                arguments: [cutoff]
+            )
+            // Delete refs + conflicts, then mark abandoned (mirrors
+            // SQLiteWikiStore.reapStaleWorkspaces — the refs are the staging
+            // rows, which must not survive a reap).
+            let now = Date().timeIntervalSince1970
+            for id in staleIDs {
+                try db.execute(sql: "DELETE FROM workspace_refs WHERE workspace_id = ?;",
+                               arguments: [id])
+                try db.execute(sql: "DELETE FROM workspace_conflicts WHERE workspace_id = ?;",
+                               arguments: [id])
+                try db.execute(
+                    sql: "UPDATE workspaces SET status = 'abandoned', updated_at = ? WHERE id = ?;",
+                    arguments: [now, id]
+                )
+            }
+            return staleIDs.count
         }
     }
 
@@ -6765,7 +6801,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
     private func rollbackSourceContentBody(db: Database, sourceID: PageID, versionID: PageID) throws {
-        try db.inTransaction(.immediate) {
+        // Use inSavepoint (not inTransaction) — this method is called from inside
+        // mutate()'s inSavepoint, so inSavepoint nests as a SAVEPOINT instead
+        // of failing with "cannot start a transaction within a transaction".
+        try db.inSavepoint {
             guard let target = try Row.fetchOne(
                 db,
                 sql: """
@@ -7020,8 +7059,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// Internal (not private) so tests can exercise nesting directly.
     func withTransaction<T>(_ body: () throws -> T) throws -> T {
         var result: T!
-        try dbQueue.writeWithoutTransaction { db in
-            try db.inTransaction(.immediate) {
+        // `unsafeReentrantWrite` (not `writeWithoutTransaction`) so a `mutate`
+        // call inside `body` re-enters inline (GRDB Case 2) instead of tripping
+        // DatabasePool's "not reentrant" fatal error. `inSavepoint` nests as a
+        // SAVEPOINT inside the outer write.
+        try dbQueue.unsafeReentrantWrite { db in
+            try db.inSavepoint {
                 result = try body()
                 return .commit
             }
@@ -7136,24 +7179,81 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         return (pages, sources)
     }
 
-    // MARK: - Launch search-index heal
+    // MARK: - Launch search-index self-heal
 
-    /// On writable open, rebuild any FTS5 index whose term b-tree is empty.
-    /// Mirrors the FTS step of `SQLiteWikiStore.ensureSearchIndexesPopulated`:
-    /// a bare `count(*)` on an *external-content* FTS5 table reads the CONTENT
-    /// table, so `count(*) FROM pages_fts` always equals `count(*) FROM pages`
-    /// — a rowid-count health check can NEVER detect "never built" (the ranking
-    /// bug: pages_fts reported 232/232 but had ZERO indexed terms → MATCH
-    /// returned nothing → search degraded to semantic-only). The `_idx` shadow
-    /// segment b-tree holds the real terms; 0 there means "never built" → run
-    /// the FTS5 'rebuild' command. Idempotent + near-zero cost when healthy.
+    /// Self-heal search indexes on every writable open. Idempotent + near-zero
+    /// cost when nothing is missing, so search "just works" without a manual
+    /// reindex. NOT run by the read-only File Provider connection. Mirrors
+    /// `SQLiteWikiStore.ensureSearchIndexesPopulated`.
+    ///
+    /// Steps:
+    /// 0. Reconcile the stored embedder identifier against the active one.
+    /// 0a. Ensure the byteless-source dedup UNIQUE partial index exists (for
+    ///     pre-v20 DBs that predate Phase 3b).
+    /// 1. Seed a v1 processed-markdown version for markdown-native sources
+    ///    that have none, so their body is searchable.
+    /// 2. Backfill the `source_search` / `chat_search` sidecars for rows
+    ///    lacking one.
+    /// 3. Rebuild an FTS index only when its `_idx` shadow term b-tree is empty.
+    ///    NOTE: `count(*) FROM pages_fts` on an external-content table is
+    ///    optimized to read the CONTENT table, so it always equals `pages`' row
+    ///    count — a rowid-count health check can NEVER detect an empty index
+    ///    (the launch ranking bug). The `_idx` b-tree holds the actual terms; 0
+    ///    there means "never built" → rebuild.
     private func ensureSearchIndexesPopulated() {
+        // 0. Reconcile embedder (app-gated internally).
+        ensureEmbedderConsistency()
+
+        // Steps 0a, 2, 2b, 3 are pure SQL → one write block. Each operation
+        // catches its own errors (best-effort, idempotent) so the write block
+        // itself does not throw.
         dbQueue.writeWithoutTransaction { db in
+            // 0a. Byteless-source dedup index (idempotent; no-op once it exists).
+            do {
+                try db.execute(sql: """
+                CREATE UNIQUE INDEX IF NOT EXISTS source_versions_byteless_eid
+                    ON source_versions(external_identity) WHERE blob_hash IS NULL;
+                """)
+            } catch {
+                DebugLog.store("ensureSearchIndexes: byteless index create failed — \(error)")
+            }
+
+            // 2. Backfill source_search for sources lacking a row (PDFs/binaries
+            //    → name-only). The AFTER-INSERT trigger on source_search keeps
+            //    sources_fts in sync.
+            do {
+                try db.execute(sql: """
+                INSERT OR IGNORE INTO source_search (source_id, title, body)
+                SELECT s.id, COALESCE(s.display_name, s.filename),
+                       \(Self.smvHeadBodySQL)
+                FROM sources s;
+                """)
+            } catch {
+                DebugLog.store("ensureSearchIndexes: source_search backfill failed — \(error)")
+            }
+
+            // 2b. Backfill chat_search for chats lacking a row (created before v28,
+            //     or whose append predates the sidecar). One row per chat:
+            //     title + concatenated message text.
+            do {
+                try db.execute(sql: """
+                INSERT OR IGNORE INTO chat_search (chat_id, title, body)
+                SELECT c.id, c.title,
+                       COALESCE((SELECT GROUP_CONCAT(m.text, '\n')
+                                 FROM chat_messages m WHERE m.chat_id = c.id), '')
+                FROM chats c
+                WHERE c.id NOT IN (SELECT chat_id FROM chat_search);
+                """)
+            } catch {
+                DebugLog.store("ensureSearchIndexes: chat_search backfill failed — \(error)")
+            }
+
+            // 3. Rebuild an FTS index only when its term index is empty.
             for (fts, content) in [("pages_fts", "pages"),
                                    ("sources_fts", "sources"),
                                    ("chats_fts", "chats")] {
-                let contentRows = (try? Int.fetchOne(db, sql: "SELECT count(*) FROM \(content);")) ?? 0
-                guard contentRows > 0, ftsIndexRowCount(fts, in: db) == 0 else { continue }
+                guard rowCount(content, on: db) > 0,
+                      ftsIndexRowCount(fts, on: db) == 0 else { continue }
                 do {
                     try db.execute(sql: "INSERT INTO \(fts)(\(fts)) VALUES ('rebuild');")
                     DebugLog.store("ensureSearchIndexes: rebuilt empty \(fts) term index")
@@ -7162,13 +7262,67 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 }
             }
         }
+
+        // 1. Seed markdown-native sources lacking a version. Done outside the
+        //    write block because `appendProcessedMarkdown` opens its own
+        //    transaction (via `mutate`) and fires post-commit re-embed/event work.
+        _ = seedNativeMarkdownSources()
     }
 
-    /// Row count of an FTS5 table's `_idx` shadow segment b-tree. NOT the
-    /// distinct-term count (that's `fts5vocab`), but a reliable emptiness probe:
-    /// `_idx == 0` iff the index was never built. Mirrors
+    /// Seed the first processed-markdown version for markdown-native sources that
+    /// lack one, by decoding their raw bytes as UTF-8 — the same lazy seeding the
+    /// UI used to do on first view. Returns the count seeded. Best-effort.
+    /// Mirrors `SQLiteWikiStore.seedNativeMarkdownSources`.
+    private func seedNativeMarkdownSources() -> Int {
+        // Collect IDs first (read), then seed each outside any write block so
+        // `appendProcessedMarkdown`'s own `mutate` transaction + post-commit work
+        // (re-embed, event emit) run cleanly.
+        let ids: [PageID]
+        do {
+            ids = try dbQueue.read { db in
+                try String.fetchAll(
+                    db,
+                    sql: """
+                    SELECT s.id FROM sources s
+                    WHERE s.mime_type LIKE 'text/%'
+                      AND NOT EXISTS (SELECT 1 FROM source_markdown_versions smv
+                                      WHERE smv.file_id = s.id);
+                    """
+                ).map { PageID(rawValue: $0) }
+            }
+        } catch {
+            DebugLog.store("seedNativeMarkdownSources: id query failed — \(error)")
+            return 0
+        }
+        var seeded = 0
+        for id in ids {
+            guard let bytes = try? sourceContent(id: id),
+                  let text = String(data: bytes, encoding: .utf8) else { continue }
+            _ = try? appendProcessedMarkdown(
+                sourceID: id, content: text, origin: .source, note: nil)
+            seeded += 1
+        }
+        if seeded > 0 {
+            DebugLog.store("seedNativeMarkdownSources: seeded \(seeded) source(s)")
+        }
+        return seeded
+    }
+
+    /// `SELECT count(*) FROM <table>` as an Int (0 on any error), on a given
+    /// `Database` handle. `<table>` is interpolated from trusted internal
+    /// callers only — never user input. Mirrors `SQLiteWikiStore.rowCount`.
+    private func rowCount(_ table: String, on db: Database) -> Int {
+        (try? Int.fetchOne(db, sql: "SELECT count(*) FROM \(table);")) ?? 0
+    }
+
+    /// Row count of an FTS5 table's `_idx` shadow segment b-tree. This is NOT
+    /// the distinct-term count (that's the `fts5vocab` virtual table) — but it
+    /// IS a reliable "has the index ever been built?" probe: 0 means the index
+    /// exists as a table but has never been populated (no terms indexed), which
+    /// is exactly the launch-ranking-bug state `ensureSearchIndexesPopulated`
+    /// must detect and rebuild. On a healthy index it is non-zero. Mirrors
     /// `SQLiteWikiStore.ftsIndexRowCount`.
-    private func ftsIndexRowCount(_ table: String, in db: Database) -> Int {
+    private func ftsIndexRowCount(_ table: String, on db: Database) -> Int {
         (try? Int.fetchOne(db, sql: "SELECT count(*) FROM \(table)_idx;")) ?? 0
     }
 
