@@ -143,9 +143,31 @@ public actor ACPBackend: AgentBackend {
         /// time. If not supported, `closeSession()` degrades to a no-op (the
         /// session context is freed when the process eventually terminates).
         let canCloseSession: Bool
+        /// Phase 2: whether the agent advertised `sessionCapabilities.resume`
+        /// (fastest crash recovery — restores the session without history replay).
+        let canResume: Bool
+        /// Phase 2: whether the agent advertised `loadSession: true`
+        /// (slower fallback — replays history as notifications).
+        let canLoadSession: Bool
+        /// Phase 2: whether the agent advertised `sessionCapabilities.list`
+        /// (used for the optional health-check ping in death detection).
+        let canListSessions: Bool
+        /// Phase 2: set to false when the subprocess dies (sendPrompt error or
+        /// `kill(pid, 0) != 0`). When false, `resume()` spawns a new process.
+        var processIsAlive: Bool
     }
 
     private var warmProcess: WarmProcess?
+
+    /// Phase 2: the ACP `SessionId` of the last active session, tracked for
+    /// crash recovery. Set in `createSession()`, cleared in `closeSession()`
+    /// (intentional close — not a crash) and `cancel()` (full teardown).
+    /// `resume()` also sets this to the resumed session's ID.
+    private var resumableSessionId: SessionId?
+
+    /// Phase 2: the last `onExit` callback from `start()`/`createSession()`,
+    /// saved so `resume()` can re-bind it on a new subprocess.
+    private var savedOnExit: (@Sendable (Int) -> Void)?
 
     /// The injected permission policy (yolo vs alwaysAsk). Defaults to `yolo`
     /// — the safe default per the design doc's caveat (always-ask enforcement
@@ -340,7 +362,12 @@ public actor ACPBackend: AgentBackend {
         // Check capabilities for session/close support (Phase 1). If the agent
         // doesn't advertise sessionCapabilities.close, closeSession() degrades
         // to a no-op — the session context is freed when the process terminates.
-        let canCloseSession = initResponse.agentCapabilities.sessionCapabilities?.close != nil
+        // Phase 2: also capture resume / loadSession / list for crash recovery.
+        let sessionCaps = initResponse.agentCapabilities.sessionCapabilities
+        let canCloseSession = sessionCaps?.close != nil
+        let canResume = sessionCaps?.resume != nil
+        let canLoadSession = initResponse.agentCapabilities.loadSession == true
+        let canListSessions = sessionCaps?.list != nil
 
         warmProcess = WarmProcess(
             client: client,
@@ -349,7 +376,11 @@ public actor ACPBackend: AgentBackend {
             notificationFanout: fanout,
             drainTask: drainTask,
             stderrTask: stderrTask,
-            canCloseSession: canCloseSession)
+            canCloseSession: canCloseSession,
+            canResume: canResume,
+            canLoadSession: canLoadSession,
+            canListSessions: canListSessions,
+            processIsAlive: true)
 
         // Wire onExit to the agent process termination. `Client.terminate()` is
         // the teardown; there's no direct terminationHandler on the SDK actor,
@@ -359,7 +390,7 @@ public actor ACPBackend: AgentBackend {
         // session — the last binding wins.
         permissionDelegate.bindOnExit(onExit)
 
-        DebugLog.agent("ACPBackend.startProcess: warm process ready canCloseSession=\(canCloseSession)") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.startProcess: warm process ready canCloseSession=\(canCloseSession) canResume=\(canResume) canLoadSession=\(canLoadSession)") // TEMP DEBUG
     }
 
     /// Create a new ACP session on an already-started (warm) subprocess.
@@ -452,6 +483,11 @@ public actor ACPBackend: AgentBackend {
         // that does NOT call finish() — the orchestrator owns finish()).
         permissionDelegate.bindOnExit(onExit)
 
+        // Phase 2: track the ACP session ID for crash recovery + save the
+        // onExit callback so resume() can re-bind it on a new subprocess.
+        resumableSessionId = sessionId
+        savedOnExit = onExit
+
         DebugLog.agent("ACPBackend.createSession: session \(sessionId.value) (handle \(sessionID)) ready") // TEMP DEBUG
         return SessionHandle(id: sessionID)
     }
@@ -492,6 +528,10 @@ public actor ACPBackend: AgentBackend {
             // finished continuation are safe no-ops, but this avoids redundant
             // cancelSession calls and confusing duplicate log lines).
             let completionFlag = TurnCompletionFlag()
+            // Phase 2: liveness flag — set when sendPrompt throws or the process
+            // is detected as dead via `kill(pid, 0)`. Read by the actor after
+            // the turn stream finishes to update `warmProcess.processIsAlive`.
+            let processHealth = ProcessHealthFlag()
             let turnStartedAt = fanout.activityTimestamp
 
             // --- Watchdog task (cause 5 fix, plans/acp-stall-recovery.md §1a) ---
@@ -499,10 +539,16 @@ public actor ACPBackend: AgentBackend {
             // notification has arrived for `idleTimeout`, or the total duration
             // exceeds `ceilingTimeout`, fail the turn: cancelSession best-effort,
             // synthesize turn-end events, finish the continuation.
-            let watchdogTask = Task { [client, sessionId, fanout, completionFlag] in
+            let watchdogTask = Task { [client, sessionId, fanout, completionFlag, processHealth] in
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(pollInterval))
                     if Task.isCancelled { return }
+                    // Phase 2: if the prompt task already detected process death
+                    // (sendPrompt threw), short-circuit — no need to evaluate
+                    // liveness or send cancelSession to a dead process.
+                    if processHealth.died {
+                        return
+                    }
                     let decision = TurnLivenessPolicy.evaluate(
                         now: Date(),
                         promptDone: completionFlag.isDone,
@@ -515,6 +561,22 @@ public actor ACPBackend: AgentBackend {
                     case .healthy:
                         continue
                     case .stalled(let idle):
+                        // Phase 2: before declaring a stall, check if the
+                        // subprocess actually died (issue #338 — silent death
+                        // looks like a stall because no notifications arrive).
+                        // `kill(pid, 0)` is a zero-signal liveness probe.
+                        if let pid = await client.processIdentifier(), pid > 0 {
+                            if kill(pid, 0) != 0 {
+                                DebugLog.agent("ACPBackend: process dead (kill(\(pid), 0) != 0) — marking for resume") // TEMP DEBUG
+                                processHealth.markDied()
+                                completionFlag.markDone()
+                                for event in Self.turnEndEvents(error: ACPBackendError.processDied) {
+                                    continuation.yield(event)
+                                }
+                                continuation.finish()
+                                return
+                            }
+                        }
                         DebugLog.agent("ACPBackend: TURN STALLED — idle \(Int(idle))s, recovering (cancelSession + turnEnd)") // TEMP DEBUG (existed; re-tagged)
                         completionFlag.markDone()
                         for event in Self.turnEndEvents(error: ACPBackendError.turnStalled(idleSeconds: idle)) {
@@ -542,7 +604,7 @@ public actor ACPBackend: AgentBackend {
             // stopReason), while notifications stream in via the fanout
             // subscription. The prompt task and watchdog are both cancelled on
             // consumer termination.
-            let promptTask = Task { [client, sessionId, fanout, completionFlag, promptText] in
+            let promptTask = Task { [client, sessionId, fanout, completionFlag, processHealth, promptText] in
                 // Subscribe to the session-lifetime fanout (NOT the SDK's
                 // `client.notifications` — that's single-consumer; re-acquiring
                 // it per turn was cause 6). Turns are serialized by the
@@ -581,6 +643,12 @@ public actor ACPBackend: AgentBackend {
                     // is just the fallout from cancelSession — skip it.
                     guard !completionFlag.isDone else { return }
                     completionFlag.markDone()
+                    // Phase 2: a sendPrompt error often means the subprocess
+                    // died (issue #338 — pipe broken / transport closed). Mark
+                    // the process health flag so the watchdog short-circuits,
+                    // and surface a .processDied error so the caller knows to
+                    // attempt resume().
+                    processHealth.markDied()
                     DebugLog.agent("ACPBackend: prompt failed: \(error.localizedDescription)") // TEMP DEBUG (existed; re-tagged)
                     for event in Self.turnEndEvents(error: error) {
                         continuation.yield(event)
@@ -604,14 +672,168 @@ public actor ACPBackend: AgentBackend {
         }
     }
 
+    /// Phase 2: Resume a session after subprocess death (issue #338). The
+    /// caller passes the ACP `SessionId.value` (a String, NOT our internal
+    /// `SessionHandle` UUID). Implementation:
+    ///
+    /// 1. If the warm process is still alive and has this session, return nil
+    ///    (no resume needed — the session is still active).
+    /// 2. Spawn a new subprocess via `startProcess()` (the old one died).
+    /// 3. If the agent supports `sessionCapabilities.resume`: call
+    ///    `client.resumeSession(sessionId:cwd:)` — restores the session without
+    ///    history replay (fastest).
+    /// 4. If resume is not supported but `loadSession` is: call
+    ///    `client.loadSession(sessionId:cwd:)` — replays history (slower but
+    ///    preserves context).
+    /// 5. If neither is supported: return nil — the caller falls back to
+    ///    `start()` (fresh session, no context, logged as context lost).
+    ///
+    /// On success, a new `ACPSession` record is created for the resumed
+    /// session (same ACP `SessionId`, new `SessionHandle`).
     public func resume(sessionID: String, profile: BackendProfile) async throws -> SessionHandle? {
-        // Phase 0 does NOT implement resume — matches the port's default. ACP
-        // *can* resume via session/load, but that's a later slice.
+        DebugLog.agent("ACPBackend.resume: sessionID=\(sessionID)") // TEMP DEBUG
+
+        // 1. If the warm process is alive and has this session, no resume needed.
+        if let warm = warmProcess, warm.processIsAlive {
+            // Check if this session is still active on the live process.
+            // If the process is alive and we have a session record, the session
+            // is still usable — no resume.
+            if sessions.values.contains(where: { $0.sessionId.value == sessionID }) {
+                DebugLog.agent("ACPBackend.resume: process alive + session active — no resume needed") // TEMP DEBUG
+                return nil
+            }
+        }
+
+        // 2. Mark the old warm process as dead (if not already) and clean it up.
+        // The old process's drain/fanout are dead; we need a fresh subprocess.
+        if let oldWarm = warmProcess {
+            DebugLog.agent("ACPBackend.resume: tearing down dead warm process") // TEMP DEBUG
+            oldWarm.drainTask.cancel()
+            oldWarm.stderrTask?.cancel()
+            oldWarm.notificationFanout.finish()
+            // Best-effort: try to terminate the old client (may already be dead).
+            await oldWarm.client.terminate()
+            warmProcess = nil
+        }
+
+        // 3. Spawn a new subprocess. startProcess() re-initializes +
+        //    re-authenticates. Re-bind the saved onExit callback if we have one.
+        let onExit: @Sendable (Int) -> Void = savedOnExit ?? { _ in }
+        try await startProcess(profile: profile, onExit: onExit)
+
+        guard let newWarm = warmProcess else {
+            DebugLog.agent("ACPBackend.resume: startProcess failed to create warm process") // TEMP DEBUG
+            return nil
+        }
+
+        let client = newWarm.client
+        let cwd = profile.scratchDirectory?.path
+            ?? Self.resolveSpawnConfig(from: profile)?.workingDirectory
+            ?? FileManager.default.currentDirectoryPath
+        let acpSessionId = SessionId(sessionID)
+
+        // 4. Attempt resume → load → give up (fallback chain).
+        if newWarm.canResume {
+            // Fastest path: resumeSession restores context without replay.
+            do {
+                DebugLog.agent("ACPBackend.resume: attempting resumeSession sessionId=\(sessionID) cwd=\(cwd)") // TEMP DEBUG
+                let response = try await client.resumeSession(
+                    sessionId: acpSessionId,
+                    cwd: cwd
+                )
+                DebugLog.agent("ACPBackend.resume: resumeSession succeeded models=\(response.models?.availableModels.count ?? 0)") // TEMP DEBUG
+                return registerResumedSession(
+                    acpSessionId: acpSessionId,
+                    warm: newWarm,
+                    modelsInfo: response.models
+                )
+            } catch {
+                // Resume failed (session GC'd, protocol error). Fall through to
+                // loadSession if supported.
+                DebugLog.agent("ACPBackend.resume: resumeSession failed: \(error.localizedDescription) — trying fallback") // TEMP DEBUG
+            }
+        }
+
+        if newWarm.canLoadSession {
+            // Slower path: loadSession replays history as notifications.
+            do {
+                DebugLog.agent("ACPBackend.resume: attempting loadSession sessionId=\(sessionID) cwd=\(cwd)") // TEMP DEBUG
+                let response = try await client.loadSession(
+                    sessionId: acpSessionId,
+                    cwd: cwd
+                )
+                DebugLog.agent("ACPBackend.resume: loadSession succeeded models=\(response.models?.availableModels.count ?? 0)") // TEMP DEBUG
+                // loadSession may return a new sessionId (some agents), or nil.
+                let resumedId = response.sessionId ?? acpSessionId
+                return registerResumedSession(
+                    acpSessionId: resumedId,
+                    warm: newWarm,
+                    modelsInfo: response.models
+                )
+            } catch {
+                DebugLog.agent("ACPBackend.resume: loadSession failed: \(error.localizedDescription) — giving up") // TEMP DEBUG
+            }
+        }
+
+        // 5. Neither resume nor load is supported (or both failed).
+        // Return nil — the caller falls back to start() (fresh session, no
+        // context). Log that context was lost so it's visible in Console.
+        DebugLog.agent("ACPBackend.resume: agent does not support resume or load — context lost, caller should use fresh start") // TEMP DEBUG
         return nil
+    }
+
+    /// Phase 2: Helper to register a resumed session in the `sessions` map.
+    /// Creates a new `SessionHandle` for an existing ACP session (resumed or
+    /// loaded), stores the `resumableSessionId`, and returns the handle.
+    /// The resumed session inherits the warm process's client, fanout, and
+    /// permission delegate.
+    private func registerResumedSession(
+        acpSessionId: SessionId,
+        warm: WarmProcess,
+        modelsInfo: ModelsInfo?
+    ) -> SessionHandle {
+        let sessionID = UUID().uuidString
+        sessions[sessionID] = ACPSession(
+            client: warm.client,
+            sessionId: acpSessionId,
+            permissionDelegate: warm.permissionDelegate,
+            modelsInfo: modelsInfo,
+            notificationFanout: warm.notificationFanout,
+            drainTask: nil,
+            systemPrompt: "",
+            systemPromptInjected: false  // resumed session already has context
+        )
+        resumableSessionId = acpSessionId
+        DebugLog.agent("ACPBackend.resume: resumed session \(acpSessionId.value) (handle \(sessionID)) ready") // TEMP DEBUG
+        return SessionHandle(id: sessionID)
+    }
+
+    /// Phase 2: Check if the subprocess is alive. Used by the orchestrator to
+    /// decide whether to call `resume()` or proceed normally. Returns false if
+    /// there's no warm process, or if `kill(pid, 0)` returns non-zero.
+    func isProcessAlive() async -> Bool {
+        guard let warm = warmProcess, warm.processIsAlive else { return false }
+        guard let pid = await warm.client.processIdentifier(), pid > 0 else {
+            return false
+        }
+        // `kill(pid, 0)` sends signal 0 — a liveness probe that returns 0 if
+        // the process exists, or sets errno if it doesn't.
+        return kill(pid, 0) == 0
+    }
+
+    /// Phase 2: The ACP session ID of the last active session, for crash
+    /// recovery. nil if no session was created or the last session was
+    /// intentionally closed (`closeSession`) or cancelled.
+    func currentResumableSessionId() -> SessionId? {
+        return resumableSessionId
     }
 
     public func cancel(_ session: SessionHandle) async {
         let record = sessions.removeValue(forKey: session.id)
+        // Phase 2: clear crash-recovery state — this is a full teardown, not
+        // a crash. No session should be resumed from a cancelled run.
+        resumableSessionId = nil
+        savedOnExit = nil
         // No session record? Could be a warm-subprocess cancel where the session
         // was already closed via closeSession but the process is still alive.
         // Tear down the warm process if present.
@@ -668,6 +890,12 @@ public actor ACPBackend: AgentBackend {
         guard let record = sessions.removeValue(forKey: handle.id) else {
             DebugLog.agent("ACPBackend.closeSession: no session for handle \(handle.id) — no-op") // TEMP DEBUG
             return
+        }
+        // Phase 2: clear the resumable session ID — this was an intentional
+        // close (phase boundary), not a crash. We should NOT resume a closed
+        // session on a new subprocess.
+        if resumableSessionId?.value == record.sessionId.value {
+            resumableSessionId = nil
         }
         DebugLog.agent("ACPBackend.closeSession: closing session=\(record.sessionId.value) handle=\(handle.id)") // TEMP DEBUG
         // Drain any in-flight always-ask continuations so a pending
@@ -870,6 +1098,8 @@ public actor ACPBackend: AgentBackend {
                 reason = .stalled(idleSeconds: idle)
             case .turnCeilingExceeded(let total):
                 reason = .ceilingExceeded(totalSeconds: total)
+            case .processDied:
+                reason = .agentError(error.localizedDescription)
             default:
                 reason = .agentError(error.localizedDescription)
             }
@@ -923,6 +1153,26 @@ private final class TurnCompletionFlag: @unchecked Sendable {
     }
 }
 
+/// Phase 2: process-liveness flag shared between the prompt task and the
+/// watchdog. Set when `sendPrompt` throws or `kill(pid, 0)` returns non-zero —
+/// the process died silently (issue #338). The backend actor reads this after
+/// the turn stream finishes (via `markProcessDeadIfNeeded`) to update
+/// `warmProcess.processIsAlive` and enable `resume()`.
+/// `@unchecked Sendable` with an internal lock.
+private final class ProcessHealthFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _died = false
+
+    var died: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _died
+    }
+
+    func markDied() {
+        lock.lock(); _died = true; lock.unlock()
+    }
+}
+
 // MARK: - Errors
 
 enum ACPBackendError: Error, LocalizedError {
@@ -938,6 +1188,11 @@ enum ACPBackendError: Error, LocalizedError {
     /// The turn exceeded the hard ceiling duration — the agent was still
     /// streaming but took too long. The turn was cancelled.
     case turnCeilingExceeded(totalSeconds: TimeInterval)
+    /// Phase 2: the agent subprocess died unexpectedly (issue #338 —
+    /// `claude-agent-acp` stays alive but sessions break / the pipe closes).
+    /// The turn failed because `sendPrompt` threw. The caller can attempt
+    /// `resume()` to recover.
+    case processDied
 
     var errorDescription: String? {
         switch self {
@@ -964,6 +1219,11 @@ enum ACPBackendError: Error, LocalizedError {
             return """
             ACP agent exceeded the maximum turn duration (\(Int(total))s). \
             The turn was cancelled; try sending again.
+            """
+        case .processDied:
+            return """
+            ACP agent subprocess died unexpectedly. The turn was cancelled; \
+            session resume is available if the agent supports it.
             """
         }
     }
