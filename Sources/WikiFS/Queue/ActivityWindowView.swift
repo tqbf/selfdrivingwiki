@@ -469,6 +469,29 @@ struct ActivityWindowView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
+                // #583: per-model breakdown for this run. Today most runs
+                // merge their phases into a single snapshot, so the breakdown
+                // has one entry and reads as a slightly-redundant second line —
+                // but the structure is here for when phases start emitting
+                // individual usage events (planner vs executor vs finalizer
+                // using different models). Only shown when there's a model id
+                // in the breakdown (otherwise the aggregate line above
+                // already covered everything).
+                let byModel = activityTracker.usageBreakdown(for: item.id)
+                if byModel.count > 1 {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(byModelSorted(byModel), id: \.modelId) { entry in
+                            Text(UsageFormatter.itemModelBreakdownLine(
+                                modelId: entry.modelId,
+                                breakdown: entry.breakdown,
+                                usage: activityTracker.usage(for: item.id)))
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .padding(.leading, 6)
+                }
             }
             Spacer()
             if copyableText(for: item) != nil {
@@ -814,6 +837,24 @@ struct ActivityWindowView: View {
 
     private func wikiDisplayName(for id: String) -> String {
         sessionManager?.sessions[id]?.descriptor.displayName ?? String(id.prefix(8))
+    }
+
+    /// #583: Sort a per-item per-model breakdown for display — largest total
+    /// tokens first, unknown-model bucket last. Mirrors
+    /// `DailyUsageByModel.sortedForDisplay` so the menu bar and the Activity
+    /// window render in the same order.
+    private func byModelSorted(
+        _ byModel: [String: ModelUsageBreakdown]
+    ) -> [(modelId: String, breakdown: ModelUsageBreakdown)] {
+        byModel
+            .filter { $0.value.hasData }
+            .sorted { lhs, rhs in
+                let lhsUnknown = lhs.key == ModelUsageBreakdown.unknownModelKey
+                let rhsUnknown = rhs.key == ModelUsageBreakdown.unknownModelKey
+                if lhsUnknown != rhsUnknown { return rhsUnknown }
+                return lhs.value.totalTokens > rhs.value.totalTokens
+            }
+            .map { (modelId: $0.key, breakdown: $0.value) }
     }
 
     private func kindLabel(for item: QueueItem) -> String {
