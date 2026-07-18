@@ -279,6 +279,20 @@ public final class WikiStoreModel {
     @ObservationIgnored public var tantivySearch: TantivySearchService?
     private var autosaveTask: Task<Void, Never>?
     private var systemPromptAutosaveTask: Task<Void, Never>?
+
+    deinit {
+        // Cancel pending debounced search tasks so they don't fire after the
+        // model is deallocated — a leaked Task's dbQueue.read would crash with
+        // "Database methods are not reentrant" if a subsequent test's write
+        // is in progress on the same DatabaseQueue.
+        MainActor.assumeIsolated {
+            searchTask?.cancel()
+            sourceSearchTask?.cancel()
+            chatSearchTask?.cancel()
+            autosaveTask?.cancel()
+            systemPromptAutosaveTask?.cancel()
+        }
+    }
     /// The page whose text currently lives in the draft buffers.
     private var loadedPage: PageID?
     /// The page-content version id captured when the page was loaded into the
