@@ -113,8 +113,14 @@ public enum ExternalEmbed {
             allowed.remove(charactersIn: ":/")
             let origin = WikiReaderOrigin.string.addingPercentEncoding(withAllowedCharacters: allowed)
                 ?? WikiReaderOrigin.string
-            let url = "https://www.youtube-nocookie.com/embed/\(id)"
+            var url = "https://www.youtube-nocookie.com/embed/\(id)"
                 + "?enablejsapi=1&origin=\(origin)&widget_referrer=\(origin)"
+            // Resume at the pasted timestamp: a `&t=…` (or `?start=…`) on the watch
+            // URL maps to the embed's `?start=<seconds>`. YouTube accepts integer
+            // seconds; the watch URL may use the `1h2m30s` clock form.
+            if let start = youTubeStartTime(from: d.planURL) {
+                url += "&start=\(start)"
+            }
             return EmbedTarget(kind: .iframe, url: url)
         case "video/vimeo":
             guard let id = d.externalIdentity, !id.isEmpty else { return nil }
@@ -161,6 +167,62 @@ public enum ExternalEmbed {
         }
 
         return nil
+    }
+
+    // MARK: - YouTube start time
+
+    /// Parse a resume offset (in whole seconds) from a YouTube watch URL's
+    /// `t` / `start` query parameter, handling the clock form YouTube emits
+    /// (`569s`, `1m30s`, `1h2m30s`) and a bare integer. Returns `nil` when the
+    /// URL carries no timestamp or it can't be parsed. Pure.
+    ///
+    /// The watch URL's `t` is NOT what the embed accepts — the embed wants an
+    /// integer `start` — so this normalizes both forms into seconds.
+    static func youTubeStartTime(from planURL: String?) -> Int? {
+        guard let raw = planURL,
+              let url = URL(string: raw),
+              let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let items = comps.queryItems else { return nil }
+        // `t` is the link-sharing form; `start` is the embed form some links carry.
+        let value = items.first(where: { $0.name == "t" })?.value
+            ?? items.first(where: { $0.name == "start" })?.value
+        guard let value, !value.isEmpty else { return nil }
+        // Bare integer seconds (`569` or `569s`): drop a single trailing `s` and
+        // confirm the remainder parses as the whole value.
+        if value.hasSuffix("s") || value.allSatisfy(\.isNumber) {
+            let digits = value.hasSuffix("s") ? String(value.dropLast()) : value
+            if let secs = Int(digits) {
+                return secs
+            }
+        }
+        return parseClockDuration(value)
+    }
+
+    /// Parse a clock-form duration (`569s`, `1m30s`, `1h2m30s`, `90m`) into
+    /// seconds. Each group is `<n>` followed by `h`/`m`/`s`; a bare trailing
+    /// number with no unit is treated as seconds. Returns `nil` on a malformed
+    /// value (e.g. a unit that isn't h/m/s). Pure.
+    private static func parseClockDuration(_ value: String) -> Int? {
+        var total = 0
+        var number = ""
+        var sawUnit = false
+        let units = ["h": 3600, "m": 60, "s": 1]
+        for ch in value {
+            if ch.isNumber {
+                number.append(ch)
+            } else {
+                guard let n = Int(number), n >= 0, let mult = units[String(ch)] else { return nil }
+                total += n * mult
+                number = ""
+                sawUnit = true
+            }
+        }
+        // A trailing number with no unit is seconds (YouTube allows `t=120`).
+        if !number.isEmpty {
+            guard let n = Int(number), n >= 0 else { return nil }
+            total += n
+        }
+        return sawUnit || total > 0 ? total : nil
     }
 
     /// Host-swap an Apple Podcasts episode page URL to its embed URL:

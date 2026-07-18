@@ -111,6 +111,36 @@ struct SourceDetailView: View {
 
     private var hasMarkdown: Bool { headVersion != nil }
 
+    /// The byteless-embed descriptor for THIS source, built from the loaded
+    /// origin + the source mime — so `ExternalEmbed` can resolve an iframe
+    /// target without the full reader's embed-info precompute. `nil` when the
+    /// source is not a byteless provider/direct-remote embed (or its origin
+    /// hasn't loaded yet). Issue #572.
+    private var embedDescriptor: SourceEmbedDescriptor? {
+        guard let mime = file.mimeType, let origin else { return nil }
+        return SourceEmbedDescriptor(
+            id: file.id,
+            mimeType: mime,
+            externalIdentity: origin.externalIdentity,
+            agentName: origin.agentName,
+            planURL: origin.plan)
+    }
+
+    /// The resolved embed target for this source, or `nil` when it is not a
+    /// renderable external embed. Drives the dedicated player section in the
+    /// detail view so byteless video sources surface the player above their
+    /// transcript (the transcript markdown has no embed directive, so the
+    /// inline reader path never emits the iframe here).
+    private var embedTarget: EmbedTarget? {
+        guard let descriptor = embedDescriptor else { return nil }
+        return ExternalEmbed.target(for: descriptor)
+    }
+
+    /// `true` when this source should render the embed-player + transcript
+    /// layout (a byteless provider video/audio, or direct-remote media) rather
+    /// than the PDF/markdown/binary branches.
+    private var isBytelessEmbedWithPlayer: Bool { embedTarget != nil }
+
     /// Phase 6: consume a pending pinned-extraction id (if any) for the current
     /// source and load that extraction into `pinnedExtraction`. Called from
     /// `.onAppear` so the pinned DOM is ready before the body first evaluates.
@@ -610,7 +640,9 @@ struct SourceDetailView: View {
 
     @ViewBuilder
     private var contentArea: some View {
-        if showTabs {
+        if isBytelessEmbedWithPlayer, let target = embedTarget {
+            embedContent(target: target)
+        } else if showTabs {
             tabbedContent
         } else if isPDF {
             pdfOnlyContent
@@ -619,6 +651,62 @@ struct SourceDetailView: View {
         } else {
             binaryFallback
         }
+    }
+
+    // MARK: Byteless embed player + transcript
+
+    /// The layout for a byteless embed source: the provider player iframe on
+    /// top (fixed height), the transcript (or other derived markdown) rendered
+    /// below it as readable text in the reader, which owns its own scroll.
+    /// Mirrors the reader's iframe attributes via `MediaEmbedPlayerHTML`. When
+    /// no derived markdown exists yet (e.g. a video with no captions, or a
+    /// Spotify track), a calm placeholder sits beneath the player. Issue #572.
+    @ViewBuilder
+    private func embedContent(target: EmbedTarget) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            MediaEmbedPlayerView(target: target)
+                .padding(.horizontal, PageEditorMetrics.contentInset)
+                .padding(.top, PageEditorMetrics.contentInset)
+                .padding(.bottom, PageEditorMetrics.sectionSpacing)
+            Divider().opacity(PageEditorMetrics.dividerOpacity)
+            if let head = headVersion {
+                WikiReaderView(
+                    markdown: pinnedExtraction?.content ?? head.content,
+                    currentSelection: store.selection,
+                    store: store,
+                    findText: findText,
+                    findVersion: findVersion,
+                    findOccurrence: findOccurrence)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .zoomShortcuts($readerZoom)
+                    .zoomScroll($readerZoom)
+            } else {
+                ContentUnavailableView {
+                    Label(embedEmptyLabel, systemImage: "waveform")
+                } description: {
+                    Text(embedEmptyDescription)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// The placeholder copy when a byteless embed has no transcript yet.
+    private var embedEmptyLabel: String {
+        switch origin?.agentName {
+        case "youtube": return "No Transcript Available"
+        default: return "No Transcript"
+        }
+    }
+
+    /// The placeholder description; explains why there's no text and that the
+    /// player above is the source's content.
+    private var embedEmptyDescription: String {
+        if origin?.agentName == "youtube" {
+            return "This video has no captions, so no transcript was extracted. The player above is the source."
+        }
+        return "This media source has no extracted text yet. The player above is the source."
     }
 
     // MARK: View mode picker

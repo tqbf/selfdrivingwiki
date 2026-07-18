@@ -16,9 +16,19 @@ struct BytelessEmbedIntegrationTests {
         return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
-    /// Fails if reached — a recognized media URL must NOT hit the HTML fetcher.
+    /// Fails if reached for an HTML website fetch — a recognized media URL must
+    /// NOT hit the website path. Serves a canned oEmbed JSON title for the
+    /// oEmbed endpoints (YouTube/Vimeo/Spotify/SoundCloud), since the byteless
+    /// embed flow now best-effort-fetches the provider display title via oEmbed
+    /// (issue #572) — that is expected new behavior, not a website fetch.
     struct ExplodingFetcher: URLFetchService.URLResourceFetcher {
         func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse {
+            let absolute = url.absoluteString
+            if absolute.contains("/oembed") || absolute.contains("api/oembed") {
+                return URLFetchService.FetchResponse(
+                    data: Data(#"{"title":"Exploding Fixture Title","author_name":"x"}"#.utf8),
+                    contentType: "application/json", finalURL: url)
+            }
             Issue.record("HTML fetcher must not run for a recognized media URL")
             throw URLFetchService.FetchError.empty
         }
@@ -183,6 +193,13 @@ struct BytelessEmbedIntegrationTests {
     struct YouTubeFixtureFetcher: URLFetchService.URLResourceFetcher {
         func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse {
             let absolute = url.absoluteString
+            // Issue #572: the byteless embed flow best-effort-fetches the video
+            // title via oEmbed alongside the transcript. Serve a canned title.
+            if absolute.contains("/oembed") {
+                return URLFetchService.FetchResponse(
+                    data: Data(#"{"title":"Test Talk","author_name":"Test Author"}"#.utf8),
+                    contentType: "application/json", finalURL: url)
+            }
             if absolute.contains("/watch") {
                 return URLFetchService.FetchResponse(
                     data: Data(Self.watchPageHTML.utf8), contentType: "text/html", finalURL: url)
