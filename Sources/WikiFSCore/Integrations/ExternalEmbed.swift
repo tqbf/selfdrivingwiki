@@ -169,6 +169,27 @@ public enum ExternalEmbed {
         return nil
     }
 
+    /// The human label for the media tab — `"Audio"`, `"Video"`, or `"Media"`
+    /// (generic fallback) — for a byteless embed descriptor, or `nil` when the
+    /// descriptor does not resolve to a renderable embed (the caller should not
+    /// show a media tab at all in that case).
+    ///
+    /// Classification keys on the source's content MIME prefix first
+    /// (`audio/*` → Audio, `video/*` → Video), which covers provider synthetic
+    /// mimes (`video/youtube`, `audio/spotify`, …) AND direct-remote real mimes
+    /// (`audio/mpeg`, `video/mp4`). Apple Podcasts is the exception: its source
+    /// content is the transcript (`text/markdown`), so it is keyed on its
+    /// `agentName == "apple-podcast"` → Audio. Pure + store-free so it is
+    /// unit-testable without a WKWebView.
+    public static func mediaTabLabel(for d: SourceEmbedDescriptor) -> String? {
+        guard target(for: d) != nil else { return nil }
+        let mime = d.mimeType ?? ""
+        if mime.hasPrefix("audio/") { return "Audio" }
+        if mime.hasPrefix("video/") { return "Video" }
+        if d.agentName == "apple-podcast" { return "Audio" }
+        return "Media"
+    }
+
     // MARK: - YouTube start time
 
     /// Parse a resume offset (in whole seconds) from a YouTube watch URL's

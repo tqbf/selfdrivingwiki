@@ -142,4 +142,53 @@ struct ExternalEmbedTests {
     @Test func nilForNilMime() throws {
         #expect(ExternalEmbed.target(for: descriptor()) == nil)
     }
+
+    // MARK: - Media tab label (audio vs video classification)
+
+    @Test func mediaTabLabelVideoProvider() throws {
+        // YouTube/Vimeo synthetic mimes → "Video".
+        #expect(ExternalEmbed.mediaTabLabel(for: descriptor(
+            mimeType: MimeType.videoYouTube, externalIdentity: "dQw4w9WgXcQ")) == "Video")
+        #expect(ExternalEmbed.mediaTabLabel(for: descriptor(
+            mimeType: "video/vimeo", externalIdentity: "76979871")) == "Video")
+    }
+
+    @Test func mediaTabLabelAudioProvider() throws {
+        // Spotify/SoundCloud synthetic mimes → "Audio".
+        #expect(ExternalEmbed.mediaTabLabel(for: descriptor(
+            mimeType: "audio/spotify", externalIdentity: "episode/1")) == "Audio")
+        #expect(ExternalEmbed.mediaTabLabel(for: descriptor(
+            mimeType: "audio/soundcloud", externalIdentity: "https://sc/track")) == "Audio")
+    }
+
+    @Test func mediaTabLabelApplePodcastsIsAudio() throws {
+        // Apple Podcasts content is text/markdown (the transcript); keyed on
+        // agentName → "Audio".
+        let planURL = "https://podcasts.apple.com/us/podcast/show/id123?i=456"
+        #expect(ExternalEmbed.mediaTabLabel(for: descriptor(
+            mimeType: MimeType.markdown, agentName: "apple-podcast",
+            planURL: planURL)) == "Audio")
+    }
+
+    @Test func mediaTabLabelDirectRemoteAudioAndVideo() throws {
+        // Real direct-remote mimes → Audio/Video by prefix.
+        #expect(ExternalEmbed.mediaTabLabel(for: descriptor(
+            mimeType: "audio/mpeg", externalIdentity: "https://x/ep.mp3")) == "Audio")
+        #expect(ExternalEmbed.mediaTabLabel(for: descriptor(
+            mimeType: "video/mp4", externalIdentity: "https://x/clip.mp4")) == "Video")
+        // HLS manifests are application/* but render as native <video>.
+        #expect(ExternalEmbed.mediaTabLabel(for: descriptor(
+            mimeType: "application/vnd.apple.mpegurl",
+            externalIdentity: "https://x/stream.m3u8")) == "Media")
+    }
+
+    @Test func mediaTabLabelNilForNonMedia() throws {
+        // Non-renderable descriptors → nil (no media tab should be shown).
+        #expect(ExternalEmbed.mediaTabLabel(for: descriptor(mimeType: "text/plain")) == nil)
+        #expect(ExternalEmbed.mediaTabLabel(for: descriptor()) == nil)
+        // Apple Podcasts with an unsuitable planURL → nil (target unresolved).
+        #expect(ExternalEmbed.mediaTabLabel(for: descriptor(
+            agentName: "apple-podcast",
+            planURL: "https://example.com/show")) == nil)
+    }
 }

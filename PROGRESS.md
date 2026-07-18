@@ -2,6 +2,66 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-18 — Unify audio podcast source detail with the video Reader/Media/Split tab pattern (branch `feature/audio-podcast-detail-tabs`)
+
+**Problem.** PR #586 (open, `unify-video-pdf-source-tabs`) unified *video*
+sources (YouTube/Vimeo) into the same Reader / Video / Split tab layout that
+PDFs use — but audio podcast sources (Apple Podcasts), which route through the
+exact same `ExternalEmbed` byteless-embed path, would have surfaced under a
+"Video" tab label. The tab system was video-specific in name; audio needed the
+same Reader/Media/Split treatment with an "Audio" label.
+
+**Fix.** Generalized the video tab into a media tab that classifies audio vs
+video and labels the picker accordingly. Two files changed (one new pure
+helper + view wiring, one test suite). Built on top of the merged #586 pattern
+(video tab renamed → media tab).
+
+Changes:
+
+- **`Sources/WikiFSCore/Integrations/ExternalEmbed.swift`** — new pure,
+  store-free `mediaTabLabel(for:) -> String?` returning `"Audio"` / `"Video"` /
+  `"Media"` (generic) for a `SourceEmbedDescriptor`, or `nil` when the
+  descriptor does not resolve to a renderable embed. Classification keys on the
+  source content MIME prefix first (`audio/*` → Audio, `video/*` → Video),
+  which covers provider synthetic mimes (`video/youtube`, `audio/spotify`, …)
+  AND direct-remote real mimes (`audio/mpeg`, `video/mp4`). Apple Podcasts is
+  the exception: its source content is the transcript (`text/markdown`), so it
+  is keyed on `agentName == "apple-podcast"` → Audio. Mirrors the existing pure
+  helper testability pattern. The HLS manifest
+  (`application/vnd.apple.mpegurl`) falls through to the generic "Media".
+
+- **`Sources/WikiFS/Sources/SourceDetailView.swift`** (on top of #586):
+  - `FileContentTab.video` → `.media` (raw value `"Media"`, the generic
+    fallback; the picker label is dynamic).
+  - New `mediaTabLabel` computed + `tabLabel(for:)` helper: the picker now
+    renders `tabLabel(for: tab)` instead of `tab.rawValue`, so the media tab
+    shows "Video"/"Audio"/"Media" per the source kind while Reader/PDF/Split
+    keep their static raw values.
+  - `availableTabs`, `tabbedContent` (`.media` case), `splitContent` doc
+    comment, and the Edit-button's "switch away from a no-editor tab" guard
+    (`.video` → `.media`) all updated to the new case name. `videoPlayerContent`
+    (the WKWebView player pane) is unchanged — it renders the same iframe for
+    audio embeds as for video; only the wrapping label changed.
+
+**Why no embed-mechanism change was needed:** `ExternalEmbed.target(for:)`
+already resolves Apple Podcasts sources to an `.iframe` embed target (row 2,
+keyed on `agentName == "apple-podcast"` + host-swapped `planURL`). So after
+#586's pattern is applied, Apple Podcast sources already get Reader/Media/Split
+tabs for free — the only missing piece was the "Video" label, which this PR
+fixes to "Audio". Apple Podcasts transcripts are stored as the source's
+processed markdown (`TTMLTranscript` → markdown via
+`ApplePodcastMaterializer`), so the Reader tab and Outline work unchanged
+(they already key off `headVersion` / `currentMarkdownContent`).
+
+**Build/Tests:** `make version prompts && swift build` clean (126s); fast tier
+**2578 tests / 218 suites passed** (+5 new `mediaTabLabel` tests in
+`ExternalEmbedTests`: video provider, audio provider, Apple Podcasts→Audio,
+direct-remote audio/video/HLS, nil for non-media). Targeted
+`ExternalEmbedTests|MediaEmbedPlayerTests` 38/38 pass.
+
+PR: `feature/audio-podcast-detail-tabs` → `main` (NOT merged — do not merge
+until #586 lands on `main`, then this branch rebases cleanly).
+
 ## 2026-07-18 — Unify video source detail with PDF tab layout (branch `unify-video-pdf-source-tabs`)
 
 **Problem.** Issue #575 (PR #572) shipped the YouTube/Vimeo embed player as a
