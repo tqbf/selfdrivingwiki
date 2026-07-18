@@ -1122,6 +1122,17 @@ public final class AgentLauncher {
     ) -> StageRouting? {
         let (provider, modelId) = providersConfig().resolvedProvider(for: stage)
         guard let spawn = resolveACPProviderSpawn(provider) else { return nil }
+        // Refuse to spawn without an explicit `selectedModelId`. Without this,
+        // the ACP subprocess silently falls through to its own first-listed
+        // upstream model (e.g. `opencode/big-pickle`, a free model nobody chose)
+        // — the diagnosed 2026-07-18 ingestion-stall root cause #6. Placed
+        // AFTER `resolveACPProviderSpawn` so the PATH-preflight error wins when
+        // both are wrong (a missing executable is more fundamental). See
+        // `tmp/ingestion-stall-diagnosis.md` and `SpawnModelGuard.swift`.
+        if let msg = SpawnModelGuard.validate(provider: provider, modelId: modelId) {
+            preflightError = msg
+            return nil
+        }
         let cacheKey = "\(provider.id)|\(modelId ?? "")"
         let backend: AgentBackend
         if let cached = cache[cacheKey] {
@@ -2025,6 +2036,27 @@ public final class AgentLauncher {
         let provider = resolveSelectedProvider()
         let resolvedSelectedModel = providersConfig().selectedModelId(forProvider: provider.id)
         DebugLog.agent("startInteractiveQuery: provider=\(provider.id) selectedModel=\(resolvedSelectedModel ?? "nil")")
+
+        // Refuse to spawn without an explicit `selectedModelId`. Mirrors the
+        // ingest path's `resolveStageRouting` guard. Without this, chat silently
+        // falls through to the ACP subprocess's first-listed upstream model. See
+        // `tmp/ingestion-stall-diagnosis.md` and `SpawnModelGuard.swift`.
+        //
+        // State contract: this early-return site is in the PREFLIGHT section
+        // (the comment at the top of this function — "no gate held — early
+        // returns here don't need gate release"). Mirror `resolveACPProviderSpawn`'s
+        // existing failure two lines below: set `preflightError` and bare
+        // `return`. Do NOT touch `isRunning` or `releaseGenerationSlot()` —
+        // neither is held here (unlike the one-shot `run()` path's preflight
+        // at line ~890, which DOES hold both, and that's why that path does
+        // the cleanup). Placed BEFORE the PATH-preflight so the missing-model
+        // message wins when both are wrong (we want the user to fix the model
+        // selection even before we attempt to resolve the executable).
+        if let msg = SpawnModelGuard.validate(provider: provider, modelId: resolvedSelectedModel) {
+            preflightError = msg
+            return
+        }
+
         self.backend = resolveBackend(policy)
 
         // Resolve the provider's spawn command (PATH-resolved) + the

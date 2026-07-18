@@ -332,8 +332,20 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// Seed the initial config: the three Phase-1 default providers (Claude —
     /// default, Hermes, OpenCode). Discovered agents are not auto-added; the
     /// user opts in via Settings.
+    ///
+    /// **Default model for the default provider:** the shipped `claude-acp`
+    /// seed is paired with `selectedModelIds["claude-acp"] = "sonnet"` so a
+    /// fresh install can spawn chat/ingest immediately. The launcher's
+    /// `SpawnModelGuard` (see `Sources/WikiFSEngine/SpawnModelGuard.swift`)
+    /// refuses to spawn without an explicit `selectedModelId`; without this
+    /// seed entry a fresh install would hit a hard circularity (you must
+    /// spawn to discover models, but the guard refuses to spawn until a model
+    /// is picked). `"sonnet"` is claude-acp's standard short-name advertised on
+    /// the first live `session/new`. See `tmp/ingestion-stall-diagnosis.md`.
     public static func seed(discovered: [DiscoveredACPAgent]) -> AgentProvidersConfig {
-        AgentProvidersConfig(providers: [.claudeAcpDefault, .hermesDefault, .opencodeDefault])
+        AgentProvidersConfig(
+            providers: [.claudeAcpDefault, .hermesDefault, .opencodeDefault],
+            selectedModelIds: ["claude-acp": "sonnet"])
     }
 
     // MARK: - Persistence
@@ -352,10 +364,27 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             // Preserve the decoded model caches + selections (re-wrapping with
             // only `providers` would wipe them). Re-normalize providers only.
             DebugLog.store("AgentProvidersConfig.loadOrSeed: LOAD providers=\(config.providers.count) hasModelCaches=\(!config.providerModels.isEmpty) hasSelections=\(!config.selectedModelIds.isEmpty)")
+            var selectedModelIds = config.selectedModelIds
+            // Backfill: upgrade-safety for existing `claude-acp`-default installs
+            // (which silently defaulted to Sonnet before the
+            // `SpawnModelGuard` existed). Only injects when `claude-acp` is the
+            // default provider AND no model is picked for it — OpenCode/Hermes
+            // and any deliberately-emptied non-default provider are unaffected,
+            // so the guard still refuses spawn for the actual diagnosed-bug
+            // state (OpenCode default with no selection). See
+            // `tmp/ingestion-stall-diagnosis.md` and
+            // `SpawnModelGuard.validate(provider:modelId:)`.
+            if config.providers.first(where: { $0.isDefault && $0.id == "claude-acp" }) != nil,
+               config.selectedModelId(forProvider: "claude-acp") == nil {
+                DebugLog.store("AgentProvidersConfig.loadOrSeed: BACKFILL claude-acp default-model='sonnet'")
+                selectedModelIds = selectedModelIds.merging(
+                    ["claude-acp": "sonnet"],
+                    uniquingKeysWith: { current, _ in current })
+            }
             return AgentProvidersConfig(
                 providers: config.providers,
                 providerModels: config.providerModels,
-                selectedModelIds: config.selectedModelIds,
+                selectedModelIds: selectedModelIds,
                 favoriteModelIds: config.favoriteModelIds,
                 stageAssignments: config.stageAssignments,
                 maxConcurrent: config.maxConcurrent)

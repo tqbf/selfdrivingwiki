@@ -151,12 +151,61 @@ struct AgentsSettingsView: View {
                     .fontDesign(.monospaced)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                // Orange "no model picked" caption. The launcher now refuses to
+                // spawn without an explicit `selectedModelId` (see
+                // `SpawnModelGuard`), so surface the missing selection here.
+                // NON-BLOCKING — models are discovered live on first spawn
+                // (`AgentsSettingsView`'s editor comment at line ~503), so we
+                // let the user save a provider without a model and just remind
+                // them to pick one before running. Disabled providers show no
+                // caption (they can't spawn anyway).
+                if let warning = Self.modelWarning(for: provider, in: config) {
+                    Label(warning, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
             }
 
             Spacer()
         }
         .padding(.vertical, 2)
         .tag(provider.id)
+    }
+
+    /// Returns a warning string when `provider` is enabled, has no selected
+    /// model, and the launcher will therefore refuse to spawn it (see
+    /// `SpawnModelGuard`). Returns `nil` for disabled providers (they can't
+    /// spawn anyway) and providers with a selected model.
+    ///
+    /// Two warning shapes:
+    /// - When the provider has cached models to pick from → the user must
+    ///   pick one before running ("No model selected — pick one before running.").
+    /// - When the provider has no cached models yet → the editor's
+    ///   "No models captured yet" caption and the launcher need a first
+    ///   successful spawn to capture them; surface a gentle guidance line
+    ///   ("No model captured yet — chat with this provider once to discover
+    ///   models."). The launcher will still refuse spawn in this state — that
+    ///   is an accepted UX wrinkle tracked in `PROGRESS.md` (a future
+    ///   dry-run `session/new` on Save would close it).
+    ///
+    /// PURE + STATIC so it can be unit-tested without rendering. The row reads
+    /// the same `config` source the view stores in its `@State`, so passing it
+    /// in as a parameter captures the identical value the row would render.
+    ///
+    /// `nonisolated`: a SwiftUI `View` is implicitly `@MainActor`, but this
+    /// helper touches no view state — only the pure `AgentProvidersConfig`
+    /// argument. Marking it `nonisolated` lets the test suite call it
+    /// synchronously (without `@MainActor`) while the row's call site
+    /// (`Self.modelWarning(for:in:)`) continues to work identically.
+    nonisolated static func modelWarning(for provider: AgentProvider, in config: AgentProvidersConfig) -> String? {
+        guard provider.enabled else { return nil }
+        let modelId = config.selectedModelId(forProvider: provider.id)
+        if let modelId, !modelId.isEmpty { return nil }
+        let models = config.cachedModels(forProvider: provider.id)
+        if models.isEmpty {
+            return "No model captured yet — chat with this provider once to discover models."
+        }
+        return "No model selected — pick one before running."
     }
 
     private func enabledBinding(for provider: AgentProvider) -> Binding<Bool> {
