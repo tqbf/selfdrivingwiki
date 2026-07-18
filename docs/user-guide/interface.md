@@ -10,6 +10,9 @@ you've used Safari or Xcode, the basics are second nature.
 
 ![Main window: sidebar with the Pages/Sources/Bookmarks/Chats tab strip on the left, the omnibox and wiki switcher in the toolbar, and a page open in the detail pane.](images/interface-main-window.png)
 
+The standard **Window menu** lists every open wiki window (by name) below
+"Bring All to Front" — click one to bring it to the front.
+
 ---
 
 ## The sidebar
@@ -87,7 +90,7 @@ the top of the detail pane — just like Safari tabs.
 | Action | How |
 |---|---|
 | Open in a new tab | Click a sidebar item (it may open in the current tab or a new one depending on type). |
-| Switch tabs | Click a tab; or ⌘1–⌘9 for the first nine tabs. |
+| Switch tabs | Click a tab; ⌘1–⌘9 for the first nine; or ⇧⌘[ / ⇧⌘] to cycle (wraps around). |
 | Close a tab | Click the × on the tab (appears on hover), or ⌘W. |
 | Close while editing | A confirmation appears: "Close Tab? Unsaved changes will be discarded." |
 | Reopen a closed tab | ⌘⇧T (remembers up to 10 recently closed tabs). |
