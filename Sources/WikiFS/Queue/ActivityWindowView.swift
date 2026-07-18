@@ -138,6 +138,14 @@ struct ActivityWindowView: View {
     private var sidebar: some View {
         let active = activeItems
         let recent = Array(recentItems.prefix(30))
+        // Precompute all @Observable-derived display data ONCE, so the
+        // ForEach row body reads only plain values. This eliminates the
+        // per-row swift_task_isMainExecutorImpl isolation checks that
+        // triggered a use-after-free crash (EXC_BAD_ACCESS in
+        // swift_getObjectType during ObservationCenter._withObservation)
+        // when observable state changed concurrently with row evaluation —
+        // e.g. cancelling a lint job. See swiftlang/swift#89197.
+        let displayData = buildRowDisplayData(for: active + recent)
 
         if active.isEmpty && recent.isEmpty {
             emptyState
@@ -146,7 +154,7 @@ struct ActivityWindowView: View {
                 if !active.isEmpty {
                     Section("Active") {
                         ForEach(active) { item in
-                            itemRow(item)
+                            itemRow(item, displayData: displayData[item.id])
                                 .tag(item.id)
                         }
                         .onMove { sources, destination in
@@ -157,7 +165,7 @@ struct ActivityWindowView: View {
                 if !recent.isEmpty {
                     Section("Recent") {
                         ForEach(recent) { item in
-                            itemRow(item)
+                            itemRow(item, displayData: displayData[item.id])
                                 .tag(item.id)
                         }
                     }
@@ -178,15 +186,20 @@ struct ActivityWindowView: View {
     }
 
     @ViewBuilder
-    private func itemRow(_ item: QueueItem) -> some View {
+    private func itemRow(_ item: QueueItem, displayData: RowDisplayData?) -> some View {
+        let data = displayData ?? RowDisplayData(
+            title: kindLabel(for: item),
+            subtitle: String(item.wikiID.prefix(8)),
+            targetNames: [],
+            usage: nil)
         HStack(spacing: 8) {
             statusView(for: item)
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 1) {
-                Text(rowTitle(for: item))
+                Text(data.title)
                     .lineLimit(1)
-                    .help(targetNames(for: item).joined(separator: "\n"))
-                Text(rowSubtitle(for: item))
+                    .help(data.targetNames.joined(separator: "\n"))
+                Text(data.subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -198,8 +211,7 @@ struct ActivityWindowView: View {
                         .help(error)
                 }
                 // #528 spike: show per-run token/cost usage on completed rows.
-                if item.state == .completed,
-                   let usage = activityTracker.usage(for: item.id) {
+                if item.state == .completed, let usage = data.usage {
                     Text(UsageFormatter.fullSummary(
                         usage: usage,
                         startedAt: item.startedAt,
@@ -562,22 +574,113 @@ struct ActivityWindowView: View {
         }
     }
 
-    /// Row title: lead with what's being processed (source filenames, lint
-    /// targets) rather than the queue kind — inside a per-queue window, the
-    /// kind is already the window title.
-    private func rowTitle(for item: QueueItem) -> String {
-        if let pageIDs = item.payload.lintPageIDs {
-            if pageIDs.isEmpty { return "Lint \(wikiDisplayName(for: item.wikiID))" }
-            let titles = lintPageTitles(for: item)
-            guard let first = titles.first else { return "Lint \(pageIDs.count) pages" }
-            return titles.count > 1 ? "Lint: \(first) +\(titles.count - 1)" : "Lint: \(first)"
+    // MARK: - Row display data (precomputed to avoid @Observable reads in ForEach)
+
+    /// Plain value type holding everything `itemRow` needs to render. Precomputed
+    /// in the sidebar getter so the `ForEach` row body reads only values — zero
+    /// `@MainActor @Observable` property accesses inside the row body.
+    ///
+    /// This eliminates the per-row `swift_task_isMainExecutorImpl` isolation
+    /// checks that triggered a use-after-free crash (EXC_BAD_ACCESS in
+    /// `swift_getObjectType` during `ObservationCenter._withObservation`) when
+    /// observable state changed concurrently with row re-evaluation — e.g.
+    /// cancelling a lint job from the Activity window. See crash report
+    /// 0C5B28C2 and swiftlang/swift#89197.
+    private struct RowDisplayData {
+        let title: String
+        let subtitle: String
+        let targetNames: [String]
+        let usage: SessionUsage?
+    }
+
+    /// Snapshot all `@Observable`-derived display data for the given items into
+    /// plain values. Called ONCE from the sidebar getter; the result is passed
+    /// to each `itemRow` so the row body has no observable accesses. Each read
+    /// here is tracked by `ObservationCenter` at the sidebar level (correct — the
+    /// sidebar re-renders when sessions/sources/usage change) rather than per-row
+    /// inside `ForEachChild.updateValue` (where the runtime bug fires).
+    private func buildRowDisplayData(for items: [QueueItem]) -> [QueueItem.ID: RowDisplayData] {
+        // Snapshot the observable dictionaries once.
+        let sessions = sessionManager?.sessions ?? [:]
+        let itemUsage = activityTracker.itemUsage
+
+        var result: [QueueItem.ID: RowDisplayData] = [:]
+        result.reserveCapacity(items.count)
+        for item in items {
+            let session = sessions[item.wikiID]
+            let wikiName = session?.descriptor.displayName ?? String(item.wikiID.prefix(8))
+            let store = session?.store
+
+            // Resolve source/page names (observable reads on WikiStoreModel).
+            // Same lookups as `sourceNames(for:)` and `lintPageTitles(for:)`,
+            // just batched into one pass per item rather than per row render.
+            let names: [String]
+            let targets: [String]
+            if let pageIDs = item.payload.lintPageIDs {
+                let titles = pageIDs.compactMap { id in
+                    store?.summaries.first { $0.id == id }?.title
+                }
+                names = titles
+                targets = pageIDs.isEmpty ? ["Entire wiki"] : titles
+            } else {
+                let resolved = item.payload.sourceIDs.compactMap { id in
+                    store?.sources.first { $0.id == id }?.effectiveName
+                }
+                names = resolved
+                targets = resolved
+            }
+
+            result[item.id] = RowDisplayData(
+                title: computeRowTitle(for: item, wikiName: wikiName, names: names),
+                subtitle: computeRowSubtitle(for: item, wikiName: wikiName),
+                targetNames: targets,
+                usage: itemUsage[item.id])
         }
-        let names = sourceNames(for: item)
+        return result
+    }
+
+    /// Pure computation of the row title from pre-resolved data (no
+    /// `@Observable` reads). Shared between `buildRowDisplayData` (precompute
+    /// path) and `rowTitle(for:)` (detail pane).
+    private func computeRowTitle(for item: QueueItem, wikiName: String, names: [String]) -> String {
+        if let pageIDs = item.payload.lintPageIDs {
+            if pageIDs.isEmpty { return "Lint \(wikiName)" }
+            guard let first = names.first else { return "Lint \(pageIDs.count) pages" }
+            return names.count > 1 ? "Lint: \(first) +\(names.count - 1)" : "Lint: \(first)"
+        }
         guard let first = names.first else {
             let count = item.payload.sourceIDs.count
             return count > 1 ? "\(count) sources" : kindLabel(for: item)
         }
         return names.count > 1 ? "\(first) +\(names.count - 1)" : first
+    }
+
+    /// Pure computation of the row subtitle from pre-resolved data.
+    private func computeRowSubtitle(for item: QueueItem, wikiName: String) -> String {
+        if let time = relativeTime(for: item) {
+            return "\(wikiName) · \(time)"
+        }
+        return wikiName
+    }
+
+    /// Row title for the detail pane (the sidebar precomputes via
+    /// `buildRowDisplayData`). Reads `@Observable` properties — only safe
+    /// outside `ForEachChild.updateValue`.
+    private func rowTitle(for item: QueueItem) -> String {
+        let wikiName = wikiDisplayName(for: item.wikiID)
+        let names: [String]
+        if item.payload.lintPageIDs != nil {
+            names = lintPageTitles(for: item)
+        } else {
+            names = sourceNames(for: item)
+        }
+        return computeRowTitle(for: item, wikiName: wikiName, names: names)
+    }
+
+    /// Row subtitle for the detail pane. Reads `@Observable` — same caveat as
+    /// ``rowTitle(for:)``.
+    private func rowSubtitle(for item: QueueItem) -> String {
+        computeRowSubtitle(for: item, wikiName: wikiDisplayName(for: item.wikiID))
     }
 
     /// Resolve the item's source IDs to display filenames via the wiki's
@@ -616,14 +719,6 @@ struct ActivityWindowView: View {
         if names.count == 1 { return shown }
         let noun = item.payload.lintPageIDs != nil ? "pages" : "sources"
         return "\(names.count) \(noun): \(shown)\(suffix)"
-    }
-
-    private func rowSubtitle(for item: QueueItem) -> String {
-        let wiki = wikiDisplayName(for: item.wikiID)
-        if let time = relativeTime(for: item) {
-            return "\(wiki) · \(time)"
-        }
-        return wiki
     }
 
     private func stateDescription(for item: QueueItem) -> String {

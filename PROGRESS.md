@@ -2,6 +2,54 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-18 — Fix EXC_BAD_ACCESS crash in Activity window when cancelling a lint job
+
+**Problem:** App crashed with `EXC_BAD_ACCESS (SIGSEGV)` in
+`objc_msgSend` → `swift_getObjectType` → `swift_task_isMainExecutorImpl` inside
+`ActivityWindowView.sidebar.getter` → `ForEachChild.updateValue` →
+`ObservationCenter._withObservation`. Triggered by cancelling a lint job from
+the Agent Queue activity window. The crash dereferenced a garbage pointer
+(`0x225005b4c20` — freed heap, not a tagged pointer) during a Swift runtime
+`@MainActor` isolation check.
+
+**Root cause:** The `ForEach` row body in `itemRow(_:)` read `@MainActor
+@Observable` properties on three objects — `SessionManager.sessions`,
+`WikiStoreModel.sources`/`.summaries`, and `QueueActivityTracker.itemUsage` —
+once per row on every re-evaluation. Each read triggers
+`swift_task_isMainExecutorImpl` (the runtime's "am I on MainActor?" check)
+inside `ObservationCenter._withObservation` → `ForEachChild.updateValue`. When
+the queue engine emits a `.cancelled` event, `QueueActivityTracker.handle(_:)`
+mutates `ingestingSourceIDs`/`lintingItemIDs` (observable writes) while the
+`ForEach` re-renders rows that read those same observables. Under this
+concurrent-mutation + isolation-check window, the runtime constructs a
+`SerialExecutorRef` from freed/bogus object metadata → crash. This is a known
+Swift runtime bug class (swiftlang/swift#89197, related #87097/PR #87163) in
+which the `SerialExecutorRef` handed to `isMainExecutor()` is constructed from
+bogus bits.
+
+**Fix:** Precompute all `@Observable`-derived display data into plain values
+*before* the `ForEach`, so the row body has zero `@Observable` property accesses.
+New `RowDisplayData` struct + `buildRowDisplayData(for:)` snapshots
+`sessionManager.sessions`, `activityTracker.itemUsage`, and the per-store
+`sources`/`summaries` lookups once at the sidebar level (where observation
+tracking is correct and the isolation check runs once, not per-row). The
+`itemRow(_:)` body now reads only from `QueueItem` (value) and `RowDisplayData`
+(value). The detail pane's helpers (`rowTitle(for:)`, `rowSubtitle(for:)`,
+`targetNames(for:)`) still read observables — they're outside the
+`ForEachChild.updateValue` path so they're not at risk.
+
+**Files changed:**
+- `Sources/WikiFS/Queue/ActivityWindowView.swift` — new `RowDisplayData` struct,
+  `buildRowDisplayData(for:)`, `computeRowTitle(for:wikiName:names:)`,
+  `computeRowSubtitle(for:wikiName:)` pure functions; `sidebar` getter
+  precomputes display data; `itemRow` takes `RowDisplayData?` and reads only
+  plain values; old `rowTitle`/`rowSubtitle` refactored as thin wrappers around
+  the pure functions for the detail pane's use.
+
+**Build/Tests:** `swift build` clean (72s); fast test tier 2542 tests in 216
+suites pass. Verified zero `@Observable` reads in `itemRow` body via
+`rg 'activityTracker\.|sessionManager\?|\.sessions\[|\.sources\b|\.summaries\b'`
+inside the function — no matches.
 ## 2026-07-18 — Issue #572: YouTube/Vimeo URL ingest UX — video title as display name + embed player in source detail (branch `feature/youtube-embed-title-ux`)
 
 **Problem:** Pasting a YouTube/Vimeo URL created a byteless embed source whose
