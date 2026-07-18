@@ -1145,43 +1145,68 @@ public final class AgentLauncher {
 
         // --- Phase 2: Executors (one per source file) ---
         if let executorRouting = resolveStageRouting(.executor, policy: policy, cache: &stageBackendCache) {
-            for sourceFile in plan.distinctSourceFiles {
-                guard isRunning else { break }  // cancelled
-                let assignments = plan.assignments(forSource: sourceFile)
-                guard !assignments.isEmpty else { continue }
-                let executorProfile = BackendProfile(
-                    providerHints: executorRouting.providerHints,
-                    scratchDirectory: scratch,
-                    isReadOnly: false,
-                    cli: makeCLIProfile(operation))
-                let executorPrompt = ACPIngestPrompts.executorPrompt(
+            let executorProfile = BackendProfile(
+                providerHints: executorRouting.providerHints,
+                scratchDirectory: scratch,
+                isReadOnly: false,
+                cli: makeCLIProfile(operation))
+            let maxConcurrent = await (executorRouting.backend as? ACPBackend)?.maxConcurrentExecutorCount() ?? 1
+
+            if maxConcurrent > 1 && plan.distinctSourceFiles.count > 1 {
+                // Phase 4: parallel executors via withTaskGroup. N source files
+                // are processed concurrently on N forked sessions of the same
+                // subprocess. Events are buffered per-session and flushed to the
+                // main actor as batches on each turn-end (avoiding interleaved
+                // streaming deltas that would garble the transcript).
+                DebugLog.agent("runACPIngest: Phase 2 — Parallel executors (maxConcurrent=\(maxConcurrent), \(plan.distinctSourceFiles.count) source file(s))")
+                await runParallelExecutors(
+                    executorRouting: executorRouting,
+                    executorProfile: executorProfile,
+                    plan: plan,
                     stateFilePath: stateFilePath,
-                    assignments: assignments,
-                    allPageTitles: plan.allPageTitles,
-                    sourceIDs: sourceIDs)
-                DebugLog.agent("runACPIngest: Phase 2 — Executor[\(sourceFile)] (\(assignments.count) page(s))")
-                // Partial failure: log and continue to next executor.
-                // Phase 3: if the planner session is still alive, try to fork it
-                // so the executor inherits the planner's source context. If fork
-                // is unsupported (or the planner session was already closed), the
-                // runPhase helper falls back to a fresh `backend.start()`.
-                let forkFrom = (executorRouting.backend as? ACPBackend != nil) ? plannerSessionHandle : nil
-                if let session = await runPhase(
-                    backend: executorRouting.backend,
-                    profile: executorProfile,
+                    sourceIDs: sourceIDs,
                     systemPrompt: systemPrompt,
-                    prompt: executorPrompt,
-                    phaseName: "executor[\(sourceFile)]",
-                    forkFrom: forkFrom
-                ) {
-                    await capturePhaseUsage(backend: executorRouting.backend, session: session)
-                    if let acp = executorRouting.backend as? ACPBackend {
-                        await acp.closeSession(session)
+                    maxConcurrent: maxConcurrent)
+            } else {
+                // Serial executors (Phase 3 behavior — current).
+                for sourceFile in plan.distinctSourceFiles {
+                    guard isRunning else { break }  // cancelled
+                    let assignments = plan.assignments(forSource: sourceFile)
+                    guard !assignments.isEmpty else { continue }
+                    let executorProfile = BackendProfile(
+                        providerHints: executorRouting.providerHints,
+                        scratchDirectory: scratch,
+                        isReadOnly: false,
+                        cli: makeCLIProfile(operation))
+                    let executorPrompt = ACPIngestPrompts.executorPrompt(
+                        stateFilePath: stateFilePath,
+                        assignments: assignments,
+                        allPageTitles: plan.allPageTitles,
+                        sourceIDs: sourceIDs)
+                    DebugLog.agent("runACPIngest: Phase 2 — Executor[\(sourceFile)] (\(assignments.count) page(s))")
+                    // Partial failure: log and continue to next executor.
+                    // Phase 3: if the planner session is still alive, try to fork it
+                    // so the executor inherits the planner's source context. If fork
+                    // is unsupported (or the planner session was already closed), the
+                    // runPhase helper falls back to a fresh `backend.start()`.
+                    let forkFrom = (executorRouting.backend as? ACPBackend != nil) ? plannerSessionHandle : nil
+                    if let session = await runPhase(
+                        backend: executorRouting.backend,
+                        profile: executorProfile,
+                        systemPrompt: systemPrompt,
+                        prompt: executorPrompt,
+                        phaseName: "executor[\(sourceFile)]",
+                        forkFrom: forkFrom
+                    ) {
+                        await capturePhaseUsage(backend: executorRouting.backend, session: session)
+                        if let acp = executorRouting.backend as? ACPBackend {
+                            await acp.closeSession(session)
+                        } else {
+                            await executorRouting.backend.cancel(session)
+                        }
                     } else {
-                        await executorRouting.backend.cancel(session)
+                        DebugLog.agent("runACPIngest: executor[\(sourceFile)] FAILED — skipping (partial failure)")
                     }
-                } else {
-                    DebugLog.agent("runACPIngest: executor[\(sourceFile)] FAILED — skipping (partial failure)")
                 }
             }
         } else {
@@ -1253,6 +1278,194 @@ public final class AgentLauncher {
         }
 
         finish(status: 0)
+    }
+
+    // MARK: - Phase 4: Parallel executor dispatch
+
+    /// Run N executor sessions concurrently via `withTaskGroup` (Phase 4,
+    /// `plans/acp-session-efficiency.md` §5). Each source file is processed on
+    /// its own forked (or fresh) session. Events are buffered per-session and
+    /// flushed to the main actor as batches on each turn-end — this avoids
+    /// interleaved streaming deltas (`.assistantTextDelta`) from different
+    /// sessions that would garble the transcript's streaming-merge logic
+    /// (`mergeOrAppend`).
+    ///
+    /// **Concurrency model:**
+    /// - `ACPBackend` is an actor — `forkSession`/`send`/`closeSession` calls
+    ///   are serialized at the actor level, but the agent's prompt processing
+    ///   runs concurrently on different sessions (each `send()` returns an
+    ///   `AsyncStream` with its own continuation + prompt task).
+    /// - `AgentLauncher` is `@MainActor` — all state mutations
+    ///   (`mergeOrAppend`, `flushTranscript`, `setGenerating`) happen on the
+    ///   main actor via `await` hops from child tasks.
+    /// - `stopAgent()` cancels via `backend.cancel()` which terminates the
+    ///   entire subprocess, killing all parallel sessions. Their streams end,
+    ///   child tasks complete, and the task group returns.
+    /// - The generation gate holds one slot for the whole run — no gate change.
+    private func runParallelExecutors(
+        executorRouting: StageRouting,
+        executorProfile: BackendProfile,
+        plan: ACPIngestPlan,
+        stateFilePath: String,
+        sourceIDs: [String],
+        systemPrompt: String,
+        maxConcurrent: Int
+    ) async {
+        let backend = executorRouting.backend      // Sendable (AgentBackend: Sendable)
+        let acp = executorRouting.backend as? ACPBackend  // Sendable (actor)
+        let profile = executorProfile              // Sendable
+        let allPageTitles = plan.allPageTitles      // [String] — Sendable
+        // Fork from the planner session if the backend is ACP (Phase 3).
+        let forkFrom = (acp != nil) ? plannerSessionHandle : nil
+        // Set backend + a session reference so stopAgent() can cancel.
+        self.backend = backend
+        self.sessionHandle = forkFrom ?? SessionHandle(id: "parallel-executors")
+
+        setGenerating(true)
+
+        // Filter to source files that actually have assignments.
+        let sourceFiles = plan.distinctSourceFiles.filter {
+            !plan.assignments(forSource: $0).isEmpty
+        }
+
+        // Each child task returns (buffered events, session handle) or nil on
+        // failure. The events are flushed to the main actor in batch by the
+        // child task itself on turn-end (not collected at the end) — this gives
+        // near-real-time transcript updates while keeping per-session event
+        // ordering intact.
+        struct ExecutorResult: Sendable {
+            let session: SessionHandle?
+        }
+
+        await withTaskGroup(of: ExecutorResult.self) { group in
+            var active = 0
+            for sourceFile in sourceFiles {
+                guard isRunning else { break }
+
+                // Throttle: if at capacity, wait for one to finish before
+                // dispatching the next.
+                if active >= maxConcurrent {
+                    if let result = await group.next() {
+                        if let session = result.session {
+                            await capturePhaseUsage(backend: backend, session: session)
+                            if let acp { await acp.closeSession(session) }
+                            else { await backend.cancel(session) }
+                        }
+                        active -= 1
+                    }
+                }
+
+                let assignments = plan.assignments(forSource: sourceFile)
+                let executorPrompt = ACPIngestPrompts.executorPrompt(
+                    stateFilePath: stateFilePath,
+                    assignments: assignments,
+                    allPageTitles: allPageTitles,
+                    sourceIDs: sourceIDs)
+                let phaseName = "executor[\(sourceFile)]"
+                let workDir = profile.scratchDirectory?.path
+                let parentHandle = forkFrom
+                let sysPrompt = systemPrompt
+
+                group.addTask { [weak self] in
+                    guard let self else { return ExecutorResult(session: nil) }
+
+                    // --- Fork or create session (ACPBackend actor call) ---
+                    let session: SessionHandle
+                    if let parentHandle = parentHandle, let acp = acp {
+                        DebugLog.agent("runACPIngest[\(phaseName)]: attempting fork from parent session")
+                        if let forked = try? await acp.forkSession(from: parentHandle, cwd: workDir) {
+                            DebugLog.agent("runACPIngest[\(phaseName)]: fork succeeded")
+                            session = forked
+                        } else {
+                            DebugLog.agent("runACPIngest[\(phaseName)]: fork unsupported/failed, falling back to fresh start")
+                            do {
+                                session = try await backend.start(
+                                    profile: profile,
+                                    systemPrompt: sysPrompt,
+                                    onExit: { status in
+                                        DebugLog.agent("runACPIngest[\(phaseName)]: onExit status=\(status) (phase-tracked)")
+                                    })
+                            } catch {
+                                DebugLog.agent("runACPIngest[\(phaseName)]: FAILED: \(error.localizedDescription)")
+                                return ExecutorResult(session: nil)
+                            }
+                        }
+                    } else {
+                        DebugLog.agent("runACPIngest[\(phaseName)]: starting (no fork)")
+                        do {
+                            session = try await backend.start(
+                                profile: profile,
+                                systemPrompt: sysPrompt,
+                                onExit: { status in
+                                    DebugLog.agent("runACPIngest[\(phaseName)]: onExit status=\(status) (phase-tracked)")
+                                })
+                        } catch {
+                            DebugLog.agent("runACPIngest[\(phaseName)]: FAILED: \(error.localizedDescription)")
+                            return ExecutorResult(session: nil)
+                        }
+                    }
+
+                    // --- Send prompt + drain stream ---
+                    // Events are buffered per-session and flushed to the main
+                    // actor as a batch on turn-end. This preserves the streaming
+                    // merge logic (events within a batch are from one session, in
+                    // order) while allowing concurrent agent processing.
+                    DebugLog.agent("runACPIngest[\(phaseName)]: sending executor prompt")
+                    let stream = await backend.send(TurnInput(userText: executorPrompt), into: session)
+                    var batch: [AgentEvent] = []
+                    for await event in stream {
+                        batch.append(event)
+                        if AgentEvent.endsGeneration(event) {
+                            // Flush this session's accumulated batch to the main
+                            // actor. mergeOrAppend + flushTranscript are
+                            // @MainActor-isolated — the await hops to the main
+                            // actor, serializing concurrent flushes.
+                            await self.mergeParallelExecutorEvents(batch)
+                            batch.removeAll(keepingCapacity: true)
+                        }
+                    }
+                    // Flush any remaining events (e.g. turnFailed without
+                    // .endsGeneration).
+                    if !batch.isEmpty {
+                        await self.mergeParallelExecutorEvents(batch)
+                    }
+                    DebugLog.agent("runACPIngest[\(phaseName)]: stream drained")
+                    return ExecutorResult(session: session)
+                }
+                active += 1
+            }
+
+            // Drain remaining in-flight tasks.
+            for await result in group {
+                if let session = result.session, isRunning {
+                    await capturePhaseUsage(backend: backend, session: session)
+                    if let acp { await acp.closeSession(session) }
+                    else { await backend.cancel(session) }
+                } else if let session = result.session {
+                    // Not running (cancelled) — still clean up the session.
+                    if let acp { await acp.closeSession(session) }
+                    else { await backend.cancel(session) }
+                }
+                active -= 1
+            }
+        }
+
+        setGenerating(false)
+    }
+
+    /// Merge a batch of events from one parallel executor session into the
+    /// transcript. Called from a task-group child task via `await` (hops to the
+    /// main actor). Within a batch, events are from a single session and in
+    /// order, so the streaming-merge logic in `mergeOrAppend` works correctly.
+    /// `flushTranscript` sends the new tail to the transcript sink for
+    /// persistence.
+    private func mergeParallelExecutorEvents(_ batch: [AgentEvent]) {
+        lastActivityAt = Date()
+        for event in batch {
+            onAgentEvent?(event)
+            mergeOrAppend(event)
+        }
+        flushTranscript()
     }
 
     /// Run one ACP phase on the given `backend`: start a session, send the

@@ -202,14 +202,14 @@ public actor ACPBackend: AgentBackend {
     /// Watchdog poll interval (seconds).
     private let watchdogPollInterval: TimeInterval
 
-    /// Phase 4: whether to run executor sessions in parallel via
-    /// `withTaskGroup`. Defaults to `false` (serial executors — current
-    /// behavior). This requires the agent to handle concurrent `session/prompt`
-    /// calls on different sessions of the same subprocess, plus Phase 3's
-    /// `forkSession` for the parallel-fork pattern. A probe test (Phase 4
-    /// prerequisite) confirms whether the agent supports this. Until then, the
-    /// conservative serial default is safe.
-    private let parallelExecutors: Bool
+    /// Phase 4: maximum number of executor sessions to run concurrently via
+    /// `withTaskGroup`. Defaults to `1` (serial executors — current behavior)
+    /// which is the safe conservative default. Values `> 1` enable parallel
+    /// execution: N source files are processed concurrently on N forked
+    /// sessions of the same subprocess. This requires the agent to handle
+    /// concurrent `session/prompt` calls on different sessions, plus Phase 3's
+    /// `forkSession` for the parallel-fork pattern.
+    private let maxConcurrentExecutors: Int
 
     init(
         permissionPolicy: PermissionPolicy = .bypass,
@@ -217,14 +217,14 @@ public actor ACPBackend: AgentBackend {
         turnIdleTimeout: TimeInterval = TurnLivenessPolicy.defaultIdleTimeout,
         turnCeilingTimeout: TimeInterval = TurnLivenessPolicy.defaultCeilingTimeout,
         watchdogPollInterval: TimeInterval = TurnLivenessPolicy.defaultPollInterval,
-        parallelExecutors: Bool = false
+        maxConcurrentExecutors: Int = 1
     ) {
         self.permissionPolicy = permissionPolicy
         self.capabilities = capabilities
         self.turnIdleTimeout = turnIdleTimeout
         self.turnCeilingTimeout = turnCeilingTimeout
         self.watchdogPollInterval = watchdogPollInterval
-        self.parallelExecutors = parallelExecutors
+        self.maxConcurrentExecutors = max(1, maxConcurrentExecutors)
     }
 
     /// `fs` read/write + `terminal` — mirrors paseo's `BASE_ACP_CLIENT_CAPABILITIES`
@@ -1086,14 +1086,13 @@ public actor ACPBackend: AgentBackend {
         usageStates[sessionHandle.id]?.contextCritical ?? false
     }
 
-    // MARK: - Parallel executors config (Phase 4, deferred)
+    // MARK: - Parallel executors config (Phase 4)
 
-    /// Phase 4: whether parallel executor sessions are enabled. Defaults to
-    /// `false`. Requires Phase 3 (`forkSession`) + a concurrent-session probe
-    /// test. When `true`, the orchestrator runs executors via `withTaskGroup`;
-    /// when `false` (current), executors run serially.
-    func isParallelExecutorsEnabled() -> Bool {
-        parallelExecutors
+    /// Phase 4: maximum number of concurrent executor sessions. `1` = serial
+    /// (current behavior); `> 1` = parallel via `withTaskGroup`. Requires Phase 3
+    /// (`forkSession`) + an agent that supports concurrent `session/prompt`.
+    func maxConcurrentExecutorCount() -> Int {
+        maxConcurrentExecutors
     }
 
     // MARK: - Model discovery (#329)

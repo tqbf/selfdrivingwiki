@@ -545,20 +545,28 @@ import ACPModel
 
     // MARK: - Phase 4: Default config
 
-    /// Parallel executors default to false (conservative — requires Phase 3
-    /// fork + concurrent session probe).
+    /// Parallel executors default to 1 (serial — conservative; requires Phase 3
+    /// fork + concurrent session support).
     @Test
-    func parallelExecutorsDefaultsToFalse() async {
+    func maxConcurrentExecutorsDefaultsToOne() async {
         let backend = ACPBackend()
-        let enabled = await backend.isParallelExecutorsEnabled()
-        #expect(enabled == false)
+        let max = await backend.maxConcurrentExecutorCount()
+        #expect(max == 1)
     }
 
-    /// Parallel executors can be explicitly enabled (for future probe tests).
+    /// Parallel executors can be explicitly enabled (max > 1).
     @Test
-    func parallelExecutorsCanBeEnabled() async {
-        let backend = ACPBackend(parallelExecutors: true)
-        let enabled = await backend.isParallelExecutorsEnabled()
-        #expect(enabled == true)
+    func maxConcurrentExecutorsCanExceedOne() async {
+        let backend = ACPBackend(maxConcurrentExecutors: 3)
+        let max = await backend.maxConcurrentExecutorCount()
+        #expect(max == 3)
+    }
+
+    /// Values below 1 are clamped to 1 (serial) — never zero or negative.
+    @Test
+    func maxConcurrentExecutorsClampedToOne() async {
+        let backend = ACPBackend(maxConcurrentExecutors: 0)
+        let max = await backend.maxConcurrentExecutorCount()
+        #expect(max == 1)
     }
 }
