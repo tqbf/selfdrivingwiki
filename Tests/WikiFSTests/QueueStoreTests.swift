@@ -545,4 +545,98 @@ struct QueueStoreTests {
         let count2 = try store.resetRunningToQueued()
         #expect(count2 == 0)
     }
+
+    // MARK: - Item activity persistence (usage / paths / progress)
+
+    @Test func testActivityPersistsAcrossReopen() throws {
+        let url = tempDatabaseURL()
+        let itemID: QueueItem.ID
+        let usageJSON = #"{"inputTokens":797,"outputTokens":203}"#
+        do {
+            let store = try QueueStore(databaseURL: url)
+            let item = try store.enqueue(
+                QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
+            itemID = item.id
+            try store.markRunning(id: itemID, providerID: "p1")
+            try store.markCompleted(id: itemID)
+            // Write usage + paths as separate upserts, exactly as the engine's
+            // emit closures do (usage on `.usage`, paths on `.runPaths`).
+            try store.upsertItemActivity(itemID: itemID, usageJSON: usageJSON, logURL: nil, debugURL: nil)
+            try store.upsertItemActivity(itemID: itemID, usageJSON: nil,
+                                         logURL: "/tmp/scratch/run.jsonl",
+                                         debugURL: "/tmp/scratch/debug")
+            store.close()
+        }
+
+        // Reopen — the closest analog to an app restart testable without a GUI.
+        let reopened = try QueueStore(databaseURL: url)
+        let activity = try reopened.loadItemActivity(itemID: itemID)
+        #expect(activity != nil)
+        #expect(activity?.usageJSON == usageJSON)
+        #expect(activity?.logURL == "/tmp/scratch/run.jsonl")
+        #expect(activity?.debugURL == "/tmp/scratch/debug")
+    }
+
+    @Test func testActivityUpsertCOALESCEPreservesExistingFields() throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        let item = try store.enqueue(
+            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
+
+        // usage only.
+        try store.upsertItemActivity(itemID: item.id, usageJSON: "{}", logURL: nil, debugURL: nil)
+        // paths only — must NOT clobber the usage written above (COALESCE).
+        try store.upsertItemActivity(itemID: item.id, usageJSON: nil,
+                                     logURL: "/tmp/log", debugURL: nil)
+
+        let activity = try store.loadItemActivity(itemID: item.id)
+        #expect(activity?.usageJSON == "{}")
+        #expect(activity?.logURL == "/tmp/log")
+    }
+
+    @Test func testProgressAppendJoinsWithNewline() throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        let item = try store.enqueue(
+            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+        try store.appendItemProgress(itemID: item.id, line: "line one")
+        try store.appendItemProgress(itemID: item.id, line: "line two")
+        try store.appendItemProgress(itemID: item.id, line: "line three")
+
+        let activity = try store.loadItemActivity(itemID: item.id)
+        // Mirrors the tracker's in-memory accumulation (newline-joined).
+        #expect(activity?.progressLog == "line one\nline two\nline three")
+    }
+
+    @Test func testActivityCascadesOnPrune() throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        let item = try store.enqueue(
+            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+        try store.markRunning(id: item.id, providerID: "p1")
+        try store.markCompleted(id: item.id)
+        try store.upsertItemActivity(itemID: item.id, usageJSON: "{}",
+                                     logURL: "/tmp/log", debugURL: nil)
+        // Sanity: the row exists while the item exists.
+        #expect(try store.loadItemActivity(itemID: item.id) != nil)
+
+        // Prune ALL terminal items (maxPerQueue: 0) → item row deleted → FK
+        // cascade removes the activity row (mirrors queue_item_events).
+        try store.pruneHistory(maxPerQueue: 0)
+        #expect(try store.getItem(item.id) == nil)
+        #expect(try store.loadItemActivity(itemID: item.id) == nil)
+    }
+
+    @Test func testLoadAllActivity() throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        let item1 = try store.enqueue(
+            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
+        let item2 = try store.enqueue(
+            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+        try store.upsertItemActivity(itemID: item1.id, usageJSON: "{}",
+                                     logURL: "/a", debugURL: nil)
+        try store.appendItemProgress(itemID: item2.id, line: "progress")
+
+        let all = try store.loadAllActivity()
+        #expect(all.count == 2)
+        #expect(all[item1.id]?.logURL == "/a")
+        #expect(all[item2.id]?.progressLog == "progress")
+    }
 }
