@@ -367,7 +367,7 @@ struct ProviderSelector: View {
         let parts = rowID.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2, let provider = config.provider(id: String(parts[0])) else { return }
         let modelId: String? = parts[1] == "default" ? nil : String(parts[1])
-        DebugLog.agent("ProviderSelector.selectRow: provider=\(provider.id) modelId=\(modelId ?? "nil") (nil=Default/agent-default)") // TEMP DEBUG
+        DebugLog.agent("ProviderSelector.selectRow: provider=\(provider.id) modelId=\(modelId ?? "nil") (nil=Default/agent-default)")
         config = launcher.setSelectedModelAndDefault(modelId, provider: provider)
         isPresented = false
         searchText = ""

@@ -228,7 +228,7 @@ public final class AgentLauncher {
         guard !models.isEmpty else { return }
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingCachedModels(models, forProvider: providerId)
-        DebugLog.store("cacheDiscoveredModels: provider=\(providerId) count=\(models.count) → save") // TEMP DEBUG
+        DebugLog.store("cacheDiscoveredModels: provider=\(providerId) count=\(models.count) → save")
         do {
             try updated.save(to: dir)
         } catch {
@@ -245,7 +245,7 @@ public final class AgentLauncher {
     public func setSelectedModel(_ modelId: String?, forProvider providerId: String) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingSelectedModel(modelId, forProvider: providerId)
-        DebugLog.store("setSelectedModel: provider=\(providerId) modelId=\(modelId ?? "nil") → save") // TEMP DEBUG
+        DebugLog.store("setSelectedModel: provider=\(providerId) modelId=\(modelId ?? "nil") → save")
         do {
             try updated.save(to: dir)
         } catch {
@@ -266,7 +266,7 @@ public final class AgentLauncher {
         _ modelId: String?, provider: AgentProvider
     ) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
-        DebugLog.store("setSelectedModelAndDefault: provider=\(provider.id) modelId=\(modelId ?? "nil") → save") // TEMP DEBUG
+        DebugLog.store("setSelectedModelAndDefault: provider=\(provider.id) modelId=\(modelId ?? "nil") → save")
         let updated = providersConfig()
             .settingDefault(id: provider.id)
             .settingSelectedModel(modelId, forProvider: provider.id)
@@ -311,21 +311,21 @@ public final class AgentLauncher {
     /// a detached `@MainActor` Task so it never delays the first turn.
     public func captureAndCacheModels(provider: AgentProvider, session: SessionHandle) {
         guard let acp = backend as? ACPBackend else {
-            DebugLog.agent("captureAndCacheModels: skip (provider=\(provider.id) backend not ACP)") // TEMP DEBUG
+            DebugLog.agent("captureAndCacheModels: skip (provider=\(provider.id) backend not ACP)")
             return
         }
-        DebugLog.agent("captureAndCacheModels: enter provider=\(provider.id) session=\(session.id)") // TEMP DEBUG
+        DebugLog.agent("captureAndCacheModels: enter provider=\(provider.id) session=\(session.id)")
         Task { @MainActor [weak self] in
             guard let self else { return }
             let models = await acp.availableModels(for: session)
             guard !models.isEmpty else {
-                DebugLog.agent("captureAndCacheModels: no models discovered for provider=\(provider.id)") // TEMP DEBUG
+                DebugLog.agent("captureAndCacheModels: no models discovered for provider=\(provider.id)")
                 return
             }
             let cached = models.map {
                 CachedModelInfo(modelId: $0.modelId, name: $0.name, description: $0.description)
             }
-            DebugLog.agent("captureAndCacheModels: captured \(cached.count) model(s) for provider=\(provider.id) ids=\(cached.map(\.modelId))") // TEMP DEBUG
+            DebugLog.agent("captureAndCacheModels: captured \(cached.count) model(s) for provider=\(provider.id) ids=\(cached.map(\.modelId))")
             self.cacheDiscoveredModels(cached, forProvider: provider.id)
         }
     }
@@ -341,7 +341,7 @@ public final class AgentLauncher {
             let pid = await acp.processIdentifier(for: session)
             if let pid {
                 self.currentProcessID = pid
-                DebugLog.agent("captureProcessID: pid=\(pid)") // TEMP DEBUG
+                DebugLog.agent("captureProcessID: pid=\(pid)")
             }
         }
     }
@@ -1589,7 +1589,7 @@ public final class AgentLauncher {
             events = historySeed
             persistedEventCount = historySeed.count
         }
-        DebugLog.agent("startInteractiveQuery: enter firstMsg=\"\(firstMessage.prefix(80))\" chatID=\(chatID ?? "nil") wikiID=\(wikiID) historySeed=\(historySeed.count)") // TEMP DEBUG
+        DebugLog.agent("startInteractiveQuery: enter firstMsg=\"\(firstMessage.prefix(80))\" chatID=\(chatID ?? "nil") wikiID=\(wikiID) historySeed=\(historySeed.count)")
         // Consumed by the first `sendInteractiveMessage` to skip re-persisting
         // the user message the model already seeded at chat creation.
         self.firstMessagePrePersisted = firstMessagePrePersisted
@@ -1600,19 +1600,19 @@ public final class AgentLauncher {
         // The chat's permission policy (default yolo). The ACP agent spawn is
         // threaded into providerHints below.
         let policy: PermissionPolicy = resolvePermissionMode()
-        DebugLog.agent("startInteractiveQuery: permissionPolicy=\(policy)") // TEMP DEBUG
+        DebugLog.agent("startInteractiveQuery: permissionPolicy=\(policy)")
 
         // #324: the launcher reads `agent-providers.json` and picks the
         // default (or selected) provider. The app is ACP-only.
         let provider = resolveSelectedProvider()
         let resolvedSelectedModel = providersConfig().selectedModelId(forProvider: provider.id)
-        DebugLog.agent("startInteractiveQuery: provider=\(provider.id) selectedModel=\(resolvedSelectedModel ?? "nil")") // TEMP DEBUG
+        DebugLog.agent("startInteractiveQuery: provider=\(provider.id) selectedModel=\(resolvedSelectedModel ?? "nil")")
         self.backend = resolveBackend(policy)
 
         // Resolve the provider's spawn command (PATH-resolved) + the
         // Keychain-backed API key (keyed by provider id).
         guard let spawn = resolveACPProviderSpawn(provider) else {
-            DebugLog.agent("startInteractiveQuery: ACP exe missing — \(preflightError ?? "?")") // TEMP DEBUG
+            DebugLog.agent("startInteractiveQuery: ACP exe missing — \(preflightError ?? "?")")
             return
         }
         let resolvedACPCommand = spawn.command
@@ -1716,10 +1716,10 @@ public final class AgentLauncher {
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: cli)
-        DebugLog.agent("startInteractiveQuery: profile built providerHints keys=\(profile.providerHints.keys.sorted()) scratch=\(scratch.lastPathComponent)") // TEMP DEBUG
+        DebugLog.agent("startInteractiveQuery: profile built providerHints keys=\(profile.providerHints.keys.sorted()) scratch=\(scratch.lastPathComponent)")
 
         do {
-            DebugLog.agent("startInteractiveQuery: backend.start provider=\(provider.id) exe=\(resolvedPath) args=\(provider.command ?? [])") // TEMP DEBUG (existed; re-tagged)
+            DebugLog.agent("startInteractiveQuery: backend.start provider=\(provider.id) exe=\(resolvedPath) args=\(provider.command ?? [])")
             let runToken = UUID()
             let session = try await backend.start(
                 profile: profile,
@@ -1740,14 +1740,14 @@ public final class AgentLauncher {
             // SPAWN COMMIT: process is alive. isRunning = true (process alive across turns).
             isInteractiveSession = true
             isRunning = true
-            DebugLog.agent("startInteractiveQuery: spawn-commit session=\(session.id) isInteractive=true") // TEMP DEBUG
+            DebugLog.agent("startInteractiveQuery: spawn-commit session=\(session.id) isInteractive=true")
             // #329: cache the agent's advertised models per-provider for the
             // picker. Done here (after spawn commit) so the session record is
             // populated; it runs as a detached task and never blocks the first
             // turn.
             captureAndCacheModels(provider: provider, session: session)
             captureProcessID(session: session)
-            DebugLog.agent("startInteractiveQuery: spawned") // TEMP DEBUG (existed; re-tagged)
+            DebugLog.agent("startInteractiveQuery: spawned")
             // Start the first turn — this acquires the generation gate for turn 1.
             // Compose the full task prompt (chat.md, write rules, citation rules,
             // don't-rediscover directive) + the user's message — same composition
@@ -1765,7 +1765,7 @@ public final class AgentLauncher {
             // when the OS reports the process gone, so a live idle session is safe.
             startCompletionWatchdog()
         } catch {
-            DebugLog.agent("startInteractiveQuery: backend.start FAILED provider=\(provider.id): \(error)") // TEMP DEBUG (existed; re-tagged)
+            DebugLog.agent("startInteractiveQuery: backend.start FAILED provider=\(provider.id): \(error)")
             preflightError = "Failed to launch claude: \(error.localizedDescription)"
             closeLogFiles()
             try? FileManager.default.removeItem(at: scratch)
@@ -1800,10 +1800,10 @@ public final class AgentLauncher {
             isAwaitingGenerationSlot: isAwaitingGenerationSlot,
             message: trimmed
         ) else {
-            DebugLog.agent("sendInteractiveMessage: GUARD bail (isRunning=\(isRunning) isInteractive=\(isInteractiveSession) isGenerating=\(isGenerating) isAwaitingSlot=\(isAwaitingGenerationSlot) empty=\(trimmed.isEmpty)") // TEMP DEBUG
+            DebugLog.agent("sendInteractiveMessage: GUARD bail (isRunning=\(isRunning) isInteractive=\(isInteractiveSession) isGenerating=\(isGenerating) isAwaitingSlot=\(isAwaitingGenerationSlot) empty=\(trimmed.isEmpty)")
             return
         }
-        DebugLog.agent("sendInteractiveMessage: queuing turn chars=\(trimmed.count) displayChars=\((displayText ?? trimmed).count)") // TEMP DEBUG
+        DebugLog.agent("sendInteractiveMessage: queuing turn chars=\(trimmed.count) displayChars=\((displayText ?? trimmed).count)")
 
         // Signal that we're waiting for the gate. The UI shows a hint; canSend = false.
         isAwaitingGenerationSlot = true
@@ -1816,14 +1816,14 @@ public final class AgentLauncher {
         interactiveSendTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let ok = await self.awaitGenerationSlot()
-            DebugLog.agent("sendInteractiveMessage: gate acquire ok=\(ok)") // TEMP DEBUG
+            DebugLog.agent("sendInteractiveMessage: gate acquire ok=\(ok)")
             self.isAwaitingGenerationSlot = false
             guard ok, !Task.isCancelled, self.isInteractiveSession,
                   let session else {
                 // Acquired the gate then bailed (cancelled or session ended) — give
                 // it back so a queued peer isn't stranded.
                 if ok { self.releaseGenerationSlot() }
-                DebugLog.agent("sendInteractiveMessage: bail after gate (cancelled=\(Task.isCancelled) isInteractive=\(self.isInteractiveSession) session=\(session != nil)") // TEMP DEBUG
+                DebugLog.agent("sendInteractiveMessage: bail after gate (cancelled=\(Task.isCancelled) isInteractive=\(self.isInteractiveSession) session=\(session != nil)")
                 return
             }
             // Display the user's message (or the displayText override — D3's
@@ -1848,7 +1848,7 @@ public final class AgentLauncher {
                 self.firstMessagePrePersisted = false
             }
             self.setGenerating(true)    // UI flag: ChatView banner + send guard
-            DebugLog.agent("sendInteractiveMessage: turn start (setGenerating=true)") // TEMP DEBUG
+            DebugLog.agent("sendInteractiveMessage: turn start (setGenerating=true)")
             self.lastActivityAt = Date()
             // Send the turn and consume the per-turn stream. The backend writes
             // the NDJSON line to stdin; the stream finishes at `.messageStop`
@@ -1862,11 +1862,11 @@ public final class AgentLauncher {
                     self.setGenerating(false)
                     self.flushTranscript()
                     self.generateChatSummary()
-                    DebugLog.agent("sendInteractiveMessage: turn end (endsGeneration) → flushTranscript") // TEMP DEBUG
+                    DebugLog.agent("sendInteractiveMessage: turn end (endsGeneration) → flushTranscript")
                     if Self.releasesGenerationSlotPerTurn(
                         isInteractiveSession: self.isInteractiveSession) {
                         self.releaseGenerationSlot()
-                        DebugLog.agent("sendInteractiveMessage: generation slot released (interactive)") // TEMP DEBUG
+                        DebugLog.agent("sendInteractiveMessage: generation slot released (interactive)")
                     }
                 }
             }
@@ -2155,10 +2155,10 @@ public final class AgentLauncher {
     /// `stdoutLineBuffer` drain moved to the backend's terminationHandler).
     private func finish(status: Int32) {
         guard isRunning else {
-            DebugLog.agent("finish: ignored (already torn down) status=\(status)") // TEMP DEBUG (existed; re-tagged)
+            DebugLog.agent("finish: ignored (already torn down) status=\(status)")
             return
         }
-        DebugLog.agent("finish: status=\(status) events=\(events.count) activeChatID=\(activeChatID ?? "nil")") // TEMP DEBUG (existed; re-tagged + chatID)
+        DebugLog.agent("finish: status=\(status) events=\(events.count) activeChatID=\(activeChatID ?? "nil")")
         watchdogTask?.cancel()
         watchdogTask = nil
         watchdogHasEscalated = false
@@ -2228,7 +2228,7 @@ public final class AgentLauncher {
     /// touch `isRunning` — process lifetime is managed explicitly. Called right
     /// before staging/preflight at the top of each launch path.
     private func resetRunArtifacts() {
-        DebugLog.agent("resetRunArtifacts: clearing per-run artifacts (prior activeChatID=\(activeChatID ?? "nil"))") // TEMP DEBUG
+        DebugLog.agent("resetRunArtifacts: clearing per-run artifacts (prior activeChatID=\(activeChatID ?? "nil"))")
         watchdogTask?.cancel()
         watchdogTask = nil
         watchdogHasEscalated = false

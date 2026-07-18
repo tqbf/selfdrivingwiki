@@ -759,10 +759,15 @@ public final class QueueStore: @unchecked Sendable {
                     db,
                     sql: "SELECT event_json FROM queue_item_events WHERE item_id = ? ORDER BY seq;",
                     arguments: [itemID])
-                return rows.compactMap { row in
+                return rows.compactMap { row -> AgentEvent? in
                     let json: String = row["event_json"]
                     guard let data = json.data(using: .utf8) else { return nil }
-                    return try? JSONDecoder().decode(AgentEvent.self, from: data)
+                    do {
+                        return try JSONDecoder().decode(AgentEvent.self, from: data)
+                    } catch {
+                        DebugLog.store("QueueStore.loadItemEvents: decode failed for event row — \(error.localizedDescription)")
+                        return nil
+                    }
                 }
             }
         }

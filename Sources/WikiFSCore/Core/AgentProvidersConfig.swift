@@ -241,7 +241,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         } else {
             cache[providerId] = models
         }
-        DebugLog.store("AgentProvidersConfig.settingCachedModels: provider=\(providerId) count=\(models.isEmpty ? 0 : models.count)") // TEMP DEBUG
+        DebugLog.store("AgentProvidersConfig.settingCachedModels: provider=\(providerId) count=\(models.isEmpty ? 0 : models.count)")
         return AgentProvidersConfig(
             providers: providers,
             providerModels: cache,
@@ -262,7 +262,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         } else {
             selections.removeValue(forKey: providerId)
         }
-        DebugLog.store("AgentProvidersConfig.settingSelectedModel: provider=\(providerId) modelId=\(modelId ?? "nil")") // TEMP DEBUG
+        DebugLog.store("AgentProvidersConfig.settingSelectedModel: provider=\(providerId) modelId=\(modelId ?? "nil")")
         return AgentProvidersConfig(
             providers: providers,
             providerModels: providerModels,
@@ -351,7 +351,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         if let config = load(from: directory), !config.providers.isEmpty {
             // Preserve the decoded model caches + selections (re-wrapping with
             // only `providers` would wipe them). Re-normalize providers only.
-            DebugLog.store("AgentProvidersConfig.loadOrSeed: LOAD providers=\(config.providers.count) hasModelCaches=\(!config.providerModels.isEmpty) hasSelections=\(!config.selectedModelIds.isEmpty)") // TEMP DEBUG
+            DebugLog.store("AgentProvidersConfig.loadOrSeed: LOAD providers=\(config.providers.count) hasModelCaches=\(!config.providerModels.isEmpty) hasSelections=\(!config.selectedModelIds.isEmpty)")
             return AgentProvidersConfig(
                 providers: config.providers,
                 providerModels: config.providerModels,
@@ -361,7 +361,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
                 maxConcurrent: config.maxConcurrent)
         }
         // Missing / corrupt / empty → seed + persist.
-        DebugLog.store("AgentProvidersConfig.loadOrSeed: SEED (file missing/corrupt/empty)") // TEMP DEBUG
+        DebugLog.store("AgentProvidersConfig.loadOrSeed: SEED (file missing/corrupt/empty)")
         let seeded = seed(discovered: discover())
         try? seeded.save(to: directory)
         return seeded

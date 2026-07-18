@@ -237,17 +237,13 @@ public actor ACPBackend: AgentBackend {
     )
 
 // MARK: - AgentBackend
-// TEMP DEBUG: ACPBackend.start/send/cancel carry verbose lifecycle logging
-// TEMP DEBUG: (launch, initialize, auth, model discovery, setModel, per-turn
-// TEMP DEBUG: prompt). Each DebugLog.agent line is tagged TEMP DEBUG for a
-// TEMP DEBUG: later `grep -n "TEMP DEBUG"` strip.
 
     public func start(
         profile: BackendProfile,
         systemPrompt: String,
         onExit: @escaping @Sendable (Int) -> Void
     ) async throws -> SessionHandle {
-        DebugLog.agent("ACPBackend.start: enter providerHints=\(profile.providerHints)") // TEMP DEBUG (existed; re-tagged)
+        DebugLog.agent("ACPBackend.start: enter providerHints=\(profile.providerHints)")
         // Warm-subprocess reuse (Phase 1, plans/acp-session-efficiency.md): if a
         // warm process already exists (spawned by a prior `start()` call on this
         // backend), skip the expensive launch+initialize+authenticate and just
@@ -274,7 +270,7 @@ public actor ACPBackend: AgentBackend {
         onExit: @escaping @Sendable (Int) -> Void
     ) async throws {
         guard let spawn = Self.resolveSpawnConfig(from: profile) else {
-            DebugLog.agent("ACPBackend.startProcess: FAIL noAgentConfigured") // TEMP DEBUG
+            DebugLog.agent("ACPBackend.startProcess: FAIL noAgentConfigured")
             throw ACPBackendError.noAgentConfigured
         }
 
@@ -284,7 +280,7 @@ public actor ACPBackend: AgentBackend {
         let permissionDelegate = ACPPermissionDelegate(policy: permissionPolicy)
         await client.setDelegate(permissionDelegate)
 
-        DebugLog.agent("ACPBackend.startProcess: launching \(spawn.executablePath) \(spawn.arguments.joined(separator: " "))") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.startProcess: launching \(spawn.executablePath) \(spawn.arguments.joined(separator: " "))")
         // Build the environment so the agent can find wikictl + the wiki DB.
         // Exports WIKI_DB/WIKICTL/PATH (NOT WIKI_ROOT — mount is optional;
         // wikictl is the primary read surface, issue #441).
@@ -305,7 +301,7 @@ public actor ACPBackend: AgentBackend {
             environment: env
         )
 
-        DebugLog.agent("ACPBackend.startProcess: process launched, sending initialize") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.startProcess: process launched, sending initialize")
         // Slice 3: initialize, then authenticate if the agent advertises
         // authMethods. The DECISION is a pure helper (`ACPAuthResolver.resolve`)
         // so it's unit-tested directly; here we just execute it. A key is never
@@ -315,14 +311,14 @@ public actor ACPBackend: AgentBackend {
             capabilities: capabilities,
             clientInfo: ClientInfo(name: "SelfDrivingWiki", title: "Self Driving Wiki", version: GeneratedVersion.appVersion)
         )
-        DebugLog.agent("ACPBackend.startProcess: initialize OK agent=\(initResponse.agentInfo?.name ?? "?") authMethods=\(initResponse.authMethods?.count ?? 0)") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.startProcess: initialize OK agent=\(initResponse.agentInfo?.name ?? "?") authMethods=\(initResponse.authMethods?.count ?? 0)")
 
         switch ACPAuthResolver.resolve(authMethods: initResponse.authMethods, apiKey: spawn.apiKey) {
         case .skip:
             // Agent needs no auth — proceed straight to newSession.
-            DebugLog.agent("ACPBackend.startProcess: agent advertised no authMethods, skipping authenticate") // TEMP DEBUG
+            DebugLog.agent("ACPBackend.startProcess: agent advertised no authMethods, skipping authenticate")
         case .authenticate(let methodId, let credentials):
-            DebugLog.agent("ACPBackend.startProcess: authenticating method=\(methodId)") // TEMP DEBUG
+            DebugLog.agent("ACPBackend.startProcess: authenticating method=\(methodId)")
             let authResponse = try await client.authenticate(
                 authMethodId: methodId,
                 credentials: credentials
@@ -337,7 +333,7 @@ public actor ACPBackend: AgentBackend {
             // client-provided key. Skip client-side `authenticate` and proceed to
             // newSession; if the agent truly requires client creds, the prompt will
             // surface that error (clearer than blocking at start).
-            DebugLog.agent("ACPBackend.startProcess: no API key configured — skipping client auth (agent may self-authenticate)") // TEMP DEBUG
+            DebugLog.agent("ACPBackend.startProcess: no API key configured — skipping client auth (agent may self-authenticate)")
         }
 
         // Capture the CLI profile's log callbacks so ACP stderr and notifications
@@ -369,7 +365,7 @@ public actor ACPBackend: AgentBackend {
             }
             fanout.finish()
         }
-        DebugLog.agent("ACPBackend.startProcess: process-lifetime notification drain started") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.startProcess: process-lifetime notification drain started")
 
         // Forward agent stderr to DebugLog.agent + run.stderr.log (via the CLI
         // profile's onStderrChunk callback). Best-effort: the stream finishes
@@ -419,7 +415,7 @@ public actor ACPBackend: AgentBackend {
         // session — the last binding wins.
         permissionDelegate.bindOnExit(onExit)
 
-        DebugLog.agent("ACPBackend.startProcess: warm process ready canCloseSession=\(canCloseSession) canResume=\(canResume) canLoadSession=\(canLoadSession) canForkSession=\(canForkSession)") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.startProcess: warm process ready canCloseSession=\(canCloseSession) canResume=\(canResume) canLoadSession=\(canLoadSession) canForkSession=\(canForkSession)")
     }
 
     /// Create a new ACP session on an already-started (warm) subprocess.
@@ -456,13 +452,13 @@ public actor ACPBackend: AgentBackend {
         // unsigned dev builds; this makes delivery reliable regardless. Both
         // files match the projection (same `currentSystemPromptBody()` source).
         Self.deliverSystemPrompt(systemPrompt, to: workingDir)
-        DebugLog.agent("ACPBackend.createSession: newSession cwd=\(workingDir)") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.createSession: newSession cwd=\(workingDir)")
         let session = try await client.newSession(workingDirectory: workingDir)
         let sessionId = session.sessionId
         let modelsInfo = session.models
         let discoveredCount = modelsInfo?.availableModels.count ?? 0
         let currentModel = modelsInfo?.currentModelId ?? "(none)"
-        DebugLog.agent("ACPBackend.createSession: discovered \(discoveredCount) model(s), current=\(currentModel)") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.createSession: discovered \(discoveredCount) model(s), current=\(currentModel)")
 
         // #329: if the user picked a model for this provider, apply it right
         // after newSession — BEFORE the first prompt — so the agent uses a
@@ -480,17 +476,17 @@ public actor ACPBackend: AgentBackend {
                 currentModelId: modelsInfo?.currentModelId,
                 advertisedModelIds: advertisedIds)
             if case .apply(let id) = decision {
-                DebugLog.agent("ACPBackend.createSession: setModel \(id)") // TEMP DEBUG
+                DebugLog.agent("ACPBackend.createSession: setModel \(id)")
                 do {
                     _ = try await client.setModel(sessionId: sessionId, modelId: id)
                 } catch {
                     // setModel failed — log and proceed to the prompt anyway; the
                     // agent's default may still work, and a clearer error will
                     // surface from the prompt if not. Non-fatal by design.
-                    DebugLog.agent("ACPBackend.createSession: setModel \(id) failed: \(error.localizedDescription)") // TEMP DEBUG
+                    DebugLog.agent("ACPBackend.createSession: setModel \(id) failed: \(error.localizedDescription)")
                 }
             } else {
-                DebugLog.agent("ACPBackend.createSession: keeping agent default model (selected=\(selectedModelId) → \(decision))") // TEMP DEBUG
+                DebugLog.agent("ACPBackend.createSession: keeping agent default model (selected=\(selectedModelId) → \(decision))")
             }
         }
 
@@ -520,14 +516,14 @@ public actor ACPBackend: AgentBackend {
         resumableSessionId = sessionId
         savedOnExit = onExit
 
-        DebugLog.agent("ACPBackend.createSession: session \(sessionId.value) (handle \(sessionID)) ready") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.createSession: session \(sessionId.value) (handle \(sessionID)) ready")
         return SessionHandle(id: sessionID)
     }
 
     public func send(_ turn: TurnInput, into handle: SessionHandle) async -> AsyncStream<AgentEvent> {
         guard var session = sessions[handle.id] else {
             // Session gone (cancelled/finished) — return an empty, finished stream.
-            DebugLog.agent("ACPBackend.send: no session for handle \(handle.id) — empty stream") // TEMP DEBUG (existed; re-tagged)
+            DebugLog.agent("ACPBackend.send: no session for handle \(handle.id) — empty stream")
             return AsyncStream { $0.finish() }
         }
         // Inject the system prompt into the first turn's user text — agent-agnostic
@@ -542,7 +538,7 @@ public actor ACPBackend: AgentBackend {
             sessions[handle.id] = session
             DebugLog.agent("ACPBackend.send: injected system prompt (\(session.systemPrompt.count) chars) into first turn")
         }
-        DebugLog.agent("ACPBackend.send: turn=\"\(turn.userText.prefix(80))\" handle=\(handle.id)") // TEMP DEBUG (existed; re-tagged)
+        DebugLog.agent("ACPBackend.send: turn=\"\(turn.userText.prefix(80))\" handle=\(handle.id)")
 
         let client = session.client
         let sessionId = session.sessionId
@@ -603,7 +599,7 @@ public actor ACPBackend: AgentBackend {
                         // `kill(pid, 0)` is a zero-signal liveness probe.
                         if let pid = await client.processIdentifier(), pid > 0 {
                             if kill(pid, 0) != 0 {
-                                DebugLog.agent("ACPBackend: process dead (kill(\(pid), 0) != 0) — marking for resume") // TEMP DEBUG
+                                DebugLog.agent("ACPBackend: process dead (kill(\(pid), 0) != 0) — marking for resume")
                                 processHealth.markDied()
                                 completionFlag.markDone()
                                 for event in Self.turnEndEvents(error: ACPBackendError.processDied) {
@@ -613,7 +609,7 @@ public actor ACPBackend: AgentBackend {
                                 return
                             }
                         }
-                        DebugLog.agent("ACPBackend: TURN STALLED — idle \(Int(idle))s, recovering (cancelSession + turnEnd)") // TEMP DEBUG (existed; re-tagged)
+                        DebugLog.agent("ACPBackend: TURN STALLED — idle \(Int(idle))s, recovering (cancelSession + turnEnd)")
                         completionFlag.markDone()
                         for event in Self.turnEndEvents(error: ACPBackendError.turnStalled(idleSeconds: idle)) {
                             continuation.yield(event)
@@ -622,7 +618,7 @@ public actor ACPBackend: AgentBackend {
                         try? await client.cancelSession(sessionId: sessionId)
                         return
                     case .ceilingExceeded(let total):
-                        DebugLog.agent("ACPBackend: TURN CEILING exceeded (\(Int(total))s), recovering") // TEMP DEBUG (existed; re-tagged)
+                        DebugLog.agent("ACPBackend: TURN CEILING exceeded (\(Int(total))s), recovering")
                         completionFlag.markDone()
                         for event in Self.turnEndEvents(error: ACPBackendError.turnCeilingExceeded(totalSeconds: total)) {
                             continuation.yield(event)
@@ -652,7 +648,7 @@ public actor ACPBackend: AgentBackend {
                         guard notification.method == "session/update" else { continue }
                         guard let params = notification.params else { continue }
                         let result = ACPBackend.translateNotification(params: params, sessionId: sessionId, translator: translator)
-                        DebugLog.agent("ACPBackend: session/update → \(result.events.count) AgentEvent(s)") // TEMP DEBUG (existed; re-tagged)
+                        DebugLog.agent("ACPBackend: session/update → \(result.events.count) AgentEvent(s)")
                         for event in result.events {
                             continuation.yield(event)
                         }
@@ -670,7 +666,7 @@ public actor ACPBackend: AgentBackend {
                 defer { drainTask.cancel() }
 
                 do {
-                    DebugLog.agent("ACPBackend: sending session/prompt (\(promptText.count) chars)") // TEMP DEBUG (existed; re-tagged)
+                    DebugLog.agent("ACPBackend: sending session/prompt (\(promptText.count) chars)")
                     let response = try await client.sendPrompt(
                         sessionId: sessionId,
                         content: [.text(TextContent(text: promptText))]
@@ -690,7 +686,7 @@ public actor ACPBackend: AgentBackend {
                     // just as sendPrompt returned), skip — continuation is done.
                     guard !completionFlag.isDone else { return }
                     completionFlag.markDone()
-                    DebugLog.agent("ACPBackend: prompt completed stopReason=\(response.stopReason.rawValue)") // TEMP DEBUG (existed; re-tagged)
+                    DebugLog.agent("ACPBackend: prompt completed stopReason=\(response.stopReason.rawValue)")
                     for event in Self.turnEndEvents(error: nil) {
                         continuation.yield(event)
                     }
@@ -705,7 +701,7 @@ public actor ACPBackend: AgentBackend {
                     // and surface a .processDied error so the caller knows to
                     // attempt resume().
                     processHealth.markDied()
-                    DebugLog.agent("ACPBackend: prompt failed: \(error.localizedDescription)") // TEMP DEBUG (existed; re-tagged)
+                    DebugLog.agent("ACPBackend: prompt failed: \(error.localizedDescription)")
                     for event in Self.turnEndEvents(error: error) {
                         continuation.yield(event)
                     }
@@ -747,7 +743,7 @@ public actor ACPBackend: AgentBackend {
     /// On success, a new `ACPSession` record is created for the resumed
     /// session (same ACP `SessionId`, new `SessionHandle`).
     public func resume(sessionID: String, profile: BackendProfile) async throws -> SessionHandle? {
-        DebugLog.agent("ACPBackend.resume: sessionID=\(sessionID)") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.resume: sessionID=\(sessionID)")
 
         // 1. If the warm process is alive and has this session, no resume needed.
         if let warm = warmProcess, warm.processIsAlive {
@@ -755,7 +751,7 @@ public actor ACPBackend: AgentBackend {
             // If the process is alive and we have a session record, the session
             // is still usable — no resume.
             if sessions.values.contains(where: { $0.sessionId.value == sessionID }) {
-                DebugLog.agent("ACPBackend.resume: process alive + session active — no resume needed") // TEMP DEBUG
+                DebugLog.agent("ACPBackend.resume: process alive + session active — no resume needed")
                 return nil
             }
         }
@@ -763,7 +759,7 @@ public actor ACPBackend: AgentBackend {
         // 2. Mark the old warm process as dead (if not already) and clean it up.
         // The old process's drain/fanout are dead; we need a fresh subprocess.
         if let oldWarm = warmProcess {
-            DebugLog.agent("ACPBackend.resume: tearing down dead warm process") // TEMP DEBUG
+            DebugLog.agent("ACPBackend.resume: tearing down dead warm process")
             oldWarm.drainTask.cancel()
             oldWarm.stderrTask?.cancel()
             oldWarm.notificationFanout.finish()
@@ -778,7 +774,7 @@ public actor ACPBackend: AgentBackend {
         try await startProcess(profile: profile, onExit: onExit)
 
         guard let newWarm = warmProcess else {
-            DebugLog.agent("ACPBackend.resume: startProcess failed to create warm process") // TEMP DEBUG
+            DebugLog.agent("ACPBackend.resume: startProcess failed to create warm process")
             return nil
         }
 
@@ -792,12 +788,12 @@ public actor ACPBackend: AgentBackend {
         if newWarm.canResume {
             // Fastest path: resumeSession restores context without replay.
             do {
-                DebugLog.agent("ACPBackend.resume: attempting resumeSession sessionId=\(sessionID) cwd=\(cwd)") // TEMP DEBUG
+                DebugLog.agent("ACPBackend.resume: attempting resumeSession sessionId=\(sessionID) cwd=\(cwd)")
                 let response = try await client.resumeSession(
                     sessionId: acpSessionId,
                     cwd: cwd
                 )
-                DebugLog.agent("ACPBackend.resume: resumeSession succeeded models=\(response.models?.availableModels.count ?? 0)") // TEMP DEBUG
+                DebugLog.agent("ACPBackend.resume: resumeSession succeeded models=\(response.models?.availableModels.count ?? 0)")
                 return registerResumedSession(
                     acpSessionId: acpSessionId,
                     warm: newWarm,
@@ -806,19 +802,19 @@ public actor ACPBackend: AgentBackend {
             } catch {
                 // Resume failed (session GC'd, protocol error). Fall through to
                 // loadSession if supported.
-                DebugLog.agent("ACPBackend.resume: resumeSession failed: \(error.localizedDescription) — trying fallback") // TEMP DEBUG
+                DebugLog.agent("ACPBackend.resume: resumeSession failed: \(error.localizedDescription) — trying fallback")
             }
         }
 
         if newWarm.canLoadSession {
             // Slower path: loadSession replays history as notifications.
             do {
-                DebugLog.agent("ACPBackend.resume: attempting loadSession sessionId=\(sessionID) cwd=\(cwd)") // TEMP DEBUG
+                DebugLog.agent("ACPBackend.resume: attempting loadSession sessionId=\(sessionID) cwd=\(cwd)")
                 let response = try await client.loadSession(
                     sessionId: acpSessionId,
                     cwd: cwd
                 )
-                DebugLog.agent("ACPBackend.resume: loadSession succeeded models=\(response.models?.availableModels.count ?? 0)") // TEMP DEBUG
+                DebugLog.agent("ACPBackend.resume: loadSession succeeded models=\(response.models?.availableModels.count ?? 0)")
                 // loadSession may return a new sessionId (some agents), or nil.
                 let resumedId = response.sessionId ?? acpSessionId
                 return registerResumedSession(
@@ -827,14 +823,14 @@ public actor ACPBackend: AgentBackend {
                     modelsInfo: response.models
                 )
             } catch {
-                DebugLog.agent("ACPBackend.resume: loadSession failed: \(error.localizedDescription) — giving up") // TEMP DEBUG
+                DebugLog.agent("ACPBackend.resume: loadSession failed: \(error.localizedDescription) — giving up")
             }
         }
 
         // 5. Neither resume nor load is supported (or both failed).
         // Return nil — the caller falls back to start() (fresh session, no
         // context). Log that context was lost so it's visible in Console.
-        DebugLog.agent("ACPBackend.resume: agent does not support resume or load — context lost, caller should use fresh start") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.resume: agent does not support resume or load — context lost, caller should use fresh start")
         return nil
     }
 
@@ -862,7 +858,7 @@ public actor ACPBackend: AgentBackend {
         // Phase 4: create a usage tracker for this resumed session.
         usageStates[sessionID] = SessionUsageState()
         resumableSessionId = acpSessionId
-        DebugLog.agent("ACPBackend.resume: resumed session \(acpSessionId.value) (handle \(sessionID)) ready") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.resume: resumed session \(acpSessionId.value) (handle \(sessionID)) ready")
         return SessionHandle(id: sessionID)
     }
 
@@ -898,9 +894,9 @@ public actor ACPBackend: AgentBackend {
         // was already closed via closeSession but the process is still alive.
         // Tear down the warm process if present.
         if record == nil {
-            DebugLog.agent("ACPBackend.cancel: no session for handle \(session.id)") // TEMP DEBUG
+            DebugLog.agent("ACPBackend.cancel: no session for handle \(session.id)")
         }
-        DebugLog.agent("ACPBackend.cancel: cancelling session=\(record?.sessionId.value ?? "(none)") handle=\(session.id)") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.cancel: cancelling session=\(record?.sessionId.value ?? "(none)") handle=\(session.id)")
         // Drain any in-flight always-ask continuations BEFORE tearing down, so a
         // pending `request_permission` never leaks its `CheckedContinuation`
         // (leaked continuations warn/trap at task end). The agent receives a
@@ -910,7 +906,7 @@ public actor ACPBackend: AgentBackend {
         // Tear down the warm process (drain + stderr + fanout + terminate).
         // This is the full teardown — the warm subprocess is killed.
         if let warm = warmProcess {
-            DebugLog.agent("ACPBackend.cancel: tearing down warm process") // TEMP DEBUG
+            DebugLog.agent("ACPBackend.cancel: tearing down warm process")
             warm.drainTask.cancel()
             warm.stderrTask?.cancel()
             warm.notificationFanout.finish()
@@ -948,7 +944,7 @@ public actor ACPBackend: AgentBackend {
     /// return an empty stream (the turn is done).
     func closeSession(_ handle: SessionHandle) async {
         guard let record = sessions.removeValue(forKey: handle.id) else {
-            DebugLog.agent("ACPBackend.closeSession: no session for handle \(handle.id) — no-op") // TEMP DEBUG
+            DebugLog.agent("ACPBackend.closeSession: no session for handle \(handle.id) — no-op")
             return
         }
         // Phase 4: clean up the usage tracker for this session.
@@ -959,7 +955,7 @@ public actor ACPBackend: AgentBackend {
         if resumableSessionId?.value == record.sessionId.value {
             resumableSessionId = nil
         }
-        DebugLog.agent("ACPBackend.closeSession: closing session=\(record.sessionId.value) handle=\(handle.id)") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.closeSession: closing session=\(record.sessionId.value) handle=\(handle.id)")
         // Drain any in-flight always-ask continuations so a pending
         // `request_permission` never leaks its `CheckedContinuation`.
         record.permissionDelegate.cancelAllPending()
@@ -969,19 +965,19 @@ public actor ACPBackend: AgentBackend {
         // Otherwise degrade gracefully — the session context is leaked until
         // the process terminates (fine for Phase 1: one process per run).
         if warmProcess?.canCloseSession ?? false {
-            DebugLog.agent("ACPBackend.closeSession: sending session/close") // TEMP DEBUG
+            DebugLog.agent("ACPBackend.closeSession: sending session/close")
             do {
                 _ = try await record.client.closeSession(sessionId: record.sessionId)
             } catch {
                 // closeSession failed — log and proceed; the session is already
                 // removed from the map, so no further sends will use it. The
                 // context will be freed on process termination.
-                DebugLog.agent("ACPBackend.closeSession: session/close failed: \(error.localizedDescription)") // TEMP DEBUG
+                DebugLog.agent("ACPBackend.closeSession: session/close failed: \(error.localizedDescription)")
             }
         } else {
-            DebugLog.agent("ACPBackend.closeSession: agent does not support session/close — skipping (context freed at terminate)") // TEMP DEBUG
+            DebugLog.agent("ACPBackend.closeSession: agent does not support session/close — skipping (context freed at terminate)")
         }
-        DebugLog.agent("ACPBackend.closeSession: session closed, subprocess stays alive") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.closeSession: session closed, subprocess stays alive")
     }
 
     /// Fork a session: creates a new session that inherits the parent's
@@ -1016,27 +1012,27 @@ public actor ACPBackend: AgentBackend {
         cwd: String? = nil
     ) async throws -> SessionHandle? {
         guard let warm = warmProcess else {
-            DebugLog.agent("ACPBackend.forkSession: no warm process — cannot fork") // TEMP DEBUG
+            DebugLog.agent("ACPBackend.forkSession: no warm process — cannot fork")
             return nil
         }
         guard warm.canForkSession else {
-            DebugLog.agent("ACPBackend.forkSession: agent does not support session/fork — returning nil (caller falls back to createSession)") // TEMP DEBUG
+            DebugLog.agent("ACPBackend.forkSession: agent does not support session/fork — returning nil (caller falls back to createSession)")
             return nil
         }
         guard let parent = sessions[parentHandle.id] else {
-            DebugLog.agent("ACPBackend.forkSession: no parent session for handle \(parentHandle.id) — returning nil") // TEMP DEBUG
+            DebugLog.agent("ACPBackend.forkSession: no parent session for handle \(parentHandle.id) — returning nil")
             return nil
         }
 
         let workingDir = cwd ?? FileManager.default.currentDirectoryPath
 
-        DebugLog.agent("ACPBackend.forkSession: forking session=\(parent.sessionId.value) cwd=\(workingDir)") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.forkSession: forking session=\(parent.sessionId.value) cwd=\(workingDir)")
         let response = try await warm.client.forkSession(
             sessionId: parent.sessionId,
             cwd: workingDir
         )
         let forkedSessionId = response.sessionId
-        DebugLog.agent("ACPBackend.forkSession: forked → session=\(forkedSessionId.value)") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.forkSession: forked → session=\(forkedSessionId.value)")
 
         // The forked session inherits the parent's conversation context —
         // including the already-injected system prompt. Mark it as injected so
@@ -1053,7 +1049,7 @@ public actor ACPBackend: AgentBackend {
             systemPromptInjected: true
         )
 
-        DebugLog.agent("ACPBackend.forkSession: forked session \(forkedSessionId.value) (handle \(sessionID)) ready") // TEMP DEBUG
+        DebugLog.agent("ACPBackend.forkSession: forked session \(forkedSessionId.value) (handle \(sessionID)) ready")
         return SessionHandle(id: sessionID)
     }
 
