@@ -30,6 +30,12 @@ final class OpenWindowBridge {
     /// as a fallback from `applicationShouldHandleReopen`. Set by
     /// `WindowBridgeProbe` via `openWindow(id: "main")`.
     var openMain: (() -> Void)?
+
+    /// Opens the Settings window via SwiftUI's `@Environment(\.openSettings)`
+    /// action. Set by `WindowBridgeProbe` from a SwiftUI view that has access
+    /// to the environment value. Used by `MenuBarItemController` (the status
+    /// item is AppKit and can't read SwiftUI environment values directly).
+    var openSettings: (() -> Void)?
 }
 
 /// Invisible helper view that captures `@Environment(\.openWindow)` (only
@@ -43,6 +49,7 @@ final class OpenWindowBridge {
 struct WindowBridgeProbe: View {
     let bridge: OpenWindowBridge
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         Color.clear
@@ -60,6 +67,16 @@ struct WindowBridgeProbe: View {
         // `openWindow(id: "main")` targets the main `WindowGroup(id: "main")`.
         bridge.openMain = {
             openWindow(id: "main")
+        }
+        // `openSettings()` opens the Settings scene — the supported SwiftUI
+        // API (macOS 14+). Captured by value like `openWindow`, so it remains
+        // callable from the menu bar even after the hosting window closes
+        // (accessory mode). Replaces the fragile private `showSettingsWindow:`
+        // selector that the responder chain can't reliably deliver when no
+        // key window exists or when the auto-generated Settings menu item was
+        // removed by `removeRedundantAppMenuItems`.
+        bridge.openSettings = {
+            openSettings()
         }
     }
 }
