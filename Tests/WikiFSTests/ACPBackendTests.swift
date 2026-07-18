@@ -510,7 +510,9 @@ import ACPModel
             cost: 0.05,
             currency: "USD",
             contextUsed: 5000,
-            contextSize: 10000)
+            contextSize: 10000,
+            providerLabel: "Claude",
+            modelId: "sonnet-4")
         #expect(usage.inputTokens == 100)
         #expect(usage.outputTokens == 200)
         #expect(usage.totalTokens == 300)
@@ -520,6 +522,8 @@ import ACPModel
         #expect(usage.currency == "USD")
         #expect(usage.contextUsed == 5000)
         #expect(usage.contextSize == 10000)
+        #expect(usage.providerLabel == "Claude")
+        #expect(usage.modelId == "sonnet-4")
     }
 
     /// `SessionUsage` with optional fields set to nil (agent didn't report them).
@@ -541,6 +545,72 @@ import ACPModel
         #expect(usage.currency == nil)
         #expect(usage.contextUsed == 0)
         #expect(usage.contextSize == 0)
+        #expect(usage.providerLabel == nil)
+        #expect(usage.modelId == nil)
+    }
+
+    /// `SessionUsage.merging` combines token counts (summed), and carries
+    /// the latest non-nil `providerLabel`/`modelId` (point-in-time, like
+    /// cost/currency). Existing nil is preserved; new non-nil overrides.
+    @Test
+    func mergingCarriesLatestProviderLabelAndModelId() {
+        let first = SessionUsage(
+            inputTokens: 100, outputTokens: 200, totalTokens: 300,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: 0.05, currency: "USD", contextUsed: 1000, contextSize: 10000,
+            providerLabel: "Claude", modelId: "sonnet-4")
+
+        let second = SessionUsage(
+            inputTokens: 50, outputTokens: 30, totalTokens: 80,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: 0.02, currency: "USD", contextUsed: 5000, contextSize: 10000,
+            providerLabel: "Hermes", modelId: "hermes-3")
+
+        let merged = SessionUsage.merging(first, second)
+        // Tokens are summed.
+        #expect(merged.inputTokens == 150)
+        #expect(merged.outputTokens == 230)
+        #expect(merged.totalTokens == 380)
+        // Cost is summed.
+        #expect(merged.cost == 0.07)
+        // Latest non-nil wins for point-in-time metadata.
+        #expect(merged.providerLabel == "Hermes")
+        #expect(merged.modelId == "hermes-3")
+    }
+
+    /// `SessionUsage.merging` preserves the existing `providerLabel`/
+    /// `modelId` when the new snapshot doesn't supply them (nil).
+    @Test
+    func mergingPreservesExistingProviderLabelWhenNewIsNil() {
+        let first = SessionUsage(
+            inputTokens: 100, outputTokens: 200, totalTokens: 300,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 0, contextSize: 10000,
+            providerLabel: "Claude", modelId: "sonnet-4")
+
+        let second = SessionUsage(
+            inputTokens: 50, outputTokens: 30, totalTokens: 80,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 5000, contextSize: 10000,
+            providerLabel: nil, modelId: nil)
+
+        let merged = SessionUsage.merging(first, second)
+        #expect(merged.providerLabel == "Claude")
+        #expect(merged.modelId == "sonnet-4")
+    }
+
+    /// `SessionUsage.merging(nil, new)` returns `new` directly.
+    @Test
+    func mergingWithNilExistingReturnsNew() {
+        let new = SessionUsage(
+            inputTokens: 10, outputTokens: 20, totalTokens: 30,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 0, contextSize: 0,
+            providerLabel: "OpenCode", modelId: "opencode-1")
+        let merged = SessionUsage.merging(nil, new)
+        #expect(merged.inputTokens == 10)
+        #expect(merged.providerLabel == "OpenCode")
+        #expect(merged.modelId == "opencode-1")
     }
 
     // MARK: - Phase 4: Default config

@@ -946,7 +946,7 @@ public final class AgentLauncher {
             // session handle. The ACPBackend retains the usage state until the
             // session is closed/cancelled, but finish() drops our handle ref.
             if isRunning, let handle = sessionHandle {
-                await capturePhaseUsage(backend: self.backend, session: handle)
+                await capturePhaseUsage(backend: self.backend, session: handle, providerLabel: provider.label)
             }
             if isRunning {
                 finish(status: exitStatus ?? 0)
@@ -1206,7 +1206,7 @@ public final class AgentLauncher {
                         phaseName: "executor[\(sourceFile)]",
                         forkFrom: forkFrom
                     ) {
-                        await capturePhaseUsage(backend: executorRouting.backend, session: session)
+                        await capturePhaseUsage(backend: executorRouting.backend, session: session, providerLabel: executorRouting.provider.label)
                         if let acp = executorRouting.backend as? ACPBackend {
                             await acp.closeSession(session)
                         } else {
@@ -1227,7 +1227,7 @@ public final class AgentLauncher {
         // alive (e.g., the planner failed early and we fell back), this is nil.
         if let plannerSession = plannerSessionHandle {
             DebugLog.agent("runACPIngest: closing planner session (all forks done)")
-            await capturePhaseUsage(backend: plannerRouting.backend, session: plannerSession)
+            await capturePhaseUsage(backend: plannerRouting.backend, session: plannerSession, providerLabel: plannerRouting.provider.label)
             if let acp = plannerRouting.backend as? ACPBackend {
                 await acp.closeSession(plannerSession)
             } else {
@@ -1267,7 +1267,7 @@ public final class AgentLauncher {
             prompt: finalizerPrompt,
             phaseName: "finalizer"
         ) {
-            await capturePhaseUsage(backend: finalizerRouting.backend, session: session)
+            await capturePhaseUsage(backend: finalizerRouting.backend, session: session, providerLabel: finalizerRouting.provider.label)
             if let acp = finalizerRouting.backend as? ACPBackend {
                 await acp.closeSession(session)
             } else {
@@ -1356,7 +1356,7 @@ public final class AgentLauncher {
                 if active >= maxConcurrent {
                     if let result = await group.next() {
                         if let session = result.session {
-                            await capturePhaseUsage(backend: backend, session: session)
+                            await capturePhaseUsage(backend: backend, session: session, providerLabel: executorRouting.provider.label)
                             if let acp { await acp.closeSession(session) }
                             else { await backend.cancel(session) }
                         }
@@ -1447,7 +1447,7 @@ public final class AgentLauncher {
             // Drain remaining in-flight tasks.
             for await result in group {
                 if let session = result.session, isRunning {
-                    await capturePhaseUsage(backend: backend, session: session)
+                    await capturePhaseUsage(backend: backend, session: session, providerLabel: executorRouting.provider.label)
                     if let acp { await acp.closeSession(session) }
                     else { await backend.cancel(session) }
                 } else if let session = result.session {
@@ -1591,7 +1591,7 @@ public final class AgentLauncher {
         ) {
             captureAndCacheModels(provider: routing.provider, session: session)
             captureProcessID(session: session)
-            await capturePhaseUsage(backend: routing.backend, session: session)
+            await capturePhaseUsage(backend: routing.backend, session: session, providerLabel: routing.provider.label)
             await routing.backend.cancel(session)
             finish(status: 0)
         } else {
@@ -1605,11 +1605,39 @@ public final class AgentLauncher {
     /// `runTotalUsage`. MUST be called BEFORE `closeSession`/`cancel` — once
     /// the session is closed, the usage state is removed from the backend.
     /// Non-ACP backends are a silent no-op (no usage data available).
-    private func capturePhaseUsage(backend: AgentBackend, session: SessionHandle) async {
+    ///
+    /// `providerLabel` and `phaseModelId` are display metadata attached to the
+    /// merged usage so the Activity window can show "Claude · Sonnet 4" etc.
+    /// The backend's `sessionUsage(for:)` already sets `modelId` from the
+    /// session's `currentModelId`; the provider label supplied here overrides
+    /// nil (latest non-nil wins on merge).
+    private func capturePhaseUsage(
+        backend: AgentBackend,
+        session: SessionHandle,
+        providerLabel: String? = nil
+    ) async {
         guard let acp = backend as? ACPBackend else { return }
         guard let usage = await acp.sessionUsage(for: session) else { return }
-        runTotalUsage = SessionUsage.merging(runTotalUsage, usage)
-        DebugLog.agent("runTotalUsage: captured phase usage in=\(usage.inputTokens) out=\(usage.outputTokens) cost=\(usage.cost ?? 0)")
+        // Attach the configured provider label (the backend doesn't know it).
+        let enriched: SessionUsage
+        if let providerLabel {
+            enriched = SessionUsage(
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+                totalTokens: usage.totalTokens,
+                cachedReadTokens: usage.cachedReadTokens,
+                thoughtTokens: usage.thoughtTokens,
+                cost: usage.cost,
+                currency: usage.currency,
+                contextUsed: usage.contextUsed,
+                contextSize: usage.contextSize,
+                providerLabel: providerLabel,
+                modelId: usage.modelId)
+        } else {
+            enriched = usage
+        }
+        runTotalUsage = SessionUsage.merging(runTotalUsage, enriched)
+        DebugLog.agent("runTotalUsage: captured phase usage in=\(usage.inputTokens) out=\(usage.outputTokens) cost=\(usage.cost ?? 0) model=\(usage.modelId ?? "nil") provider=\(providerLabel ?? "nil")")
     }
 
     /// Resolve the path to a binary bundled in `Contents/Helpers/`, or nil if
