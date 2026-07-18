@@ -39,9 +39,9 @@ public enum AgentOperationRunner {
         wikictlDirectory: String
     ) async {
         let trimmed = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        DebugLog.agent("startChat: enter msg=\"\(trimmed.prefix(80))\" provider=\(launcher.resolveSelectedProvider().id)") // TEMP DEBUG
+        DebugLog.agent("startChat: enter msg=\"\(trimmed.prefix(80))\" provider=\(launcher.resolveSelectedProvider().id)")
         guard !trimmed.isEmpty else {
-            DebugLog.agent("startChat: early-return — empty message") // TEMP DEBUG
+            DebugLog.agent("startChat: early-return — empty message")
             return
         }
 
@@ -51,7 +51,7 @@ public enum AgentOperationRunner {
         // removed — CAS (page versions, W0) prevents data races.
         if Self.shouldBlockEditStart(
             isIngestInProgress: store.isIngestInProgress) {
-            DebugLog.agent("startChat: edit-blocked (isIngestInProgress=\(store.isIngestInProgress))") // TEMP DEBUG
+            DebugLog.agent("startChat: edit-blocked (isIngestInProgress=\(store.isIngestInProgress))")
             launcher.preflightError = "An ingestion is in progress. Wait for it to finish before starting a chat."
             return
         }
@@ -78,7 +78,7 @@ public enum AgentOperationRunner {
         // Start the interactive session. The agent-run lifecycle is ref-counted
         // (agentRunStarted/agentRunEnded) for sidebar reload on last-run-end;
         // no edit lock — CAS (page versions, W0) prevents data races.
-        DebugLog.agent("startChat: calling launcher.startInteractiveQuery wikiID=\(wikiID) chatID=\(chat?.id.rawValue ?? "nil")") // TEMP DEBUG
+        DebugLog.agent("startChat: calling launcher.startInteractiveQuery wikiID=\(wikiID) chatID=\(chat?.id.rawValue ?? "nil")")
         await launcher.startInteractiveQuery(
             firstMessage: trimmed,
             stateMarkdown: store.currentStateSnapshot().renderStateFile(),
@@ -112,10 +112,10 @@ public enum AgentOperationRunner {
         // immediately isn't caught here, but seeding guarantees that chat still
         // holds its first message — never titled-but-empty.)
         if let chat, launcher.preflightError != nil {
-            DebugLog.agent("startChat: ROLLBACK chat=\(chat.id.rawValue) preflightError=\(launcher.preflightError ?? "?")") // TEMP DEBUG
+            DebugLog.agent("startChat: ROLLBACK chat=\(chat.id.rawValue) preflightError=\(launcher.preflightError ?? "?")")
             store.rollbackChatCreation(id: chat.id, toDraft: .newChat)
         }
-        DebugLog.agent("startChat: done preflightError=\(launcher.preflightError ?? "nil")") // TEMP DEBUG
+        DebugLog.agent("startChat: done preflightError=\(launcher.preflightError ?? "nil")")
     }
 
     // MARK: - Pure predicates
@@ -299,9 +299,9 @@ public enum AgentOperationRunner {
         wikictlDirectory: String
     ) async {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        DebugLog.agent("continueChat: enter chatID=\(chatID.rawValue) msg=\"\(trimmed.prefix(80))\" provider=\(launcher.resolveSelectedProvider().id)") // TEMP DEBUG
+        DebugLog.agent("continueChat: enter chatID=\(chatID.rawValue) msg=\"\(trimmed.prefix(80))\" provider=\(launcher.resolveSelectedProvider().id)")
         guard !trimmed.isEmpty else {
-            DebugLog.agent("continueChat: early-return — empty message") // TEMP DEBUG
+            DebugLog.agent("continueChat: early-return — empty message")
             return
         }
 
@@ -313,10 +313,10 @@ public enum AgentOperationRunner {
             isInteractiveSession: launcher.isInteractiveSession,
             isGenerating: launcher.isGenerating,
             isAwaitingGenerationSlot: launcher.isAwaitingGenerationSlot)
-        DebugLog.agent("continueChat: takeover decision=\(decision) (isRunning=\(launcher.isRunning) isInteractiveSession=\(launcher.isInteractiveSession) isGenerating=\(launcher.isGenerating) isAwaitingGenerationSlot=\(launcher.isAwaitingGenerationSlot))") // TEMP DEBUG
+        DebugLog.agent("continueChat: takeover decision=\(decision) (isRunning=\(launcher.isRunning) isInteractiveSession=\(launcher.isInteractiveSession) isGenerating=\(launcher.isGenerating) isAwaitingGenerationSlot=\(launcher.isAwaitingGenerationSlot))")
         switch decision {
         case .refused:
-            DebugLog.agent("continueChat: refused — launcher mid-generation") // TEMP DEBUG (existed; re-tagged)
+            DebugLog.agent("continueChat: refused — launcher mid-generation")
             return
         case .betweenTurns:
             // End the OTHER chat's session first. stopAgent() cancels any
@@ -324,10 +324,10 @@ public enum AgentOperationRunner {
             // finish(-1) SYNCHRONOUSLY on the main actor — which runs the final
             // flushTranscript() (persisting the other chat's tail) and clears its
             // transcriptSink + activeChatID before we take over. Nothing is lost.
-            DebugLog.agent("continueChat: ending between-turns session before takeover") // TEMP DEBUG (existed; re-tagged)
+            DebugLog.agent("continueChat: ending between-turns session before takeover")
             launcher.stopAgent()
         case .idle:
-            DebugLog.agent("continueChat: idle — taking over directly") // TEMP DEBUG
+            DebugLog.agent("continueChat: idle — taking over directly")
         }
 
         // Refuse if an ingest is in progress (issue #235). The old
@@ -335,7 +335,7 @@ public enum AgentOperationRunner {
         // prevents data races, so concurrent agent runs are fine.
         if Self.shouldBlockEditStart(
             isIngestInProgress: store.isIngestInProgress) {
-            DebugLog.agent("continueChat: edit-blocked (isIngestInProgress=\(store.isIngestInProgress))") // TEMP DEBUG
+            DebugLog.agent("continueChat: edit-blocked (isIngestInProgress=\(store.isIngestInProgress))")
             launcher.preflightError = "An ingestion is in progress. Wait for it to finish before starting a chat."
             return
         }
@@ -347,13 +347,13 @@ public enum AgentOperationRunner {
         // Build the condensed transcript + new message as the first prompt.
         let history = store.chatMessages(chatID: chatID)
         let firstMessage = continuationPreamble(from: history, newMessage: trimmed)
-        DebugLog.agent("continueChat: historyRows=\(history.count) preambleChars=\(firstMessage.count) displayMsg=\(trimmed.count)") // TEMP DEBUG
+        DebugLog.agent("continueChat: historyRows=\(history.count) preambleChars=\(firstMessage.count) displayMsg=\(trimmed.count)")
 
         // Start a fresh session writing to the SAME chat row. activeChatID = chat.id
         // flips ChatView to live for this tab (seq continues, title
         // preserved, updatedAt bumps on the first persisted append). The sink is
         // keyed by chatID and appends to the same row.
-        DebugLog.agent("continueChat: calling launcher.startInteractiveQuery wikiID=\(wikiID) chatID=\(chatID.rawValue)") // TEMP DEBUG
+        DebugLog.agent("continueChat: calling launcher.startInteractiveQuery wikiID=\(wikiID) chatID=\(chatID.rawValue)")
         await launcher.startInteractiveQuery(
             firstMessage: firstMessage,
             firstMessageDisplay: trimmed,
