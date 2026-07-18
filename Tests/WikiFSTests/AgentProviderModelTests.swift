@@ -490,4 +490,53 @@ import ACPModel
         let config = AgentProvidersConfig(providers: [.claudeAcpDefault])
         #expect(config.cachedModels(forProvider: "claude-acp").isEmpty)
     }
+
+    // MARK: - Readiness (#440)
+
+    @Test func readinessMessageReturnsNilWhenCommandResolves() {
+        // The default Claude provider's `bun` command resolves via the
+        // injected closure → nil (ready). We inject a stub that always
+        // finds the binary so we don't depend on the real filesystem.
+        let msg = AgentLauncher.readinessMessage(
+            for: .claudeAcpDefault,
+            resolveCommand: { _ in ["/usr/local/bin/bun"] })
+        #expect(msg == nil)
+    }
+
+    @Test func readinessMessageReturnsMessageWhenBinaryNotFound() {
+        // Inject a resolver that always fails → the provider is not ready.
+        let provider = AgentProvider(
+            id: "hermes", label: "Hermes",
+            command: ["hermes", "acp"], enabled: true, isDefault: true)
+        let msg = AgentLauncher.readinessMessage(
+            for: provider,
+            resolveCommand: { _ in nil })
+        #expect(msg != nil)
+        #expect(msg?.contains("was not found on your PATH") == true)
+        #expect(msg?.contains("Settings → Agents") == true)
+    }
+
+    @Test func readinessMessageReturnsMessageWhenNoCommandConfigured() {
+        // A provider with no command at all.
+        let provider = AgentProvider(
+            id: "broken", label: "Broken",
+            command: nil, enabled: true, isDefault: true)
+        let msg = AgentLauncher.readinessMessage(
+            for: provider,
+            resolveCommand: { _ in nil })
+        #expect(msg != nil)
+        #expect(msg?.contains("has no command configured") == true)
+        #expect(msg?.contains("Settings → Agents") == true)
+    }
+
+    @Test func readinessMessageMentionsBunForBunProvider() {
+        // The default Claude provider uses `bun` — the message should mention
+        // bun.sh when the binary isn't found.
+        let msg = AgentLauncher.readinessMessage(
+            for: .claudeAcpDefault,
+            resolveCommand: { _ in nil })
+        #expect(msg != nil)
+        #expect(msg?.contains("bun") == true)
+        #expect(msg?.contains("bun.sh") == true)
+    }
 }

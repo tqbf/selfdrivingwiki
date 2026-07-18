@@ -29,6 +29,10 @@ struct ActivityWindowView: View {
     let queueEngine: QueueEngine
     @Bindable var activityTracker: QueueActivityTracker
     weak var sessionManager: SessionManager?
+    /// Bridges the SwiftUI environment's `openSettings` action so the
+    /// "Configure…" CTA buttons can open Settings on the relevant tab
+    /// (#440). Set by `MenuBarItemController` when creating the window.
+    var openWindowBridge: OpenWindowBridge?
 
     @State private var viewModel = QueueViewModel()
     @State private var selectedItemID: QueueItem.ID?
@@ -391,6 +395,23 @@ struct ActivityWindowView: View {
                         .foregroundStyle(.red)
                         .textSelection(.enabled)
                         .lineLimit(4)
+                    // #440: when the failure is a "not configured" error (the
+                    // provider binary wasn't found, no API key, etc.), show a
+                    // call-to-action button that opens Settings on the relevant
+                    // tab so the user can fix it without guessing.
+                    if isConfigurationError(error), openWindowBridge != nil {
+                        Button(action: {
+                            let tab = queue == .extraction ? "extraction" : "agents"
+                            openWindowBridge?.openSettings(tab: tab)
+                        }) {
+                            Label(
+                                queue == .extraction ? "Configure Extraction…" : "Configure Agents…",
+                                systemImage: "gearshape"
+                            )
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
                 }
                 // #528 spike: show per-run usage in the detail header too.
                 if let usage = activityTracker.usage(for: item.id) {
@@ -506,6 +527,39 @@ struct ActivityWindowView: View {
     private func item(for id: QueueItem.ID) -> QueueItem? {
         activeItems.first { $0.id == id }
             ?? recentItems.first { $0.id == id }
+    }
+
+    /// Detects whether a failed item's error message is a "not configured"
+    /// error (binary not on PATH, no API key, no endpoint) rather than a
+    /// runtime error (agent crashed, network failure). Used to decide whether
+    /// to show the "Configure…" call-to-action button (#440).
+    ///
+    /// Matches the wording from `QueueIngestionError.notReady`,
+    /// `QueueExtractionError.notReady`, and the `ExtractionReadiness`
+    /// `.needsSetup`/`.notInstalled` cases. Conservative: only surfaces the
+    /// CTA when the error clearly points at configuration, so a generic
+    /// "convert failed" doesn't show a misleading gear button.
+    private func isConfigurationError(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        // Markers from the readiness messages:
+        // - "was not found on your PATH"
+        // - "has no command configured"
+        // - "Open Settings → Agents" / "Open Settings → Extraction"
+        // - "no api key" / "add your … api key"
+        // - "set a docling serve endpoint"
+        // - "dependencies aren't installed" (local pdf2md)
+        let markers = [
+            "was not found on your path",
+            "has no command configured",
+            "open settings → agents",
+            "open settings → extraction",
+            "add your anthropic api key",
+            "add your google ai studio api key",
+            "set a docling serve endpoint",
+            "dependencies aren't installed",
+            "fix it in settings → agents"
+        ]
+        return markers.contains(where: { lower.contains($0) })
     }
 
     private func wikiDisplayName(for id: String) -> String {

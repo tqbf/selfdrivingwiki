@@ -1929,11 +1929,12 @@ public final class WikiStoreModel {
         // providers (Vimeo/Spotify/SoundCloud/remote-media) fall through to the
         // pure-URL byteless path.
         if let outcome = try await youtubeEmbedAndTranscriptOutcome(
-            rawInput, youtubeFetcher: youtubeFetcher ?? YouTubeTranscriptService(fetcher: fetcher))
+            rawInput, urlFetcher: fetcher,
+            youtubeFetcher: youtubeFetcher ?? YouTubeTranscriptService(fetcher: fetcher))
         {
             return outcome
         }
-        if let outcome = try bytelessMediaOutcome(rawInput) {
+        if let outcome = try await bytelessMediaOutcome(rawInput, urlFetcher: fetcher) {
             return outcome
         }
         return try await addURLViaWebsite(rawInput, fetcher: fetcher)
@@ -1993,11 +1994,12 @@ public final class WikiStoreModel {
         // its captions are extracted (best-effort, no API key) alongside the
         // embed; the other providers fall through to the pure-URL byteless path.
         if let outcome = try await youtubeEmbedAndTranscriptOutcome(
-            rawInput, youtubeFetcher: youtubeFetcher)
+            rawInput, urlFetcher: fetcher,
+            youtubeFetcher: youtubeFetcher)
         {
             return outcome
         }
-        if let outcome = try bytelessMediaOutcome(rawInput) {
+        if let outcome = try await bytelessMediaOutcome(rawInput, urlFetcher: fetcher) {
             return outcome
         }
         return try await addURLViaWebsite(rawInput, fetcher: fetcher)
@@ -2014,7 +2016,10 @@ public final class WikiStoreModel {
     /// `role: .primary` (not `.media`): these are first-class, user-created,
     /// referenceable sources — visible, searchable, and citable in the Sources
     /// list — matching the byteless-podcast precedent.
-    private func bytelessMediaOutcome(_ rawInput: String) throws -> URLFetchService.FetchOutcome? {
+    private func bytelessMediaOutcome(
+        _ rawInput: String,
+        urlFetcher: any URLFetchService.URLResourceFetcher
+    ) async throws -> URLFetchService.FetchOutcome? {
         let match: MediaEmbedMatch
         let kind: URLFetchService.FetchOutcome.Kind
         if let m = MediaEmbedURL.youtube(rawInput) { match = m; kind = .videoEmbed }
@@ -2034,10 +2039,22 @@ public final class WikiStoreModel {
                 externalRef: match.planURL,
                 externalIdentity: match.externalIdentity),
             role: .primary)
-        // No manual reload — the bus fires reloadFromStore() async after the
-        // store write. The tab title is passed explicitly so tabTitle (which
-        // reads `sources`) needs no synchronous freshness.
-        openTab(.source(summary.id), title: summary.effectiveName)
+        // Best-effort provider display title via oEmbed (YouTube/Vimeo/Spotify/
+        // SoundCloud). Runs off-main, never blocks the embed; a nil title leaves
+        // the synthetic `youtube-<id>` name in place. Issue #572.
+        let resolvedTitle = await fetchMediaTitle(for: match, urlFetcher: urlFetcher)
+        if let title = resolvedTitle {
+            do {
+                try store.setSourceDisplayName(id: summary.id, displayName: title)
+            } catch {
+                DebugLog.store("byteless oEmbed title setSourceDisplayName failed (source=\(summary.id.rawValue)): \(error)")
+            }
+        }
+        // No manual reload — the bus fires reloadFromStore() async after each
+        // store write (addBytelessSource + setSourceDisplayName). The tab title
+        // is passed explicitly (the resolved title when available) so it needs
+        // no synchronous freshness.
+        openTab(.source(summary.id), title: resolvedTitle ?? summary.effectiveName)
         return URLFetchService.FetchOutcome(
             filename: match.filename, byteSize: 0, kind: kind)
     }
@@ -2053,9 +2070,10 @@ public final class WikiStoreModel {
     /// is logged via `DebugLog` but NEVER blocks the embed — the embed source is
     /// created first, then the transcript fetch runs off-main. Returns `nil` for
     /// non-YouTube URLs so the caller falls through to `bytelessMediaOutcome`.
-    /// Issue #564.
+    /// Issue #564 / #572.
     private func youtubeEmbedAndTranscriptOutcome(
         _ rawInput: String,
+        urlFetcher: any URLFetchService.URLResourceFetcher,
         youtubeFetcher: (any YouTubeTranscriptFetching)?
     ) async throws -> URLFetchService.FetchOutcome? {
         guard let match = MediaEmbedURL.youtube(rawInput) else { return nil }
@@ -2075,9 +2093,23 @@ public final class WikiStoreModel {
                 externalIdentity: match.externalIdentity),
             role: .primary)
 
+        // Best-effort oEmbed title for the display name (#572). Runs off-main and
+        // never blocks: a nil leaves the synthetic `youtube-<id>` name in place.
+        // Fetched ONCE here and threaded to every return path so the title store
+        // write + tab title stay consistent regardless of the transcript outcome.
+        let resolvedTitle = await fetchMediaTitle(for: match, urlFetcher: urlFetcher)
+        if let title = resolvedTitle {
+            do {
+                try store.setSourceDisplayName(id: summary.id, displayName: title)
+            } catch {
+                DebugLog.store("YouTube oEmbed title setSourceDisplayName failed (source=\(summary.id.rawValue)): \(error)")
+            }
+        }
+        let tabTitle = resolvedTitle ?? summary.effectiveName
+
         // No transcript fetcher → embed-only (e.g. app-store build, or a test).
         guard let fetcher = youtubeFetcher else {
-            openTab(.source(summary.id), title: summary.effectiveName)
+            openTab(.source(summary.id), title: tabTitle)
             return URLFetchService.FetchOutcome(
                 filename: match.filename, byteSize: 0, kind: .videoEmbed)
         }
@@ -2109,20 +2141,35 @@ public final class WikiStoreModel {
                 // with no trace. The embed source is already saved, so this is a
                 // partial-failure log, not a throw.
                 DebugLog.store("YouTube transcript store failed (source=\(summary.id.rawValue)): \(error)")
-                openTab(.source(summary.id), title: summary.effectiveName)
+                openTab(.source(summary.id), title: tabTitle)
                 return URLFetchService.FetchOutcome(
                     filename: match.filename, byteSize: 0, kind: .videoEmbed)
             }
-            openTab(.source(summary.id), title: summary.effectiveName)
+            openTab(.source(summary.id), title: tabTitle)
             return URLFetchService.FetchOutcome(
                 filename: transcript.filename,
                 byteSize: transcript.markdown.utf8.count,
                 kind: .videoTranscript)
         }
         // No transcript available — embed only (current behavior).
-        openTab(.source(summary.id), title: summary.effectiveName)
+        openTab(.source(summary.id), title: tabTitle)
         return URLFetchService.FetchOutcome(
             filename: match.filename, byteSize: 0, kind: .videoEmbed)
+    }
+
+    /// Off-main oEmbed title fetch for a byteless media match. The GET itself
+    /// runs in a detached `Task` so it can't stall the `@MainActor` model; a
+    /// `nil` leaves the synthetic name in place. Shared by the YouTube and the
+    /// generic provider paths so the title fetch is one code path. Issue #572.
+    private func fetchMediaTitle(
+        for match: MediaEmbedMatch,
+        urlFetcher: any URLFetchService.URLResourceFetcher
+    ) async -> String? {
+        let matchCopy = match
+        let fetcherCopy = urlFetcher
+        return await Task.detached(priority: .userInitiated) {
+            await MediaTitleFetcher.title(for: matchCopy, fetcher: fetcherCopy)
+        }.value
     }
 
     /// The web-fetch ingest path (HTML→md / PDF / text / binary), shared by both

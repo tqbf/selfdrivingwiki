@@ -50,6 +50,66 @@ tracking is correct and the isolation check runs once, not per-row). The
 suites pass. Verified zero `@Observable` reads in `itemRow` body via
 `rg 'activityTracker\.|sessionManager\?|\.sessions\[|\.sources\b|\.summaries\b'`
 inside the function — no matches.
+## 2026-07-18 — Issue #572: YouTube/Vimeo URL ingest UX — video title as display name + embed player in source detail (branch `feature/youtube-embed-title-ux`)
+
+**Problem:** Pasting a YouTube/Vimeo URL created a byteless embed source whose
+display name was the synthetic `youtube-<videoId>` (not the real video title),
+and `SourceDetailView` routed byteless sources to the inert "Raw Source"
+fallback — the transcript markdown (from #564) and the embed player were never
+shown in the detail view. Only the in-page reader (`![[source:…]]` directive)
+rendered the iframe.
+
+**Fix (three parts):**
+
+1. **Video title via oEmbed** (`Sources/WikiFSCore/Integrations/MediaTitleFetcher.swift`):
+   a pure `title(for:fetcher:)` that builds each provider's oEmbed endpoint URL
+   (YouTube/Vimeo/Spotify/SoundCloud — `remote-media` has none), fetches the JSON
+   off-main via the injected `URLResourceFetcher` seam, and parses the `title`
+   field. Never throws — a network/decode failure returns `nil` so the synthetic
+   name stays in place (mirrors the `YouTubeTranscriptService` best-effort
+   discipline). Wired into both byteless paths in `WikiStoreModel`:
+   `bytelessMediaOutcome` and `youtubeEmbedAndTranscriptOutcome` now call
+   `fetchMediaTitle` (a detached `Task` helper) and `setSourceDisplayName` on
+   success, threading the resolved title to every `openTab` call.
+
+2. **Embed start-time** (`ExternalEmbed.youTubeStartTime(from:)`): parses
+   YouTube's `&t=` / `?start=` (integer + clock form `1m30s`/`1h2m30s`) into
+   integer seconds and stamps `&start=` onto the embed URL so the player
+   resumes at the pasted timestamp.
+
+3. **Embed player + transcript in `SourceDetailView`**
+   (`Sources/WikiFS/Sources/MediaEmbedPlayerView.swift`): a self-contained
+   `WKWebView` (`NSViewRepresentable`) that renders one provider iframe, loaded
+   under `WikiReaderOrigin` (the same synthetic https origin the reader uses) so
+   YouTube's parent-origin check passes (no 153-error). The iframe attributes
+   mirror `WikiLinkMarkdown.embedHTML` exactly (YouTube eager-loads + forwards
+   the referrer; others lazy-load). A pure `MediaEmbedPlayerHTML.document(for:)`
+   builds the HTML so it is unit-testable without a WKWebView. `SourceDetailView`
+   gains `embedDescriptor`/`embedTarget` computed from the loaded `origin` + the
+   source mime, branches `contentArea` to a new `embedContent(target:)` layout
+   (player on top, transcript below in the existing `WikiReaderView`), and a
+   "No Transcript Available" placeholder when no capped/markdown exists.
+
+Changes:
+- `Sources/WikiFSCore/Integrations/MediaTitleFetcher.swift` — new pure oEmbed
+  title fetcher (URL builder + JSON parse).
+- `Sources/WikiFSCore/Integrations/ExternalEmbed.swift` — `youTubeStartTime` +
+  `parseClockDuration` helpers, stamped into the YouTube embed URL.
+- `Sources/WikiFSCore/Store/WikiStoreModel.swift` — `bytelessMediaOutcome` +
+  `youtubeEmbedAndTranscriptOutcome` now async + take the URL fetcher and apply
+  the oEmbed title; new `fetchMediaTitle` detached-Task helper.
+- `Sources/WikiFS/Sources/MediaEmbedPlayerView.swift` — new standalone player
+  view + pure HTML builder.
+- `Sources/WikiFS/Sources/SourceDetailView.swift` — `embedDescriptor`/
+  `embedTarget`/`isBytelessEmbedWithPlayer` computed; `embedContent(target:)`
+  section; `origin` already loaded by `.onAppear`/`.task`.
+- `Tests/WikiFSTests/MediaEmbedPlayerTests.swift` — 17 pure tests (start-time
+  parsing, oEmbed URL building + title parse, embed player HTML).
+- `Tests/WikiFSTests/BytelessEmbedIntegrationTests.swift` — `ExplodingFetcher`
+  + `YouTubeFixtureFetcher` now serve canned oEmbed JSON (new expected behavior).
+
+**Build/Tests:** `make version prompts && swift build` clean; fast test tier
+2,559 tests in 217 suites pass (+17 new).
 
 ## 2026-07-18 — Issue #192: "Go to Original" bookmark context-menu action (branch `bookmark-go-to-original`)
 

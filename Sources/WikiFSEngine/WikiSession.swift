@@ -92,6 +92,15 @@ public final class WikiSession {
     /// blob and activity orphans; cleared on Cancel / Vacuum.
     public var pendingVacuumAll: VacuumReport?
 
+    /// Phase 1 Tantivy SHADOW search index (plans/tantivy-search-sidecar.md).
+    /// EXPERIMENTAL: built and kept in sync alongside FTS5, but NOT wired into
+    /// the production search path yet — FTS5 + sqlite-vec + RRF remains
+    /// primary. `nil` if construction failed (session never breaks over a
+    /// derived index). Retained for the lifetime of the session so the
+    /// `TantivyShadowSync` bus subscription stays alive.
+    public let tantivyShadowSearch: TantivySearchService?
+    @ObservationIgnored private var tantivyShadowSync: TantivyShadowSync?
+
     // MARK: - Init
 
     /// Open `wikiID`'s DB and stand up the model + launchers for one wiki.
@@ -136,6 +145,10 @@ public final class WikiSession {
 
         let url = containerDirectory.appendingPathComponent("\(wikiID).sqlite", isDirectory: false)
         let model: WikiStoreModel
+        // Captured across both store-open branches (file-backed + in-memory
+        // fallback) so the Phase 1 Tantivy shadow service can read from the
+        // same `WikiStore` the model wraps (the model keeps it `private`).
+        var shadowStore: WikiStore?
         do {
             // `var`: the bus is set via the protocol's computed setter, which
             // the compiler treats as mutating through the `WikiStore`
@@ -146,6 +159,7 @@ public final class WikiSession {
             // File Provider signaler and the change bridge subscribe to the
             // same bus from the app layer. See `plans/event-bus.md`.
             store.eventBus = WikiEventBus(wikiID: wikiID)
+            shadowStore = store
             model = WikiStoreModel(store: store)
             // Seed a Home page when the store is empty (mirrors
             // `openActive` lines 334–341 + `createWiki`'s #315
@@ -180,10 +194,39 @@ public final class WikiSession {
                 fatalError("WikiSession: in-memory fallback store failed to open for wiki \(wikiID): \(error)")
             }
             memory.eventBus = WikiEventBus(wikiID: wikiID)
+            shadowStore = memory
             model = WikiStoreModel(store: memory)
         }
         self.store = model
         self.descriptor = sessionDescriptor
+
+        // Phase 1 Tantivy SHADOW index (plans/tantivy-search-sidecar.md).
+        // Built and synced alongside FTS5; NOT wired into the production
+        // search path. Failures are non-fatal — the session never breaks over
+        // a derived, rebuildable index; a failed start just means no shadow
+        // results (FTS5 still answers). Reads happen off-main on the indexer
+        // actor; the content source reads committed SQLite state through its
+        // own recursive lock (no statement handle crosses a boundary).
+        var shadowSearch: TantivySearchService?
+        var shadowSync: TantivyShadowSync?
+        if let shadowStore, let bus = shadowStore.eventBus {
+            do {
+                let contentSource = StoreBackedTantivyContentSource(store: shadowStore)
+                let svc = try TantivySearchService(
+                    wikiID: wikiID,
+                    containerDirectory: containerDirectory,
+                    contentSource: contentSource
+                )
+                let sync = TantivyShadowSync(service: svc, bus: bus)
+                sync.start()
+                shadowSearch = svc
+                shadowSync = sync
+            } catch {
+                DebugLog.store("WikiSession: Tantivy shadow index disabled for wiki \(wikiID): \(error)")
+            }
+        }
+        self.tantivyShadowSearch = shadowSearch
+        self.tantivyShadowSync = shadowSync
 
         // Per-session gate: lane limits match the app-wide gate the launchers
         // previously shared. Each session gets its own so cross-wiki

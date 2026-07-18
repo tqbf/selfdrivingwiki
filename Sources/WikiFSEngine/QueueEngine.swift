@@ -558,7 +558,13 @@ public actor QueueEngine {
                     }
                 }
             } else {
-                let errorMsg = String(describing: error)
+                // #440: prefer `localizedDescription` (respects
+                // `LocalizedError.errorDescription`) so the user sees a clean
+                // message like "bun was not found on your PATH…" instead of the
+                // raw `notReady("…")` enum case from `String(describing:)`.
+                // Falls back to `String(describing:)` for non-Localized errors.
+                let errorMsg = (error as? LocalizedError)?.errorDescription
+                    ?? String(describing: error)
                 do {
                     try store.markFailed(id: item.id, error: errorMsg)
                     decrementProviderCount(for: item)
