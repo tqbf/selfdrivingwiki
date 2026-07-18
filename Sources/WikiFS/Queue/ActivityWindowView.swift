@@ -487,7 +487,20 @@ struct ActivityWindowView: View {
         let progressText = activityTracker.progressLog(for: item.id)
 
         if !events.isEmpty {
-            ChatWebView(events: events, style: .activityFeed, showsInternals: false)
+            ChatWebView(
+                events: events,
+                style: .activityFeed,
+                showsInternals: false,
+                onWikiLink: wikiLinkHandler(for: item.wikiID),
+                // Resolve ghost-link coloring + blob serving from THIS item's
+                // wiki store (the transcript's `[[wiki-links]]` point into the
+                // wiki the agent ran against, not a different one). nil when
+                // the wiki window is closed — links still render but without
+                // resolution-based styling (the same degradation the in-wiki
+                // feed tolerates when a store is mid-swap).
+                renderContext: renderContextProvider(for: item.wikiID),
+                blobStore: store(for: item.wikiID)
+            )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if !progressText.isEmpty {
             ScrollView {
@@ -663,6 +676,58 @@ struct ActivityWindowView: View {
     private func item(for id: QueueItem.ID) -> QueueItem? {
         activeItems.first { $0.id == id }
             ?? recentItems.first { $0.id == id }
+    }
+
+    // MARK: - Wiki-link navigation (cross-window)
+
+    /// The store for `wikiID` if that wiki's window is open, else nil. Used
+    /// for `blobStore` + the `renderContext` provider on the transcript's
+    /// `ChatWebView` — a closed wiki degrades gracefully (links render, no
+    /// ghost coloring / blob serving), since the agent's transcript text is
+    /// self-contained HTML.
+    private func store(for wikiID: String) -> WikiStoreModel? {
+        sessionManager?.sessions[wikiID]?.store
+    }
+
+    /// A `WikiRenderContext` provider bound to `wikiID`'s store, or nil when
+    /// the wiki window is closed. `nil` preserves the historical constant-
+    /// `true` resolution in `ChatWebView` (links render as resolved — the
+    /// best we can do without a live store to query).
+    private func renderContextProvider(for wikiID: String) -> (() -> WikiRenderContext?)? {
+        guard let store = store(for: wikiID) else { return nil }
+        return { [weak store] in store?.renderContext() }
+    }
+
+    /// Build the `onWikiLink` closure for a transcript whose `[[wiki-links]]`
+    /// point into `wikiID`. This is the Activity window's core gap: until now
+    /// `ChatWebView` was constructed with a `nil` handler, so clicks were
+    /// inert. The handler follows the same routing as the in-wiki chat
+    /// transcript (`WikiReaderView.onWikiLinkHandler(for:)`) but must cross
+    /// window boundaries:
+    ///
+    /// 1. If `wikiID`'s window is open → the live store is ready; route the
+    ///    click directly through `WikiReaderView.onWikiLinkHandler(for:)` —
+    ///    the exact handler the in-wiki chat transcript uses. `⌘-click`
+    ///    (`openInNewTab`) carries through to `selectPage`/`selectSource`.
+    /// 2. If `wikiID`'s window is closed → stash the deferred link on the
+    ///    session manager, then `openWindowBridge.openWiki(wikiID)` opens (or
+    ///    focuses) the window. `RootScene.resolveSession` creates the session,
+    ///    transfers the stash onto it, and `RootView.onAppear` delivers it to
+    ///    the store via the same `onWikiLinkHandler`.
+    private func wikiLinkHandler(for wikiID: String) -> (URL, Bool) -> Void {
+        { url, openInNewTab in
+            if let store = self.sessionManager?.sessions[wikiID]?.store {
+                // Window open → route directly (same path as the in-wiki chat).
+                WikiReaderView.onWikiLinkHandler(for: store)(url, openInNewTab)
+            } else {
+                // Window closed → stash + open. The stash is consumed when the
+                // session resolves and `RootView` appears.
+                self.sessionManager?.stashPendingWikiLink(
+                    wikiID, url: url, openInNewTab: openInNewTab
+                )
+                self.openWindowBridge?.openWiki?(wikiID)
+            }
+        }
     }
 
     /// Detects whether a failed item's error message is a "not configured"

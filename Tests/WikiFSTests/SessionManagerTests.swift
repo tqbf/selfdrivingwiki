@@ -200,6 +200,70 @@ struct SessionManagerTests {
 
         #expect(manager.frontmostSession === session)
     }
+
+    // MARK: - Cross-window wiki-link navigation
+
+    @Test func testStashPendingWikiLinkStoresAndConsumes() {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let manager = makeSessionManager(dir: dir)
+        let descriptor = registry.wikis.first!
+        let url = URL(string: "wiki://page?title=Home")!
+
+        manager.stashPendingWikiLink(descriptor.id, url: url, openInNewTab: false)
+
+        // Stash stores the request by wiki ID.
+        #expect(manager.pendingWikiLinks[descriptor.id]?.url == url)
+        #expect(manager.pendingWikiLinks[descriptor.id]?.openInNewTab == false)
+
+        // Consume retrieves and clears (one-shot).
+        let consumed = manager.consumePendingWikiLink(for: descriptor.id)
+        #expect(consumed?.url == url)
+        #expect(consumed?.openInNewTab == false)
+        #expect(manager.pendingWikiLinks[descriptor.id] == nil)
+    }
+
+    @Test func testConsumePendingWikiLinkReturnsNilWhenNothingStashed() {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let manager = makeSessionManager(dir: dir)
+        let descriptor = registry.wikis.first!
+
+        // No stash → nil, no crash.
+        #expect(manager.consumePendingWikiLink(for: descriptor.id) == nil)
+    }
+
+    @Test func testSessionCreationTransfersPendingWikiLinkOntoSession() {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let manager = makeSessionManager(dir: dir)
+        let descriptor = registry.wikis.first!
+        let url = URL(string: "wiki://source?title=Paper")!
+
+        // Stash a deferred link BEFORE the session exists (wiki window closed).
+        manager.stashPendingWikiLink(descriptor.id, url: url, openInNewTab: true)
+        #expect(manager.pendingWikiLinks[descriptor.id] != nil)
+
+        // Creating the session transfers the stash onto it.
+        let session = manager.session(for: descriptor.id, descriptor: descriptor)
+
+        #expect(session.pendingWikiLink?.url == url)
+        #expect(session.pendingWikiLink?.openInNewTab == true)
+        // The stash is consumed from the manager.
+        #expect(manager.pendingWikiLinks[descriptor.id] == nil)
+    }
+
+    @Test func testSessionCreationWithoutStashLeavesPendingWikiLinkNil() {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let manager = makeSessionManager(dir: dir)
+        let descriptor = registry.wikis.first!
+
+        // No stash → the new session's pendingWikiLink is nil.
+        let session = manager.session(for: descriptor.id, descriptor: descriptor)
+
+        #expect(session.pendingWikiLink == nil)
+    }
 }
 
 /// A minimal stub `MarkdownExtractor` for tests — returns empty content.

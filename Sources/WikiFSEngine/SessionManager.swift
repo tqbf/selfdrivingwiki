@@ -88,6 +88,12 @@ public final class SessionManager {
             extractionProvider: extractionProvider,
             pdf2mdScriptPathResolver: pdf2mdScriptPathResolver
         )
+        // Transfer any deferred wiki-link click (registered by
+        // `applyOrStashWikiLink` for a wiki whose window wasn't open yet)
+        // onto the new session. `RootView` consumes it on appear.
+        if let pending = consumePendingWikiLink(for: wikiID) {
+            newSession.pendingWikiLink = pending
+        }
         sessions[wikiID] = newSession
         return newSession
     }
@@ -127,5 +133,35 @@ public final class SessionManager {
     public var frontmostSession: WikiSession? {
         guard let id = frontmostWikiID else { return nil }
         return sessions[id]
+    }
+
+    // MARK: - Cross-window wiki-link navigation
+
+    /// Deferred `wiki://` click requests keyed by wiki ID, for wikis whose
+    /// window is NOT yet open. When ``session(for:descriptor:)`` creates a
+    /// session, it transfers the matching stash onto the session's
+    /// ``WikiSession/pendingWikiLink``; `RootView` then consumes it on appear
+    /// — after the store is ready. Used by the Activity / queue window, which
+    /// renders transcripts across MANY wikis: a click on a still-closed wiki
+    /// opens the window via `OpenWindowBridge.openWiki(wikiID)` (which dedupes
+    /// by `==`, so a focus-if-open), then delivers the navigation once the
+    /// session resolves. The open-window case is handled directly by the
+    /// caller (it has the live store) and never reaches this stash.
+    public var pendingWikiLinks: [String: (url: URL, openInNewTab: Bool)] = [:]
+
+    /// Stash a deferred `wiki://` navigation for `wikiID` — for a wiki whose
+    /// window is NOT yet open. ``session(for:descriptor:)`` transfers the
+    /// stash onto the new session; `RootView.onAppear` consumes it. Call this
+    /// ONLY when the wiki window is closed; an open window's store can route
+    /// the click directly.
+    public func stashPendingWikiLink(_ wikiID: String, url: URL, openInNewTab: Bool) {
+        pendingWikiLinks[wikiID] = (url: url, openInNewTab: openInNewTab)
+    }
+
+    /// Consume (clear) the stashed deferred link for `wikiID`. Called by
+    /// ``session(for:descriptor:)`` once it has transferred the stash onto
+    /// the freshly-created session. One-shot: a second call returns nil.
+    public func consumePendingWikiLink(for wikiID: String) -> (url: URL, openInNewTab: Bool)? {
+        pendingWikiLinks.removeValue(forKey: wikiID)
     }
 }
