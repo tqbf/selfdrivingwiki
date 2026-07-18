@@ -68,6 +68,23 @@ struct AgentOperationRunnerTests {
         #expect(combined == ["One", "Two", "Three"])
     }
 
+    @Test func brokenLinksPreserveNamespaceInPrompt() throws {
+        // runLintPages formats each broken link with its wiki-link namespace
+        // prefix so the agent can distinguish page/source/chat links (was a
+        // flat [String] that stripped the namespace, making broken source/chat
+        // links look like broken page links).
+        let brokenPageLinks = ["Some Page"]
+        let brokenSourceLinks = ["Some Source"]
+        let brokenChatLinks = ["Some Chat"]
+
+        let pageLinks = brokenPageLinks.map { "[[\($0)]]" }
+        let sourceLinks = brokenSourceLinks.map { "[[source:\($0)]]" }
+        let chatLinks = brokenChatLinks.map { "[[chat:\($0)]]" }
+        let allBroken = pageLinks + sourceLinks + chatLinks
+
+        #expect(allBroken == ["[[Some Page]]", "[[source:Some Source]]", "[[chat:Some Chat]]"])
+    }
+
     // MARK: - Canonical ULID links are not false positives
 
     @Test func canonicalULIDPageLinkIsNotBroken() throws {

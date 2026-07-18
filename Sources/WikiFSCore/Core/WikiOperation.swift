@@ -314,11 +314,11 @@ extension WikiOperation {
   ) -> String {
     let linksSection: String
     if brokenLinks.isEmpty {
-      linksSection = "Broken [[wiki links]]: none detected."
+      linksSection = "Broken wiki links: none detected."
     } else {
-      let list = brokenLinks.map { "  - [[\($0)]]" }.joined(separator: "\n")
+      let list = brokenLinks.map { "  - \($0)" }.joined(separator: "\n")
       linksSection = """
-        Broken [[wiki links]] (targets not found in the wiki):
+        Broken wiki links (targets not found in the wiki):
         \(list)
         """
     }
