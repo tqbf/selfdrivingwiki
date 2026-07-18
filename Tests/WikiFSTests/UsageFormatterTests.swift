@@ -212,4 +212,29 @@ import Foundation
         let result = UsageFormatter.fullSummary(usage: usage, startedAt: 0, finishedAt: 0)
         #expect(result == "Claude · sonnet-4 · 100 tokens in · 50 tokens out")
     }
+
+    @Test func fullSummaryIncludesThinkingLevelBetweenModelAndTokens() {
+        // #566: the thinking-effort level surfaces between the model id and the
+        // token counts. Regression test for the capturePhaseUsage enrichment
+        // path that once dropped `thinkingLevel` when attaching `providerLabel`.
+        let usage = SessionUsage(
+            inputTokens: 797, outputTokens: 203, totalTokens: 1000,
+            cachedReadTokens: nil, thoughtTokens: 412,
+            cost: 0.34, currency: "USD", contextUsed: 0, contextSize: 0,
+            providerLabel: "Claude", modelId: "sonnet-4",
+            thinkingLevel: "high")
+        let result = UsageFormatter.fullSummary(usage: usage, startedAt: nil, finishedAt: nil)
+        #expect(result == "Claude · sonnet-4 · high · 797 tokens in · 203 tokens out · 412 thought · $0.34")
+    }
+
+    @Test func fullSummaryOmitsThinkingLevelWhenNil() {
+        let usage = SessionUsage(
+            inputTokens: 797, outputTokens: 203, totalTokens: 1000,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 0, contextSize: 0,
+            providerLabel: "Claude", modelId: "sonnet-4",
+            thinkingLevel: nil)
+        let result = UsageFormatter.fullSummary(usage: usage, startedAt: nil, finishedAt: nil)
+        #expect(result == "Claude · sonnet-4 · 797 tokens in · 203 tokens out")
+    }
 }

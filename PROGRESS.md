@@ -2,114 +2,22 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-07-18 — Fix EXC_BAD_ACCESS crash in Activity window when cancelling a lint job
+## 2026-07-18 — Fix missing activity ingestion details: thinking-level dropped in enrichment (branch `fix/missing-activity-details`)
 
-**Problem:** App crashed with `EXC_BAD_ACCESS (SIGSEGV)` in
-`objc_msgSend` → `swift_getObjectType` → `swift_task_isMainExecutorImpl` inside
-`ActivityWindowView.sidebar.getter` → `ForEachChild.updateValue` →
-`ObservationCenter._withObservation`. Triggered by cancelling a lint job from
-the Agent Queue activity window. The crash dereferenced a garbage pointer
-(`0x225005b4c20` — freed heap, not a tagged pointer) during a Swift runtime
-`@MainActor` isolation check.
+**Problem:** The Activity window lost the thinking-effort level segment ("high"/"medium"/"low") for completed ingestion/lint runs. The user reported that rich run metadata (model name, token counts, cost, timing) had partially regressed — the thinking-effort segment introduced in #566 was always blank.
 
-**Root cause:** The `ForEach` row body in `itemRow(_:)` read `@MainActor
-@Observable` properties on three objects — `SessionManager.sessions`,
-`WikiStoreModel.sources`/`.summaries`, and `QueueActivityTracker.itemUsage` —
-once per row on every re-evaluation. Each read triggers
-`swift_task_isMainExecutorImpl` (the runtime's "am I on MainActor?" check)
-inside `ObservationCenter._withObservation` → `ForEachChild.updateValue`. When
-the queue engine emits a `.cancelled` event, `QueueActivityTracker.handle(_:)`
-mutates `ingestingSourceIDs`/`lintingItemIDs` (observable writes) while the
-`ForEach` re-renders rows that read those same observables. Under this
-concurrent-mutation + isolation-check window, the runtime constructs a
-`SerialExecutorRef` from freed/bogus object metadata → crash. This is a known
-Swift runtime bug class (swiftlang/swift#89197, related #87097/PR #87163) in
-which the `SerialExecutorRef` handed to `isMainExecutor()` is constructed from
-bogus bits.
+**Root cause:** PR #569 (`Surface thinking effort level in UI`) added `thinkingLevel: String?` to `SessionUsage` and wired it through `ACPBackend.sessionUsage(for:)` and `UsageFormatter.fullSummary`, but the enrichment hop in `AgentLauncher.capturePhaseUsage` (which reattaches the configured `providerLabel`) reconstructed `SessionUsage` with an explicit memberwise init that omitted the `thinkingLevel` parameter — defaulting it to `nil` on every call. Since every `capturePhaseUsage` call site passes a non-nil `providerLabel`, the `if let providerLabel` branch always ran, and `thinkingLevel` was always lost. `SessionUsage.merging` then propagated `nil` through `runTotalUsage` → `onUsage` → the `.usage` queue event → `QueueActivityTracker.itemUsage`, so the Activity window's `fullSummary` rendered without the thinking-effort segment.
 
-**Fix:** Precompute all `@Observable`-derived display data into plain values
-*before* the `ForEach`, so the row body has zero `@Observable` property accesses.
-New `RowDisplayData` struct + `buildRowDisplayData(for:)` snapshots
-`sessionManager.sessions`, `activityTracker.itemUsage`, and the per-store
-`sources`/`summaries` lookups once at the sidebar level (where observation
-tracking is correct and the isolation check runs once, not per-row). The
-`itemRow(_:)` body now reads only from `QueueItem` (value) and `RowDisplayData`
-(value). The detail pane's helpers (`rowTitle(for:)`, `rowSubtitle(for:)`,
-`targetNames(for:)`) still read observables — they're outside the
-`ForEachChild.updateValue` path so they're not at risk.
+**Investigation (pipeline trace):** Verified the full usage pipeline is structurally intact — `ACPBackend.sessionUsage` → `capturePhaseUsage` → `runTotalUsage` → `AppQueueIngestionProvider.onUsage?(launcher.runTotalUsage)` × 3 sites → `emitUsage` → `QueueEngine.makeEmitUsage` broadcaster → `QueueActivityTracker.handle(.usage)` → `itemUsage` → `ActivityWindowView.fullSummary`. The display code (row + header) is present and correct. The #565/#571/#572/#573 merges did not break the wiring in `WikiFSApp.swift` (the `UsageEmitBox` seam). The only dropped field was `thinkingLevel` in `capturePhaseUsage`.
 
-**Files changed:**
-- `Sources/WikiFS/Queue/ActivityWindowView.swift` — new `RowDisplayData` struct,
-  `buildRowDisplayData(for:)`, `computeRowTitle(for:wikiName:names:)`,
-  `computeRowSubtitle(for:wikiName:)` pure functions; `sidebar` getter
-  precomputes display data; `itemRow` takes `RowDisplayData?` and reads only
-  plain values; old `rowTitle`/`rowSubtitle` refactored as thin wrappers around
-  the pure functions for the detail pane's use.
-
-**Build/Tests:** `swift build` clean (72s); fast test tier 2542 tests in 216
-suites pass. Verified zero `@Observable` reads in `itemRow` body via
-`rg 'activityTracker\.|sessionManager\?|\.sessions\[|\.sources\b|\.summaries\b'`
-inside the function — no matches.
-## 2026-07-18 — Issue #572: YouTube/Vimeo URL ingest UX — video title as display name + embed player in source detail (branch `feature/youtube-embed-title-ux`)
-
-**Problem:** Pasting a YouTube/Vimeo URL created a byteless embed source whose
-display name was the synthetic `youtube-<videoId>` (not the real video title),
-and `SourceDetailView` routed byteless sources to the inert "Raw Source"
-fallback — the transcript markdown (from #564) and the embed player were never
-shown in the detail view. Only the in-page reader (`![[source:…]]` directive)
-rendered the iframe.
-
-**Fix (three parts):**
-
-1. **Video title via oEmbed** (`Sources/WikiFSCore/Integrations/MediaTitleFetcher.swift`):
-   a pure `title(for:fetcher:)` that builds each provider's oEmbed endpoint URL
-   (YouTube/Vimeo/Spotify/SoundCloud — `remote-media` has none), fetches the JSON
-   off-main via the injected `URLResourceFetcher` seam, and parses the `title`
-   field. Never throws — a network/decode failure returns `nil` so the synthetic
-   name stays in place (mirrors the `YouTubeTranscriptService` best-effort
-   discipline). Wired into both byteless paths in `WikiStoreModel`:
-   `bytelessMediaOutcome` and `youtubeEmbedAndTranscriptOutcome` now call
-   `fetchMediaTitle` (a detached `Task` helper) and `setSourceDisplayName` on
-   success, threading the resolved title to every `openTab` call.
-
-2. **Embed start-time** (`ExternalEmbed.youTubeStartTime(from:)`): parses
-   YouTube's `&t=` / `?start=` (integer + clock form `1m30s`/`1h2m30s`) into
-   integer seconds and stamps `&start=` onto the embed URL so the player
-   resumes at the pasted timestamp.
-
-3. **Embed player + transcript in `SourceDetailView`**
-   (`Sources/WikiFS/Sources/MediaEmbedPlayerView.swift`): a self-contained
-   `WKWebView` (`NSViewRepresentable`) that renders one provider iframe, loaded
-   under `WikiReaderOrigin` (the same synthetic https origin the reader uses) so
-   YouTube's parent-origin check passes (no 153-error). The iframe attributes
-   mirror `WikiLinkMarkdown.embedHTML` exactly (YouTube eager-loads + forwards
-   the referrer; others lazy-load). A pure `MediaEmbedPlayerHTML.document(for:)`
-   builds the HTML so it is unit-testable without a WKWebView. `SourceDetailView`
-   gains `embedDescriptor`/`embedTarget` computed from the loaded `origin` + the
-   source mime, branches `contentArea` to a new `embedContent(target:)` layout
-   (player on top, transcript below in the existing `WikiReaderView`), and a
-   "No Transcript Available" placeholder when no capped/markdown exists.
+**Fix:** One-line addition — pass `thinkingLevel: usage.thinkingLevel` through the enrichment `SessionUsage` init in `capturePhaseUsage`. The `else` branch (no `providerLabel`) already passed `usage` directly. Added 3 regression tests covering `SessionUsage.merging` thinking-level latest-wins + existing-preserved, and `UsageFormatter.fullSummary` thinking-level inclusion between model and tokens.
 
 Changes:
-- `Sources/WikiFSCore/Integrations/MediaTitleFetcher.swift` — new pure oEmbed
-  title fetcher (URL builder + JSON parse).
-- `Sources/WikiFSCore/Integrations/ExternalEmbed.swift` — `youTubeStartTime` +
-  `parseClockDuration` helpers, stamped into the YouTube embed URL.
-- `Sources/WikiFSCore/Store/WikiStoreModel.swift` — `bytelessMediaOutcome` +
-  `youtubeEmbedAndTranscriptOutcome` now async + take the URL fetcher and apply
-  the oEmbed title; new `fetchMediaTitle` detached-Task helper.
-- `Sources/WikiFS/Sources/MediaEmbedPlayerView.swift` — new standalone player
-  view + pure HTML builder.
-- `Sources/WikiFS/Sources/SourceDetailView.swift` — `embedDescriptor`/
-  `embedTarget`/`isBytelessEmbedWithPlayer` computed; `embedContent(target:)`
-  section; `origin` already loaded by `.onAppear`/`.task`.
-- `Tests/WikiFSTests/MediaEmbedPlayerTests.swift` — 17 pure tests (start-time
-  parsing, oEmbed URL building + title parse, embed player HTML).
-- `Tests/WikiFSTests/BytelessEmbedIntegrationTests.swift` — `ExplodingFetcher`
-  + `YouTubeFixtureFetcher` now serve canned oEmbed JSON (new expected behavior).
+- `Sources/WikiFSEngine/AgentLauncher.swift` (`capturePhaseUsage`) — pass `thinkingLevel: usage.thinkingLevel` in the providerLabel enrichment init.
+- `Tests/WikiFSTests/ACPBackendTests.swift` — added `thinkingLevel: "high"` assertion to `sessionUsageStructCarriesAllFields`; 2 new tests (`mergingCarriesLatestThinkingLevel`, `mergingPreservesExistingThinkingLevelWhenNewIsNil`).
+- `Tests/WikiFSTests/UsageFormatterTests.swift` — 2 new tests (`fullSummaryIncludesThinkingLevelBetweenModelAndTokens`, `fullSummaryOmitsThinkingLevelWhenNil`).
 
-**Build/Tests:** `make version prompts && swift build` clean; fast test tier
-2,559 tests in 217 suites pass (+17 new).
+**Build/Tests:** `make version prompts && swift build` clean; `swift test --filter UsageFormatterTests|ACPBackendTests` 67/67 pass; full fast test tier **2552 tests / 216 suites pass**.
 
 ## 2026-07-18 — Issue #192: "Go to Original" bookmark context-menu action (branch `bookmark-go-to-original`)
 
