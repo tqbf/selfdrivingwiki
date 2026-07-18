@@ -221,9 +221,9 @@ $WIKICTL index set --body-file ./index.md   rewrite index.md wholesale
 $WIKICTL log append --kind ingest|query|lint --title "…" [--note "…"] [--source <file-id>]  record an action (--source marks an ingest done)
 $WIKICTL search --query "…" [--limit N]    semantic search — find pages by meaning; defaults to 10 results, max 100
 $WIKICTL source list [--json]               list all sources (TSV, or JSON lines)
-$WIKICTL source cat --id I | --name N       write raw source bytes to stdout
-$WIKICTL source export --id I | --name N [--out <path>]
-                                            materialize a source to disk, print its path
+$WIKICTL source cat --id I | --name N [--markdown]  write raw source bytes (or extracted markdown with --markdown) to stdout
+$WIKICTL source export --id I | --name N [--out <path>] [--markdown]
+                                            materialize a source to disk, print its path; --markdown exports the .md sibling
 $WIKICTL source search --query "…" [--limit N]   semantic search of sources — find source material by meaning; defaults to 10, max 100
 $WIKICTL chat list [--json]                   list chats (id / title / kind / message count)
 $WIKICTL chat get --id I | --title T          print a chat transcript as markdown
@@ -265,11 +265,15 @@ $ $WIKICTL search --query "continuous profiling with JFR"
 
 Most sources already have their text extracted. `$WIKICTL source list` shows
 metadata (including a `has_markdown` flag); to read a source's content, use
-`$WIKICTL source cat --id <id>` (or `--name <name>`) for text/markdown — it
-writes the source's content to stdout. For a PDF or other binary source, run
-`$WIKICTL source export --id <id>` (materializes to disk and prints the path),
-then `Read` that path — the `Read` tool handles text, images, and PDFs; for a
-PDF read the text first, and view any figures you need as images separately.
+`$WIKICTL source cat --id <id>` (or `--name <name>`) — it writes the source's
+raw bytes to stdout. For PDFs and other binary sources, pass `--markdown` to
+get the extracted markdown HEAD instead of binary:
+`$WIKICTL source cat --id <id> --markdown` (falls back to raw bytes if no
+extraction has been done). Alternatively, run `$WIKICTL source export --id <id>`
+(materializes to disk and prints the path), then `Read` that path — the `Read`
+tool handles text, images, and PDFs; for a PDF read the text first, and view
+any figures you need as images separately. `source export --markdown` exports
+the extracted `.md` sibling.
 Do NOT try to read or `cat` source files from the mount (`sources/…`) — use
 `wikictl source cat` / `source export`, which read the database directly and
 are always available. To find source **content** by meaning, use
@@ -289,8 +293,9 @@ When the user's message begins with `[[page:…]]`, `[[source:…]]`, or
 `[[chat:…]]` reference lines (dragged from the sidebar), READ the referenced
 resource via wikictl BEFORE answering:
 - `[[page:Title]]` → `$WIKICTL page get --title "Title"` (or `--id <id>`)
-- `[[source:Name]]` → `$WIKICTL source cat --name "Name"` (text) or
-  `$WIKICTL source export --name "Name"` then `Read` the path (PDF/binary)
+- `[[source:Name]]` → `$WIKICTL source cat --name "Name" --markdown` (extracted
+  text; drop `--markdown` for raw bytes), or `$WIKICTL source export --name "Name"
+  --markdown` then `Read` the path (PDF/binary)
 - `[[chat:Title]]` → `$WIKICTL chat get --title "Title"`
 
 Do NOT read these from the mount — use wikictl, which reads the database
@@ -299,8 +304,9 @@ directly and is always available.
 ## Workflows
 
 **Ingest** — bring one raw source into the wiki:
-1. Read the source via wikictl: `$WIKICTL source cat --id <id>` for text/markdown,
-   or `$WIKICTL source export --id <id>` then `Read` the path for PDFs/images.
+1. Read the source via wikictl: `$WIKICTL source cat --id <id> --markdown` for
+   extracted text, or `$WIKICTL source export --id <id>` then `Read` the path
+   for PDFs/images.
 2. Check for relevant prior discussion: `$WIKICTL chat search --query "…"` for
    the source's topic, and `$WIKICTL chat get --id I` on any promising hit —
    incorporate what the user already cared about into the pages you write, and
