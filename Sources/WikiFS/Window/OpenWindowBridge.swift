@@ -36,6 +36,15 @@ final class OpenWindowBridge {
     /// to the environment value. Used by `MenuBarItemController` (the status
     /// item is AppKit and can't read SwiftUI environment values directly).
     var openSettings: (() -> Void)?
+
+    /// Opens Settings on a specific tab. Sets the `@AppStorage` key that the
+    /// Settings `TabView(selection:)` binds to, then calls `openSettings`.
+    /// `tabRawValue` is one of: "about", "zotero", "extraction", "agents".
+    /// Used by the Activity window's "Configure…" call-to-action (#440).
+    func openSettings(tab tabRawValue: String) {
+        UserDefaults.standard.set(tabRawValue, forKey: "settings.selectedTab")
+        openSettings?()
+    }
 }
 
 /// Invisible helper view that captures `@Environment(\.openWindow)` (only
