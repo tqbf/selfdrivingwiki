@@ -41,6 +41,9 @@ struct BookmarksContainerView: View {
                 onOpenBackground: { selections in
                     for sel in selections { store.openTabInBackground(sel) }
                 },
+                onGoToOriginal: { selection in
+                    store.requestSidebarReveal(selection)
+                },
                 onEdit: { onEdit($0) },
                 onDelete: { ids in
                     for id in ids { store.deleteBookmarkNode(id: id) }

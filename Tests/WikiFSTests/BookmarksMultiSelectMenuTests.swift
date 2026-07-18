@@ -25,6 +25,7 @@ struct BookmarksMultiSelectMenuTests {
         vc.fileProvider = nil
         vc.callbacks = BookmarksCallbacks(
             onOpen: { _ in }, onOpenBackground: { _ in },
+            onGoToOriginal: { _ in },
             onEdit: { _ in }, onDelete: { _ in },
             onAddPage: { _ in }, onAddSource: { _ in },
             onNewFolder: {}, onNewSubfolder: { _ in }
@@ -194,6 +195,7 @@ struct BookmarksMultiSelectMenuTests {
         var deletedIDs: [String] = []
         vc.callbacks = BookmarksCallbacks(
             onOpen: { _ in }, onOpenBackground: { _ in },
+            onGoToOriginal: { _ in },
             onEdit: { _ in },
             onDelete: { ids in deletedIDs = ids },
             onAddPage: { _ in }, onAddSource: { _ in },
@@ -222,6 +224,7 @@ struct BookmarksMultiSelectMenuTests {
         vc.callbacks = BookmarksCallbacks(
             onOpen: { sels in openedSelections = sels },
             onOpenBackground: { _ in },
+            onGoToOriginal: { _ in },
             onEdit: { _ in }, onDelete: { _ in },
             onAddPage: { _ in }, onAddSource: { _ in },
             onNewFolder: {}, onNewSubfolder: { _ in }
@@ -241,5 +244,82 @@ struct BookmarksMultiSelectMenuTests {
             #expect(openedSelections.contains(.page(PageID(rawValue: "target"))))
             #expect(openedSelections.contains(.source(PageID(rawValue: "target"))))
         }
+    }
+
+    // MARK: - "Go to Original" action
+
+    @Test func goToOriginalShownForSingleLeaf() {
+        let nodes = [leaf("n1")]
+        let vc = makeVC(nodes: nodes)
+        let titles = menuTitles(vc, clicked: nodes[0])
+
+        #expect(titles.contains("Go to Original"))
+    }
+
+    @Test func goToOriginalHiddenForFolder() {
+        let nodes = [folder("f1")]
+        let vc = makeVC(nodes: nodes)
+        let titles = menuTitles(vc, clicked: nodes[0])
+
+        #expect(!titles.contains("Go to Original"))
+    }
+
+    @Test func goToOriginalHiddenForBatch() {
+        let nodes = [leaf("n1"), leaf("n2")]
+        let vc = makeVC(nodes: nodes)
+        let outline = vc.outlineView!
+
+        outline.selectRowIndexes(IndexSet(integersIn: 0..<2), byExtendingSelection: false)
+
+        let titles = menuTitles(vc, clicked: nodes[0])
+
+        // Batches are ambiguous about which item to reveal.
+        #expect(!titles.contains("Go to Original"))
+    }
+
+    @Test func goToOriginalRevealsPageTarget() {
+        let nodes = [leaf("n1", kind: .pageRef, targetID: "page-1")]
+        let vc = makeVC(nodes: nodes)
+        let outline = vc.outlineView!
+
+        var revealed: WikiSelection?
+        vc.callbacks = BookmarksCallbacks(
+            onOpen: { _ in }, onOpenBackground: { _ in },
+            onGoToOriginal: { sel in revealed = sel },
+            onEdit: { _ in }, onDelete: { _ in },
+            onAddPage: { _ in }, onAddSource: { _ in },
+            onNewFolder: {}, onNewSubfolder: { _ in }
+        )
+
+        let buildMenu: (NSOutlineView, Any) -> NSMenu? = vc.outlineView(_:menuFor:)
+        let menu = buildMenu(outline, nodes[0])!
+        let item = menu.items.first { $0.title == "Go to Original" }!
+
+        _ = vc.perform(item.action, with: item)
+
+        #expect(revealed == .page(PageID(rawValue: "page-1")))
+    }
+
+    @Test func goToOriginalRevealsChatTarget() {
+        let nodes = [leaf("n1", kind: .chatRef, targetID: "chat-1")]
+        let vc = makeVC(nodes: nodes)
+        let outline = vc.outlineView!
+
+        var revealed: WikiSelection?
+        vc.callbacks = BookmarksCallbacks(
+            onOpen: { _ in }, onOpenBackground: { _ in },
+            onGoToOriginal: { sel in revealed = sel },
+            onEdit: { _ in }, onDelete: { _ in },
+            onAddPage: { _ in }, onAddSource: { _ in },
+            onNewFolder: {}, onNewSubfolder: { _ in }
+        )
+
+        let buildMenu: (NSOutlineView, Any) -> NSMenu? = vc.outlineView(_:menuFor:)
+        let menu = buildMenu(outline, nodes[0])!
+        let item = menu.items.first { $0.title == "Go to Original" }!
+
+        _ = vc.perform(item.action, with: item)
+
+        #expect(revealed == .chat(PageID(rawValue: "chat-1")))
     }
 }
