@@ -988,7 +988,8 @@ struct SourceDetailView: View {
         // the queue. `isRunning` still blocks when a *chat* agent is running
         // (no ingest active) to avoid a launcher preflight refusal.
         .disabled((isRunning && !isAnySourceIngesting)
-                  || isEditLockedExternally)
+                  || isEditLockedExternally
+                  || !hasMarkdown)
         .confirmationDialog(
             "Ingest Again?",
             isPresented: $showReingestConfirmation,
@@ -1003,11 +1004,12 @@ struct SourceDetailView: View {
         }
 
         // Ingested → a calm green "done" affordance. Otherwise prominent only
-        // when Ingest is the actual next step; when a PDF has no markdown yet,
-        // Extract is the call-to-action, so Ingest stays secondary here.
+        // when Ingest is the actual next step; a source without markdown (an
+        // unextracted PDF, or a byteless video with no transcript) can't be
+        // ingested, so Ingest stays secondary here and is disabled above.
         if hasBeenIngested {
             button.tint(.green)
-        } else if isPDF, !hasMarkdown {
+        } else if !hasMarkdown {
             button
         } else {
             button.buttonStyle(.borderedProminent)

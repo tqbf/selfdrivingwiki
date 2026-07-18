@@ -9,6 +9,14 @@ import WikiFSEngine
 /// ingestion item. For non-PDFs or PDFs with existing markdown, enqueues
 /// ingestion directly.
 ///
+/// **Markdown/content gate (chokepoint):** after any extraction step, a
+/// source with neither processed markdown nor raw bytes is dropped
+/// (`canIngest` check). This is the single enforcement of "don't ingest
+/// sources without content" — every entry point funnels through here, so a
+/// byteless source (e.g. a YouTube video with no transcript) can never be
+/// enqueued no matter which UI path originated the request. The UI predicate
+/// (`WikiStoreModel.canIngest`) mirrors this for affordance gating.
+///
 /// **Deduplication:** before enqueuing, checks the engine's active items
 /// (`.queued` or `.running`) for this wiki. Sources already active in either
 /// the extraction or ingestion queue are skipped — a user tapping Ingest
@@ -44,12 +52,15 @@ func enqueueIngestion(
     var ingestionSourceIDs: [PageID] = []
 
     for sourceID in newSourceIDs {
-        // Check if this source needs extraction first.
-        if let source = store.sources.first(where: { $0.id == sourceID }),
-           MimeType.isPDF(source.mimeType),
+        guard let source = store.sources.first(where: { $0.id == sourceID }) else {
+            DebugLog.ingest("enqueueIngestion: unknown source \(sourceID.rawValue) — skipped")
+            continue
+        }
+
+        // PDF without extracted markdown → enqueue extraction, wait for it,
+        // then include in ingestion batch (extraction produces the markdown).
+        if MimeType.isPDF(source.mimeType),
            store.processedMarkdownHead(for: source) == nil {
-            // PDF without extracted markdown → enqueue extraction, wait
-            // for it, then include in ingestion batch.
             let request = QueueItemRequest(
                 queue: .extraction,
                 wikiID: wikiID,
@@ -60,6 +71,21 @@ func enqueueIngestion(
             } catch {
                 DebugLog.ingest("enqueueIngestion: extraction failed for \(sourceID.rawValue) — \(error.localizedDescription)")
             }
+        }
+
+        // ── Chokepoint ───────────────────────────────────────────────────
+        // The single enforcement of "don't ingest sources without content."
+        // `canIngest` is true when the source has processed markdown (a
+        // transcript, extracted PDF) **or** raw bytes (`byteSize > 0`) the
+        // staging path reads directly. A byteless source with no processed
+        // markdown — e.g. a YouTube video whose transcript never arrived —
+        // has neither, so it is dropped here rather than enqueuing a run the
+        // staging path would hand empty bytes to. Every UI entry point
+        // (detail view, list context menu, batch ingest) funnels through
+        // here, so the rule is *guaranteed* regardless of origin.
+        guard store.canIngest(source) else {
+            DebugLog.ingest("enqueueIngestion: dropped \(sourceID.rawValue) — no markdown or bytes to ingest")
+            continue
         }
         ingestionSourceIDs.append(sourceID)
     }

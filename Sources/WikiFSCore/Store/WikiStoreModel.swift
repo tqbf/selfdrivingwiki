@@ -2419,6 +2419,21 @@ public final class WikiStoreModel {
         (try? store.hasProcessedMarkdown(sourceID: sourceID)) ?? false
     }
 
+    /// The single predicate naming the "can this source be ingested?" rule.
+    /// A source is ingestible iff it has content the staging path can hand the
+    /// agent — either a processed-markdown version (extracted PDF, transcript,
+    /// edited text) that `processedMarkdownHead` resolves, **or** raw bytes
+    /// (`byteSize > 0`) that the staging reads directly for native markdown /
+    /// images / PDFs / … A **byteless** source with no processed markdown —
+    /// e.g. a YouTube video whose transcript never arrived — has neither and
+    /// returns `false`: there is nothing to stage, so ingestion must not run.
+    /// Enforcement of the drop lives in `enqueueIngestion`; the UI gates
+    /// (`SourceDetailView`, `SourcesListView`) consult this so the affordance
+    /// reflects the truth.
+    public func canIngest(_ source: SourceSummary) -> Bool {
+        hasProcessedMarkdown(for: source.id) || source.byteSize > 0
+    }
+
     /// All versions for a source, newest first. Empty if none.
     public func processedMarkdownHistory(for sourceID: PageID) -> [SourceMarkdownVersion] {
         (try? store.processedMarkdownHistory(sourceID: sourceID)) ?? []

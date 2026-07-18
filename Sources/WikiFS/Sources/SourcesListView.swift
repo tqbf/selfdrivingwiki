@@ -443,10 +443,24 @@ extension SourcesListViewController {
                               action: #selector(revealAction(_:)), payload: payload))
         }
 
-        menu.addItem(.separator())
-        menu.addItem(item(
-            title: isMulti ? "Ingest \(count) Sources" : "Ingest",
-            systemImage: "text.badge.plus", action: #selector(ingestAction(_:)), payload: payload))
+        // Ingest is offered only for ingestible sources — gate on the shared
+        // `canIngest` (mirrors the `enqueueIngestion` chokepoint). Hides the
+        // item entirely for a selection with no ingestible source (e.g. a
+        // byteless YouTube video with no transcript), rather than offering a
+        // no-op the chokepoint would drop anyway.
+        let ingestible = effective.filter { canIngest($0) }
+        if isMulti {
+            if !ingestible.isEmpty {
+                menu.addItem(.separator())
+                menu.addItem(item(title: "Ingest \(ingestible.count) Sources",
+                                  systemImage: "text.badge.plus", action: #selector(ingestAction(_:)),
+                                  payload: payload))
+            }
+        } else if canIngest(clicked) {
+            menu.addItem(.separator())
+            menu.addItem(item(title: "Ingest", systemImage: "text.badge.plus",
+                              action: #selector(ingestAction(_:)), payload: payload))
+        }
 
         let extractable = effective.filter { canExtract($0) }
         if isMulti {
@@ -476,6 +490,15 @@ extension SourcesListViewController {
     private func canExtract(_ source: SourceSummary) -> Bool {
         MimeType.isPDF(source.mimeType)
             && store?.processedMarkdownHead(for: source) == nil
+    }
+
+    /// Mirrors the chokepoint rule in `enqueueIngestion` (via
+    /// `WikiStoreModel.canIngest`): a source is ingestible iff it has
+    /// processed markdown to ingest or raw bytes the staging path reads.
+    /// Used to hide the Ingest item for sources that can never be ingested
+    /// (e.g. a byteless YouTube video with no transcript).
+    private func canIngest(_ source: SourceSummary) -> Bool {
+        store?.canIngest(source) ?? false
     }
 
     private func item(title: String, systemImage: String,
