@@ -17,6 +17,14 @@ final class TranscriptEmitBox: @unchecked Sendable {
     var emit: (@Sendable (QueueItem.ID, AgentEvent) -> Void)?
 }
 
+/// A mutable box for a `@Sendable` usage-emit closure. Same pattern as
+/// `ProgressEmitBox`/`TranscriptEmitBox` — breaks the circular dependency
+/// between the ingestion worker factory (needs the closure) and the engine
+/// (provides it). #528 spike.
+final class UsageEmitBox: @unchecked Sendable {
+    var emit: (@Sendable (QueueItem.ID, SessionUsage) -> Void)?
+}
+
 /// Observes `QueueEngine.events` and maintains `@Observable` UI state for
 /// extraction activity. Replaces the launcher's extraction slot machinery
 /// (`isExtracting`, `extractionLog`, `extractionPID`,
@@ -70,6 +78,16 @@ final class QueueActivityTracker {
     /// Per-item accumulated progress text (for extraction items that produce
     /// progress strings, not typed `AgentEvent`s). Keyed by item ID.
     private(set) var progressLogs: [QueueItem.ID: String] = [:]
+
+    /// Per-item cumulative token/cost usage for completed runs (#528 spike).
+    /// Keyed by item ID. Set once when a `.usage` event arrives. The Activity
+    /// window reads this to append "12.4K in · 3.2K out · $0.34" to completed rows.
+    private(set) var itemUsage: [QueueItem.ID: SessionUsage] = [:]
+
+    /// Today's cumulative token usage across all completed runs (#528 spike).
+    /// Persists to UserDefaults with a date key so it survives app restarts
+    /// and resets daily. Driven by `.usage` events.
+    private(set) var todayUsage: DailyUsage = DailyUsage.load()
 
     /// Accumulated progress log for the most recent extraction. Cleared on
     /// `.started`, appended on `.progress`. Drives the sidebar log text.
@@ -151,6 +169,7 @@ final class QueueActivityTracker {
         itemToSourceIDs.removeAll()
         transcripts.removeAll()
         progressLogs.removeAll()
+        itemUsage.removeAll()
         streamingTranscriptItemIDs.removeAll()
         streamingThinkingItemIDs.removeAll()
     }
@@ -254,6 +273,7 @@ final class QueueActivityTracker {
     func pruneTranscripts(for itemID: QueueItem.ID) {
         transcripts.removeValue(forKey: itemID)
         progressLogs.removeValue(forKey: itemID)
+        itemUsage.removeValue(forKey: itemID)
         streamingTranscriptItemIDs.remove(itemID)
         streamingThinkingItemIDs.remove(itemID)
     }
@@ -266,6 +286,12 @@ final class QueueActivityTracker {
     /// The accumulated progress log for a given item ID (may be empty).
     func progressLog(for itemID: QueueItem.ID) -> String {
         progressLogs[itemID] ?? ""
+    }
+
+    /// The cumulative token/cost usage for a completed item, or `nil` if the
+    /// backend didn't report usage. Read by the Activity window rows.
+    func usage(for itemID: QueueItem.ID) -> SessionUsage? {
+        itemUsage[itemID]
     }
 
     // MARK: - Event handling
@@ -299,6 +325,13 @@ final class QueueActivityTracker {
 
         case .transcript(let id, let agentEvent):
             appendTranscriptEvent(itemID: id, event: agentEvent)
+
+        case .usage(let id, let usage):
+            // #528 spike: store per-item usage for the Activity window, and
+            // accumulate today's daily total (persists to UserDefaults).
+            itemUsage[id] = usage
+            todayUsage.add(usage)
+            DailyUsage.save(todayUsage)
 
         case .progress(let id, let line):
             // Accumulate per-item progress (for extraction items and any
@@ -366,5 +399,127 @@ final class QueueActivityTracker {
         if let pid = Int32(cleaned) {
             extractionPID = pid
         }
+    }
+}
+
+// MARK: - DailyUsage (#528 spike)
+
+/// A lightweight daily token/cost accumulator that persists to UserDefaults
+/// and resets at midnight. Stores the date so stale data from a prior day is
+/// discarded on load. Not a full `usage_log` table — just enough for the menu
+/// bar's "Today: X tokens · $Y" line.
+struct DailyUsage: Sendable, Equatable {
+    var inputTokens: Int = 0
+    var outputTokens: Int = 0
+    var totalTokens: Int = 0
+    var cost: Double = 0
+    var currency: String? = nil
+    /// The calendar day this total covers (yyyy-MM-dd). On load, if this
+    /// doesn't match today, the struct is reset.
+    var date: String
+
+    private static let storageKey = "sdw_dailyUsage_v1"
+
+    /// Load today's usage from UserDefaults. If the stored date is stale
+    /// (yesterday or older), returns a fresh zero total for today.
+    static func load() -> DailyUsage {
+        let today = Self.todayString()
+        guard let dict = UserDefaults.standard.dictionary(forKey: storageKey),
+              let storedDate = dict["date"] as? String,
+              storedDate == today
+        else {
+            return DailyUsage(date: today)
+        }
+        return DailyUsage(
+            inputTokens: dict["inputTokens"] as? Int ?? 0,
+            outputTokens: dict["outputTokens"] as? Int ?? 0,
+            totalTokens: dict["totalTokens"] as? Int ?? 0,
+            cost: dict["cost"] as? Double ?? 0,
+            currency: dict["currency"] as? String,
+            date: storedDate
+        )
+    }
+
+    /// Persist to UserDefaults. Called after each `.usage` event.
+    static func save(_ usage: DailyUsage) {
+        UserDefaults.standard.set([
+            "inputTokens": usage.inputTokens,
+            "outputTokens": usage.outputTokens,
+            "totalTokens": usage.totalTokens,
+            "cost": usage.cost,
+            "currency": usage.currency as Any,
+            "date": usage.date
+        ] as [String: Any], forKey: storageKey)
+    }
+
+    /// Accumulate a run's usage into this daily total.
+    mutating func add(_ usage: SessionUsage) {
+        // Guard against double-counting if the date rolled over mid-session.
+        if date != Self.todayString() {
+            self = DailyUsage(date: Self.todayString())
+        }
+        inputTokens += usage.inputTokens
+        outputTokens += usage.outputTokens
+        totalTokens += usage.totalTokens
+        if let c = usage.cost { cost += c }
+        if currency == nil { currency = usage.currency }
+    }
+
+    /// True if anything was tracked today (non-zero tokens).
+    var hasData: Bool {
+        totalTokens > 0 || cost > 0
+    }
+
+    private static func todayString() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = .current
+        return formatter.string(from: Date())
+    }
+}
+
+// MARK: - Usage formatting (#528 spike)
+
+/// Pure formatting helpers for token/cost usage display. No UI — just
+/// number → string so views stay declarative and the logic is testable.
+enum UsageFormatter {
+    /// Format a token count as "12.4K" or "1.2M" (compact). Below 1,000 shows
+    /// the raw integer. Uses the "K"/"M" suffixes the issue spec mentions.
+    static func tokens(_ count: Int) -> String {
+        if count >= 1_000_000 {
+            return String(format: "%.1fM", Double(count) / 1_000_000)
+        } else if count >= 1_000 {
+            return String(format: "%.1fK", Double(count) / 1_000)
+        }
+        return "\(count)"
+    }
+
+    /// Format a cost as "$0.34" or "$1,234.56". Returns nil if cost is 0 or nil.
+    static func cost(_ amount: Double?, currency: String?) -> String? {
+        guard let amount, amount > 0 else { return nil }
+        let symbol = currency == "USD" || currency == nil ? "$" : ""
+        let suffix = (currency != nil && currency != "USD") ? " \(currency!)" : ""
+        return String(format: "%@%.2f%@", symbol, amount, suffix)
+    }
+
+    /// A compact one-line summary: "12.4K in · 3.2K out · $0.34". Omits the
+    /// cost segment when nil/zero. Uses middle-dot separator (macOS convention).
+    static func summary(usage: SessionUsage) -> String {
+        var parts: [String] = []
+        parts.append("\(tokens(usage.inputTokens)) in")
+        parts.append("\(tokens(usage.outputTokens)) out")
+        if let cost = cost(usage.cost, currency: usage.currency) {
+            parts.append(cost)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// A daily total line: "Today: 45.2K tokens · $1.23". Omits cost when nil.
+    static func dailySummary(usage: DailyUsage) -> String {
+        var parts: [String] = ["Today: \(tokens(usage.totalTokens)) tokens"]
+        if usage.cost > 0 {
+            parts.append(cost(usage.cost, currency: usage.currency) ?? "")
+        }
+        return parts.joined(separator: " · ")
     }
 }

@@ -367,6 +367,13 @@ public final class AgentLauncher {
     /// old `process: Process?` — the launcher never touches a `Process` directly.
     @ObservationIgnored private var sessionHandle: SessionHandle?
 
+    /// Cumulative token/cost usage across ALL ACP phases in the current run
+    /// (#528 spike). Accumulated from each phase's `sessionUsage(for:)` before
+    /// the phase session is closed (since `closeSession` removes the usage
+    /// state). Read by `AppQueueIngestionProvider` after `run(...)` returns.
+    /// nil when no usage has been captured (non-ACP backend or empty run).
+    @ObservationIgnored private(set) public var runTotalUsage: SessionUsage?
+
     /// The planner session handle kept alive during the executor phase so it
     /// can be forked (Phase 3, `plans/acp-session-efficiency.md` §4). nil unless
     /// we're in the planner-executors ingest flow AND the planner session is
@@ -929,6 +936,13 @@ public final class AgentLauncher {
             // returns so callers see post-finish state: gate released, run
             // lifecycle decremented, onAgentEvent cleared. finish() is idempotent
             // (isRunning guard), so a later onExit-triggered finish() is a no-op.
+            //
+            // #528 spike: capture per-session usage before finish() nils the
+            // session handle. The ACPBackend retains the usage state until the
+            // session is closed/cancelled, but finish() drops our handle ref.
+            if isRunning, let handle = sessionHandle {
+                await capturePhaseUsage(backend: self.backend, session: handle)
+            }
             if isRunning {
                 finish(status: exitStatus ?? 0)
             }
@@ -1160,6 +1174,7 @@ public final class AgentLauncher {
                     phaseName: "executor[\(sourceFile)]",
                     forkFrom: forkFrom
                 ) {
+                    await capturePhaseUsage(backend: executorRouting.backend, session: session)
                     if let acp = executorRouting.backend as? ACPBackend {
                         await acp.closeSession(session)
                     } else {
@@ -1179,6 +1194,7 @@ public final class AgentLauncher {
         // alive (e.g., the planner failed early and we fell back), this is nil.
         if let plannerSession = plannerSessionHandle {
             DebugLog.agent("runACPIngest: closing planner session (all forks done)")
+            await capturePhaseUsage(backend: plannerRouting.backend, session: plannerSession)
             if let acp = plannerRouting.backend as? ACPBackend {
                 await acp.closeSession(plannerSession)
             } else {
@@ -1217,6 +1233,7 @@ public final class AgentLauncher {
             prompt: finalizerPrompt,
             phaseName: "finalizer"
         ) {
+            await capturePhaseUsage(backend: finalizerRouting.backend, session: session)
             if let acp = finalizerRouting.backend as? ACPBackend {
                 await acp.closeSession(session)
             } else {
@@ -1351,11 +1368,25 @@ public final class AgentLauncher {
         ) {
             captureAndCacheModels(provider: routing.provider, session: session)
             captureProcessID(session: session)
+            await capturePhaseUsage(backend: routing.backend, session: session)
             await routing.backend.cancel(session)
             finish(status: 0)
         } else {
             finish(status: -1)
         }
+    }
+
+    // MARK: - Usage accumulation (#528 spike)
+
+    /// Read per-session usage from an `ACPBackend` phase and merge it into
+    /// `runTotalUsage`. MUST be called BEFORE `closeSession`/`cancel` — once
+    /// the session is closed, the usage state is removed from the backend.
+    /// Non-ACP backends are a silent no-op (no usage data available).
+    private func capturePhaseUsage(backend: AgentBackend, session: SessionHandle) async {
+        guard let acp = backend as? ACPBackend else { return }
+        guard let usage = await acp.sessionUsage(for: session) else { return }
+        runTotalUsage = SessionUsage.merging(runTotalUsage, usage)
+        DebugLog.agent("runTotalUsage: captured phase usage in=\(usage.inputTokens) out=\(usage.outputTokens) cost=\(usage.cost ?? 0)")
     }
 
     /// Resolve the path to a binary bundled in `Contents/Helpers/`, or nil if
@@ -2206,6 +2237,7 @@ public final class AgentLauncher {
         currentProcessID = nil
         sessionHandle = nil
         plannerSessionHandle = nil
+        runTotalUsage = nil
         onUnlockHandler = nil
         // A reset starts a new run: a stale sink must never receive a new
         // session's events (issue #119).

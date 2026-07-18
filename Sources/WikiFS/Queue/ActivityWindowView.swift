@@ -193,6 +193,14 @@ struct ActivityWindowView: View {
                         .lineLimit(1)
                         .help(error)
                 }
+                // #528 spike: show per-run token/cost usage on completed rows.
+                if item.state == .completed,
+                   let usage = activityTracker.usage(for: item.id) {
+                    Text(UsageFormatter.summary(usage: usage))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 4)
             rowAction(for: item)
@@ -368,6 +376,12 @@ struct ActivityWindowView: View {
                         .foregroundStyle(.red)
                         .textSelection(.enabled)
                         .lineLimit(4)
+                }
+                // #528 spike: show per-run usage in the detail header too.
+                if let usage = activityTracker.usage(for: item.id) {
+                    Text(UsageFormatter.summary(usage: usage))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
             }
             Spacer()

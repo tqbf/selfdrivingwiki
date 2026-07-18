@@ -43,7 +43,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         wikiID: String,
         sourceIDs: [PageID],
         onProgress: @escaping @Sendable (String) -> Void,
-        onTranscript: (@Sendable (AgentEvent) -> Void)?
+        onTranscript: (@Sendable (AgentEvent) -> Void)?,
+        onUsage: (@Sendable (SessionUsage?) -> Void)?
     ) async throws {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
@@ -169,6 +170,12 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             )
         }
 
+        // #528 spike: read the launcher's accumulated run-total usage after
+        // the run completes and forward it to the worker (which emits a
+        // `.usage` queue event). Done here, after `run()` returns, so the
+        // usage reflects all phases (planner → executors → finalizer).
+        onUsage?(launcher.runTotalUsage)
+
         // If the agent never spawned (cancelled, preflight failure), clear
         // the ingest flag. The tracker's ingestingSourceIDs will be cleared
         // by the queue event when the item reaches a terminal state.
@@ -182,7 +189,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     func runLint(
         wikiID: String,
         onProgress: @escaping @Sendable (String) -> Void,
-        onTranscript: (@Sendable (AgentEvent) -> Void)?
+        onTranscript: (@Sendable (AgentEvent) -> Void)?,
+        onUsage: (@Sendable (SessionUsage?) -> Void)?
     ) async throws {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
@@ -208,13 +216,15 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             onProgress: onProgress,
             onTranscript: onTranscript
         )
+        onUsage?(launcher.runTotalUsage)
     }
 
     func runLintPages(
         wikiID: String,
         pageIDs: [PageID],
         onProgress: @escaping @Sendable (String) -> Void,
-        onTranscript: (@Sendable (AgentEvent) -> Void)?
+        onTranscript: (@Sendable (AgentEvent) -> Void)?,
+        onUsage: (@Sendable (SessionUsage?) -> Void)?
     ) async throws {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
@@ -262,6 +272,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             onProgress: onProgress,
             onTranscript: onTranscript
         )
+        onUsage?(launcher.runTotalUsage)
     }
 
     // MARK: - Private

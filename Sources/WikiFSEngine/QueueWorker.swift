@@ -80,6 +80,10 @@ public enum QueueEvent: Sendable {
     /// Carries the item ID + the event. Used by the Activity window to
     /// build per-item transcripts (decoupled from the launcher instance).
     case transcript(QueueItem.ID, AgentEvent)
+    /// Final cumulative token/cost usage for a completed ingestion or lint
+    /// run. Emitted once, after the run finishes. #528 spike — surfaces
+    /// per-run usage in the Activity window and aggregates a daily total.
+    case usage(QueueItem.ID, SessionUsage)
     /// An item transitioned to `.completed`.
     case completed(QueueItem)
     /// An item transitioned to `.failed`. Carries the error message.
@@ -100,7 +104,7 @@ public enum QueueEvent: Sendable {
             return i
         case .failed(let i, _):
             return i
-        case .progress, .transcript, .runStateChanged:
+        case .progress, .transcript, .usage, .runStateChanged:
             return nil
         }
     }

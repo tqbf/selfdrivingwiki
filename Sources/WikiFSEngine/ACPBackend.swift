@@ -1365,6 +1365,30 @@ public struct SessionUsage: Sendable {
         self.contextUsed = contextUsed
         self.contextSize = contextSize
     }
+
+    /// Merge two usage snapshots for run-total accumulation (#528 spike).
+    /// Token counts are summed; context window + cost reflect the most recent
+    /// snapshot (they are point-in-time, not cumulative across phases).
+    /// `existing == nil` returns `new` directly.
+    public static func merging(_ existing: SessionUsage?, _ new: SessionUsage) -> SessionUsage {
+        guard let existing else { return new }
+        let mergedCost: Double?
+        if let e = existing.cost, let n = new.cost {
+            mergedCost = e + n
+        } else {
+            mergedCost = new.cost ?? existing.cost
+        }
+        return SessionUsage(
+            inputTokens: existing.inputTokens + new.inputTokens,
+            outputTokens: existing.outputTokens + new.outputTokens,
+            totalTokens: existing.totalTokens + new.totalTokens,
+            cachedReadTokens: (existing.cachedReadTokens ?? 0) + (new.cachedReadTokens ?? 0),
+            thoughtTokens: (existing.thoughtTokens ?? 0) + (new.thoughtTokens ?? 0),
+            cost: mergedCost,
+            currency: new.currency ?? existing.currency,
+            contextUsed: new.contextUsed,
+            contextSize: new.contextSize)
+    }
 }
 
 /// Thread-safe accumulator for per-session usage data. Captured in the
