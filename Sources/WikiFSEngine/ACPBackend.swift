@@ -1187,6 +1187,18 @@ public actor ACPBackend: AgentBackend {
             environment: environment)
     }
 
+    /// Named constants for the environment-variable keys and values that
+    /// `buildAgentEnv` exports into the agent subprocess. Centralizes the raw
+    /// string literals so typos are caught at compile time — same pattern as
+    /// `HintKey` (issue #509).
+    private enum AgentEnvKey {
+        static let wikiDB = "WIKI_DB"
+        static let wikictl = "WIKICTL"
+        static let path = "PATH"
+        static let defaultPath = "/usr/bin:/bin"
+        static let pathSeparator = ":"
+    }
+
     /// Builds the environment dict for the agent subprocess. Exports `WIKI_DB`,
     /// `WIKICTL`, and prepends the wikictl directory to `PATH`. `WIKI_ROOT` is
     /// intentionally NOT exported — the mount is optional; wikictl is the primary
@@ -1199,16 +1211,27 @@ public actor ACPBackend: AgentBackend {
         spawnEnvironment: [String: String]
     ) -> [String: String] {
         var env = baseEnv
-        env["WIKI_DB"] = cli.wikiID
+        env[AgentEnvKey.wikiDB] = cli.wikiID
         // WIKI_ROOT is intentionally NOT exported — mount is optional; wikictl is the primary read surface (#441).
-        env["WIKICTL"] = cli.wikictlDirectory + "/wikictl"
-        let existingPath = env["PATH"] ?? "/usr/bin:/bin"
-        env["PATH"] = cli.wikictlDirectory + ":" + existingPath
+        env[AgentEnvKey.wikictl] = cli.wikictlDirectory + "/wikictl"
+        let existingPath = env[AgentEnvKey.path] ?? AgentEnvKey.defaultPath
+        env[AgentEnvKey.path] = cli.wikictlDirectory + AgentEnvKey.pathSeparator + existingPath
         for (key, value) in spawnEnvironment {
             env[key] = value
         }
         return env
     }
+
+    /// Filenames the agent reads for system context from its working directory
+    /// (spec models system context as `CLAUDE.md`/`AGENTS.md` in cwd). Both are
+    /// written by `deliverSystemPrompt` so the agent reads from whichever it
+    /// supports.
+    private static let systemPromptFilenames = ["CLAUDE.md", "AGENTS.md"]
+
+    /// Delimiter separating the injected system prompt from the user task.
+    private static let systemPromptDelimiter = "---"
+    /// Header marking the start of the user task beneath the system prompt.
+    private static let taskHeader = "# YOUR TASK"
 
     /// Writes the system prompt to the agent's working directory as both
     /// `CLAUDE.md` and `AGENTS.md` — the spec-compliant delivery mechanism.
@@ -1226,7 +1249,7 @@ public actor ACPBackend: AgentBackend {
     static func deliverSystemPrompt(_ systemPrompt: String, to workingDir: String) {
         guard !systemPrompt.isEmpty else { return }
         let dirURL = URL(fileURLWithPath: workingDir)
-        for filename in ["CLAUDE.md", "AGENTS.md"] {
+        for filename in Self.systemPromptFilenames {
             let url = dirURL.appendingPathComponent(filename)
             do {
                 try systemPrompt.write(to: url, atomically: true, encoding: .utf8)
@@ -1250,8 +1273,8 @@ public actor ACPBackend: AgentBackend {
         return """
         \(systemPrompt)
 
-        ---
-        # YOUR TASK
+        \(Self.systemPromptDelimiter)
+        \(Self.taskHeader)
         \(userText)
         """
     }
