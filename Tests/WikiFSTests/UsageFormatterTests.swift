@@ -50,7 +50,7 @@ import Foundation
     }
 
     @Test func costNonUSDShowsSuffix() {
-        #expect(UsageFormatter.cost(2.00, currency: "EUR") == "$2.00 EUR")
+        #expect(UsageFormatter.cost(2.00, currency: "EUR") == "2.00 EUR")
     }
 
     // MARK: - duration(ms:)
