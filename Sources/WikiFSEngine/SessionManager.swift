@@ -53,18 +53,27 @@ public final class SessionManager {
     /// The app passes a closure delegating to `PdfExtractionService.resolveScript()`.
     public let pdf2mdScriptPathResolver: () -> String?
 
+    /// Receives per-turn interactive (Ask/Edit chat) usage deltas from each
+    /// session's launchers so the menu bar daily total includes chat, not
+    /// just queue runs. The app wires this to
+    /// `QueueActivityTracker.recordInteractiveUsage`. Default no-op so
+    /// headless/daemon callers (which have no UI tracker) are unaffected.
+    public let interactiveUsageRecorder: @MainActor (SessionUsage) -> Void
+
     public init(
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: QueueEngine,
         extractionProvider: any QueueExtractionProvider,
-        pdf2mdScriptPathResolver: @escaping () -> String?
+        pdf2mdScriptPathResolver: @escaping () -> String?,
+        interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
     ) {
         self.containerDirectory = containerDirectory
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
         self.extractionProvider = extractionProvider
         self.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
+        self.interactiveUsageRecorder = interactiveUsageRecorder
     }
 
     // MARK: - Session lifecycle
@@ -86,7 +95,8 @@ public final class SessionManager {
             extractionCoordinator: extractionCoordinator,
             queueEngine: queueEngine,
             extractionProvider: extractionProvider,
-            pdf2mdScriptPathResolver: pdf2mdScriptPathResolver
+            pdf2mdScriptPathResolver: pdf2mdScriptPathResolver,
+            interactiveUsageRecorder: interactiveUsageRecorder
         )
         // Transfer any deferred wiki-link click (registered by
         // `applyOrStashWikiLink` for a wiki whose window wasn't open yet)

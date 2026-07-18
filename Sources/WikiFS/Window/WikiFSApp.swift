@@ -207,7 +207,12 @@ struct WikiFSApp: App {
             extractionCoordinator: coordinator,
             queueEngine: queueEngine,
             extractionProvider: extractionProvider,
-            pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path }
+            pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path },
+            interactiveUsageRecorder: { [weak activityTracker] usage in
+                // Interactive chat (Ask/Edit) usage delta → daily total so the
+                // menu bar "Today: X tokens" includes chat, not just queue runs.
+                activityTracker?.recordInteractiveUsage(usage)
+            }
         )
         _sessionManager = State(initialValue: sm)
         _windowTracker = State(initialValue: WindowListTracker())

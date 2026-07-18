@@ -62,6 +62,16 @@ public final class AgentLauncher {
     /// Set in `run(...)` from the resolved provider; cleared in `finish()` and
     /// `resetRunArtifacts()`. Nil for runs without ACP backend usage data.
     @ObservationIgnored private var liveUsageProviderLabel: String?
+
+    /// Receives the per-turn token/cost delta for an interactive (Ask/Edit)
+    /// chat session. The app layer installs this so the menu bar's "Today:
+    /// X tokens" daily total includes interactive chat, not just queue-based
+    /// ingest/lint runs. The delta is computed against the last snapshot read
+    /// for THIS session (the backend reports cumulative session totals), so
+    /// accumulating into `DailyUsage.add` doesn't double-count across turns.
+    /// `nil` (no-op) when the app hasn't wired it — interactive usage is
+    /// simply untracked. Set/cleared in `resetRunArtifacts()` / `finish()`.
+    @ObservationIgnored public var onInteractiveUsage: (@MainActor (SessionUsage) -> Void)?
     /// The raw combined transcript (raw stream-json stdout + stderr) kept alongside
     /// the typed `events`, so the UI / a debugger can see exactly what the CLI
     /// emitted. This is the in-memory mirror of the on-disk `run.jsonl`.
@@ -466,6 +476,14 @@ public final class AgentLauncher {
     /// state). Read by `AppQueueIngestionProvider` after `run(...)` returns.
     /// nil when no usage has been captured (non-ACP backend or empty run).
     @ObservationIgnored private(set) public var runTotalUsage: SessionUsage?
+
+    /// The cumulative usage snapshot last emitted for the interactive
+    /// session, used to compute the per-turn delta. The backend's
+    /// `sessionUsage(for:)` returns cumulative session totals (tokens across
+    /// all turns); emitting those after each turn would double-count when
+    /// accumulated by `DailyUsage.add`. Reset in `resetRunArtifacts()` so
+    /// each interactive session starts fresh.
+    @ObservationIgnored private var lastInteractiveUsageSnapshot: SessionUsage?
 
     /// The planner session handle kept alive during the executor phase so it
     /// can be forked (Phase 3, `plans/acp-session-efficiency.md` §4). nil unless
@@ -1807,6 +1825,56 @@ public final class AgentLauncher {
         }
     }
 
+    /// Read the interactive session's cumulative usage after a turn finishes
+    /// (the turn stream drained at `.messageStop`/`.result`) and emit the
+    /// per-turn DELTA via `onInteractiveUsage`. MUST be called while the
+    /// session is still alive (before `cancel`/`closeSession`) — the backend
+    /// removes usage state on close.
+    ///
+    /// The backend's `sessionUsage(for:)` returns cumulative session totals
+    /// (tokens across all turns). Accumulating those directly via
+    /// `DailyUsage.add` would double-count on every turn after the first, so
+    /// we emit `SessionUsage.delta(from: lastInteractiveUsageSnapshot, to:)`.
+    /// Non-ACP backends or a missing/nil callback are silent no-ops (no usage
+    /// data, nothing to forward). The configured `runProviderLabel` is
+    /// attached so the daily summary can show "Claude" etc. — the backend
+    /// doesn't know the provider.
+    private func captureInteractiveUsage() async {
+        guard onInteractiveUsage != nil else { return }
+        guard let acp = backend as? ACPBackend, let session = sessionHandle else { return }
+        guard let current = await acp.sessionUsage(for: session) else {
+            DebugLog.agent("captureInteractiveUsage: no usage snapshot for session (nil)")
+            return
+        }
+        // Attach the configured provider label (set at spawn-commit). The
+        // backend's snapshot has providerLabel == nil (it doesn't know it).
+        let enriched: SessionUsage
+        if let providerLabel = runProviderLabel {
+            enriched = SessionUsage(
+                inputTokens: current.inputTokens,
+                outputTokens: current.outputTokens,
+                totalTokens: current.totalTokens,
+                cachedReadTokens: current.cachedReadTokens,
+                thoughtTokens: current.thoughtTokens,
+                cost: current.cost,
+                currency: current.currency,
+                contextUsed: current.contextUsed,
+                contextSize: current.contextSize,
+                providerLabel: providerLabel,
+                modelId: current.modelId,
+                thinkingLevel: current.thinkingLevel)
+        } else {
+            enriched = current
+        }
+        let delta = SessionUsage.delta(from: lastInteractiveUsageSnapshot, to: enriched)
+        lastInteractiveUsageSnapshot = enriched
+        // Only forward when there's something to count — avoids noise on a
+        // turn that produced no usage yet.
+        guard delta.totalTokens > 0 || delta.cost != nil else { return }
+        onInteractiveUsage?(delta)
+        DebugLog.agent("captureInteractiveUsage: emitted delta in=\(delta.inputTokens) out=\(delta.outputTokens) cost=\(delta.cost ?? 0) model=\(delta.modelId ?? "nil") provider=\(delta.providerLabel ?? "nil") (cumulative session in=\(enriched.inputTokens) out=\(enriched.outputTokens))")
+    }
+
     /// Resolve the path to a binary bundled in `Contents/Helpers/`, or nil if
     /// not present or not executable.
     ///
@@ -2319,6 +2387,11 @@ public final class AgentLauncher {
                     self.setGenerating(false)
                     self.flushTranscript()
                     self.generateChatSummary()
+                    // Capture the per-turn usage delta and forward it to the
+                    // menu bar tracker (if wired). Reads the backend's
+                    // cumulative session snapshot and emits the delta vs the
+                    // last turn, so the daily total doesn't double-count.
+                    await self.captureInteractiveUsage()
                     DebugLog.agent("sendInteractiveMessage: turn end (endsGeneration) → flushTranscript")
                     if Self.releasesGenerationSlotPerTurn(
                         isInteractiveSession: self.isInteractiveSession) {
@@ -2635,6 +2708,10 @@ public final class AgentLauncher {
         // provider's onUsagecallback.
         onLiveUsage = nil
         liveUsageProviderLabel = nil
+        // Interactive usage tracking: detach the callback and clear the
+        // snapshot baseline so a new run starts fresh (no stale delta base).
+        onInteractiveUsage = nil
+        lastInteractiveUsageSnapshot = nil
         // D2 flip-timing: clear activeChatID AFTER flushTranscript() has
         // committed the final tail.
         // transcriptSink?(tail) which runs store.appendChatEvents on the main
@@ -2721,6 +2798,9 @@ public final class AgentLauncher {
         sessionHandle = nil
         plannerSessionHandle = nil
         runTotalUsage = nil
+        // Interactive usage: clear the per-session baseline so each
+        // interactive run starts fresh (the first turn's delta == full usage).
+        lastInteractiveUsageSnapshot = nil
         thinkingOption = nil
         onUnlockHandler = nil
         // A reset starts a new run: a stale sink must never receive a new

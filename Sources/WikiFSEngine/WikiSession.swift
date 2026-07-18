@@ -144,7 +144,8 @@ public final class WikiSession {
         queueEngine: QueueEngine,
         extractionProvider: any QueueExtractionProvider,
         makeStore: @escaping (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
-        pdf2mdScriptPathResolver: @escaping () -> String? = { nil }
+        pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
+        interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
     ) {
         self.wikiID = wikiID
         self.extractionCoordinator = extractionCoordinator
@@ -255,10 +256,14 @@ public final class WikiSession {
         // different wiki's session runs independently.
         let agent = AgentLauncher(generationGate: gate, extractionCoordinator: extractionCoordinator)
         agent.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
+        // Interactive (non-queue) query runs via `agentLauncher` also report
+        // their per-turn usage delta to the menu bar tracker when wired.
+        agent.onInteractiveUsage = interactiveUsageRecorder
         self.agentLauncher = agent
 
         let chat = AgentLauncher(generationGate: gate, extractionCoordinator: extractionCoordinator)
         chat.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
+        chat.onInteractiveUsage = interactiveUsageRecorder
         self.chatLauncher = chat
     }
 
