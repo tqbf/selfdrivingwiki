@@ -39,6 +39,13 @@ public enum MimeType {
     /// `text/html`.
     public static let html = "text/html"
 
+    /// `text/mermaid` — the conventional MIME type for a standalone Mermaid
+    /// diagram source (`.mmd`).
+    public static let mermaid = "text/mermaid"
+
+    /// `text/x-mermaid` — the `x-` variant some tools emit for Mermaid sources.
+    public static let mermaidX = "text/x-mermaid"
+
     /// `application/xhtml+xml`.
     public static let xhtml = "application/xhtml+xml"
 
@@ -55,6 +62,9 @@ public enum MimeType {
 
     /// The recognized Markdown MIME variants (`text/markdown`, `text/x-markdown`).
     public static let markdownVariants: Set<String> = [markdown, markdownX]
+
+    /// The recognized Mermaid MIME variants (`text/mermaid`, `text/x-mermaid`).
+    public static let mermaidVariants: Set<String> = [mermaid, mermaidX]
 
     // MARK: - Predicates
 
@@ -75,5 +85,12 @@ public enum MimeType {
     public static func isMarkdown(_ mime: String?) -> Bool {
         guard let mime else { return false }
         return markdownVariants.contains(mime.lowercased())
+    }
+
+    /// Whether `mime` is one of the recognized Mermaid variants
+    /// (`text/mermaid` / `text/x-mermaid`, case-insensitive). `nil` is `false`.
+    public static func isMermaid(_ mime: String?) -> Bool {
+        guard let mime else { return false }
+        return mermaidVariants.contains(mime.lowercased())
     }
 }
