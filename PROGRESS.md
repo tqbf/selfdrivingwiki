@@ -2,83 +2,186 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-07-18 — Unify video source detail with PDF tab layout (branch `unify-video-pdf-source-tabs`)
+## 2026-07-18 — Fix inconsistent ingest button/menu state (branch `fix/ingest-button-state-consistency`)
 
-**Problem.** Issue #575 (PR #572) shipped the YouTube/Vimeo embed player as a
-custom `embedContent(target:)` layout in `SourceDetailView`: a fixed-height
-player iframe stacked on top of the transcript in a single scroll column. PDF
-sources, meanwhile, had a far richer detail view — a segmented **Reader / PDF /
-Split** tab picker with an outline pane. Video sources should use that *same*
-layout, with the video player standing in for PDFKit.
+**Problem:** The detail-view Ingest button and the sources-outline context-menu
+Ingest item disagreed on when a source is ingestible. A not-yet-extracted source
+with raw bytes but no processed markdown — e.g. a dropped PDF, or
+`[[source:Kirkeby-Hinrag 2022 …]]` — showed the "Ready to ingest" (hollow
+circle) indicator and an **enabled** context-menu item, but a **greyed-out**
+Ingest button in the detail view, so the user couldn't ingest from there.
 
-**Fix.** Generalized the PDF tab system so byteless media embeds
-(YouTube/Vimeo/Spotify/SoundCloud/direct-remote) route through the same tabbed
-viewer, and deleted the bespoke stacked player+transcript layout. One file
-changed: `Sources/WikiFS/Sources/SourceDetailView.swift`.
+**Root cause:** `SourceDetailView.ingestButton` gated its `.disabled` and
+button-style on `!hasMarkdown` (`headVersion != nil` — processed markdown
+*only*). The context menu (`SourcesListView`) and the `enqueueIngestion`
+chokepoint (`QueueIngestionHelper`) gate on the shared
+`WikiStoreModel.canIngest` = `hasProcessedMarkdown || byteSize > 0`. A byteful
+source with no extraction has `canIngest == true` (menu enabled) but
+`hasMarkdown == false` (button greyed) — the exact mismatch.
+
+**Fix:** Added `SourceDetailView.canIngest` (`hasMarkdown || file.byteSize > 0`),
+mirroring `WikiStoreModel.canIngest` and computed from already-loaded `headVersion`
+(reactive) + `file.byteSize` (no DB read in the body). The Ingest button's
+`.disabled` and button-style branches now use `!canIngest` instead of
+`!hasMarkdown`, so the button and the context menu reflect the same rule. A PDF
+with raw bytes is now enabled immediately; only a genuinely un-ingestible source
+(byteless, no processed markdown — e.g. a video whose transcript never arrived)
+stays disabled/secondary.
+
+**Kept (intentional, verified):** the `isRunning && !isAnySourceIngesting` block.
+`isRunning` is `agentLauncher.isRunning` (the ingest/lint launcher), **not** the
+chat launcher, so it stays `false` during a chat run (no chat-run blocking). It is
+`true` only during a lint with no ingest active — a real launcher-preflight guard
+that prevents starting an ingest mid-lint. Corrected the stale comment that claimed
+it blocked during a "chat agent."
+
+**Files changed:** `Sources/WikiFS/Sources/SourceDetailView.swift` only (+24/−8).
+
+**Build/Tests:** `make version prompts` → `swift build` clean (298s); fast test
+tier **2573 tests / 218 suites passed** (0 failures; an initial run reported 1
+flake in a `/tmp` snapshot/render test, not reproduced on re-run).
+
+## 2026-07-18 — Fix Window menu: open-windows list + Show Previous/Next Tab (#567)
+
+**Problem:** The Window menu was missing two standard macOS features: (1) the
+list of open windows below "Bring All to Front", and (2) the "Show Previous/Next
+Tab" items (⇧⌘[ / ⇧⌘]) for cycling editor tabs within a window.
+
+**Root cause:** Nothing was *suppressing* the auto window list — `.commands`
+only replaced `.newItem`, and `removeRedundantAppMenuItems` strips only
+About/Settings items. SwiftUI's value-driven `WindowGroup(for: String.self)`
+just doesn't reliably surface value-typed windows in the standard Window-menu
+list, so the list was empty. The tab-cycling commands simply didn't exist.
+
+**Fix:** Added `WindowMenuCommands` (`Sources/WikiFS/Window/WindowMenuCommands.swift`):
+- `CommandGroup(after: .windowList)` renders an open-windows list driven by a
+  small `@MainActor @Observable WindowListTracker` that re-derives from
+  `NSApplication.shared.windows` on `NSWindow` lifecycle notifications (become
+  key/main, occlusion-state change, will-close, app activation). Wiki window
+  titles resolve from the `wiki:` identifier → `WikiRegistryClient` display
+  name (falling back to the AppKit title). `after:` (not `replacing:`) can't
+  clobber the system Minimize/Zoom/Bring-All-to-Front items; the auto list is
+  observed-empty so there's no duplication.
+- "Show Previous Tab" / "Show Next Tab" `Button`s with `.keyboardShortcut`
+  (`[`/`]`, `.command + .shift`) placed in the Window menu where macOS puts
+  them. The action targets `SessionManager.frontmostSession?.store`, cycles
+  `WikiStoreModel.tabs` with wrap-around (Euclidean modulo), and self-guards
+  (no-op with no frontmost session / <2 tabs) so the shortcuts always fire.
+
+Wired via `WikiFSApp.commands`; the tracker is `@State`-owned, started in
+`startStatusItem()` alongside the status-item controller.
+
+Verified: `make version prompts` → `swift build` (clean) → fast test tier
+(2569 tests passed).
+
+## 2026-07-18 — Fix EXC_BAD_ACCESS crash in Activity window when cancelling a lint job
+
+**Problem:** App crashed with `EXC_BAD_ACCESS (SIGSEGV)` in
+`objc_msgSend` → `swift_getObjectType` → `swift_task_isMainExecutorImpl` inside
+`ActivityWindowView.sidebar.getter` → `ForEachChild.updateValue` →
+`ObservationCenter._withObservation`. Triggered by cancelling a lint job from
+the Agent Queue activity window. The crash dereferenced a garbage pointer
+(`0x225005b4c20` — freed heap, not a tagged pointer) during a Swift runtime
+`@MainActor` isolation check.
+
+**Root cause:** The `ForEach` row body in `itemRow(_:)` read `@MainActor
+@Observable` properties on three objects — `SessionManager.sessions`,
+`WikiStoreModel.sources`/`.summaries`, and `QueueActivityTracker.itemUsage` —
+once per row on every re-evaluation. Each read triggers
+`swift_task_isMainExecutorImpl` (the runtime's "am I on MainActor?" check)
+inside `ObservationCenter._withObservation` → `ForEachChild.updateValue`. When
+the queue engine emits a `.cancelled` event, `QueueActivityTracker.handle(_:)`
+mutates `ingestingSourceIDs`/`lintingItemIDs` (observable writes) while the
+`ForEach` re-renders rows that read those same observables. Under this
+concurrent-mutation + isolation-check window, the runtime constructs a
+`SerialExecutorRef` from freed/bogus object metadata → crash. This is a known
+Swift runtime bug class (swiftlang/swift#89197, related #87097/PR #87163) in
+which the `SerialExecutorRef` handed to `isMainExecutor()` is constructed from
+bogus bits.
+
+**Fix:** Precompute all `@Observable`-derived display data into plain values
+*before* the `ForEach`, so the row body has zero `@Observable` property accesses.
+New `RowDisplayData` struct + `buildRowDisplayData(for:)` snapshots
+`sessionManager.sessions`, `activityTracker.itemUsage`, and the per-store
+`sources`/`summaries` lookups once at the sidebar level (where observation
+tracking is correct and the isolation check runs once, not per-row). The
+`itemRow(_:)` body now reads only from `QueueItem` (value) and `RowDisplayData`
+(value). The detail pane's helpers (`rowTitle(for:)`, `rowSubtitle(for:)`,
+`targetNames(for:)`) still read observables — they're outside the
+`ForEachChild.updateValue` path so they're not at risk.
+
+**Files changed:**
+- `Sources/WikiFS/Queue/ActivityWindowView.swift` — new `RowDisplayData` struct,
+  `buildRowDisplayData(for:)`, `computeRowTitle(for:wikiName:names:)`,
+  `computeRowSubtitle(for:wikiName:)` pure functions; `sidebar` getter
+  precomputes display data; `itemRow` takes `RowDisplayData?` and reads only
+  plain values; old `rowTitle`/`rowSubtitle` refactored as thin wrappers around
+  the pure functions for the detail pane's use.
+
+**Build/Tests:** `swift build` clean (72s); fast test tier 2542 tests in 216
+suites pass. Verified zero `@Observable` reads in `itemRow` body via
+`rg 'activityTracker\.|sessionManager\?|\.sessions\[|\.sources\b|\.summaries\b'`
+inside the function — no matches.
+## 2026-07-18 — Issue #572: YouTube/Vimeo URL ingest UX — video title as display name + embed player in source detail (branch `feature/youtube-embed-title-ux`)
+
+**Problem:** Pasting a YouTube/Vimeo URL created a byteless embed source whose
+display name was the synthetic `youtube-<videoId>` (not the real video title),
+and `SourceDetailView` routed byteless sources to the inert "Raw Source"
+fallback — the transcript markdown (from #564) and the embed player were never
+shown in the detail view. Only the in-page reader (`![[source:…]]` directive)
+rendered the iframe.
+
+**Fix (three parts):**
+
+1. **Video title via oEmbed** (`Sources/WikiFSCore/Integrations/MediaTitleFetcher.swift`):
+   a pure `title(for:fetcher:)` that builds each provider's oEmbed endpoint URL
+   (YouTube/Vimeo/Spotify/SoundCloud — `remote-media` has none), fetches the JSON
+   off-main via the injected `URLResourceFetcher` seam, and parses the `title`
+   field. Never throws — a network/decode failure returns `nil` so the synthetic
+   name stays in place (mirrors the `YouTubeTranscriptService` best-effort
+   discipline). Wired into both byteless paths in `WikiStoreModel`:
+   `bytelessMediaOutcome` and `youtubeEmbedAndTranscriptOutcome` now call
+   `fetchMediaTitle` (a detached `Task` helper) and `setSourceDisplayName` on
+   success, threading the resolved title to every `openTab` call.
+
+2. **Embed start-time** (`ExternalEmbed.youTubeStartTime(from:)`): parses
+   YouTube's `&t=` / `?start=` (integer + clock form `1m30s`/`1h2m30s`) into
+   integer seconds and stamps `&start=` onto the embed URL so the player
+   resumes at the pasted timestamp.
+
+3. **Embed player + transcript in `SourceDetailView`**
+   (`Sources/WikiFS/Sources/MediaEmbedPlayerView.swift`): a self-contained
+   `WKWebView` (`NSViewRepresentable`) that renders one provider iframe, loaded
+   under `WikiReaderOrigin` (the same synthetic https origin the reader uses) so
+   YouTube's parent-origin check passes (no 153-error). The iframe attributes
+   mirror `WikiLinkMarkdown.embedHTML` exactly (YouTube eager-loads + forwards
+   the referrer; others lazy-load). A pure `MediaEmbedPlayerHTML.document(for:)`
+   builds the HTML so it is unit-testable without a WKWebView. `SourceDetailView`
+   gains `embedDescriptor`/`embedTarget` computed from the loaded `origin` + the
+   source mime, branches `contentArea` to a new `embedContent(target:)` layout
+   (player on top, transcript below in the existing `WikiReaderView`), and a
+   "No Transcript Available" placeholder when no capped/markdown exists.
 
 Changes:
-- `FileContentTab` — renamed `.markdown` → `.reader` (the tab shows the rendered
-  transcript *or* processed markdown; "Reader" matches the PDF-side label),
-  added `.video`. Kept `.pdf` and `.split`.
-- `availableTabs` (new computed[]) — replaces the boolean `showTabs`. A video
-  source gets `[.reader, .video]` plus `.split` only when a transcript
-  (`hasMarkdown`) exists; a PDF with extraction keeps `[.reader, .pdf, .split]`;
-  an un-extracted PDF / native markdown / binary source gets `[]` (bare content,
-  no picker). `showTabs` is now `!availableTabs.isEmpty`.
-- `contentArea` — the `if isBytelessEmbedWithPlayer … embedContent(…)` branch is
-  gone; video sources fall into `showTabs || isBytelessEmbedWithPlayer` →
-  `tabbedContent` (same path as PDF+extraction). PDF-only / native-markdown /
-  binary branches untouched.
-- `tabbedContent` — `.reader` shows the transcript reader (or
-  `embedEmptyReaderContent` when a byteless embed has no transcript yet);
-  `.video` shows `videoPlayerContent`; `.pdf`/`.split` unchanged.
-- `videoPlayerContent` (new) — wraps `MediaEmbedPlayerView` (unchanged,
-  reusable) as a full-pane tab body, with a `ContentUnavailableView` fallback
-  when the embed target can't resolve. Replaces the deleted
-  `embedContent(target:)`.
-- `embedEmptyReaderContent` (new) — the calm "No Transcript Available"
-  placeholder that fills the Reader tab for a video with no captions, so the
-  picker row is never blank.
-- `splitContent` — right pane now picks the source's visual companion: the PDF
-  for PDF sources, the video player for byteless embeds. Left pane (the reader)
-  identical.
-- `selectedTab` default + file-id reset → `.reader`; the Edit button's "switch
-  away from a no-editor tab" guard now also covers `.video`.
+- `Sources/WikiFSCore/Integrations/MediaTitleFetcher.swift` — new pure oEmbed
+  title fetcher (URL builder + JSON parse).
+- `Sources/WikiFSCore/Integrations/ExternalEmbed.swift` — `youTubeStartTime` +
+  `parseClockDuration` helpers, stamped into the YouTube embed URL.
+- `Sources/WikiFSCore/Store/WikiStoreModel.swift` — `bytelessMediaOutcome` +
+  `youtubeEmbedAndTranscriptOutcome` now async + take the URL fetcher and apply
+  the oEmbed title; new `fetchMediaTitle` detached-Task helper.
+- `Sources/WikiFS/Sources/MediaEmbedPlayerView.swift` — new standalone player
+  view + pure HTML builder.
+- `Sources/WikiFS/Sources/SourceDetailView.swift` — `embedDescriptor`/
+  `embedTarget`/`isBytelessEmbedWithPlayer` computed; `embedContent(target:)`
+  section; `origin` already loaded by `.onAppear`/`.task`.
+- `Tests/WikiFSTests/MediaEmbedPlayerTests.swift` — 17 pure tests (start-time
+  parsing, oEmbed URL building + title parse, embed player HTML).
+- `Tests/WikiFSTests/BytelessEmbedIntegrationTests.swift` — `ExplodingFetcher`
+  + `YouTubeFixtureFetcher` now serve canned oEmbed JSON (new expected behavior).
 
-**Outline** works free — `contentAndOutline` keys off `currentMarkdownContent`,
-which is the transcript markdown for a video source, so `PageOutlineView`
-populates from the transcript's headings just as it does for PDF-derived
-markdown. No change needed there.
-
-**Why this is the right generalization:** the player lives where the PDFKit
-view lived and the transcript lives where processed-markdown lived. Everything
-else (toolbar, outline, zoom, find, extraction chip, provenance) stays identical
-because it already keyed off `headVersion` / `isPDF`, not the content layout.
-`MediaEmbedPlayerView` + `MediaEmbedPlayerHTML` are untouched (kept as the
-reusable WKWebView player component); only the wrapping layout changed.
-
-**Build/Tests:** `make version prompts && swift build` clean (449s);
-fast tier **2573 tests / 218 suites passed**; targeted
-`MediaEmbedPlayerTests|ExternalEmbedTests|YouTubeEmbedWebViewTests` 34/34 pass.
-
-PR: `unify-video-pdf-source-tabs` → `main` (NOT merged).
-
-## 2026-07-18 — Fix missing activity ingestion details: thinking-level dropped in enrichment (branch `fix/missing-activity-details`)
-
-**Problem:** The Activity window lost the thinking-effort level segment ("high"/"medium"/"low") for completed ingestion/lint runs. The user reported that rich run metadata (model name, token counts, cost, timing) had partially regressed — the thinking-effort segment introduced in #566 was always blank.
-
-**Root cause:** PR #569 (`Surface thinking effort level in UI`) added `thinkingLevel: String?` to `SessionUsage` and wired it through `ACPBackend.sessionUsage(for:)` and `UsageFormatter.fullSummary`, but the enrichment hop in `AgentLauncher.capturePhaseUsage` (which reattaches the configured `providerLabel`) reconstructed `SessionUsage` with an explicit memberwise init that omitted the `thinkingLevel` parameter — defaulting it to `nil` on every call. Since every `capturePhaseUsage` call site passes a non-nil `providerLabel`, the `if let providerLabel` branch always ran, and `thinkingLevel` was always lost. `SessionUsage.merging` then propagated `nil` through `runTotalUsage` → `onUsage` → the `.usage` queue event → `QueueActivityTracker.itemUsage`, so the Activity window's `fullSummary` rendered without the thinking-effort segment.
-
-**Investigation (pipeline trace):** Verified the full usage pipeline is structurally intact — `ACPBackend.sessionUsage` → `capturePhaseUsage` → `runTotalUsage` → `AppQueueIngestionProvider.onUsage?(launcher.runTotalUsage)` × 3 sites → `emitUsage` → `QueueEngine.makeEmitUsage` broadcaster → `QueueActivityTracker.handle(.usage)` → `itemUsage` → `ActivityWindowView.fullSummary`. The display code (row + header) is present and correct. The #565/#571/#572/#573 merges did not break the wiring in `WikiFSApp.swift` (the `UsageEmitBox` seam). The only dropped field was `thinkingLevel` in `capturePhaseUsage`.
-
-**Fix:** One-line addition — pass `thinkingLevel: usage.thinkingLevel` through the enrichment `SessionUsage` init in `capturePhaseUsage`. The `else` branch (no `providerLabel`) already passed `usage` directly. Added 3 regression tests covering `SessionUsage.merging` thinking-level latest-wins + existing-preserved, and `UsageFormatter.fullSummary` thinking-level inclusion between model and tokens.
-
-Changes:
-- `Sources/WikiFSEngine/AgentLauncher.swift` (`capturePhaseUsage`) — pass `thinkingLevel: usage.thinkingLevel` in the providerLabel enrichment init.
-- `Tests/WikiFSTests/ACPBackendTests.swift` — added `thinkingLevel: "high"` assertion to `sessionUsageStructCarriesAllFields`; 2 new tests (`mergingCarriesLatestThinkingLevel`, `mergingPreservesExistingThinkingLevelWhenNewIsNil`).
-- `Tests/WikiFSTests/UsageFormatterTests.swift` — 2 new tests (`fullSummaryIncludesThinkingLevelBetweenModelAndTokens`, `fullSummaryOmitsThinkingLevelWhenNil`).
-
-**Build/Tests:** `make version prompts && swift build` clean; `swift test --filter UsageFormatterTests|ACPBackendTests` 67/67 pass; full fast test tier **2552 tests / 216 suites pass**.
+**Build/Tests:** `make version prompts && swift build` clean; fast test tier
+2,559 tests in 217 suites pass (+17 new).
 
 ## 2026-07-18 — Issue #192: "Go to Original" bookmark context-menu action (branch `bookmark-go-to-original`)
 
