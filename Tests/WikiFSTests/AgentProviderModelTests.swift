@@ -215,6 +215,30 @@ import ACPModel
         let loaded = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { [] })
         #expect(loaded.isFavoriteModel("opus", forProvider: "claude-acp"))
     }
+
+    // MARK: - SpawnModelGuard precondition (diagnosed 2026-07-18 bug state)
+
+    @Test func resolvedProviderReturnsNilModelWhenNothingConfigured() {
+        // Reproduce the diagnosed-bug precondition: the resolved provider has
+        // no `selectedModelIds` entry, so `resolvedProvider(for:)` returns a
+        // nil `modelId`. The launcher's `SpawnModelGuard` keys on exactly this
+        // state to refuse spawn — this test pins the precondition so the guard
+        // has a stable contract.
+        //
+        // The state: opencode is the default provider (the user manually set
+        // `isDefault = true` — note `.opencodeDefault` ships with
+        // `isDefault: false`, so we override) AND has no `selectedModelIds`
+        // entry. `resolvedProvider(for:)` falls back to `selectedProvider()`
+        // (the stage assignment is empty) → returns `(opencode, nil)`.
+        var opencodeAsDefault = AgentProvider.opencodeDefault
+        opencodeAsDefault.isDefault = true
+        let config = AgentProvidersConfig(providers: [opencodeAsDefault])
+        let resolved = config.resolvedProvider(for: .planner)
+        #expect(resolved.provider.id == "opencode")
+        #expect(resolved.modelId == nil)
+        // This is the exact state `SpawnModelGuard.validate` refuses to spawn on
+        // — confirmed by `SpawnModelGuardTests.returnsErrorMessageWhenModelIdIsNil`.
+    }
 }
 
 @Suite struct AgentProviderCatalogTests {
