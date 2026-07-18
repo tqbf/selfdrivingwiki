@@ -19,7 +19,7 @@ struct NavigationSaveTests {
 
     @Test func selectFlushesCurrentDraftThenLoadsNewPage() throws {
         let url = tempURL()
-        let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: url))
+        let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: url))
 
         // Create A and B (newPage selects the just-created page).
         model.newPage(title: "A")
@@ -55,13 +55,13 @@ struct NavigationSaveTests {
         guard case let .page(aPageID) = aID, case let .page(bPageID) = bID else {
             Issue.record("expected page selections"); return
         }
-        let reopened = try SQLiteWikiStore(databaseURL: url)
+        let reopened = try StoreBackend.current.makeStore(databaseURL: url)
         #expect(try reopened.getPage(id: aPageID).bodyMarkdown == "A-edit")
         #expect(try reopened.getPage(id: bPageID).bodyMarkdown == "B-edit")
     }
 
     @Test func summariesRebuiltFromSourceAfterMutations() throws {
-        let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
+        let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.newPage(title: "First")
         model.newPage(title: "Second")
         model.reloadFromStore()
@@ -80,7 +80,7 @@ struct NavigationSaveTests {
     /// page's draft and load the incoming page — the same guarantee as `select`.
     @Test func listSelectionChangeFlushesAndLoads() throws {
         let url = tempURL()
-        let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: url))
+        let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: url))
         model.newPage(title: "A")
         let aID = model.selection!
         model.newPage(title: "B")
@@ -104,7 +104,7 @@ struct NavigationSaveTests {
     }
 
     @Test func renameUpdatesSummaryFromSource() throws {
-        let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
+        let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.newPage(title: "Old Name")
         model.reloadFromStore()
         guard case let .page(id)? = model.selection else {

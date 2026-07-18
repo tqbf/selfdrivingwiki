@@ -127,6 +127,13 @@ public protocol WikiStore: Sendable {
     /// Page summaries ordered by the given sort criterion.
     func listPages(sortBy: PageSortOrder) throws -> [WikiPageSummary]
     func getPage(id: PageID) throws -> WikiPage
+    /// Create a page with no author. Convenience so callers omitting
+    /// `createdBy` (the common case) route through a protocol requirement —
+    /// protocol requirements can't declare default arguments, so both backends
+    /// implement this 1-arg forwarder. Equivalent to
+    /// `createPage(title: createdBy: nil)`.
+    @discardableResult
+    func createPage(title: String) throws -> WikiPage
     func createPage(title: String, createdBy: String?) throws -> WikiPage
     func updatePage(id: PageID, title: String, body: String, lastEditedBy: String?) throws
     func deletePage(id: PageID) throws
@@ -181,6 +188,14 @@ public protocol WikiStore: Sendable {
         resolvedDisplayName: String??
     ) throws -> SourceSummary
 
+    /// 2-arg convenience: store a source with only `filename` + `data` (all
+    /// trailing args default to `nil` / `.primary`). Protocol requirements can't
+    /// declare default arguments, so both backends implement this forwarder,
+    /// which routes to the full-signature impl with the trailing args at their
+    /// defaults. This is the most common test call shape.
+    @discardableResult
+    func addSource(filename: String, data: Data) throws -> SourceSummary
+
     /// Store a **byteless** source: a source whose identity row + v1 content
     /// version carry NO blob (`blob_hash = NULL`, `byte_size = 0`,
     /// `content_hash = NULL`). The source is a pointer to an external resource
@@ -223,6 +238,15 @@ public protocol WikiStore: Sendable {
     /// website sources with different URLs each return their own URL); `agentName`
     /// from the **agent** row.
     func sourceOrigin(sourceID: PageID) throws -> SourceOrigin?
+
+    /// The active content version for a source, resolved exactly like
+    /// `sourceContent` (ref → version, else default-active `MAX(id)`). Returns
+    /// nil when the source has no version rows at all. On the protocol (not only
+    /// the concrete read helper) so callers — notably the website snapshot store
+    /// and the refresh guard — can read it through `any WikiStore` without
+    /// downcasting to a concrete backend. Both `SQLiteWikiStore` and
+    /// `GRDBWikiStore` implement this identically.
+    func activeContentVersion(sourceID: PageID) throws -> SourceVersion?
 
     /// Rename a source's display_name and rewrite every `[[source:<old>…]]` link
     /// that points at it. Transactional — source row + all affected pages + their

@@ -122,7 +122,7 @@ public final class WikiSession {
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: QueueEngine,
         extractionProvider: any QueueExtractionProvider,
-        makeStore: @escaping (URL) throws -> WikiStore = { try SQLiteWikiStore(databaseURL: $0) },
+        makeStore: @escaping (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil }
     ) {
         self.wikiID = wikiID

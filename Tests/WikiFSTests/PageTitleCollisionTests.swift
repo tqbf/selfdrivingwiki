@@ -36,7 +36,7 @@ struct PageTitleCollisionTests {
     }
 
     @Test func newPageWithoutExplicitTitleGetsTimestamp() throws {
-        let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
+        let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.newPage()
         model.reloadFromStore()
         let summary = try #require(model.summaries.first)
@@ -45,7 +45,7 @@ struct PageTitleCollisionTests {
     }
 
     @Test func newPageInNewTabWithoutExplicitTitleGetsTimestamp() throws {
-        let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
+        let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.newPageInNewTab()
         model.reloadFromStore()
         let summary = try #require(model.summaries.first)
@@ -56,7 +56,7 @@ struct PageTitleCollisionTests {
     // MARK: - Rename collision
 
     @Test func renameToExistingTitleIsBlocked() throws {
-        let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
+        let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.newPage(title: "First Page")
         model.newPage(title: "Second Page")
         model.reloadFromStore()
@@ -74,7 +74,7 @@ struct PageTitleCollisionTests {
     }
 
     @Test func renameToOwnTitleIsAllowed() throws {
-        let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
+        let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.newPage(title: "Same Title")
         model.reloadFromStore()
         guard case let .page(id)? = model.selection else {
@@ -89,7 +89,7 @@ struct PageTitleCollisionTests {
     }
 
     @Test func renameToExistingTitleCaseInsensitiveIsBlocked() throws {
-        let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
+        let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.newPage(title: "My Page")
         model.newPage(title: "Other Page")
         model.reloadFromStore()
@@ -105,7 +105,7 @@ struct PageTitleCollisionTests {
     }
 
     @Test func renameToUniqueTitleSucceeds() throws {
-        let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
+        let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.newPage(title: "Alpha")
         model.newPage(title: "Beta")
         model.reloadFromStore()
@@ -120,7 +120,7 @@ struct PageTitleCollisionTests {
     }
 
     @Test func clearRenameConflictResets() throws {
-        let model = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: tempURL()))
+        let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.newPage(title: "A")
         model.newPage(title: "B")
         model.reloadFromStore()

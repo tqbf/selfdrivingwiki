@@ -13,8 +13,7 @@ struct WikiStoreModelRenameSourceTests {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return WikiStoreModel(store: try SQLiteWikiStore(
-            databaseURL: dir.appendingPathComponent("WikiFS.sqlite")))
+        return WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite")))
     }
 
     @Test func renameSourceRefreshesSourcesList() throws {

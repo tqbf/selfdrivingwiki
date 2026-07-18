@@ -303,8 +303,7 @@ struct QuoteHighlightWebViewTests {
     /// clicked `[[source:paper#"quote"]]` produces via `selectSource`).
     @MainActor
     private func storeWithPendingQuoteAnchor(quote: String) throws -> (WikiStoreModel, WikiSelection) {
-        let store = WikiStoreModel(store: try SQLiteWikiStore(
-            databaseURL: URL.temporaryDirectory.appending(path: "coord-\(UUID().uuidString).sqlite")))
+        let store = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: URL.temporaryDirectory.appending(path: "coord-\(UUID().uuidString).sqlite")))
         store.addSource(filename: "paper.md", data: Data("# Paper\n".utf8))
         store.selectSource(byDisplayName: "paper", anchor: "\"\(quote)\"")
         return (store, store.selection!)
@@ -351,7 +350,7 @@ struct QuoteHighlightWebViewTests {
     /// reach any other way.
     @Test func hostedViewHighlightsQuoteFromPendingAnchor() async throws {
         let dbURL = URL.temporaryDirectory.appending(path: "hosted-\(UUID().uuidString).sqlite")
-        let store = WikiStoreModel(store: try SQLiteWikiStore(databaseURL: dbURL))
+        let store = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: dbURL))
         let markdown = "# Paper\n\nThe data show a clear improvement in throughput."
         store.addSource(filename: "paper.md", data: Data(markdown.utf8))
 

@@ -90,7 +90,7 @@ struct YouTubeEmbedWebViewTests {
     /// can't reach.
     @Test func hostedYouTubeEmbedLoadsUnderRealOriginWithMatchingEmbedURL() async throws {
         let dbURL = URL.temporaryDirectory.appending(path: "yt-embed-\(UUID().uuidString).sqlite")
-        let sqlite = try SQLiteWikiStore(databaseURL: dbURL)
+        let sqlite = try StoreBackend.current.makeStore(databaseURL: dbURL)
         let videoID = "dQw4w9WgXcQ"
 
         // Seed the byteless YouTube source exactly as the URL recognizer would.

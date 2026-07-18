@@ -2514,6 +2514,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    /// 1-arg convenience requirement: forward to the full-signature impl with
+    /// `createdBy: nil`. Mirrors `SQLiteWikiStore`'s defaulted-parameter convenience.
+    @discardableResult
+    public func createPage(title: String) throws -> WikiPage {
+        try createPage(title: title, createdBy: nil)
+    }
+
     public func updatePage(id: PageID, title: String, body: String, lastEditedBy: String?) throws {
         try mutate(event: { _ in
             self.localEvent(.page, id: id.rawValue, change: .updated)
@@ -2736,6 +2743,18 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    /// 2-arg convenience requirement: forward to the full-signature impl with
+    /// all trailing args at their defaults (`nil` / `.primary`). Mirrors
+    /// `SQLiteWikiStore`'s defaulted-parameter convenience.
+    @discardableResult
+    public func addSource(filename: String, data: Data) throws -> SourceSummary {
+        try addSource(
+            filename: filename, data: data,
+            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            provenance: nil, role: .primary, originalPath: nil,
+            activityID: nil, resolvedDisplayName: nil)
+    }
+
 
     public func addBytelessSource(
         filename: String, mimeType: String?,
@@ -2849,30 +2868,54 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     public func sourceContent(id: PageID) throws -> Data {
         try dbQueue.read { db in
-            // Resolve the active content version → blob.
-            guard let versionID = try String.fetchOne(
+            // 1. Resolve the active content version (ref → version, else
+            //    default-active MAX(id)). Mirrors `SQLiteWikiStore.sourceContent`.
+            let cols = "sv.id, sv.source_id, sv.parent_id, sv.blob_hash"
+            var row = try Row.fetchOne(
                 db,
-                sql: "SELECT version_id FROM refs WHERE kind = 'source-content' AND owner_id = ?;",
+                sql: """
+                SELECT \(cols)
+                FROM refs r
+                JOIN source_versions sv ON sv.id = r.version_id
+                WHERE r.kind = 'source-content' AND r.owner_id = ?;
+                """,
                 arguments: [id.rawValue]
-            ) else {
+            )
+            if row == nil {
+                // No ref → default-active rule: MAX(id) version.
+                row = try Row.fetchOne(
+                    db,
+                    sql: """
+                    SELECT \(cols)
+                    FROM source_versions
+                    WHERE source_id = ? ORDER BY id DESC LIMIT 1;
+                    """,
+                    arguments: [id.rawValue]
+                )
+            }
+            guard let row else {
+                // No version rows at all → unknown source.
                 throw WikiStoreError.notFound(id)
             }
-            guard let blobHash = try String.fetchOne(
-                db,
-                sql: "SELECT blob_hash FROM source_versions WHERE id = ?;",
-                arguments: [versionID]
-            ) else {
-                throw WikiStoreError.notFound(id)
-            }
-            guard let row = try Row.fetchOne(
+
+            // 2. Byteless source (blob_hash IS NULL) → empty Data (never throws).
+            //    Mirrors `SQLiteWikiStore.sourceContent`'s explicit byteless path.
+            let blobHash: String? = row["blob_hash"]
+            guard let blobHash else { return Data() }
+
+            // 3. Read the blob bytes.
+            guard let blobRow = try Row.fetchOne(
                 db,
                 sql: "SELECT content FROM blobs WHERE hash = ?;",
                 arguments: [blobHash]
             ) else {
-                throw WikiStoreError.notFound(id)
+                // A version points at a blob that is missing — an integrity
+                // break (blob writes always precede version writes). Treat as
+                // byteless (empty Data) rather than crashing, matching
+                // `SQLiteWikiStore.sourceContent`'s resilient fallback.
+                return Data()
             }
-            let data: Data = row["content"]
-            return data
+            return blobRow["content"]
         }
     }
 
@@ -5123,6 +5166,23 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             UPDATE chats SET title = ?, updated_at = ?
             WHERE id = ?;
             """, arguments: [title, Date().timeIntervalSince1970, id.rawValue])
+
+            // Refresh the FTS sidecar title so keyword search reflects the new
+            // name (the body is unchanged). A no-op if no chat_search row exists
+            // yet (a chat with no messages has nothing to index). Mirrors
+            // `SQLiteWikiStore.renameChat`'s `upsertChatSearch(chatID:)`.
+            do {
+                let body: String = (try String.fetchOne(
+                    db,
+                    sql: "SELECT COALESCE(GROUP_CONCAT(text, '\n'), '') FROM chat_messages WHERE chat_id = ?;",
+                    arguments: [id.rawValue]
+                )) ?? ""
+                try db.execute(sql: """
+                INSERT OR REPLACE INTO chat_search (chat_id, title, body) VALUES (?, ?, ?);
+                """, arguments: [id.rawValue, title, body])
+            } catch {
+                DebugLog.store("GRDBWikiStore.renameChat: upsertChatSearch[\(id.rawValue)] failed — \(error)")
+            }
         }
     }
 
@@ -5201,16 +5261,30 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func missingChatEmbeddingWork() -> [(id: PageID, text: String)] {
         do {
             return try dbQueue.read { db in
+                // Build the embeddable text from the chat title + concatenated
+                // user/assistant message text — exactly like
+                // `SQLiteWikiStore.missingChatEmbeddingWork`. The FTS sidecar
+                // (`chat_search`) is NOT used here because it may lag the chat's
+                // actual messages (it's updated at append time, but the embeddable
+                // text must reflect the raw message text, not the FTS body).
                 let rows = try Row.fetchAll(db, sql: """
-                SELECT c.id, c.title AS text
+                SELECT c.id, c.title,
+                       COALESCE((
+                           SELECT GROUP_CONCAT(m.text, '\n')
+                           FROM chat_messages m
+                           WHERE m.chat_id = c.id AND m.role IN ('user', 'assistant')
+                       ), '') AS body
                 FROM chats c
                 WHERE NOT EXISTS (
                     SELECT 1 FROM chat_chunks WHERE chat_id = c.id
                 )
                 ORDER BY c.id;
                 """)
-                return rows.map { row in
-                    (id: PageID(rawValue: row["id"]), text: row["text"])
+                return rows.map { row -> (id: PageID, text: String) in
+                    let id = PageID(rawValue: row["id"])
+                    let title: String = row["title"]
+                    let body: String = row["body"]
+                    return (id, body.isEmpty ? title : "\(title)\n\n\(body)")
                 }
             }
         } catch {
@@ -5590,6 +5664,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             arguments: [sourceID.rawValue]
         ) else { return nil }
         return try Self.readSourceVersion(from: row)
+    }
+
+    /// Public protocol impl: the active content version for `sourceID`.
+    /// Routes the read through `dbQueue.read` (the serial reader queue), which
+    /// is reentrant-safe from within the private `db:`-taking helper. Mirrors
+    /// `SQLiteWikiStore.activeContentVersion(sourceID:)` exactly.
+    public func activeContentVersion(sourceID: PageID) throws -> SourceVersion? {
+        try dbQueue.read { db in
+            try self.activeContentVersion(sourceID: sourceID, on: db)
+        }
     }
 
     /// The `generation` of the `source-content` ref for `sourceID`, or nil.

@@ -21,11 +21,11 @@ struct SnapshotRefreshGuardTests {
         0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
     ])
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> any WikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-refresh-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     private func pngResponse(url: String) -> URLFetchService.FetchResponse {
