@@ -7,7 +7,9 @@ import WikiFSEngine
 /// (Ingestion + Extraction) for the queue engine.
 ///
 /// The status item icon is ALWAYS the books glyph — books.vertical when idle,
-/// books.vertical.fill while working. Paused/failed states are conveyed by
+/// and while working it *breathes* between books.vertical and
+/// books.vertical.fill (a subtle, repeating toggle — never a different shape)
+/// so the menu bar shows live progress. Paused/failed states are conveyed by
 /// the tooltip and the windows, never by swapping to an alert symbol (a menu
 /// bar icon that changes shape reads as a different app).
 ///
@@ -45,6 +47,10 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     // MARK: - State tracking
 
     private var streamTask: Task<Void, Never>?
+    /// Repeating loop that breathes the books glyph while the queue is
+    /// active (see `startIconAnimation`). Cancelled in `stop()` and whenever
+    /// the icon leaves the working state, so it consumes no CPU when idle.
+    private var animationTask: Task<Void, Never>?
     private var hasFailedItems = false
     private var isPaused = false
     private var lastSnapshot: QueueSnapshot = QueueSnapshot()
@@ -112,6 +118,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         dismissHint()
         streamTask?.cancel()
         streamTask = nil
+        stopIconAnimation()
         closeActivityWindow()
         if let item = statusItem {
             NSStatusBar.system.removeStatusItem(item)
@@ -384,11 +391,21 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         // ALWAYS the books glyph — paused/attention states convey via the
         // tooltip and the activity windows. A menu bar icon that morphs into
         // an alert triangle reads as a different app's item.
-        let name: String
+        let filled: Bool
         switch state {
-        case .working: name = "books.vertical.fill"
-        case .idle, .paused, .attention: name = "books.vertical"
+        case .working: filled = true
+        case .idle, .paused, .attention: filled = false
         }
+        return booksIcon(filled: filled)
+    }
+
+    /// The shared books glyph used for every status state and for each frame
+    /// of the working-state animation. `filled` selects the filled variant
+    /// (`books.vertical.fill`) vs the outline (`books.vertical`). SF Symbol
+    /// images are template by default, so each frame tints correctly in light
+    /// and dark menu bars without reasserting `isTemplate`.
+    private func booksIcon(filled: Bool) -> NSImage? {
+        let name = filled ? "books.vertical.fill" : "books.vertical"
         let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
         return NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(config)
@@ -405,8 +422,18 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         } else {
             state = .idle
         }
-        statusItem?.button?.image = statusIcon(for: state)
         statusItem?.button?.toolTip = tooltipText(for: state)
+
+        // While working, breathe the books glyph between its outline and
+        // filled forms so the menu bar shows live progress without opening
+        // the Activity window. Every other state is a static glyph; leaving
+        // the working state cancels the loop (no CPU when idle).
+        if state == .working {
+            startIconAnimation()
+        } else {
+            stopIconAnimation()
+            statusItem?.button?.image = statusIcon(for: state)
+        }
     }
 
     private func tooltipText(for state: IconState) -> String {
@@ -425,6 +452,43 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         case .paused: return "Self Driving Wiki — Paused"
         case .attention: return "Self Driving Wiki — Attention needed"
         }
+    }
+
+    // MARK: - Working-state animation
+
+    /// Begin breathing the books glyph between `books.vertical` and
+    /// `books.vertical.fill` every 0.8 s while queue work is active. A
+    /// `Task`-based loop (rather than `Timer`) keeps every frame on the
+    /// `@MainActor` — `NSStatusItem` is main-thread-only — and is trivially
+    /// cancellable. Guarded so the many `updateIcon` calls during a busy run
+    /// only start one loop per working period.
+    private func startIconAnimation() {
+        guard animationTask == nil else { return }
+        DebugLog.tabs("MenuBarItemController: start icon animation")
+        var isFilled = false
+        // Render the first (outline) frame immediately so the icon responds
+        // the instant work starts, rather than after one full interval.
+        setAnimationFrame(filled: false)
+        animationTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                if Task.isCancelled { break }
+                isFilled.toggle()
+                self?.setAnimationFrame(filled: isFilled)
+            }
+        }
+    }
+
+    /// Set one frame of the working-state animation.
+    private func setAnimationFrame(filled: Bool) {
+        statusItem?.button?.image = booksIcon(filled: filled)
+    }
+
+    /// Stop the breathing animation and release the loop.
+    private func stopIconAnimation() {
+        guard animationTask != nil else { return }
+        animationTask?.cancel()
+        animationTask = nil
     }
 
     // MARK: - Event handling
