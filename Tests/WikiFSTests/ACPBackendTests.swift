@@ -662,6 +662,114 @@ import ACPModel
         #expect(merged.modelId == "opencode-1")
     }
 
+    // MARK: - SessionUsage.delta (interactive usage, no double-count)
+
+    /// `delta(from: nil, to: new)` returns `new` directly — the first interactive
+    /// turn's delta is the full cumulative session usage. Guards against dropping
+    /// the first turn from the daily total.
+    @Test
+    func deltaWithNilBaselineReturnsFullSnapshot() {
+        let current = SessionUsage(
+            inputTokens: 100, outputTokens: 50, totalTokens: 150,
+            cachedReadTokens: 20, thoughtTokens: 30,
+            cost: 0.05, currency: "USD", contextUsed: 4000, contextSize: 10000,
+            providerLabel: "Claude", modelId: "sonnet-4",
+            thinkingLevel: "high")
+        let d = SessionUsage.delta(from: nil, to: current)
+        #expect(d.inputTokens == 100)
+        #expect(d.outputTokens == 50)
+        #expect(d.totalTokens == 150)
+        #expect(d.cachedReadTokens == 20)
+        #expect(d.thoughtTokens == 30)
+        #expect(d.cost == 0.05)
+        #expect(d.providerLabel == "Claude")
+    }
+
+    /// `delta` subtracts the baseline's cumulative token counts so accumulating
+    /// per-turn deltas into `DailyUsage.add` doesn't double-count across turns
+    /// of the SAME session. This is the core correctness guarantee for the
+    /// interactive-usage wiring: the backend reports cumulative session totals,
+    /// but the daily total must only gain THIS turn's marginal tokens.
+    @Test
+    func deltaSubtractsBaselineTokens() {
+        let baseline = SessionUsage(
+            inputTokens: 1000, outputTokens: 500, totalTokens: 1500,
+            cachedReadTokens: 100, thoughtTokens: 200,
+            cost: 1.00, currency: "USD", contextUsed: 3000, contextSize: 10000,
+            providerLabel: "Claude", modelId: "sonnet-4",
+            thinkingLevel: "high")
+        let current = SessionUsage(
+            inputTokens: 1300, outputTokens: 700, totalTokens: 2000,
+            cachedReadTokens: 150, thoughtTokens: 350,
+            cost: 1.40, currency: "USD", contextUsed: 6000, contextSize: 10000,
+            providerLabel: "Claude", modelId: "sonnet-4",
+            thinkingLevel: "high")
+        let d = SessionUsage.delta(from: baseline, to: current)
+        #expect(d.inputTokens == 300)
+        #expect(d.outputTokens == 200)
+        #expect(d.totalTokens == 500)
+        #expect(d.cachedReadTokens == 50)
+        #expect(d.thoughtTokens == 150)
+        // Cost delta is a Double subtraction (1.40 − 1.00) — use approximate
+        // equality to avoid float-precision false failures.
+        #expect(abs((d.cost ?? 0) - 0.40) < 0.001)
+        // Context window is point-in-time, not cumulative.
+        #expect(d.contextUsed == 6000)
+        #expect(d.contextSize == 10000)
+    }
+
+    /// `delta` takes the latest non-nil point-in-time metadata
+    /// (providerLabel/modelId/thinkingLevel), matching `merging`'s rule.
+    /// A turn that drops the model id must inherit it from the baseline.
+    @Test
+    func deltaCarriesMetadataFromBaselineWhenMissing() {
+        let baseline = SessionUsage(
+            inputTokens: 100, outputTokens: 50, totalTokens: 150,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 0, contextSize: 10000,
+            providerLabel: "Claude", modelId: "sonnet-4",
+            thinkingLevel: "high")
+        let current = SessionUsage(
+            inputTokens: 200, outputTokens: 100, totalTokens: 300,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 5000, contextSize: 10000,
+            providerLabel: nil, modelId: nil,
+            thinkingLevel: nil)
+        let d = SessionUsage.delta(from: baseline, to: current)
+        #expect(d.providerLabel == "Claude")
+        #expect(d.modelId == "sonnet-4")
+        #expect(d.thinkingLevel == "high")
+    }
+
+    /// `delta` never returns negative token counts even if the backend reports
+    /// a lower cumulative total on a later turn (shouldn't happen in practice,
+    /// but guards against a session-restart that reuses a stale baseline).
+    @Test
+    func deltaClampsToZero() {
+        let baseline = SessionUsage(
+            inputTokens: 500, outputTokens: 400, totalTokens: 900,
+            cachedReadTokens: 100, thoughtTokens: 50,
+            cost: 2.00, currency: "USD", contextUsed: 5000, contextSize: 10000,
+            providerLabel: "Claude", modelId: "sonnet-4",
+            thinkingLevel: "high")
+        // A LOWER cumulative (e.g. after a session restart reusing a stale
+        // baseline). Delta must clamp to 0, not negative.
+        let current = SessionUsage(
+            inputTokens: 100, outputTokens: 50, totalTokens: 150,
+            cachedReadTokens: 10, thoughtTokens: 5,
+            cost: 0.50, currency: "USD", contextUsed: 1000, contextSize: 10000,
+            providerLabel: "Claude", modelId: "sonnet-4",
+            thinkingLevel: "high")
+        let d = SessionUsage.delta(from: baseline, to: current)
+        #expect(d.inputTokens == 0)
+        #expect(d.outputTokens == 0)
+        #expect(d.totalTokens == 0)
+        #expect(d.cachedReadTokens == 0)
+        #expect(d.thoughtTokens == 0)
+        // Cost delta clamps to 0 too (current is lower than baseline).
+        #expect(d.cost == 0)
+    }
+
     // MARK: - Phase 4: Default config
 
     /// Parallel executors default to 1 (serial — conservative; requires Phase 3

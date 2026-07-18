@@ -1668,6 +1668,46 @@ public struct SessionUsage: Sendable, Codable {
             modelName: new.modelName ?? existing.modelName,
             thinkingLevel: new.thinkingLevel ?? existing.thinkingLevel)
     }
+
+    /// Compute the incremental usage between two cumulative snapshots of the
+    /// SAME session (`from` = an earlier `sessionUsage(for:)` result, `to` = a
+    /// later one). The backend's `sessionUsage(for:)` returns cumulative
+    /// session totals (tokens across all turns, last-reported cost). Emitting
+    /// those after each interactive turn and adding them into `DailyUsage.add`
+    /// would double-count — so the interactive path emits this delta.
+    ///
+    /// Semantics:
+    /// - Token counts (cumulative across turns): `to − from`. `from == nil`
+    ///   (first turn) returns `to` directly.
+    /// - `cost` / `currency`: cost is point-in-time (last reported) but
+    ///   represents cumulative session cost; delta = `to.cost − from.cost`
+    ///   (both present), else the new cost. Currency takes the latest.
+    /// - `contextUsed` / `contextSize`: point-in-time snapshot, not
+    ///   cumulative — takes `to`'s values.
+    /// - `providerLabel` / `modelId` / `thinkingLevel`: point-in-time
+    ///   metadata — latest non-nil wins, matching `merging`.
+    static func delta(from: SessionUsage?, to new: SessionUsage) -> SessionUsage {
+        guard let from else { return new }
+        let deltaCost: Double?
+        if let f = from.cost, let n = new.cost {
+            deltaCost = max(0, n - f)
+        } else {
+            deltaCost = new.cost
+        }
+        return SessionUsage(
+            inputTokens: max(0, new.inputTokens - from.inputTokens),
+            outputTokens: max(0, new.outputTokens - from.outputTokens),
+            totalTokens: max(0, new.totalTokens - from.totalTokens),
+            cachedReadTokens: max(0, (new.cachedReadTokens ?? 0) - (from.cachedReadTokens ?? 0)),
+            thoughtTokens: max(0, (new.thoughtTokens ?? 0) - (from.thoughtTokens ?? 0)),
+            cost: deltaCost,
+            currency: new.currency ?? from.currency,
+            contextUsed: new.contextUsed,
+            contextSize: new.contextSize,
+            providerLabel: new.providerLabel ?? from.providerLabel,
+            modelId: new.modelId ?? from.modelId,
+            thinkingLevel: new.thinkingLevel ?? from.thinkingLevel)
+    }
 }
 
 /// Thread-safe accumulator for per-session usage data. Captured in the

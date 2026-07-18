@@ -654,6 +654,49 @@ struct QueueActivityTrackerRunPathsTests {
     }
 }
 
+// MARK: - Interactive usage tracking
+
+@Suite("QueueActivityTracker interactive usage")
+struct QueueActivityTrackerInteractiveUsageTests {
+
+    /// `recordInteractiveUsage` accumulates the per-turn delta into `todayUsage`
+    /// (the menu bar daily total), without creating an `itemUsage` entry —
+    /// interactive chat has no queue item. This is the receiving end of the
+    /// `AgentLauncher.onInteractiveUsage` → `recordInteractiveUsage` wiring.
+    @MainActor
+    @Test("Interactive usage accumulates into todayUsage without an itemUsage entry")
+    func interactiveUsageAccumulates() async {
+        let tracker = QueueActivityTracker()
+        // Capture + restore the persisted daily total so this test doesn't
+        // pollute the real menu bar count (DailyUsage persists to
+        // UserDefaults.standard with a fixed key).
+        let savedDaily = tracker.todayUsage
+        let baseline = savedDaily.inputTokens
+
+        let firstTurn = SessionUsage(
+            inputTokens: 1000, outputTokens: 300, totalTokens: 1300,
+            cachedReadTokens: 100, thoughtTokens: 50,
+            cost: 0.05, currency: "USD", contextUsed: 4000, contextSize: 10000,
+            providerLabel: "Claude", modelId: "sonnet-4")
+        tracker.recordInteractiveUsage(firstTurn)
+
+        let secondTurn = SessionUsage(
+            inputTokens: 800, outputTokens: 200, totalTokens: 1000,
+            cachedReadTokens: 60, thoughtTokens: 30,
+            cost: 0.03, currency: "USD", contextUsed: 5000, contextSize: 10000,
+            providerLabel: "Claude", modelId: "sonnet-4")
+        tracker.recordInteractiveUsage(secondTurn)
+
+        #expect(tracker.todayUsage.inputTokens == baseline + 1800)
+        #expect(tracker.todayUsage.outputTokens == savedDaily.outputTokens + 500)
+        #expect(tracker.todayUsage.totalTokens == savedDaily.totalTokens + 2300)
+        // No queue item → no per-item usage entry is created.
+        #expect(tracker.transcripts["any-interactive"] == nil)
+
+        DailyUsage.save(savedDaily)
+    }
+}
+
 /// A stub factory that never dispatches (providerID returns nil).
 struct StubWorkerFactory: QueueWorkerFactory {
     func providerID(for item: QueueItem) async -> String? { nil }

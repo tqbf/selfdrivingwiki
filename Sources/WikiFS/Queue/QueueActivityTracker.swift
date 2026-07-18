@@ -540,6 +540,24 @@ final class QueueActivityTracker {
         }
     }
 
+    /// Accumulate interactive (Ask/Edit chat) usage into today's daily total.
+    ///
+    /// Interactive chat sessions don't go through the queue — they use
+    /// `AgentLauncher.sendInteractiveMessage`, which reads the ACP backend's
+    /// per-session usage and emits the per-turn DELTA (not cumulative) via
+    /// `AgentLauncher.onInteractiveUsage`. This method is the receiving end:
+    /// the app wires the launcher's callback to it.
+    ///
+    /// There is no queue item (and thus no `itemUsage` entry) for interactive
+    /// sessions — only the daily total (`todayUsage`) is updated, which is
+    /// what the menu bar "Today: X tokens" line reads. The queue path's
+    /// `.usage` event handler (`itemUsage[id] = usage`) is intentionally NOT
+    /// replicated here.
+    func recordInteractiveUsage(_ usage: SessionUsage) {
+        todayUsage.add(usage)
+        DailyUsage.save(todayUsage)
+    }
+
     /// Remove an item from the active set and clean up its mapping.
     private func removeItem(_ item: QueueItem) {
         if let sourceIDs = itemToSourceIDs.removeValue(forKey: item.id) {
