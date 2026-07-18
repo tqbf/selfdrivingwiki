@@ -588,6 +588,13 @@ enum UsageFormatter {
             parts.append(model)
         }
 
+        // #566: thinking-effort level (high/medium/low) — between the model and
+        // the token counts, matching the issue's example line:
+        // "Sonnet 4 · high · 797 tokens in · 203 tokens out · 412 thought".
+        if let level = usage.thinkingLevel, !level.isEmpty {
+            parts.append(level)
+        }
+
         // Token usage with explicit units.
         parts.append(tokenSummary(usage: usage))
 
