@@ -69,6 +69,11 @@ public struct SourceProvenance: Sendable, Equatable {
 /// `addSource`). Also carries the retained Zotero legacy columns so the
 /// `ZoteroMaterializer` can populate both the PROV layer and the legacy columns in
 /// one call (§4.2: zotero columns are "legacy provenance, retained").
+///
+/// `extractedMarkdown` (issue #599): non-nil when the source preserves its
+/// original bytes AND carries a derived markdown version alongside — mirrors the
+/// PDF → pdf2md model. The store path writes it as a `SourceMarkdownOrigin.extraction`
+/// processed-markdown version after the source row lands.
 public struct MaterializedSource: Sendable {
     public let filename: String
     public let data: Data
@@ -76,6 +81,7 @@ public struct MaterializedSource: Sendable {
     public let zoteroItemKey: String?
     public let zoteroItemTitle: String?
     public let provenance: SourceProvenance?
+    public let extractedMarkdown: String?
 
     public init(
         filename: String,
@@ -83,7 +89,8 @@ public struct MaterializedSource: Sendable {
         mimeType: String? = nil,
         zoteroItemKey: String? = nil,
         zoteroItemTitle: String? = nil,
-        provenance: SourceProvenance? = nil
+        provenance: SourceProvenance? = nil,
+        extractedMarkdown: String? = nil
     ) {
         self.filename = filename
         self.data = data
@@ -91,6 +98,7 @@ public struct MaterializedSource: Sendable {
         self.zoteroItemKey = zoteroItemKey
         self.zoteroItemTitle = zoteroItemTitle
         self.provenance = provenance
+        self.extractedMarkdown = extractedMarkdown
     }
 }
 
@@ -185,8 +193,8 @@ public struct LocalFileMaterializer: SourceMaterializer {
             provenance: SourceProvenance(
                 agentName: agentName,
                 activityKind: "import"
-            )
-        )
+            ),
+            extractedMarkdown: plan.extractedMarkdown)
     }
 }
 
@@ -233,8 +241,8 @@ public struct WebsiteMaterializer: SourceMaterializer {
         let source = MaterializedSource(
             filename: plan.filename,
             data: plan.data,
-            // Pass nil so the store sniffs (the dispatch plan already converted
-            // HTML→Markdown bytes; mime is for the stored artifact, not the
+            // Pass nil so the store sniffs (the dispatch plan already preserved
+            // the original HTML bytes; mime is for the stored artifact, not the
             // original response). Mirrors the pre-Phase-3 addURL behavior.
             mimeType: nil,
             provenance: SourceProvenance(
@@ -243,8 +251,8 @@ public struct WebsiteMaterializer: SourceMaterializer {
                 plan: url.absoluteString,
                 externalRef: finalURLString,
                 externalIdentity: finalURLString
-            )
-        )
+            ),
+            extractedMarkdown: plan.extractedMarkdown)
         return (source, plan)
     }
 
@@ -277,8 +285,12 @@ public struct WebsiteMaterializer: SourceMaterializer {
             externalRef: finalURLString,
             externalIdentity: finalURLString)
 
-        if plan.format == .htmlConverted {
+        if plan.format == .html {
             // HTML: full snapshot — extract + download images, rewrite srcs.
+            // The snapshot's page source preserves the ORIGINAL HTML bytes; the
+            // snapshot markdown (with image srcs rewritten to stored siblings)
+            // rides as the extracted-markdown sidecar (issue #599 — mirrors the
+            // non-snapshot HTML path's normalized two-layer model).
             let html = URLFetchService.decodeText(response.data)
             return try await WebsiteSnapshotExtractor.snapshot(
                 html: html,
@@ -434,7 +446,7 @@ public struct ZoteroMaterializer: SourceMaterializer {
                 filename: plan.filename,
                 data: plan.data,
                 // Pass nil so the store sniffs (the dispatch plan already
-                // converted HTML→Markdown; mime is for the stored artifact).
+                // preserved the original HTML bytes when applicable).
                 mimeType: nil,
                 zoteroItemKey: parentItem.key,
                 zoteroItemTitle: parentItem.title,
@@ -442,8 +454,8 @@ public struct ZoteroMaterializer: SourceMaterializer {
                     agentName: agentName,
                     activityKind: "import",
                     externalIdentity: parentItem.key
-                )
-            )
+                ),
+                extractedMarkdown: plan.extractedMarkdown)
         case .unavailable(let reason):
             throw ZoteroFetchError.unavailable(reason)
         }

@@ -224,9 +224,13 @@ struct SourceMaterializerTests {
     }
 
     /// AC.3 — a Zotero HTML attachment now routes through format dispatch and
-    /// converts to Markdown (matching what `WebsiteMaterializer` would produce).
-    /// Before this refactor it was stored as raw HTML — a latent bug.
-    @Test func zoteroHtmlAttachmentConvertsToMarkdown() async throws {
+    /// preserves the original HTML bytes (#599 — mirrors PDF → pdf2md extraction).
+    /// The HTML→Markdown conversion rides as a sidecar that the store path writes
+    /// as a `.extraction` processed-markdown version. Before #599 the HTML was
+    /// converted to Markdown at the format-dispatch layer and the original HTML
+    /// was discarded; before Phase 3a it was stored as raw HTML without a
+    /// derived-markdown version.
+    @Test func zoteroHtmlAttachmentPreservedWithMarkdownSidecar() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("prov-zotero-html-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -235,8 +239,8 @@ struct SourceMaterializerTests {
             .appendingPathComponent("HTML1234", isDirectory: true)
         try FileManager.default.createDirectory(at: attachmentDir, withIntermediateDirectories: true)
         let htmlFile = attachmentDir.appendingPathComponent("page.html")
-        try Data("<html><head><title>Zotero Page</title></head><body><p>Hello world</p></body></html>".utf8)
-            .write(to: htmlFile)
+        let html = "<html><head><title>Zotero Page</title></head><body><p>Hello world</p></body></html>"
+        try Data(html.utf8).write(to: htmlFile)
 
         let attachment = ZoteroAttachment(
             key: "HTML1234", parentItem: "PARENT1", linkMode: "imported_file",
@@ -248,9 +252,12 @@ struct SourceMaterializerTests {
             attachment: attachment, parentItem: parent, zoteroDir: dir)
         let source = try await provider.materialize()
 
-        // The HTML is converted to Markdown; the filename derives from <title>.
-        #expect(source.filename == "Zotero Page.md")
-        let md = String(data: source.data, encoding: .utf8) ?? ""
+        // Issue #599: the source blob IS the original HTML bytes; the filename
+        // derives from <title> with an `.html` extension.
+        #expect(source.filename == "Zotero Page.html")
+        #expect(source.data == Data(html.utf8))
+        // The extracted markdown sidecar carries the HTML→Markdown conversion.
+        let md = try #require(source.extractedMarkdown)
         #expect(md.contains("Hello world"))
         #expect(!md.contains("<html>"))
     }

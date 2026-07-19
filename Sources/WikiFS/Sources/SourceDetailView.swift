@@ -103,6 +103,10 @@ struct SourceDetailView: View {
     private enum FileContentTab: String, CaseIterable {
         case reader = "Reader"
         case pdf = "PDF"
+        /// The original HTML rendered in a WKWebView — the "HTML" tab for HTML
+        /// sources (issue #599). Mirrors the PDF tab: the original document
+        /// rendered faithfully alongside the Reader (extracted markdown) tab.
+        case html = "HTML"
         /// The rendered Mermaid diagram (inline SVG). Only shown for Mermaid
         /// sources (`.mmd` or markdown containing a ```mermaid block); the raw
         /// value is the picker label.
@@ -123,6 +127,30 @@ struct SourceDetailView: View {
     }
 
     private var isPDF: Bool { MimeType.isPDF(file.mimeType) }
+
+    /// `true` for sources whose original bytes are HTML (issue #599). Detects
+    /// the canonical HTML MIME types (text/html, application/xhtml+xml) and the
+    /// `.html`/`.htm`/`.xhtml` extensions. A source whose original HTML was
+    /// discarded by the pre-#599 ingest path (stored as markdown with format
+    /// `.htmlConverted`) does NOT match here — it has a markdown MIME and no
+    /// HTML extension — so it stays in the markdown-only path with no HTML tab,
+    /// matching the "no migration needed" rule in the issue.
+    private var isHTMLSource: Bool {
+        if let mime = file.mimeType {
+            return mime == MimeType.html || mime == MimeType.xhtml
+        }
+        let ext = file.ext.lowercased()
+        return ext == "html" || ext == "htm" || ext == "xhtml"
+    }
+
+    /// The source's original HTML bytes, decoded as text. Used by the HTML tab
+    /// (the WKWebView renders them verbatim). Returns `nil` when the source
+    /// isn't HTML or the bytes couldn't be decoded.
+    private var htmlSourceString: String? {
+        guard isHTMLSource, let data = store.sourceBytes(id: file.id) else { return nil }
+        return String(data: data, encoding: .utf8)
+            ?? String(decoding: data, as: UTF8.self)  // lossy, never nil
+    }
 
     private var hasMarkdown: Bool { headVersion != nil }
 
@@ -222,6 +250,14 @@ struct SourceDetailView: View {
     /// to split) but keeps Reader so the "no transcript" placeholder is
     /// discoverable. Empty for a PDF with no extraction yet — that branch
     /// renders the bare PDF with no picker.
+    ///
+    /// Issue #599: HTML sources with extracted markdown show Reader (markdown)
+    /// / HTML (rendered WKWebView) / Split (both) — mirrors the PDF three-way
+    /// so HTML is treated like a PDF (original bytes preserved + extracted
+    /// markdown alongside). An HTML source whose extracted markdown didn't
+    /// land (e.g. a conversion failure on a fresh ingest) still shows the
+    /// Reader / HTML pair via the `hasMarkdown || isHTMLSource` gate so the
+    /// user can see something on each tab.
     private var availableTabs: [FileContentTab] {
         if isBytelessEmbedWithPlayer {
             var tabs: [FileContentTab] = [.reader, .media]
@@ -230,6 +266,14 @@ struct SourceDetailView: View {
         }
         if isPDF && hasMarkdown {
             return [.reader, .pdf, .split]
+        }
+        // An HTML source with extracted markdown (or at minimum HTML bytes to
+        // show on the HTML tab): Reader (markdown) ⇄ HTML (rendered) ⇄ Split
+        // (both). Checked after PDF so a PDF whose extracted text happens to
+        // be HTML stays a PDF; checked before Mermaid so a `.mmd` source stays
+        // on the Mermaid three-way.
+        if isHTMLSource && (hasMarkdown || htmlSourceString != nil) {
+            return hasMarkdown ? [.reader, .html, .split] : [.html]
         }
         // A Mermaid source (standalone `.mmd` / `text/mermaid`, or markdown
         // carrying a fenced ```mermaid block): Reader (raw source) ⇄ Rendered
@@ -294,6 +338,13 @@ struct SourceDetailView: View {
     private var currentMarkdownContent: String? {
         if isEditing { return editBuffer }
         if let head = headVersion { return pinnedExtraction?.content ?? head.content }
+        // Issue #599: HTML sources preserve the original HTML bytes as the
+        // source blob — the markdown lives in a processed-markdown version
+        // (headVersion, above). Don't fall through to `sourceBytes` for HTML
+        // sources — the raw bytes are HTML, not markdown, and rendering them
+        // as markdown would show raw `<html>` tags. The Reader tab falls back
+        // to its "No Processed Markdown" placeholder until headVersion loads.
+        if isHTMLSource { return nil }
         if isMarkdownNative, let data = store.sourceBytes(id: file.id) {
             return String(data: data, encoding: .utf8)
         }
@@ -603,11 +654,11 @@ struct SourceDetailView: View {
                                 editBuffer = currentMarkdownContent ?? ""
                                 isEditing = true
                                 // #211: focus the editor even if the user had
-                                // switched to the PDF, Media, or Rendered tab,
-                                // where the markdown editor isn't rendered.
+                                // switched to the PDF, HTML, Media, or Rendered
+                                // tab, where the markdown editor isn't rendered.
                                 // Leave Split alone — the editor is already
                                 // visible there.
-                                if selectedTab == .pdf || selectedTab == .media || selectedTab == .rendered {
+                                if selectedTab == .pdf || selectedTab == .html || selectedTab == .media || selectedTab == .rendered {
                                     selectedTab = .reader
                                 }
                             }
@@ -963,16 +1014,19 @@ struct SourceDetailView: View {
     // MARK: Split Markdown ⇄ companion
 
     /// Split view: the markdown reader on the left, and the source's primary
-    /// visual companion — the PDF for a PDF source, or the media player for a
-    /// byteless embed (video or audio) — on the right. Only callable when there
-    /// is markdown to show on the left (gate by `hasMarkdown` before appending
-    /// `.split` to `availableTabs`).
+    /// visual companion — the PDF for a PDF source, the rendered HTML for an
+    /// HTML source (issue #599), or the media player for a byteless embed
+    /// (video or audio) — on the right. Only callable when there is markdown
+    /// to show on the left (gate by `hasMarkdown` before appending `.split`
+    /// to `availableTabs`).
     @ViewBuilder
     private var splitContent: some View {
         HSplitView {
             markdownContent
             if isBytelessEmbedWithPlayer {
                 videoPlayerContent
+            } else if isHTMLSource {
+                htmlSourceView
             } else if isMermaidSource {
                 renderedMermaidContent
             } else {
@@ -1005,12 +1059,35 @@ struct SourceDetailView: View {
             }
         case .pdf:
             pdfView
+        case .html:
+            htmlSourceView
         case .rendered:
             renderedMermaidContent
         case .media:
             videoPlayerContent
         case .split:
             splitContent
+        }
+    }
+
+    // MARK: HTML source view (issue #599)
+
+    /// The HTML tab (and the right pane of the HTML split view): renders the
+    /// source's original HTML bytes in a WKWebView with JavaScript disabled.
+    /// Mirrors how the PDF tab renders the original PDF in a `PDFView` —
+    /// faithful to the source, no script execution. Falls back to a calm
+    /// placeholder when the bytes can't be decoded.
+    @ViewBuilder
+    private var htmlSourceView: some View {
+        if let html = htmlSourceString {
+            HTMLSourceWebView(html: html)
+        } else {
+            ContentUnavailableView {
+                Label("Cannot Load HTML", systemImage: "globe")
+            } description: {
+                Text("The source bytes for this file couldn't be read or decoded as HTML.")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

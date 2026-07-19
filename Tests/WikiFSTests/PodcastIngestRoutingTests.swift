@@ -115,7 +115,7 @@ struct PodcastIngestRoutingTests {
         }
         let outcome = try await model.addURL(
             "https://example.com/article", fetcher: HTMLFetcher(), podcastFetcher: nil)
-        #expect(outcome.kind == .htmlConverted)
+        #expect(outcome.kind == .html)  // #599: HTML now preserved, outcome kind .html
     }
 
     /// Phase 4b routing-precedence: an Apple Podcasts episode URL must still

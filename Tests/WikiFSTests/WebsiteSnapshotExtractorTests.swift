@@ -38,7 +38,7 @@ struct WebsiteSnapshotExtractorTests {
         externalIdentity: "https://example.com/page")
 
     private let dummyPlan = FormatPlan(
-        filename: "Page.md", data: Data("placeholder".utf8), format: .htmlConverted)
+        filename: "Page.html", data: Data("placeholder".utf8), format: .html)
 
     // MARK: - AC.2: relative srcs + absolute normalization (D4)
 
@@ -58,10 +58,13 @@ struct WebsiteSnapshotExtractorTests {
         ])
         let snapshot = try await WebsiteSnapshotExtractor.snapshot(
             html: html, finalURL: URL(string: "https://example.com/page")!,
-            fetcher: fetcher, filename: "Page.md",
+            fetcher: fetcher, filename: "Page.html",
             provenance: provenance, plan: dummyPlan)
 
-        let md = String(data: snapshot.page.data, encoding: .utf8) ?? ""
+        // Issue #599: the page's source bytes are the original HTML; the
+        // extracted markdown (with rewritten image srcs) rides as a sidecar.
+        #expect(snapshot.page.data == Data(html.utf8))
+        let md = try #require(snapshot.plan.extractedMarkdown)
         // The relative src is unchanged; the absolute src is normalized to its
         // relative original_path (D4).
         #expect(md.contains("](images/foo.png)"))
@@ -86,7 +89,7 @@ struct WebsiteSnapshotExtractorTests {
         ])
         let snapshot = try await WebsiteSnapshotExtractor.snapshot(
             html: html, finalURL: URL(string: "https://example.com/page")!,
-            fetcher: fetcher, filename: "Page.md",
+            fetcher: fetcher, filename: "Page.html",
             provenance: provenance, plan: dummyPlan)
 
         let paths = snapshot.images.map(\.originalPath).sorted()
@@ -112,7 +115,7 @@ struct WebsiteSnapshotExtractorTests {
         ])
         let snapshot = try await WebsiteSnapshotExtractor.snapshot(
             html: html, finalURL: URL(string: "https://example.com/page")!,
-            fetcher: fetcher, filename: "Page.md",
+            fetcher: fetcher, filename: "Page.html",
             provenance: provenance, plan: dummyPlan)
 
         // The small image is stored; the huge one is skipped (not fatal).

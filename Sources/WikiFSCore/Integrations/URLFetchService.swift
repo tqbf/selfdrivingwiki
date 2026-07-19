@@ -14,8 +14,10 @@ import Foundation
 /// `URLSessionFetcher` + the active `WikiStoreModel.addSource`.
 ///
 /// Dispatch by `Content-Type`:
-/// - `text/html` / `application/xhtml+xml` → `HTMLToMarkdown` → store the **markdown**
-///   as a `.md` file (named from the `<title>` when present).
+/// - `text/html` / `application/xhtml+xml` → store the **original HTML bytes**
+///   as `.html`; the extracted markdown rides as a sidecar and is written as a
+///   processed-markdown version (issue #599 — mirrors PDF → pdf2md extraction).
+///   File named from the `<title>` when present.
 /// - `application/pdf` → store the raw PDF bytes as `.pdf` (verbatim).
 /// - other `text/*` (plain, markdown, csv…) → store the raw text as-is.
 /// - anything else (images, binaries) → store raw bytes with an extension inferred
@@ -44,7 +46,7 @@ public struct URLFetchService {
         public let kind: Kind
 
         public enum Kind: Sendable, Equatable {
-            case htmlConverted   // HTML → Markdown
+            case html           // verbatim HTML (extracted markdown stored as a processed version)
             case pdf             // verbatim PDF
             case text            // verbatim text
             case binary          // verbatim other bytes
@@ -177,7 +179,7 @@ public struct URLFetchService {
     /// Map the format-layer `SourceFormat` to the UI-facing `FetchOutcome.Kind`.
     static func mapFormat(_ format: SourceFormat) -> FetchOutcome.Kind {
         switch format {
-        case .htmlConverted: return .htmlConverted
+        case .html: return .html
         case .pdf: return .pdf
         case .text: return .text
         case .binary: return .binary

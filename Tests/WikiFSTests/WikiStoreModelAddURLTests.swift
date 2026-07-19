@@ -20,7 +20,7 @@ struct WikiStoreModelAddURLTests {
         return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
-    @Test func htmlURLLandsAsMarkdownFileInList() async throws {
+    @Test func htmlURLLandsVerbatimWithMarkdownSidecar() async throws {
         let store = try tempStore()
         store.eventBus = WikiEventBus(wikiID: "test")
         let model = WikiStoreModel(store: store)
@@ -35,18 +35,28 @@ struct WikiStoreModelAddURLTests {
         let outcome = try await model.addURL("example.com/doc", fetcher: fetcher)
         model.reloadFromStore()
 
-        #expect(outcome.kind == .htmlConverted)
-        #expect(outcome.filename == "My Doc.md")
+        // Issue #599: HTML sources now preserve the original HTML bytes; the
+        // extracted markdown rides as a `.extraction`-origin processed-markdown
+        // version (mirrors PDF → pdf2md extraction).
+        #expect(outcome.kind == .html)
+        #expect(outcome.filename == "My Doc.html")
         #expect(model.sources.count == 1)
-        #expect(model.sources.first?.filename == "My Doc.md")
-        #expect(model.sources.first?.ext == "md")
+        #expect(model.sources.first?.filename == "My Doc.html")
+        #expect(model.sources.first?.ext == "html")
         try await recorder.awaitNonEmpty()
         #expect(recorder.count > 0)
 
-        // Content is the converted markdown.
+        // The source bytes ARE the original HTML.
         let id = model.sources.first!.id
         let bytes = try store.sourceContent(id: id)
-        #expect(String(data: bytes, encoding: .utf8) == "# Heading\n\nBody.")
+        #expect(String(data: bytes, encoding: .utf8) == "<title>My Doc</title><body><h1>Heading</h1><p>Body.</p></body>")
+
+        // The extracted markdown sidecar landed as a `.extraction`-origin
+        // processed-markdown version on the source's derived chain.
+        let head = try #require(try store.processedMarkdownHead(sourceID: id))
+        #expect(head.origin == .extraction)
+        #expect(head.technique == "html-to-markdown")
+        #expect(head.content == "# Heading\n\nBody.")
     }
 
     @Test func pdfURLLandsVerbatim() async throws {

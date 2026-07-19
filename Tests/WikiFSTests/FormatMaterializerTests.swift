@@ -11,18 +11,22 @@ import Testing
 /// AC.7 — `FormatMaterializer` has no dependency on URL types.
 struct FormatMaterializerTests {
 
-    // MARK: - HTML → Markdown (AC.1)
+    // MARK: - HTML → verbatim bytes + extracted-markdown sidecar (issue #599)
 
-    @Test func htmlConvertedToMarkdownWithTitleFilename() {
+    @Test func htmlStoredVerbatimWithMarkdownSidecar() {
         let html = "<html><head><title>Cool Page</title></head><body><h1>Hi</h1><p>Hello <strong>world</strong>.</p></body></html>"
         let plan = FormatMaterializer.dispatch(
             data: Data(html.utf8), contentType: "text/html; charset=utf-8",
             stem: "article", extensionHint: nil)
 
-        #expect(plan.format == .htmlConverted)
-        #expect(plan.filename == "Cool Page.md")
-        let md = String(data: plan.data, encoding: .utf8)!
-        #expect(md == "# Hi\n\nHello **world**.")
+        // Issue #599: HTML sources preserve the ORIGINAL HTML bytes (format
+        // .html); the extracted markdown rides as a sidecar.
+        #expect(plan.format == .html)
+        #expect(plan.filename == "Cool Page.html")
+        // Byte-identical: the source blob IS the original HTML.
+        #expect(plan.data == Data(html.utf8))
+        // The extracted markdown sidecar carries the conversion.
+        #expect(plan.extractedMarkdown == "# Hi\n\nHello **world**.")
     }
 
     @Test func htmlWithoutTitleFallsBackToStem() {
@@ -31,18 +35,34 @@ struct FormatMaterializerTests {
             data: Data(html.utf8), contentType: "text/html",
             stem: "photosynthesis", extensionHint: nil)
 
-        #expect(plan.format == .htmlConverted)
-        #expect(plan.filename == "photosynthesis.md")
+        #expect(plan.format == .html)
+        #expect(plan.filename == "photosynthesis.html")
+        #expect(plan.data == Data(html.utf8))
+        #expect(plan.extractedMarkdown != nil)
     }
 
-    @Test func xhtmlAlsoConverted() {
+    @Test func xhtmlAlsoStoredVerbatim() {
         let html = "<html><title>X</title><body><p>x</p></body></html>"
         let plan = FormatMaterializer.dispatch(
             data: Data(html.utf8), contentType: "application/xhtml+xml",
             stem: "page", extensionHint: nil)
 
-        #expect(plan.format == .htmlConverted)
-        #expect(plan.filename == "X.md")
+        #expect(plan.format == .html)
+        #expect(plan.filename == "X.html")
+        #expect(plan.data == Data(html.utf8))
+        #expect(plan.extractedMarkdown != nil)
+    }
+
+    @Test func htmlSidecarMarkdownIsEmptyWhenBodyIsBlank() {
+        // Blank body still preserves the HTML bytes verbatim; the sidecar markdown
+        // is whatever HTMLToMarkdown converts (likely empty/whitespace).
+        let html = "<html><head><title>Empty</title></head><body></body></html>"
+        let plan = FormatMaterializer.dispatch(
+            data: Data(html.utf8), contentType: "text/html",
+            stem: "page", extensionHint: nil)
+
+        #expect(plan.format == .html)
+        #expect(plan.data == Data(html.utf8))
     }
 
     // MARK: - PDF verbatim (AC.1)
@@ -132,15 +152,15 @@ struct FormatMaterializerTests {
         #expect(plan.data == png)
     }
 
-    @Test func genuineHTMLStillConvertedToMarkdown() {
+    @Test func genuineHTMLStillStoredVerbatimAsHTML() {
         // Real HTML labeled text/html must NOT trip the sniffer (no binary magic).
         let html = "<html><head><title>Real Page</title></head><body><p>hi</p></body></html>"
         let plan = FormatMaterializer.dispatch(
             data: Data(html.utf8), contentType: "text/html",
             stem: "page", extensionHint: nil)
 
-        #expect(plan.format == .htmlConverted)
-        #expect(plan.filename == "Real Page.md")
+        #expect(plan.format == .html)
+        #expect(plan.filename == "Real Page.html")
     }
 
     // MARK: - Extension fallback for non-mapped MIMEs (AC.1)
