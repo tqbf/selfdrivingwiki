@@ -1027,7 +1027,12 @@ struct SourceDetailView: View {
                 onCaretChange: { caretCharIndex = $0 },
                 sidebarDropBuilder: { payloads in
                     SidebarDropBuilder.insertionText(for: payloads, store: store)
-                }
+                },
+                // Issue #680: wiki-link autocomplete in the source markdown
+                // editor. Same hooks + search backend as the chat composer
+                // (#684) and the page editor (also #680).
+                autocomplete: SidebarDropBuilder.wikiLinkAutocompleteHooks(store: store),
+                autocompletePlacement: .below
             )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(PageEditorMetrics.contentInset)

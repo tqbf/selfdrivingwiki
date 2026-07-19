@@ -1,6 +1,8 @@
 import AppKit
 import SwiftUI
 import WikiFSCore
+import WikiFSLinks
+import WikiFSSearch
 
 /// A programmatic scroll request for `ScrollableTextEditor`. When `version`
 /// changes, the editor scrolls so the character at `charOffset` is visible and
@@ -56,6 +58,42 @@ struct ScrollableTextEditor: NSViewRepresentable {
     /// and AppKit drag callbacks run on the main thread, so the capture is
     /// main-actor-isolated without an explicit hop.
     var sidebarDropBuilder: (([SidebarDragPayload]) -> String?)? = nil
+
+    // MARK: - Wiki-link autocomplete (#680)
+
+    /// Optional autocomplete integration (issue #680). When non-nil, the
+    /// coordinator runs a debounced query for each keystroke that lands inside
+    /// an open `[[kind:partial` trigger, surfaces the results in the same
+    /// `ChatAutocompletePanel` the chat composer uses (#684 just generalized
+    /// the panel's `present(caretRect:in:placement:)` API for this reuse), and
+    /// inserts the canonical `[[kind:ULID|Title]]` form on Return / click.
+    ///
+    /// The hooks (`fetch`: Tantivy autocomplete, `format`: canonical link)
+    /// are decoupled from `WikiFSCore` / `DroppedLinkFormatter` so the AppKit
+    /// controller stays dependency-light. Built by `PageDetailView` and
+    /// `SourceDetailView` from `store.tantivySearch` (same pattern as
+    /// `ChatView.chatAutocompleteHooks`).
+    var autocomplete: WikiLinkAutocompleteHooks? = nil
+
+    /// Preferred dropdown placement relative to the caret. The chat composer
+    /// uses `.above` (composer sits at the bottom of the chat window); the
+    /// editor MUST use `.below` (a tall NSTextView in the middle of the window
+    /// has more room below the caret than above). Defaults to `.below` since
+    /// the only consumer of `ScrollableTextEditor` is the page/source editor.
+    var autocompletePlacement: ChatAutocompletePanel.Placement = .below
+
+    /// Debounce window (ms) for the autocomplete Tantivy query. Mirrors the
+    /// chat composer's `ComposerTextView.autocompleteDebounce` (150 ms). Tests
+    /// pass a smaller value via the construction-time `debounce` parameter.
+    var autocompleteDebounce: UInt64 = ComposerTextView.autocompleteDebounce
+
+    /// Optional debounce scheduler seam (issue #661 — same goal as the chat
+    /// composer's): tests inject a manual scheduler that captures work for an
+    /// explicit `fireAll()` call so the timing is fully deterministic with no
+    /// real `Task.sleep`. Production leaves `nil` and the controller uses its
+    /// built-in `Task.sleep` scheduler.
+    var autocompleteScheduleDebounce:
+        ((UInt64, @escaping () async -> Void) -> WikiLinkAutocompleteDebounceHandle)? = nil
 
     // MARK: - NSViewRepresentable
 
@@ -120,6 +158,13 @@ struct ScrollableTextEditor: NSViewRepresentable {
         }
     }
 
+    /// Final teardown — cancel any in-flight autocomplete query and release the
+    /// dropdown panel so it can't leak across SwiftUI view rebuilds. Mirrors
+    /// `ComposerTextView.dismantleNSView` (#436).
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        coordinator.teardownAutocomplete()
+    }
+
     // MARK: - Text view factory (shared with tests)
 
     /// Builds the `NSTextView` for the editor. Returns a `DropLinkTextView`
@@ -172,6 +217,15 @@ struct ScrollableTextEditor: NSViewRepresentable {
         /// index actually changed.
         private var lastReportedCaret: Int?
 
+        // MARK: - Autocomplete (#680)
+
+        /// The reusable autocomplete pipeline (extracted from
+        /// `ComposerTextView.Coordinator` so the chat composer and this editor
+        /// share one implementation). Built lazily from the parent's hooks /
+        /// debounce / scheduler. The Coordinator's `textDidChange` /
+        /// `doCommandBy:` delegate methods route to this controller.
+        private var autocompleteController: WikiLinkAutocompleteController?
+
         init(_ parent: ScrollableTextEditor) {
             self.parent = parent
         }
@@ -182,11 +236,85 @@ struct ScrollableTextEditor: NSViewRepresentable {
                 parent.text = textView.string
             }
             reportCaret(in: textView)
+            ensureAutocompleteController()
+            autocompleteController?.textDidChange(textView: textView)
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             reportCaret(in: textView)
+        }
+
+        /// `doCommandBy:` is the NSTextView's hook for "the user just did
+        /// this text command" — Return, Tab, Backspace, etc. The editor uses
+        /// it only to intercept Plain Return when the autocomplete dropdown is
+        /// open (consume → commit the selected row). Every other selector
+        /// falls through to NSTextView's default behavior (insert newline,
+        /// insert tab, etc.) by returning `false`.
+        ///
+        /// Mirrors `ComposerTextView.Coordinator.textView(_:doCommandBy:)` but
+        /// is simpler because the editor doesn't have a "send" action — plain
+        /// Return in the editor just inserts a newline (NSTextView's default).
+        func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
+            ensureAutocompleteController()
+            let modifiers = (NSApp.currentEvent?.modifierFlags ?? []).intersection(.deviceIndependentFlagsMask)
+            // The controller returns true only when the dropdown is open AND
+            // the Return was plain (no Shift/Option/Cmd). Shift+Return etc.
+            // fall through to NSTextView's literal-newline default behavior.
+            return autocompleteController?.shouldConsumeReturn(modifiers: modifiers) ?? false
+        }
+
+        // MARK: - Autocomplete controller lifecycle
+
+        /// Lazily build / refresh the controller from the parent's current
+        /// `autocomplete` hooks. Safe to call on every `textDidChange` (no-op
+        /// when the parent hasn't changed). The host view (PageDetailView /
+        /// SourceDetailView) builds `autocomplete` once from
+        /// `store.tantivySearch` — it doesn't change between SwiftUI updates
+        /// for the same wiki — but the controller is rebuilt if `autocomplete`
+        /// transitions to nil (wiki closed) so a stale dropdown doesn't linger.
+        private func ensureAutocompleteController() {
+            guard parent.autocomplete != nil else {
+                if let existing = autocompleteController {
+                    existing.teardown()
+                    autocompleteController = nil
+                }
+                return
+            }
+            if autocompleteController == nil {
+                autocompleteController = WikiLinkAutocompleteController(
+                    hooksProvider: { [weak self] in self?.parent.autocomplete },
+                    debounceProvider: { [weak self] in
+                        self?.parent.autocompleteDebounce ?? ComposerTextView.autocompleteDebounce
+                    },
+                    scheduleDebounceProvider: { [weak self] debounce, work in
+                        guard let scheduler = self?.parent.autocompleteScheduleDebounce else { return nil }
+                        return scheduler(debounce, work)
+                    },
+                    placement: parent.autocompletePlacement,
+                    widthProvider: { textView in
+                        // The editor is monospaced + wide; a 460pt dropdown
+                        // (same as the chat composer's default width) is
+                        // readable and doesn't visually overpower the line
+                        // the caret is on. Clamp to the text view's bounds so
+                        // a narrow editor window (split-view on a small
+                        // screen) doesn't overflow.
+                        max(min(textView.bounds.width, 460), 240)
+                    }
+                )
+                autocompleteController?.textBinding = { [weak self] newText in
+                    guard let self else { return }
+                    self.parent.text = newText
+                }
+            }
+        }
+
+        /// Final teardown on dismantle: cancel in-flight query, drop the key
+        /// monitor, close the panel. Called from `dismantleNSView`.
+        func teardownAutocomplete() {
+            autocompleteController?.teardown()
+            autocompleteController = nil
         }
 
         private func reportCaret(in textView: NSTextView) {
