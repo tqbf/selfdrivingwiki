@@ -54,6 +54,32 @@ public final class TantivySearchService: Sendable {
         }
     }
 
+    // MARK: - Autocomplete (composer wiki-link fuzzy)
+
+    /// Title-only fuzzy autocomplete scoped to one or more kinds. Drives the
+    /// chat composer's `[[kind:partial` autocomplete (issues #436 / #638).
+    /// Returns empty on any error (never throws — autocomplete is best-effort).
+    ///
+    /// Defaults: distance 2, limit 8. `kinds` is a Set so the composer can
+    /// pre-scope to one kind (`[[page:` → `[.page]`) or open it up later.
+    /// See `TantivyIndexer.autocomplete(...)` for the query-string-path
+    /// rationale (prefix-true on title is load-bearing for the
+    /// `"Erl" → "Erickson"` headline case).
+    public func autocomplete(
+        partial: String,
+        kinds: Set<TantivyDocumentKind>,
+        distance: UInt8 = 2,
+        limit: Int = 8
+    ) async -> [TantivyShadowSearchResult] {
+        do {
+            return try await indexer.autocomplete(
+                partial: partial, kinds: kinds, distance: distance, limit: limit)
+        } catch {
+            DebugLog.store("TantivySearchService: autocomplete(\"\(partial)\") failed: \(error)")
+            return []
+        }
+    }
+
     // MARK: - Lifecycle
 
     /// Ensure the shadow index is populated. On first open (empty index) or

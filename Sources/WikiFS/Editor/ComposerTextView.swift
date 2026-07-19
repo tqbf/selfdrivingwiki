@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import WikiFSLinks
+import WikiFSSearch
 
 /// NSTextView-backed chat composer, replacing the SwiftUI
 /// `TextField(..., axis: .vertical).lineLimit(1...6)` that previously backed
@@ -41,8 +43,59 @@ struct ComposerTextView: NSViewRepresentable {
     /// start typing immediately after clicking "Add chat".
     var autoFocus: Bool = false
 
+    // MARK: - Wiki-link autocomplete (#436 / #638)
+
+    /// Optional autocomplete integration. When non-nil, the coordinator runs
+    /// a debounced query for each keystroke that lands inside an open
+    /// `[[kind:partial` trigger, surfaces the results in a dropdown, and
+    /// inserts the canonical `[[kind:ULID|Title]]` form on selection.
+    ///
+    /// Three injected closures so the AppKit coordinator stays pure about the
+    /// engine + formatter (it doesn't import `WikiFSCore` / `DroppedLinkFormatter`
+    /// directly — the SwiftUI parent wires those in from `ChatView`):
+    ///   - `fetch`: runs the Tantivy `autocomplete(partial:kinds:...)` query.
+    ///     Must be async-cancellable on the caller side (the coordinator cancels
+    ///     the prior in-flight Task before each new keystroke — AC #5). Returns
+    ///     the ranked hits for the dropdown.
+    ///   - `format`: builds the canonical `[[kind:ULID|Title]]` string for the
+    ///     selected hit (`DroppedLinkFormatter.link(for:id:displayName:)`). The
+    ///     coordinator does the actual range-replace in the text view.
+    ///   - `geometry`: returns the anchor `NSView` the dropdown should track
+    ///     (the composer's text view). Called each time the dropdown is shown.
+    var autocomplete: AutocompleteHooks?
+
+    /// Closures injected by `ChatView` so the coordinator stays decoupled from
+    /// `WikiFSCore` (the store handle) and `WikiFSLinks` (the formatter). Both
+    /// are optional — `nil` means autocomplete is disabled (the composer
+    /// behaves exactly as it did before #436). The Coordinator uses its own
+    /// captured text view as the dropdown anchor (no closure needed).
+    struct AutocompleteHooks {
+        /// Runs the Tantivy `autocomplete(partial:kinds:...)` query for one
+        /// kind (`[[page:` → `[.page]`, etc.). The coordinator wraps this in a
+        /// debounced + cancellable `Task` (AC #5).
+        var fetch: (String, ParsedLink.LinkType) async -> [TantivyShadowSearchResult]
+        /// Builds the canonical `[[kind:ULID|Title]]` string to insert for a
+        /// selected hit. Wraps `DroppedLinkFormatter.link(...)`.
+        var format: (TantivyShadowSearchResult) -> String
+
+        init(
+            fetch: @escaping (String, ParsedLink.LinkType) async -> [TantivyShadowSearchResult],
+            format: @escaping (TantivyShadowSearchResult) -> String
+        ) {
+            self.fetch = fetch
+            self.format = format
+        }
+    }
+
     nonisolated static let accessibilityLabel = "Message"
     private let placeholderText = "Ask a question, or ask the Agent to update the wiki…"
+
+    /// Debounce window for the autocomplete query (AC #5). 150 ms is fast
+    /// enough to feel instant while keeping per-keystroke Tantivy queries from
+    /// stacking up. Sidebar search uses 300 ms; autocomplete feels more
+    /// time-critical so it's tighter. Override per-test by setting this to a
+    /// tiny value (the coordinator reads it fresh on each schedule).
+    nonisolated static let autocompleteDebounce: UInt64 = 150
 
     // MARK: - Height clamping (pure, testable)
 
@@ -73,12 +126,30 @@ struct ComposerTextView: NSViewRepresentable {
         clampedHeight(contentHeight: 0, lineHeight: NSLayoutManager().defaultLineHeight(for: font))
     }
 
+    /// Pure: convert a UTF-16 (NSTextView) caret offset to a Swift
+    /// `String.Index`/`Character`-count offset the prefix scanner expects.
+    /// Clamps to `[0, text.count]`. The scanner rebuilds via `Array(text)` so
+    /// the offset must count `Character`s, not UTF-16 units. ASCII wiki-link
+    /// prefixes are BMP-stable so the two are equal for the common case;
+    /// non-ASCII is still correct because the scanner handles it on its side.
+    nonisolated static func clampedSwiftOffset(utf16Offset: Int, in text: String) -> Int {
+        guard utf16Offset > 0 else { return 0 }
+        let utf16 = Array(text.utf16)
+        guard utf16Offset <= utf16.count else { return text.count }
+        let prefix = String(decoding: utf16.prefix(utf16Offset), as: UTF16.self)
+        return prefix.count
+    }
+
     // MARK: - Key handling (pure, testable)
 
     nonisolated enum ComposerKeyAction {
         case send
         case insertNewline
         case unhandled
+        /// Plain Return while the autocomplete dropdown is open with results:
+        /// the coordinator should insert the canonical link for the selected
+        /// (or top) row and consume the keystroke (no message send).
+        case insertAutocomplete
     }
 
     /// Pure: decide what a `doCommandBy:` selector + the live modifier flags
@@ -88,11 +159,19 @@ struct ComposerTextView: NSViewRepresentable {
     /// Cmd+Return falls through (`.unhandled`) so the send button's own
     /// `.keyboardShortcut(.return, modifiers: .command)` is the single path —
     /// otherwise a Cmd+Return keystroke would send twice.
-    nonisolated static func keyAction(for selector: Selector, modifiers: NSEvent.ModifierFlags) -> ComposerKeyAction {
+    ///
+    /// When `autocompleteOpen` is true AND results are present, plain Return
+    /// returns `.insertAutocomplete` instead of `.send` so the coordinator
+    /// inserts the canonical link rather than sending the message.
+    nonisolated static func keyAction(
+        for selector: Selector,
+        modifiers: NSEvent.ModifierFlags,
+        autocompleteOpen: Bool = false
+    ) -> ComposerKeyAction {
         guard selector == #selector(NSResponder.insertNewline(_:)) else { return .unhandled }
         if modifiers.contains(.shift) || modifiers.contains(.option) { return .insertNewline }
         if modifiers.contains(.command) { return .unhandled }
-        return .send
+        return autocompleteOpen ? .insertAutocomplete : .send
     }
 
     // MARK: - NSViewRepresentable
@@ -171,6 +250,7 @@ struct ComposerTextView: NSViewRepresentable {
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         coordinator.stopObservingFrameChanges()
+        coordinator.teardownAutocomplete()
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
@@ -198,27 +278,272 @@ struct ComposerTextView: NSViewRepresentable {
         private var frameObserver: NSObjectProtocol?
         private var lastObservedWidth: CGFloat?
 
+        // MARK: - Autocomplete state (#436 / #638)
+
+        /// The current dropdown results. Empty when the dropdown is hidden.
+        private var autocompleteResults: [TantivyShadowSearchResult] = []
+        /// The keyboard-highlighted row in the dropdown. `nil` = nothing
+        /// explicitly selected; Enter targets the top row.
+        private var selectedIndex: Int? = nil
+        /// The trigger for the currently-shown dropdown, kept so a stale
+        /// in-flight query that returns after the dropdown was dismissed
+        /// can detect it shouldn't apply.
+        private var currentTrigger: WikiLinkPrefixScanner.OpenWikiLink? = nil
+        /// The non-activating panel hosting the dropdown. Lazily created on
+        /// first show; reused across keystrokes.
+        private var panel: ChatAutocompletePanel?
+        /// The live text view, captured in `textDidChange` so the local event
+        /// monitor and the click handler can mutate it without a notification.
+        private weak var textView: NSTextView?
+        /// Local key monitor (installed while the dropdown is up) — consumes
+        /// ↑/↓/Escape. Per reviewer correction #2: Escape is NOT delivered
+        /// via `doCommandBy:`, so a local `NSEvent` monitor is the only path.
+        /// Mirrors `OmniboxSearchField.swift:242-252`.
+        private var keyMonitor: Any?
+        /// The in-flight autocomplete Task. Cancelled and replaced on every
+        /// keystroke that lands inside an open-link trigger (AC #5). Visible
+        /// to tests so they can assert it was cancelled.
+        fileprivate var autocompleteTask: Task<Void, Never>?
+
         init(_ parent: ComposerTextView) {
             self.parent = parent
         }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
+            self.textView = textView
             if parent.text != textView.string {
                 parent.text = textView.string
             }
             recomputeHeight(for: textView)
+            evaluateAutocomplete(for: textView)
         }
 
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            self.textView = textView
             let modifiers = (NSApp.currentEvent?.modifierFlags ?? []).intersection(.deviceIndependentFlagsMask)
-            switch ComposerTextView.keyAction(for: selector, modifiers: modifiers) {
+            let open = !autocompleteResults.isEmpty
+            switch ComposerTextView.keyAction(for: selector, modifiers: modifiers, autocompleteOpen: open) {
             case .send:
                 parent.onSubmit()
+                return true
+            case .insertAutocomplete:
+                // Plain Return while the dropdown is up: insert the selected
+                // (or top) row's canonical link and consume. Shift/Option/Cmd
+                // still fall through to insert-newline / unhandled via keyAction.
+                commitAutocomplete()
                 return true
             case .insertNewline, .unhandled:
                 return false
             }
+        }
+
+        // MARK: - Autocomplete pipeline
+
+        /// Per-keystroke: detect an open `[[kind:partial` trigger at the caret
+        /// and (re)schedule a debounced Tantivy query. Dismisses the dropdown
+        /// when no trigger is present.
+        private func evaluateAutocomplete(for textView: NSTextView) {
+            guard parent.autocomplete != nil else { return }
+            let caret = textView.selectedRange().location
+            let text = textView.string
+            // The scanner uses `String.Index` offsets; convert the NSTextView's
+            // UTF-16 caret to a Swift `Character`-count offset (the text view
+            // stores a UTF-16 string, so for ASCII-only wiki-links the two are
+            // equal; for non-ASCII the conversion is still correct because the
+            // scanner rebuilds via `Array(text)`).
+            let swiftCaret = clampedSwiftOffset(utf16Offset: caret, in: text)
+            guard let trigger = WikiLinkPrefixScanner.openLink(at: swiftCaret, in: text) else {
+                hideAutocomplete()
+                return
+            }
+            currentTrigger = trigger
+            scheduleAutocomplete(trigger: trigger)
+        }
+
+        /// Cancel any in-flight query and start a fresh debounced one for
+        /// `trigger`. AC #5: typing fast cancels stale in-flight queries.
+        fileprivate func scheduleAutocomplete(trigger: WikiLinkPrefixScanner.OpenWikiLink) {
+            autocompleteTask?.cancel()
+            guard let hooks = parent.autocomplete else { return }
+            // Capture the partial at schedule time — a later keystroke that
+            // reschedules will see a different trigger and cancel this one
+            // before its query lands.
+            let partial = trigger.partial
+            let kind = trigger.kind
+            let debounce = ComposerTextView.autocompleteDebounce
+            autocompleteTask = Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await Task.sleep(for: .milliseconds(debounce))
+                } catch {
+                    // Cancelled during the sleep — bail without applying.
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                let results = await hooks.fetch(partial, kind)
+                guard !Task.isCancelled else { return }
+                // Only apply if this trigger is still current (a later keystroke
+                // may have replaced us and already shown its own results).
+                await MainActor.run { [weak self] in
+                    guard let self,
+                          self.currentTrigger?.partial == partial,
+                          self.currentTrigger?.kind == kind else { return }
+                    self.applyResults(results)
+                }
+            }
+        }
+
+        /// Apply a fresh result set: reset selection, render the panel. Runs on
+        /// the main actor (panel hosting is main-actor-isolated).
+        @MainActor
+        private func applyResults(_ results: [TantivyShadowSearchResult]) {
+            autocompleteResults = results
+            selectedIndex = nil
+            if results.isEmpty {
+                hideAutocomplete()
+            } else {
+                presentPanel()
+            }
+        }
+
+        /// Show (or refresh) the dropdown above the composer. Installs the
+        /// local ↑/↓/Escape monitor (reviewer correction #2).
+        @MainActor
+        private func presentPanel() {
+            guard parent.autocomplete != nil else { return }
+            guard let anchor = self.textView else { return }
+            let panel = self.panel ?? ChatAutocompletePanel()
+            self.panel = panel
+            panel.update(results: autocompleteResults,
+                         selectedIndex: selectedIndex,
+                         width: anchor.bounds.width) { [weak self] result in
+                MainActor.assumeIsolated {
+                    self?.commitSelection(result)
+                }
+            }
+            panel.present(above: anchor)
+            installKeyMonitor()
+        }
+
+        @MainActor
+        fileprivate func hideAutocomplete() {
+            removeKeyMonitor()
+            currentTrigger = nil
+            autocompleteResults = []
+            selectedIndex = nil
+            guard let panel else { return }
+            panel.parent?.removeChildWindow(panel)
+            panel.orderOut(nil)
+        }
+
+        /// Final teardown on dismantle: cancel in-flight query, drop the monitor,
+        /// close the panel. Distinct from `hideAutocomplete` because we also
+        /// want the panel *released* (not just hidden) so a stale SwiftUI
+        /// hosting view can't leak across view rebuilds.
+        @MainActor
+        fileprivate func teardownAutocomplete() {
+            autocompleteTask?.cancel()
+            autocompleteTask = nil
+            removeKeyMonitor()
+            currentTrigger = nil
+            autocompleteResults = []
+            selectedIndex = nil
+            if let panel {
+                panel.parent?.removeChildWindow(panel)
+                panel.orderOut(nil)
+                self.panel = nil
+            }
+        }
+
+        /// Commit a specific hit (click or Return), then dismiss the dropdown.
+        /// Replaces the trigger's `range` with the canonical `[[kind:ULID|Title]]`
+        /// string built by the parent's `format` closure, syncs the SwiftUI
+        /// `text` binding, and recomputes height.
+        @MainActor
+        private func commitSelection(_ hit: TantivyShadowSearchResult) {
+            guard let hooks = parent.autocomplete,
+                  let textView,
+                  let trigger = currentTrigger else { return }
+            let link = hooks.format(hit)
+            // Range-replace in the live text view. NSTextView uses UTF-16
+            // offsets; `NSRange(_:in:)` converts a `Range<String.Index>` to the
+            // matching UTF-16 NSRange against the current string contents.
+            let current = textView.string
+            let range = NSRange(trigger.range, in: current)
+            textView.replaceCharacters(in: range, with: link)
+            // Move the caret to just after the inserted `]]`.
+            let newCaret = range.location + (link as NSString).length
+            textView.setSelectedRange(NSRange(location: newCaret, length: 0))
+            // Sync the SwiftUI binding so the model sees the canonical form.
+            parent.text = textView.string
+            recomputeHeight(for: textView)
+            hideAutocomplete()
+        }
+
+        /// Commit the keyboard-selected row (or top row when nothing is
+        /// explicitly selected). Called from `doCommandBy:` `.insertAutocomplete`.
+        @MainActor
+        fileprivate func commitAutocomplete() {
+            let idx = selectedIndex ?? 0
+            guard autocompleteResults.indices.contains(idx) else {
+                hideAutocomplete()
+                return
+            }
+            commitSelection(autocompleteResults[idx])
+        }
+
+        // MARK: - Local key monitor (↑/↓/Escape — reviewer correction #2)
+
+        /// Installs a local keyDown monitor (idempotent). Removed in
+        /// `hideAutocomplete` so the keys fall through to the text view
+        /// normally when the dropdown isn't showing. Mirrors
+        /// `OmniboxSearchField.swift:220-226`.
+        private func installKeyMonitor() {
+            guard keyMonitor == nil else { return }
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else { return event }
+                return self.handleAutocompleteKey(event)
+            }
+        }
+
+        private func removeKeyMonitor() {
+            guard let keyMonitor else { return }
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
+        }
+
+        /// Consumes ↑/↓/Escape while the dropdown is showing; passes every
+        /// other event through untouched. The monitor is installed only while
+        /// the panel is up, so by the time we're here the composer text view
+        /// holds first responder. Local monitors deliver on the main thread —
+        /// the `@MainActor` panel update runs synchronously via
+        /// `MainActor.assumeIsolated`.
+        private func handleAutocompleteKey(_ event: NSEvent) -> NSEvent? {
+            guard !autocompleteResults.isEmpty else { return event }
+            switch event.keyCode {
+            case 125: // Down arrow
+                MainActor.assumeIsolated { self.applyArrow(delta: 1) }
+                return nil
+            case 126: // Up arrow
+                MainActor.assumeIsolated { self.applyArrow(delta: -1) }
+                return nil
+            case 53: // Escape (reviewer correction #2 — NOT a doCommandBy: selector)
+                MainActor.assumeIsolated { self.hideAutocomplete() }
+                return nil
+            default:
+                return event
+            }
+        }
+
+        @MainActor
+        private func applyArrow(delta: Int) {
+            guard let next = ChatAutocompleteSelection.advance(
+                current: selectedIndex,
+                count: autocompleteResults.count,
+                delta: delta) else { return }
+            selectedIndex = next
+            presentPanel()
         }
 
         /// Measures content height and writes the clamped result back to the
