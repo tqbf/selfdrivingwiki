@@ -2003,10 +2003,26 @@ public final class WikiStoreModel {
             let markdown = String(data: transcript.data, encoding: .utf8) ?? ""
             try store.appendProcessedMarkdown(
                 sourceID: summary.id, content: markdown, origin: .transcript, note: nil, technique: nil)
+            // Issue #621: resolve a human-readable display name from the
+            // episode slug so the source list shows the episode title instead
+            // of the slugified filename. Mirrors the byteless oEmbed title step
+            // (YouTube/Vimeo/Spotify/SoundCloud) — does NOT block ingest; a nil
+            // title leaves the synthetic filename display name in place. The
+            // slug is the episode title as Apple generates it for an episode
+            // link, so un-sluggifying is offline and dependency-free.
+            let resolvedTitle = PodcastEpisodeURL.displayTitle(from: episode.slug)
+                .map { WikiNameRules.sanitized($0) }
+            if let title = resolvedTitle {
+                do {
+                    try store.setSourceDisplayName(id: summary.id, displayName: title)
+                } catch {
+                    DebugLog.store("apple-podcast slug title setSourceDisplayName failed (source=\(summary.id.rawValue)): \(error)")
+                }
+            }
             // No manual reload — the bus fires reloadFromStore() async after the
             // store write. The tab title is passed explicitly so tabTitle (which
             // reads `sources`) needs no synchronous freshness.
-            openTab(.source(summary.id), title: summary.effectiveName)
+            openTab(.source(summary.id), title: resolvedTitle ?? summary.effectiveName)
             return URLFetchService.FetchOutcome(
                 filename: transcript.filename,
                 byteSize: transcript.data.count,

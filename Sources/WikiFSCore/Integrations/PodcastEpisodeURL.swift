@@ -52,5 +52,64 @@ public enum PodcastEpisodeURL {
         guard !candidate.isEmpty, !candidate.hasPrefix("id") else { return nil }
         return candidate
     }
+
+    /// Convert an `EpisodeRef.slug` into a human-readable, title-cased display
+    /// name. The slug is a hyphen-separated, ASCII-stemmed form of the episode
+    /// title Apple generates at link-time: `if-you-care-about-food-…-land` →
+    /// `If You Care About Food You Have to Care About Land`. Pure, runs
+    /// offline, and is reused by the refresh path so the title stays consistent
+    /// across re-pastes.
+    ///
+    /// Returns nil when `slug` is nil/empty/whitespace — so the caller falls
+    /// back to the synthetic filename display name (mirrors the oEmbed best-
+    /// effort discipline for YouTube/Vimeo/Spotify/SoundCloud). The caller is
+    /// expected to run the result through `WikiNameRules.sanitized` before any
+    /// `setSourceDisplayName` write (the same invariant every display-name
+    /// write honors).
+    ///
+    /// Issue #621.
+    public static func displayTitle(from slug: String?) -> String? {
+        let trimmed = slug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        // Split on `-` and drop empties (consecutive / leading / trailing
+        // hyphens). `URL.pathComponents` already percent-decodes the slug, so
+        // non-ASCII characters arrive intact — no extra decoding needed here.
+        // Real Apple URL slugs never contain whitespace (the `/` separator
+        // carries hyphen-joined ASCII words); the additional whitespace filter
+        // is defensive so the helper never returns a whitespace-only "title".
+        let words: [String] = trimmed
+            .split(separator: "-", omittingEmptySubsequences: true)
+            .map(String.init)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !words.isEmpty else { return nil }
+        return titleCase(words: words).joined(separator: " ")
+    }
+
+    /// Title-case `words` preserving the lowercase form of small connector
+    /// words (a/an/the/and/but/or/…/to/…) unless they are the first word —
+    /// matches AP-style title casing so the result reads like an episode title
+    /// rather than a slug-with-spaces. Naive `String.capitalized`
+    /// over-capitalizes "to"/"about"/"the" (#621 risk note).
+    private static func titleCase(words: [String]) -> [String] {
+        // Lowercased once so we lowercase-initial any short mixed-case slug
+        // input. The slug is assumed all-lowercase ASCII (the form Apple
+        // generates), but defensively normalizing keeps the function usable for
+        // round-tripped inputs.
+        let smallWords: Set<String> = [
+            "a", "an", "the", "and", "but", "or", "for", "nor", "on", "at",
+            "to", "from", "by", "of", "in", "as", "vs", "vs.", "via"
+        ]
+        return words.enumerated().map { index, raw -> String in
+            let word = raw.lowercased()
+            guard !word.isEmpty else { return raw }
+            if index != 0, smallWords.contains(word) {
+                return word
+            }
+            // Capitalize the first character only — don't `.capitalized` the
+            // whole word, which would mangle Apple-style "iPhone" stems or
+            // force trailing caps on already-cased input.
+            return word.prefix(1).uppercased() + word.dropFirst()
+        }
+    }
 }
 #endif

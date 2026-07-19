@@ -73,5 +73,69 @@ struct PodcastEpisodeURLTests {
         #expect(ref?.id == "1000774368453")
         #expect(ref?.slug == nil)
     }
+
+    // MARK: - displayTitle(from:) — issue #621
+
+    @Test func displayTitleUnsluggifiesAndTitleCases() {
+        // The issue #621 driving example: the slug IS the episode title as Apple
+        // generates it for an episode link. Un-slug → human-readable episode
+        // title, with small connector words preserved lowercase.
+        let slug = "if-you-care-about-food-you-have-to-care-about-land"
+        #expect(
+            PodcastEpisodeURL.displayTitle(from: slug)
+                == "If You Care About Food You Have to Care About Land")
+    }
+
+    @Test func displayTitlePreservesSmallWordsLowercaseExceptFirst() {
+        // The first word is capitalized even when it's a small word; subsequent
+        // small words stay lowercase so the result reads like an episode title.
+        #expect(PodcastEpisodeURL.displayTitle(from: "to-the-moon-and-back")
+                == "To the Moon and Back")
+        #expect(PodcastEpisodeURL.displayTitle(from: "a-walk-in-the-park")
+                == "A Walk in the Park")
+    }
+
+    @Test func displayTitleHandlesMultiHyphenRuns() {
+        // Consecutive hyphens collapse to a single space.
+        #expect(PodcastEpisodeURL.displayTitle(from: "foo---bar") == "Foo Bar")
+    }
+
+    @Test func displayTitleTrimsLeadingAndTrailingHyphens() {
+        #expect(PodcastEpisodeURL.displayTitle(from: "-foo-bar-") == "Foo Bar")
+        #expect(PodcastEpisodeURL.displayTitle(from: "--foo--") == "Foo")
+    }
+
+    @Test func displayTitleReturnsSingleWordCapitalized() {
+        #expect(PodcastEpisodeURL.displayTitle(from: "chinatalk") == "Chinatalk")
+    }
+
+    @Test func displayTitleReturnsNilForNilOrEmpty() {
+        #expect(PodcastEpisodeURL.displayTitle(from: nil) == nil)
+        #expect(PodcastEpisodeURL.displayTitle(from: "") == nil)
+        #expect(PodcastEpisodeURL.displayTitle(from: "   ") == nil)
+    }
+
+    @Test func displayTitleReturnsNilForAllHyphenInput() {
+        // A slug that is only hyphens / whitespace has no words to surface.
+        #expect(PodcastEpisodeURL.displayTitle(from: "---") == nil)
+        #expect(PodcastEpisodeURL.displayTitle(from: "- - -") == nil)
+    }
+
+    @Test func displayTitleHandlesPercentEncodedNonASCII() {
+        // `URL.pathComponents` percent-decodes the path before `parse` slices
+        // it, so a non-ASCII episode title arrives intact. The helper must NOT
+        // re-decode (it would mangle `%`); it just splits on hyphens and
+        // capitalizes the first character of each word.
+        let slug = "café-con-leche"
+        #expect(PodcastEpisodeURL.displayTitle(from: slug) == "Café Con Leche")
+    }
+
+    @Test func displayTitlePreservesNumbersAndMixedCaseInput() {
+        // Alphanumerics + already-lowercased input are both safe; we lowercase
+        // first, then capitalize the initial of each non-small word so mixed
+        // case in a stale slug (e.g. a copy-paste drift) normalizes cleanly.
+        #expect(PodcastEpisodeURL.displayTitle(from: "phase-4-of-5") == "Phase 4 of 5")
+        #expect(PodcastEpisodeURL.displayTitle(from: "EPISODE-7") == "Episode 7")
+    }
 }
 #endif
