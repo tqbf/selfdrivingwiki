@@ -74,15 +74,23 @@ struct ComposerAutocompleteHostedTests {
     private func makeHostedComposer(
         text: Binding<String>,
         autocomplete: ComposerTextView.AutocompleteHooks?,
-        measuredHeight: Binding<CGFloat>
+        measuredHeight: Binding<CGFloat>,
+        debounce: UInt64 = 5
     ) -> (window: NSWindow, textView: NSTextView, coordinator: ComposerTextView.Coordinator) {
+        // `debounce` defaults to 5 ms (vs. the 150 ms production default) so
+        // the schedule/cancel timing is deterministic without long `Task.sleep`
+        // waits — the suite is heavy (2700+ tests competing for the
+        // cooperative pool) and a tight 5 ms debounce window makes the cancel
+        // assertion insensitive to pool saturation. Production gets the 150 ms
+        // default via `ComposerTextView.debounce`'s default.
         let parent = ComposerTextView(
             text: text,
             isEditable: true,
             font: bodyFont,
             onSubmit: {},
             measuredHeight: measuredHeight,
-            autocomplete: autocomplete
+            autocomplete: autocomplete,
+            debounce: debounce
         )
         let coordinator = ComposerTextView.Coordinator(parent)
         let textView = ComposerTextView.makeConfiguredTextView(font: bodyFont)
@@ -111,33 +119,27 @@ struct ComposerAutocompleteHostedTests {
     @Test func debouncedQueryCancelsStaleInFlightPartial() async {
         // Drive the coordinator's schedule with two partials in quick
         // succession. The first must be cancelled before its fetch lands; only
-        // the second partial's result is applied.
+        // the second partial's fetch fires.
+        //
+        // Robustness: under heavy cooperative-pool load (this suite runs
+        // alongside 2700+ others), a fixed `Task.sleep` wait can return
+        // BEFORE the second schedule's @MainActor-isolated Task body gets a
+        // chance to run — which looks like "no fetch ran" (false failure).
+        // The poll loop below waits adaptively: it exits as soon as the
+        // second partial ("Erl") lands in `fetchCalls`, with a generous 3s
+        // ceiling so a slow CI runner still completes.
         var text = ""
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
-        // Make the FIRST fetch slow enough that the second schedule arrives
-        // before it returns. The debounce (150ms) plus this delay must exceed
-        // the gap between the two schedules.
-        var fetchCount = 0
+        let fake = FakeAutocomplete()
+        await fake.setNextResult([
+            TantivyShadowSearchResult(documentID: "page:01PAGE0001", kind: .page,
+                                      title: "Erickson", score: 1.0),
+        ])
         let hooks = ComposerTextView.AutocompleteHooks(
-            fetch: { partial, _ in
-                let captured = fetchCount
-                fetchCount += 1
-                if captured == 0 {
-                    // First fetch — slow. Should be cancelled before its
-                    // `await` returns. If we get here uncancelled, the sentinel
-                    // title lets the assertion detect it.
-                    try? await Task.sleep(for: .milliseconds(400))
-                    return [TantivyShadowSearchResult(
-                        documentID: "page:FIRST", kind: .page,
-                        title: "First Should Not Appear", score: 1.0)]
-                }
-                return [TantivyShadowSearchResult(
-                    documentID: "page:SECOND", kind: .page,
-                    title: "Second Wins", score: 1.0)]
-            },
+            fetch: { partial, kind in await fake.fetch(partial, kind) },
             format: Self.formatHit
         )
 
@@ -156,17 +158,38 @@ struct ComposerAutocompleteHostedTests {
         // completes, so the first `hooks.fetch` never runs.
         type("[[page:Erl", into: textView, coordinator: coordinator)
 
-        // Wait long enough for the debounce + the second fetch to settle.
-        // (First fetch's 400ms delay would land at ~550ms; we wait 700ms to
-        // be sure, but the cancel prevents it from applying.)
-        try? await Task.sleep(for: .milliseconds(700))
+        // Poll for the SECOND partial ("Erl") to land in fetchCalls. If the
+        // cancel worked, "Erl" is the ONLY entry (the first fetch never
+        // ran). If the cancel failed, BOTH "Er" and "Erl" land — the
+        // assertion below catches that.
+        let calls = await Self.waitForPartial("Erl", in: fake, timeout: .seconds(3))
 
-        // The headline check: fetchCount is exactly 1 (the second), proving
-        // the first schedule was cancelled BEFORE its `await hooks.fetch`
-        // ran. This is what AC#5 requires: cancel stale in-flight *queries* —
-        // the second schedule's cancel landed during the first schedule's
-        // debounce sleep, so the first fetch never started.
-        #expect(fetchCount == 1, "the second schedule should have cancelled the first BEFORE its fetch ran; got \(fetchCount)")
+        // The headline check: exactly one fetch ran, for the SECOND partial.
+        // This proves the first schedule was cancelled BEFORE its fetch ran
+        // (AC #5: cancel stale in-flight queries — the second schedule's
+        // cancel landed during the first schedule's debounce sleep).
+        #expect(calls.count == 1, "the second schedule should have cancelled the first BEFORE its fetch ran; got \(calls)")
+        #expect(calls.first?.partial == "Erl")
+        #expect(calls.first?.kind == .page)
+    }
+
+    /// Poll `fake.fetchCalls` until it contains an entry with `partial`, or
+    /// `timeout` elapses. Returns the snapshot at exit. Adaptive so the cancel
+    /// test doesn't flake under heavy cooperative-pool load (a fixed
+    /// `Task.sleep` can return before the @MainActor Task body gets to run).
+    private static func waitForPartial(
+        _ partial: String,
+        in fake: FakeAutocomplete,
+        timeout: Duration
+    ) async -> [(partial: String, kind: ParsedLink.LinkType)] {
+        let deadline = Date().addingTimeInterval(Double(timeout.components.seconds))
+        var snapshot: [(partial: String, kind: ParsedLink.LinkType)] = []
+        while Date() < deadline {
+            snapshot = await fake.fetchCalls
+            if snapshot.contains(where: { $0.partial == partial }) { return snapshot }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return snapshot
     }
 
     @Test func onlyLatestPartialTriggersAFetchWhenTypingRapidly() async {
@@ -194,13 +217,12 @@ struct ComposerAutocompleteHostedTests {
             type(prefix, into: textView, coordinator: coordinator)
         }
 
-        // Wait generously past the debounce so the final schedule's fetch
-        // has time to land. The suite is heavy (2700+ tests competing for the
-        // cooperative pool), so a tight window flakes — see commit history.
-        try? await Task.sleep(for: .milliseconds(1_000))
+        // Poll for the FINAL partial ("Erl") to land — adaptive so the test
+        // doesn't flake under heavy cooperative-pool load (a fixed
+        // `Task.sleep` can return before the @MainActor Task body runs).
+        let calls = await Self.waitForPartial("Erl", in: fake, timeout: .seconds(3))
 
         // Exactly one fetch should have run, for the final partial.
-        let calls = await fake.fetchCalls
         #expect(calls.count == 1, "rapid typing should debounce to one fetch; got \(calls)")
         #expect(calls.first?.partial == "Erl")
     }
@@ -229,9 +251,7 @@ struct ComposerAutocompleteHostedTests {
             text: textBinding, autocomplete: hooks, measuredHeight: heightBinding)
 
         type("[[page:Erl", into: textView, coordinator: coordinator)
-        try? await Task.sleep(for: .milliseconds(1_000))
-
-        let calls = await fake.fetchCalls
+        let calls = await Self.waitForPartial("Erl", in: fake, timeout: .seconds(3))
         #expect(calls.count == 1)
         #expect(calls.first?.partial == "Erl")
         #expect(calls.first?.kind == .page)
@@ -255,7 +275,7 @@ struct ComposerAutocompleteHostedTests {
             text: textBinding, autocomplete: hooks, measuredHeight: heightBinding)
 
         type("Just a regular message", into: textView, coordinator: coordinator)
-        try? await Task.sleep(for: .milliseconds(1_000))
+        try? await Task.sleep(for: .milliseconds(500))
 
         let calls = await fake.fetchCalls
         #expect(calls.isEmpty, "no fetch should fire without an open-link trigger")
@@ -277,7 +297,7 @@ struct ComposerAutocompleteHostedTests {
             text: textBinding, autocomplete: hooks, measuredHeight: heightBinding)
 
         type("[[page:Erickson]]", into: textView, coordinator: coordinator)
-        try? await Task.sleep(for: .milliseconds(1_000))
+        try? await Task.sleep(for: .milliseconds(500))
 
         let calls = await fake.fetchCalls
         #expect(calls.isEmpty, "no fetch should fire for a closed link")
@@ -302,7 +322,7 @@ struct ComposerAutocompleteHostedTests {
 
         // Multi-line text with a `[[` on one line and content on the next.
         type("[[page:Erl\nmore stuff", into: textView, coordinator: coordinator)
-        try? await Task.sleep(for: .milliseconds(1_000))
+        try? await Task.sleep(for: .milliseconds(500))
 
         let calls = await fake.fetchCalls
         #expect(calls.isEmpty, "newline in the trigger should bail (paste/multi-line guard)")
@@ -326,7 +346,7 @@ struct ComposerAutocompleteHostedTests {
         // Paste: `[[page:` + maxPartialSpan+1 chars → over the cap.
         let long = String(repeating: "a", count: WikiLinkPrefixScanner.maxPartialSpan + 1)
         type("[[page:\(long)", into: textView, coordinator: coordinator)
-        try? await Task.sleep(for: .milliseconds(1_000))
+        try? await Task.sleep(for: .milliseconds(500))
 
         let calls = await fake.fetchCalls
         #expect(calls.isEmpty, "overlong partial should bail (paste guard)")

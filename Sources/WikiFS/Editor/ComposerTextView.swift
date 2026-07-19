@@ -93,9 +93,19 @@ struct ComposerTextView: NSViewRepresentable {
     /// Debounce window for the autocomplete query (AC #5). 150 ms is fast
     /// enough to feel instant while keeping per-keystroke Tantivy queries from
     /// stacking up. Sidebar search uses 300 ms; autocomplete feels more
-    /// time-critical so it's tighter. Override per-test by setting this to a
-    /// tiny value (the coordinator reads it fresh on each schedule).
+    /// time-critical so it's tighter. This is the canonical production value
+    /// (read by ``debounce``'s default). Tests override ``debounce`` to a much
+    /// smaller value (e.g. 5 ms) so the schedule/cancel timing is deterministic
+    /// without long `Task.sleep` waits — see `ComposerAutocompleteHostedTests`.
     nonisolated static let autocompleteDebounce: UInt64 = 150
+
+    /// Per-instance debounce override (microseconds... no — milliseconds,
+    /// matching ``autocompleteDebounce``'s unit). Tests pass a small value
+    /// (e.g. 5 ms) so the debounce window is tight and the cancel/collapse
+    /// logic is exercised without relying on CI-timing-sensitive `Task.sleep`
+    /// tolerances. Production leaves the default (``autocompleteDebounce``).
+    /// The coordinator reads this fresh on every schedule.
+    var debounce: UInt64 = ComposerTextView.autocompleteDebounce
 
     // MARK: - Height clamping (pure, testable)
 
@@ -371,7 +381,7 @@ struct ComposerTextView: NSViewRepresentable {
             // before its query lands.
             let partial = trigger.partial
             let kind = trigger.kind
-            let debounce = ComposerTextView.autocompleteDebounce
+            let debounce = parent.debounce
             autocompleteTask = Task { [weak self] in
                 guard let self else { return }
                 do {
