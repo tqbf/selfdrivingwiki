@@ -245,6 +245,20 @@ public actor ACPBackend: AgentBackend {
     /// Watchdog poll interval (seconds).
     private let watchdogPollInterval: TimeInterval
 
+    /// #615: drain-end grace timeout for recovering a hung `sendPrompt`. Armed
+    /// ONLY inside the per-turn drain task's post-`for-await` exit path, gated
+    /// by `!Task.isCancelled` (i.e. ONLY when the per-turn subscription ended
+    /// via fanout-finish — transport closed / subprocess died — NOT via the
+    /// normal `defer { drainTask.cancel() }` that fires when `sendPrompt`
+    /// returns). On a normal streaming turn the drain loop is still iterating
+    /// when the prompt completes, so this timer is never even created. Sleeps
+    /// `drainGraceTimeout` as a buffer for the ACP SDK to surface the broken
+    /// transport as a thrown error (handled by the existing catch path); if the
+    /// SDK neither returns nor throws within the buffer (the #615 symptom),
+    /// `TurnRecoveryGrace.arm()` synthesizes the recovery events + finishes the
+    /// continuation. Defaults to `.seconds(3)`. See `plans/615-turn-completion-hang.md`.
+    private let drainGraceTimeout: Duration
+
     /// Phase 4: maximum number of executor sessions to run concurrently via
     /// `withTaskGroup`. Defaults to `1` (serial executors — current behavior)
     /// which is the safe conservative default. Values `> 1` enable parallel
@@ -260,6 +274,7 @@ public actor ACPBackend: AgentBackend {
         capabilities: ClientCapabilities = ACPBackend.defaultCapabilities,
         turnCeilingTimeout: TimeInterval = TurnLivenessPolicy.defaultCeilingTimeout,
         watchdogPollInterval: TimeInterval = TurnLivenessPolicy.defaultPollInterval,
+        drainGraceTimeout: Duration = .seconds(3),
         maxConcurrentExecutors: Int = 1
     ) {
         self.permissionPolicy = permissionPolicy
@@ -267,6 +282,7 @@ public actor ACPBackend: AgentBackend {
         self.capabilities = capabilities
         self.turnCeilingTimeout = turnCeilingTimeout
         self.watchdogPollInterval = watchdogPollInterval
+        self.drainGraceTimeout = drainGraceTimeout
         self.maxConcurrentExecutors = max(1, maxConcurrentExecutors)
     }
 
@@ -609,6 +625,10 @@ public actor ACPBackend: AgentBackend {
         let fanout = session.notificationFanout
         let ceilingTimeout = turnCeilingTimeout
         let pollInterval = watchdogPollInterval
+        // #615: drain-end grace timeout (captured here so the @Sendable
+        // continuation closure below is a pure capture, same actor-isolated-
+        // read-before-closure shape as ceilingTimeout/pollInterval above).
+        let graceTimeout = drainGraceTimeout
         // Phase 4: per-session usage tracker. Captured by reference into the
         // drain task (UsageUpdate) and prompt task (Usage). Same
         // @unchecked Sendable pattern as TurnCompletionFlag / ProcessHealthFlag.
@@ -681,7 +701,13 @@ public actor ACPBackend: AgentBackend {
             // subscription. The prompt task and watchdog are both cancelled on
             // consumer termination.
             let liveUsageCB = self.liveUsageCallback  // capture once (actor-isolated read)
-            let promptTask = Task { [client, sessionId, fanout, completionFlag, processHealth, promptText, usageState, handle, debugLogger, debugTurn] in
+            // #615: holder for the drain-end grace timer. Declared here (in
+            // the continuation closure scope) so BOTH the drain task (sets it
+            // when arming `TurnRecoveryGrace`) and `continuation.onTermination`
+            // (cancels it on stopAgent) can see it. Mirrors #614's
+            // `Pending(timer:)` storage-on-shared-state shape.
+            let recoveryRef = RecoveryTimerRef()
+            let promptTask = Task { [client, sessionId, fanout, completionFlag, processHealth, promptText, usageState, handle, debugLogger, debugTurn, graceTimeout, recoveryRef] in
                 // Subscribe to the session-lifetime fanout (NOT the SDK's
                 // `client.notifications` — that's single-consumer; re-acquiring
                 // it per turn was cause 6). Turns are serialized by the
@@ -731,8 +757,53 @@ public actor ACPBackend: AgentBackend {
                             await updateConfigOptions(for: handle, options: configOptions)
                         }
                     }
+                    // ── #615: drain loop exited. Distinguish WHY ────────────
+                    // (reviewer CRITICAL subtlety — see
+                    // `plans/615-turn-completion-hang.md` §3):
+                    // - CANCELLED (`Task.isCancelled == true`): the NORMAL path.
+                    //   `sendPrompt` returned → success/catch ran `markDone()` →
+                    //   the `defer { drainTask.cancel() }` below fired and broke
+                    //   the `for await` via cancellation. Notifications were
+                    //   still flowing fine when the loop exited — DO NOT arm the
+                    //   grace timer (arming here would kill every >3s turn with
+                    //   a spurious `.processDiedBeforeResult`).
+                    // - FANOUT FINISHED (`Task.isCancelled == false`): the
+                    //   process-lifetime drain called `fanout.finish()` because
+                    //   `client.notifications` ended (transport closed / process
+                    //   died) AFTER streaming a complete response. `sendPrompt`
+                    //   is still suspended → the #615 hang. Arm the grace timer
+                    //   ONLY here.
+                    if Task.isCancelled { return }
+                    let recovery = TurnRecoveryGrace(
+                        completionFlag: completionFlag,
+                        continuation: continuation,
+                        processHealth: processHealth,
+                        drainGraceTimeout: graceTimeout,
+                        debugLogger: debugLogger,
+                        debugTurn: debugTurn)
+                    let timerTask = Task { await recovery.arm() }
+                    recoveryRef.set(timerTask)
+                    await timerTask.value
+                    // Mirror the watchdog ceiling path (`ACPBackend.swift`'s
+                    // `try? await client.cancelSession(...)` in the ceiling
+                    // branch): send cancelSession so the SDK unblocks the
+                    // suspended `sendPrompt`. Without this, the catch path
+                    // never runs (`sendPrompt` never returns), promptTask
+                    // leaks holding strong refs (`client`, `sessionId`,
+                    // `fanout`, …). If `cancelSession` unblocks `sendPrompt`
+                    // (even on a dead transport), the catch path's `guard
+                    // !completionFlag.isDone` no-ops (recovery already marked
+                    // done) and `promptTask` exits cleanly. Documented
+                    // carve-out from the repo write rules (cooperative
+                    // lifecycle event, not a hidden failure — mirrors the
+                    // existing `try?` call sites at the watchdog ceiling and
+                    // `onTermination`).
+                    try? await client.cancelSession(sessionId: sessionId)
                 }
-                defer { drainTask.cancel() }
+                defer {
+                    drainTask.cancel()
+                    recoveryRef.cancel()   // belt-and-suspenders teardown of the grace timer
+                }
 
                 do {
                     DebugLog.agent("ACPBackend: sending session/prompt (\(promptText.count) chars)")
@@ -755,6 +826,7 @@ public actor ACPBackend: AgentBackend {
                     // just as sendPrompt returned), skip — continuation is done.
                     guard !completionFlag.isDone else { return }
                     completionFlag.markDone()
+                    recoveryRef.cancel()   // ★ #615: cancel the grace timer at the win site (DEFAULT, non-optional)
                     DebugLog.agent("ACPBackend: prompt completed stopReason=\(response.stopReason.rawValue)")
                     if let debugTurn {
                         debugLogger?.logPromptResponse(response, turn: debugTurn)
@@ -767,6 +839,7 @@ public actor ACPBackend: AgentBackend {
                     // is just the fallout from cancelSession — skip it.
                     guard !completionFlag.isDone else { return }
                     completionFlag.markDone()
+                    recoveryRef.cancel()   // ★ #615: cancel the grace timer at the win site (DEFAULT, non-optional)
                     // Phase 2: a sendPrompt error often means the subprocess
                     // died (issue #338 — pipe broken / transport closed). Mark
                     // the process health flag so the watchdog short-circuits,
@@ -790,6 +863,7 @@ public actor ACPBackend: AgentBackend {
                 if case .cancelled = reason {
                     promptTask.cancel()
                     watchdogTask.cancel()
+                    recoveryRef.cancel()   // ★ #615: tear down the grace timer on stopAgent
                     Task { [client, sessionId] in
                         try? await client.cancelSession(sessionId: sessionId)
                     }
@@ -1527,6 +1601,8 @@ public actor ACPBackend: AgentBackend {
                 reason = .ceilingExceeded(totalSeconds: total)
             case .processDied:
                 reason = .agentError(error.localizedDescription)
+            case .processDiedBeforeResult:
+                reason = .agentError(error.localizedDescription)
             default:
                 reason = .agentError(error.localizedDescription)
             }
@@ -1829,7 +1905,15 @@ private final class SessionUsageState: @unchecked Sendable {
 /// short-circuits to avoid redundant `cancelSession` calls and confusing log
 /// lines. `@unchecked Sendable` with an internal lock — accessed from multiple
 /// Tasks inside the `@Sendable` continuation closure.
-private final class TurnCompletionFlag: @unchecked Sendable {
+///
+/// #615: also shared by `TurnRecoveryGrace` (the drain-end grace timer), which
+/// joins the existing success/catch/watchdog race discipline — every terminal
+/// path does `guard !isDone else { return }` → `markDone()` first, so exactly
+/// one path yields events + finishes the continuation. `internal` (not
+/// `private`) so `@testable import WikiFSEngine` tests can drive
+/// `TurnRecoveryGrace` directly with the real `NSLock`-atomic flag — the
+/// load-bearing race-safety primitive.
+final class TurnCompletionFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var _done = false
 
@@ -1849,7 +1933,12 @@ private final class TurnCompletionFlag: @unchecked Sendable {
 /// the turn stream finishes (via `markProcessDeadIfNeeded`) to update
 /// `warmProcess.processIsAlive` and enable `resume()`.
 /// `@unchecked Sendable` with an internal lock.
-private final class ProcessHealthFlag: @unchecked Sendable {
+///
+/// #615: also set by `TurnRecoveryGrace.arm()` when recovering a hung
+/// `sendPrompt` (transport closed before the result arrived). `internal` (not
+/// `private`) so `@testable` tests can assert the recovery path ran `markDied`
+/// (the test-tier proxy for "the timer won the race").
+final class ProcessHealthFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var _died = false
 
@@ -1860,6 +1949,101 @@ private final class ProcessHealthFlag: @unchecked Sendable {
 
     func markDied() {
         lock.lock(); _died = true; lock.unlock()
+    }
+}
+
+// MARK: - Turn-completion recovery (#615)
+
+/// #615: race-safe holder for the drain-end grace timer's `Task`. Constructed
+/// before the per-turn drain task (inside the `AsyncStream` continuation
+/// closure); set by the drain task's post-`for-await` path when it arms
+/// `TurnRecoveryGrace`; cancelled by the success path, the catch path, the
+/// `defer` on `promptTask` exit, and `continuation.onTermination` (stopAgent).
+/// Mirrors the storage shape of `ACPPermissions.Pending(timer:)` (PR #614):
+/// the timer is stored on shared mutable state under an internal lock, and
+/// `cancel()` pulls it out + cancels it atomically. The lock guards ONLY the
+/// `Task` pointer — the recovery's own race-safety (exactly-one-finish) is
+/// enforced by the `completionFlag` (`TurnCompletionFlag`) check-then-mark,
+/// not by this holder.
+final class RecoveryTimerRef: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _task: Task<Void, Never>?
+
+    func set(_ task: Task<Void, Never>) {
+        lock.lock(); _task = task; lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock(); _task?.cancel(); _task = nil; lock.unlock()
+    }
+}
+
+/// #615: drain-end grace recovery. Armed ONLY when the per-turn drain loop
+/// finished via fanout-finish (`!Task.isCancelled` after the `for await`) with
+/// the prompt still pending — i.e. the transport closed / the subprocess died
+/// after streaming a complete response but before the `session/prompt` result
+/// arrived. Sleeps `drainGraceTimeout` (a buffer for the ACP SDK to surface the
+/// broken transport as a thrown error, which the existing catch path would
+/// handle normally; see `plans/615-turn-completion-hang.md` §4) then, if no
+/// winner ran, synthesizes the recovery events + finishes the continuation so
+/// the launcher's `endsGeneration` branch fires → `setGenerating(false)`,
+/// transcript flush, slot release. After recovery, callers SHOULD send
+/// `client.cancelSession(sessionId:)` (mirroring the watchdog ceiling path at
+/// the watchdog's `try? await client.cancelSession(...)`) so the SDK unblocks
+/// the suspended `sendPrompt` — otherwise `promptTask` leaks holding strong
+/// refs (`client`, `sessionId`, `fanout`, …).
+///
+/// Pure / testable: takes only `Sendable` primitives + the existing flag +
+/// continuation types. No SDK `Client` dependency — that's why the
+/// *integration* of this seam into `send` is validated manually (the
+/// test-infrastructure gap documented in `plans/615-turn-completion-hang.md`
+/// §7 — the SDK `Client` is a concrete `public actor`, not a protocol, so a
+/// fake requires a major refactor out of scope here).
+///
+/// `internal` (default) — NOT `private`. `@testable import WikiFSEngine`
+/// exposes `internal` members but does NOT change the visibility of `private`/
+/// `fileprivate` declarations, so a `private` type would be inaccessible from
+/// the test module. Mirrors `ACPBackend.turnEndEvents(error:)` (already
+/// `internal`).
+struct TurnRecoveryGrace: Sendable {
+    let completionFlag: TurnCompletionFlag
+    let continuation: AsyncStream<AgentEvent>.Continuation
+    let processHealth: ProcessHealthFlag
+    let drainGraceTimeout: Duration
+    let debugLogger: DebugRunLogger?
+    let debugTurn: Int?
+
+    /// Sleep `drainGraceTimeout`, then — if no winner ran (`completionFlag`
+    /// still pending) — synthesize the recovery: `markDone` (win the race),
+    /// `markDied` (so the watchdog short-circuits + the actor updates
+    /// `warmProcess.processIsAlive`), log the error (writing `turn-N-response.json`
+    /// error variant to `debug/` when enabled), yield `turnEndEvents(error:)`,
+    /// and finish the continuation. Returns early on `Task.sleep`
+    /// `CancellationError` (the success/catch/`onTermination`/`defer` paths
+    /// cancelled the timer first — a cooperative lifecycle event, not a hidden
+    /// failure: the repo write rules forbid bare `try?`, but the
+    /// `CancellationError` from `Task.sleep` is the documented carve-out, see
+    /// `plans/acp-permissions.md` §3 + `plans/615-turn-completion-hang.md` §6).
+    func arm() async {
+        do {
+            try await Task.sleep(for: drainGraceTimeout)
+        } catch {
+            // CancellationError — success/catch/onTermination cancelled us.
+            // Cooperative lifecycle event, not a hidden failure (§3 house-rule
+            // carve-out from plans/acp-permissions.md; do NOT use bare try?).
+            return
+        }
+        guard !completionFlag.isDone else { return }   // a winner already ran
+        completionFlag.markDone()
+        processHealth.markDied()
+        DebugLog.agent("ACPBackend: drain ended with prompt still pending — process exited before result (turn \(debugTurn.map(String.init) ?? "?"))")
+        if let debugTurn {
+            debugLogger?.logPromptError(ACPBackendError.processDiedBeforeResult, turn: debugTurn)
+        }
+        for event in ACPBackend.turnEndEvents(error: ACPBackendError.processDiedBeforeResult) {
+            continuation.yield(event)
+        }
+        continuation.finish()
     }
 }
 
@@ -1879,6 +2063,14 @@ enum ACPBackendError: Error, LocalizedError {
     /// The turn failed because `sendPrompt` threw. The caller can attempt
     /// `resume()` to recover.
     case processDied
+    /// #615: the agent subprocess exited / closed the transport after streaming
+    /// a complete response but BEFORE the `session/prompt` result returned. The
+    /// turn's answer was likely already shown; the result confirmation never
+    /// came. Distinct from `.processDied` (where `sendPrompt` threw); here
+    /// `sendPrompt` never resumed. The caller can send the next message (resume
+    /// may be available if the agent supports it). Surfaced as a user-visible,
+    /// actionable error rather than a silent freeze.
+    case processDiedBeforeResult
 
     var errorDescription: String? {
         switch self {
@@ -1905,6 +2097,11 @@ enum ACPBackendError: Error, LocalizedError {
             return """
             ACP agent subprocess died unexpectedly. The turn was cancelled; \
             session resume is available if the agent supports it.
+            """
+        case .processDiedBeforeResult:
+            return """
+            Claude finished but the connection dropped before the result arrived. \
+            Your answer was shown; you can send the next message.
             """
         }
     }
