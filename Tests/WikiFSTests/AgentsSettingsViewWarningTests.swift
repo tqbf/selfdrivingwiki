@@ -54,7 +54,14 @@ struct AgentsSettingsViewWarningTests {
         // The first state: enabled + no model + no cached models. The friendly
         // guidance line ("chat with this provider once to discover models")
         // is what users of a freshly-added provider see.
-        let opencode = AgentProvider.opencodeDefault
+        // #663: `.opencodeDefault` was deleted; fixtures build literals.
+        let opencode = AgentProvider(
+            id: "opencode",
+            label: "OpenCode",
+            command: ["opencode", "acp"],
+            env: [:],
+            enabled: true,
+            isDefault: false)
         let config = AgentProvidersConfig(providers: [opencode])
         let msg = AgentsSettingsView.modelWarning(for: opencode, in: config)
         #expect(msg != nil)
@@ -68,7 +75,14 @@ struct AgentsSettingsViewWarningTests {
         // The second state: enabled + no model + cached models exist. The user
         // has discoverable models and just needs to pick one. Warning is the
         // more direct "pick one before running".
-        let opencode = AgentProvider.opencodeDefault
+        // #663: `.opencodeDefault` was deleted; fixtures build literals.
+        let opencode = AgentProvider(
+            id: "opencode",
+            label: "OpenCode",
+            command: ["opencode", "acp"],
+            env: [:],
+            enabled: true,
+            isDefault: false)
         let config = AgentProvidersConfig(
             providers: [opencode],
             providerModels: [
@@ -89,8 +103,22 @@ struct AgentsSettingsViewWarningTests {
         // Two providers with the same (enabled, no-model, no-cache) state get
         // the same warning string. Pins the format so UI snapshot tests could
         // pin it without surprising changes per-provider.
-        let opencode = AgentProvider.opencodeDefault
-        let hermes = AgentProvider.hermesDefault
+        // #663: `.opencodeDefault` and `.hermesDefault` were deleted; fixtures
+        // build literals.
+        let opencode = AgentProvider(
+            id: "opencode",
+            label: "OpenCode",
+            command: ["opencode", "acp"],
+            env: [:],
+            enabled: true,
+            isDefault: false)
+        let hermes = AgentProvider(
+            id: "hermes",
+            label: "Hermes",
+            command: ["hermes", "acp"],
+            env: [:],
+            enabled: true,
+            isDefault: false)
         let config = AgentProvidersConfig(providers: [opencode, hermes])
         #expect(
             AgentsSettingsView.modelWarning(for: opencode, in: config)

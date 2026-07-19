@@ -209,7 +209,16 @@ import WikiFSCore
             .appendingPathComponent("preflight-banner-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         launcher.resolveProvidersContainerDirectory = { tmp }
-        launcher.resolveSelectedProvider = { .opencodeDefault }
+        // #663: `.opencodeDefault` was deleted; built inline.
+        launcher.resolveSelectedProvider = {
+            AgentProvider(
+                id: "opencode",
+                label: "OpenCode",
+                command: ["opencode", "acp"],
+                env: [:],
+                enabled: true,
+                isDefault: false)
+        }
         return launcher
     }
 }

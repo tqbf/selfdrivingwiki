@@ -114,15 +114,16 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// Enforce the single-default invariant. PURE so it is unit-tested
     /// directly.
     ///
-    /// New invariants (Phase 1 — no more forced `claude-acp` insertion):
-    /// - `providers.isEmpty` → re-seed all three defaults (Claude, Hermes,
-    ///   OpenCode; Claude default).
+    /// New invariants (#663 — generic Custom-ACP):
+    /// - `providers.isEmpty` → seed `[claudeAcpDefault]` ONLY (the old
+    ///   three-default Hermesc+OpenCode seed was removed; the catalog-driven
+    ///   `AddProviderSheet` replaces it for first-run discoverability).
     /// - At most one `isDefault`: the FIRST one keeps it, the rest are
     ///   demoted.
     /// - If none is default, the FIRST ENABLED provider is promoted.
     static func normalized(_ providers: [AgentProvider]) -> [AgentProvider] {
         if providers.isEmpty {
-            return [.claudeAcpDefault, .hermesDefault, .opencodeDefault]
+            return [.claudeAcpDefault]
         }
         var list = providers
         // Single-default: keep the first `isDefault == true`, demote the rest.
@@ -294,9 +295,11 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
 
     // MARK: - Seed (pure)
 
-    /// Seed the initial config: the three Phase-1 default providers (Claude —
-    /// default, Hermes, OpenCode). Discovered agents are not auto-added; the
-    /// user opts in via Settings.
+    /// Seed the initial config: the Claude ACP default ONLY (#663 dropped
+    /// the Hermes/OpenCode seed statics — first-run discovery now goes
+    /// through the `AddProviderSheet` + `ACPProviderCatalog` suggestions
+    /// surface, not through seeding). Discovered agents are not auto-added;
+    /// the user opts in via Settings.
     ///
     /// **Default model for the default provider:** the shipped `claude-acp`
     /// seed is paired with `selectedModelIds["claude-acp"] = "sonnet"` so a
@@ -309,7 +312,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// the first live `session/new`. See `tmp/ingestion-stall-diagnosis.md`.
     public static func seed(discovered: [DiscoveredACPAgent]) -> AgentProvidersConfig {
         AgentProvidersConfig(
-            providers: [.claudeAcpDefault, .hermesDefault, .opencodeDefault],
+            providers: [.claudeAcpDefault],
             selectedModelIds: ["claude-acp": "sonnet"])
     }
 
@@ -333,10 +336,11 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             // Backfill: upgrade-safety for existing `claude-acp`-default installs
             // (which silently defaulted to Sonnet before the
             // `SpawnModelGuard` existed). Only injects when `claude-acp` is the
-            // default provider AND no model is picked for it — OpenCode/Hermes
-            // and any deliberately-emptied non-default provider are unaffected,
-            // so the guard still refuses spawn for the actual diagnosed-bug
-            // state (OpenCode default with no selection). See
+            // default provider AND no model is picked for it — non-default
+            // providers (Hermes/OpenCode/custom) and any deliberately-emptied
+            // non-default provider are unaffected, so the guard still refuses
+            // spawn for the actual diagnosed-bug state (a non-default provider
+            // set as default with no selection). See
             // `tmp/ingestion-stall-diagnosis.md` and
             // `SpawnModelGuard.validate(provider:modelId:)`.
             if config.providers.first(where: { $0.isDefault && $0.id == "claude-acp" }) != nil,

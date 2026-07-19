@@ -58,7 +58,13 @@ public struct AgentProvider: Codable, Equatable, Sendable, Identifiable {
     }
 
     /// Claude via the ACP wrapper (`bunx @agentclientprotocol/claude-agent-acp`).
-    /// This is the DEFAULT chat provider.
+    /// This is the DEFAULT chat provider — also the sole seed for a fresh
+    /// install (#663: the old Hermes/OpenCode seed statics were removed in
+    /// favour of the generic `AddProviderSheet` + `ACPProviderCatalog`
+    /// suggestions surface). Kept as a `static let` because
+    /// `AgentProvidersConfig.defaultProvider`/`selectedProvider()` fall back
+    /// to it when nothing is configured — a defensive safety net for a
+    /// hand-edited/corrupt `agent-providers.json`.
     public static let claudeAcpDefault = AgentProvider(
         id: "claude-acp",
         label: "Claude",
@@ -66,28 +72,6 @@ public struct AgentProvider: Codable, Equatable, Sendable, Identifiable {
         env: [:],
         enabled: true,
         isDefault: true
-    )
-
-    /// Hermes via ACP (`hermes acp`). Enabled, not default — one of the three
-    /// Phase-1 seed providers alongside Claude and OpenCode.
-    public static let hermesDefault = AgentProvider(
-        id: "hermes",
-        label: "Hermes",
-        command: ["hermes", "acp"],
-        env: [:],
-        enabled: true,
-        isDefault: false
-    )
-
-    /// OpenCode via ACP (`opencode acp`). Enabled, not default — one of the
-    /// three Phase-1 seed providers alongside Claude and Hermes.
-    public static let opencodeDefault = AgentProvider(
-        id: "opencode",
-        label: "OpenCode",
-        command: ["opencode", "acp"],
-        env: [:],
-        enabled: true,
-        isDefault: false
     )
 
     /// Build an ACP provider from a discovered catalog agent. Mirrors paseo's
