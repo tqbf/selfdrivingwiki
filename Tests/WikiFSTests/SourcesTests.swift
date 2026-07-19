@@ -88,6 +88,145 @@ struct SourcesTests {
         #expect(source.mimeType?.contains("markdown") == true)
     }
 
+    // MARK: - .mmd Mermaid source MIME resolution (#620)
+
+    /// A `.mmd` file has no registered UTType (UTType returns a dynamic
+    /// `dyn.…` tag, `preferredMIMEType == nil`), and its text has no magic
+    /// bytes — so before #620 the source row was written with `mime_type NULL`,
+    /// which broke `SourceDetailView.isMarkdownNative` and left every Mermaid
+    /// tab empty. The fix #1 fallback `MimeType.mime(forExtension:)` must
+    /// catch it.
+    @Test func mmdExtensionResolvesToTextMermaid() throws {
+        let store = try tempStore()
+        let diagram = Data("flowchart TD\n    A --> B\n    B --> C\n".utf8)
+        let source = try store.addSource(
+            filename: "architecture.mmd", data: diagram, mimeType: nil)
+        #expect(source.ext == "mmd")
+        #expect(source.mimeType == MimeType.mermaid)
+        // The gate `SourceDetailView.isMarkdownNative` reads — text/* prefix.
+        #expect(MimeType.isText(source.mimeType) == true)
+        #expect(MimeType.isMermaid(source.mimeType) == true)
+    }
+
+    @Test func mmdExtensionUpperCasedResolvesToTextMermaid() throws {
+        // The ext is lowercased by `addSource` before the fallback runs; the
+        // `.MMD` filename must still resolve.
+        let store = try tempStore()
+        let source = try store.addSource(
+            filename: "Flow.MMD", data: Data("graph TD\n  X --> Y\n".utf8))
+        #expect(source.ext == "mmd")
+        #expect(source.mimeType == MimeType.mermaid)
+    }
+
+    @Test func mermaidExtensionAlsoResolvesToTextMermaid() throws {
+        // The less common `.mermaid` extension is recognized too.
+        let store = try tempStore()
+        let source = try store.addSource(
+            filename: "seq.mermaid", data: Data("sequenceDiagram\n  A->>B: hi\n".utf8))
+        #expect(source.ext == "mermaid")
+        #expect(source.mimeType == MimeType.mermaid)
+    }
+
+    @Test func explicitMimeStillWinsOverMmdExtension() throws {
+        // The `mimeType:` parameter is the first fallback tried; a caller that
+        // says "this is application/custom" must win over the `.mmd` map.
+        let store = try tempStore()
+        let source = try store.addSource(
+            filename: "custom.mmd", data: Data("flowchart TD\n".utf8),
+            mimeType: "application/custom")
+        #expect(source.mimeType == "application/custom")
+    }
+
+    @Test func mmdWithExplicitTextMermaidMimeRoundTrips() throws {
+        // A caller that passes `text/mermaid` explicitly (e.g. a future
+        // materializer that recognizes `.mmd`) must round-trip unchanged.
+        let store = try tempStore()
+        let source = try store.addSource(
+            filename: "explicit.mmd", data: Data("graph LR\n  A --> B\n".utf8),
+            mimeType: MimeType.mermaid)
+        #expect(source.mimeType == MimeType.mermaid)
+    }
+
+    /// The gap that shipped #620: PR #601's pure-detector tests passed
+    /// (`isMermaidSource(mime: nil, filename: "flow.mmd", content: nil)` → true)
+    /// but no test wired the *content path* — a nil-MIME `.mmd` source going
+    /// through `addSource` → `sourceContent` → `String(data:encoding:)` →
+    /// `MermaidSourceDetector.renderableMarkdown` to produce a fence the
+    /// Rendered tab actually renders. This test closes that gap.
+    @Test func nilMimeMmdSourceRoundTripsThroughViewContentPath() throws {
+        let store = try tempStore()
+        let rawDiagram = "flowchart TD\n    A --> B\n    B --> C\n"
+        let summary = try store.addSource(
+            filename: "design.mmd", data: Data(rawDiagram.utf8), mimeType: nil)
+
+        // 1. Fix #1 — stored mime is now `text/mermaid` (was NULL pre-fix),
+        //    so `SourceDetailView.isMarkdownNative` (`MimeType.isText`) is
+        //    true and the existing `if isMarkdownNative` branch in
+        //    `currentMarkdownContent` runs.
+        #expect(summary.mimeType == MimeType.mermaid)
+        #expect(MimeType.isText(summary.mimeType) == true)
+
+        // 2. The bytes the view reads via `store.sourceBytes(id:)` /
+        //    `sourceContent(id:)` match the original diagram.
+        let bytes = try store.sourceContent(id: summary.id)
+        let decoded = try #require(String(data: bytes, encoding: .utf8))
+        #expect(decoded == rawDiagram)
+
+        // 3. With content loaded, `MermaidSourceDetector.isMermaidSource`
+        //    (the view's `isMermaidSource` computed property — drives the
+        //    tab picker) returns true for this source.
+        #expect(MermaidSourceDetector.isMermaidSource(
+            mimeType: summary.mimeType,
+            filename: summary.filename,
+            content: decoded) == true)
+
+        // 4. And the cheap mime+filename arms alone (no content) also return
+        //    true — this is the gate fix #2's defense-in-depth branch uses to
+        //    decide whether to read bytes for a source whose MIME is still
+        //    nil (e.g. a pre-fix row that wasn't re-ingested).
+        #expect(MermaidSourceDetector.isMermaidSource(
+            mimeType: summary.mimeType,
+            filename: summary.filename,
+            content: nil) == true)
+
+        // 5. `renderableMarkdown(from:)` must wrap the standalone diagram in a
+        //    fenced ```mermaid block so `WikiReaderView`'s render pipeline
+        //    inlines `mermaid.min.js` + the bootstrap. This is the exact
+        //    transform `SourceDetailView.renderedMermaidContent` feeds the
+        //    reader; without it, the Rendered tab shows "No Diagram".
+        let renderable = try #require(
+            MermaidSourceDetector.renderableMarkdown(from: decoded))
+        #expect(renderable == "```mermaid\nflowchart TD\n    A --> B\n    B --> C\n```")
+        #expect(renderable.contains("```mermaid\n") == true)
+    }
+
+    /// Regression: `.md` sources carrying a fenced mermaid block are NOT
+    /// affected by fix #1 — they continue to resolve to a Markdown MIME via
+    /// UTType and stay on the existing `isMarkdownNative` path.
+    @Test func markdownWithEmbeddedMermaidRemainsUnaffected() throws {
+        let store = try tempStore()
+        let md = """
+        # Architecture
+
+        ```mermaid
+        flowchart TD
+            A --> B
+        ```
+        """
+        let source = try store.addSource(filename: "arch.md", data: Data(md.utf8))
+        // The `.md` extension resolves via UTType, NOT the new .mmd map.
+        #expect(source.mimeType?.hasPrefix("text/") == true)
+        #expect(source.mimeType?.contains("markdown") == true)
+        #expect(source.mimeType != MimeType.mermaid)
+
+        // Embedded-mermaid markdown is still detected (content-scan arm).
+        #expect(MermaidSourceDetector.isMermaidSource(
+            mimeType: source.mimeType, filename: source.filename, content: md) == true)
+        // And `renderableMarkdown` passes the doc through unchanged (so headings
+        // and outline survive).
+        #expect(MermaidSourceDetector.renderableMarkdown(from: md) == md)
+    }
+
     // MARK: - Zotero provenance (v8 → v9)
 
     /// A drag-drop / URL ingest passes no Zotero provenance, so the two new

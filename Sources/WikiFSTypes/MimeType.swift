@@ -93,4 +93,25 @@ public enum MimeType {
         guard let mime else { return false }
         return mermaidVariants.contains(mime.lowercased())
     }
+
+    /// Extension-derived MIME for known text-by-extension cases that
+    /// `UTType.preferredMIMEType` cannot resolve (it returns a dynamic UTI tag
+    /// for unregistered extensions like `.mmd`, and `nil` for its MIME).
+    ///
+    /// This is the last-resort fallback in `GRDBWikiStore.addSource`'s MIME
+    /// chain — without it, a standalone `.mmd` Mermaid source ingests with
+    /// `mime_type = NULL`, which breaks `SourceDetailView.isMarkdownNative`
+    /// (`MimeType.isText(nil) == false`) and leaves every Mermaid tab empty
+    /// (issue #620). The canonical extension string is
+    /// `MermaidSourceDetector.mermaidExtension` (kept here as a literal because
+    /// `WikiFSTypes` can't depend on `WikiFSCore`).
+    ///
+    /// Lowercased input is assumed (callers lower-case extensions); the switch
+    /// is case-insensitive anyway. Returns `nil` for unrecognized extensions.
+    public static func mime(forExtension ext: String) -> String? {
+        switch ext.lowercased() {
+        case "mmd", "mermaid": return mermaid
+        default: return nil
+        }
+    }
 }
