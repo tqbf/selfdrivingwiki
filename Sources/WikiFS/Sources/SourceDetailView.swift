@@ -254,6 +254,30 @@ struct SourceDetailView: View {
         isMarkdownNative || hasMarkdown
     }
 
+    /// `true` when this source is a STANDALONE Mermaid diagram (`.mmd` /
+    /// `text/mermaid` / `text/x-mermaid`) — as opposed to a markdown document
+    /// that merely CONTAINS a fenced ```mermaid block. The outline parses
+    /// markdown headings, which a pure diagram source has none of; suppress
+    /// the outline sidebar and its toggle for these sources (issue #642).
+    /// Uses mime + extension (not a content scan) so it's stable before the
+    /// raw bytes load.
+    private var isPureMermaidSource: Bool {
+        if MimeType.isMermaid(file.mimeType) { return true }
+        let ext = file.ext.lowercased()
+        return ext == MermaidSourceDetector.mermaidExtension || ext == "mermaid"
+    }
+
+    /// `true` when the outline sidebar is meaningful for this source: there's
+    /// markdown content AND it isn't a pure Mermaid diagram. Gates both the
+    /// outline pane and its toggle button so a `.mmd` source never shows a
+    /// useless empty outline (and never gets stuck with the pane open and no
+    /// way to close it — `isOutlineExpanded` is global `@AppStorage`, so
+    /// without this guard it leaks from a previous markdown source).
+    /// Issue #642.
+    private var isOutlineApplicable: Bool {
+        !isPureMermaidSource && isMarkdownEditable
+    }
+
     private var displayName: String {
         let name = file.effectiveName
         return name.isEmpty ? "Untitled" : name
@@ -452,20 +476,25 @@ struct SourceDetailView: View {
                 // Zotero provenance sits inline on the metadata line rather than
                 // in its own row — the big title already names the item, so this
                 // just needs the "Zotero" origin tag + a jump-back link.
+                // Two-dimensional label (#644): "Zotero / PDF", "Zotero / Markdown",
+                // or just "Zotero" when the content type is unknown.
                 if let key = file.zoteroItemKey, !key.isEmpty {
                     metadataSeparator
+                    let zoteroLabel = SourceProvenanceLabel.combine(
+                        provider: "Zotero", agentName: "zotero",
+                        ext: file.ext, mimeType: file.mimeType)
                     if let url = zoteroItemURL(itemKey: key) {
                         // The "Zotero" tag itself is the link — clicking it jumps
                         // back to the item in the Zotero app (no separate button).
                         Button {
                             NSWorkspace.shared.open(url)
                         } label: {
-                            Label("Zotero", systemImage: "books.vertical")
+                            Label(zoteroLabel, systemImage: "books.vertical")
                         }
                         .buttonStyle(.link)
                         .help("View in Zotero")
                     } else {
-                        Label("Zotero", systemImage: "books.vertical")
+                        Label(zoteroLabel, systemImage: "books.vertical")
                     }
                 } else if let origin, origin.agentName != "legacy-import" {
                     // Phase 3a provider origin: website → clickable link to the
@@ -493,12 +522,14 @@ struct SourceDetailView: View {
                         }
                         .keyboardShortcut(.escape, modifiers: [])
 
-                        Button {
-                            isOutlineExpanded.toggle()
-                        } label: {
-                            Image(systemName: "sidebar.right")
+                        if isOutlineApplicable {
+                            Button {
+                                isOutlineExpanded.toggle()
+                            } label: {
+                                Image(systemName: "sidebar.right")
+                            }
+                            .help("Toggle Outline")
                         }
-                        .help("Toggle Outline")
                     }
                 } else {
                     // Row 1 — primary source actions: the extraction chip leads
@@ -595,7 +626,7 @@ struct SourceDetailView: View {
                             }
                             .help("Reveal this source file in Finder")
                         }
-                        if isMarkdownEditable {
+                        if isOutlineApplicable {
                             Button {
                                 isOutlineExpanded.toggle()
                             } label: {
@@ -675,6 +706,11 @@ struct SourceDetailView: View {
     /// website → a clickable link to the origin URL; apple-podcast → a clickable
     /// link to the episode; markdown-folder → "Folder"; local-file → "File".
     /// Mirrors the inline Zotero tag's styling.
+    ///
+    /// Two-dimensional labels (issue #644): the File branch becomes
+    /// "File / {content type}" (e.g. "File / Mermaid", "File / PDF") since a
+    /// drag-drop can carry anything. URL/media providers and markdown folders
+    /// imply their content type, so their labels stay single-dimensional.
     @ViewBuilder
     private func providerOriginTag(_ origin: SourceOrigin) -> some View {
         switch origin.agentName {
@@ -726,7 +762,15 @@ struct SourceDetailView: View {
                 Label(info.label, systemImage: info.systemImage)
             }
         default:
-            Label("File", systemImage: "doc")
+            // Local-file (and any unrecognized import provider). Two-dimensional
+            // label (#644): "File / Mermaid", "File / PDF", "File / Markdown",
+            // or just "File" when the content type is unknown. The provider
+            // does not imply a single content type — a drag-drop can carry
+            // anything — so the suffix is meaningful here.
+            let fileLabel = SourceProvenanceLabel.combine(
+                provider: "File", agentName: origin.agentName,
+                ext: file.ext, mimeType: file.mimeType)
+            Label(fileLabel, systemImage: "doc")
         }
     }
 
@@ -752,7 +796,12 @@ struct SourceDetailView: View {
     private var contentAndOutline: some View {
         HStack(spacing: 0) {
             contentArea
-            if isOutlineExpanded, let markdown = currentMarkdownContent {
+            // `isOutlineApplicable` excludes pure Mermaid sources (`.mmd` /
+            // `text/mermaid`) — the outline parses markdown headings, which a
+            // diagram source has none of. Without this guard the pane leaks
+            // open from a previous markdown source via the global
+            // `@AppStorage("isOutlineExpanded")` flag (issue #642).
+            if isOutlineExpanded, isOutlineApplicable, let markdown = currentMarkdownContent {
                 outlineView(markdown: markdown)
             }
         }
