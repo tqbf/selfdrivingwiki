@@ -739,43 +739,78 @@ private struct ProviderEditorView: View {
     /// parity: `provider-snapshot-manager.ts:773-786` overwrites status/error
     /// fields only).
     private func refreshModels() {
-        // Availability pre-check (Paseo parity, :748-756 — `client.isAvailable`).
-        // This is the SSW analogue: PathPreflight on the login-shell PATH.
-        // Done on-main with the `isAvailable` state already computed by
-        // `refreshAvailability()` — no spawn if the executable isn't found.
-        guard isAvailable else {
+        // PATH-resolve the executable BEFORE constructing the probe — the
+        // probe (and `AgentBackendFactory.providerHints` /
+        // `ACPBackend.resolveSpawnConfig` downstream) expects
+        // `resolvedCommand[0]` to be an ABSOLUTE PATH. The swift-acp SDK's
+        // `Process.launch()` does NOT do PATH lookup, and a GUI app's process
+        // PATH is the launchd-minimal one (usually lacks `/opt/homebrew/bin`),
+        // so passing the bare exe name reproduces the bug where the green
+        // "Executable found on PATH" chip stays lit but Refresh Models fails
+        // with "file <exe> doesn't exist". `AgentLauncher.
+        // resolveACPProviderSpawn` does this same PATH hop on the real spawn
+        // path; the probe must match (#640).
+        //
+        // NB: `AgentProvider.command` (what `save()` stores) is the BARE argv
+        // — resolution is a spawn-time concern, not a stored-config concern.
+        // The probe takes both: `provider` (bare, matching `save()`) and
+        // `resolvedCommand` (resolved, matching the spawn contract).
+        let words = ShellWords.split(commandText)
+        let exe = words.first ?? ""
+        guard !exe.isEmpty else {
+            isAvailable = false
             modelRefreshState = .error("Executable not found on PATH")
             return
         }
-        // Reviewer finding #4: build the provider from the editor's current
-        // state, mirroring `save()`'s construction verbatim — the probe needs
-        // the resolved command path (PATH resolution happens internally in
-        // `resolveSpawnConfig` via `providerHints`). `enabled`/`isDefault` are
-        // preserved by the parent on Save; the probe doesn't read them.
-        let words = ShellWords.split(commandText)
-        let env: [String: String] = envRows.reduce(into: [:]) { result, row in
-            let key = row.key.trimmingCharacters(in: .whitespaces)
-            guard !key.isEmpty else { return }
-            result[key] = row.value
-        }
-        let providerForProbe = AgentProvider(
-            id: originalID,
-            label: label.trimmingCharacters(in: .whitespaces),
-            command: words.isEmpty ? nil : words,
-            env: env,
-            enabled: true,
-            isDefault: false)
-        let apiKeyForProbe = apiKey.isEmpty ? nil : apiKey
-
         modelRefreshState = .loading
         DebugLog.agent("ProviderEditorView.refreshModels: starting probe provider=\(originalID)")
         Task {
+            // `PathPreflight.resolveOnLoginShell` spawns `/bin/zsh -lc
+            // 'echo $PATH'` (blocking I/O) — run it OFF the main actor,
+            // mirroring `refreshAvailability()`'s detached task. Re-resolve
+            // here instead of trusting the `onAppear`-time `isAvailable` state
+            // (the user's PATH could have changed in the meantime).
+            let resolved = await Task.detached {
+                PathPreflight.resolveOnLoginShell(executable: exe)
+            }.value
+            let resolvedWords: [String]
+            switch resolved {
+            case .found(let absolutePath):
+                resolvedWords = [absolutePath] + Array(words.dropFirst())
+                await MainActor.run { isAvailable = true }
+            case .missing(let reason):
+                await MainActor.run {
+                    isAvailable = false
+                    modelRefreshState = .error(reason)
+                }
+                return
+            }
+            // Reviewer finding #4: build the provider from the editor's
+            // current state, mirroring `save()`'s construction verbatim.
+            // `enabled`/`isDefault` are preserved by the parent on Save;
+            // the probe doesn't read them. `command` is the BARE argv (what
+            // `save()` stores); the resolved argv is passed separately as
+            // `resolvedCommand` below.
+            let env: [String: String] = envRows.reduce(into: [:]) { result, row in
+                let key = row.key.trimmingCharacters(in: .whitespaces)
+                guard !key.isEmpty else { return }
+                result[key] = row.value
+            }
+            let providerForProbe = AgentProvider(
+                id: originalID,
+                label: label.trimmingCharacters(in: .whitespaces),
+                command: words.isEmpty ? nil : words,
+                env: env,
+                enabled: true,
+                isDefault: false)
+            let apiKeyForProbe = apiKey.isEmpty ? nil : apiKey
+
             // The probe struct captures only Sendable config; the SDK Client
             // actor is the concurrency boundary. All subprocess I/O runs here,
             // off-main.
             let probe = ACPProviderModelProbe(
                 provider: providerForProbe,
-                resolvedCommand: words,
+                resolvedCommand: resolvedWords,
                 apiKey: apiKeyForProbe)
             let outcome: Result<[CachedModelInfo], Error>
             do {
