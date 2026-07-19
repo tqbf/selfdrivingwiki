@@ -7,11 +7,13 @@ import Testing
 /// Semantic source search tests. The cosine-ranking semantic path cannot run
 /// under `swift test` (NLEmbedding is app-bundle-gated — sqlite-vec itself is
 /// now statically linked and registered; see
-/// `vecScalarIsRegisteredAfterStaticLink`), so these tests exercise: the v13 schema migration,
-/// the `storeSourceEmbedding` write path, the **LIKE fallback** search, the
-/// `reembedSource` no-op behavior without vec, the `wikictl source search` CLI
-/// (TSV output + arg validation), and the `ON DELETE CASCADE` on
-/// `source_embeddings`. Mirrors `SourcesTests` / `WikiCtlCommandTests`.
+/// `vecScalarIsRegisteredAfterStaticLink`), so these tests exercise: the v13
+/// schema migration, the `storeSourceEmbedding` write path, the **Tantivy
+/// bm25Leg pass-through** (post-#634 — FTS5 is dropped, `searchSimilarSources`
+/// consumes a caller-supplied leg), the `reembedSource` no-op behavior
+/// without vec, the `wikictl source search` CLI (TSV output + arg validation),
+/// and the `ON DELETE CASCADE` on `source_embeddings`. Mirrors `SourcesTests` /
+/// `WikiCtlCommandTests`.
 struct SourceEmbeddingSearchTests {
 
     private func tempDatabaseURL() -> URL {
@@ -55,10 +57,14 @@ struct SourceEmbeddingSearchTests {
         #expect(tableExists(db, "page_chunks"))
         // The old single-embedding tables are dropped in v14.
         #expect(!tableExists(db, "source_embeddings"))
-        // v13: FTS5 full-text search tables.
-        #expect(tableExists(db, "pages_fts"))
-        #expect(tableExists(db, "sources_fts"))
+        // v13 search sidecars are ordinary tables (kept after #634 — the FTS5
+        // external-content virtual tables that lived on top of them are gone).
         #expect(tableExists(db, "source_search"))
+        // #634: FTS5 virtual tables are dropped at v37→v38 on existing DBs, and
+        // a fresh DB never creates them. Tantivy is the sole BM25 leg.
+        #expect(!tableExists(db, "pages_fts"))
+        #expect(!tableExists(db, "sources_fts"))
+        #expect(!tableExists(db, "chats_fts"))
     }
 
     // MARK: - vec registration (Phase 2: statically-linked sqlite-vec)
@@ -84,52 +90,75 @@ struct SourceEmbeddingSearchTests {
         }
     }
 
-    // MARK: - searchSimilarSources LIKE fallback
+    // MARK: - searchSimilarSources with a Tantivy bm25Leg (the post-#634 path)
+    //
+    // #634 dropped the FTS5 fallback path; `searchSimilarSources(query:bm25Leg:)`
+    // returns EMPTY when the leg is nil/empty (cosine-only — NLEmbedding is
+    // app-gated, so under `swift test` the semantic leg is empty too). The
+    // tests below fabricate a Tantivy-like leg and assert it passes through
+    // unchanged — the store must NOT augment or filter it.
 
-    @Test func searchSimilarSourcesLIKEFallbackFindsByFilename() throws {
+    @Test func searchSimilarSourcesReturnsExactTantivyLegByFilename() throws {
         let store = try tempStore()
-        _ = try store.addSource(filename: "quarterly-report.pdf", data: Data("%PDF".utf8))
+        let s1 = try store.addSource(filename: "quarterly-report.pdf", data: Data("%PDF".utf8))
         _ = try store.addSource(filename: "vacation.jpg", data: Data([0xFF, 0xD8, 0xFF]))
 
-        let hits = try store.searchSimilarSources(query: "report", limit: 10, bm25Leg: nil)
+        // Fabricate a Tantivy leg that returns only s1 (matching the query
+        // "report" — a Tantivy index over the source bodies would surface the
+        // filename). With no source_chunks seeded, the cosine leg is empty, so
+        // the fused output MUST equal exactly this leg.
+        let leg = [s1]
+        let hits = try store.searchSimilarSources(query: "report", limit: 10, bm25Leg: leg)
         #expect(hits.count == 1)
         #expect(hits.first?.filename == "quarterly-report.pdf")
     }
 
-    @Test func searchSimilarSourcesLIKEFallbackMatchesDisplayName() throws {
+    @Test func searchSimilarSourcesLegWithRenamedSourcePassesThrough() throws {
         let store = try tempStore()
         let s = try store.addSource(filename: "data.bin", data: Data("x".utf8))
         try store.renameSource(id: s.id, to: "Annual Budget")
 
-        let hits = try store.searchSimilarSources(query: "budget", limit: 10, bm25Leg: nil)
+        // After a rename, the summary's displayName reflects the new name.
+        // A Tantivy leg built post-rename carries that displayName through.
+        let renamed = try store.getSource(id: s.id)
+        let leg = [renamed]
+        let hits = try store.searchSimilarSources(query: "budget", limit: 10, bm25Leg: leg)
         #expect(hits.count == 1)
         #expect(hits.first?.displayName == "Annual Budget")
     }
 
-    @Test func searchSimilarSourcesLIKEFallbackRespectsLimit() throws {
+    @Test func searchSimilarSourcesRespectsLimitOnTantivyLeg() throws {
         let store = try tempStore()
-        _ = try store.addSource(filename: "report-1.pdf", data: Data("%PDF 1".utf8))
-        _ = try store.addSource(filename: "report-2.pdf", data: Data("%PDF 2".utf8))
+        let s1 = try store.addSource(filename: "report-1.pdf", data: Data("%PDF 1".utf8))
+        let s2 = try store.addSource(filename: "report-2.pdf", data: Data("%PDF 2".utf8))
         _ = try store.addSource(filename: "report-3.pdf", data: Data("%PDF 3".utf8))
 
-        let hits = try store.searchSimilarSources(query: "report", limit: 2, bm25Leg: nil)
+        // Fabricated leg has 3 matches; cap the limit at 2.
+        let leg = [s1, s2]
+        let hits = try store.searchSimilarSources(query: "report", limit: 2, bm25Leg: leg)
         #expect(hits.count == 2)
     }
 
-    @Test func searchSimilarSourcesLIKEFallbackEmptyWhenNoMatch() throws {
+    @Test func searchSimilarSourcesEmptyLegReturnsEmpty() throws {
+        // Post-#634: an empty leg (`[]`) and nil leg are equivalent — both mean
+        // no BM25 results. With no cosine results either (vec unavailable under
+        // swift test), the output is empty.
         let store = try tempStore()
         _ = try store.addSource(filename: "alpha.txt", data: Data("a".utf8))
         #expect(try store.searchSimilarSources(query: "zzznomatch", limit: 10, bm25Leg: nil).isEmpty)
+        #expect(try store.searchSimilarSources(query: "zzznomatch", limit: 10, bm25Leg: []).isEmpty)
     }
 
     @Test func searchSimilarSourcesNeverSelectsStar() throws {
-        // Regression guard: `sourceSummary(from:)` reads column 5 as created_at
-        // (a Double). `SELECT s.*` would emit the `content` BLOB at index 5.
-        // The LIKE fallback returns a summary whose dates are sane (not 1970 /
-        // not NaN), proving the column order is the explicit 11-column list.
+        // Regression guard: `readSourceSummary(from:)` reads column 5 as
+        // created_at (a Double). A `SELECT s.*` would emit the `content` BLOB
+        // at index 5. A Tantivy leg built from `listSources()` carries a
+        // summary whose dates are sane (not 1970 / not NaN), proving the
+        // column order is the explicit 11-column list consumers expect.
         let store = try tempStore()
-        _ = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4 content bytes".utf8))
-        let hits = try store.searchSimilarSources(query: "doc", limit: 10, bm25Leg: nil)
+        let s = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4 content bytes".utf8))
+        let leg = [s]
+        let hits = try store.searchSimilarSources(query: "doc", limit: 10, bm25Leg: leg)
         let created = try #require(hits.first?.createdAt)
         #expect(created.timeIntervalSince1970 > 1_700_000_000)  // a 2023+ timestamp
     }
@@ -170,13 +199,17 @@ struct SourceEmbeddingSearchTests {
     }
 
     // MARK: - CLI: SourceCommand.run(.search)
+    //
+    // Post-#634: SourceCommand.run(.search) needs a `bm25Leg` to produce TSV
+    // output — the store no longer has an FTS5 fallback. The CLI resolves a
+    // Tantivy leg in production; tests fabricate one from the seeded sources.
 
     @Test func sourceSearchReturnsTSVAndDoesNotCommit() throws {
         let store = try tempStore()
         let s = try store.addSource(filename: "self-driving-cars.pdf", data: Data("%PDF".utf8))
 
         let result = try SourceCommand.run(
-            .search(query: "driving", limit: 10), in: store, cwd: "/tmp")
+            .search(query: "driving", limit: 10), in: store, cwd: "/tmp", bm25Leg: [s])
         #expect(result.didCommit == false)
         guard case .text(let output) = result.payload else {
             Issue.record("expected text payload"); return
@@ -190,8 +223,11 @@ struct SourceEmbeddingSearchTests {
         let s = try store.addSource(filename: "data.bin", data: Data("x".utf8))
         try store.renameSource(id: s.id, to: "Renamed Source")
 
+        // Fetch the post-rename summary so the fabricated leg reflects the
+        // display name Tantivy would surface.
+        let renamed = try store.getSource(id: s.id)
         let result = try SourceCommand.run(
-            .search(query: "renamed", limit: 10), in: store, cwd: "/tmp")
+            .search(query: "renamed", limit: 10), in: store, cwd: "/tmp", bm25Leg: [renamed])
         guard case .text(let output) = result.payload else {
             Issue.record("expected text payload"); return
         }

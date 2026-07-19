@@ -93,10 +93,10 @@ public final class WikiSession {
     public var pendingVacuumAll: VacuumReport?
 
     /// Phase 2 Tantivy search index (plans/tantivy-search-sidecar.md §4.4).
-    /// Tantivy is now the PRIMARY BM25 leg of the hybrid search; FTS5 is kept
-    /// as fallback. `nil` if construction failed (session never breaks over a
-    /// derived index). Retained for the lifetime of the session so the
-    /// `TantivyShadowSync` bus subscription stays alive.
+    /// Tantivy is the PRIMARY BM25 leg of the hybrid search; post-#634 it is
+    /// the SOLE BM25 leg (FTS5 was dropped). `nil` if construction failed
+    /// (session never breaks over a derived index). Retained for the lifetime
+    /// of the session so the `TantivyShadowSync` bus subscription stays alive.
     public let tantivyShadowSearch: TantivySearchService?
 
     /// Cross-window deferred `wiki://` navigation. Set by
@@ -214,12 +214,13 @@ public final class WikiSession {
         self.descriptor = sessionDescriptor
 
         // Phase 2 Tantivy search index (plans/tantivy-search-sidecar.md §4.4).
-        // Phase 2 CUTOVER: Tantivy is now the PRIMARY BM25 leg of the hybrid
+        // Phase 2 CUTOVER (#634): Tantivy is the SOLE BM25 leg of the hybrid
         // search. The service is injected into the model (`model.tantivySearch =
-        // svc`) so the search path queries Tantivy first, falling back to FTS5
-        // when Tantivy is unavailable/empty. Failures are non-fatal — the session
-        // never breaks over a derived, rebuildable index; a failed start just
-        // means no Tantivy results (FTS5 still answers). Reads happen off-main on
+        // svc`) so the search path queries Tantivy first; a `nil`/empty leg
+        // means no BM25 signal (FTS5 fallback was dropped in #634). Failures
+        // are non-fatal — the session never breaks over a derived, rebuildable
+        // index; a failed start just means no Tantivy results (cosine still
+        // answers when NLEmbedding/MLX is available). Reads happen off-main on
         // the indexer actor; the content source reads committed SQLite state
         // through its own recursive lock (no statement handle crosses a boundary).
         var shadowSearch: TantivySearchService?
@@ -328,8 +329,8 @@ public final class WikiSession {
     /// leg — plans/tantivy-search-sidecar.md §4.4). Returns kind-tagged hits with
     /// id/title/kind/score, decoupled from the store's typed summaries. Returns
     /// `nil` (not an empty list) when the Tantivy index was never built or
-    /// failed to open, so a caller can distinguish "index unavailable (fall back
-    /// to FTS5)" from "index queried, no matches."
+    /// failed to open, so a caller can distinguish "index unavailable (no BM25
+    /// leg post-#634 — FTS5 was dropped)" from "index queried, no matches."
     ///
     /// The production hybrid search uses this internally via
     /// `WikiStoreModel.resolveTantivyLeg(...)` — this public accessor is for

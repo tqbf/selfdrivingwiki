@@ -31,6 +31,16 @@ jobs:
           swift --version || xcrun swift --version
       - name: Generate codegen files (version + prompts)
         run: make version prompts
+      - name: Cache Swift build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-swift-${{ hashFiles('Package.resolved') }}-${{ hashFiles('Sources/**/*.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-swift-${{ hashFiles('Package.resolved') }}-
+            ${{ runner.os }}-swift-
       - name: Build
         # Select the swift command that works on this runner and export it so
         # the Test step uses the SAME toolchain (a mismatch forces a full
@@ -46,6 +56,9 @@ jobs:
         # The full suite runs in ~1.5 min via in-memory SQLite fixtures (#658);
         # the previous fast/integration tier split + `.integration` tags are
         # retired (no slow disk I/O to skip). See AGENTS.md.
+        # timeout-minutes: 30 is a safety net for a cache-miss full rebuild
+        # (the suite itself is ~1.5 min; cold build+test should be well under 30).
+        timeout-minutes: 30
         run: $SWIFT test
 
   python:
