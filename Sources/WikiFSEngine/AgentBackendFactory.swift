@@ -14,8 +14,14 @@ import WikiFSCore
 public enum AgentBackendFactory {
 
     /// Construct the backend for a session. Every provider drives `ACPBackend`.
-    static func makeBackend(policy: PermissionPolicy) -> AgentBackend {
-        ACPBackend(permissionPolicy: policy)
+    ///
+    /// - Parameter budget: #606 auto-reject budget for deferred permission
+    ///   requests. nil (default) = no timer (interactive chat — current
+    ///   behavior); non-nil = a stuck permission auto-rejects after this
+    ///   `Duration` so unattended pipelines (ingest/lint) can't stall for the
+    ///   full 1800s ceiling.
+    static func makeBackend(policy: PermissionPolicy, budget: Duration? = nil) -> AgentBackend {
+        ACPBackend(permissionPolicy: policy, budget: budget)
     }
 
     /// Build the `providerHints` for an ACP provider from its PATH-resolved

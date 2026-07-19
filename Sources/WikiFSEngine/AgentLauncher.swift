@@ -194,19 +194,36 @@ public final class AgentLauncher {
 
     /// Factory closure that constructs the backend for a session. Called at
     /// spawn time in `run()` / `startInteractiveQuery()` so a fresh backend is
-    /// built per session with the current permission policy. Injectable so tests
-    /// can substitute a stub backend that survives the `self.backend = ...`
-    /// assignment in `run()` (setting `backend` directly is overwritten).
-    @ObservationIgnored var resolveBackend: (PermissionPolicy) -> AgentBackend = {
-        AgentBackendFactory.makeBackend(policy: $0)
+    /// built per session with the current permission policy + the operation's
+    /// auto-reject budget (#606). Injectable so tests can substitute a stub
+    /// backend that survives the `self.backend = ...` assignment in `run()`
+    /// (setting `backend` directly is overwritten).
+    ///
+    /// #606: second parameter is the deferred-permission budget — nil = no
+    /// timer (interactive chat), non-nil = auto-reject after this `Duration`.
+    /// Ingest/lint pass `.seconds(60)`; chat passes `nil`.
+    @ObservationIgnored var resolveBackend: (PermissionPolicy, Duration?) -> AgentBackend = {
+        AgentBackendFactory.makeBackend(policy: $0, budget: $1)
     }
 
-    /// The chat's permission mode (`@AppStorage("agentPermissionMode")`, default
-    /// `.bypass`). v1: app-wide persisted. Read at spawn time so it bakes into
-    /// the `ACPBackend`'s `PermissionPolicy`.
-    @ObservationIgnored var resolvePermissionMode: () -> PermissionPolicy = {
-        let raw = UserDefaults.standard.string(forKey: AgentLauncher.permissionModeKey) ?? ""
-        return PermissionPolicy(rawValue: raw) ?? .bypass
+    /// The permission policy, resolved per operation kind. #607: previously one
+    /// shared `agentPermissionMode` key was fed to chat + ingest + lint, so a
+    /// user who correctly chose `alwaysAsk` for interactive chat got the same
+    /// gating applied to an unattended ingest/lint — guaranteeing a stall on
+    /// the first prompt needing a permission. Now three independent keys:
+    /// `chatPermissionMode` / `ingestPermissionMode` / `lintPermissionMode`.
+    /// Extraction is intentionally NOT a kind here — see `plans/acp-permissions.md`
+    /// §5.1 (extraction keeps its `.bypass` default on `ACPExtractionClient`).
+    @ObservationIgnored var resolvePermissionMode: (PermissionOperationKind) -> PermissionPolicy = { op in
+        let key: String
+        let fallback: PermissionPolicy
+        switch op {
+        case .chat:   key = PermissionModeKey.chat;   fallback = .bypass
+        case .ingest: key = PermissionModeKey.ingest; fallback = .bypass
+        case .lint:   key = PermissionModeKey.lint;   fallback = .bypass
+        }
+        let raw = UserDefaults.standard.string(forKey: key) ?? ""
+        return PermissionPolicy(rawValue: raw) ?? fallback
     }
 
     /// The Keychain-backed store for the ACP agent's API key. Injectable so
@@ -464,8 +481,27 @@ public final class AgentLauncher {
     /// `setGenerating(false)` / `finish()` / `resetRunArtifacts()`.
     @ObservationIgnored private var pendingPollTask: Task<Void, Never>?
 
-    /// UserDefaults key shared with the `@AppStorage` bindings in Settings + ChatView.
-    public static let permissionModeKey = "agentPermissionMode"
+    /// #607: per-operation permission-mode UserDefaults keys. Replaces the single
+    /// shared `permissionModeKey = "agentPermissionMode"` that fed chat + ingest +
+    /// lint from one store — a user who chose `alwaysAsk` for chat got the same
+    /// gating applied to an unattended ingest/lint, guaranteeing a stall on the
+    /// first prompt needing a permission. These are UserDefaults string keys; the
+    /// `@AppStorage(PermissionModeKey.<x>)` bindings in Settings + ChatView + the
+    /// `resolvePermissionMode(for:)` closure here all read/write them.
+    ///
+    /// Extraction is intentionally NOT a kind in this PR — see `plans/acp-permissions.md`
+    /// §5.1 (extraction keeps its `.bypass` default on `ACPExtractionClient`).
+    public enum PermissionModeKey {
+        /// Interactive chat permission mode. Default `.bypass`.
+        public static let chat = "chatPermissionMode"
+        /// Multi-phase ingest permission mode (planner + executors + finalizer).
+        /// Default `.bypass` — the sandbox already confines writes; an unattended
+        /// pipeline can't use `alwaysAsk` productively.
+        public static let ingest = "ingestPermissionMode"
+        /// Lint permission mode (the `run()` single-session path for `.lint` /
+        /// `.lintPage`). Default `.bypass` — same unattended-pipeline rationale.
+        public static let lint = "lintPermissionMode"
+    }
     /// The active session handle (nil when no session is live). Replaces the
     /// old `process: Process?` — the launcher never touches a `Process` directly.
     @ObservationIgnored private var sessionHandle: SessionHandle?
@@ -892,15 +928,30 @@ public final class AgentLauncher {
         // restart.
         let dir = containerDirectory ?? (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
 
-        // The chat's permission policy (default yolo). Constructed HERE so both
-        // `start` and the per-turn stream consumer capture the same backend.
-        let policy: PermissionPolicy = resolvePermissionMode()
+        // #607: per-operation permission policy. The kind is known from the
+        // `request` parameter (the staged `WikiOperation` isn't built yet, but
+        // the enum cases map 1:1 — `.ingest` → `.ingest`, `.lint`/`.lintPage`
+        // → `.lint`, else `.chat`). Pre-#607 a single shared key fed all
+        // three, so a user who chose `alwaysAsk` for chat got the same gating
+        // on an unattended ingest/lint — guaranteeing a stall (#606).
+        let permissionKind: PermissionOperationKind = {
+            switch request {
+            case .ingest: return .ingest
+            case .lint, .lintPage: return .lint
+            case .query: return .chat
+            }
+        }()
+        let policy: PermissionPolicy = resolvePermissionMode(permissionKind)
+        // #606: chat is interactive (unbounded — the UI chip is the release
+        // valve); ingest/lint are unattended and MUST auto-reject so a stuck
+        // permission can't burn the 1800s ceiling.
+        let permissionBudget: Duration? = (permissionKind == .chat) ? nil : .seconds(60)
 
         // #324: the launcher reads `agent-providers.json`, picks the default
         // (or selected) provider, and resolves its PATH command + Keychain key
         // into providerHints. The app is ACP-only.
         let provider = resolveSelectedProvider()
-        self.backend = resolveBackend(policy)
+        self.backend = resolveBackend(policy, permissionBudget)
 
         // Resolve the provider's spawn command (PATH-resolved because the
         // swift-acp SDK's launch() does NOT do PATH lookup) + the Keychain-backed
@@ -1136,6 +1187,7 @@ public final class AgentLauncher {
     private func resolveStageRouting(
         _ stage: IngestStage,
         policy: PermissionPolicy,
+        budget: Duration?,
         cache: inout [String: AgentBackend]
     ) -> StageRouting? {
         let (provider, modelId) = providersConfig().resolvedProvider(for: stage)
@@ -1156,7 +1208,7 @@ public final class AgentLauncher {
         if let cached = cache[cacheKey] {
             backend = cached
         } else {
-            backend = resolveBackend(policy)
+            backend = resolveBackend(policy, budget)
             cache[cacheKey] = backend
         }
         let providerHints = AgentBackendFactory.providerHints(
@@ -1204,7 +1256,15 @@ public final class AgentLauncher {
         // second+ call on the same backend) and `closeSession()` at the phase
         // boundary (frees session context, keeps the subprocess alive). The
         // subprocess is terminated via `backend.cancel()` only at the very end.
-        let policy: PermissionPolicy = resolvePermissionMode()
+        //
+        // #607: ingest policy reads its OWN `ingestPermissionMode` key, NOT the
+        // chat key — a user who chose `alwaysAsk` for chat no longer stalls an
+        // unattended ingest. #606: a deferred ingest permission auto-rejects
+        // after `.seconds(60)` so even a misconfigured ingest can't burn the
+        // 1800s ceiling (the sandbox already confines writes — `bypass` is the
+        // correct default for an unattended pipeline).
+        let policy: PermissionPolicy = resolvePermissionMode(.ingest)
+        let permissionBudget: Duration? = .seconds(60)
         var stageBackendCache: [String: AgentBackend] = [:]
 
         // Build a shared CLI profile closure (sets the env vars `ACPBackend`
@@ -1220,7 +1280,7 @@ public final class AgentLauncher {
         // --- Phase 1: Planner ---
         DebugLog.agent("runACPIngest: Phase 1 — Planner")
         currentIngestPhase = "planner"
-        guard let plannerRouting = resolveStageRouting(.planner, policy: policy, cache: &stageBackendCache) else {
+        guard let plannerRouting = resolveStageRouting(.planner, policy: policy, budget: permissionBudget, cache: &stageBackendCache) else {
             DebugLog.agent("runACPIngest: planner routing failed (\(preflightError ?? "?")) — aborting")
             finish(status: -1)
             return
@@ -1288,7 +1348,7 @@ public final class AgentLauncher {
         DebugLog.agent("runACPIngest: plan loaded — \(plan.pages.count) pages across \(plan.distinctSourceFiles.count) source file(s)")
 
         // --- Phase 2: Executors (one per source file) ---
-        if let executorRouting = resolveStageRouting(.executor, policy: policy, cache: &stageBackendCache) {
+        if let executorRouting = resolveStageRouting(.executor, policy: policy, budget: permissionBudget, cache: &stageBackendCache) {
             let executorProfile = BackendProfile(
                 providerHints: executorRouting.providerHints,
                 scratchDirectory: scratch,
@@ -1381,7 +1441,7 @@ public final class AgentLauncher {
         }
 
         // --- Phase 3: Finalizer ---
-        guard let finalizerRouting = resolveStageRouting(.finalizer, policy: policy, cache: &stageBackendCache) else {
+        guard let finalizerRouting = resolveStageRouting(.finalizer, policy: policy, budget: permissionBudget, cache: &stageBackendCache) else {
             DebugLog.agent("runACPIngest: finalizer routing failed (\(preflightError ?? "?")) — aborting")
             preflightError = nil
             finish(status: -1)
@@ -2096,8 +2156,14 @@ public final class AgentLauncher {
 
         // The chat's permission policy (default yolo). The ACP agent spawn is
         // threaded into providerHints below.
-        let policy: PermissionPolicy = resolvePermissionMode()
-        DebugLog.agent("startInteractiveQuery: permissionPolicy=\(policy)")
+        //
+        // #607: chat reads its OWN `chatPermissionMode` key — independent of
+        // ingest/lint. #606: chat is interactive, so no auto-reject budget —
+        // the UI chip is the release valve, preserving the prior indefinite-
+        // suspend behavior. (`nil` budget ⇒ no timer on `deferPermission`.)
+        let policy: PermissionPolicy = resolvePermissionMode(.chat)
+        let permissionBudget: Duration? = nil
+        DebugLog.agent("startInteractiveQuery: permissionPolicy=\(policy) budget=nil (interactive)")
 
         // #324: the launcher reads `agent-providers.json` and picks the
         // default (or selected) provider. The app is ACP-only.
@@ -2125,7 +2191,7 @@ public final class AgentLauncher {
             return
         }
 
-        self.backend = resolveBackend(policy)
+        self.backend = resolveBackend(policy, permissionBudget)
 
         // Resolve the provider's spawn command (PATH-resolved) + the
         // Keychain-backed API key (keyed by provider id).
@@ -2996,5 +3062,59 @@ public final class AgentLauncher {
     private func createSandboxTmpDir(in scratch: URL) {
         let tmp = scratch.appendingPathComponent(Self.tmpRelocationLeaf, isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    }
+}
+
+// MARK: - #607: per-operation permission policy domain
+
+/// The operation kind the launcher resolves a permission policy for. Kept
+/// distinct from `WikiOperation.Kind` (the *run* kind) so the permission-
+/// policy domain stays independent (no coupling between the two enums). Mapping
+/// from a `WikiOperation.Kind` to a `PermissionOperationKind` happens at the
+/// launcher call site (`.lint`/`.lintPage` → `.lint`, `.ingest` → `.ingest`,
+/// else `.chat`).
+///
+/// Extraction is intentionally NOT a kind here — see `plans/acp-permissions.md`
+/// §5.1 (extraction keeps its `.bypass` default on `ACPExtractionClient` and its
+/// callers weren't fully enumerated; a follow-up PR can add `.extraction` once
+/// every `ACPExtractionClient()` construction threads the extraction key).
+public enum PermissionOperationKind: Sendable {
+    case chat
+    case ingest
+    case lint
+}
+
+// MARK: - #607: one-time legacy key migration
+
+/// One-shot migration of the pre-#607 `agentPermissionMode` UserDefaults key
+/// into the post-#607 `chatPermissionMode` key. Idempotent + injectable
+/// (`defaults` is a parameter) so it can be unit-tested against a throwaway
+/// `UserDefaults(suiteName:)` without touching the app's real `.standard`
+/// defaults — mirrors `AppStorageMigration.migrateZoomKey`'s shape.
+///
+/// **Why `object(forKey:) == nil` (not `string(forKey:) == nil`):** `UserDefaults
+/// .string(forKey:)` cannot distinguish "key absent" from "key present but empty
+/// string" — `object(forKey:) == nil` is the only correct key-presence check.
+/// This is the predicate test #9 in `plans/acp-permissions.md` §8.2 asserts.
+///
+/// **Idempotent:** after the first run, `object(forKey: PermissionModeKey.chat)`
+/// is non-nil (we just wrote it), so the guard fails on subsequent launches.
+///
+/// **Copy, not move:** the legacy `agentPermissionMode` is left in place
+/// (orphaned, like `sandbox-config.json`) — deleting a UserDefaults key has no
+/// rollback path, and a future downgrade would silently lose the user's pick.
+public enum PermissionModeMigration {
+    public static func migrateOnce(
+        from legacyKey: String = "agentPermissionMode",
+        to newKey: String = AgentLauncher.PermissionModeKey.chat,
+        in defaults: UserDefaults = .standard
+    ) {
+        // Only migrate if the new chat key has NEVER been written (object == nil).
+        guard defaults.object(forKey: newKey) == nil,
+              let legacy = defaults.string(forKey: legacyKey),
+              !legacy.isEmpty,
+              let policy = PermissionPolicy(rawValue: legacy) else { return }
+        defaults.set(policy.rawValue, forKey: newKey)
+        DebugLog.agent("PermissionModeMigration: copied legacy \(legacyKey)=\(policy.rawValue) -> \(newKey)")
     }
 }

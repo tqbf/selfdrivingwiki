@@ -309,6 +309,23 @@ public struct PendingPermission: Sendable, Equatable {
 /// `Sendable` without `@unchecked`. The pending map maps `toolCallId` → a
 /// `CheckedContinuation` that `resolve(optionId:)` resumes. No actor hop needed
 /// (the continuation + map are lock-protected), so resolution is immediate.
+///
+/// **#606 — bounded auto-reject budget:** a deferred permission request that is
+/// never resolved will hang a turn until the 1800s `TurnLivenessPolicy` ceiling.
+/// For unattended pipelines (ingest/lint) that is unacceptable — nobody is
+/// watching the transcript to click Approve/Reject. The `budget` parameter arms
+/// a detached `Task` that sleeps for the chosen `Duration` and, if the user
+/// hasn't resolved first, auto-rejects via `timeOut(toolCallId:)`. Interactive
+/// chat passes `budget: nil` (unbounded — preserves the prior behavior so the
+/// UI chip stays the source of truth). The race is safe by construction: the
+/// existing `removeValue`-then-resume discipline in `resolve` /
+/// `cancelAllPending` is mirrored by `timeOut` — whichever wins the race pulls
+/// the entry out of the map under the lock, so the others find nothing to
+/// resume (`CheckedContinuation` cannot be resumed twice). The `Task` handle is
+/// stored on `Pending` so `resolve`/`cancelAllPending` cancel it on the winning
+/// side, avoiding a stray timer firing after teardown.
+/// See `plans/acp-permissions.md` §4.1 for the load-bearing invariants + the
+/// TaskGroup-rejection rationale.
 public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
 
     /// A pending request's resolution channel.
@@ -317,9 +334,19 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
         let toolName: String?
         let inputSummary: String?
         let continuation: CheckedContinuation<RequestPermissionResponse, Never>
+        /// #606: the auto-reject timer Task, armed in `deferPermission` when a
+        /// non-nil `budget` is set. `resolve`/`cancelAllPending` cancel it when
+        /// they win the race; the timer task itself calls `timeOut(toolCallId:)`
+        /// when it wins. nil for interactive chat (`budget: nil`) — no timer.
+        let timer: Task<Void, Never>?
     }
 
     private let policy: PermissionPolicy
+    /// #606: the per-request auto-reject budget. nil = no timer (current
+    /// behavior — interactive chat). non-nil = a deferred permission auto-
+    /// rejects after the duration elapses. Threading: only read at
+    /// `handlePermissionRequest` entry (no lock needed — it's a `let`).
+    private let budget: Duration?
     /// The per-run debug logger, for capturing permission request/response
     /// exchanges to `permissions.jsonl`. nil when debug logging is disabled —
     /// all calls are no-ops via optional chaining.
@@ -333,9 +360,19 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
     }
     private let lock = OSAllocatedUnfairLock<LockedState>(initialState: LockedState())
 
-    init(policy: PermissionPolicy, debugLogger: DebugRunLogger? = nil) {
+    /// - Parameters:
+    ///   - policy: the permission policy (`bypass`/`alwaysAsk`/`acceptEdits`/`plan`).
+    ///   - debugLogger: optional per-run permission-exchange logger.
+    ///   - budget: #606 auto-reject budget. nil (default) = no timer; non-nil =
+    ///     after this `Duration` elapses with no user resolution, the pending
+    ///     request is auto-rejected as `cancelled`. Interactive chat passes nil
+    ///     (preserves the prior indefinite-suspend behavior — the live UI is the
+    ///     release valve); ingest/lint pass `.seconds(60)` so an unattended
+    ///     pipeline can't stall on a stuck permission.
+    init(policy: PermissionPolicy, debugLogger: DebugRunLogger? = nil, budget: Duration? = nil) {
         self.policy = policy
         self.debugLogger = debugLogger
+        self.budget = budget
     }
 
     // MARK: - ClientDelegate: the permission seam
@@ -358,8 +395,10 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
                 DebugLog.agent("ACPBackend: acceptEdits auto-allow edit toolCallId=\(request.toolCall.toolCallId)")
                 response = RequestPermissionResponse(outcome: PermissionOutcome(optionId: allow.optionId))
             } else {
-                // Non-edit tool → defer to the user (same as alwaysAsk).
-                response = await Self.deferPermission(request: request, lock: lock)
+                // Non-edit tool → defer to the user (same as alwaysAsk). Same
+                // auto-reject budget applies — a stalled non-edit permission
+                // blocks the turn identically to an alwaysAsk stall (#606).
+                response = await Self.deferPermission(request: request, lock: lock, budget: budget)
             }
 
         case .plan:
@@ -371,7 +410,7 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
             // Defer: record pending and SUSPEND until resolve(optionId:). The
             // future UI calls ACPBackend.resolvePermission, which calls into
             // here. This is the pending-permission-blocking pattern from paseo.
-            response = await Self.deferPermission(request: request, lock: lock)
+            response = await Self.deferPermission(request: request, lock: lock, budget: budget)
         }
         // Debug: log the full request/response exchange to permissions.jsonl.
         debugLogger?.logPermission(request: request, response: response, policy: policy.rawValue)
@@ -381,25 +420,93 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
     // MARK: - Shared helpers
 
     /// Defer a permission request to the user (alwaysAsk / acceptEdits-non-edit).
-    /// Records the pending continuation and returns when the user resolves it.
+    /// Records the pending continuation and returns when the user resolves it,
+    /// OR — if a `budget` is set and the user doesn't resolve in time — auto-
+    /// rejects as `cancelled` after the budget elapses (#606).
+    ///
+    /// **The race + lifecycle:** the single `CheckedContinuation` is resumed
+    /// EXACTLY once by one of three racers:
+    ///   1. `resolve(optionId:)` — the user clicked Approve/Reject.
+    ///   2. `cancelAllPending()` — full session teardown (drains everything).
+    ///   3. `timeOut(toolCallId:)` — the budget timer elapsed first.
+    /// All three racers do `state.pending.removeValue(forKey:)` (or
+    /// `removeAll()`) UNDER the lock before resuming. Whichever wins pulls the
+    /// entry out, so the others find nothing — `CheckedContinuation` cannot be
+    /// resumed twice (see `docs/skills/swift-concurrency-pro/SKILL.md`
+    /// `bug-patterns`: "Continuation resumed twice → restructure so only one
+    /// path reaches the continuation"). The detach-timer form is the committed
+    /// approach — a `withTaskGroup` sketch where a child task awaits
+    /// `group.next()` on the same group does not compile under Swift 6.0 strict
+    /// concurrency (non-Sendable + mutating access).
+    ///
+    /// **Why a `Task` and not a `TaskGroup`:** awaiting `group.next()` from
+    /// inside one of the group's own child tasks is a data race (the group is
+    /// non-`Sendable` and `next()` is mutating). The detached-timer form below
+    /// preserves the existing `removeValue`-then-resume discipline verbatim and
+    /// compiles cleanly. See `plans/acp-permissions.md` §4.1 note #5.
     private static func deferPermission(
         request: RequestPermissionRequest,
-        lock: OSAllocatedUnfairLock<LockedState>
+        lock: OSAllocatedUnfairLock<LockedState>,
+        budget: Duration?
     ) async -> RequestPermissionResponse {
         let toolCall = request.toolCall
         let toolName = Self.toolName(for: toolCall)
         let inputSummary = Self.toolSummary(for: toolCall)
         return await withCheckedContinuation { (continuation: CheckedContinuation<RequestPermissionResponse, Never>) in
+            // #606: arm the auto-reject timer when a budget is set. nil means
+            // interactive chat (unbounded — the UI is the release valve).
+            let timer: Task<Void, Never>? = budget.map { b in
+                Task { [toolCallId = request.toolCall.toolCallId] in
+                    do {
+                        try await Task.sleep(for: b)
+                    } catch {
+                        // CancellationError — expected when resolve() /
+                        // cancelAllPending() cancelled the timer first.
+                        // Cooperative lifecycle event, not a hidden failure
+                        // (§3 house-rule carve-out in plans/acp-permissions.md).
+                        return
+                    }
+                    // Budget elapsed before the user resolved → auto-reject.
+                    // `timeOut` mirrors `resolve`: removeValue under the lock,
+                    // then resume. If the user/teardown already won, the entry
+                    // is gone — `timeOut` no-ops.
+                    Self.timeOut(toolCallId: toolCallId, lock: lock)
+                }
+            }
             lock.withLock { state in
                 state.pending[request.toolCall.toolCallId] = Pending(
                     options: request.options,
                     toolName: toolName,
                     inputSummary: inputSummary,
-                    continuation: continuation
-                )
+                    continuation: continuation,
+                    timer: timer)
             }
-            DebugLog.agent("ACPBackend: deferring toolCallId=\(request.toolCall.toolCallId) (\(request.options.count) options)")
+            DebugLog.agent("ACPBackend: deferring toolCallId=\(request.toolCall.toolCallId) (\(request.options.count) options) budget=\(budget.map { "\($0.components.seconds)s" } ?? "nil")")
         }
+    }
+
+    /// #606: auto-reject a pending request when its budget elapses. Mirrors
+    /// `resolve(optionId:)`: pulls the pending entry out of the map UNDER the
+    /// lock (so a concurrent `resolve`/`cancelAllPending` that already won the
+    /// race finds nothing here — `guard let drained` no-ops), then resumes the
+    /// continuation as `cancelled` AFTER the lock is released (the existing
+    /// discipline — never resume under the lock, it can deadlock or trap on a
+    /// sync re-entrant call). The removed `timer` is returned but not cancelled
+    /// here (it's the running task itself — self-cancellation is a no-op).
+    private static func timeOut(
+        toolCallId: String,
+        lock: OSAllocatedUnfairLock<LockedState>
+    ) {
+        let drained = lock.withLock { state -> (CheckedContinuation<RequestPermissionResponse, Never>, Task<Void, Never>?)? in
+            guard let pending = state.pending.removeValue(forKey: toolCallId) else { return nil }
+            return (pending.continuation, pending.timer)
+        }
+        guard let (cont, _) = drained else {
+            // resolve() or cancelAllPending() already won the race — nothing to do.
+            return
+        }
+        DebugLog.agent("ACPBackend: permission budget exceeded — auto-reject toolCallId=\(toolCallId)")
+        cont.resume(returning: RequestPermissionResponse(outcome: PermissionOutcome(cancelled: true)))
     }
 
     /// Heuristic: does this tool call look like a file edit/write? Used by
@@ -456,16 +563,20 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
     /// is what the Approve/Reject UI calls.
     @discardableResult
     func resolve(optionId: String) -> Bool {
-        let resolved: CheckedContinuation<RequestPermissionResponse, Never>? = lock.withLock { state in
+        let resolved: (CheckedContinuation<RequestPermissionResponse, Never>, Task<Void, Never>?)? = lock.withLock { state in
             // Find the pending request that offers this option (a request is
             // identified by toolCallId; the UI passes the chosen option id).
             for (toolCallId, pending) in state.pending where pending.options.contains(where: { $0.optionId == optionId }) {
                 state.pending.removeValue(forKey: toolCallId)
-                return pending.continuation
+                // #606: cancel the auto-reject timer — the user won the race.
+                // Without this, the timer fires later, hits the now-empty map
+                // look-up in `timeOut`, and no-ops (harmless but wasteful).
+                return (pending.continuation, pending.timer)
             }
             return nil
         }
-        guard let continuation = resolved else { return false }
+        guard let (continuation, timer) = resolved else { return false }
+        timer?.cancel()
         continuation.resume(returning: RequestPermissionResponse(outcome: PermissionOutcome(optionId: optionId)))
         return true
     }
@@ -496,13 +607,16 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
     /// the number of continuations resumed (for tests).
     @discardableResult
     func cancelAllPending() -> Int {
-        let drained = lock.withLock { state -> [(options: [PermissionOption], continuation: CheckedContinuation<RequestPermissionResponse, Never>)] in
+        let drained = lock.withLock { state -> [(options: [PermissionOption], continuation: CheckedContinuation<RequestPermissionResponse, Never>, timer: Task<Void, Never>?)] in
             let pending = state.pending
             state.pending.removeAll()
-            return pending.map { (toolCallId, value) in (value.options, value.continuation) }
+            return pending.map { (toolCallId, value) in (value.options, value.continuation, value.timer) }
         }
+        // #606: cancel every armed timer BEFORE resuming the continuation so no
+        // stray timer task fires after teardown (its `timeOut` would no-op
+        // against the emptied map anyway, but cancelling is the cleaner lifecycle).
         for item in drained {
-            _ = item.options  // toolCallId is implicit; nothing else needed
+            item.timer?.cancel()
             item.continuation.resume(returning: RequestPermissionResponse(outcome: PermissionOutcome(cancelled: true)))
         }
         return drained.count
