@@ -93,11 +93,18 @@ enum WikiLinkMenuNSItems {
     /// A submenu listing the closest pages to `query`; choosing one navigates to
     /// it. Shows a disabled "No similar pages" item when the search is empty so
     /// the submenu is never mysteriously blank.
+    ///
+    /// #637: builds with `store.searchSimilarResolvingTantivy(query:limit:)`
+    /// (rather than the FTS5-fallback `searchSimilar(query:limit:)`) so the menu
+    /// surfaces Tantivy-BM25-fused results — gaining the indexer's `fuzzyFields`
+    /// edit-distance-1 matches (already configured at
+    /// `TantivyIndexer.swift:108-111`) for free, and surviving #634's FTS5 drop
+    /// without regression.
     private static func similarPagesItem(
         title: String, query: String, store: WikiStoreModel
     ) -> NSMenuItem {
         let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        let matches = query.isEmpty ? [] : store.searchSimilar(query: query, limit: 8)
+        let matches = query.isEmpty ? [] : store.searchSimilarResolvingTantivy(query: query, limit: 8)
         let menu = NSMenu()
         if matches.isEmpty {
             let none = NSMenuItem(title: "No similar pages", action: nil, keyEquivalent: "")

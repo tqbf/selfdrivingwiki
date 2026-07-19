@@ -48,14 +48,24 @@ public enum ChatCommand {
     }
 
     /// Run one action against `store`. Reads never commit; `rename` does.
-    public static func run(_ action: Action, in store: WikiStore) throws -> Result {
+    ///
+    /// `bm25Leg` is the pre-resolved Tantivy BM25 leg for the `.search` action
+    /// (#637). `nil` (the default) makes the store run its own FTS5; a non-nil
+    /// list is fused with the semantic cosine leg via RRF, REPLACING the FTS5
+    /// leg. Caller-resolved via `CLITantivyLegResolver.resolveChatLeg(...)` in
+    /// `wikictl`'s `execute()`.
+    public static func run(
+        _ action: Action,
+        in store: WikiStore,
+        bm25Leg: [ChatSummary]? = nil
+    ) throws -> Result {
         switch action {
         case .list(let json):
             return try list(in: store, json: json)
         case .get(let selector):
             return try get(selector, in: store)
         case .search(let query, let limit):
-            return try search(query: query, limit: limit, in: store)
+            return try search(query: query, limit: limit, bm25Leg: bm25Leg, in: store)
         case .rename(let selector, let newTitle):
             return try rename(selector, to: newTitle, in: store)
         }
@@ -105,9 +115,9 @@ public enum ChatCommand {
     /// their message text matches the query. Output is TSV
     /// (id <tab> title <tab> kind <tab> messages), best match first.
     private static func search(
-        query: String, limit: Int, in store: WikiStore
+        query: String, limit: Int, bm25Leg: [ChatSummary]?, in store: WikiStore
     ) throws -> Result {
-        let results = try store.searchSimilarChats(query: query, limit: limit)
+        let results = try store.searchSimilarChats(query: query, limit: limit, bm25Leg: bm25Leg)
         let output: String = results.map { chat in
             let title = chat.title.replacingOccurrences(of: "\t", with: " ")
             return "\(chat.id.rawValue)\t\(title)\t\(chat.kind.rawValue)\t\(chat.messageCount)"

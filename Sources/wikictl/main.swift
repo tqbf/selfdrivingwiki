@@ -82,7 +82,11 @@ func run() async -> Int32 {
         }
         let store = try GRDBWikiStore(databaseURL: resolver.databaseURL(for: descriptor))
 
-        let result = try execute(command, in: store)
+        let result = try execute(
+            command,
+            in: store,
+            wikiID: descriptor.id,
+            containerDirectory: resolver.containerDirectory)
 
         switch result.payload {
         case .text(let output):
@@ -125,7 +129,18 @@ func run() async -> Int32 {
 /// `LogIndexCommand` (the Phase-B `log append` / `index set`), or `SourceCommand`
 /// (the `source …` family for raw source reads). The deferred body read (`-` = stdin,
 /// else a file path) happens here — the only I/O the parser left for `main`.
-func execute(_ command: ArgumentParser.Command, in store: GRDBWikiStore) throws -> SourceCommand.Result {
+///
+/// `wikiID` + `containerDirectory` thread the on-disk Tantivy index path
+/// (`<container>/search-index/<wikiID>/`) to the three search cases so they
+/// can resolve a Tantivy BM25 leg via `CLITantivyLegResolver` before invoking
+/// the kind-specific `*Command.run(..., bm25Leg:)` (#637). Non-search cases
+/// ignore them.
+func execute(
+    _ command: ArgumentParser.Command,
+    in store: GRDBWikiStore,
+    wikiID: String,
+    containerDirectory: URL
+) throws -> SourceCommand.Result {
     switch command {
     case .list(let json):
         let r = try PageCommand.run(.list(json: json), in: store)
@@ -148,7 +163,16 @@ func execute(_ command: ArgumentParser.Command, in store: GRDBWikiStore) throws 
         let r = try LogIndexCommand.run(.indexSet(body: body, workspace: workspace), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .search(let query, let limit):
-        let r = try PageCommand.run(.search(query: query, limit: limit), in: store)
+        // #637: route through the Tantivy BM25 leg (mirrors the sidebar's
+        // `WikiStoreModel.scheduleSearch()` → `resolveTantivyLeg` flow) so the
+        // CLI gets fuzzy matching (edit-distance 1 on title+body, already
+        // configured at TantivyIndexer.swift:108-111) and survives #634's
+        // FTS5 drop. `nil` leg (Tantivy index unavailable/empty) → the store's
+        // existing FTS5 fallback (Phase 2 contract).
+        let leg = CLITantivyLegResolver.resolvePageLeg(
+            wikiID: wikiID, containerDirectory: containerDirectory,
+            store: store, query: query, limit: limit)
+        let r = try PageCommand.run(.search(query: query, limit: limit), in: store, bm25Leg: leg)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .pageHistory(let selector):
         let r = try PageCommand.run(.history(selector), in: store)
@@ -157,8 +181,10 @@ func execute(_ command: ArgumentParser.Command, in store: GRDBWikiStore) throws 
         let r = try PageCommand.run(.revert(selector, versionID: versionID), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .source(let action):
-        return try SourceCommand.run(action, in: store,
-                                   cwd: FileManager.default.currentDirectoryPath)
+        return try SourceCommand.run(
+            action, in: store,
+            cwd: FileManager.default.currentDirectoryPath,
+            bm25Leg: cliSourceLegIfSearch(action, wikiID: wikiID, containerDirectory: containerDirectory, store: store))
     case .sourceEditMarkdown(let selector, let contentOrFile, let isFile):
         let content: String
         if isFile {
@@ -201,8 +227,7 @@ func execute(_ command: ArgumentParser.Command, in store: GRDBWikiStore) throws 
     case .admin(let action):
         return try AdminCommand.run(action, in: store)
     case .chat(let action):
-        let r = try ChatCommand.run(action, in: store)
-        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
+        return try runChatCommand(action, in: store, wikiID: wikiID, containerDirectory: containerDirectory)
     case .bookmark(let action):
         let r = try BookmarkCommand.run(action, in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
@@ -216,6 +241,44 @@ func execute(_ command: ArgumentParser.Command, in store: GRDBWikiStore) throws 
         // Handled before wiki resolution in `run()` — unreachable here.
         return SourceCommand.Result(payload: .text(""), didCommit: false)
     }
+}
+
+/// #637: split-out dispatch for the `wikictl chat …` subcommands. Resolves
+/// a Tantivy BM25 leg for `.search` before invoking `ChatCommand.run(...,
+/// bm25Leg:)`. Mirrors the `page search` / `source search` paths in
+/// `execute(...)` — kept as a helper so that function's switch stays compact.
+private func runChatCommand(
+    _ action: ChatCommand.Action,
+    in store: GRDBWikiStore,
+    wikiID: String,
+    containerDirectory: URL
+) throws -> SourceCommand.Result {
+    let leg: [ChatSummary]?
+    if case .search(let query, let limit) = action {
+        leg = CLITantivyLegResolver.resolveChatLeg(
+            wikiID: wikiID, containerDirectory: containerDirectory,
+            store: store, query: query, limit: limit)
+    } else {
+        leg = nil
+    }
+    let r = try ChatCommand.run(action, in: store, bm25Leg: leg)
+    return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
+}
+
+/// #637: inspect a `SourceCommand.Action` and, when it's `.search`, resolve a
+/// Tantivy BM25 leg to thread into `SourceCommand.run(..., bm25Leg:)`. Returns
+/// `nil` for every other action (the param is unused by them). Kept as a
+/// helper so the switch in `execute(...)` reads cleanly.
+private func cliSourceLegIfSearch(
+    _ action: SourceCommand.Action,
+    wikiID: String,
+    containerDirectory: URL,
+    store: GRDBWikiStore
+) -> [SourceSummary]? {
+    guard case .search(let query, let limit) = action else { return nil }
+    return CLITantivyLegResolver.resolveSourceLeg(
+        wikiID: wikiID, containerDirectory: containerDirectory,
+        store: store, query: query, limit: limit)
 }
 
 /// Thread-safe box for the wikictl async→sync semaphore bridge (Phase 3b).

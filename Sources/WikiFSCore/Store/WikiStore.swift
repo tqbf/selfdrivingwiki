@@ -701,26 +701,43 @@ public protocol WikiStore: Sendable {
 
 // MARK: - searchSimilar default-argument convenience (Phase 2 bm25Leg)
 //
-// Protocol requirements can't carry default arguments, so the 2-arg legacy entry
-// points live here. Every caller that omits `bm25Leg` (wikictl, tests, the
-// model's sync `searchSimilar` wrappers) resolves to these and gets the FTS5
-// path — "zero caller breakage" for the Phase 2 cutover.
+// Protocol requirements can't carry default arguments, so the 2-arg legacy
+// entry points live here. As of #637 these are DEPRECATED: a `nil` bm25Leg
+// makes the store run its own FTS5 leg (the pre-Phase-2 path), bypassing the
+// Tantivy BM25 leg the sidebar/omnibox/`wikictl` now route through. After #634
+// drops FTS5, a `nil` bm25Leg has no BM25 leg at all — the legacy overloads
+// will go away entirely. Migrate to `searchSimilar(query:limit:bm25Leg:)`
+// (or the kind-specific equivalent) and resolve a Tantivy leg first.
 
 extension WikiStore {
     /// Legacy 2-arg entry point — `nil` bm25Leg means the store runs its own
     /// FTS5 (the pre-Phase-2 path). See `searchSimilar(query:limit:bm25Leg:)`.
+    ///
+    /// Deprecated (#637): call `searchSimilar(query:limit:bm25Leg:)` and
+    /// resolve a Tantivy leg via `WikiStoreModel.resolveTantivyLeg(...)` (app)
+    /// or `CLITantivyLegResolver` (CLI). A `nil` leg still works in Phase 2
+    /// (FTS5 fallback) but will regress to cosine-only under #634.
+    @available(*, deprecated, message: "Pass an explicit `bm25Leg:` — resolve a Tantivy leg for the hybrid path, or `nil` for FTS5 fallback. See #637 / #634.")
     public func searchSimilar(query: String, limit: Int) throws -> [WikiPageSummary] {
         try searchSimilar(query: query, limit: limit, bm25Leg: nil)
     }
 
     /// Legacy 2-arg entry point for sources. See
     /// `searchSimilarSources(query:limit:bm25Leg:)`.
+    ///
+    /// Deprecated (#637): call `searchSimilarSources(query:limit:bm25Leg:)`
+    /// and resolve a Tantivy leg. See ``searchSimilar(query:limit:)``.
+    @available(*, deprecated, message: "Pass an explicit `bm25Leg:` — resolve a Tantivy leg for the hybrid path, or `nil` for FTS5 fallback. See #637 / #634.")
     public func searchSimilarSources(query: String, limit: Int) throws -> [SourceSummary] {
         try searchSimilarSources(query: query, limit: limit, bm25Leg: nil)
     }
 
     /// Legacy 2-arg entry point for chats. See
     /// `searchSimilarChats(query:limit:bm25Leg:)`.
+    ///
+    /// Deprecated (#637): call `searchSimilarChats(query:limit:bm25Leg:)` and
+    /// resolve a Tantivy leg. See ``searchSimilar(query:limit:)``.
+    @available(*, deprecated, message: "Pass an explicit `bm25Leg:` — resolve a Tantivy leg for the hybrid path, or `nil` for FTS5 fallback. See #637 / #634.")
     public func searchSimilarChats(query: String, limit: Int) throws -> [ChatSummary] {
         try searchSimilarChats(query: query, limit: limit, bm25Leg: nil)
     }

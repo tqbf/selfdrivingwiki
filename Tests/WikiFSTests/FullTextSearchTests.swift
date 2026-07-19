@@ -29,7 +29,7 @@ struct FullTextSearchTests {
         let page = try store.createPage(title: "Lecture Notes")
         try store.updatePage(id: page.id, title: "Lecture Notes",
                              body: "Today we covered clinical hypnosis and suggestion.")
-        let hits = try store.searchSimilar(query: "hypnosis", limit: 10)
+        let hits = try store.searchSimilar(query: "hypnosis", limit: 10, bm25Leg: nil)
         #expect(hits.count == 1)
         #expect(hits.first?.id == page.id)
     }
@@ -41,7 +41,7 @@ struct FullTextSearchTests {
         _ = try store.appendProcessedMarkdown(
             sourceID: s.id, content: "Hypnosis measurably alters pain perception.",
             origin: .extraction, note: nil)
-        let hits = try store.searchSimilarSources(query: "hypnosis", limit: 10)
+        let hits = try store.searchSimilarSources(query: "hypnosis", limit: 10, bm25Leg: nil)
         #expect(hits.count == 1)
         #expect(hits.first?.id == s.id)
     }
@@ -51,7 +51,7 @@ struct FullTextSearchTests {
         let store = try tempStore()
         let page = try store.createPage(title: "Training")
         try store.updatePage(id: page.id, title: "Training", body: "She is running every morning.")
-        #expect(try store.searchSimilar(query: "run", limit: 10).first?.id == page.id)
+        #expect(try store.searchSimilar(query: "run", limit: 10, bm25Leg: nil).first?.id == page.id)
     }
 
     // MARK: - Name-only indexing (un-extracted source findable by filename)
@@ -59,7 +59,7 @@ struct FullTextSearchTests {
     @Test func unextractedSourceFindableByFilename() throws {
         let store = try tempStore()
         _ = try store.addSource(filename: "hypnosis-study.pdf", data: Data("%PDF".utf8))
-        let hits = try store.searchSimilarSources(query: "hypnosis", limit: 10)
+        let hits = try store.searchSimilarSources(query: "hypnosis", limit: 10, bm25Leg: nil)
         #expect(hits.count == 1)
     }
 
@@ -72,7 +72,7 @@ struct FullTextSearchTests {
                              body: "thermodynamics thermodynamics thermodynamics thermodynamics")
         let b = try store.createPage(title: "B")
         try store.updatePage(id: b.id, title: "B", body: "a brief mention of thermodynamics")
-        let hits = try store.searchSimilar(query: "thermodynamics", limit: 10)
+        let hits = try store.searchSimilar(query: "thermodynamics", limit: 10, bm25Leg: nil)
         #expect(hits.count == 2)
         #expect(hits.first?.id == a.id)  // higher term frequency → better bm25
     }
@@ -83,9 +83,9 @@ struct FullTextSearchTests {
         let store = try tempStore()
         let page = try store.createPage(title: "Gone")
         try store.updatePage(id: page.id, title: "Gone", body: "contains qxzuniqueterm")
-        #expect(try store.searchSimilar(query: "qxzuniqueterm", limit: 10).count == 1)
+        #expect(try store.searchSimilar(query: "qxzuniqueterm", limit: 10, bm25Leg: nil).count == 1)
         try store.deletePage(id: page.id)
-        #expect(try store.searchSimilar(query: "qxzuniqueterm", limit: 10).isEmpty)
+        #expect(try store.searchSimilar(query: "qxzuniqueterm", limit: 10, bm25Leg: nil).isEmpty)
     }
 
     // MARK: - Reindex rebuild (Reindex button backfills pre-existing content)
@@ -124,17 +124,17 @@ struct FullTextSearchTests {
         try store.updatePage(id: page.id, title: "Claim Notes",
                              body: "Details about the insurance claim and appeal process.")
         // Baseline: a healthy index finds the body term.
-        #expect(try store.searchSimilar(query: "insurance", limit: 10).contains { $0.id == page.id })
+        #expect(try store.searchSimilar(query: "insurance", limit: 10, bm25Leg: nil).contains { $0.id == page.id })
 
         // Reproduce the broken state: pages exist, but the FTS term index is
         // empty (as when pages predate the FTS triggers).
         try store._breakPagesFtsIndexForTesting()
-        #expect(try store.searchSimilar(query: "insurance", limit: 10).isEmpty)
+        #expect(try store.searchSimilar(query: "insurance", limit: 10, bm25Leg: nil).isEmpty)
 
         // Re-opening runs ensureSearchIndexes, which must now see zero terms and
         // rebuild → the body term is findable again.
         let reopened = try GRDBWikiStore(databaseURL: url)
-        let hits = try reopened.searchSimilar(query: "insurance", limit: 10)
+        let hits = try reopened.searchSimilar(query: "insurance", limit: 10, bm25Leg: nil)
         #expect(hits.contains { $0.id == page.id })
     }
 

@@ -99,13 +99,15 @@ import Testing
     }
 
     @Test func defaultArgBehaviorPreserved() throws {
-        // Callers that omit bm25Leg entirely (wikictl, tests, the model's sync
-        // searchSimilar wrapper) must see the legacy behavior — the "zero caller
-        // breakage" guarantee of Option B.
+        // #637: the 2-arg store overload is now deprecated — `bm25Leg: nil`
+        // is the explicit form for "no Tantivy leg, run FTS5" (the legacy
+        // Phase 2 behavior the model's sync wrapper still uses, and the
+        // FTS5 fallback path #634 will retire). Tests pass `nil` explicitly
+        // so the deprecation warning doesn't fire under `-warnings-as-errors`.
         let store = try tempStore()
         let p = try store.createPage(title: "Default Arg")
         try store.updatePage(id: p.id, title: p.title, body: "kappa keyword common", lastEditedBy: nil)
-        let hits = try store.searchSimilar(query: "kappa", limit: 10)
+        let hits = try store.searchSimilar(query: "kappa", limit: 10, bm25Leg: nil)
         #expect(hits.count == 1)
     }
 

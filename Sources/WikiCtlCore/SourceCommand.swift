@@ -60,7 +60,18 @@ public enum SourceCommand {
     /// Run one action against `store`. `cwd` is the directory for `export`'s
     /// default output path (injected for testability). All actions are pure
     /// reads — `didCommit` is always false.
-    public static func run(_ action: Action, in store: WikiStore, cwd: String) throws -> Result {
+    ///
+    /// `bm25Leg` is the pre-resolved Tantivy BM25 leg for the `.search` action
+    /// (#637). `nil` (the default) makes the store run its own FTS5; a non-nil
+    /// list is fused with the semantic cosine leg via RRF, REPLACING the FTS5
+    /// leg. Caller-resolved via `CLITantivyLegResolver.resolveSourceLeg(...)`
+    /// in `wikictl`'s `execute()`.
+    public static func run(
+        _ action: Action,
+        in store: WikiStore,
+        cwd: String,
+        bm25Leg: [SourceSummary]? = nil
+    ) throws -> Result {
         switch action {
         case .list(let json):
             return try list(in: store, json: json)
@@ -73,7 +84,7 @@ public enum SourceCommand {
         case .rename(let selector, let to):
             return try rename(selector, to: to, in: store)
         case .search(let query, let limit):
-            return try search(query: query, limit: limit, in: store)
+            return try search(query: query, limit: limit, bm25Leg: bm25Leg, in: store)
         case .setActive(let selector, let versionID):
             return try setActive(selector, versionID: versionID, in: store)
         case .info(let selector):
@@ -265,9 +276,9 @@ public enum SourceCommand {
     /// `PageCommand.search`. `name` is the display name, falling back to the
     /// filename (mirrors how sources are surfaced elsewhere). Read-only.
     private static func search(
-        query: String, limit: Int, in store: WikiStore
+        query: String, limit: Int, bm25Leg: [SourceSummary]?, in store: WikiStore
     ) throws -> Result {
-        let results = try store.searchSimilarSources(query: query, limit: limit)
+        let results = try store.searchSimilarSources(query: query, limit: limit, bm25Leg: bm25Leg)
         let output: String = results.map { summary in
             // `effectiveName` falls back to filename on nil OR empty display_name,
             // matching how sources are labeled app-wide (sidebar/file-provider).

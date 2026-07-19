@@ -65,13 +65,20 @@ public enum PageCommand {
     ///
     /// `validator` injects the Mermaid validator (defaults to the bundled one) so
     /// the abort-before-write path is end-to-end testable without a bundle.
-    /// `linter` injects the Markdown linter (defaults to the bundled one) so the
-    /// auto-fix-before-write path is testable without a bundle.
+    /// `linter` injects the Markdown linter (defaults to the bundled one) so
+    /// the auto-fix-before-write path is testable without a bundle.
+    ///
+    /// `bm25Leg` is the pre-resolved Tantivy BM25 leg for the `.search` action
+    /// (#637). `nil` (the default) makes the store run its own FTS5; a non-nil
+    /// list is fused with the semantic cosine leg via RRF, REPLACING the FTS5
+    /// leg — which is what unblocks #634 (drop FTS5). Caller-resolved via
+    /// `CLITantivyLegResolver.resolvePageLeg(...)` in `wikictl`'s `execute()`.
     public static func run(
         _ action: Action,
         in store: WikiStore,
         validator: MermaidValidator? = MermaidValidator.loadDefault(),
-        linter: MarkdownLinter? = MarkdownLinter.loadDefault()
+        linter: MarkdownLinter? = MarkdownLinter.loadDefault(),
+        bm25Leg: [WikiPageSummary]? = nil
     ) throws -> Result {
         switch action {
         case .list(let json):
@@ -83,7 +90,7 @@ public enum PageCommand {
         case .delete(let id):
             return try delete(id: id, in: store)
         case .search(let query, let limit):
-            return try search(query: query, limit: limit, in: store)
+            return try search(query: query, limit: limit, bm25Leg: bm25Leg, in: store)
         case .history(let selector):
             return try history(selector, in: store)
         case .revert(let selector, let versionID):
@@ -301,9 +308,9 @@ public enum PageCommand {
     // MARK: - search
 
     private static func search(
-        query: String, limit: Int, in store: WikiStore
+        query: String, limit: Int, bm25Leg: [WikiPageSummary]?, in store: WikiStore
     ) throws -> Result {
-        let results = try store.searchSimilar(query: query, limit: limit)
+        let results = try store.searchSimilar(query: query, limit: limit, bm25Leg: bm25Leg)
         let output: String = results.map { summary in
             let title = summary.title.replacingOccurrences(of: "\t", with: " ")
             return "\(summary.id.rawValue)\t\(title)"
