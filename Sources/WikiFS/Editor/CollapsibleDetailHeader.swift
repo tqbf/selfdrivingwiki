@@ -1,4 +1,5 @@
 import SwiftUI
+import WikiFSCore
 
 /// A detail-view header with a collapsible disclosure area. The title row
 /// (disclosure chevron + resource icon + editable title) is always visible;
@@ -41,6 +42,7 @@ struct CollapsibleDetailHeader<Expanded: View>: View {
     private var titleRow: some View {
         HStack(alignment: .center, spacing: 6) {
             Button {
+                DebugLog.tabs("CollapsibleDetailHeader: chevron tapped — wasExpanded=\(isExpanded)")
                 withAnimation(.easeInOut(duration: 0.2)) {
                     isExpanded.toggle()
                 }
