@@ -58,4 +58,24 @@ public enum MermaidSourceDetector {
         // inlines the Mermaid library + bootstrap.
         return "```mermaid\n\(trimmed)\n```"
     }
+
+    /// The Reader-tab markdown for a STANDALONE diagram source (`.mmd` /
+    /// `text/mermaid`; future: `.excalidraw` / `.canvas`): the raw source text
+    /// wrapped in a plain (no-language) CommonMark code fence so the reader
+    /// renders `<pre><code>` — monospace, newlines preserved, no markdown
+    /// parsing of the body. Diagram DSLs confuse the markdown pipeline (mermaid
+    /// `flowchart LR` parsed as prose, `.excalidraw` JSON as flat text), so the
+    /// Reader tab shows them as the code they are while the Rendered tab still
+    /// renders the diagram (issue #662).
+    ///
+    /// Uses a 4-backtick fence so any 3-backtick sequences inside the content
+    /// (rare in mermaid DSL or JSON, but possible) don't terminate the wrapper
+    /// early. Returns `nil` only when `content` is empty/whitespace (nothing to
+    /// show). Sibling of `renderableMarkdown(from:)`: that one wraps to RENDER
+    /// a diagram; this one wraps to DISPLAY source code.
+    public static func codeBlockMarkdown(from content: String) -> String? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return "````\n\(trimmed)\n````"
+    }
 }
