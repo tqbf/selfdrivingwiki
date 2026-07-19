@@ -510,14 +510,14 @@ public final class WikiStoreModel {
     /// caller that froze the UI was removed; MiniLM inference is now ms, not the
     /// ~5 s/100k chars NLEmbedding cliff that motivated disabling this.
     ///
-    /// Routes through the FTS5 fallback (`bm25Leg: nil`) rather than the
-    /// Tantivy leg used by `scheduleSearch()` — kept as-is for one-shot
-    /// callers that don't want the Tantivy index dependency (the omnibox is
-    /// debounced via a `Task` and benefits from the existing path). The
-    /// "Find Similar…" right-click menu should call
+    /// Routes through the no-BM25-leg path (`bm25Leg: nil`) — post-#634 this
+    /// means cosine-only (the FTS5 fallback it used to surface was dropped). Kept
+    /// as-is for one-shot callers that don't want the Tantivy index dependency
+    /// (the omnibox is debounced via a `Task` and benefits from the existing
+    /// path). The "Find Similar…" right-click menu should call
     /// ``searchSimilarResolvingTantivy(query:limit:)`` instead — it resolves
     /// the Tantivy BM25 leg (#637) so the menu surfaces fuzzy (edit-distance 1)
-    /// matches and survives #634's FTS5 drop without regression.
+    /// matches without regressing post-#634 (no FTS5).
     public func searchSimilar(query: String, limit: Int = 8) -> [WikiPageSummary] {
         (try? store.searchSimilar(query: query, limit: limit, bm25Leg: nil)) ?? []
     }
@@ -532,8 +532,10 @@ public final class WikiStoreModel {
     /// The Tantivy `indexer.search` runs on its actor (off-main); the async→
     /// sync bridge uses `Task { ... }.value` on `@MainActor` — safe because
     /// the search never hops back to the main actor to make progress. Returns
-    /// FTS5-fallback results (`bm25Leg: nil`) when Tantivy is unavailable or
-    /// returns no hits.
+    /// cosine-only results (`bm25Leg: nil`) when Tantivy is unavailable or
+    /// returns no hits — post-#634 that's the documented contract (FTS5 was
+    /// dropped; nil leg = no BM25 leg, cosine still answers when vec and
+    /// NLEmbedding/MLX are available).
     public func searchSimilarResolvingTantivy(query: String, limit: Int = 8) -> [WikiPageSummary] {
         guard !query.isEmpty else { return [] }
         let leg = resolveTantivyLegSync(query: query, kind: .page, limit: limit, catalog: summaries)

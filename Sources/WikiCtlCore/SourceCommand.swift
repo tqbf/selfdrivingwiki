@@ -62,9 +62,9 @@ public enum SourceCommand {
     /// reads — `didCommit` is always false.
     ///
     /// `bm25Leg` is the pre-resolved Tantivy BM25 leg for the `.search` action
-    /// (#637). `nil` (the default) makes the store run its own FTS5; a non-nil
-    /// list is fused with the semantic cosine leg via RRF, REPLACING the FTS5
-    /// leg. Caller-resolved via `CLITantivyLegResolver.resolveSourceLeg(...)`
+    /// (#637). Post-#634 this is the SOLE BM25 leg (FTS5 was dropped); `nil`
+    /// (the default) means no BM25 results — only the cosine semantic leg runs.
+    /// Caller-resolved via `CLITantivyLegResolver.resolveSourceLeg(...)`
     /// in `wikictl`'s `execute()`.
     public static func run(
         _ action: Action,

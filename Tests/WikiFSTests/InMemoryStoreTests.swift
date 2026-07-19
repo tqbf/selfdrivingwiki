@@ -54,16 +54,27 @@ struct InMemoryStoreTests {
     }
 
     @Test func inMemoryStore_ftsIndexIsPopulatedAfterCreate() throws {
-        // `ensureSearchIndexesPopulated` runs at init; with no pre-existing pages
-        // it's a no-op. After creating + updating a page, the FTS trigger should
-        // index the body — proves FTS5 + triggers work on `:memory:` (where
-        // `PRAGMA journal_mode=WAL` would have been a no-op).
+        // Post-#634: FTS5 is gone — `:memory:` no longer has an FTS5 leg for
+        // `searchSimilar` to fall back on. With `bm25Leg: nil` and the cosine
+        // leg empty under `swift test` (NLEmbedding is app-gated), the result
+        // is empty. Prove the contract holds on `:memory:` by supplying a
+        // fabricated leg (mirroring `TantivyBM25LegCutoverTests`): with no
+        // page_chunks the cosine leg is empty so the fused output equals the
+        // leg exactly — proves `mutate()` + `ensureSearchIndexesPopulated` ran
+        // cleanly on the `:memory:` `DatabaseQueue` (no WAL pragma, no
+        // file-based checkpoint).
         let store = try TestStoreFactory.inMemory()
         _ = try store.createPage(title: "Hypnosis")
         let page = try store.createPage(title: "Notes")
         try store.updatePage(id: page.id, title: "Notes",
                              body: "Details about clinical hypnosis and suggestion.")
-        let hits = try store.searchSimilar(query: "hypnosis", limit: 10, bm25Leg: nil)
+        // nil leg → no BM25 results (FTS5 dropped; cosine gated).
+        #expect(try store.searchSimilar(query: "hypnosis", limit: 10, bm25Leg: nil).isEmpty)
+        // Fabricated leg targeting the page → pass-through unchanged.
+        let leg = [WikiPageSummary(
+            id: page.id, title: page.title,
+            updatedAt: page.updatedAt, createdAt: page.createdAt)]
+        let hits = try store.searchSimilar(query: "hypnosis", limit: 10, bm25Leg: leg)
         #expect(hits.contains { $0.id == page.id })
     }
 
