@@ -123,6 +123,62 @@ public actor TantivyIndexer {
         }.prefix(limit))
     }
 
+    // MARK: - Autocomplete (composer wiki-link fuzzy)
+
+    /// Title-only fuzzy autocomplete scoped to one or more kinds. Used by the
+    /// chat composer's `[[kind:partial` autocomplete (issues #436 / #638).
+    ///
+    /// **Reviewer correction #1 (load-bearing):** uses the **query-string path**
+    /// (`TantivySwiftSearchQuery` + `TantivySwiftFuzzyField`), NOT the structured
+    /// `TantivyQuery.fuzzy` enum. The structured `.fuzzy` case has no `prefix`
+    /// parameter, and without `prefix: true` distance-2 fuzzy on a short
+    /// partial like `"Erl"` will not surface `"Erickson"` (whole-token edit
+    /// distance 6). The query-string path's `TantivySwiftFuzzyField` exposes
+    /// both `distance: UInt8` AND `prefix: Bool` — this is the same path the
+    /// shipped sidebar search uses (`search(query:kind:limit:)` above), with
+    /// `distance: 2` instead of `1` and `prefix: true` on title only.
+    ///
+    /// Kind scoping is a **Swift post-filter** (same shape as `search()` at
+    /// `:113-116`) since the query-string path carries no facet clause. The
+    /// engine-level kind facet (`.term(.facet)` on `kind`) was a nice-to-have
+    /// optimization dropped in review — it is not required by any AC.
+    ///
+    /// Title only (not body): the user is typing a title/name; body fuzzy
+    /// would surface noise. distance 1–2 (default 2 — AC #638 headline case).
+    public func autocomplete(
+        partial: String,
+        kinds: Set<TantivyDocumentKind>,
+        distance: UInt8 = 2,
+        limit: Int = 8
+    ) async throws -> [TantivyShadowSearchResult] {
+        guard let index, !partial.isEmpty, !kinds.isEmpty else { return [] }
+        // Over-fetch to give the Swift-side kind post-filter a fair pool to
+        // draw from (same shape as `search()` `:102`). `min(limit*5, 1_000)`
+        // matches the existing cap.
+        let fetchLimit = max(1, min(limit * 5, 1_000))
+        var q = TantivySwiftSearchQuery<TantivySearchDocument>(
+            queryStr: partial,
+            defaultFields: [.title],
+            limit: UInt32(fetchLimit)
+        )
+        // prefix:true is load-bearing — see method doc and §3c nuance.
+        q.fuzzyFields = [
+            .init(field: .title, prefix: true, distance: distance),
+        ]
+        let results = try await index.search(query: q)
+        let allowed = kinds
+        return Array(results.docs.compactMap { hit -> TantivyShadowSearchResult? in
+            let kindEnum = TantivyDocumentKind.allCases.first { $0.facetPath == hit.doc.kind }
+            guard let kindEnum, allowed.contains(kindEnum) else { return nil }
+            return TantivyShadowSearchResult(
+                documentID: hit.doc.id,
+                kind: kindEnum,
+                title: hit.doc.title,
+                score: hit.score
+            )
+        }.prefix(max(0, limit)))
+    }
+
     // MARK: - Rebuild / initial build
 
     /// Number of indexed documents. Used by the service to detect an empty
