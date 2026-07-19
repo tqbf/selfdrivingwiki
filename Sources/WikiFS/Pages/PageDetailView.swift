@@ -304,7 +304,14 @@ struct PageDetailView: View {
             onCaretChange: { caretCharIndex = $0 },
             sidebarDropBuilder: { payloads in
                 SidebarDropBuilder.insertionText(for: payloads, store: store)
-            }
+            },
+            // Issue #680: wiki-link autocomplete in the editor. Same hooks +
+            // search backend as the chat composer (#684), re-pointed at the
+            // editor's `ScrollableTextEditor`. Built from `store.tantivySearch`
+            // so a wiki without one (no Tantivy service yet attached) gets
+            // `nil` and the editor behaves as before.
+            autocomplete: SidebarDropBuilder.wikiLinkAutocompleteHooks(store: store),
+            autocompletePlacement: .below  // editor convention: tall NSTextView has more room below the caret
         )
         .padding(.horizontal, PageEditorMetrics.contentInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
