@@ -17,10 +17,11 @@ import WikiFSCore
 /// (the precondition: empty selection → nil modelId).
 @Suite("SpawnModelGuard")
 struct SpawnModelGuardTests {
-    /// Inline fixture: no `.testDefault` factory exists on `AgentProvider` —
-    /// the type defines only `claudeAcpDefault`, `hermesDefault`,
-    /// `opencodeDefault`, and the `acp(from:)` factory. Construct inline so
-    /// the test is independent of those seeds.
+    /// Inline fixture: #663 deleted the `.hermesDefault`/`.opencodeDefault`
+    /// seed statics (the `.claudeAcpDefault` static remains as the
+    /// `selectedProvider()` fallback safety net) and the `acp(from:)` factory
+    /// is the generic catalog→provider mapper. Construct inline so the test
+    /// is independent of any seed.
     private let claude = AgentProvider(
         id: "claude-acp",
         label: "Claude",

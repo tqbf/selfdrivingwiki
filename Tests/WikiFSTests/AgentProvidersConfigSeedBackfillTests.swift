@@ -22,10 +22,15 @@ struct AgentProvidersConfigSeedBackfillTests {
     }
 
     @Test func seedDoesNotSeedModelsForNonDefaultProviders() {
-        // Only the default claude-acp gets a seed model — Hermes/OpenCode stay
-        // nil so the actual diagnosed-bug state (default provider with no
-        // model) is still reachable for them (the user opts in explicitly).
+        // Only the default claude-acp gets a seed model — any other provider
+        // (e.g. one built from the catalog via `AddProviderSheet`) stays nil so
+        // the actual diagnosed-bug state (default provider with no model) is
+        // still reachable for them (the user opts in explicitly).
         let config = AgentProvidersConfig.seed(discovered: [])
+        #expect(config.selectedModelId(forProvider: "claude-acp") == "sonnet")
+        // Providers other than claude-acp don't exist in the seed at all
+        // (#663: the seed was reduced to `[claudeAcpDefault]`), so their
+        // `selectedModelId` is nil by definition — pin it for the contract.
         #expect(config.selectedModelId(forProvider: "hermes") == nil)
         #expect(config.selectedModelId(forProvider: "opencode") == nil)
     }
@@ -71,12 +76,21 @@ struct AgentProvidersConfigSeedBackfillTests {
         // `[.claudeAcpDefault, opencodeAsDefault]` list would leave
         // claude-acp as default and trigger the backfill. We demote
         // claude-acp explicitly so opencode is the sole default.
+        // #663: `.opencodeDefault` was deleted with the Hermes/OpenCode
+        // seeds — fixtures build the literal inline (the catalog-driven
+        // `AddProviderSheet` constructs the same shape at runtime).
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("agent-providers-no-backfill-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
-        var opencodeDefault = AgentProvider.opencodeDefault
+        var opencodeDefault = AgentProvider(
+            id: "opencode",
+            label: "OpenCode",
+            command: ["opencode", "acp"],
+            env: [:],
+            enabled: true,
+            isDefault: false)
         opencodeDefault.isDefault = true
         var claudeNonDefault = AgentProvider.claudeAcpDefault
         claudeNonDefault.isDefault = false

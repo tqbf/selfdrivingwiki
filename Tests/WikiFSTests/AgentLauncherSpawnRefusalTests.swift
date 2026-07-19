@@ -37,8 +37,19 @@ struct AgentLauncherSpawnRefusalTests {
         launcher.resolveProvidersContainerDirectory = { tmp }
         // Override the provider so we exercise opencode's nil-modelId state,
         // independent of whatever the user happens to have configured as
-        // default in the real App Group container.
-        launcher.resolveSelectedProvider = { .opencodeDefault }
+        // default in the real App Group container. Constructed inline (#663:
+        // the `.opencodeDefault` static was deleted alongside the Hermes/
+        // OpenCode seeds — the catalog-driven `AddProviderSheet` replaced
+        // them, so test fixtures build literals).
+        launcher.resolveSelectedProvider = {
+            AgentProvider(
+                id: "opencode",
+                label: "OpenCode",
+                command: ["opencode", "acp"],
+                env: [:],
+                enabled: true,
+                isDefault: false)
+        }
         return launcher
     }
 
@@ -95,7 +106,16 @@ struct AgentLauncherSpawnRefusalTests {
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         // Pre-populate with a config whose opencode provider has a model.
-        var opencodeDefault = AgentProvider.opencodeDefault
+        // #663: `.opencodeDefault` was deleted alongside the Hermes/OpenCode
+        // seeds — the catalog-driven `AddProviderSheet` replaced them, so test
+        // fixtures build literals.
+        var opencodeDefault = AgentProvider(
+            id: "opencode",
+            label: "OpenCode",
+            command: ["opencode", "acp"],
+            env: [:],
+            enabled: true,
+            isDefault: false)
         opencodeDefault.isDefault = true
         let configWithModel = AgentProvidersConfig(
             providers: [opencodeDefault],

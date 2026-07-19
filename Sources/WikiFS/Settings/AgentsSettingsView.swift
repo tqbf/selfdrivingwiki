@@ -2,6 +2,24 @@ import SwiftUI
 import WikiFSCore
 import WikiFSEngine
 
+/// #663: structured model-status classifier for `providerRow`. The
+/// `nonisolated static func modelStatus(for:in:)` below returns one of these
+/// so the row can branch without re-deriving. PURE so it is unit-tested
+/// directly (`AgentsSettingsViewModelStatusTests`).
+enum ModelStatus: Equatable {
+    /// The provider is disabled — no status line (the `○` switch glyph conveys it).
+    case disabled
+    /// The provider has a `selectedModelId` + the friendly name (the chosen
+    /// model from the cache, or the raw model id when the cache is stale).
+    case selected(name: String)
+    /// Enabled + no model + no cached models. The orange "chat with this
+    /// provider once to discover models" guidance line.
+    case noneCaptured
+    /// Enabled + no model + cached models exist. The orange "pick one before
+    /// running" guidance line.
+    case noSelectionPickable
+}
+
 /// Settings → **Agents** tab (Phase 3 of `plans/acp-multi-provider.md`):
 /// replaces the old "Agent" + "Providers" tabs with one view over
 /// `AgentProvidersConfig` — the editable multi-provider list and the permission
@@ -15,6 +33,10 @@ struct AgentsSettingsView: View {
     @State private var config: AgentProvidersConfig
     @State private var selectedProviderID: String?
     @State private var providerPendingDeletion: AgentProvider?
+    /// #663: drives the `AddProviderSheet`. Replaces the old `Menu` of
+    /// hardcoded seed buttons (Add Claude / Add Hermes / Add OpenCode) with
+    /// a non-destructive, catalog-driven sheet. Cancel = no change (AC.2).
+    @State private var showAddSheet = false
 
     @AppStorage(AgentLauncher.PermissionModeKey.chat)   private var chatModeRaw   = PermissionPolicy.bypass.rawValue
     @AppStorage(AgentLauncher.PermissionModeKey.ingest) private var ingestModeRaw = PermissionPolicy.bypass.rawValue
@@ -41,6 +63,21 @@ struct AgentsSettingsView: View {
         }
         .formStyle(.grouped)
         .frame(minWidth: 560, minHeight: 520)
+        // #663: the Add Provider sheet. Non-destructive (nothing is written
+        // until an Add button is pressed — AC.2). The handoff to the editor
+        // uses `DispatchQueue.main.async` (see correction §5): letting this
+        // sheet finish dismissing before the editor presents avoids the
+        // SwiftUI hazard where the second sheet silently fails when the
+        // first is mid-dismissal.
+        .sheet(isPresented: $showAddSheet) {
+            AddProviderSheet(
+                existingIDs: Set(config.providers.map(\.id)),
+                onAdd: { provider in appendProvider(provider) },
+                onAddNeedsEditor: { provider in
+                    showAddSheet = false
+                    DispatchQueue.main.async { editingProvider = provider }
+                })
+        }
         .sheet(item: $editingProvider) { provider in
             ProviderEditorView(
                 provider: provider,
@@ -78,54 +115,57 @@ struct AgentsSettingsView: View {
 
     private var providersSection: some View {
         Section {
-            List(config.providers, selection: $selectedProviderID) { provider in
-                providerRow(provider)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        selectedProviderID = provider.id
-                        editingProvider = provider
-                    }
-            }
-            .frame(minHeight: 160, maxHeight: 220)
-            .listStyle(.inset)
-
-            HStack {
-                Menu {
-                    Button("Add Claude") { addSeed(.claudeAcpDefault) }
-                    Button("Add Hermes") { addSeed(.hermesDefault) }
-                    Button("Add OpenCode") { addSeed(.opencodeDefault) }
-                    Divider()
-                    Button("Custom…") { addCustom() }
-                } label: {
-                    Image(systemName: "plus")
+            if config.providers.isEmpty {
+                // Defensive — `loadOrSeed` guarantees at least one provider,
+                // but a hand-edited/corrupt file could empty the list.
+                ProvidersEmptyState { showAddSheet = true }
+                    .frame(minHeight: 200)
+                    .listRowBackground(Color.clear)
+            } else {
+                List(config.providers, selection: $selectedProviderID) { provider in
+                    providerRow(provider)
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2) {
+                            selectedProviderID = provider.id
+                            editingProvider = provider
+                        }
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
+                .frame(minHeight: 160, maxHeight: 220)
+                .listStyle(.inset)
 
-                Button {
-                    if let provider = selectedProvider {
-                        providerPendingDeletion = provider
+                HStack {
+                    Button {
+                        showAddSheet = true
+                    } label: {
+                        Label("Add Provider", systemImage: "plus")
                     }
-                } label: {
-                    Image(systemName: "minus")
-                }
-                .disabled(selectedProvider == nil || config.providers.count <= 1)
+                    .buttonStyle(.borderedProminent)
 
-                Button("Make Default") {
-                    if let id = selectedProviderID {
-                        save(config.settingDefault(id: id))
+                    Button {
+                        if let provider = selectedProvider {
+                            providerPendingDeletion = provider
+                        }
+                    } label: {
+                        Image(systemName: "minus")
                     }
-                }
-                .disabled(selectedProvider?.isDefault ?? true)
+                    .disabled(selectedProvider == nil || config.providers.count <= 1)
 
-                Spacer()
-
-                Button("Edit…") {
-                    if let provider = selectedProvider {
-                        editingProvider = provider
+                    Button("Make Default") {
+                        if let id = selectedProviderID {
+                            save(config.settingDefault(id: id))
+                        }
                     }
+                    .disabled(selectedProvider?.isDefault ?? true)
+
+                    Spacer()
+
+                    Button("Edit…") {
+                        if let provider = selectedProvider {
+                            editingProvider = provider
+                        }
+                    }
+                    .disabled(selectedProvider == nil)
                 }
-                .disabled(selectedProvider == nil)
             }
         } header: {
             Text("Providers")
@@ -137,49 +177,54 @@ struct AgentsSettingsView: View {
     }
 
     private func providerRow(_ provider: AgentProvider) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Toggle("", isOn: enabledBinding(for: provider))
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.mini)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(provider.label)
                         .fontWeight(.medium)
-                    if provider.isDefault {
-                        Text("Default")
-                            .font(.caption2)
-                            .fontWeight(.semibold)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Color.accentColor.opacity(0.18), in: Capsule())
-                            .foregroundStyle(Color.accentColor)
-                    }
+                    ProviderStatusBadges(provider: provider)
                 }
                 Text(provider.command.map(ShellWords.join) ?? "—")
                     .font(.caption)
                     .fontDesign(.monospaced)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                // Orange "no model picked" caption. The launcher now refuses to
-                // spawn without an explicit `selectedModelId` (see
-                // `SpawnModelGuard`), so surface the missing selection here.
-                // NON-BLOCKING — models are discovered live on first spawn
-                // (`AgentsSettingsView`'s editor comment at line ~503), so we
-                // let the user save a provider without a model and just remind
-                // them to pick one before running. Disabled providers show no
-                // caption (they can't spawn anyway).
-                if let warning = Self.modelWarning(for: provider, in: config) {
-                    Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .truncationMode(.middle)
+                // Model status line (§3.2) — drives a green dot with the
+                // model name, or an orange warning matching `modelWarning`.
+                // The pure `modelStatus(for:in:)` classifier below is the
+                // unit-tested seam; the `modelWarning(for:in:)` sibling is
+                // kept for the existing `AgentsSettingsViewWarningTests`
+                // suite (correction §6 — both coexist).
+                switch Self.modelStatus(for: provider, in: config) {
+                case .selected(let name):
+                    Label(name, systemImage: "circle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.green)
+                case .noSelectionPickable:
+                    Label("No model selected — pick one before running",
+                          systemImage: "exclamationmark.triangle.fill")
                         .font(.caption2)
                         .foregroundStyle(.orange)
+                case .noneCaptured:
+                    Label("No model captured yet — chat with this provider once to discover models",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                case .disabled:
+                    EmptyView()
                 }
             }
+            .opacity(provider.enabled ? 1.0 : 0.55)
 
             Spacer()
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
         .tag(provider.id)
     }
 
@@ -217,6 +262,34 @@ struct AgentsSettingsView: View {
             return "No model captured yet — chat with this provider once to discover models."
         }
         return "No model selected — pick one before running."
+    }
+
+    /// #663: the structured classifier the restructured `ProviderRow` reads.
+    /// Sibling to `modelWarning(for:in:)` — both coexist (correction §6) so
+    /// the existing `AgentsSettingsViewWarningTests` (which pin the warning
+    /// STRING) stay load-bearing while the new row can branch on the
+    /// structured enum.
+    ///
+    /// Same contract + same `nonisolated static` shape so the new tests
+    /// (`AgentsSettingsViewModelStatusTests`) can call it without rendering.
+    /// - `.disabled` is returned for a disabled provider (the row shows no
+    ///   status line — the leading `○` switch glyph already conveys it).
+    /// - `.selected(name)` when the provider has a `selectedModelId`.
+    /// - `.noneCaptured` when no model cache exists yet (first-spawn state).
+    /// - `.noSelectionPickable` when a cache exists but no selection was made.
+    nonisolated static func modelStatus(for provider: AgentProvider, in config: AgentProvidersConfig) -> ModelStatus {
+        guard provider.enabled else { return .disabled }
+        if let modelId = config.selectedModelId(forProvider: provider.id),
+           !modelId.isEmpty {
+            // Resolve a friendly name if the model is in the cache; fall back
+            // to the raw id so the dot+label still renders definitively.
+            let name = config.cachedModels(forProvider: provider.id)
+                .first(where: { $0.modelId == modelId })?.name ?? modelId
+            return .selected(name: name)
+        }
+        let models = config.cachedModels(forProvider: provider.id)
+        if models.isEmpty { return .noneCaptured }
+        return .noSelectionPickable
     }
 
     private func enabledBinding(for provider: AgentProvider) -> Binding<Bool> {
@@ -268,44 +341,30 @@ struct AgentsSettingsView: View {
 
     // MARK: - Add / delete
 
-    private func addSeed(_ seed: AgentProvider) {
-        guard !config.providers.contains(where: { $0.id == seed.id }) else {
-            selectedProviderID = seed.id
+    /// #663: non-destructive append — replaces `addSeed(_:)` and the
+    /// pre-persist tail of `addCustom()`. Called by `AddProviderSheet`'s
+    /// `onAdd`. Persists the provider immediately (the row appears in the
+    /// list as soon as the sheet dismisses); the editor opens separately
+    /// via the `onAddNeedsEditor` callback when the heuristic in
+    /// `AddProviderModel.needsEditor(for:)` says so.
+    ///
+    /// Dedup: a provider with the same id is NOT replaced — the call is a
+    /// no-op (the `AddProviderSheet` already hides already-added agents
+    /// behind a "✓ Added" chip, so this is a defensive guard against a
+    /// race between the sheet snapshot and a fast double-click).
+    private func appendProvider(_ provider: AgentProvider) {
+        guard !config.providers.contains(where: { $0.id == provider.id }) else {
+            selectedProviderID = provider.id
             return
         }
         var updated = config
-        updated.providers.append(seed)
+        updated.providers.append(provider)
         save(AgentProvidersConfig(
             providers: updated.providers,
             providerModels: updated.providerModels,
             selectedModelIds: updated.selectedModelIds,
             favoriteModelIds: updated.favoriteModelIds))
-        selectedProviderID = seed.id
-    }
-
-    private func addCustom() {
-        var id = "custom"
-        var suffix = 1
-        while config.providers.contains(where: { $0.id == id }) {
-            suffix += 1
-            id = "custom-\(suffix)"
-        }
-        let blank = AgentProvider(
-            id: id,
-            label: "Custom Agent",
-            command: [],
-            env: [:],
-            enabled: true,
-            isDefault: false)
-        var updated = config
-        updated.providers.append(blank)
-        save(AgentProvidersConfig(
-            providers: updated.providers,
-            providerModels: updated.providerModels,
-            selectedModelIds: updated.selectedModelIds,
-            favoriteModelIds: updated.favoriteModelIds))
-        selectedProviderID = id
-        editingProvider = blank
+        selectedProviderID = provider.id
     }
 
     private var isShowingDeleteConfirmation: Binding<Bool> {
@@ -429,6 +488,17 @@ private struct ProviderEditorView: View {
     /// last-known list stays visible).
     @State private var modelRefreshState: ModelRefreshState = .idle
 
+    /// #663: progressive disclosure for Environment + Authentication. The
+    /// common-case editor shows only Command + Model; the env/apiKey fields
+    /// collapse under "Advanced" until the user has either env vars OR a
+    /// stored key (auto-expanded via `onAppear` so existing config is never
+    /// hidden). The `onAppear` assignment may cause a one-frame collapsed→
+    /// expanded flash on providers that have env/key — acceptable per
+    /// correction §7 (Low). A future two-pass `init` could compute it up
+    /// front, but the apiKey load already needs `onAppear` (Keychain is a
+    /// synchronous-actor hop on first read), so the timing is similar.
+    @State private var showAdvanced = false
+
     let credentialStore: any ACPCredentialStore
     let onSave: (AgentProvider, String?) -> Void
     /// #640: durable-persist callback for discovered models. The probe calls
@@ -478,6 +548,10 @@ private struct ProviderEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
+                // #663: reorder so the COMMON case is at the top — Command
+                // → Model → Advanced (Environment + Authentication). The old
+                // order had Environment between Command and Authentication,
+                // cluttering the editor for providers that have neither.
                 Section {
                     TextField("Label", text: $label)
                     TextField("Command", text: $commandText, prompt: Text("hermes acp"))
@@ -493,46 +567,6 @@ private struct ProviderEditorView: View {
                     Text("Command")
                 } footer: {
                     Text("A single command line, e.g. bun x @agentclientprotocol/claude-agent-acp. Quote arguments containing spaces.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section {
-                    ForEach($envRows) { $row in
-                        HStack {
-                            TextField("KEY", text: $row.key)
-                                .fontDesign(.monospaced)
-                                .frame(maxWidth: 160)
-                            TextField("value", text: $row.value)
-                                .fontDesign(.monospaced)
-                            Button {
-                                envRows.removeAll { $0.id == row.id }
-                            } label: {
-                                Image(systemName: "minus.circle")
-                            }
-                            .buttonStyle(.borderless)
-                        }
-                    }
-                    Button {
-                        envRows.append(EnvRow(key: "", value: ""))
-                    } label: {
-                        Label("Add Variable", systemImage: "plus")
-                    }
-                    .buttonStyle(.borderless)
-                } header: {
-                    Text("Environment")
-                } footer: {
-                    Text("Non-secret configuration only — API keys and other secrets belong in the field below, never here (this list is stored in plain JSON).")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section {
-                    SecureField("API Key", text: $apiKey, prompt: Text("optional"))
-                } header: {
-                    Text("Authentication")
-                } footer: {
-                    Text("Stored in the macOS Keychain, never in the provider's JSON config.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -564,10 +598,14 @@ private struct ProviderEditorView: View {
                             Text("Discovering models…")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                        case .ready:
-                            // The picker above already shows the count; no extra
-                            // caption needed (keeps the row tight).
-                            EmptyView()
+                        case .ready(let models):
+                            // #663: show a compact "N models" caption next
+                            // to Refresh so the count is always legible (was
+                            // EmptyView — the picker's count was the only
+                            // signal, which disappeared when collapsed).
+                            Label("\(models.count) models", systemImage: "circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         case .error(let message):
                             Text(message)
                                 .font(.caption)
@@ -578,6 +616,51 @@ private struct ProviderEditorView: View {
                 } header: {
                     Text("Model")
                 }
+
+                DisclosureGroup(isExpanded: $showAdvanced) {
+                    Section {
+                        ForEach($envRows) { $row in
+                            HStack {
+                                TextField("KEY", text: $row.key)
+                                    .fontDesign(.monospaced)
+                                    .frame(maxWidth: 160)
+                                TextField("value", text: $row.value)
+                                    .fontDesign(.monospaced)
+                                Button {
+                                    envRows.removeAll { $0.id == row.id }
+                                } label: {
+                                    Image(systemName: "minus.circle")
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
+                        Button {
+                            envRows.append(EnvRow(key: "", value: ""))
+                        } label: {
+                            Label("Add Variable", systemImage: "plus")
+                        }
+                        .buttonStyle(.borderless)
+                    } header: {
+                        Text("Environment")
+                    } footer: {
+                        Text("Non-secret configuration only — API keys and other secrets belong in the field below, never here (this list is stored in plain JSON).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Section {
+                        SecureField("API Key", text: $apiKey, prompt: Text("optional"))
+                    } header: {
+                        Text("Authentication")
+                    } footer: {
+                        Text("Stored in the macOS Keychain, never in the provider's JSON config.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } label: {
+                    Label("Advanced", systemImage: "slider.horizontal.3")
+                        .font(.headline)
+                }
             }
             .formStyle(.grouped)
 
@@ -586,6 +669,7 @@ private struct ProviderEditorView: View {
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
                 Button("Save") { save() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(label.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -596,6 +680,15 @@ private struct ProviderEditorView: View {
         .frame(minWidth: 480, minHeight: 480)
         .onAppear {
             apiKey = credentialStore.apiKey(forProvider: originalID) ?? ""
+            // #663: auto-expand Advanced when provider already has env vars
+            // OR a stored API key, so the user doesn't have to hunt for
+            // existing config (§3.4). envRows is already initialized before
+            // onAppear from `provider.env`; apiKey is set just above. NB:
+            // this may cause a one-frame collapsed→expanded flash on env/key
+            // providers — see the `showAdvanced` declaration comment.
+            showAdvanced = showAdvanced
+                || !envRows.allSatisfy { $0.key.trimmingCharacters(in: .whitespaces).isEmpty && $0.value.isEmpty }
+                || !apiKey.isEmpty
             refreshAvailability()
         }
     }

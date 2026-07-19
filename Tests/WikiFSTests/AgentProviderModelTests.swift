@@ -18,11 +18,13 @@ import ACPModel
 
     // MARK: - Seed
 
-    @Test func seedYieldsAllThreeDefaultProvidersWithClaudeDefault() {
-        // Phase 1: seed() emits the three seed providers — Claude, Hermes,
-        // OpenCode — with Claude as the default.
+    @Test func seedYieldsClaudeAcpDefaultOnly() {
+        // #663: seed() emits a single provider — Claude ACP — as the default.
+        // (The Hermes/OpenCode seed statics were removed; first-run
+        // discoverability now flows through the `AddProviderSheet` +
+        // `ACPProviderCatalog` suggestions surface.)
         let config = AgentProvidersConfig.seed(discovered: [])
-        #expect(config.providers.map(\.id) == ["claude-acp", "hermes", "opencode"])
+        #expect(config.providers.map(\.id) == ["claude-acp"])
         #expect(config.providers.first?.isDefault == true)
         #expect(config.providers.allSatisfy { $0.enabled })
         #expect(config.providers.filter(\.isDefault).count == 1)
@@ -36,14 +38,14 @@ import ACPModel
     }
 
     @Test func seedIgnoresDiscoveredAgents() {
-        // The seed always yields the three fixed defaults — discovered agents
-        // are ignored (the user opts in via Settings).
+        // The seed always yields the single Claude default — discovered agents
+        // are ignored (the user opts in via Settings → Add Provider).
         let discovered = [
             DiscoveredACPAgent(agent: KnownACPAgent(id: "gemini", label: "Gemini CLI", summary: "", detectExecutable: "gemini", command: ["gemini", "--acp"]), resolvedPath: "/usr/local/bin/gemini"),
             DiscoveredACPAgent(agent: KnownACPAgent(id: "hermes", label: "Hermes", summary: "", detectExecutable: "hermes", command: ["hermes", "acp"]), resolvedPath: "/usr/local/bin/hermes"),
         ]
         let config = AgentProvidersConfig.seed(discovered: discovered)
-        #expect(config.providers.map(\.id) == ["claude-acp", "hermes", "opencode"])
+        #expect(config.providers.map(\.id) == ["claude-acp"])
     }
 
     // MARK: - Normalization (single-default invariant)
@@ -74,11 +76,12 @@ import ACPModel
         #expect(config.defaultProvider.id == "b")
     }
 
-    @Test func normalizedReseedsAllThreeWhenEmpty() {
-        // Phase 1: providers.isEmpty re-seeds all three defaults (Claude
-        // default).
+    @Test func normalizedReseedsClaudeAcpOnlyWhenEmpty() {
+        // #663: providers.isEmpty re-seeds `[claudeAcpDefault]` (the three-
+        // default seed was removed; the catalog-driven `AddProviderSheet`
+        // replaced it for first-run discoverability).
         let config = AgentProvidersConfig(providers: [])
-        #expect(config.providers.map(\.id) == ["claude-acp", "hermes", "opencode"])
+        #expect(config.providers.map(\.id) == ["claude-acp"])
         #expect(config.defaultProvider.id == "claude-acp")
     }
 
@@ -137,6 +140,34 @@ import ACPModel
         #expect(loaded.provider(id: "gemini")?.env == ["FOO": "bar"])
     }
 
+    // MARK: - AC.3 (#663): hermes/opencode IDs round-trip after static removal
+
+    /// After #663 (deletion of `.hermesDefault`/`.opencodeDefault`), the
+    /// `AgentProvider` type itself is unchanged — only the static SEED
+    /// constants were deleted. A user's existing `agent-providers.json`
+    /// containing hermes/opencode rows MUST still decode + re-encode
+    /// losslessly. No migration needed (the IDs are no longer special —
+    /// they're just user-configured providers whose id happens to match
+    /// a catalog entry).
+    @Test func hermesOpencodeIDsRoundTripAfterStaticRemoval() throws {
+        let original = AgentProvidersConfig(providers: [
+            AgentProvider(id: "claude-acp", label: "Claude", command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: true, isDefault: true),
+            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], env: ["ZAI_API_KEY": "x"], enabled: true, isDefault: false),
+            AgentProvider(id: "opencode", label: "OpenCode", command: ["opencode", "acp"], enabled: false, isDefault: false),
+        ])
+
+        let encoded = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(AgentProvidersConfig.self, from: encoded)
+        #expect(decoded == original)
+        // Pin the per-provider fields that previously lived on the deleted
+        // statics — same id, same command, same env.
+        #expect(decoded.provider(id: "hermes")?.command == ["hermes", "acp"])
+        #expect(decoded.provider(id: "hermes")?.env == ["ZAI_API_KEY": "x"])
+        #expect(decoded.provider(id: "opencode")?.command == ["opencode", "acp"])
+        // Default's still claude-acp.
+        #expect(decoded.defaultProvider.id == "claude-acp")
+    }
+
     @Test func loadOrSeedSeedsWhenMissing() throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("agent-providers-seed-\(UUID().uuidString)", isDirectory: true)
@@ -150,7 +181,7 @@ import ACPModel
         #expect(FileManager.default.fileExists(atPath: url.path))
     }
 
-    @Test func loadOrSeedSeedsTheThreeDefaultsIgnoringDiscovery() {
+    @Test func loadOrSeedSeedsTheSingleClaudeDefaultIgnoringDiscovery() {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("agent-providers-disc-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -160,8 +191,8 @@ import ACPModel
             DiscoveredACPAgent(agent: KnownACPAgent(id: "gemini", label: "Gemini CLI", summary: "", detectExecutable: "gemini", command: ["gemini", "--acp"]), resolvedPath: "/x"),
         ]
         let config = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { discovered })
-        // Discovered agents are ignored — the three fixed defaults are seeded.
-        #expect(config.providers.map(\.id) == ["claude-acp", "hermes", "opencode"])
+        // #663: Discovered agents are ignored — the single Claude default is seeded.
+        #expect(config.providers.map(\.id) == ["claude-acp"])
     }
 
     // MARK: - Favorites (display-only per-row star)
@@ -226,12 +257,19 @@ import ACPModel
         // has a stable contract.
         //
         // The state: opencode is the default provider (the user manually set
-        // `isDefault = true` — note `.opencodeDefault` ships with
-        // `isDefault: false`, so we override) AND has no `selectedModelIds`
-        // entry → `selectedModelId(forProvider:)` returns nil. (#604 removed
-        // the per-stage assignment API; this is the same precondition the
-        // collapsed single-resolution path uses.)
-        var opencodeAsDefault = AgentProvider.opencodeDefault
+        // `isDefault = true` — constructed inline because #663 deleted the
+        // `.opencodeDefault` static alongside the Hermes/OpenCode seeds; the
+        // catalog-driven `AddProviderSheet` replaced them) AND has no
+        // `selectedModelIds` entry → `selectedModelId(forProvider:)` returns
+        // nil. (#604 removed the per-stage assignment API; this is the same
+        // precondition the collapsed single-resolution path uses.)
+        var opencodeAsDefault = AgentProvider(
+            id: "opencode",
+            label: "OpenCode",
+            command: ["opencode", "acp"],
+            env: [:],
+            enabled: true,
+            isDefault: false)
         opencodeAsDefault.isDefault = true
         let config = AgentProvidersConfig(providers: [opencodeAsDefault])
         let provider = config.selectedProvider()
@@ -402,9 +440,12 @@ import ACPModel
 
     // MARK: - Empty-list reseed
 
-    @Test func emptyProvidersListReseedsAllThreeDefaults() {
+    @Test func emptyProvidersListReseedsClaudeAcpOnly() {
+        // #663: empty providers list re-seeds `[claudeAcpDefault]` only (the
+        // Hermes/OpenCode seeds were removed in favour of the catalog-driven
+        // `AddProviderSheet`).
         let config = AgentProvidersConfig(providers: [])
-        #expect(config.providers.map(\.id) == ["claude-acp", "hermes", "opencode"])
+        #expect(config.providers.map(\.id) == ["claude-acp"])
         #expect(config.defaultProvider.id == "claude-acp")
         #expect(config.providers.filter(\.isDefault).count == 1)
     }
