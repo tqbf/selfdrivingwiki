@@ -2995,6 +2995,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let mime = mimeType
             ?? ContentSniff.mimeType(of: data)
             ?? (ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType)
+            ?? MimeType.mime(forExtension: ext)  // #620: .mmd → text/mermaid (UTType can't resolve it)
         let displayName: String?
         if let resolved = resolvedDisplayName ?? DisplayNameResolver.resolve(
             filename: filename, data: data, mimeType: mime,

@@ -267,6 +267,22 @@ struct SourceDetailView: View {
         if isMarkdownNative, let data = store.sourceBytes(id: file.id) {
             return String(data: data, encoding: .utf8)
         }
+        // #620: defense-in-depth — when a Mermaid-detected source arrives
+        // without a text MIME (e.g. a pre-existing NULL-mime `.mmd` row from
+        // before the `addSource` extension fallback, or any future ingest path
+        // that bypasses it), still surface the raw diagram bytes so the Reader
+        // and Rendered tabs render instead of empty states. Calls the static
+        // detector with `content: nil` (mime+filename arms only) — NOT the
+        // `isMermaidSource` computed property, which reads this same property
+        // and would recurse. The content-scan arm is irrelevant here: this
+        // branch is only reached when `isMarkdownNative` is false, and a
+        // fenced-block-only source (no `.mmd`, no `text/mermaid` mime) already
+        // had nowhere to read its bytes from before #620.
+        if MermaidSourceDetector.isMermaidSource(
+               mimeType: file.mimeType, filename: file.filename, content: nil),
+           let data = store.sourceBytes(id: file.id) {
+            return String(data: data, encoding: .utf8)
+        }
         return nil
     }
 
