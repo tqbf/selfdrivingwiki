@@ -476,20 +476,25 @@ struct SourceDetailView: View {
                 // Zotero provenance sits inline on the metadata line rather than
                 // in its own row — the big title already names the item, so this
                 // just needs the "Zotero" origin tag + a jump-back link.
+                // Two-dimensional label (#644): "Zotero / PDF", "Zotero / Markdown",
+                // or just "Zotero" when the content type is unknown.
                 if let key = file.zoteroItemKey, !key.isEmpty {
                     metadataSeparator
+                    let zoteroLabel = SourceProvenanceLabel.combine(
+                        provider: "Zotero", agentName: "zotero",
+                        ext: file.ext, mimeType: file.mimeType)
                     if let url = zoteroItemURL(itemKey: key) {
                         // The "Zotero" tag itself is the link — clicking it jumps
                         // back to the item in the Zotero app (no separate button).
                         Button {
                             NSWorkspace.shared.open(url)
                         } label: {
-                            Label("Zotero", systemImage: "books.vertical")
+                            Label(zoteroLabel, systemImage: "books.vertical")
                         }
                         .buttonStyle(.link)
                         .help("View in Zotero")
                     } else {
-                        Label("Zotero", systemImage: "books.vertical")
+                        Label(zoteroLabel, systemImage: "books.vertical")
                     }
                 } else if let origin, origin.agentName != "legacy-import" {
                     // Phase 3a provider origin: website → clickable link to the
@@ -701,6 +706,11 @@ struct SourceDetailView: View {
     /// website → a clickable link to the origin URL; apple-podcast → a clickable
     /// link to the episode; markdown-folder → "Folder"; local-file → "File".
     /// Mirrors the inline Zotero tag's styling.
+    ///
+    /// Two-dimensional labels (issue #644): the File branch becomes
+    /// "File / {content type}" (e.g. "File / Mermaid", "File / PDF") since a
+    /// drag-drop can carry anything. URL/media providers and markdown folders
+    /// imply their content type, so their labels stay single-dimensional.
     @ViewBuilder
     private func providerOriginTag(_ origin: SourceOrigin) -> some View {
         switch origin.agentName {
@@ -752,7 +762,15 @@ struct SourceDetailView: View {
                 Label(info.label, systemImage: info.systemImage)
             }
         default:
-            Label("File", systemImage: "doc")
+            // Local-file (and any unrecognized import provider). Two-dimensional
+            // label (#644): "File / Mermaid", "File / PDF", "File / Markdown",
+            // or just "File" when the content type is unknown. The provider
+            // does not imply a single content type — a drag-drop can carry
+            // anything — so the suffix is meaningful here.
+            let fileLabel = SourceProvenanceLabel.combine(
+                provider: "File", agentName: origin.agentName,
+                ext: file.ext, mimeType: file.mimeType)
+            Label(fileLabel, systemImage: "doc")
         }
     }
 
