@@ -522,95 +522,171 @@ struct ChatView: View {
 
     @ViewBuilder
     private func header(for chat: ChatSummary) -> some View {
-        CollapsibleDetailHeader(
-            systemImage: ResourceKind.chat.systemImageName,
-            title: chat.title,
-            placeholder: "Untitled Chat",
-            titleLineLimit: 1,
-            isExpanded: $isHeaderExpanded,
-            onTitleCommit: { newTitle in
-                store.renameChat(id: chat.id, to: newTitle)
-            }
-        ) {
-            VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
+        // The header is split into two rows:
+        //
+        //   1. Title + date (inside `CollapsibleDetailHeader`'s expanded
+        //      content) — constrained to `readableContentWidth` so the
+        //      editable title and date stay readable.
+        //
+        //   2. The action toolbar row (Show in List / Share / Reveal in
+        //      Finder / Reveal Debug Folder + outline toggle) — rendered as
+        //      a SIBLING of `CollapsibleDetailHeader`, NOT inside its
+        //      expanded content, so it can span the FULL view width. The
+        //      outline toggle (pinned to the trailing edge via `Spacer`)
+        //      therefore aligns to the view edge, not the readable column
+        //      edge. Previously this HStack lived inside the
+        //      `readableContentWidth` frame, so the Spacer only reached the
+        //      right edge of that constrained column and the toggle appeared
+        //      wedged in the middle-right.
+        //
+        // Both rows are still gated on `isHeaderExpanded` so the collapse
+        // chevron hides the actions exactly as before.
+        VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
+            CollapsibleDetailHeader(
+                systemImage: ResourceKind.chat.systemImageName,
+                title: chat.title,
+                placeholder: "Untitled Chat",
+                titleLineLimit: 1,
+                isExpanded: $isHeaderExpanded,
+                onTitleCommit: { newTitle in
+                    store.renameChat(id: chat.id, to: newTitle)
+                }
+            ) {
                 Text(chat.updatedAt, style: .date)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 10) {
-                if let chatID {
-                    Button("Show in List", systemImage: "sidebar.left") {
-                        DebugLog.tabs("ChatView: Show in List tapped — id=\(chatID.rawValue)")
-                        store.requestSidebarReveal(.chat(chatID))
-                    }
-                    .help("Reveal this chat in the sidebar")
-                }
-                if fileProvider.path != nil, let chatID {
-                    Button("Share", systemImage: "square.and.arrow.up") {
-                        DebugLog.fileprovider("ChatView: Share tapped — id=\(chatID.rawValue)")
-                        Task {
-                            guard let url = await fileProvider.resolveChatByNameURL(id: chatID, wikiID: session.wikiID) else {
-                                DebugLog.fileprovider("Share chat detail: resolveChatByNameURL returned nil — id=\(chatID.rawValue) wikiID=\(session.wikiID)")
-                                return
-                            }
-                            DebugLog.fileprovider("Share chat detail: \(url.lastPathComponent)")
-                            let picker = NSSharingServicePicker(items: [url])
-                            let mouseScreen = NSEvent.mouseLocation
-                            guard let window = NSApplication.shared.keyWindow,
-                                  let contentView = window.contentView else { return }
-                            let windowPoint = window.convertPoint(fromScreen: mouseScreen)
-                            let viewPoint = contentView.convert(windowPoint, from: nil)
-                            picker.show(
-                                relativeTo: NSRect(origin: viewPoint,
-                                                   size: NSSize(width: 1, height: 1)),
-                                of: contentView, preferredEdge: .minY)
-                        }
-                    }
-                    .help("Share this chat")
-                    Button("Reveal in Finder", systemImage: "folder") {
-                        DebugLog.fileprovider("ChatView: Reveal in Finder tapped — id=\(chatID.rawValue)")
-                        Task { await fileProvider.revealChatInFinder(id: chatID, wikiID: session.wikiID) }
-                    }
-                    .help("Reveal this chat file in Finder")
-                }
-                // #671: persistent "Reveal Debug Folder" — reads from the
-                // launcher's in-memory chatID→path map (populated at spawn
-                // commit in `startInteractiveQuery`), falling back to the live
-                // session's `debugFolderURL` so an in-progress run reveals before
-                // the map entry is finalized. Visible for any chat that ran in
-                // this app session (live or reopened from history); absent for
-                // chats that never ran here or whose run failed preflight (no
-                // scratch dir → no debug folder). Mirrors ingestion's
-                // `ActivityWindowView.revealMenu(for:)`.
-                if let chatID,
-                   let debugURL = launcher.debugFolderURL(forChat: chatID.rawValue)
-                        ?? (isLiveChat ? launcher.debugFolderURL : nil) {
-                    Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
-                        DebugLog.agent("ChatView: Reveal Debug Folder tapped — id=\(chatID.rawValue)")
-                        NSWorkspace.shared.activateFileViewerSelecting([debugURL])
-                    }
-                    .help("Open the complete debug trace folder (ACP messages, permissions, usage)")
-                }
-                // Pin action buttons at the leading edge and the outline
-                // toggle at the trailing edge so the row's layout is
-                // independent of the parent's proposed width (which changes
-                // when the outline pane or the header expands/collapses —
-                // keeps "Show in List" and friends in a fixed position).
-                Spacer()
-                Button {
-                    DebugLog.tabs("ChatView: Toggle Outline tapped")
-                    chatOutlineExpanded.toggle()
-                } label: {
-                    Image(systemName: "sidebar.right")
-                }
-                .help("Toggle Outline")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
+            .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
+
+            if isHeaderExpanded {
+                chatActionBar
+                    .transition(.opacity)
             }
         }
-        .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
         .padding(.horizontal, PageEditorMetrics.contentInset)
         .padding(.top, PageEditorMetrics.contentInset)
         .padding(.bottom, ChatMetrics.sectionSpacing)
+    }
+
+    // MARK: - Header action bar (full-width toolbar row)
+
+    /// The chat detail action toolbar row. Rendered as a sibling of
+    /// `CollapsibleDetailHeader` — NOT inside its expanded content — so this
+    /// HStack spans the FULL view width. The trailing `Spacer(minLength: 0)`
+    /// therefore pushes the outline toggle all the way to the view's right
+    /// edge (Bug 1 fix), instead of only the readable-column edge.
+    @ViewBuilder
+    private var chatActionBar: some View {
+        HStack(spacing: 10) {
+            if let chatID {
+                Button("Show in List", systemImage: "sidebar.left") {
+                    DebugLog.tabs("ChatView: Show in List tapped — id=\(chatID.rawValue)")
+                    store.requestSidebarReveal(.chat(chatID))
+                }
+                .help("Reveal this chat in the sidebar")
+            }
+            if fileProvider.path != nil, let chatID {
+                Button("Share", systemImage: "square.and.arrow.up") {
+                    DebugLog.fileprovider("ChatView: Share tapped — id=\(chatID.rawValue)")
+                    Task {
+                        guard let url = await fileProvider.resolveChatByNameURL(id: chatID, wikiID: session.wikiID) else {
+                            DebugLog.fileprovider("Share chat detail: resolveChatByNameURL returned nil — id=\(chatID.rawValue) wikiID=\(session.wikiID)")
+                            return
+                        }
+                        DebugLog.fileprovider("Share chat detail: \(url.lastPathComponent)")
+                        let picker = NSSharingServicePicker(items: [url])
+                        let mouseScreen = NSEvent.mouseLocation
+                        guard let window = NSApplication.shared.keyWindow,
+                              let contentView = window.contentView else { return }
+                        let windowPoint = window.convertPoint(fromScreen: mouseScreen)
+                        let viewPoint = contentView.convert(windowPoint, from: nil)
+                        picker.show(
+                            relativeTo: NSRect(origin: viewPoint,
+                                               size: NSSize(width: 1, height: 1)),
+                            of: contentView, preferredEdge: .minY)
+                    }
+                }
+                .help("Share this chat")
+                Button("Reveal in Finder", systemImage: "folder") {
+                    DebugLog.fileprovider("ChatView: Reveal in Finder tapped — id=\(chatID.rawValue)")
+                    Task { await fileProvider.revealChatInFinder(id: chatID, wikiID: session.wikiID) }
+                }
+                .help("Reveal this chat file in Finder")
+            }
+            revealDebugFolderButton
+            // Pin action buttons at the leading edge and the outline
+            // toggle at the trailing edge (Spacer reaches the view's right
+            // edge because this row is outside the readableContentWidth
+            // frame — Bug 1 fix).
+            Spacer(minLength: 0)
+            Button {
+                DebugLog.tabs("ChatView: Toggle Outline tapped")
+                chatOutlineExpanded.toggle()
+            } label: {
+                Image(systemName: "sidebar.right")
+            }
+            .help("Toggle Outline")
+        }
+    }
+
+    // MARK: - Reveal Debug Folder button (#671)
+
+    /// The "Reveal Debug Folder" button. ALWAYS rendered when there is a
+    /// `chatID` — previously the button was gated on
+    /// `launcher.debugFolderURL(forChat:) ?? launcher.debugFolderURL`,
+    /// which is an in-memory map populated only at spawn commit. A persisted
+    /// chat reopened from history (that ran in a previous app session) had
+    /// no entry, so the button never appeared — the operator couldn't tell
+    /// the feature existed (Bug 2).
+    ///
+    /// When the launcher has a debug URL for this chat (from the in-memory
+    /// `chatLogPaths` map, or the live session's `debugFolderURL` while a
+    /// run is in progress), the button is enabled and reveals the folder.
+    /// When there is no URL (a persisted chat that ran in a previous
+    /// session, or a chat whose run failed preflight), the button is
+    /// DISABLED with a help tooltip explaining the limitation — so the
+    /// feature is always discoverable.
+    @ViewBuilder
+    private var revealDebugFolderButton: some View {
+        if let chatID {
+            revealDebugFolderButton(
+                chatID: chatID,
+                debugURL: launcher.debugFolderURL(forChat: chatID.rawValue)
+                    ?? (isLiveChat ? launcher.debugFolderURL : nil))
+        }
+    }
+
+    @ViewBuilder
+    private func revealDebugFolderButton(chatID: PageID, debugURL: URL?) -> some View {
+        Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
+            DebugLog.agent("ChatView: Reveal Debug Folder tapped — id=\(chatID.rawValue)")
+            if let debugURL {
+                NSWorkspace.shared.activateFileViewerSelecting([debugURL])
+            } else {
+                // No debug URL for this chat — `chatLogPaths` is
+                // in-memory and only populated at spawn commit, so a
+                // chat that ran in a previous app session has no entry.
+                // Log so the click is visible in Console.app (the
+                // disabled state should already prevent this branch,
+                // but belt-and-suspenders).
+                DebugLog.agent("ChatView: no debug folder available for chat — id=\(chatID.rawValue) (not run in this app session)")
+            }
+        }
+        .disabled(debugURL == nil)
+        .help(Self.debugFolderButtonHelpText(debugURL: debugURL))
+    }
+
+    /// Pure predicate returning the help tooltip text for the Reveal Debug
+    /// Folder button. Extracted as a static func so the visibility/help-text
+    /// contract is unit-testable without a SwiftUI view tree (following the
+    /// `composerCaptionText` / `canSendPredicate` / `preflightBannerMessage`
+    /// pattern). Returns the disabled-state explanation when `debugURL` is
+    /// nil, or the enabled-state description when a folder is available.
+    nonisolated static func debugFolderButtonHelpText(debugURL: URL?) -> String {
+        if debugURL != nil {
+            return "Open the complete debug trace folder (ACP messages, permissions, usage)"
+        }
+        return "Debug logs only available for chats run in this session"
     }
 
     // MARK: - Preflight-error banner (issue #613)
