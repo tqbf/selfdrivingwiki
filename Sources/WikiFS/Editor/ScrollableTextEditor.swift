@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WikiFSCore
 
 /// A programmatic scroll request for `ScrollableTextEditor`. When `version`
 /// changes, the editor scrolls so the character at `charOffset` is visible and
@@ -41,6 +42,20 @@ struct ScrollableTextEditor: NSViewRepresentable {
     /// Fires with the caret's character index whenever it changes — used by the
     /// caller to highlight the heading the caret is currently inside.
     var onCaretChange: ((Int) -> Void)?
+    /// Builds the insertion text for a sidebar drag-drop onto the editor. Receives
+    /// the flattened `[SidebarDragPayload]` across every dragged pasteboard item
+    /// (handles both a single leaf drop and a multi-row selection / bookmark
+    /// folder). Returns `nil` to reject the drop (e.g. when an agent is
+    /// mid-generation, or every payload resolved stale). `nil` (the default)
+    /// disables sidebar drops entirely — the editor behaves exactly as before
+    /// (#616 is opt-in per call site).
+    ///
+    /// The closure is stored on the representable and re-applied in `updateNSView`
+    /// so a new SwiftUI evaluation (e.g. `store` changing) re-wires it
+    /// on the live `DropLinkTextView`. Captured `WikiStoreModel` is `@MainActor`
+    /// and AppKit drag callbacks run on the main thread, so the capture is
+    /// main-actor-isolated without an explicit hop.
+    var sidebarDropBuilder: (([SidebarDragPayload]) -> String?)? = nil
 
     // MARK: - NSViewRepresentable
 
@@ -57,6 +72,9 @@ struct ScrollableTextEditor: NSViewRepresentable {
         let textView = Self.makeConfiguredTextView(font: font)
         textView.delegate = context.coordinator
         textView.string = text
+        if let dropTV = textView as? DropLinkTextView {
+            dropTV.sidebarDropBuilder = sidebarDropBuilder
+        }
 
         scrollView.documentView = textView
         return scrollView
@@ -77,6 +95,18 @@ struct ScrollableTextEditor: NSViewRepresentable {
             textView.font = font
         }
 
+        // Re-wire the sidebar drop builder on every SwiftUI update — the closure
+        // captures a fresh `store` reference, and `sidebarDropBuilder` being nil
+        // (the default) cleanly disables drops on editors that aren't wired up.
+        // Dropping into the editor fires `textDidChange` (via
+        // `replaceCharacters`) which updates `parent.text` BEFORE the next
+        // `updateNSView`; the `textView.string != text` guard above then
+        // correctly skips (no clobber) because the binding already reflects the
+        // drop.
+        if let dropTV = textView as? DropLinkTextView {
+            dropTV.sidebarDropBuilder = sidebarDropBuilder
+        }
+
         // Consume a pending scroll request.
         if let request = scrollRequest,
            context.coordinator.appliedScrollVersion != request.version {
@@ -92,8 +122,14 @@ struct ScrollableTextEditor: NSViewRepresentable {
 
     // MARK: - Text view factory (shared with tests)
 
+    /// Builds the `NSTextView` for the editor. Returns a `DropLinkTextView`
+    /// (a subclass that accepts `wikiSidebarItem` sidebar drops alongside the
+    /// inherited text drag types) for issue #616 — the same configuration
+    /// (no rich text, no substitutions, monospaced font, etc.) as before, just
+    /// with the sidebar-drop acceptance layered on. Tests can still type this
+    /// as `NSTextView` since `DropLinkTextView` is a subclass.
     static func makeConfiguredTextView(font: NSFont) -> NSTextView {
-        let textView = NSTextView()
+        let textView = DropLinkTextView()
         textView.isRichText = false
         textView.importsGraphics = false
         textView.allowsUndo = true
