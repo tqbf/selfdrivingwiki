@@ -8,6 +8,10 @@ A snapshot of the current wiki state is at: {{STATE_FILE_PATH}}
 
 {{ASSIGNED_PAGES}}
 
+> **Scope boundary:** Write ONLY the pages assigned above. Do NOT update
+> `Home`, `index.md`, `log.md`, or any existing page — the Finalizer owns
+> those. Once all assigned pages are written and verified, stop.
+
 ## All pages in this ingest (for cross-linking)
 
 {{ALL_PAGE_TITLES}}
@@ -42,12 +46,10 @@ For EACH assigned page:
 `head_version_id`, then pass `--expect-head <that id>` to
 `$WIKICTL page upsert`. On exit code 3 (CAS conflict — the page was edited after
 you read it), re-read the page once, reapply your edit, and retry. If it fails
-again, report the conflict rather than looping.
+again, report the conflict rather than looping. Do NOT invent `python3 -c`
+or `/tmp`-redirecting shell pipelines to read `head_version_id` —
+`$WIKICTL page get … --json` is the only supported read path.
 
 IMPORTANT:
-- You MAY dispatch sub-agents via the Task tool to read and digest source
-  sections in parallel. Each sub-agent generates lifecycle notifications that
-  keep the host informed of progress. Workers must NOT write to the wiki —
-  only you write via `$WIKICTL`.
 - Do NOT use sleep or ScheduleWakeup.
 - Write ALL your assigned pages before stopping.
