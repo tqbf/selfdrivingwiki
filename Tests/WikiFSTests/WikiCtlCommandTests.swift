@@ -791,10 +791,10 @@ struct WikiCtlCommandTests {
     private func repoMermaidValidator() throws -> MermaidValidator {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
-            .appendingPathComponent("../../Resources/merval.bundle.js")
+            .appendingPathComponent("../../Resources/mermaid.min.js")
         guard let src = try? String(contentsOf: url, encoding: .utf8), !src.isEmpty,
               let v = MermaidValidator(jsSource: src) else {
-            throw Failure("Resources/merval.bundle.js unavailable")
+            throw Failure("Resources/mermaid.min.js unavailable")
         }
         return v
     }
@@ -864,14 +864,15 @@ struct WikiCtlCommandTests {
         let v = try repoMermaidValidator()
         let store = try tempStore()
         let fence = String(repeating: "`", count: 3)
-        let body = "# Title\n\n\(fence)mermaid\nflowchart LR\nA B\n\(fence)\n"
+        // `A B` is now VALID under mermaid v11; use a genuinely-invalid block.
+        let body = "# Title\n\n\(fence)mermaid\nflowchart LR\nA[unclosed\n\(fence)\n"
         do {
             _ = try PageCommand.run(
                 .upsert(id: nil, title: "Bad Mermaid", body: body),
                 in: store, validator: v, linter: l)
             Issue.record("expected upsert to abort on invalid mermaid")
         } catch let PageCommand.Failure.message(text) {
-            #expect(text.contains("MISSING_ARROW"))
+            #expect(text.contains("PARSE_ERROR"))
         }
         // No page was written.
         #expect(try store.listPages(sortBy: .lastUpdated).isEmpty)
