@@ -91,7 +91,7 @@ struct SourceEmbeddingSearchTests {
         _ = try store.addSource(filename: "quarterly-report.pdf", data: Data("%PDF".utf8))
         _ = try store.addSource(filename: "vacation.jpg", data: Data([0xFF, 0xD8, 0xFF]))
 
-        let hits = try store.searchSimilarSources(query: "report", limit: 10)
+        let hits = try store.searchSimilarSources(query: "report", limit: 10, bm25Leg: nil)
         #expect(hits.count == 1)
         #expect(hits.first?.filename == "quarterly-report.pdf")
     }
@@ -101,7 +101,7 @@ struct SourceEmbeddingSearchTests {
         let s = try store.addSource(filename: "data.bin", data: Data("x".utf8))
         try store.renameSource(id: s.id, to: "Annual Budget")
 
-        let hits = try store.searchSimilarSources(query: "budget", limit: 10)
+        let hits = try store.searchSimilarSources(query: "budget", limit: 10, bm25Leg: nil)
         #expect(hits.count == 1)
         #expect(hits.first?.displayName == "Annual Budget")
     }
@@ -112,14 +112,14 @@ struct SourceEmbeddingSearchTests {
         _ = try store.addSource(filename: "report-2.pdf", data: Data("%PDF 2".utf8))
         _ = try store.addSource(filename: "report-3.pdf", data: Data("%PDF 3".utf8))
 
-        let hits = try store.searchSimilarSources(query: "report", limit: 2)
+        let hits = try store.searchSimilarSources(query: "report", limit: 2, bm25Leg: nil)
         #expect(hits.count == 2)
     }
 
     @Test func searchSimilarSourcesLIKEFallbackEmptyWhenNoMatch() throws {
         let store = try tempStore()
         _ = try store.addSource(filename: "alpha.txt", data: Data("a".utf8))
-        #expect(try store.searchSimilarSources(query: "zzznomatch", limit: 10).isEmpty)
+        #expect(try store.searchSimilarSources(query: "zzznomatch", limit: 10, bm25Leg: nil).isEmpty)
     }
 
     @Test func searchSimilarSourcesNeverSelectsStar() throws {
@@ -129,7 +129,7 @@ struct SourceEmbeddingSearchTests {
         // not NaN), proving the column order is the explicit 11-column list.
         let store = try tempStore()
         _ = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4 content bytes".utf8))
-        let hits = try store.searchSimilarSources(query: "doc", limit: 10)
+        let hits = try store.searchSimilarSources(query: "doc", limit: 10, bm25Leg: nil)
         let created = try #require(hits.first?.createdAt)
         #expect(created.timeIntervalSince1970 > 1_700_000_000)  // a 2023+ timestamp
     }

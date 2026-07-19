@@ -35,7 +35,7 @@ import SQLite3
             .userText("explain something"),
             .assistantText("Quantum entanglement links particles across distance."),
         ])
-        let hits = try store.searchSimilarChats(query: "entanglement", limit: 10)
+        let hits = try store.searchSimilarChats(query: "entanglement", limit: 10, bm25Leg: nil)
         #expect(hits.count == 1)
         #expect(hits.first?.id == chat.id)
     }
@@ -51,7 +51,7 @@ import SQLite3
         _ = try store.appendChatMessages(chatID: chat.id, events: [
             .assistantText("Photosynthesis converts light into chemical energy."),
         ])
-        #expect(try store.searchSimilarChats(query: "photosynthesis", limit: 10).first?.id == chat.id)
+        #expect(try store.searchSimilarChats(query: "photosynthesis", limit: 10, bm25Leg: nil).first?.id == chat.id)
     }
 
     @Test func searchRespectsLimit() throws {
@@ -62,7 +62,7 @@ import SQLite3
                 .assistantText("Report \(i) discusses the budget forecast."),
             ])
         }
-        let hits = try store.searchSimilarChats(query: "budget", limit: 2)
+        let hits = try store.searchSimilarChats(query: "budget", limit: 2, bm25Leg: nil)
         #expect(hits.count == 2)
     }
 
@@ -72,7 +72,7 @@ import SQLite3
         _ = try store.appendChatMessages(chatID: chat.id, events: [
             .assistantText("Hello there, how can I help?"),
         ])
-        #expect(try store.searchSimilarChats(query: "zzznomatchxyz", limit: 10).isEmpty)
+        #expect(try store.searchSimilarChats(query: "zzznomatchxyz", limit: 10, bm25Leg: nil).isEmpty)
     }
 
     @Test func searchReflectsRename() throws {
@@ -82,23 +82,23 @@ import SQLite3
             .assistantText("A body with no distinctive keywords."),
         ])
         // The old title is searchable before rename.
-        #expect(try store.searchSimilarChats(query: "Old", limit: 10).first?.id == chat.id)
+        #expect(try store.searchSimilarChats(query: "Old", limit: 10, bm25Leg: nil).first?.id == chat.id)
         try store.renameChat(id: chat.id, to: "Completely Renamed")
         // New title is now searchable…
-        #expect(try store.searchSimilarChats(query: "Renamed", limit: 10).first?.id == chat.id)
+        #expect(try store.searchSimilarChats(query: "Renamed", limit: 10, bm25Leg: nil).first?.id == chat.id)
         // …and the old one no longer matches (the body has none of those words).
-        #expect(try store.searchSimilarChats(query: "Old", limit: 10).isEmpty)
+        #expect(try store.searchSimilarChats(query: "Old", limit: 10, bm25Leg: nil).isEmpty)
     }
 
     @Test func sidecarNotPopulatedUntilFirstAppend() throws {
         let store = try tempStore()
         let chat = try store.createChat(kind: .edit, title: "Placeholder")
         // A chat with no messages has an empty body → nothing to match.
-        #expect(try store.searchSimilarChats(query: "Placeholder", limit: 10).isEmpty)
+        #expect(try store.searchSimilarChats(query: "Placeholder", limit: 10, bm25Leg: nil).isEmpty)
         _ = try store.appendChatMessages(chatID: chat.id, events: [
             .assistantText("Now the body has Placeholder in it."),
         ])
-        #expect(try store.searchSimilarChats(query: "Placeholder", limit: 10).first?.id == chat.id)
+        #expect(try store.searchSimilarChats(query: "Placeholder", limit: 10, bm25Leg: nil).first?.id == chat.id)
     }
 
     // MARK: - Chunk-embedding mechanics (model-independent)
@@ -155,7 +155,7 @@ import SQLite3
         // The ON DELETE CASCADE on chat_chunks removes them; the chat is gone
         // from missing-work entirely (no row to be "missing").
         #expect(store.missingChatEmbeddingWork().isEmpty)
-        #expect(try store.searchSimilarChats(query: "Doomed", limit: 10).isEmpty)
+        #expect(try store.searchSimilarChats(query: "Doomed", limit: 10, bm25Leg: nil).isEmpty)
     }
 
     // MARK: - wikictl `chat search`
