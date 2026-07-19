@@ -66,6 +66,183 @@ struct ACPProviderModelProbeTests {
         #expect(cached.isEmpty)
     }
 
+    // MARK: - PURE: mapModelsToCache configOptions fallback (#654)
+
+    /// #654 exact repro: opencode doesn't populate `availableModels` — it
+    /// advertises the model list as a `configOptions` select whose
+    /// `id.value == "model"`. Pre-fix: probe returned [] ("advertised no
+    /// models"). Post-fix: probe extracts the choices from the select.
+    /// Mirrors Paseo's `deriveModelDefinitionsFromACP` fallback
+    /// (`acp-agent.ts:637-680`).
+    @Test func mapModelsToCacheFallsBackToConfigOptionsModelSelector() {
+        let configOptions = [
+            SessionConfigOption(
+                id: SessionConfigId("model"),
+                name: "Model",
+                kind: .select(SessionConfigSelect(
+                    currentValue: SessionConfigValueId("glm-4.7"),
+                    options: .ungrouped([
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("glm-4.7"),
+                            name: "GLM-4.7",
+                            description: "Fast"),
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("glm-4-7"),
+                            name: "GLM 4.7 (legacy)"),
+                    ]))))
+        ]
+        let cached = ACPProviderModelProbe.mapModelsToCache(nil, configOptions: configOptions)
+        #expect(cached.count == 2)
+        #expect(cached.map(\.modelId) == ["glm-4.7", "glm-4-7"])
+        #expect(cached[0].name == "GLM-4.7")
+        #expect(cached[0].description == "Fast")
+        #expect(cached[1].description == nil)
+    }
+
+    /// #654 + grouped-options variant. Some agents group their model options
+    /// (e.g. "Fast" / "Smart"). The fallback must flatten the groups and
+    /// preserve the agent's in-group ordering (the picker is flat). Pinned so
+    /// a future refactor that drops `.grouped` handling is caught.
+    @Test func mapModelsToCacheFallsBackToConfigOptionsGrouped() {
+        let configOptions = [
+            SessionConfigOption(
+                id: SessionConfigId("model"),
+                name: "Model",
+                kind: .select(SessionConfigSelect(
+                    currentValue: SessionConfigValueId("sonnet"),
+                    options: .grouped([
+                        SessionConfigSelectGroup(
+                            group: SessionConfigGroupId("fast"),
+                            name: "Fast",
+                            options: [
+                                SessionConfigSelectOption(
+                                    value: SessionConfigValueId("haiku"),
+                                    name: "Claude Haiku"),
+                            ]),
+                        SessionConfigSelectGroup(
+                            group: SessionConfigGroupId("smart"),
+                            name: "Smart",
+                            options: [
+                                SessionConfigSelectOption(
+                                    value: SessionConfigValueId("sonnet"),
+                                    name: "Claude Sonnet"),
+                                SessionConfigSelectOption(
+                                    value: SessionConfigValueId("opus"),
+                                    name: "Claude Opus"),
+                            ]),
+                    ]))))
+        ]
+        let cached = ACPProviderModelProbe.mapModelsToCache(nil, configOptions: configOptions)
+        #expect(cached.count == 3)
+        #expect(cached.map(\.modelId) == ["haiku", "sonnet", "opus"])
+    }
+
+    /// #654 + `category == "model"` convention. The polytoken daemon
+    /// advertises the model selector by `category` rather than `id.value`.
+    /// The fallback accepts both (dual-convention parity with
+    /// `ThinkingEffortOption.isThoughtLevel`).
+    @Test func mapModelsToCacheFallsBackMatchesByCategory() {
+        let configOptions = [
+            SessionConfigOption(
+                id: SessionConfigId("model_picker"),
+                name: "Model Picker",
+                category: "model",
+                kind: .select(SessionConfigSelect(
+                    currentValue: SessionConfigValueId("gpt-5"),
+                    options: .ungrouped([
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("gpt-5"),
+                            name: "GPT-5"),
+                    ]))))
+        ]
+        let cached = ACPProviderModelProbe.mapModelsToCache(nil, configOptions: configOptions)
+        #expect(cached.count == 1)
+        #expect(cached.first?.modelId == "gpt-5")
+    }
+
+    /// #654: the missing-model-list edge case. `availableModels` is EMPTY
+    /// (not nil) AND `configOptions` has a model selector. Pre-fix this was
+    /// treated as `.noModelsAdvertised`. Post-fix the fallback kicks in.
+    @Test func mapModelsToCacheFallsBackWhenAvailableModelsEmptyButConfigOptionsHasModels() {
+        let models = ModelsInfo(currentModelId: "", availableModels: [])
+        let configOptions = [
+            SessionConfigOption(
+                id: SessionConfigId("model"),
+                name: "Model",
+                kind: .select(SessionConfigSelect(
+                    currentValue: SessionConfigValueId("glm-4.7"),
+                    options: .ungrouped([
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("glm-4.7"),
+                            name: "GLM-4.7"),
+                    ]))))
+        ]
+        let cached = ACPProviderModelProbe.mapModelsToCache(models, configOptions: configOptions)
+        #expect(cached.count == 1)
+        #expect(cached.first?.modelId == "glm-4.7")
+    }
+
+    /// Precedence: when BOTH `availableModels` and a `configOptions` model
+    /// selector are present, `availableModels` wins (Paseo parity). The
+    /// fallback is ONLY a fallback.
+    @Test func mapModelsToCachePrefersAvailableModelsOverConfigOptions() {
+        let models = ModelsInfo(
+            currentModelId: "sonnet",
+            availableModels: [
+                ModelInfo(modelId: "sonnet", name: "Claude Sonnet", description: nil),
+            ])
+        let configOptions = [
+            SessionConfigOption(
+                id: SessionConfigId("model"),
+                name: "Model",
+                kind: .select(SessionConfigSelect(
+                    currentValue: SessionConfigValueId("opus"),
+                    options: .ungrouped([
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("opus"),
+                            name: "Claude Opus"),
+                    ]))))
+        ]
+        let cached = ACPProviderModelProbe.mapModelsToCache(models, configOptions: configOptions)
+        #expect(cached.count == 1)
+        #expect(cached.first?.modelId == "sonnet")
+    }
+
+    /// Fallback returns [] when `configOptions` is present but has NO model
+    /// selector — the agent advertised other options (e.g. `thought_level`)
+    /// but no model. The probe then surfaces `.noModelsAdvertised`.
+    @Test func mapModelsToCacheFallsBackEmptyWhenNoModelSelector() {
+        let configOptions = [
+            SessionConfigOption(
+                id: SessionConfigId("thought_level"),
+                name: "Thinking",
+                kind: .select(SessionConfigSelect(
+                    currentValue: SessionConfigValueId("high"),
+                    options: .ungrouped([
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("high"),
+                            name: "High"),
+                    ]))))
+        ]
+        let cached = ACPProviderModelProbe.mapModelsToCache(nil, configOptions: configOptions)
+        #expect(cached.isEmpty)
+    }
+
+    /// Fallback returns [] when a `model` option exists but its `kind` is
+    /// `.boolean`, not `.select` — only `.select` carries a model list (a
+    /// `.boolean` doesn't make sense for a model picker). Defensive against
+    /// a malformed/edge-case agent.
+    @Test func mapModelsToCacheFallsBackEmptyWhenKindIsBoolean() {
+        let configOptions = [
+            SessionConfigOption(
+                id: SessionConfigId("model"),
+                name: "Model",
+                kind: .boolean(SessionConfigBoolean(currentValue: true)))
+        ]
+        let cached = ACPProviderModelProbe.mapModelsToCache(nil, configOptions: configOptions)
+        #expect(cached.isEmpty)
+    }
+
     // MARK: - PURE: shouldThrowNoModels
 
     @Test func shouldThrowNoModelsTrueForEmpty() {

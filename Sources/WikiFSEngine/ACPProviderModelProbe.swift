@@ -244,7 +244,7 @@ public struct ACPProviderModelProbe: Sendable {
             throw ACPProviderModelProbeError.underlying(error)
         }
 
-        let models = Self.mapModelsToCache(session.models)
+        let models = Self.mapModelsToCache(session.models, configOptions: session.configOptions)
         DebugLog.agent("ACPProviderModelProbe.runProbe: discovered \(models.count) model(s) for provider=\(provider.id) ids=\(models.map(\.modelId))")
         return models
     }
@@ -252,13 +252,81 @@ public struct ACPProviderModelProbe: Sendable {
     // MARK: - PURE helpers (testable without a live Client actor)
 
     /// PURE. Map the SDK's `ModelsInfo?` (from `session/new`) to the app's
-    /// secrets-free `[CachedModelInfo]`. Returns `[]` when the agent advertised
-    /// nothing (older agents predate the models capability). Extracted so the
-    /// mapping is unit-tested without a subprocess.
-    public static func mapModelsToCache(_ models: ModelsInfo?) -> [CachedModelInfo] {
-        guard let models else { return [] }
-        return models.availableModels.map {
-            CachedModelInfo(modelId: $0.modelId, name: $0.name, description: $0.description)
+    /// secrets-free `[CachedModelInfo]`. Falls back to scanning
+    /// `configOptions` for a `model` select option when `availableModels` is
+    /// empty/nil — mirrors Paseo's `deriveModelDefinitionsFromACP` fallback
+    /// (`packages/server/src/server/agent/providers/acp-agent.ts:637-680`).
+    /// opencode (and possibly other agents) don't populate `availableModels`;
+    /// they advertise the model list as a `SessionConfigOption` select with
+    /// `category == "model"` (or `id.value == "model"`). Without this
+    /// fallback, the probe returns "The provider advertised no models" even
+    /// though the models ARE available (#654). Extracted so the mapping is
+    /// unit-tested without a subprocess.
+    ///
+    /// `configOptions` defaults to `nil` so the prior callers (which only
+    /// pass `session.models`) keep their existing behavior.
+    public static func mapModelsToCache(
+        _ models: ModelsInfo?,
+        configOptions: [SessionConfigOption]? = nil
+    ) -> [CachedModelInfo] {
+        // Primary path: the agent advertised `availableModels`. Paseo parity.
+        if let models, !models.availableModels.isEmpty {
+            return models.availableModels.map {
+                CachedModelInfo(modelId: $0.modelId, name: $0.name, description: $0.description)
+            }
+        }
+        // Fallback: derive from the configOptions model selector — the path
+        // opencode and other agents take when they don't populate
+        // `availableModels`.
+        guard let configOptions else { return [] }
+        return deriveModelsFromConfigOptions(configOptions)
+    }
+
+    /// PURE. Scan `configOptions` for a `model` select option (matched by
+    /// `id.value == "model"` OR `category == "model"` — the spec and the
+    /// daemon use different conventions, so accept both) and flatten its
+    /// choices to `[CachedModelInfo]`. Mirrors Paseo's
+    /// `deriveSelectorOptions(configOptions, "model")`. Returns `[]` when no
+    /// such option exists or it isn't a `.select`.
+    private static func deriveModelsFromConfigOptions(
+        _ configOptions: [SessionConfigOption]
+    ) -> [CachedModelInfo] {
+        guard let option = configOptions.first(where: { isModelSelector($0) }),
+              case .select(let select) = option.kind else {
+            return []
+        }
+        return flattenSelectOptions(select.options).map { choice in
+            // `choice.value` is `SessionConfigValueId` (a wrapped String) —
+            // `.value` is the model id sent to `session/set_model`. Matches
+            // the same unwrapping in `ThinkingEffortOption.flatChoices`.
+            CachedModelInfo(
+                modelId: choice.value.value,
+                name: choice.name,
+                description: choice.description)
+        }
+    }
+
+    /// Match heuristic: a model selector by id (opencode advertises
+    /// `id.value == "model"`) or by category (other agents use
+    /// `category == "model"`). Same dual-convention approach as
+    /// `ThinkingEffortOption.isThoughtLevel`.
+    private static func isModelSelector(_ option: SessionConfigOption) -> Bool {
+        option.id.value == "model" || option.category == "model"
+    }
+
+    /// PURE. Flatten the SDK's `ungrouped`/`grouped` select options into a
+    /// single `[SessionConfigSelectOption]` list. Grouped options preserve
+    /// the agent's ordering within each group but drop the group headings
+    /// (the model picker is a flat list). Mirrors
+    /// `ThinkingEffortOption.flatChoices`.
+    private static func flattenSelectOptions(
+        _ options: SessionConfigSelectOptions
+    ) -> [SessionConfigSelectOption] {
+        switch options {
+        case .ungrouped(let opts):
+            return opts
+        case .grouped(let groups):
+            return groups.flatMap { $0.options }
         }
     }
 
