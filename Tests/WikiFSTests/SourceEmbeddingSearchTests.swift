@@ -7,11 +7,16 @@ import Testing
 /// Semantic source search tests. The cosine-ranking semantic path cannot run
 /// under `swift test` (NLEmbedding is app-bundle-gated — sqlite-vec itself is
 /// now statically linked and registered; see
-/// `vecScalarIsRegisteredAfterStaticLink`), so these tests exercise: the v13 schema migration,
-/// the `storeSourceEmbedding` write path, the **LIKE fallback** search, the
-/// `reembedSource` no-op behavior without vec, the `wikictl source search` CLI
-/// (TSV output + arg validation), and the `ON DELETE CASCADE` on
-/// `source_embeddings`. Mirrors `SourcesTests` / `WikiCtlCommandTests`.
+/// `vecScalarIsRegisteredAfterStaticLink`), so these tests exercise: the
+/// schema migration, the `storeSourceEmbedding` write path, the `reembedSource`
+/// no-op behavior without vec, the `wikictl source search` CLI (TSV output +
+/// arg validation), and the `ON DELETE CASCADE` on `source_embeddings`.
+/// Mirrors `SourcesTests` / `WikiCtlCommandTests`.
+///
+/// The lexical/BM25 path (FTS5 pre-v38, Tantivy as of v38/#634) is not
+/// exercised here — `TantivyBM25LegCutoverTests` + `CLITantivyLegResolverTests`
+/// cover the BM25 leg. A `bm25Leg: nil` to `searchSimilarSources` after #634
+/// means "no BM25 leg" — empty result when vec is unavailable.
 struct SourceEmbeddingSearchTests {
 
     private func tempDatabaseURL() -> URL {
@@ -55,10 +60,13 @@ struct SourceEmbeddingSearchTests {
         #expect(tableExists(db, "page_chunks"))
         // The old single-embedding tables are dropped in v14.
         #expect(!tableExists(db, "source_embeddings"))
-        // v13: FTS5 full-text search tables.
-        #expect(tableExists(db, "pages_fts"))
-        #expect(tableExists(db, "sources_fts"))
-        #expect(tableExists(db, "source_search"))
+        // v38 (#634): FTS5/BM25 tables + sidecars are dropped — Tantivy is
+        // the sole BM25 search path. A fresh DB must never create them.
+        #expect(!tableExists(db, "pages_fts"))
+        #expect(!tableExists(db, "sources_fts"))
+        #expect(!tableExists(db, "chats_fts"))
+        #expect(!tableExists(db, "source_search"))
+        #expect(!tableExists(db, "chat_search"))
     }
 
     // MARK: - vec registration (Phase 2: statically-linked sqlite-vec)
@@ -84,54 +92,39 @@ struct SourceEmbeddingSearchTests {
         }
     }
 
-    // MARK: - searchSimilarSources LIKE fallback
+    // MARK: - searchSimilarSources: no BM25 leg under `swift test`
+    //
+    // Post-#634 (v38), a `bm25Leg: nil` means "no BM25 leg" — Tantivy is the
+    // sole BM25 path and there's no FTS5 fallback. Under `swift test`
+    // (NLEmbedding-gated vec unavailable), the store returns no source hits
+    // when no leg is supplied. `TantivyBM25LegCutoverTests` covers the
+    // leg-supplied path; `CLITantivyLegResolverTests` covers the CLI's
+    // Tantivy leg resolution.
 
-    @Test func searchSimilarSourcesLIKEFallbackFindsByFilename() throws {
+    @Test func searchSimilarSourcesEmptyWithoutBm25LegUnderSwiftTest() throws {
         let store = try tempStore()
         _ = try store.addSource(filename: "quarterly-report.pdf", data: Data("%PDF".utf8))
         _ = try store.addSource(filename: "vacation.jpg", data: Data([0xFF, 0xD8, 0xFF]))
 
+        // No Tantivy leg, vec unavailable → no BM25 leg, no cosine leg → empty.
         let hits = try store.searchSimilarSources(query: "report", limit: 10, bm25Leg: nil)
+        #expect(hits.isEmpty)
+    }
+
+    @Test func searchSimilarSourcesUsesSuppliedBm25Leg() throws {
+        let store = try tempStore()
+        let s = try store.addSource(filename: "quarterly-report.pdf", data: Data("%PDF".utf8))
+        // Caller-supplied BM25 leg (the contract the model +
+        // CLITantivyLegResolver fulfill in production via Tantivy). With no
+        // chunk embeddings seeded, the semantic leg is empty → fused == leg.
+        let leg = [SourceSummary(
+            id: s.id, filename: s.filename, ext: s.ext, mimeType: s.mimeType,
+            byteSize: s.byteSize, createdAt: s.createdAt, updatedAt: s.updatedAt,
+            version: s.version, zoteroItemKey: nil, zoteroItemTitle: nil,
+            displayName: s.displayName, role: s.role)]
+        let hits = try store.searchSimilarSources(query: "report", limit: 10, bm25Leg: leg)
         #expect(hits.count == 1)
-        #expect(hits.first?.filename == "quarterly-report.pdf")
-    }
-
-    @Test func searchSimilarSourcesLIKEFallbackMatchesDisplayName() throws {
-        let store = try tempStore()
-        let s = try store.addSource(filename: "data.bin", data: Data("x".utf8))
-        try store.renameSource(id: s.id, to: "Annual Budget")
-
-        let hits = try store.searchSimilarSources(query: "budget", limit: 10, bm25Leg: nil)
-        #expect(hits.count == 1)
-        #expect(hits.first?.displayName == "Annual Budget")
-    }
-
-    @Test func searchSimilarSourcesLIKEFallbackRespectsLimit() throws {
-        let store = try tempStore()
-        _ = try store.addSource(filename: "report-1.pdf", data: Data("%PDF 1".utf8))
-        _ = try store.addSource(filename: "report-2.pdf", data: Data("%PDF 2".utf8))
-        _ = try store.addSource(filename: "report-3.pdf", data: Data("%PDF 3".utf8))
-
-        let hits = try store.searchSimilarSources(query: "report", limit: 2, bm25Leg: nil)
-        #expect(hits.count == 2)
-    }
-
-    @Test func searchSimilarSourcesLIKEFallbackEmptyWhenNoMatch() throws {
-        let store = try tempStore()
-        _ = try store.addSource(filename: "alpha.txt", data: Data("a".utf8))
-        #expect(try store.searchSimilarSources(query: "zzznomatch", limit: 10, bm25Leg: nil).isEmpty)
-    }
-
-    @Test func searchSimilarSourcesNeverSelectsStar() throws {
-        // Regression guard: `sourceSummary(from:)` reads column 5 as created_at
-        // (a Double). `SELECT s.*` would emit the `content` BLOB at index 5.
-        // The LIKE fallback returns a summary whose dates are sane (not 1970 /
-        // not NaN), proving the column order is the explicit 11-column list.
-        let store = try tempStore()
-        _ = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4 content bytes".utf8))
-        let hits = try store.searchSimilarSources(query: "doc", limit: 10, bm25Leg: nil)
-        let created = try #require(hits.first?.createdAt)
-        #expect(created.timeIntervalSince1970 > 1_700_000_000)  // a 2023+ timestamp
+        #expect(hits.first?.id == s.id)
     }
 
     // MARK: - Re-embed hooks (vec-unavailable no-op)
@@ -170,13 +163,25 @@ struct SourceEmbeddingSearchTests {
     }
 
     // MARK: - CLI: SourceCommand.run(.search)
+    //
+    // Post-#634 (v38): Tantivy is the sole BM25 path. `SourceCommand.run`'s
+    // default `bm25Leg: nil` means "no BM25 leg" — under `swift test` (vec
+    // unavailable), the search returns nothing unless the caller supplies a
+    // leg. In production `wikictl` resolves one via `CLITantivyLegResolver`
+    // (covered by `CLITantivyLegResolverTests`); these tests supply a
+    // synthetic leg to verify the TSV formatting + commit semantics.
 
     @Test func sourceSearchReturnsTSVAndDoesNotCommit() throws {
         let store = try tempStore()
         let s = try store.addSource(filename: "self-driving-cars.pdf", data: Data("%PDF".utf8))
 
+        let leg = [SourceSummary(
+            id: s.id, filename: s.filename, ext: s.ext, mimeType: s.mimeType,
+            byteSize: s.byteSize, createdAt: s.createdAt, updatedAt: s.updatedAt,
+            version: s.version, zoteroItemKey: nil, zoteroItemTitle: nil,
+            displayName: s.displayName, role: s.role)]
         let result = try SourceCommand.run(
-            .search(query: "driving", limit: 10), in: store, cwd: "/tmp")
+            .search(query: "driving", limit: 10), in: store, cwd: "/tmp", bm25Leg: leg)
         #expect(result.didCommit == false)
         guard case .text(let output) = result.payload else {
             Issue.record("expected text payload"); return
@@ -190,8 +195,14 @@ struct SourceEmbeddingSearchTests {
         let s = try store.addSource(filename: "data.bin", data: Data("x".utf8))
         try store.renameSource(id: s.id, to: "Renamed Source")
 
+        // The rename updates `display_name` on `sources`. The synthetic leg
+        // must reflect the post-rename summary (mirrors what
+        // `CLITantivyLegResolver` reads from `store.listSources()` in
+        // production).
+        let renamed = try store.listSources().first { $0.id == s.id } ?? s
+        let leg = [renamed]
         let result = try SourceCommand.run(
-            .search(query: "renamed", limit: 10), in: store, cwd: "/tmp")
+            .search(query: "renamed", limit: 10), in: store, cwd: "/tmp", bm25Leg: leg)
         guard case .text(let output) = result.payload else {
             Issue.record("expected text payload"); return
         }

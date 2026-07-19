@@ -54,11 +54,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     /// The latest schema version stamped by `createFreshSchema()` (for a fresh
     /// DB) and by `migrateIfNeeded(_:in:)` after running the ladder (for an
-    /// existing DB). MUST match `SQLiteWikiStore.currentSchemaVersion`: existing
-    /// databases produced by that store carry `PRAGMA user_version` up to 37, and
-    /// this store must recognize them as already-current so the ladder is a no-op
-    /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 37
+    /// existing DB). v38 drops the FTS5/BM25 tables + triggers + the
+    /// `source_search`/`chat_search` sidecars — Tantivy is now the sole BM25
+    /// search path (#634). Existing databases produced by this store carry
+    /// `PRAGMA user_version` up to 38, and this store must recognize them as
+    /// already-current so the ladder is a no-op on re-open (the proven
+    /// `if version < N`).
+    private static let currentSchemaVersion = 38
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -128,7 +130,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
 
         // Register the statically-linked sqlite-vec on this connection
-        // (connection-scoped). Non-fatal: FTS5 remains the fallback.
+        // (connection-scoped). Non-fatal: a failed registration disables the
+        // semantic cosine leg — Tantivy (the BM25 leg) is independent of this.
         // `db.sqliteConnection` is `OpaquePointer?` (GRDB's
         // `SQLiteConnection` typealias) — the raw `sqlite3*` handle.
         config.prepareDatabase { db in
@@ -137,7 +140,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             if rc == 0 {
                 DebugLog.store("GRDBWikiStore: sqlite-vec registered on connection (vec_distance_cosine available)")
             } else {
-                DebugLog.store("GRDBWikiStore: sqlite3_vec_init FAILED rc=\(rc) — semantic search disabled, FTS5 fallback active")
+                DebugLog.store("GRDBWikiStore: sqlite3_vec_init FAILED rc=\(rc) — semantic cosine search disabled")
             }
         }
 
@@ -146,7 +149,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             isReadOnly = false
             // Mirrors `SQLiteWikiStore.bootstrapSchema`: a FRESH db (user_version
             // 0) gets the consolidated current schema in one block; an EXISTING db
-            // at any version runs the proven 37-step `if version < N` ladder
+            // at any version runs the proven 38-step `if version < N` ladder
             // translated to GRDB's API. Either path stamps `user_version` to
             // `currentSchemaVersion`, so re-opening is a no-op (idempotent,
             // exactly like the `SQLiteWikiStore` store).
@@ -173,24 +176,23 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 do {
                     try migrateIfNeeded(db)
                 } catch let error as DatabaseError where error.resultCode == .SQLITE_CORRUPT {
-                    // A migration step that writes to `pages`/`sources` (e.g. the
-                    // v22→23 link-canonicalization sweep) fires the external-content
-                    // FTS5 sync triggers. A cross-host copy (rsync) can corrupt an
-                    // FTS5 shadow index in a way `PRAGMA integrity_check` misses —
-                    // it validates the main tables, not FTS5 shadow b-trees — so the
-                    // corruption only surfaces as SQLITE_CORRUPT when the trigger
-                    // writes the index. The content tables are intact, so rebuild
-                    // the FTS indexes from them and retry the migration once.
-                    // Mirrors `SQLiteWikiStore.bootstrapSchema`'s catch.
-                    DebugLog.store("GRDBWikiStore: migration hit SQLITE_CORRUPT (\(error.message ?? "")); rebuilding FTS indexes and retrying")
-                    Self.healCorruptFTSIndexes(in: db)
-                    try migrateIfNeeded(db)
+                    // Historically a migration step could trip SQLITE_CORRUPT via
+                    // the FTS5 external-content sync triggers when a cross-host
+                    // copy (rsync) corrupted an FTS5 shadow index in a way
+                    // `PRAGMA integrity_check` missed. FTS5 is gone as of v38
+                    // (#634), so there's no shadow index to heal-and-retry — a
+                    // corrupt database is a real corrupt database now. Surface
+                    // the error to the caller (the app's `WikiSession` catches
+                    // it and falls back to `:memory:`).
+                    DebugLog.store("GRDBWikiStore: migration hit SQLITE_CORRUPT (\(error.message ?? "")) — no FTS heal path remains (FTS5 dropped in v38)")
+                    throw error
                 }
             }
-            // Heal any FTS5 index whose term b-tree is empty (e.g. pages that
-            // predate the FTS triggers, or a restored-from-backup DB). Mirrors
-            // SQLiteWikiStore.ensureSearchIndexesPopulated's FTS step. NOT run by
-            // the read-only File Provider open.
+            // Lazy-embed any source/chat whose chunks are missing (e.g. pages
+            // that predate the chunk-embedding path, or a restored-from-backup
+            // DB). Mirrors SQLiteWikiStore.ensureSearchIndexesPopulated minus
+            // the (now-dropped) FTS step. NOT run by the read-only File
+            // Provider open.
             ensureSearchIndexesPopulated()
         } catch {
             throw WikiStoreError.open("\(error)")
@@ -342,18 +344,18 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     /// The schema-bootstrap entry point — the GRDB equivalent of
     /// `SQLiteWikiStore.bootstrapSchema`. Reads `PRAGMA user_version` and:
-    /// - **Fresh DB (version == 0):** runs `createFreshSchema(on:)` (the v37
+    /// - **Fresh DB (version == 0):** runs `createFreshSchema(on:)` (the v38
     ///   end-state in one consolidated block) and stamps
     ///   `user_version = currentSchemaVersion`. The fresh path skips the
     ///   historical create→rename→drop churn of the ladder, exactly as
     ///   `createFreshSchemaV20()` does.
     /// - **Existing DB (version >= 1):** runs `migrate(from:in:)`, the proven
-    ///   37-step `if version < N` ladder translated to GRDB's API. Each step
+    ///   38-step `if version < N` ladder translated to GRDB's API. Each step
     ///   is guarded so a re-open at the same version (the steady-state case
     ///   for a store that's already migrated) is a no-op; genuine upgrades run
     ///   only the steps they owe.
     ///
-    /// Both paths end at `user_version = currentSchemaVersion` (37), so the
+    /// Both paths end at `user_version = currentSchemaVersion` (38), so the
     /// File Provider's read-only handle to the same WAL file never sees a
     /// half-migrated schema.
     ///
@@ -364,7 +366,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let version = try Int.fetchOne(db, sql: "PRAGMA user_version") ?? 0
         guard version < Self.currentSchemaVersion else { return }
         if version == 0 {
-            // Fresh DB: create the complete v37 schema in one block, then stamp.
+            // Fresh DB: create the complete v38 schema in one block, then stamp.
             try Self.createFreshSchema(on: db)
             try db.execute(sql: "PRAGMA user_version = \(Self.currentSchemaVersion);")
             return
@@ -372,19 +374,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // Existing DB: run the stepwise ladder (data-preserving). A rewind-of-
         // select steps never runs for a genuinely-current DB (the early-return
         // `guard` above fired).
-        #if DEBUG
-        // Test hook: simulate a corrupt FTS index tripping the first migration
-        // write with SQLITE_CORRUPT (see `init`'s catch). Fires once, then
-        // clears itself so the retry proceeds normally. Mirrors
-        // `SQLiteWikiStore.bootstrapSchema`.
-        if let fault = Self.migrationCorruptFaultForTesting {
-            Self.migrationCorruptFaultForTesting = nil
-            throw DatabaseError(
-                resultCode: .SQLITE_CORRUPT,
-                message: fault.isEmpty ? "database disk image is malformed" : fault
-            )
-        }
-        #endif
         var v = version
         try migrate(from: &v, in: db)
     }
@@ -394,7 +383,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// This is a faithful, line-by-line translation of
     /// `SQLiteWikiStore.migrate(from:)` to GRDB's API. Every SQL statement is
     /// preserved verbatim — the ladder is PROVEN (running in production across
-    /// 37 schema versions); only the API calls change:
+    /// 38 schema versions); only the API calls change:
     /// - `exec(sql)` → `db.execute(sql: sql)`
     /// - `statement(sql)` + `bind(x, at: n)` + `step()` →
     ///   `db.execute(sql: sql, arguments: [x])` (one-shot; GRDB caches
@@ -682,87 +671,26 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version = 12
         }
 
-        // v12 → v13: FTS5/BM25 full-text search over title + body. FTS5 is
-        // CORE SQLite (ENABLE_FTS5 on the system build) — no loadable
-        // extension needed, so it works in wikictl and under `swift test`,
-        // unlike the vec layer.
+        // v12 → v13: historically created the FTS5/BM25 search layer
+        // (`pages_fts`, `sources_fts` + sync triggers, `source_search`
+        // sidecar). FTS5 was the BM25 search path until Tantivy replaced it
+        // (Phase 2 cutover, #637) and was dropped entirely at v38 (#634).
+        // The original DDL is intentionally preserved here as historical
+        // reference; it MUST NOT run for an upgrading DB because v38 would
+        // just DROP the tables again, and creating them on a DB that already
+        // ran the historical v13 (e.g. a rewind test) would error on the
+        // duplicate `CREATE VIRTUAL TABLE` without `IF NOT EXISTS`. The step
+        // is now a stamp-only version bump.
         //
-        // PAGES: body (body_markdown) is inline on `pages`, so use
-        // external-content FTS5 keyed on pages.rowid, maintained by AFTER
-        // INSERT/UPDATE/DELETE triggers. This needs NO changes to the
-        // page-write path — createPage / updatePage / deletePage already write
-        // `pages`, so the triggers fire. Existing rows are backfilled lazily by
-        // rebuildFTS() (Reindex), via the FTS5 'rebuild' command; new rows index
-        // immediately.
+        // PAGES: body (body_markdown) is inline on `pages`, so external-content
+        // FTS5 keyed on pages.rowid was maintained by AFTER INSERT/UPDATE/DELETE
+        // triggers.
         //
         // SOURCES: body is the HEAD of the version chain
-        // (source_markdown_versions), NOT inline on `sources`, so we index a
-        // sidecar `source_search` — one row per source holding the current
-        // title + head body — maintained by appendProcessedMarkdown /
-        // renameSource via upsertSourceSearch(). The trigger keeps sources_fts
-        // in sync; deleting a source cascades to source_search (FK ON DELETE
-        // CASCADE) whose trigger removes the FTS row.
+        // (source_markdown_versions), NOT inline on `sources`, so a sidecar
+        // `source_search` — one row per source holding the current title +
+        // head body — backed `sources_fts`.
         if version < 13 {
-            try db.execute(sql: """
-            CREATE VIRTUAL TABLE pages_fts USING fts5(
-                title, body_markdown,
-                content='pages', content_rowid='rowid',
-                tokenize='porter');
-            """)
-            try db.execute(sql: """
-            CREATE TRIGGER pages_fts_ai AFTER INSERT ON pages BEGIN
-              INSERT INTO pages_fts(rowid, title, body_markdown)
-                VALUES (new.rowid, new.title, new.body_markdown);
-            END;
-            """)
-            try db.execute(sql: """
-            CREATE TRIGGER pages_fts_ad AFTER DELETE ON pages BEGIN
-              INSERT INTO pages_fts(pages_fts, rowid, title, body_markdown)
-                VALUES ('delete', old.rowid, old.title, old.body_markdown);
-            END;
-            """)
-            try db.execute(sql: """
-            CREATE TRIGGER pages_fts_au AFTER UPDATE ON pages BEGIN
-              INSERT INTO pages_fts(pages_fts, rowid, title, body_markdown)
-                VALUES ('delete', old.rowid, old.title, old.body_markdown);
-              INSERT INTO pages_fts(rowid, title, body_markdown)
-                VALUES (new.rowid, new.title, new.body_markdown);
-            END;
-            """)
-
-            try db.execute(sql: """
-            CREATE TABLE source_search (
-                source_id TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
-                title     TEXT NOT NULL,
-                body      TEXT NOT NULL
-            );
-            """)
-            try db.execute(sql: """
-            CREATE VIRTUAL TABLE sources_fts USING fts5(
-                title, body,
-                content='source_search', content_rowid='rowid',
-                tokenize='porter');
-            """)
-            try db.execute(sql: """
-            CREATE TRIGGER sources_fts_ai AFTER INSERT ON source_search BEGIN
-              INSERT INTO sources_fts(rowid, title, body)
-                VALUES (new.rowid, new.title, new.body);
-            END;
-            """)
-            try db.execute(sql: """
-            CREATE TRIGGER sources_fts_ad AFTER DELETE ON source_search BEGIN
-              INSERT INTO sources_fts(sources_fts, rowid, title, body)
-                VALUES ('delete', old.rowid, old.title, old.body);
-            END;
-            """)
-            try db.execute(sql: """
-            CREATE TRIGGER sources_fts_au AFTER UPDATE ON source_search BEGIN
-              INSERT INTO sources_fts(sources_fts, rowid, title, body)
-                VALUES ('delete', old.rowid, old.title, old.body);
-              INSERT INTO sources_fts(rowid, title, body)
-                VALUES (new.rowid, new.title, new.body);
-            END;
-            """)
             try db.execute(sql: "PRAGMA user_version = 13;")
             version = 13
         }
@@ -877,9 +805,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version = 19
         }
 
-        // ---- v19 → v37: graph-model phases + chat + workspaces (data
-        // migrations that must run for a genuine upgrade). Each helper below
-        // is a faithful translation of the SQLiteWikiStore counterpart. ----
+        // ---- v19 → v38: graph-model phases + chat + workspaces + FTS5 drop
+        // (data migrations that must run for a genuine upgrade). Each helper
+        // below is a faithful translation of the SQLiteWikiStore counterpart. ----
 
         if version < 20 {
             try Self.migrateV19ToV20(in: db)
@@ -967,10 +895,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version = 27
         }
 
-        // Step 27 → 28 (issue #245): semantic + FTS search over chats. Adds
-        // `chat_chunks` (per-chunk cosine embeddings) + the `chat_search` FTS
-        // sidecar + `chats_fts` external-content index, mirroring the existing
-        // pages/sources search pipeline. Purely additive (`IF NOT EXISTS`); a
+        // Step 27 → 28 (issue #245): semantic search over chats. Adds
+        // `chat_chunks` (per-chunk cosine embeddings). The historical step also
+        // created a `chat_search` FTS5 sidecar + `chats_fts` external-content
+        // index for the lexical BM25 path; both were dropped at v38 (#634)
+        // when Tantivy became the sole BM25 search path, so this step now
+        // creates only `chat_chunks`. Purely additive (`IF NOT EXISTS`); a
         // brand-new DB forced through the ladder has no chat rows to index.
         if version < 28 {
             try Self.createChatSearchTables(in: db)
@@ -1074,8 +1004,40 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // `wiki_metadata` key-value table for persisting one-time work flags
         // (e.g. the link-reconcile version) so they survive model recreation
         // between launches. Purely additive — `CREATE TABLE IF NOT EXISTS`.
-        if version < Self.currentSchemaVersion {
+        if version < 37 {
             try Self.createWikiMetadataTable(in: db)
+            try db.execute(sql: "PRAGMA user_version = 37;")
+            version = 37
+        }
+
+        // Step 37 → 38 (issue #634 — drop FTS5): Tantivy is now the sole BM25
+        // search path. The FTS5 external-content virtual tables (`pages_fts`,
+        // `sources_fts`, `chats_fts`), their AFTER INSERT/UPDATE/DELETE sync
+        // triggers, and the sidecar backing tables (`source_search`,
+        // `chat_search`) are derived search indexes — dropping them loses no
+        // source data. The Tantivy index rebuilds independently at the next
+        // app/wiki open. The semantic cosine path (sqlite-vec over
+        // `page_chunks`/`source_chunks`/`chat_chunks`) is unchanged.
+        //
+        // All `DROP` statements are `IF EXISTS`-guarded so a DB that never had
+        // FTS5 (e.g. a test fixture) or one that already dropped them stamps
+        // v38 idempotently. Dropping a virtual table cascades to its shadow
+        // tables automatically; the named triggers are dropped explicitly.
+        if version < Self.currentSchemaVersion {
+            try db.execute(sql: "DROP TABLE IF EXISTS chats_fts;")
+            try db.execute(sql: "DROP TABLE IF EXISTS sources_fts;")
+            try db.execute(sql: "DROP TABLE IF EXISTS pages_fts;")
+            try db.execute(sql: "DROP TABLE IF EXISTS chat_search;")
+            try db.execute(sql: "DROP TABLE IF EXISTS source_search;")
+            try db.execute(sql: "DROP TRIGGER IF EXISTS chats_fts_ai;")
+            try db.execute(sql: "DROP TRIGGER IF EXISTS chats_fts_ad;")
+            try db.execute(sql: "DROP TRIGGER IF EXISTS chats_fts_au;")
+            try db.execute(sql: "DROP TRIGGER IF EXISTS sources_fts_ai;")
+            try db.execute(sql: "DROP TRIGGER IF EXISTS sources_fts_ad;")
+            try db.execute(sql: "DROP TRIGGER IF EXISTS sources_fts_au;")
+            try db.execute(sql: "DROP TRIGGER IF EXISTS pages_fts_ai;")
+            try db.execute(sql: "DROP TRIGGER IF EXISTS pages_fts_ad;")
+            try db.execute(sql: "DROP TRIGGER IF EXISTS pages_fts_au;")
             try db.execute(sql: "PRAGMA user_version = \(Self.currentSchemaVersion);")
             version = Self.currentSchemaVersion
         }
@@ -1302,9 +1264,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
     /// Create the chat-search tables (issue #245): `chat_chunks` (per-chunk
-    /// cosine embeddings, mirroring `page_chunks`/`source_chunks`) and the
-    /// `chat_search` FTS sidecar + `chats_fts` external-content index
-    /// (mirroring `source_search`/`sources_fts`).
+    /// cosine embeddings, mirroring `page_chunks`/`source_chunks`). FTS5
+    /// sidecars (`chat_search` + `chats_fts`) were dropped at v38 (#634) when
+    /// Tantivy became the sole BM25 leg, so this now creates only the chunk
+    /// table.
     private static func createChatSearchTables(in db: Database) throws {
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS chat_chunks (
@@ -1313,41 +1276,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             embedding BLOB NOT NULL,
             PRIMARY KEY (chat_id, chunk_idx)
         ) WITHOUT ROWID;
-        """)
-        try db.execute(sql: """
-        CREATE TABLE IF NOT EXISTS chat_search (
-            chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
-            title   TEXT NOT NULL,
-            body    TEXT NOT NULL
-        );
-        """)
-        // FTS5/BM25 (v28): external-content over `chat_search`, kept in sync
-        // by AFTER INSERT/UPDATE/DELETE triggers — mirrors `sources_fts`.
-        try db.execute(sql: """
-        CREATE VIRTUAL TABLE IF NOT EXISTS chats_fts USING fts5(
-            title, body,
-            content='chat_search', content_rowid='rowid',
-            tokenize='porter');
-        """)
-        try db.execute(sql: """
-        CREATE TRIGGER IF NOT EXISTS chats_fts_ai AFTER INSERT ON chat_search BEGIN
-          INSERT INTO chats_fts(rowid, title, body)
-            VALUES (new.rowid, new.title, new.body);
-        END;
-        """)
-        try db.execute(sql: """
-        CREATE TRIGGER IF NOT EXISTS chats_fts_ad AFTER DELETE ON chat_search BEGIN
-          INSERT INTO chats_fts(chats_fts, rowid, title, body)
-            VALUES ('delete', old.rowid, old.title, old.body);
-        END;
-        """)
-        try db.execute(sql: """
-        CREATE TRIGGER IF NOT EXISTS chats_fts_au AFTER UPDATE ON chat_search BEGIN
-          INSERT INTO chats_fts(chats_fts, rowid, title, body)
-            VALUES ('delete', old.rowid, old.title, old.body);
-          INSERT INTO chats_fts(rowid, title, body)
-            VALUES (new.rowid, new.title, new.body);
-        END;
         """)
     }
 
@@ -1364,31 +1292,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         """)
     }
 
-    // MARK: - FTS5 corruption heal (migration safety net)
-
-    /// Rebuild the FTS5 external-content indexes from their content tables.
-    /// Called when a migration write trips `SQLITE_CORRUPT` on a shadow index
-    /// (see `init(databaseURL:)`). The `'rebuild'` command drops and re-derives
-    /// the index from `pages`/`source_search`/`chat_search`, so a corrupt shadow
-    /// b-tree is replaced by a consistent one. Best-effort per index: a missing
-    /// table (minimal fixture) or an already-healthy index is a harmless no-op.
-    /// Mirrors `SQLiteWikiStore.healCorruptFTSIndexes`.
-    private static func healCorruptFTSIndexes(in db: Database) {
-        for table in ["pages_fts", "sources_fts", "chats_fts"] {
-            let exists = (try? Int.fetchOne(
-                db,
-                sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='\(table)';"
-            ) ?? 0) != 0
-            guard exists else { continue }
-            do {
-                try db.execute(sql: "INSERT INTO \(table)(\(table)) VALUES ('rebuild');")
-            } catch {
-                DebugLog.store("GRDBWikiStore healCorruptFTSIndexes: \(table) rebuild failed — \(error)")
-            }
-        }
-    }
-
-    // MARK: - Data-migration helpers (v19 → v37)
+    // MARK: - Data-migration helpers (v19 → v38)
 
     /// The v19→20 migration step (graph-model Phase 1): move source content
     /// out of the mutable `sources.content` column into immutable,
@@ -2242,66 +2146,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         ) WITHOUT ROWID;
         """)
 
-        // FTS5/BM25 (v13): pages (external-content) + sources (sidecar).
-        try db.execute(sql: """
-        CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
-            title, body_markdown,
-            content='pages', content_rowid='rowid',
-            tokenize='porter');
-        """)
-        try db.execute(sql: """
-        CREATE TRIGGER IF NOT EXISTS pages_fts_ai AFTER INSERT ON pages BEGIN
-          INSERT INTO pages_fts(rowid, title, body_markdown)
-            VALUES (new.rowid, new.title, new.body_markdown);
-        END;
-        """)
-        try db.execute(sql: """
-        CREATE TRIGGER IF NOT EXISTS pages_fts_ad AFTER DELETE ON pages BEGIN
-          INSERT INTO pages_fts(pages_fts, rowid, title, body_markdown)
-            VALUES ('delete', old.rowid, old.title, old.body_markdown);
-        END;
-        """)
-        try db.execute(sql: """
-        CREATE TRIGGER IF NOT EXISTS pages_fts_au AFTER UPDATE ON pages BEGIN
-          INSERT INTO pages_fts(pages_fts, rowid, title, body_markdown)
-            VALUES ('delete', old.rowid, old.title, old.body_markdown);
-          INSERT INTO pages_fts(rowid, title, body_markdown)
-            VALUES (new.rowid, new.title, new.body_markdown);
-        END;
-        """)
-        try db.execute(sql: """
-        CREATE TABLE IF NOT EXISTS source_search (
-            source_id TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
-            title     TEXT NOT NULL,
-            body      TEXT NOT NULL
-        );
-        """)
-        try db.execute(sql: """
-        CREATE VIRTUAL TABLE IF NOT EXISTS sources_fts USING fts5(
-            title, body,
-            content='source_search', content_rowid='rowid',
-            tokenize='porter');
-        """)
-        try db.execute(sql: """
-        CREATE TRIGGER IF NOT EXISTS sources_fts_ai AFTER INSERT ON source_search BEGIN
-          INSERT INTO sources_fts(rowid, title, body)
-            VALUES (new.rowid, new.title, new.body);
-        END;
-        """)
-        try db.execute(sql: """
-        CREATE TRIGGER IF NOT EXISTS sources_fts_ad AFTER DELETE ON source_search BEGIN
-          INSERT INTO sources_fts(sources_fts, rowid, title, body)
-            VALUES ('delete', old.rowid, old.title, old.body);
-        END;
-        """)
-        try db.execute(sql: """
-        CREATE TRIGGER IF NOT EXISTS sources_fts_au AFTER UPDATE ON source_search BEGIN
-          INSERT INTO sources_fts(sources_fts, rowid, title, body)
-            VALUES ('delete', old.rowid, old.title, old.body);
-          INSERT INTO sources_fts(rowid, title, body)
-            VALUES (new.rowid, new.title, new.body);
-        END;
-        """)
+        // (FTS5/BM25 tables removed at v38, #634 — Tantivy is now the sole
+        // BM25 search path. Pages previously used an external-content FTS5
+        // table over `pages`; sources used a `source_search` sidecar +
+        // external-content FTS5. Both derived indexes are gone.)
 
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS embedding_meta (
@@ -2411,7 +2259,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         """)
         try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_seq ON chat_messages(chat_id, seq);")
 
-        // v28: chat search (chat_chunks + chat_search + chats_fts).
+        // v28: chat semantic search (chat_chunks only — chat_search/chats_fts
+        // dropped at v38, #634).
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS chat_chunks (
             chat_id   TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
@@ -2419,39 +2268,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             embedding BLOB NOT NULL,
             PRIMARY KEY (chat_id, chunk_idx)
         ) WITHOUT ROWID;
-        """)
-        try db.execute(sql: """
-        CREATE TABLE IF NOT EXISTS chat_search (
-            chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
-            title   TEXT NOT NULL,
-            body    TEXT NOT NULL
-        );
-        """)
-        try db.execute(sql: """
-        CREATE VIRTUAL TABLE IF NOT EXISTS chats_fts USING fts5(
-            title, body,
-            content='chat_search', content_rowid='rowid',
-            tokenize='porter');
-        """)
-        try db.execute(sql: """
-        CREATE TRIGGER IF NOT EXISTS chats_fts_ai AFTER INSERT ON chat_search BEGIN
-          INSERT INTO chats_fts(rowid, title, body)
-            VALUES (new.rowid, new.title, new.body);
-        END;
-        """)
-        try db.execute(sql: """
-        CREATE TRIGGER IF NOT EXISTS chats_fts_ad AFTER DELETE ON chat_search BEGIN
-          INSERT INTO chats_fts(chats_fts, rowid, title, body)
-            VALUES ('delete', old.rowid, old.title, old.body);
-        END;
-        """)
-        try db.execute(sql: """
-        CREATE TRIGGER IF NOT EXISTS chats_fts_au AFTER UPDATE ON chat_search BEGIN
-          INSERT INTO chats_fts(chats_fts, rowid, title, body)
-            VALUES ('delete', old.rowid, old.title, old.body);
-          INSERT INTO chats_fts(rowid, title, body)
-            VALUES (new.rowid, new.title, new.body);
-        END;
         """)
 
         // v30: page versions (W0).
@@ -3097,10 +2913,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             VALUES ('source-content', ?, ?, 1, ?);
             """, arguments: [sourceID, versionID, nowTS])
 
-            // Name-only FTS index entry (the body is indexed once processed
-            // markdown is appended). Best-effort; inline (pure SQL).
-            self.upsertSourceSearch(sourceID: id, body: "", on: db)
-
             return SourceSummary(
                 id: id, filename: filename, ext: ext, mimeType: mime,
                 byteSize: data.count, createdAt: now, updatedAt: now, version: 1,
@@ -3204,10 +3016,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
             VALUES ('source-content', ?, ?, 1, ?);
             """, arguments: [sourceID, versionID, nowTS])
-
-            // Name-only FTS entry (the transcript is indexed when
-            // appendProcessedMarkdown runs). Best-effort; inline.
-            self.upsertSourceSearch(sourceID: id, body: "", on: db)
 
             return SourceSummary(
                 id: id, filename: filename, ext: ext, mimeType: mime,
@@ -3352,27 +3160,15 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             """, arguments: [newDisplayName, Date().timeIntervalSince1970, id.rawValue])
             return true
         }
-        // No-op rename: skip the re-embed/FTS work (mirrors the original's
+        // No-op rename: skip the re-embed work (mirrors the original's
         // `guard renamed else { return }`).
         guard renamed else { return }
-        // Post-commit: re-embed + refresh FTS for the new title (best-effort),
-        // using the current processed-markdown HEAD body so embedding reflects
-        // both the new name and the content.
+        // Post-commit: re-embed for the new title (best-effort), using the
+        // current processed-markdown HEAD body so embedding reflects both the
+        // new name and the content. (FTS refresh removed at v38 — Tantivy is
+        // the sole BM25 path; it re-syncs via the event bus.)
         let headBody = (try? processedMarkdownHead(sourceID: id)?.content) ?? ""
         reembedSource(sourceID: id, body: headBody)
-        upsertSourceSearchPostCommit(sourceID: id, body: headBody)
-    }
-
-    /// Post-commit FTS upsert for `source_search` (opens its own write so it
-    /// must be called AFTER `mutate` returns, never inside).
-    private func upsertSourceSearchPostCommit(sourceID: PageID, body: String) {
-        do {
-            try dbQueue.write { db in
-                self.upsertSourceSearch(sourceID: sourceID, body: body, on: db)
-            }
-        } catch {
-            DebugLog.store("GRDBWikiStore.upsertSourceSearch[\(sourceID.rawValue)] post-commit failed: \(error)")
-        }
     }
 
     /// Fetch one source summary by id on an open `db`. `db:`-taking so it is
@@ -3729,9 +3525,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             VALUES ('source-content', ?, ?, 1, ?);
             """, arguments: [sourceID, versionID, nowTS])
 
-            // Name-only FTS entry. Best-effort; inline.
-            self.upsertSourceSearch(sourceID: id, body: "", on: db)
-
             return SourceSummary(
                 id: id, filename: filename, ext: ext, mimeType: mime,
                 byteSize: data.count, createdAt: now, updatedAt: now, version: 1,
@@ -3906,9 +3699,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                             origin.rawValue, note, now.timeIntervalSince1970,
                             blobHash, technique])
 
-            // FTS refresh inline (pure SQL) so keyword search finds the new content.
-            self.upsertSourceSearch(sourceID: sourceID, body: content, on: db)
-
             return SourceMarkdownVersion(
                 id: id, sourceID: sourceID, parentID: parentID,
                 content: content, origin: origin, note: note, createdAt: now,
@@ -3973,9 +3763,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                             targetBlobHash, targetVersion.mimeType])
             try self.upsertMarkdownDerivedRef(sourceID: sourceID, versionID: id.rawValue, now: nowTS, on: db)
 
-            // FTS refresh inline (pure SQL).
-            self.upsertSourceSearch(sourceID: sourceID, body: targetVersion.content, on: db)
-
             return SourceMarkdownVersion(
                 id: id, sourceID: sourceID, parentID: parentID,
                 content: targetVersion.content, origin: .revert,
@@ -3999,7 +3786,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         sourceID: PageID, content: String, backend: ExtractionBackend,
         sourceVersionID: String? = nil, note: String? = nil, modelVersion: String? = nil
     ) throws -> SourceMarkdownVersion {
-        let (version, reembed): (SourceMarkdownVersion, Bool) = try mutate(event: { _ in
+        let version: SourceMarkdownVersion = try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
         }) { db in
             let id = PageID(rawValue: ULID.generate())
@@ -4034,27 +3821,17 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                             note, nowTS, activityID, resolvedSourceVersionID,
                             blobHash, backend.rawValue])
 
-            // Re-embed/index only when this row is now the active head (default-
-            // active rule: it is MAX(id); if a ref nominates a different row, this
-            // is just a coexisting alternative and must not disturb the active index).
-            let refExists = (try? self.markdownDerivedRef(sourceID: sourceID, on: db)) != nil
-            if !refExists {
-                self.upsertSourceSearch(sourceID: sourceID, body: content, on: db)
-            }
-
-            let version = SourceMarkdownVersion(
+            return SourceMarkdownVersion(
                 id: id, sourceID: sourceID, parentID: parentID,
                 content: content, origin: .extraction, note: note, createdAt: now,
                 activityID: activityID, sourceVersionID: resolvedSourceVersionID,
                 blobHash: blobHash, mimeType: MimeType.markdown,
                 technique: backend.rawValue
             )
-            return (version, !refExists)
         }
-        // Post-commit: re-embed only when this row became the active head.
-        if reembed {
-            reembedSource(sourceID: sourceID, body: version.content)
-        }
+        // Post-commit: re-embed the new HEAD body (FTS refresh removed at v38 —
+        // Tantivy is the sole BM25 path; it re-syncs via the event bus).
+        reembedSource(sourceID: sourceID, body: version.content)
         return version
     }
 
@@ -4076,10 +3853,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 sourceID: sourceID, versionID: versionID.rawValue,
                 now: Date().timeIntervalSince1970, on: db)
         }
-        // Post-commit: refresh the search indexes for the newly-active body.
+        // Post-commit: re-embed the newly-active body. (FTS refresh removed at
+        // v38 — Tantivy is the sole BM25 path; it re-syncs via the event bus.)
         if let head = try? processedMarkdownHead(sourceID: sourceID) {
             reembedSource(sourceID: sourceID, body: head.content)
-            upsertSourceSearchPostCommit(sourceID: sourceID, body: head.content)
         }
     }
 
@@ -5023,45 +4800,19 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func searchSimilar(query: String, limit: Int, bm25Leg: [WikiPageSummary]?) throws -> [WikiPageSummary] {
         try dbQueue.read { db in
             let pool = max(limit * 2, limit)
-            // --- FTS (lexical) pass ---
-            // Phase 2 Tantivy cutover (plans/tantivy-search-sidecar.md §4.4): a
-            // caller-supplied `bm25Leg` (Tantivy search mapped to summaries)
-            // REPLACES the FTS5 query when non-empty; otherwise run FTS5.
-            // Semantic leg + RankFusion.rrf run unchanged either way.
-            let ftsRows: [WikiPageSummary]
-            if let bm25Leg, !bm25Leg.isEmpty {
-                ftsRows = bm25Leg
-            } else {
-                let q = Self.ftsMatch(query)
-                var rows: [WikiPageSummary] = []
-                if !q.isEmpty {
-                    rows = try Row.fetchAll(
-                        db,
-                        sql: """
-                        SELECT p.id, p.title, p.updated_at, p.created_at
-                        FROM pages_fts
-                        JOIN pages p ON p.rowid = pages_fts.rowid
-                        WHERE pages_fts MATCH ?
-                        ORDER BY rank
-                        LIMIT ?;
-                        """,
-                        arguments: [q, pool]
-                    ).map { row in
-                        WikiPageSummary(
-                            id: PageID(rawValue: row["id"]),
-                            title: row["title"],
-                            updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
-                            createdAt: Date(timeIntervalSince1970: row["created_at"])
-                        )
-                    }
-                }
-                ftsRows = rows
-            }
+            // --- BM25 leg ---
+            // Tantivy is the sole BM25 search path as of v38 (#634); FTS5 is
+            // gone. The caller supplies a Tantivy-resolved `bm25Leg` (the
+            // sidebar/omnibox/wikictl all resolve one via
+            // `WikiStoreModel.resolveTantivyLeg` / `CLITantivyLegResolver`).
+            // `nil`/empty leg → no BM25 leg at all → the result is cosine-only
+            // (or empty when vec is unavailable, e.g. under `swift test`).
+            let bm25Rows: [WikiPageSummary] = (bm25Leg ?? [])
 
             // --- Semantic (vec cosine) pass + RRF ---
             if Self.isVecAvailable(db),
                let queryBlob = EmbeddingService.embeddingBlob(for: query) {
-                DebugLog.store("search[pages]: query=\(query) \(bm25Leg == nil ? "FTS-only" : "Tantivy-BM25"), vec=true")
+                DebugLog.store("search[pages]: query=\(query) \(bm25Rows.isEmpty ? "cosine-only" : "Tantivy-BM25+cosine"), vec=true")
                 let semRows = try Row.fetchAll(
                     db,
                     sql: """
@@ -5083,10 +4834,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                         createdAt: Date(timeIntervalSince1970: row["created_at"])
                     )
                 }
-                return Array(RankFusion.rrf([semRows, ftsRows], id: \.id).prefix(limit))
+                return Array(RankFusion.rrf([semRows, bm25Rows], id: \.id).prefix(limit))
             }
-            DebugLog.store("search[pages]: query=\(query) \(bm25Leg == nil ? "FTS-only" : "Tantivy-BM25"), vec=false")
-            return Array(ftsRows.prefix(limit))
+            DebugLog.store("search[pages]: query=\(query) \(bm25Rows.isEmpty ? "no-BM25-leg" : "Tantivy-BM25-only"), vec=false")
+            return Array(bm25Rows.prefix(limit))
         }
     }
 
@@ -5136,40 +4887,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func searchSimilarSources(query: String, limit: Int, bm25Leg: [SourceSummary]?) throws -> [SourceSummary] {
         try dbQueue.read { db in
             let pool = max(limit * 2, limit)
-            // --- FTS (lexical) pass ---
-            // Phase 2 Tantivy cutover — bm25Leg replaces FTS5 when supplied (see
-            // searchSimilar(query:limit:bm25Leg:) above for the full rationale).
-            let ftsRows: [SourceSummary]
-            if let bm25Leg, !bm25Leg.isEmpty {
-                ftsRows = bm25Leg
-            } else {
-                let q = Self.ftsMatch(query)
-                var rows: [SourceSummary] = []
-                if !q.isEmpty {
-                    rows = try Row.fetchAll(
-                        db,
-                        sql: """
-                        SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size, s.created_at, s.updated_at,
-                               s.version, s.zotero_item_key, s.zotero_item_title, s.display_name, s.role
-                        FROM sources_fts
-                        JOIN source_search ss ON ss.rowid = sources_fts.rowid
-                        JOIN sources s ON s.id = ss.source_id
-                        WHERE sources_fts MATCH ?
-                        ORDER BY rank
-                        LIMIT ?;
-                        """,
-                        arguments: [q, pool]
-                    ).map { row in
-                        try Self.readSourceSummary(from: row)
-                    }
-                }
-                ftsRows = rows
-            }
+            // --- BM25 leg ---
+            // Tantivy is the sole BM25 search path as of v38 (#634); FTS5 is
+            // gone. See `searchSimilar(query:limit:bm25Leg:)` for the full
+            // rationale. `nil`/empty leg → cosine-only.
+            let bm25Rows: [SourceSummary] = (bm25Leg ?? [])
 
             // --- Semantic (vec cosine) pass + RRF ---
             if Self.isVecAvailable(db),
                let queryBlob = EmbeddingService.embeddingBlob(for: query) {
-                DebugLog.store("search[sources]: query=\(query) \(bm25Leg == nil ? "FTS-only" : "Tantivy-BM25"), vec=true")
+                DebugLog.store("search[sources]: query=\(query) \(bm25Rows.isEmpty ? "cosine-only" : "Tantivy-BM25+cosine"), vec=true")
                 let semRows = try Row.fetchAll(
                     db,
                     sql: """
@@ -5187,10 +4914,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 ).map { row in
                     try Self.readSourceSummary(from: row)
                 }
-                return Array(RankFusion.rrf([semRows, ftsRows], id: \.id).prefix(limit))
+                return Array(RankFusion.rrf([semRows, bm25Rows], id: \.id).prefix(limit))
             }
-            DebugLog.store("search[sources]: query=\(query) \(bm25Leg == nil ? "FTS-only" : "Tantivy-BM25"), vec=false")
-            return Array(ftsRows.prefix(limit))
+            DebugLog.store("search[sources]: query=\(query) \(bm25Rows.isEmpty ? "no-BM25-leg" : "Tantivy-BM25-only"), vec=false")
+            return Array(bm25Rows.prefix(limit))
         }
     }
 
@@ -5494,27 +5221,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             UPDATE chats SET updated_at = ? WHERE id = ?;
             """, arguments: [now.timeIntervalSince1970, chatID.rawValue])
 
-            // Keep the chat FTS sidecar fresh (title + concatenated message body).
-            // Best-effort, inside the same transaction so the FTS index never lags.
-            do {
-                if let titleRow = try Row.fetchOne(
-                    db,
-                    sql: "SELECT title FROM chats WHERE id = ?;",
-                    arguments: [chatID.rawValue]
-                ) {
-                    let title: String = titleRow["title"]
-                    let body: String = (try String.fetchOne(
-                        db,
-                        sql: "SELECT COALESCE(GROUP_CONCAT(text, '\n'), '') FROM chat_messages WHERE chat_id = ?;",
-                        arguments: [chatID.rawValue]
-                    )) ?? ""
-                    try db.execute(sql: """
-                    INSERT OR REPLACE INTO chat_search (chat_id, title, body) VALUES (?, ?, ?);
-                    """, arguments: [chatID.rawValue, title, body])
-                }
-            } catch {
-                DebugLog.store("upsertChatSearch[\(chatID.rawValue)] failed — \(error)")
-            }
+            // (FTS sidecar refresh removed at v38 — Tantivy is the sole BM25
+            // path; it re-syncs via the event bus. The lazy embedding path
+            // picks up new messages via missingChatEmbeddingWork below.)
 
             // NOTE: eager re-embed omitted — GRDB store uses lazy embedding via
             // missingChatEmbeddingWork + storeChatChunks (matching the source
@@ -5586,22 +5295,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // (mirrors updatePage / SQLiteWikiStore.renameChat).
             guard db.changesCount > 0 else { throw WikiStoreError.notFound(id) }
 
-            // Refresh the FTS sidecar title so keyword search reflects the new
-            // name (the body is unchanged). A no-op if no chat_search row exists
-            // yet (a chat with no messages has nothing to index). Mirrors
-            // `SQLiteWikiStore.renameChat`'s `upsertChatSearch(chatID:)`.
-            do {
-                let body: String = (try String.fetchOne(
-                    db,
-                    sql: "SELECT COALESCE(GROUP_CONCAT(text, '\n'), '') FROM chat_messages WHERE chat_id = ?;",
-                    arguments: [id.rawValue]
-                )) ?? ""
-                try db.execute(sql: """
-                INSERT OR REPLACE INTO chat_search (chat_id, title, body) VALUES (?, ?, ?);
-                """, arguments: [id.rawValue, title, body])
-            } catch {
-                DebugLog.store("GRDBWikiStore.renameChat: upsertChatSearch[\(id.rawValue)] failed — \(error)")
-            }
+            // (FTS sidecar title refresh removed at v38 — Tantivy re-syncs via
+            // the event bus; the chat_search sidecar is gone.)
         }
     }
 
@@ -5682,10 +5377,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             return try dbQueue.read { db in
                 // Build the embeddable text from the chat title + concatenated
                 // user/assistant message text — exactly like
-                // `SQLiteWikiStore.missingChatEmbeddingWork`. The FTS sidecar
-                // (`chat_search`) is NOT used here because it may lag the chat's
-                // actual messages (it's updated at append time, but the embeddable
-                // text must reflect the raw message text, not the FTS body).
+                // `SQLiteWikiStore.missingChatEmbeddingWork`. (The v28 FTS
+                // sidecar `chat_search` was dropped at v38; this query reads
+                // the raw `chat_messages` rows directly.)
                 let rows = try Row.fetchAll(db, sql: """
                 SELECT c.id, c.title,
                        COALESCE((
@@ -5715,40 +5409,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func searchSimilarChats(query: String, limit: Int, bm25Leg: [ChatSummary]?) throws -> [ChatSummary] {
         try dbQueue.read { db in
             let pool = max(limit * 2, limit)
-            // --- FTS (lexical) pass ---
-            // Phase 2 Tantivy cutover — bm25Leg replaces FTS5 when supplied (see
-            // searchSimilar(query:limit:bm25Leg:) above for the full rationale).
-            let ftsRows: [ChatSummary]
-            if let bm25Leg, !bm25Leg.isEmpty {
-                ftsRows = bm25Leg
-            } else {
-                let q = Self.ftsMatch(query)
-                var rows: [ChatSummary] = []
-                if !q.isEmpty {
-                    rows = try Row.fetchAll(
-                        db,
-                        sql: """
-                        SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
-                               (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count
-                        FROM chats_fts
-                        JOIN chat_search cs ON cs.rowid = chats_fts.rowid
-                        JOIN chats c ON c.id = cs.chat_id
-                        WHERE chats_fts MATCH ?
-                        ORDER BY rank
-                        LIMIT ?;
-                        """,
-                        arguments: [q, pool]
-                    ).map { row in
-                        Self.readChatSummary(from: row, summary: nil, summaryAt: nil)
-                    }
-                }
-                ftsRows = rows
-            }
+            // --- BM25 leg ---
+            // Tantivy is the sole BM25 search path as of v38 (#634); FTS5 is
+            // gone. See `searchSimilar(query:limit:bm25Leg:)` for the full
+            // rationale. `nil`/empty leg → cosine-only.
+            let bm25Rows: [ChatSummary] = (bm25Leg ?? [])
 
             // --- Semantic (vec cosine) pass + RRF ---
             if Self.isVecAvailable(db),
                let queryBlob = EmbeddingService.embeddingBlob(for: query) {
-                DebugLog.store("search[chats]: query=\(query) \(bm25Leg == nil ? "FTS-only" : "Tantivy-BM25"), vec=true")
+                DebugLog.store("search[chats]: query=\(query) \(bm25Rows.isEmpty ? "cosine-only" : "Tantivy-BM25+cosine"), vec=true")
                 let semRows = try Row.fetchAll(
                     db,
                     sql: """
@@ -5766,10 +5436,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 ).map { row in
                     Self.readChatSummary(from: row, summary: nil, summaryAt: nil)
                 }
-                return Array(RankFusion.rrf([semRows, ftsRows], id: \.id).prefix(limit))
+                return Array(RankFusion.rrf([semRows, bm25Rows], id: \.id).prefix(limit))
             }
-            DebugLog.store("search[chats]: query=\(query) \(bm25Leg == nil ? "FTS-only" : "Tantivy-BM25"), vec=false")
-            return Array(ftsRows.prefix(limit))
+            DebugLog.store("search[chats]: query=\(query) \(bm25Rows.isEmpty ? "no-BM25-leg" : "Tantivy-BM25-only"), vec=false")
+            return Array(bm25Rows.prefix(limit))
         }
     }
 
@@ -5968,16 +5638,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
     // MARK: - GRDB implementation helpers
-
-    /// Sanitize free text into a safe FTS5 MATCH expression: keep alphanumerics
-    /// and whitespace, drop operator characters so user input can't inject query
-    /// syntax. Returns "" when nothing useful remains. Mirrors
-    /// SQLiteWikiStore.ftsMatch.
-    private static func ftsMatch(_ raw: String) -> String {
-        let allowed = CharacterSet.alphanumerics.union(.whitespaces)
-        let kept = String(raw.unicodeScalars.map { allowed.contains($0) ? Character($0) : " " })
-        return kept.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-    }
 
     /// Whether the sqlite-vec scalar functions are registered on this connection.
     /// Probed the same way as SQLiteWikiStore.isVecAvailable: `vec_distance_cosine`
@@ -6201,29 +5861,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         )
     }
 
-    /// UPSERT the `source_search` FTS backing row (title + body). The FTS5
-    /// triggers on `source_search` keep `sources_fts` fresh. Best-effort: a
-    /// failure is logged, never thrown (mirrors SQLiteWikiStore's `try?` guard).
-
-
-    /// UPSERT the `source_search` FTS backing row (title + body). The FTS5
-    /// triggers on `source_search` keep `sources_fts` fresh. Best-effort: a
-    /// failure is logged, never thrown (mirrors SQLiteWikiStore's `try?` guard).
-    private func upsertSourceSearch(sourceID: PageID, body: String, on db: Database) {
-        guard let title = try? String.fetchOne(
-            db,
-            sql: "SELECT COALESCE(display_name, filename) FROM sources WHERE id = ?;",
-            arguments: [sourceID.rawValue]
-        ) else { return }
-        do {
-            try db.execute(sql: """
-            INSERT OR REPLACE INTO source_search (source_id, title, body) VALUES (?, ?, ?);
-            """, arguments: [sourceID.rawValue, title, body])
-        } catch {
-            DebugLog.store("GRDBWikiStore.upsertSourceSearch[\(sourceID.rawValue)] failed: \(error)")
-        }
-    }
-
     /// Whether sqlite-vec scalar functions are registered on this connection.
     /// Mirrors `SQLiteWikiStore.isVecAvailable`. Best-effort.
 
@@ -6345,10 +5982,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         return try Self.readSourceSummary(from: row)
     }
 
-    /// Post-commit FTS upsert for `source_search` (opens its own write so it
-    /// must be called AFTER `mutate` returns, never inside).
-
-
     /// `db:`-taking HEAD read for use inside `mutate` (cannot call the public
     /// `processedMarkdownHead` — it re-enters `dbQueue.read` and deadlocks).
     private func processedMarkdownHead(sourceID: PageID, on db: Database) throws -> SourceMarkdownVersion? {
@@ -6380,8 +6013,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
 
     /// Inline append for the revert fallback (target had no blob_hash). `db:`-
-    /// taking; emits FTS inline. The caller's post-commit re-embed runs on
-    /// `result.content`.
+    /// taking. The caller's post-commit re-embed runs on `result.content`.
     private func appendProcessedMarkdownInline(
         sourceID: PageID, content: String,
         origin: SourceMarkdownOrigin, note: String?, technique: String?,
@@ -6398,7 +6030,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         """, arguments: [id.rawValue, sourceID.rawValue, parentID?.rawValue,
                         origin.rawValue, note, now.timeIntervalSince1970,
                         blobHash, technique])
-        self.upsertSourceSearch(sourceID: sourceID, body: content, on: db)
         return SourceMarkdownVersion(
             id: id, sourceID: sourceID, parentID: parentID,
             content: content, origin: origin, note: note, createdAt: now,
@@ -7145,41 +6776,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    // MARK: - FTS rebuild
-
-    /// Backfill the FTS indexes for pre-existing content. Pages rebuild from
-    /// `pages` via the FTS5 'rebuild' command; sources first backfill
-    /// `source_search` from the HEAD of each version chain, then rebuild.
-    /// Idempotent. Returns counts. Mirrors `SQLiteWikiStore.rebuildFTS`.
-    public func rebuildFTS() -> (pages: Int, sources: Int) {
-        dbQueue.writeWithoutTransaction { db in
-            do {
-                try db.execute(sql: "INSERT INTO pages_fts(pages_fts) VALUES ('rebuild');")
-            } catch {
-                DebugLog.store("rebuildFTS: pages rebuild failed — \(error)")
-            }
-            do {
-                try db.execute(sql: """
-                INSERT OR IGNORE INTO source_search (source_id, title, body)
-                SELECT s.id, COALESCE(s.display_name, s.filename),
-                       \(Self.smvHeadBodySQL)
-                FROM sources s
-                WHERE s.id NOT IN (SELECT source_id FROM source_search);
-                """)
-                try db.execute(sql: "INSERT INTO sources_fts(sources_fts) VALUES ('rebuild');")
-            } catch {
-                DebugLog.store("rebuildFTS: sources rebuild failed — \(error)")
-            }
-        }
-        let pages = (try? dbQueue.read { db in
-            try Int.fetchOne(db, sql: "SELECT count(*) FROM pages_fts;") ?? 0
-        }) ?? 0
-        let sources = (try? dbQueue.read { db in
-            try Int.fetchOne(db, sql: "SELECT count(*) FROM sources_fts;") ?? 0
-        }) ?? 0
-        return (pages, sources)
-    }
-
     // MARK: - Launch search-index self-heal
 
     /// Self-heal search indexes on every writable open. Idempotent + near-zero
@@ -7193,21 +6789,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     ///     pre-v20 DBs that predate Phase 3b).
     /// 1. Seed a v1 processed-markdown version for markdown-native sources
     ///    that have none, so their body is searchable.
-    /// 2. Backfill the `source_search` / `chat_search` sidecars for rows
-    ///    lacking one.
-    /// 3. Rebuild an FTS index only when its `_idx` shadow term b-tree is empty.
-    ///    NOTE: `count(*) FROM pages_fts` on an external-content table is
-    ///    optimized to read the CONTENT table, so it always equals `pages`' row
-    ///    count — a rowid-count health check can NEVER detect an empty index
-    ///    (the launch ranking bug). The `_idx` b-tree holds the actual terms; 0
-    ///    there means "never built" → rebuild.
+    ///
+    /// (Historical steps 2 + 3 — `source_search`/`chat_search` sidecar
+    /// backfill + empty-FTS-index rebuild — were dropped at v38 when FTS5 was
+    /// removed. Tantivy is the sole BM25 search path and rebuilds
+    /// independently via the event bus.)
     private func ensureSearchIndexesPopulated() {
         // 0. Reconcile embedder (app-gated internally).
         ensureEmbedderConsistency()
 
-        // Steps 0a, 2, 2b, 3 are pure SQL → one write block. Each operation
-        // catches its own errors (best-effort, idempotent) so the write block
-        // itself does not throw.
+        // Step 0a is pure SQL → one write block. Best-effort, idempotent.
         dbQueue.writeWithoutTransaction { db in
             // 0a. Byteless-source dedup index (idempotent; no-op once it exists).
             do {
@@ -7217,50 +6808,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 """)
             } catch {
                 DebugLog.store("ensureSearchIndexes: byteless index create failed — \(error)")
-            }
-
-            // 2. Backfill source_search for sources lacking a row (PDFs/binaries
-            //    → name-only). The AFTER-INSERT trigger on source_search keeps
-            //    sources_fts in sync.
-            do {
-                try db.execute(sql: """
-                INSERT OR IGNORE INTO source_search (source_id, title, body)
-                SELECT s.id, COALESCE(s.display_name, s.filename),
-                       \(Self.smvHeadBodySQL)
-                FROM sources s;
-                """)
-            } catch {
-                DebugLog.store("ensureSearchIndexes: source_search backfill failed — \(error)")
-            }
-
-            // 2b. Backfill chat_search for chats lacking a row (created before v28,
-            //     or whose append predates the sidecar). One row per chat:
-            //     title + concatenated message text.
-            do {
-                try db.execute(sql: """
-                INSERT OR IGNORE INTO chat_search (chat_id, title, body)
-                SELECT c.id, c.title,
-                       COALESCE((SELECT GROUP_CONCAT(m.text, '\n')
-                                 FROM chat_messages m WHERE m.chat_id = c.id), '')
-                FROM chats c
-                WHERE c.id NOT IN (SELECT chat_id FROM chat_search);
-                """)
-            } catch {
-                DebugLog.store("ensureSearchIndexes: chat_search backfill failed — \(error)")
-            }
-
-            // 3. Rebuild an FTS index only when its term index is empty.
-            for (fts, content) in [("pages_fts", "pages"),
-                                   ("sources_fts", "sources"),
-                                   ("chats_fts", "chats")] {
-                guard rowCount(content, on: db) > 0,
-                      ftsIndexRowCount(fts, on: db) == 0 else { continue }
-                do {
-                    try db.execute(sql: "INSERT INTO \(fts)(\(fts)) VALUES ('rebuild');")
-                    DebugLog.store("ensureSearchIndexes: rebuilt empty \(fts) term index")
-                } catch {
-                    DebugLog.store("ensureSearchIndexes: \(fts) rebuild failed — \(error)")
-                }
             }
         }
 
@@ -7307,24 +6854,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             DebugLog.store("seedNativeMarkdownSources: seeded \(seeded) source(s)")
         }
         return seeded
-    }
-
-    /// `SELECT count(*) FROM <table>` as an Int (0 on any error), on a given
-    /// `Database` handle. `<table>` is interpolated from trusted internal
-    /// callers only — never user input. Mirrors `SQLiteWikiStore.rowCount`.
-    private func rowCount(_ table: String, on db: Database) -> Int {
-        (try? Int.fetchOne(db, sql: "SELECT count(*) FROM \(table);")) ?? 0
-    }
-
-    /// Row count of an FTS5 table's `_idx` shadow segment b-tree. This is NOT
-    /// the distinct-term count (that's the `fts5vocab` virtual table) — but it
-    /// IS a reliable "has the index ever been built?" probe: 0 means the index
-    /// exists as a table but has never been populated (no terms indexed), which
-    /// is exactly the launch-ranking-bug state `ensureSearchIndexesPopulated`
-    /// must detect and rebuild. On a healthy index it is non-zero. Mirrors
-    /// `SQLiteWikiStore.ftsIndexRowCount`.
-    private func ftsIndexRowCount(_ table: String, on db: Database) -> Int {
-        (try? Int.fetchOne(db, sql: "SELECT count(*) FROM \(table)_idx;")) ?? 0
     }
 
     // MARK: - Source link queries
@@ -7375,30 +6904,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `SQLiteWikiStore.vecRegisteredForTesting`.
     var vecRegisteredForTesting: Bool {
         (try? dbQueue.read { db in Self.isVecAvailable(db) }) ?? false
-    }
-
-    /// Test hook: when non-nil, the next `migrateIfNeeded` migration throws
-    /// `SQLITE_CORRUPT` (with this message) before running any step, simulating
-    /// a corrupt FTS shadow index tripping a migration write. The hook clears
-    /// itself so the catch's rebuild-and-retry proceeds normally. Mirrors
-    /// `SQLiteWikiStore.migrationCorruptFaultForTesting`.
-    nonisolated(unsafe) static var migrationCorruptFaultForTesting: String?
-
-    /// Test-only: recreate `pages_fts` as an external-content table with an
-    /// EMPTY term index, reproducing the launch ranking bug (content rows that
-    /// predate the FTS triggers). The triggers remain; the index simply has no
-    /// terms until `ensureSearchIndexes` rebuilds it on the next open. Mirrors
-    /// `SQLiteWikiStore._breakPagesFtsIndexForTesting`.
-    internal func _breakPagesFtsIndexForTesting() throws {
-        try dbQueue.writeWithoutTransaction { db in
-            try db.execute(sql: "DROP TABLE pages_fts;")
-            try db.execute(sql: """
-            CREATE VIRTUAL TABLE pages_fts USING fts5(
-                title, body_markdown,
-                content='pages', content_rowid='rowid',
-                tokenize='porter');
-            """)
-        }
     }
     #endif
 

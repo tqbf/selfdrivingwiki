@@ -14,13 +14,14 @@ import TantivySwift
 /// statement handle crossing a boundary" — the two concerns are on different
 /// threads/locks entirely.
 ///
-/// **Phase 1:** the indexer is built and kept up to date, but search results
-/// are not surfaced to the user yet (FTS5 stays primary). The `search(...)`
-/// method exists for shadow-mode validation and the smoke test.
+/// **Sole BM25 path as of v38 (#634).** FTS5 was dropped; this indexer is
+/// the only lexical/BM25 leg in the hybrid search. The `search(...)` method
+/// feeds the sidebar / omnibox / `wikictl` via the model's
+/// `resolveTantivyLeg(...)` and the CLI's `CLITantivyLegResolver`.
 public actor TantivyIndexer {
     /// The underlying Tantivy index. `nil` when the index failed to open or
-    /// was marked for rebuild; callers degrade gracefully (shadow mode — a
-    /// missing index just means no shadow results, FTS5 still answers).
+    /// was marked for rebuild; callers degrade gracefully (a missing index
+    /// just means no BM25 leg — cosine-only results).
     private var index: TantivySwiftIndex<TantivySearchDocument>?
     private let indexPath: String
     private let contentSource: any TantivyContentSource
@@ -137,8 +138,8 @@ public actor TantivyIndexer {
     /// self-heal (plans/tantivy-search-sidecar.md §3.3–§3.4).
     public func rebuild() async throws {
         // If the index never opened, retry once after deleting the (possibly
-        // corrupt) on-disk directory. If reopen still fails, give up (shadow
-        // mode — FTS5 still answers).
+        // corrupt) on-disk directory. If reopen still fails, give up (the
+        // store has no BM25 leg in that case — cosine-only results).
         if index == nil {
             try await reopen()
         }

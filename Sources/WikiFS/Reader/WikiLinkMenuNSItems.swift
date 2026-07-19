@@ -95,11 +95,11 @@ enum WikiLinkMenuNSItems {
     /// the submenu is never mysteriously blank.
     ///
     /// #637: builds with `store.searchSimilarResolvingTantivy(query:limit:)`
-    /// (rather than the FTS5-fallback `searchSimilar(query:limit:)`) so the menu
-    /// surfaces Tantivy-BM25-fused results — gaining the indexer's `fuzzyFields`
+    /// (which resolves a Tantivy BM25 leg synchronously) so the menu surfaces
+    /// Tantivy-BM25-fused results — gaining the indexer's `fuzzyFields`
     /// edit-distance-1 matches (already configured at
-    /// `TantivyIndexer.swift:108-111`) for free, and surviving #634's FTS5 drop
-    /// without regression.
+    /// `TantivyIndexer.swift:108-111`) for free. Tantivy is the sole BM25
+    /// path as of v38 (#634), so this leg is mandatory for lexical matches.
     private static func similarPagesItem(
         title: String, query: String, store: WikiStoreModel
     ) -> NSMenuItem {

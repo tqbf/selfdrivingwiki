@@ -17,6 +17,9 @@ import Testing
 /// These are fast: they open a temp SQLite DB, build a small Tantivy index
 /// (3-5 docs), and call one resolver method per test. They live in the fast
 /// CI tier (not skip-listed).
+///
+/// After #634 (v38), Tantivy is the sole BM25 path — a `nil` leg from the
+/// resolver means "no BM25 leg" (cosine-only store result).
 @Suite
 struct CLITantivyLegResolverTests {
 
@@ -48,8 +51,8 @@ struct CLITantivyLegResolverTests {
         let store = try tempStore(in: container, wikiID: wikiID)
         // No Tantivy index exists yet — `rebuildIfNeeded` was never called
         // (the app would normally kick it off in `TantivyShadowSync.start()`).
-        // The resolver must return nil so the store falls back to FTS5
-        // (the #637 contract — empty leg = no BM25 signal).
+        // The resolver must return nil so the store has no BM25 leg
+        // (the #637/#634 contract — empty leg = no BM25 signal).
         let leg = CLITantivyLegResolver.resolvePageLeg(
             wikiID: wikiID, containerDirectory: container,
             store: store, query: "anything", limit: 10)
@@ -155,13 +158,13 @@ struct CLITantivyLegResolverTests {
         #expect(leg?.first?.id == chat.id)
     }
 
-    // MARK: - FTS5 fallback when no Tantivy service can be built
+    // MARK: - nil leg when no Tantivy service can be built
 
     @Test func resolvePageLegReturnsNilWhenServiceConstructionFails() throws {
         // Point the resolver at a container path that doesn't exist and can't
         // be created (a file in place of the container dir). `makeService`
-        // catches the throw and returns nil — the store then falls back to
-        // FTS5 (the #637 contract — Tantivy unavailable = no BM25 leg, not an
+        // catches the throw and returns nil — the store then has no BM25 leg
+        // (the #637/#634 contract — Tantivy unavailable = no BM25 leg, not an
         // error).
         let fileAsContainer = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("cli-tantivy-leg-blocker-\(UUID().uuidString)")

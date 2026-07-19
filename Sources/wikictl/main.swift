@@ -166,9 +166,9 @@ func execute(
         // #637: route through the Tantivy BM25 leg (mirrors the sidebar's
         // `WikiStoreModel.scheduleSearch()` → `resolveTantivyLeg` flow) so the
         // CLI gets fuzzy matching (edit-distance 1 on title+body, already
-        // configured at TantivyIndexer.swift:108-111) and survives #634's
-        // FTS5 drop. `nil` leg (Tantivy index unavailable/empty) → the store's
-        // existing FTS5 fallback (Phase 2 contract).
+        // configured at TantivyIndexer.swift:108-111). Tantivy is the sole
+        // BM25 path as of v38 (#634); a `nil` leg (index unavailable/empty)
+        // means no BM25 leg — the store returns cosine-only results.
         let leg = CLITantivyLegResolver.resolvePageLeg(
             wikiID: wikiID, containerDirectory: containerDirectory,
             store: store, query: query, limit: limit)

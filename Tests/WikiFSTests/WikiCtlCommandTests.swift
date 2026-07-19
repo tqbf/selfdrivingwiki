@@ -285,9 +285,17 @@ struct WikiCtlCommandTests {
 
     @Test func searchReturnsTSVAndDoesNotCommit() throws {
         let store = try tempStore()
-        _ = try PageCommand.run(.upsert(id: nil, title: "Cars", body: "electric vehicles"), in: store)
+        let carsPage = try store.createPage(title: "Cars")
+        try store.updatePage(id: carsPage.id, title: "Cars", body: "electric vehicles")
         _ = try PageCommand.run(.upsert(id: nil, title: "Recipes", body: "baking bread"), in: store)
-        let result = try PageCommand.run(.search(query: "car", limit: 10), in: store)
+        // Post-#634 (v38): Tantivy is the sole BM25 path. Under `swift test`
+        // (no Tantivy index), the caller supplies a synthetic leg — production
+        // wikictl resolves one via `CLITantivyLegResolver`. Verify the TSV
+        // formatting + commit semantics through that seam.
+        let leg = [WikiPageSummary(
+            id: carsPage.id, title: carsPage.title,
+            updatedAt: carsPage.updatedAt, createdAt: carsPage.createdAt)]
+        let result = try PageCommand.run(.search(query: "car", limit: 10), in: store, bm25Leg: leg)
         #expect(!result.didCommit)
         let lines = result.output.split(separator: "\n")
         #expect(!lines.isEmpty)

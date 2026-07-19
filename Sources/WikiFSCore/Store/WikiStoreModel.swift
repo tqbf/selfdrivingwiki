@@ -275,7 +275,9 @@ public final class WikiStoreModel {
     /// store + bus the model wraps, but construction happens post-init so this is
     /// set rather than a constructor param — same lifecycle as `readPool`).
     /// `nil` when Tantivy construction failed (the session never breaks over a
-    /// derived index) — search silently falls back to FTS5 in that case.
+    /// derived index) — search has no BM25 leg in that case (#634 dropped the
+    /// FTS5 fallback; results are cosine-only when vec is available, empty
+    /// otherwise).
     @ObservationIgnored public var tantivySearch: TantivySearchService?
     private var autosaveTask: Task<Void, Never>?
     private var systemPromptAutosaveTask: Task<Void, Never>?
@@ -496,59 +498,46 @@ public final class WikiStoreModel {
         return (data, summary.mimeType)
     }
 
-    /// Semantic search for pages matching `query`. Delegates to the store's
-    /// hybrid search (FTS5 bm25 always; +MiniLM cosine fused via RRF when the
-    /// model is available). Runs the query embedding + SQLite on the main actor
-    /// — fine for the one-shot callers (the "Find Similar…" link menu builds its
-    /// submenu once per right-click, not per render). The old per-row sidebar
-    /// caller that froze the UI was removed; MiniLM inference is now ms, not the
-    /// ~5 s/100k chars NLEmbedding cliff that motivated disabling this.
+    /// Semantic + BM25 search for pages matching `query`. Resolves a Tantivy
+    /// BM25 leg synchronously (off-main actor hop via `Task.detached`), then
+    /// delegates to the store's 3-arg hybrid search (Tantivy BM25 + sqlite-vec
+    /// cosine fused via `RankFusion.rrf`). Runs the query embedding + SQLite on
+    /// the main actor — fine for the one-shot callers (the "Find Similar…"
+    /// link menu builds its submenu once per right-click, not per render; the
+    /// omnibox uses `searchOmnibox(query:)` which fans out to all three kinds).
     ///
-    /// Routes through the FTS5 fallback (`bm25Leg: nil`) rather than the
-    /// Tantivy leg used by `scheduleSearch()` — kept as-is for one-shot
-    /// callers that don't want the Tantivy index dependency (the omnibox is
-    /// debounced via a `Task` and benefits from the existing path). The
-    /// "Find Similar…" right-click menu should call
-    /// ``searchSimilarResolvingTantivy(query:limit:)`` instead — it resolves
-    /// the Tantivy BM25 leg (#637) so the menu surfaces fuzzy (edit-distance 1)
-    /// matches and survives #634's FTS5 drop without regression.
+    /// Tantivy is the sole BM25 search path as of v38 (#634) — FTS5 is gone,
+    /// so a `nil` BM25 leg here would regress to cosine-only. Resolving the
+    /// leg internally preserves the prior 2-arg contract for one-shot callers
+    /// that don't want to manage the leg lifecycle themselves.
     public func searchSimilar(query: String, limit: Int = 8) -> [WikiPageSummary] {
-        (try? store.searchSimilar(query: query, limit: limit, bm25Leg: nil)) ?? []
+        let leg = resolveTantivyLegSync(query: query, kind: .page, limit: limit, catalog: summaries)
+        return (try? store.searchSimilar(query: query, limit: limit, bm25Leg: leg)) ?? []
     }
 
     /// #637: one-shot page search that resolves a Tantivy BM25 leg before
-    /// calling the store's 3-arg `searchSimilar` — mirrors `scheduleSearch()`
-    /// but synchronous (the caller — `WikiLinkMenuNSItems.similarPagesItem` —
-    /// builds its submenu once per right-click, not per render, so blocking the
-    /// main actor for the Tantivy query is the same trade-off the existing
-    /// `searchSimilar(query:limit:)` already makes for MiniLM inference).
-    ///
-    /// The Tantivy `indexer.search` runs on its actor (off-main); the async→
-    /// sync bridge uses `Task { ... }.value` on `@MainActor` — safe because
-    /// the search never hops back to the main actor to make progress. Returns
-    /// FTS5-fallback results (`bm25Leg: nil`) when Tantivy is unavailable or
-    /// returns no hits.
+    /// calling the store's 3-arg `searchSimilar` — kept as an explicit synonym
+    /// for the right-click "Find Similar…" menu (`WikiLinkMenuNSItems`), which
+    /// documents the Tantivy dependency at the call site. Equivalent to
+    /// ``searchSimilar(query:limit:)`` now that 2-arg resolves a leg too.
     public func searchSimilarResolvingTantivy(query: String, limit: Int = 8) -> [WikiPageSummary] {
-        guard !query.isEmpty else { return [] }
-        let leg = resolveTantivyLegSync(query: query, kind: .page, limit: limit, catalog: summaries)
-        do {
-            return try store.searchSimilar(query: query, limit: limit, bm25Leg: leg)
-        } catch {
-            DebugLog.store("WikiStoreModel.searchSimilarResolvingTantivy: store hit failed for query=\"\(query)\": \(error)")
-            return []
-        }
+        searchSimilar(query: query, limit: limit)
     }
 
-    /// Semantic source search wrapper — same hybrid store search as
-    /// `searchSimilar`, over sources.
+    /// Semantic + BM25 source search — same hybrid store search as
+    /// `searchSimilar`, over sources. Resolves a Tantivy leg synchronously
+    /// (mirrors `searchSimilar(query:limit:)`).
     public func searchSimilarSources(query: String, limit: Int = 20) -> [SourceSummary] {
-        (try? store.searchSimilarSources(query: query, limit: limit, bm25Leg: nil)) ?? []
+        let leg = resolveTantivyLegSync(query: query, kind: .source, limit: limit, catalog: sources)
+        return (try? store.searchSimilarSources(query: query, limit: limit, bm25Leg: leg)) ?? []
     }
 
-    /// Hybrid chat search wrapper — same hybrid store search as
-    /// `searchSimilar`, over chats. Used by the Chats sidebar search field.
+    /// Hybrid chat search — same hybrid store search as `searchSimilar`, over
+    /// chats. Used by the Chats sidebar search field. Resolves a Tantivy leg
+    /// synchronously (mirrors `searchSimilar(query:limit:)`).
     public func searchSimilarChats(query: String, limit: Int = 20) -> [ChatSummary] {
-        (try? store.searchSimilarChats(query: query, limit: limit, bm25Leg: nil)) ?? []
+        let leg = resolveTantivyLegSync(query: query, kind: .chat, limit: limit, catalog: chats)
+        return (try? store.searchSimilarChats(query: query, limit: limit, bm25Leg: leg)) ?? []
     }
 
     /// Unified omnibox search across all resource types (#288). Returns a
@@ -565,15 +554,15 @@ public final class WikiStoreModel {
         // 1. The "Ask" action row — always first, so Enter sends to chat.
         results.append(.ask(question: trimmed))
 
-        // 2. Pages (semantic + FTS).
+        // 2. Pages (Tantivy BM25 + cosine).
         let pages = searchSimilar(query: trimmed, limit: 3)
         results.append(contentsOf: pages.map { .page($0) })
 
-        // 3. Sources (semantic + FTS).
+        // 3. Sources (Tantivy BM25 + cosine).
         let sources = searchSimilarSources(query: trimmed, limit: 2)
         results.append(contentsOf: sources.map { .source($0) })
 
-        // 4. Chats (semantic + FTS).
+        // 4. Chats (Tantivy BM25 + cosine).
         let chats = searchSimilarChats(query: trimmed, limit: 2)
         results.append(contentsOf: chats.map { .chat($0) })
 
@@ -2960,26 +2949,27 @@ public final class WikiStoreModel {
         }.value
     }
 
-    // MARK: - Phase 2: Tantivy BM25 leg (cutover)
+    // MARK: - Tantivy BM25 leg (sole BM25 path as of v38)
     //
-    // Tantivy is now the PRIMARY lexical/BM25 leg of the hybrid search
-    // (plans/tantivy-search-sidecar.md §4.4). Flow:
+    // Tantivy is the PRIMARY and ONLY lexical/BM25 leg of the hybrid search
+    // (plans/tantivy-search-sidecar.md §4.4). FTS5 was dropped at v38 (#634).
+    // Flow:
     //   1. `resolveTantivyLeg(...)` queries the Tantivy index (async, actor) and
     //      maps hits to full typed summaries via the cached catalog, preserving
     //      Tantivy's best-first rank order.
     //   2. The leg is passed to `store.searchSimilar(query:limit:bm25Leg:)`.
-    //      The store uses the leg INSTEAD of FTS5, then fuses it with the
-    //      semantic cosine leg via `RankFusion.rrf` (unchanged, in-store).
-    //   3. `nil` leg → the store falls back to FTS5 (Tantivy unavailable, empty,
-    //      or all hits resolved to nothing). wikictl/tests always pass `nil`.
+    //      The store fuses it with the semantic cosine leg via
+    //      `RankFusion.rrf` (unchanged, in-store).
+    //   3. `nil` leg → no BM25 signal (Tantivy unavailable, empty, or all hits
+    //      resolved to nothing). The result is cosine-only, or empty when vec
+    //      is also unavailable (e.g. under `swift test` without NLEmbedding).
     //
-    // FTS5 is kept fully intact for Phase 2 fallback; Phase 3 retires it.
 
     /// Resolve Tantivy BM25 hits into full typed summaries from a cached
     /// catalog, preserving Tantivy's best-first rank order. Returns `nil` when
     /// Tantivy is unavailable, the index returned nothing, or every hit was
     /// missing from the catalog (e.g. a resource deleted since the last Tantivy
-    /// sync). A `nil` return makes the store fall back to FTS5.
+    /// sync). A `nil` return means "no BM25 leg" (#634 — FTS5 is gone).
     ///
     /// `catalog` is a value-type copy captured at the call site, so a main-actor
     /// mutation during the `await svc.search` suspension can't race the lookup.
@@ -3018,8 +3008,8 @@ public final class WikiStoreModel {
     /// `Task { ... }`) is intentional: an unstructured `Task` would inherit
     /// the main-actor executor and could starve under load.
     ///
-    /// Returns `nil` (→ store falls back to FTS5) when `tantivySearch` is
-    /// `nil`, the index returned no hits, or every hit was missing from
+    /// Returns `nil` (→ no BM25 leg, cosine-only result) when `tantivySearch`
+    /// is `nil`, the index returned no hits, or every hit was missing from
     /// `catalog`. Same contract as the async variant.
     @MainActor
     private func resolveTantivyLegSync<T: Identifiable & Sendable>(
@@ -3060,14 +3050,14 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Phase 2 shadow-comparison log. With Option B the FTS5 leg isn't run
-    /// separately when Tantivy succeeds, so the meaningful Phase 2 signal is: of
-    /// the Tantivy BM25 hits fed into RRF, how many survive into the final fused
-    /// output (a high overlap means Tantivy's lexical signal is well-represented;
-    /// a low overlap means the semantic leg dominated). Latency is total hybrid
-    /// time (Tantivy query + store semantic + RRF). Raw FTS5-vs-Tantivy BM25
-    /// parity was already validated in Phase 1 shadow tests
-    /// (`TantivyShadowIndexTests`).
+    /// Phase 2 shadow-comparison log. With Option B there's no separate FTS5
+    /// leg, so the meaningful signal is: of the Tantivy BM25 hits fed into RRF,
+    /// how many survive into the final fused output (a high overlap means
+    /// Tantivy's lexical signal is well-represented; a low overlap means the
+    /// semantic leg dominated). Latency is total hybrid time (Tantivy query +
+    /// store semantic + RRF). Raw FTS5-vs-Tantivy BM25 parity was validated in
+    /// Phase 1 shadow tests (`TantivyShadowIndexTests`); FTS5 is now dropped
+    /// (#634, v38).
     private func logShadowComparison<T: Identifiable & Hashable & Sendable>(
         kind: String,
         query: String,

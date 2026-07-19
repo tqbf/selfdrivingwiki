@@ -9,10 +9,10 @@ import Foundation
 /// The index is a derived artifact — SQLite is always the source of truth —
 /// so any corruption is recovered by a full rebuild from the content source.
 ///
-/// **Phase 1:** this service is EXPERIMENTAL. It builds and maintains the
-/// index in shadow mode (FTS5 remains the primary search path). Callers
-/// should not surface `search(...)` results to the user yet — use it only for
-/// validation / the smoke test.
+/// **Sole BM25 path as of v38 (#634).** FTS5 was dropped; this service is
+/// the only lexical/BM25 leg in the hybrid search. `search(...)` results
+/// feed the sidebar / omnibox / `wikictl` via the model's
+/// `resolveTantivyLeg(...)` and the CLI's `CLITantivyLegResolver`.
 public final class TantivySearchService: Sendable {
     public let indexer: TantivyIndexer
     public let wikiID: String
@@ -33,8 +33,8 @@ public final class TantivySearchService: Sendable {
     // MARK: - Shadow-mode search
 
     /// Free-text search over the Tantivy index, optionally restricted to one
-    /// kind. Returns empty on any error (the caller falls back to FTS5 in
-    /// Phase 2; in Phase 1 the result is logged for comparison, not shown).
+    /// kind. Returns empty on any error — the caller has no BM25 leg in that
+    /// case (cosine-only result).
     public func search(query: String, kinds: [TantivyDocumentKind] = [], limit: Int = 20) async -> [TantivyShadowSearchResult] {
         do {
             // Single-kind fast path: ask the indexer to filter.

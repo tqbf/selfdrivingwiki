@@ -50,9 +50,9 @@ public enum ChatCommand {
     /// Run one action against `store`. Reads never commit; `rename` does.
     ///
     /// `bm25Leg` is the pre-resolved Tantivy BM25 leg for the `.search` action
-    /// (#637). `nil` (the default) makes the store run its own FTS5; a non-nil
-    /// list is fused with the semantic cosine leg via RRF, REPLACING the FTS5
-    /// leg. Caller-resolved via `CLITantivyLegResolver.resolveChatLeg(...)` in
+    /// (#637). Tantivy is the sole BM25 search path as of v38 (#634) — FTS5
+    /// is gone, so `nil` here means "no BM25 leg" (cosine-only result).
+    /// Caller-resolved via `CLITantivyLegResolver.resolveChatLeg(...)` in
     /// `wikictl`'s `execute()`.
     public static func run(
         _ action: Action,
@@ -127,9 +127,9 @@ public enum ChatCommand {
 
     // MARK: - rename
 
-    /// Rename a chat's title and rebuild the `chat_search` FTS sidecar.
-    /// Commits — the caller posts the Darwin notification on `didCommit`.
-    /// Mirrors `SourceCommand.rename`.
+    /// Rename a chat's title. Commits — the caller posts the Darwin
+    /// notification on `didCommit`. (FTS sidecar removed at v38, #634; Tantivy
+    /// re-syncs via the event bus.) Mirrors `SourceCommand.rename`.
     private static func rename(_ selector: Selector, to newTitle: String, in store: WikiStore) throws -> Result {
         let id = try resolve(selector, in: store)
         try store.renameChat(id: id, to: newTitle)

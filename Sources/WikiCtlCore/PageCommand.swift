@@ -69,10 +69,10 @@ public enum PageCommand {
     /// the auto-fix-before-write path is testable without a bundle.
     ///
     /// `bm25Leg` is the pre-resolved Tantivy BM25 leg for the `.search` action
-    /// (#637). `nil` (the default) makes the store run its own FTS5; a non-nil
-    /// list is fused with the semantic cosine leg via RRF, REPLACING the FTS5
-    /// leg — which is what unblocks #634 (drop FTS5). Caller-resolved via
-    /// `CLITantivyLegResolver.resolvePageLeg(...)` in `wikictl`'s `execute()`.
+    /// (#637). Tantivy is the sole BM25 search path as of v38 (#634) — FTS5
+    /// is gone, so `nil` here means "no BM25 leg" (cosine-only result).
+    /// Caller-resolved via `CLITantivyLegResolver.resolvePageLeg(...)` in
+    /// `wikictl`'s `execute()`.
     public static func run(
         _ action: Action,
         in store: WikiStore,

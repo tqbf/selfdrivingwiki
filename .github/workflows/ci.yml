@@ -50,7 +50,11 @@ jobs:
         # merge for fast iteration — see AGENTS.md.
         # To add a slow suite: tag it `.integration` AND append its name here.
         env:
-          SKIP: 'EnumeratorDeletionTests|StoreEmissionTests|StoreEmissionReentrancyTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SplitDiffSnapshotTests|FullTextSearchTests|ChatSearchTests|SessionManagerTests|QuoteHighlightWebViewTests|SidebarDropBuilderIntegrationTests|CLITantivyLegResolverTests'
+          # FullTextSearchTests + ChatSearchTests were deleted in #634 (FTS5
+          # dropped; Tantivy is the sole BM25 path). CLITantivyLegResolverTests
+          # stays skip-listed — it builds a real Tantivy index and is tagged
+          # `.integration`; the slow tier runs it.
+          SKIP: 'EnumeratorDeletionTests|StoreEmissionTests|StoreEmissionReentrancyTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SplitDiffSnapshotTests|SessionManagerTests|QuoteHighlightWebViewTests|SidebarDropBuilderIntegrationTests|CLITantivyLegResolverTests'
         run: $SWIFT test --skip "$SKIP"
 
   swift-integration:

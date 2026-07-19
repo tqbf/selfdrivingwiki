@@ -5,14 +5,14 @@ import WikiFSCore
 /// `source search`, `chat search`) onto the SAME Tantivy BM25 leg the app's
 /// sidebar / omnibox use (#637).
 ///
-/// wikictl opens a `GRDBWikiStore` directly and prior to #637 called the
-/// 2-arg `store.searchSimilar(query:limit:)` overloads, which forward to the
+/// wikictl opens a `GRDBWikiStore` directly. Prior to #637 the CLI called the
+/// 2-arg `store.searchSimilar(query:limit:)` overloads, which forwarded to the
 /// 3-arg path with `bm25Leg: nil` — meaning the store ran its OWN FTS5 leg and
 /// never queried the on-disk Tantivy index at
 /// `<appGroupContainer>/search-index/<wikiID>/`. That bypassed the Tantivy
 /// `fuzzyFields` (edit-distance 1 on title + body, already configured at
-/// `Sources/WikiFSSearch/TantivyIndexer.swift:108-111`) and would break under
-/// #634 (drop FTS5) where `bm25Leg: nil` has no BM25 leg at all.
+/// `Sources/WikiFSSearch/TantivyIndexer.swift:108-111`) and broke under #634
+/// (drop FTS5) where `bm25Leg: nil` has no BM25 leg at all.
 ///
 /// This resolver constructs a CLI-owned `TantivySearchService` over the SAME
 /// on-disk index the app builds/maintains (the index is a derived artifact, so
@@ -25,18 +25,16 @@ import WikiFSCore
 /// performs for the sidebar.
 ///
 /// Returns `nil` when Tantivy is unavailable, the index returned nothing, or
-/// every hit was missing from the catalog — the store falls back to FTS5 in
-/// all three cases (the Phase 2 contract for `bm25Leg: nil`). After #634
-/// drops FTS5, `nil` here means "no BM25 leg" — but the index is shared with
-/// the app, so as long as the wiki has been opened in the app at least once
-/// (the app kicks off the initial build via `TantivyShadowSync.start()`), the
-/// leg is populated. A wiki never opened in the app still has FTS5 to answer
-/// today; #634 lands later.
+/// every hit was missing from the catalog. After #634 (v38), `nil` here means
+/// "no BM25 leg" — the store returns a cosine-only result (or empty when vec
+/// is also unavailable). The index is shared with the app, so as long as the
+/// wiki has been opened in the app at least once (the app kicks off the initial
+/// build via `TantivyShadowSync.start()`), the leg is populated.
 public enum CLITantivyLegResolver {
 
     /// Resolve a Tantivy BM25 leg for `wikictl page search`. Returns `nil`
-    /// when the index is unavailable/empty — the store then falls back to
-    /// FTS5 (Phase 2 behavior; #634 will retire this fallback path).
+    /// when the index is unavailable/empty — the store then has no BM25 leg
+    /// (#634 — cosine-only result).
     public static func resolvePageLeg(
         wikiID: String,
         containerDirectory: URL,
@@ -173,10 +171,10 @@ public enum CLITantivyLegResolver {
     /// are dropped here because the store's `searchSimilar(query:limit:bm25Leg:)`
     /// treats the leg as a pre-ranked BM25 source and fuses it with the
     /// semantic cosine leg via `RankFusion.rrf`. Returns `nil` (not `[]`)
-    /// when nothing resolves so the store falls back to FTS5 rather than
-    /// querying an empty BM25 signal — this matches the model's contract and
-    /// is what #634's drop-FTS5 path will key off (a future Tantivy miss
-    /// becomes "no BM25 leg" rather than "BM25 returned no results").
+    /// when nothing resolves so the store has no BM25 leg (cosine-only) rather
+    /// than querying an empty BM25 signal — this matches the model's contract
+    /// and is what #634's drop-FTS5 path keys off (a Tantivy miss becomes
+    /// "no BM25 leg" rather than "BM25 returned no results").
     private static func resolveHits<T: Identifiable & Sendable>(
         _ hits: [TantivyShadowSearchResult],
         catalog: [T]
