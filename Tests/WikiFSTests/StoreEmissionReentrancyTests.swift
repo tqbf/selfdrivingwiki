@@ -14,6 +14,7 @@ import Foundation
 /// depth-0 design is future-proofing for graph-model ref-repoint methods. The
 /// per-method `StoreEmissionTests` already prove each top-level mutator emits
 /// exactly once (no double-emit).
+@Suite(.tags(.integration))
 struct StoreEmissionReentrancyTests {
 
     final class Recorder: @unchecked Sendable {
@@ -33,15 +34,8 @@ struct StoreEmissionReentrancyTests {
         }
     }
 
-    private func tempDatabaseURL() -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("reentry-tests-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("WikiFS.sqlite")
-    }
-
     private func makeHarness() throws -> (GRDBWikiStore, WikiEventBus, Recorder) {
-        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        let store = try TestStoreFactory.inMemory()
         let bus = WikiEventBus(wikiID: "W")
         store.eventBus = bus
         let recorder = Recorder()

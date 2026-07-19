@@ -40,16 +40,9 @@ struct StoreEmissionTests {
         recorder.clear()
     }
 
-    private func tempDatabaseURL() -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("emit-tests-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("WikiFS.sqlite")
-    }
-
-    /// Fresh temp-file store + per-wiki bus + spy subscriber.
+    /// Fresh in-memory store + per-wiki bus + spy subscriber.
     private func makeHarness() throws -> (GRDBWikiStore, WikiEventBus, Recorder) {
-        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        let store = try TestStoreFactory.inMemory()
         let bus = WikiEventBus(wikiID: "W")
         store.eventBus = bus
         let recorder = Recorder()
@@ -370,7 +363,7 @@ struct StoreEmissionTests {
     @Test func nilBusStoreEmitsSilently() throws {
         // A store with no bus (the wikictl path) must not crash on mutation and
         // must not emit anything (there is nothing to emit into).
-        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        let store = try TestStoreFactory.inMemory()
         #expect(store.eventBus == nil)
         let page = try store.createPage(title: "Silent")
         #expect(page.title == "Silent")

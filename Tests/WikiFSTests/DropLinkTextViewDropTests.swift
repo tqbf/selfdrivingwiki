@@ -129,17 +129,14 @@ struct DropLinkTextViewDropTests {
 /// the fast-tier `--skip` regex in `.github/workflows/ci.yml` so it runs only
 /// in the `swift-integration` job.
 @MainActor
+@Suite(.tags(.integration))
 struct SidebarDropBuilderIntegrationTests {
 
-    /// Resolve a fresh temp DB + `WikiStoreModel`. Mirrors
-    /// `ExternalWriteBookmarkRefreshTests.makeModel` setup.
+    /// Resolve a fresh in-memory store + `WikiStoreModel`. Mirrors
+    /// `ExternalWriteBookmarkRefreshTests.makeModel` setup (but in-memory —
+    /// issue #651).
     private func makeModel() throws -> (WikiStoreModel, GRDBWikiStore) {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sdw-drop-builder-\(UUID().uuidString)",
-                                    isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let store = try GRDBWikiStore(
-            databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let store = try TestStoreFactory.inMemory()
         store.eventBus = WikiEventBus(wikiID: "test")
         return (WikiStoreModel(store: store), store)
     }

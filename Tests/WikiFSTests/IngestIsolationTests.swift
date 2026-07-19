@@ -20,10 +20,7 @@ import Testing
 struct IngestIsolationTests {
 
     private func tempStore() throws -> GRDBWikiStore {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("iso-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        try TestStoreFactory.inMemory()
     }
 
     // MARK: - AC7.1: Workspace-stage write leaves main untouched until merge
