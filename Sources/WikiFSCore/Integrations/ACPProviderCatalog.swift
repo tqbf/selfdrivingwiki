@@ -34,10 +34,16 @@ public struct KnownACPAgent: Sendable, Equatable, Identifiable {
 }
 
 public enum ACPProviderCatalog {
-    /// Confirmed ACP agents, ported from paseo's `acp-provider-catalog.ts`.
-    /// Each entry's `command[0]` is its `detectExecutable`. Add entries here as
-    /// their ACP invocation is verified.
-    public static let agents: [KnownACPAgent] = [
+    /// Pre-#665 hardcoded catalog — the confirmed ACP agents ported from
+    /// paseo's `acp-provider-catalog.ts`. Each entry's `command[0]` is its
+    /// `detectExecutable`.
+    ///
+    /// Kept as the **last-resort** fallback when the live registry, the
+    /// cache, AND the bundled snapshot are all unavailable (offline first run,
+    /// corrupt bundle, etc.). The runtime catalog is loaded from the official
+    /// ACP registry via `loadAgents()` (`agents` serves the bundled snapshot
+    /// synchronously for non-async contexts).
+    public static let fallbackCatalog: [KnownACPAgent] = [
         KnownACPAgent(
             id: "claude-acp",
             label: "Claude",
@@ -111,4 +117,46 @@ public enum ACPProviderCatalog {
             detectExecutable: "opencode",
             command: ["opencode", "acp"]),
     ]
+
+    /// Sync accessor for contexts that can't `await` (SwiftUI previews,
+    /// deterministic test fixtures, the Add Provider sheet's first paint).
+    ///
+    /// Order: bundled snapshot → `fallbackCatalog`. The bundled snapshot is
+    /// the official registry JSON shipped in `Contents/Resources/acp-registry.json`;
+    /// if the bundle lookup fails (e.g. running under `swift test`, where
+    /// `Bundle.main` is the test runner — not the .app), this degrades to the
+    /// hardcoded `fallbackCatalog`.
+    ///
+    /// For the live (cached + networked) registry, use `loadAgents()` (async).
+    public static var agents: [KnownACPAgent] {
+        guard let url = ACPRegistryClient.bundledURL else { return fallbackCatalog }
+        // Read + decode, routing failures through DebugLog (house rule: never
+        // bare `try?`). A missing/corrupt bundled snapshot is rare-but-fixable
+        // signal: log it so Console.app shows the regression on launch.
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            DebugLog.agent("ACPProviderCatalog.agents: bundled snapshot read failed — \(error.localizedDescription)")
+            return fallbackCatalog
+        }
+        let response: ACPRegistryResponse
+        do {
+            response = try JSONDecoder().decode(ACPRegistryResponse.self, from: data)
+        } catch {
+            DebugLog.agent("ACPProviderCatalog.agents: bundled snapshot decode failed — \(error.localizedDescription)")
+            return fallbackCatalog
+        }
+        let mapped = ACPRegistryClient.mapRegistryToCatalog(response)
+        // Empty decoded payload → fall through to the hardcoded list (don't
+        // silently render an empty catalog).
+        return mapped.isEmpty ? fallbackCatalog : mapped
+    }
+
+    /// Async accessor: the live registry with cache + offline fallback. Always
+    /// returns SOME list (worst case, `fallbackCatalog`). Never throws —
+    /// network errors are logged via `DebugLog.agent` and the call degrades.
+    public static func loadAgents() async -> [KnownACPAgent] {
+        await ACPRegistryClient.loadAgents()
+    }
 }
