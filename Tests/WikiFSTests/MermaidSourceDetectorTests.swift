@@ -138,4 +138,59 @@ struct MermaidSourceDetectorTests {
         let rendered = MermaidSourceDetector.renderableMarkdown(from: raw)
         #expect(rendered == "```mermaid\n%% this is a mermaid diagram\nflowchart TD\n  A --> B\n```")
     }
+
+    // MARK: - codeBlockMarkdown (Reader tab for diagram sources, issue #662)
+
+    @Test func codeBlockMarkdownWrapsStandaloneSourceInPlainFence() {
+        // No language tag — the reader renders the body as `<pre><code>` (plain
+        // monospace), so the Mermaid library does NOT kick in (that's the point:
+        // show the DSL as code, not render the diagram).
+        let raw = "flowchart TD\n    A --> B\n    B --> C"
+        let codeBlock = MermaidSourceDetector.codeBlockMarkdown(from: raw)
+        #expect(codeBlock == "````\nflowchart TD\n    A --> B\n    B --> C\n````")
+    }
+
+    @Test func codeBlockMarkdownTrimsTrailingBlankLines() {
+        let raw = "graph LR\n  X --> Y\n\n\n"
+        let codeBlock = MermaidSourceDetector.codeBlockMarkdown(from: raw)
+        #expect(codeBlock == "````\ngraph LR\n  X --> Y\n````")
+    }
+
+    @Test func codeBlockMarkdownNilForEmptyOrWhitespace() {
+        #expect(MermaidSourceDetector.codeBlockMarkdown(from: "") == nil)
+        #expect(MermaidSourceDetector.codeBlockMarkdown(from: "   \n\t ") == nil)
+    }
+
+    @Test func codeBlockMarkdownSurvivesInnerThreeBacktickRuns() {
+        // A 4-backtick outer fence stays open even if the content contains a
+        // 3-backtick run (rare in `.mmd`/JSON, but possible). The wrapper must
+        // not terminate early — the inner ``` becomes content of the block.
+        let raw = "comment\n```\nflowchart TD\n  A --> B\n```"
+        let codeBlock = MermaidSourceDetector.codeBlockMarkdown(from: raw)
+        #expect(codeBlock == "````\ncomment\n```\nflowchart TD\n  A --> B\n```\n````")
+    }
+
+    @Test func codeBlockMarkdownPreservesJSONVerbatim() {
+        // Excalidraw/Obsidian Canvas are JSON — string content round-trips
+        // unchanged (no escaping needed for the markdown pipeline; the renderer
+        // escapes `<`/`>`/`&` inside code blocks).
+        let raw = "{\"type\":\"excalidraw\",\"version\":2}"
+        let codeBlock = MermaidSourceDetector.codeBlockMarkdown(from: raw)
+        #expect(codeBlock == "````\n{\"type\":\"excalidraw\",\"version\":2}\n````")
+    }
+
+    @Test func codeBlockMarkdownDiffersFromRenderableMarkdown() {
+        // The two siblings produce DIFFERENT markdown for the same `.mmd`
+        // source: `renderableMarkdown` wraps in a ` ```mermaid ` fence (so the
+        // reader renders the diagram), `codeBlockMarkdown` wraps in a plain
+        // fence (so the reader shows the source as code). This is the load-
+        // bearing distinction that powers Reader-as-code-view vs Rendered-as-
+        // diagram in `SourceDetailView.tabbedContent`.
+        let raw = "flowchart TD\n  A --> B"
+        let rendered = MermaidSourceDetector.renderableMarkdown(from: raw)
+        let codeBlock = MermaidSourceDetector.codeBlockMarkdown(from: raw)
+        #expect(rendered != codeBlock)
+        #expect(rendered?.hasPrefix("```mermaid") == true)
+        #expect(codeBlock?.hasPrefix("````\n") == true)
+    }
 }
