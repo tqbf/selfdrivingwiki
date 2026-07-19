@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import ACPModel
 @testable import WikiFSEngine
 @testable import WikiFS
 import WikiFSCore
@@ -106,7 +107,8 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
-        onLogPaths: (@Sendable (URL?, URL?) -> Void)?
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
     ) async throws {
         calledWikiID = wikiID
         calledSourceIDs = sourceIDs
@@ -121,7 +123,8 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
-        onLogPaths: (@Sendable (URL?, URL?) -> Void)?
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
     ) async throws {
         calledLintWikiID = wikiID
         calledLintPageIDs = []
@@ -137,7 +140,8 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
-        onLogPaths: (@Sendable (URL?, URL?) -> Void)?
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
     ) async throws {
         calledLintWikiID = wikiID
         calledLintPageIDs = pageIDs
@@ -162,7 +166,7 @@ struct QueueIngestionWorkerTests {
             provider: provider,
             emitProgress: { _, _ in },
             emitTranscript: { _, _ in }, emitUsage: { _, _ in },
-            emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
+            emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
         let worker = try await factory.worker(for: QueueItem(
             id: "test1", queue: .ingestion, wikiID: "wiki1",
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
@@ -187,7 +191,7 @@ struct QueueIngestionWorkerTests {
         let worker = QueueIngestionWorker(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
 
         await #expect(throws: QueueIngestionError.self) {
             try await worker.execute(QueueItem(
@@ -205,7 +209,7 @@ struct QueueIngestionWorkerTests {
         let worker = QueueIngestionWorker(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
 
         await #expect(throws: QueueIngestionError.self) {
             try await worker.execute(QueueItem(
@@ -224,7 +228,7 @@ struct QueueIngestionWorkerTests {
         let worker = QueueIngestionWorker(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
 
         do {
             try await worker.execute(QueueItem(
@@ -256,7 +260,7 @@ struct QueueIngestionWorkerTests {
         let worker = QueueIngestionWorker(
             provider: provider,
             emitProgress: { _, _ in },
-            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
 
         try await worker.execute(QueueItem(
             id: "test-ready-ok", queue: .ingestion, wikiID: "wiki1",
@@ -337,6 +341,132 @@ struct QueueActivityTrackerIngestionTests {
         // Complete ingestion → both clear
         tracker.handleForTesting(.completed(ingestionItem))
         #expect(tracker.ingestingSourceIDs.isEmpty)
+    }
+
+    // MARK: - #608: pending-permission surfacing
+
+    /// Builds a `PendingPermission` for tests with the same shape `ACPBackend`
+    /// hands the launcher: tool name + input summary + a single allow/reject
+    /// option pair. ACP agents gate one write at a time, so a single entry is
+    /// the realistic shape.
+    private func makePermission(
+        toolCallId: String = "tc-1",
+        toolName: String? = "Edit file",
+        inputSummary: String? = "/wiki/page.md"
+    ) -> PendingPermission {
+        PendingPermission(
+            toolCallId: toolCallId,
+            title: "Edit file /wiki/page.md",
+            toolName: toolName,
+            inputSummary: inputSummary,
+            options: [
+                PermissionOption(kind: "allow_always", name: "Allow", optionId: "opt-allow"),
+                PermissionOption(kind: "reject_once", name: "Reject", optionId: "opt-reject")
+            ])
+    }
+
+    @MainActor
+    @Test("Tracker surfaces pending permission via pendingPermission(for:) (#608)")
+    func pendingPermissionSurfaced() async {
+        let tracker = QueueActivityTracker()
+        let item = makeItem(queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")])
+        tracker.handleForTesting(.started(item))
+
+        // Before any pending permission event: nil — the row should not render.
+        #expect(tracker.pendingPermission(for: item.id) == nil)
+
+        // Surface a pending permission — the launcher's poller does this via
+        // the emit closure when `pendingPermissions` goes from [] to [perm].
+        let perm = makePermission()
+        tracker.handleForTesting(.pendingPermission(item.id, perm))
+        #expect(tracker.pendingPermission(for: item.id) == perm)
+
+        // Clear the pending permission — the continuation resolved (approve,
+        // reject) or the S1 auto-reject timer fired.
+        tracker.handleForTesting(.pendingPermission(item.id, nil))
+        #expect(tracker.pendingPermission(for: item.id) == nil)
+    }
+
+    @MainActor
+    @Test("Tracker replaces prior pending permission when a new one arrives (#608)")
+    func pendingPermissionReplaces() async {
+        let tracker = QueueActivityTracker()
+        let item = makeItem(queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")])
+        tracker.handleForTesting(.started(item))
+
+        let firstPerm = makePermission(toolCallId: "tc-1", toolName: "Edit file")
+        tracker.handleForTesting(.pendingPermission(item.id, firstPerm))
+        #expect(tracker.pendingPermission(for: item.id) == firstPerm)
+
+        // A second pending permission replaces the first — ACP agents gate one
+        // write at a time, but successive prompts within a single run are
+        // plausible (the agent asks, user approves, agent asks again). The
+        // snapshot diff in `refreshPendingPermissions` would clear → set in
+        // two events, but a single replace event covers the in-place update
+        // path too.
+        let secondPerm = makePermission(toolCallId: "tc-2", toolName: "Create directory")
+        tracker.handleForTesting(.pendingPermission(item.id, secondPerm))
+        #expect(tracker.pendingPermission(for: item.id) == secondPerm)
+        #expect(tracker.pendingPermission(for: item.id) != firstPerm)
+    }
+
+    @MainActor
+    @Test("Tracker clears pending permission on terminal state (#608)")
+    func pendingPermissionClearedOnTerminal() async {
+        let tracker = QueueActivityTracker()
+        let item = makeItem(queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")])
+        tracker.handleForTesting(.started(item))
+        tracker.handleForTesting(.pendingPermission(item.id, makePermission()))
+        #expect(tracker.pendingPermission(for: item.id) != nil)
+
+        // Completed → the yellow row must clear so it doesn't linger on a
+        // completed row. The launcher's `finish()` emits `nil` first, but a
+        // terminal state arriving first (cancelled mid-prompt, hard process
+        // death) needs this safety net too.
+        let completed = makeItem(id: item.id, queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")])
+        tracker.handleForTesting(.completed(completed))
+        #expect(tracker.pendingPermission(for: item.id) == nil)
+
+        // Same for failed.
+        tracker.handleForTesting(.started(item))
+        tracker.handleForTesting(.pendingPermission(item.id, makePermission()))
+        #expect(tracker.pendingPermission(for: item.id) != nil)
+        let failed = makeItem(id: item.id, queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")], state: .failed)
+        tracker.handleForTesting(.failed(failed, error: "boom"))
+        #expect(tracker.pendingPermission(for: item.id) == nil)
+
+        // Same for cancelled.
+        tracker.handleForTesting(.started(item))
+        tracker.handleForTesting(.pendingPermission(item.id, makePermission()))
+        #expect(tracker.pendingPermission(for: item.id) != nil)
+        let cancelled = makeItem(id: item.id, queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")], state: .cancelled)
+        tracker.handleForTesting(.cancelled(cancelled))
+        #expect(tracker.pendingPermission(for: item.id) == nil)
+    }
+
+    @MainActor
+    @Test("Tracker isolates pending permissions per item (#608)")
+    func pendingPermissionPerItemIsolation() async {
+        let tracker = QueueActivityTracker()
+        let itemA = makeItem(id: "ing-a", queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")])
+        let itemB = makeItem(id: "ing-b", queue: .ingestion, sourceIDs: [PageID(rawValue: "src2")])
+        tracker.handleForTesting(.started(itemA))
+        tracker.handleForTesting(.started(itemB))
+
+        let permA = makePermission(toolCallId: "tc-a", toolName: "Edit file")
+        tracker.handleForTesting(.pendingPermission(itemA.id, permA))
+
+        // Item A is parked on a permission; item B is not.
+        #expect(tracker.pendingPermission(for: itemA.id) == permA)
+        #expect(tracker.pendingPermission(for: itemB.id) == nil)
+
+        // Completing item A should NOT clear item B's state — but more
+        // importantly, completing item B (without ever surfacing a permission
+        // for it) should leave item A's pending permission intact.
+        let completedB = makeItem(id: itemB.id, queue: .ingestion, sourceIDs: [PageID(rawValue: "src2")])
+        tracker.handleForTesting(.completed(completedB))
+        #expect(tracker.pendingPermission(for: itemA.id) == permA)
+        #expect(tracker.pendingPermission(for: itemB.id) == nil)
     }
 }
 
@@ -422,7 +552,7 @@ struct LintIngestionDispatchTests {
             provider: provider,
             emitProgress: { _, _ in },
             emitTranscript: { _, _ in }, emitUsage: { _, _ in },
-            emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
+            emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
         let worker = try await factory.worker(for: QueueItem(
             id: "lint1", queue: .ingestion, wikiID: "w1",
             payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [PageID(rawValue: "p1")]),
@@ -448,7 +578,7 @@ struct LintIngestionDispatchTests {
             provider: provider,
             emitProgress: { _, _ in },
             emitTranscript: { _, _ in }, emitUsage: { _, _ in },
-            emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
+            emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
         let worker = try await factory.worker(for: QueueItem(
             id: "lint2", queue: .ingestion, wikiID: "w1",
             payload: QueueItemPayload(sourceIDs: [], lintPageIDs: []),
@@ -472,7 +602,7 @@ struct LintIngestionDispatchTests {
             provider: provider,
             emitProgress: { _, _ in },
             emitTranscript: { _, _ in }, emitUsage: { _, _ in },
-            emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in })
+            emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
         let worker = try await factory.worker(for: QueueItem(
             id: "ing1", queue: .ingestion, wikiID: "w1",
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "s1")]),

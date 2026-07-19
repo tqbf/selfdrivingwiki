@@ -21,6 +21,11 @@ enum QueueEventType: String, Codable, Sendable {
     case runStateChanged
     case reordered
     case runPaths
+    /// #608: a pending always-ask permission surfaced (or cleared) for a run.
+    /// Not logged to JSONL (runtime-only state — a restart mid-prompt resets
+    /// the run to `.queued`, so re-emitting is harmless but useless). The
+    /// `write()` method skips this case.
+    case pendingPermission
 }
 
 // MARK: - QueueLogRecord
@@ -261,6 +266,24 @@ struct QueueLogRecord: Codable, Sendable {
             self.finishedAt = nil
             self.durationMs = nil
 
+        case .pendingPermission:
+            // #608: a pending always-ask permission stall surfaced (or
+            // cleared) for a run. Runtime-only state — NOT logged to JSONL.
+            // The `write()` method skips this case.
+            self.eventType = .pendingPermission
+            self.itemID = nil
+            self.queue = nil
+            self.wikiID = nil
+            self.providerID = nil
+            self.itemState = nil
+            self.runState = nil
+            self.orderingKey = nil
+            self.attempt = nil
+            self.error = nil
+            self.startedAt = nil
+            self.finishedAt = nil
+            self.durationMs = nil
+
         case .runStateChanged(let queue, let state):
             self.eventType = .runStateChanged
             self.itemID = nil
@@ -400,6 +423,7 @@ public actor QueueEventLog {
         if case .liveUsage = event { return }
         if case .usage = event { return }
         if case .runPaths = event { return }
+        if case .pendingPermission = event { return }
 
         ensureOpenForToday()
         guard let handle = fileHandle else { return }

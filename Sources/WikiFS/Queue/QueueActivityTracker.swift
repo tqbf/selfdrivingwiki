@@ -43,6 +43,17 @@ final class LogPathsEmitBox: @unchecked Sendable {
     var emit: (@Sendable (QueueItem.ID, URL?, URL?) -> Void)?
 }
 
+/// A mutable box for a `@Sendable` pending-permission-emit closure. Same
+/// pattern as the other emit boxes — breaks the circular dependency between
+/// the ingestion worker factory (needs the closure) and the engine (provides
+/// it). Carries the launcher's current pending-permission snapshot for an
+/// item so the Activity window can surface "Permission pending: <cmd>" while
+/// a run is parked on an always-ask prompt (issue #608). `nil` clears the
+/// row (resolved / rejected / auto-rejected by the S1 companion).
+final class PendingPermissionEmitBox: @unchecked Sendable {
+    var emit: (@Sendable (QueueItem.ID, PendingPermission?) -> Void)?
+}
+
 /// Observes `QueueEngine.events` and maintains `@Observable` UI state for
 /// extraction activity. Replaces the launcher's extraction slot machinery
 /// (`isExtracting`, `extractionLog`, `extractionPID`,
@@ -159,6 +170,17 @@ final class QueueActivityTracker {
     /// `.runPaths` arrives after the run starts.
     private(set) var itemDebugURLs: [QueueItem.ID: URL] = [:]
 
+    /// Per-item pending permission request surfaced from the launcher's
+    /// `pendingPermissions` while a turn is parked on an always-ask prompt
+    /// (issue #608). Set/cleared from the `.pendingPermission` queue event:
+    /// a non-nil value means the run is blocked waiting for an Approve/
+    /// Reject decision (or the S1 auto-reject timeout). The Activity window
+    /// renders a yellow "Permission pending: <cmd>" row below the item's
+    /// status row. Cleared on terminal state and when the continuation
+    /// resolves. Keyed by item ID — ACP agents gate one write at a time, so
+    /// at most one entry per item.
+    private(set) var pendingPermissions: [QueueItem.ID: PendingPermission] = [:]
+
     /// Accumulated progress log for the most recent extraction. Cleared on
     /// `.started`, appended on `.progress`. Drives the sidebar log text.
     private(set) var extractionLog: String = ""
@@ -270,6 +292,7 @@ final class QueueActivityTracker {
         itemUsageByModel.removeAll()
         itemLogURLs.removeAll()
         itemDebugURLs.removeAll()
+        pendingPermissions.removeAll()
         streamingTranscriptItemIDs.removeAll()
         streamingThinkingItemIDs.removeAll()
     }
@@ -378,6 +401,7 @@ final class QueueActivityTracker {
         itemUsageByModel.removeValue(forKey: itemID)
         itemLogURLs.removeValue(forKey: itemID)
         itemDebugURLs.removeValue(forKey: itemID)
+        pendingPermissions.removeValue(forKey: itemID)
         streamingTranscriptItemIDs.remove(itemID)
         streamingThinkingItemIDs.remove(itemID)
     }
@@ -423,6 +447,16 @@ final class QueueActivityTracker {
     /// didn't create one. Read by the Activity window for "Reveal Debug Folder".
     func debugURL(for itemID: QueueItem.ID) -> URL? {
         itemDebugURLs[itemID]
+    }
+
+    /// The pending permission request a run is parked on, or `nil` when the
+    /// item isn't blocked on an always-ask prompt. Read by the Activity
+    /// window to render a yellow "Permission pending: <cmd>" row below the
+    /// item's status row (#608). ACP agents gate one write at a time, so
+    /// there is at most one pending request per item — the launcher emits
+    /// the first (or `nil` once the continuation resolves / auto-rejects).
+    func pendingPermission(for itemID: QueueItem.ID) -> PendingPermission? {
+        pendingPermissions[itemID]
     }
 
     // MARK: - Event handling
@@ -499,6 +533,21 @@ final class QueueActivityTracker {
             // run didn't create the files (not started, preflight failure).
             if let logURL { itemLogURLs[id] = logURL }
             if let debugURL { itemDebugURLs[id] = debugURL }
+
+        case .pendingPermission(let id, let permission):
+            // #608: surface "Permission pending: <cmd>" while a run is parked
+            // on an always-ask prompt. The launcher's `pendingPollTask`
+            // refreshes `pendingPermissions` from the backend while a turn
+            // generates; the AppQueueIngestionProvider forwards changes via
+            // the emit closure. `nil` clears the row (resolved / rejected /
+            // auto-rejected by the S1 companion timer). Updates replace the
+            // prior entry — ACP agents gate one write at a time, so the
+            // array never carries more than one entry at a time.
+            if let permission {
+                pendingPermissions[id] = permission
+            } else {
+                pendingPermissions.removeValue(forKey: id)
+            }
 
         case .progress(let id, let line):
             // Accumulate per-item progress (for extraction items and any
@@ -588,6 +637,13 @@ final class QueueActivityTracker {
         // live snapshot would linger. Completed items have already dropped it
         // in the `.usage` handler (this is a redundant-clear safety net then).
         liveUsage.removeValue(forKey: item.id)
+        // #608: clear any surfaced pending permission on terminal state. The
+        // launcher's poller is torn down in `finish()` — a resolved/rejected/
+        // auto-rejected request would already have cleared this via the
+        // `.pendingPermission(_, nil)` event, but a terminal state arriving
+        // first (e.g. cancelled mid-prompt) needs this safety net so the
+        // yellow row doesn't linger on a completed/failed/cancelled row.
+        pendingPermissions.removeValue(forKey: item.id)
     }
 
     /// Parse a PID from a progress line if the local backend reports one.

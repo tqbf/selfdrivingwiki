@@ -85,7 +85,7 @@ final class OperationNotifier {
             post(item: item, outcome: .failed(error))
         // Cancelled is user-initiated — not worth a notification.
         case .cancelled, .enqueued, .started, .progress, .transcript, .liveUsage,
-              .usage, .runPaths, .runStateChanged, .reordered:
+              .usage, .runPaths, .runStateChanged, .reordered, .pendingPermission:
             break
         }
     }
