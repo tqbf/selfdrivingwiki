@@ -989,6 +989,17 @@ struct SourceDetailView: View {
         case .reader:
             if isBytelessEmbedWithPlayer, !hasMarkdown {
                 embedEmptyReaderContent
+            } else if isPureMermaidSource {
+                // Diagram source files (`.mmd` / `text/mermaid`) render their
+                // raw DSL as a read-only monospace code block — the markdown
+                // pipeline parses `flowchart LR` as prose, producing confusing
+                // output. The Rendered and Split tabs keep their existing
+                // diagram-rendering behavior (issue #662). Embedded-mermaid
+                // markdown (`.md` with a ```mermaid block) is gated out by
+                // `isPureMermaidSource` so its prose+outline stay intact.
+                // Follow-up: extend to `.excalidraw` / `.canvas` once their
+                // raw bytes are loaded into `currentMarkdownContent`.
+                diagramCodeContent
             } else {
                 markdownContent
             }
@@ -1102,6 +1113,43 @@ struct SourceDetailView: View {
                 Label("No Diagram", systemImage: "flowchart.fill")
             } description: {
                 Text("This source has no Mermaid diagram to render yet.")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    // MARK: Diagram source code view (Reader tab for diagram sources)
+
+    /// The Reader-tab content for a STANDALONE diagram source (`.mmd` /
+    /// `text/mermaid`): the raw source text rendered as a read-only monospace
+    /// code block instead of through the markdown pipeline. Diagram DSLs
+    /// confuse the markdown reader — mermaid `flowchart LR` becomes a flat
+    /// paragraph, JSON sources flatten to text — so the Reader tab now shows
+    /// them as code (matches the existing `<pre><code>` reader styling). The
+    /// Edit button still switches to the editor for changes; the Rendered and
+    /// Split tabs are unchanged. Issue #662.
+    ///
+    /// Sibling of `renderedMermaidContent`: that view hands the source to
+    /// `MermaidSourceDetector.renderableMarkdown` (a ` ```mermaid ` fence) so
+    /// the reader renders the diagram; this one hands it to
+    /// `MermaidSourceDetector.codeBlockMarkdown` (a plain code fence) so the
+    /// reader displays the source verbatim. Both use `WikiReaderView`, so the
+    /// find bar, zoom, and color-scheme theming come for free.
+    @ViewBuilder
+    private var diagramCodeContent: some View {
+        if let content = currentMarkdownContent,
+           let codeBlock = MermaidSourceDetector.codeBlockMarkdown(from: content) {
+            WikiReaderView(markdown: codeBlock,
+                           currentSelection: store.selection,
+                           store: store,
+                           findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
+                .zoomShortcuts($readerZoom)
+                .zoomScroll($readerZoom)
+        } else {
+            ContentUnavailableView {
+                Label("No Source", systemImage: "curlybraces")
+            } description: {
+                Text("This source's raw content couldn't be loaded.")
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

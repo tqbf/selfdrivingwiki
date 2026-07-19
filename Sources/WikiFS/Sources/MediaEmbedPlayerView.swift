@@ -127,6 +127,12 @@ enum MediaEmbedPlayerHTML {
             return "<audio src=\"\(esc(target.url))\" controls class=\"wiki-embed\"></audio>"
         case .video:
             return "<video src=\"\(esc(target.url))\" controls class=\"wiki-embed\"></video>"
+        case .diagram:
+            // #670 — diagrams render inline through `WikiLinkMarkdown.embedHTML`
+            // in the page reader; this media-player view is never used for a
+            // diagram (no Source Detail Media tab is shown for `.mmd` sources).
+            // Defensive empty fallback for exhaustiveness.
+            return ""
         }
     }
 
