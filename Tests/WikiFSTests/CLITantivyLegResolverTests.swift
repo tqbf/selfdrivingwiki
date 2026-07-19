@@ -17,7 +17,7 @@ import Testing
 /// These are fast: they open a temp SQLite DB, build a small Tantivy index
 /// (3-5 docs), and call one resolver method per test. They live in the fast
 /// CI tier (not skip-listed).
-@Suite
+@Suite(.tags(.integration), .timeLimit(.minutes(5)))
 struct CLITantivyLegResolverTests {
 
     // MARK: - Helpers

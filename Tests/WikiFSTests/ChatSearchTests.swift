@@ -10,7 +10,7 @@ import SQLite3
 /// cosine path needs the bundled embedding model, so these tests exercise the
 /// FTS backbone plus the chunk-embedding mechanics (`storeChatChunks`,
 /// `missingChatEmbeddingWork`, incremental no-wipe) that are model-independent.
-@Suite(.tags(.integration)) struct ChatSearchTests {
+@Suite(.tags(.integration), .timeLimit(.minutes(5))) struct ChatSearchTests {
 
     private func tempStore() throws -> GRDBWikiStore {
         try TestStoreFactory.inMemory()

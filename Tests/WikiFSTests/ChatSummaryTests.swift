@@ -12,6 +12,7 @@ import Testing
 ///     iterates `[AgentEvent]` without a live launcher; fast tier.
 ///   - **Store round-trip** — `updateChatSummary` + `listChats()` on a real
 ///     SQLite DB; tagged `.integration` (opens a real store).
+@Suite(.tags(.integration), .timeLimit(.minutes(5)))
 struct ChatSummaryTests {
 
     // MARK: - Pure extract: ChatSummary.summaryExtract

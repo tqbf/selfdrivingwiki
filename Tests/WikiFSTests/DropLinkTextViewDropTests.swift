@@ -129,7 +129,7 @@ struct DropLinkTextViewDropTests {
 /// the fast-tier `--skip` regex in `.github/workflows/ci.yml` so it runs only
 /// in the `swift-integration` job.
 @MainActor
-@Suite(.tags(.integration))
+@Suite(.tags(.integration), .timeLimit(.minutes(5)))
 struct SidebarDropBuilderIntegrationTests {
 
     /// Resolve a fresh in-memory store + `WikiStoreModel`. Mirrors

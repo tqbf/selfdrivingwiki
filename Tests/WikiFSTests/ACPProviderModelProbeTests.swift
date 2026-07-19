@@ -474,6 +474,7 @@ struct ACPProviderModelProbeTests {
 /// ```
 @Suite(
     .tags(.integration),
+    .timeLimit(.minutes(5)),
     .disabled(
         if: ProcessInfo.processInfo.environment["ACP_SMOKE"] == nil,
         "Set ACP_SMOKE=1 (and ANTHROPIC_API_KEY for a full probe) to run the live model-probe test.")

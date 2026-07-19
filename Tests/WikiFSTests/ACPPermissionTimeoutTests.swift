@@ -13,7 +13,24 @@ import ACPModel
 /// The race-safety invariant (exactly one `resume` per `CheckedContinuation`)
 /// is the load-bearing correctness property — covered by tests #2, #3, #6
 /// (`plans/acp-permissions.md` §4.1 note #1, §8.2).
-@Suite struct ACPPermissionTimeoutTests {
+///
+/// Tagged `.integration` AND `.serialized` (issue #664): this suite is the
+/// identified cause of the 6-hour `swift-integration` CI hang. It uses real
+/// `Task`s, `Task.sleep`, and `CheckedContinuation` to exercise race-safety
+/// timing windows — under heavy parallel SQLite integration load the
+/// cooperative thread pool is starved, the carefully-tuned `budget` windows
+/// slip, and a continuation can suspend indefinitely (the same flakiness shape
+/// as `QueueEngineTests`, issue #448). `.serialized` removes intra-suite
+/// concurrency; `.timeLimit(.minutes(5))` is the per-test safety net; the
+/// skip-list entries below keep it out of the parallel-integration tier
+/// entirely (it's covered reliably in the fast tier, where the heavy SQLite
+/// suites are skipped and the cooperative pool isn't starved).
+@Suite(
+    .tags(.integration),
+    .timeLimit(.minutes(5)),
+    .serialized
+)
+struct ACPPermissionTimeoutTests {
 
     /// A two-option request the always-ask path defers (matches the existing
     /// `ACPBackendTests.alwaysAskDefersUntilResolved` shape).

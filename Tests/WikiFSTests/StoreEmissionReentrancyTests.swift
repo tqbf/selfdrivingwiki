@@ -14,7 +14,7 @@ import Foundation
 /// depth-0 design is future-proofing for graph-model ref-repoint methods. The
 /// per-method `StoreEmissionTests` already prove each top-level mutator emits
 /// exactly once (no double-emit).
-@Suite(.tags(.integration))
+@Suite(.tags(.integration), .timeLimit(.minutes(5)))
 struct StoreEmissionReentrancyTests {
 
     final class Recorder: @unchecked Sendable {
