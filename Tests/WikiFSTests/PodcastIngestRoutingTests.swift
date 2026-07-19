@@ -133,5 +133,71 @@ struct PodcastIngestRoutingTests {
         #expect(outcome.kind == .podcastTranscript)
         #expect(podcast.requestedEpisodeID == "1000774368453")
     }
+
+    /// Issue #621: the source's display name must be the un-slugified episode
+    /// title (written via `setSourceDisplayName`, mirroring the oEmbed title
+    /// step for YouTube/Vimeo/Spotify/SoundCloud) — NOT the slugified filename
+    /// `chinatalk-1000774368453-transcript.md`.
+    @Test func episodeURLSetsDisplayTitleFromSlug() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let podcast = FakePodcastFetcher()
+
+        let outcome = try await model.addURL(
+            Self.chinaTalkURL, fetcher: ExplodingFetcher(), podcastFetcher: podcast)
+
+        // Re-fetch (the in-memory `summary` came back BEFORE the
+        // setSourceDisplayName write). `effectiveName` reads displayName first
+        // and falls back to filename only when unset — so the title shows up as
+        // the source's effective name everywhere in the UI.
+        let sources = try store.listSources()
+        let stored = try #require(sources.first { $0.filename == outcome.filename })
+        #expect(stored.displayName == "Chinatalk")
+        #expect(stored.effectiveName == "Chinatalk")
+    }
+
+    /// Issue #621: an episode URL with a multi-word slug resolves a real
+    /// title-cased display name (small words kept lowercase) instead of the
+    /// `-transcript.md` slug filename.
+    @Test func multiWordSlugResolvesTitleCasedDisplayName() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let podcast = FakePodcastFetcher()
+
+        // The issue's driving example episode URL — the slug is the entire
+        // episode title as Apple generates it for an episode link.
+        let url = "https://podcasts.apple.com/us/podcast/"
+            + "if-you-care-about-food-you-have-to-care-about-land/"
+            + "id1728932037?i=1000714478537"
+        let outcome = try await model.addURL(
+            url, fetcher: ExplodingFetcher(), podcastFetcher: podcast)
+
+        let sources = try store.listSources()
+        let stored = try #require(sources.first { $0.filename == outcome.filename })
+        #expect(stored.displayName
+                == "If You Care About Food You Have to Care About Land")
+        #expect(stored.effectiveName
+                == "If You Care About Food You Have to Care About Land")
+    }
+
+    /// Issue #621 edge case: an episode URL with no `/podcast/<slug>/` path
+    /// (an unusual but parseable episode URL) leaves the display name unset —
+    /// the slug → title helper returns nil and the synthetic filename display
+    /// name stays in place, mirroring the oEmbed-nil discipline.
+    @Test func sluglessEpisodeURLLeavesFilenameDisplayName() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let podcast = FakePodcastFetcher()
+
+        let url = "https://podcasts.apple.com/us?i=1000774368453"
+        let outcome = try await model.addURL(
+            url, fetcher: ExplodingFetcher(), podcastFetcher: podcast)
+
+        let sources = try store.listSources()
+        let stored = try #require(sources.first { $0.filename == outcome.filename })
+        #expect(stored.displayName == nil)
+        // `effectiveName` falls through to the synthetic filename.
+        #expect(stored.effectiveName == stored.filename)
+    }
 }
 #endif
