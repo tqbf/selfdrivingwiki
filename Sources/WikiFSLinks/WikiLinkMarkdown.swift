@@ -26,9 +26,10 @@ public enum WikiLinkMarkdown {
     /// The render decision for one `![[source:…]]` embed: the source id + its
     /// MIME type (for the byteful `wiki-blob://` dispatch) and an optional
     /// external `EmbedTarget` (for byteless external media — provider iframes,
-    /// direct-remote `<audio>`/`<video>`, Apple Podcasts player). When `target`
-    /// is non-nil the renderer emits the external element; otherwise it falls
-    /// back to the byteful blob dispatch (Phase 4a), then to a cite link.
+    /// direct-remote `<audio>`/`<video>`, Apple Podcasts player — or an inline
+    /// Mermaid diagram, #670). When `target` is non-nil the renderer emits the
+    /// element for the target's `kind`; otherwise it falls back to the byteful
+    /// blob dispatch (Phase 4a), then to a cite link.
     public struct SourceEmbedInfo: Sendable, Equatable {
         public let id: PageID
         public let mimeType: String?
@@ -392,7 +393,8 @@ public enum WikiLinkMarkdown {
     /// `<video src="wiki-blob://…">` against empty bytes). The `wiki-blob://` URL
     /// is served by `BlobSchemeHandler` (Phase 4a).
     private static func embedHTML(display: String, id: PageID, mimeType: String?, target: EmbedTarget?) -> String? {
-        // 1. Byteless external media: provider iframe or direct-remote native tag.
+        // 1. Byteless external media or inline diagram: provider iframe,
+        // direct-remote native tag, or a Mermaid diagram div.
         if let target {
             switch target.kind {
             case .iframe:
@@ -411,6 +413,21 @@ public enum WikiLinkMarkdown {
                 return "<audio src=\"\(embedEscape(target.url))\" controls class=\"wiki-embed\"></audio>"
             case .video:
                 return "<video src=\"\(embedEscape(target.url))\" controls class=\"wiki-embed\"></video>"
+            case .diagram:
+                // #670 — inline Mermaid diagram. Emit a `<div class='mermaid'>`
+                // carrying the HTML-escaped source text; the reader's bundled
+                // `mermaid.min.js` (v11) scans the DOM for `.mermaid` divs,
+                // reads `div.textContent` (which un-escapes the entities below
+                // back to the raw diagram source), and renders an inline SVG.
+                // No per-embed JS — the reader's `mermaidBootstrapJS` is what
+                // initializes the library and calls `mermaid.run`.
+                //
+                // Escape the same set `embedEscape` uses for alt text so `<`,
+                // `>`, `&`, and `"` survive the HTML parser intact (a mermaid
+                // arrow `A --> B` is literal text, but `A < B` would otherwise
+                // start a tag and break the surrounding markup).
+                let escaped = embedEscape(target.content ?? "")
+                return "<div class=\"mermaid\">\(escaped)</div>"
             }
         }
         // 2. Byteful blob dispatch (Phase 4a) — unchanged.
