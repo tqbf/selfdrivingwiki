@@ -276,7 +276,10 @@ struct PageDetailView: View {
             font: NSFont.monospacedSystemFont(
                 ofSize: CGFloat(13 * editorZoom), weight: .regular),
             scrollRequest: editorScrollRequest,
-            onCaretChange: { caretCharIndex = $0 }
+            onCaretChange: { caretCharIndex = $0 },
+            sidebarDropBuilder: { payloads in
+                SidebarDropBuilder.insertionText(for: payloads, store: store)
+            }
         )
         .padding(.horizontal, PageEditorMetrics.contentInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

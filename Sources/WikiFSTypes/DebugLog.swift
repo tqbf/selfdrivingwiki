@@ -22,6 +22,10 @@ public enum DebugLog {
     public static func config(_ message: @autoclosure () -> String) { emit("config", message()) }
     public static func fileprovider(_ message: @autoclosure () -> String) { emit("fileprovider", message()) }
     public static func reader(_ message: @autoclosure () -> String) { emit("reader", message()) }
+    /// Page/source markdown editor surface (drop-insert, dirty-buffer, agent-
+    /// edit-guard events). Distinct from `tabs` (sidebar/tab/open) so editor
+    /// events surface cleanly in Console.app.
+    public static func editor(_ message: @autoclosure () -> String) { emit("editor", message()) }
 
     private static let subsystem = "com.selfdrivingwiki.debug"
 
@@ -40,6 +44,7 @@ public enum DebugLog {
         "config": Logger(subsystem: subsystem, category: "config"),
         "fileprovider": Logger(subsystem: subsystem, category: "fileprovider"),
         "reader": Logger(subsystem: subsystem, category: "reader"),
+        "editor": Logger(subsystem: subsystem, category: "editor"),
     ]
 
     // `.default` is the "notice" level (persisted by `log show`); `.debug` is
