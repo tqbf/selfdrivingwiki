@@ -80,6 +80,11 @@ struct AddProviderSheet: View {
             // Focus search once the sheet is up — the `.task` runs after the
             // initial render, so the field is mounted.
             searchFocused = true
+            // Refresh the catalog from the official ACP registry (with cache +
+            // offline fallback to the bundled snapshot / hardcoded catalog).
+            // Non-blocking on errors — always returns SOME list; the UI shows
+            // the bundled snapshot from first paint until this completes.
+            model.catalogAgents = await ACPProviderCatalog.loadAgents()
         }
     }
 
@@ -108,7 +113,7 @@ struct AddProviderSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text("\(model.detected.count) installed · \(ACPProviderCatalog.agents.count) in catalog")
+                Text("\(model.detected.count) installed · \(model.catalogAgents.count) in catalog")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -323,14 +328,22 @@ private struct AddProviderRow: View {
 // MARK: - View model
 
 /// The `@Observable` view model for `AddProviderSheet`. Owns the live PATH
-/// discovery scan (off-main) + the search filter; the catalog list is
-/// sourced from `ACPProviderCatalog.agents` (11 entries).
+/// discovery scan (off-main) + the search filter; the catalog list starts from
+/// the bundled snapshot (`ACPProviderCatalog.agents`) and is refreshed from the
+/// official ACP registry by the sheet's `.task` (off-network failure → stale
+/// cache → bundled snapshot → hardcoded fallback).
 @MainActor
 @Observable
 final class AddProviderModel {
     /// The search query (filters both `detected` and `otherAgents` over
     /// `label` + `summary`, case-insensitive).
     var query = ""
+
+    /// The ACP agent catalog backing the *Other known agents* section. Begins
+    /// from the bundled snapshot (synchronous: no first-paint flicker) and is
+    /// refreshed by the sheet's `.task` via `ACPProviderCatalog.loadAgents()`
+    /// (the live registry, with cache + offline fallback to `agents`).
+    var catalogAgents: [KnownACPAgent] = ACPProviderCatalog.agents
 
     /// ACP agents found on the login-shell PATH during the last scan.
     /// Populated by `scan()`; empty until the scan completes (and the parent
@@ -361,7 +374,7 @@ final class AddProviderModel {
     /// `query`. Each renders an "Other known agent" row in the sheet.
     var otherAgents: [KnownACPAgent] {
         let detectedIDs = Set(detected.map(\.agent.id))
-        return ACPProviderCatalog.agents
+        return catalogAgents
             .filter { !existingIDs.contains($0.id) && !detectedIDs.contains($0.id) }
             .filter { matchesQuery($0) }
     }

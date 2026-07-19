@@ -192,6 +192,16 @@ if [ -f "${MARKDOWNLINT_JS}" ]; then
 else
   echo "  (markdownlint.bundle.js not found at ${MARKDOWNLINT_JS} — markdown save-time auto-fix will be skipped)"
 fi
+# Bundled snapshot of the official ACP agent registry (#665) — the offline
+# fallback for `ACPRegistryClient.loadAgents()` (served when both the cache
+# and the live fetch fail). Cached at runtime under Application Support; this
+# is the shipped-last-resort. Plain JSON, codesigned with the outer .app.
+ACP_REGISTRY_JSON="Resources/acp-registry.json"
+if [ -f "${ACP_REGISTRY_JSON}" ]; then
+  cp "${ACP_REGISTRY_JSON}" "${RESOURCES_DIR}/acp-registry.json"
+else
+  echo "  (acp-registry.json not found at ${ACP_REGISTRY_JSON} — registry will fall back to the hardcoded catalog)"
+fi
 # MLX runtime — model dir + metallib, both downloaded on demand (gitignored),
 # bundled into the .app. The metallib is REQUIRED: swift build can't build MLX's
 # Metal shaders, so the prebuilt version-matched one (fetched by download.py) must

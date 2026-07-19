@@ -701,6 +701,56 @@ struct ChatView: View {
         return base.withSize(base.pointSize * CGFloat(chatZoom))
     }
 
+    /// Wiki-link autocomplete hooks (#436 / #638). Returns `nil` when no
+    /// Tantivy service is attached (no wiki open) — the composer then behaves
+    /// exactly as before. The `fetch` closure runs the distance-2 fuzzy query
+    /// on the live Tantivy index; `format` builds the canonical
+    /// `[[kind:ULID|Title]]` form via `DroppedLinkFormatter`. The coordinator
+    /// wraps `fetch` in a debounced + cancellable Task (AC #5).
+    private var chatAutocompleteHooks: ComposerTextView.AutocompleteHooks? {
+        guard let search = store.tantivySearch else { return nil }
+        return ComposerTextView.AutocompleteHooks(
+            fetch: { partial, kind in
+                let tantivyKind = Self.tantivyKind(for: kind)
+                return await search.autocomplete(
+                    partial: partial,
+                    kinds: [tantivyKind],
+                    distance: 2,
+                    limit: 8)
+            },
+            format: { hit in
+                // Map the search hit back to a ParsedLink.LinkType for the
+                // formatter (single source of truth for the `[[kind:ULID|…]]`
+                // prefix string).
+                let linkType = Self.linkType(for: hit.kind)
+                return DroppedLinkFormatter.link(
+                    for: linkType,
+                    id: hit.ulid,
+                    displayName: hit.title)
+            }
+        )
+    }
+
+    /// Pure: map `ParsedLink.LinkType` (the prefix vocabulary) →
+    /// `TantivyDocumentKind` (the search index vocabulary). Single source of
+    /// truth so a prefix-rename hits both sides. `nonisolated` for test reach.
+    nonisolated static func tantivyKind(for kind: ParsedLink.LinkType) -> TantivyDocumentKind {
+        switch kind {
+        case .page:   return .page
+        case .source: return .source
+        case .chat:   return .chat
+        }
+    }
+
+    /// Pure inverse of ``tantivyKind(for:)``. Same single-source-of-truth goal.
+    nonisolated static func linkType(for kind: TantivyDocumentKind) -> ParsedLink.LinkType {
+        switch kind {
+        case .page:   return .page
+        case .source: return .source
+        case .chat:   return .chat
+        }
+    }
+
     private func composer(enabled: Bool) -> some View {
         let sendActive = canSend && enabled
         // Paseo-style: ONE rounded box wrapping the text (top) and a toolbar row
@@ -716,7 +766,8 @@ struct ChatView: View {
                 font: composerFont,
                 onSubmit: sendMessage,
                 measuredHeight: $composerHeight,
-                autoFocus: chatID == nil
+                autoFocus: chatID == nil,
+                autocomplete: chatAutocompleteHooks
             )
                 .frame(height: composerHeight)
                 .frame(maxWidth: .infinity)
