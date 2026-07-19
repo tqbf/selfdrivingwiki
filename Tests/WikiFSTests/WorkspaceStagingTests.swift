@@ -17,10 +17,7 @@ import Testing
 struct WorkspaceStagingTests {
 
     private func tempStore() throws -> GRDBWikiStore {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ws-stage-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        try TestStoreFactory.inMemory()
     }
 
     // MARK: - AC5.1: Created page is invisible on main before merge

@@ -49,8 +49,10 @@ jobs:
         # failing AC test blocks merge. Still run `swift test` locally before
         # merge for fast iteration — see AGENTS.md.
         # To add a slow suite: tag it `.integration` AND append its name here.
+        # `GenerationGateLaneTests` was removed from this list (issue #651) —
+        # it's a pure-concurrency suite (no SQLite) and belongs in the fast tier.
         env:
-          SKIP: 'EnumeratorDeletionTests|StoreEmissionTests|StoreEmissionReentrancyTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SplitDiffSnapshotTests|FullTextSearchTests|ChatSearchTests|SessionManagerTests|QuoteHighlightWebViewTests|SidebarDropBuilderIntegrationTests|CLITantivyLegResolverTests'
+          SKIP: 'EnumeratorDeletionTests|StoreEmissionTests|StoreEmissionReentrancyTests|BlobVacuumTests|AgentCASTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SplitDiffSnapshotTests|FullTextSearchTests|ChatSearchTests|SessionManagerTests|QuoteHighlightWebViewTests|SidebarDropBuilderIntegrationTests|CLITantivyLegResolverTests'
         run: $SWIFT test --skip "$SKIP"
 
   swift-integration:

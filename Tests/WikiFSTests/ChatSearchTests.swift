@@ -10,17 +10,10 @@ import SQLite3
 /// cosine path needs the bundled embedding model, so these tests exercise the
 /// FTS backbone plus the chunk-embedding mechanics (`storeChatChunks`,
 /// `missingChatEmbeddingWork`, incremental no-wipe) that are model-independent.
-@Suite struct ChatSearchTests {
-
-    private func tempDatabaseURL() -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("chat-search-tests-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("WikiFS.sqlite")
-    }
+@Suite(.tags(.integration)) struct ChatSearchTests {
 
     private func tempStore() throws -> GRDBWikiStore {
-        try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        try TestStoreFactory.inMemory()
     }
 
     private let noEnv: (String) -> String? = { _ in nil }

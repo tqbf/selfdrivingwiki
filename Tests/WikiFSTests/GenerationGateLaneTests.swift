@@ -11,8 +11,13 @@ import WikiFSEngine
 /// each with its own concurrency limit and FIFO queue. Acquiring on one lane
 /// never blocks the other. Cancellation safety is preserved per-lane: a
 /// cancelled waiter self-removes and is never handed a slot.
+///
+/// Pure concurrency primitive — no SQLite, no store, no disk I/O. Belongs in
+/// the fast tier (issue #651): the `.integration` tag was bogus (the suite
+/// is named `...LaneTests`, which collided with the DB-integration
+/// `LaneTests` naming — but it never touched a DB).
 @MainActor
-@Suite(.tags(.integration))
+@Suite
 struct GenerationGateLaneTests {
 
     // MARK: - AC2.1: interactive acquires during ingest

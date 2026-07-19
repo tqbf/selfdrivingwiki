@@ -8,17 +8,11 @@ import Testing
 /// NOT app-gated — it runs fully under `swift test`. These cover the new
 /// capability the LIKE fallback lacked: matching the document **body** (not just
 /// the filename/title), plus cascade and the Reindex rebuild.
+@Suite(.tags(.integration))
 struct FullTextSearchTests {
 
-    private func tempDatabaseURL() -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-fts-tests-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("WikiFS.sqlite")
-    }
-
     private func tempStore() throws -> GRDBWikiStore {
-        try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        try TestStoreFactory.inMemory()
     }
 
     // MARK: - Body search (the new capability — AC.1)
@@ -118,8 +112,10 @@ struct FullTextSearchTests {
     /// ("scala", "java") arbitrarily. Opening the store must detect the empty
     /// term index and rebuild it.
     @Test func emptyFtsTermIndexIsHealedOnOpen() throws {
-        let url = tempDatabaseURL()
-        let store = try GRDBWikiStore(databaseURL: url)
+        // File-backed (not in-memory): the test re-opens the same DB file at
+        // line `reopened = ...`, which only works when both stores share a real
+        // file — separate `:memory:` connections see different empty databases.
+        let (store, url) = try TestStoreFactory.fileBacked(prefix: "fts-heal")
         let page = try store.createPage(title: "Claim Notes")
         try store.updatePage(id: page.id, title: "Claim Notes",
                              body: "Details about the insurance claim and appeal process.")

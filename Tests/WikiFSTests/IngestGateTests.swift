@@ -24,10 +24,7 @@ import WikiFSEngine
 struct IngestGateTests {
 
     private func tempStore() throws -> GRDBWikiStore {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ingestgate-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        try TestStoreFactory.inMemory()
     }
 
     /// A byteless YouTube source — synthetic mime `video/youtube`,

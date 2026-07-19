@@ -14,10 +14,7 @@ import Testing
 struct BlobVacuumTests {
 
     private func tempStore() throws -> GRDBWikiStore {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("blobvac-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        try TestStoreFactory.inMemory()
     }
 
     // MARK: - AC.VAC.1: page-version blobs survive vacuumBlobs --apply

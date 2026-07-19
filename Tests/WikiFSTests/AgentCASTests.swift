@@ -16,10 +16,7 @@ import Testing
 struct AgentCASTests {
 
     private func tempStore() throws -> GRDBWikiStore {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("cas-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        try TestStoreFactory.inMemory()
     }
 
     // MARK: - AC1.1: expect-head current succeeds

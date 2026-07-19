@@ -92,12 +92,7 @@ struct ChatSummaryTests {
 
     @Test(.tags(.integration))
     func summaryRoundTrip_updateAndReadBack() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-summary-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let store = try TestStoreFactory.inMemory()
         let chat = try store.createChat(kind: .edit, title: "Test Chat")
 
         // Before: no summary.
@@ -116,12 +111,7 @@ struct ChatSummaryTests {
     func summaryNullForExistingChats_afterMigration() throws {
         // A fresh DB is already at v36; createChat inserts a row with NULL
         // summary/summary_at. listChats() must return nil for both.
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-summary-null-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let store = try TestStoreFactory.inMemory()
         let chat = try store.createChat(kind: .edit, title: "No Summary Chat")
 
         let row = try store.listChats().first { $0.id == chat.id }
@@ -132,12 +122,7 @@ struct ChatSummaryTests {
 
     @Test(.tags(.integration))
     func summaryBumpsUpdatedAt() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-summary-updated-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let store = try TestStoreFactory.inMemory()
         let chat = try store.createChat(kind: .edit, title: "Timestamp Chat")
         let before = try store.listChats().first { $0.id == chat.id }
         let originalUpdatedAt = before?.updatedAt
