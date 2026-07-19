@@ -600,13 +600,18 @@ struct SourceDetailView: View {
                         // (like openSource) so the filename is human-readable
                         // and the URL is guaranteed to resolve.
                         Button("Show in List", systemImage: "sidebar.left") {
+                            DebugLog.tabs("SourceDetailView: Show in List tapped — id=\(file.id.rawValue)")
                             store.requestSidebarReveal(.source(file.id))
                         }
                         .help("Reveal this source in the sidebar")
                         if fileProvider.path != nil {
                             Button("Share", systemImage: "square.and.arrow.up") {
+                                DebugLog.fileprovider("SourceDetailView: Share tapped — id=\(file.id.rawValue)")
                                 Task {
-                                    guard let url = await fileProvider.resolveSourceByNameURL(id: file.id) else { return }
+                                    guard let url = await fileProvider.resolveSourceByNameURL(id: file.id) else {
+                                        DebugLog.fileprovider("Share source detail: resolveSourceByNameURL returned nil — id=\(file.id.rawValue)")
+                                        return
+                                    }
                                     DebugLog.fileprovider("Share source detail: \(url.lastPathComponent)")
                                     let picker = NSSharingServicePicker(items: [url])
                                     let mouseScreen = NSEvent.mouseLocation
@@ -622,6 +627,7 @@ struct SourceDetailView: View {
                             }
                             .help("Share this source file")
                             Button("Reveal in Finder", systemImage: "folder") {
+                                DebugLog.fileprovider("SourceDetailView: Reveal in Finder tapped — id=\(file.id.rawValue)")
                                 Task { await fileProvider.revealSourceInFinder(id: file.id) }
                             }
                             .help("Reveal this source file in Finder")
@@ -792,10 +798,23 @@ struct SourceDetailView: View {
 
     /// The content area plus the optional outline sidebar. Extracted from
     /// `body` so the type-checker can resolve each subtree independently.
+    ///
+    /// The explicit `.frame(maxWidth: .infinity, maxHeight: .infinity,
+    /// alignment: .topLeading)` on `contentArea` is load-bearing and mirrors
+    /// `PageDetailView`'s `contentAndOutline` shape. Without it, the inner
+    /// `WikiReaderView` (an `NSViewRepresentable` wrapping a `WKWebView`)
+    /// reports no intrinsic content size and SwiftUI leaves the layout
+    /// indeterminate — for pure Mermaid sources, where PR #648's
+    /// `isOutlineApplicable` guard also removed the always-present
+    /// `PageOutlineView` sibling that previously helped pin the `HStack`'s
+    /// vertical extent, the indeterminate layout leaks into the header area.
+    /// The header's Show in List / Share / Reveal in Finder buttons render
+    /// above, but no longer receive their click. Issue #656.
     @ViewBuilder
     private var contentAndOutline: some View {
         HStack(spacing: 0) {
             contentArea
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             // `isOutlineApplicable` excludes pure Mermaid sources (`.mmd` /
             // `text/mermaid`) — the outline parses markdown headings, which a
             // diagram source has none of. Without this guard the pane leaks
