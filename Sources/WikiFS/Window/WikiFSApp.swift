@@ -81,6 +81,12 @@ struct WikiFSApp: App {
         // it. Idempotent: copies `conversation.zoom` → `chat.zoom` only when the
         // new key is unset and the old key is set; no-op for fresh installs.
         AppStorageMigration.migrateZoomKey(in: .standard)
+        // #607: one-time migration of the pre-split `agentPermissionMode` key
+        // into `chatPermissionMode`. Idempotent: only copies when the new chat
+        // key has NEVER been written (object == nil check, not string == nil) and
+        // the legacy key is set + valid. The legacy key is orphaned (not deleted)
+        // — see `PermissionModeMigration` + `plans/acp-permissions.md` §5.3.
+        PermissionModeMigration.migrateOnce()
         // Install the app-only PDFKit title extractor into Core's injectable
         // seam. Core must not import PDFKit (it pulls AppKit into the File
         // Provider extension on macOS 26), so the real implementation lives in

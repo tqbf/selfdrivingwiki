@@ -50,7 +50,12 @@ struct ChatView: View {
     @State private var quoteAnchor: ChatHighlightRequest? = nil
     /// The chat's always-ask/yolo mode (shared with the launcher, read at spawn).
     /// v1 app-wide, default off (yolo). Applies to the next conversation.
-    @AppStorage(AgentLauncher.permissionModeKey) private var permissionModeRaw = PermissionPolicy.bypass.rawValue
+    ///
+    /// #607: chat reads its OWN `chatPermissionMode` key (was the shared
+    /// `agentPermissionMode` before the per-operation split). Ingest/lint have
+    /// their own pickers in Settings → Agents → Permissions. This chip governs
+    /// interactive chat only.
+    @AppStorage(AgentLauncher.PermissionModeKey.chat) private var permissionModeRaw = PermissionPolicy.bypass.rawValue
 
     /// True when this surface is rendering the active live session (D2
     /// source-of-truth rule). The view sources from `launcher.events`; when
