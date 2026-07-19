@@ -870,4 +870,99 @@ struct EditorTabTests {
         #expect(model.tabs.first?.selection == .page(a.id))
         #expect(model.activeTabID == model.tabs.first?.id)
     }
+
+    // MARK: - isActiveTabEditing (drop-wikilinks gate, issue #616)
+
+    // `isActiveTabEditing` is the seam `WikiDetailView.body` uses to gate its
+    // parent-level `.dropDestination` on `wikiSidebarItem`. While true, the
+    // destination is removed so a sidebar drag inserts a `[[wikilink]]` at the
+    // `DropLinkTextView`'s drop point instead of opening a new tab. The state is
+    // synced from `PageDetailView`/`SourceDetailView` via `setTabEditing` — pin
+    // the model-level contract here so the SwiftUI gate stays correct.
+
+    @Test func isActiveTabEditing_falseWhenNoTabs() throws {
+        let (model, _) = try tempModel()
+        #expect(model.tabs.isEmpty)
+        #expect(model.activeTabID == nil)
+        #expect(model.isActiveTabEditing == false)
+    }
+
+    @Test func isActiveTabEditing_falseWhenActiveTabNotEditing() throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        model.reloadFromStore()
+        model.openTab(.page(a.id))
+        // Default tab state is `isEditing == false`.
+        #expect(model.activeTab?.isEditing == false)
+        #expect(model.isActiveTabEditing == false)
+    }
+
+    @Test func isActiveTabEditing_trueWhenActiveTabIsEditing() throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        model.reloadFromStore()
+        model.openTab(.page(a.id))
+        guard let id = model.activeTabID else {
+            Issue.record("expected active tab after openTab")
+            return
+        }
+        model.setTabEditing(tabID: id, isEditing: true)
+        #expect(model.activeTab?.isEditing == true)
+        #expect(model.isActiveTabEditing == true)
+    }
+
+    @Test func isActiveTabEditing_falseAfterEditingTurnedOff() throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        model.reloadFromStore()
+        model.openTab(.page(a.id))
+        guard let id = model.activeTabID else {
+            Issue.record("expected active tab after openTab")
+            return
+        }
+        model.setTabEditing(tabID: id, isEditing: true)
+        #expect(model.isActiveTabEditing == true)
+        model.setTabEditing(tabID: id, isEditing: false)
+        #expect(model.isActiveTabEditing == false)
+    }
+
+    @Test func isActiveTabEditing_tracksActiveTabSwitch() throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        let b = try store.createPage(title: "B")
+        model.reloadFromStore()
+        model.openTab(.page(a.id))
+        model.openTab(.page(b.id))
+        // Active is B; mark A as editing (a non-active tab's state is preserved
+        // by the view layer via setTabEditing on tab switch-back).
+        let tabA = model.tabs.first { $0.selection == .page(a.id) }?.id
+        guard let tabA else {
+            Issue.record("expected tab A in tabs")
+            return
+        }
+        model.setTabEditing(tabID: tabA, isEditing: true)
+        // Active tab (B) is not editing.
+        #expect(model.isActiveTabEditing == false)
+        // Switching to A — now A is active AND editing.
+        model.selectTab(id: tabA)
+        #expect(model.activeTabID == tabA)
+        #expect(model.isActiveTabEditing == true)
+    }
+
+    @Test func isActiveTabEditing_ignoresNonActiveEditingTab() throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        let b = try store.createPage(title: "B")
+        model.reloadFromStore()
+        model.openTab(.page(a.id))
+        model.openTab(.page(b.id))
+        // Mark A (non-active) as editing. Active tab (B) is not.
+        let tabA = model.tabs.first { $0.selection == .page(a.id) }?.id
+        guard let tabA else {
+            Issue.record("expected tab A in tabs")
+            return
+        }
+        model.setTabEditing(tabID: tabA, isEditing: true)
+        #expect(model.isActiveTabEditing == false)
+    }
 }
