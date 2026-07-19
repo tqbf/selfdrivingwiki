@@ -57,11 +57,41 @@ enum TurnLivenessPolicy {
 
     // MARK: - Defaults
 
-    /// Default ceiling: 30 minutes. Backstop against an agent that streams
-    /// heartbeat-ish updates forever without finishing.
+    /// Default (interactive) ceiling: 30 minutes. Backstop against an agent
+    /// that streams heartbeat-ish updates forever without finishing. Used by
+    /// `startInteractiveQuery` (interactive chat — long reasoning chains are
+    /// legitimate, and the UI chip is the user-facing release valve).
     static let defaultCeilingTimeout: TimeInterval = 1800
+
+    /// Queued-ingestion ceiling: 10 minutes. Used by unattended pipelines
+    /// (ingest — including `runACPIngestPlannerExecutors` — and lint runs).
+    /// Lower than the interactive default so a single stalled ingestion turn
+    /// burns 10 minutes, not 30 (issue #609: a 4-page ingest twice hit the
+    /// 1800s ceiling on 2026-07-18, costing ~60 minutes of dead time). The
+    /// companion #606 permission auto-reject budget (60s) is the primary
+    /// backstop; this ceiling is a wider safety net for non-permission stalls.
+    static let queuedIngestCeiling: TimeInterval = 600
 
     /// Watchdog poll interval: 15 seconds. Balances responsiveness (a ceiling
     /// breach is detected within 15s of the threshold) against actor pressure.
     static let defaultPollInterval: TimeInterval = 15
+
+    // MARK: - Per-context ceiling selection
+
+    /// Resolve the ceiling a turn should use given the operation kind:
+    /// - `.chat` — the interactive 1800s default (long reasoning chains are
+    ///   legitimate in a user-attended chat).
+    /// - `.ingest` / `.lint` — the queued-ingestion 600s ceiling (unattended
+    ///   batch pipelines that must not burn 30 minutes on a stall).
+    ///
+    /// Single decision point the launcher consults at backend construction.
+    /// Mirrors the `permissionBudget` split (`nil` for chat, `.seconds(60)`
+    /// for ingest/lint) at the symmetric call site — same rationale:
+    /// unattended pipelines need tighter backstops than interactive chat.
+    static func ceiling(for kind: PermissionOperationKind) -> TimeInterval {
+        switch kind {
+        case .chat:                return defaultCeilingTimeout
+        case .ingest, .lint:       return queuedIngestCeiling
+        }
+    }
 }
