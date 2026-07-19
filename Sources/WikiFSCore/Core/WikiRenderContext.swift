@@ -162,11 +162,41 @@ public struct WikiRenderContext: Sendable {
         let uniqueLooseKeys = index.uniqueSourceLooseKeys
 
         // --- Embed map (reader lines ~848–873; WRC-specific — per-source) ---
+        //
+        // Two resolution paths compose here, in priority order:
+        //   1. **Mermaid diagram** (#670): a source carrying `.mmd` /
+        //      `text/mermaid` / `text/x-mermaid` (cheap detector arms —
+        //      mime + filename only, no content scan) resolves to a `.diagram`
+        //      EmbedTarget carrying the raw source text. The renderer emits
+        //      `<div class='mermaid'>…</div>`; the bundled mermaid.min.js (v11)
+        //      picks it up and inlines an SVG. Diagram takes precedence over
+        //      the descriptor path because a `.mmd` source is byteful (it
+        //      carries real text bytes) and therefore absent from
+        //      `embedDescriptors()` (which is `WHERE sv.blob_hash IS NULL`) —
+        //      a diagram source would otherwise fall through to the byteful
+        //      blob branch and emit nothing (no image/audio/video/pdf).
+        //   2. **Byteless external media** (Phase 4b): synthetic provider mimes
+        //      + Apple Podcasts + direct-remote media, dispatched through
+        //      `ExternalEmbed.target(for:)` as before.
         let embedDescriptorMap = store.embedDescriptors()
         var embedMap: [String: WikiLinkMarkdown.SourceEmbedInfo] = [:]
         for source in store.sources {
-            let target = embedDescriptorMap[source.id]
-                .flatMap { ExternalEmbed.target(for: $0) }
+            let target: EmbedTarget? = {
+                // 1. Mermaid diagram — #670.
+                if MermaidSourceDetector.isMermaidSource(
+                    mimeType: source.mimeType,
+                    filename: source.filename,
+                    content: nil),
+                   let bytes = store.sourceBytes(id: source.id),
+                   let text = String(data: bytes, encoding: .utf8) {
+                    return EmbedTarget(
+                        kind: .diagram, url: source.id.rawValue, content: text)
+                }
+                // 2. Byteless external media (provider iframes, direct-remote,
+                //    Apple Podcasts).
+                return embedDescriptorMap[source.id]
+                    .flatMap { ExternalEmbed.target(for: $0) }
+            }()
             let info = WikiLinkMarkdown.SourceEmbedInfo(
                 id: source.id, mimeType: source.mimeType, target: target)
             let names = [source.displayName, source.filename].compactMap({ $0 })
