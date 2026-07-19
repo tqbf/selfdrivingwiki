@@ -15,13 +15,27 @@ public enum AgentBackendFactory {
 
     /// Construct the backend for a session. Every provider drives `ACPBackend`.
     ///
-    /// - Parameter budget: #606 auto-reject budget for deferred permission
-    ///   requests. nil (default) = no timer (interactive chat — current
-    ///   behavior); non-nil = a stuck permission auto-rejects after this
-    ///   `Duration` so unattended pipelines (ingest/lint) can't stall for the
-    ///   full 1800s ceiling.
-    static func makeBackend(policy: PermissionPolicy, budget: Duration? = nil) -> AgentBackend {
-        ACPBackend(permissionPolicy: policy, budget: budget)
+    /// - Parameters:
+    ///   - budget: #606 auto-reject budget for deferred permission
+    ///     requests. nil (default) = no timer (interactive chat — current
+    ///     behavior); non-nil = a stuck permission auto-rejects after this
+    ///     `Duration` so unattended pipelines (ingest/lint) can't stall for the
+    ///     full 1800s ceiling.
+    ///   - turnCeilingTimeout: #609 hard ceiling on total turn duration. The
+    ///     caller picks this per context via `TurnLivenessPolicy.ceiling(for:)`:
+    ///     `.chat` (interactive) → `defaultCeilingTimeout` (1800s);
+    ///     `.ingest`/`.lint` (queued) → `queuedIngestCeiling` (600s). Defaults
+    ///     to the interactive value for callers that don't differentiate
+    ///     (matching the underlying `ACPBackend.init` default).
+    static func makeBackend(
+        policy: PermissionPolicy,
+        budget: Duration? = nil,
+        turnCeilingTimeout: TimeInterval = TurnLivenessPolicy.defaultCeilingTimeout
+    ) -> AgentBackend {
+        ACPBackend(
+            permissionPolicy: policy,
+            budget: budget,
+            turnCeilingTimeout: turnCeilingTimeout)
     }
 
     /// Build the `providerHints` for an ACP provider from its PATH-resolved

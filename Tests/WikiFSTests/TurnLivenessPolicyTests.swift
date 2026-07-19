@@ -89,4 +89,57 @@ import WikiFSEngine
         )
         #expect(decision == .healthy)
     }
+
+    // MARK: - Per-context ceiling selection (#609)
+
+    /// The queued-ingestion ceiling constant exists and is the value the issue
+    /// prescribes (600s = 10 min). A pre-#609 installation had only
+    /// `defaultCeilingTimeout` (1800s); a stall in `runACPIngestPlannerExecutors`
+    /// burned 30 minutes per turn before the watchdog killed it (issue #609
+    /// symptom on 2026-07-18: two ceiling kills = ~60 min lost).
+    @Test func queuedIngestCeilingIs600Seconds() {
+        #expect(TurnLivenessPolicy.queuedIngestCeiling == 600)
+    }
+
+    /// The interactive default stays at 1800s (30 min). The fix is split *who
+    /// reads* the constant, NOT a change to the constant itself — interactive
+    /// chat keeps the long chain backstop. Pinned so the split isn't lost.
+    @Test func interactiveCeilingStays1800Seconds() {
+        #expect(TurnLivenessPolicy.defaultCeilingTimeout == 1800)
+    }
+
+    /// `ceiling(for: .chat)` resolves to the 1800s interactive default — the
+    /// value `startInteractiveQuery` MUST pass when constructing its backend.
+    /// Long reasoning chains are legitimate in a user-attended chat, and the
+    /// UI chip is the release valve.
+    @Test func ceilingForChatIsInteractiveDefault() {
+        #expect(TurnLivenessPolicy.ceiling(for: .chat) == TurnLivenessPolicy.defaultCeilingTimeout)
+        #expect(TurnLivenessPolicy.ceiling(for: .chat) == 1800)
+    }
+
+    /// `ceiling(for: .ingest)` resolves to the 600s queued-ingestion ceiling.
+    /// This is the value `runACPIngestPlannerExecutors` runs under — exactly the
+    /// wiring #609 asserts: "ceiling used by `runACPIngestPlannerExecutors` is
+    /// the queued-ingestion value (600s)". `runACPIngestPlannerExecutors`
+    /// reuses the backend `run()` constructed (which selects the kind as
+    /// `.ingest`), so this decision gates all planner/executor/finalizer phases.
+    @Test func ceilingForIngestIsQueuedCeiling() {
+        #expect(TurnLivenessPolicy.ceiling(for: .ingest) == TurnLivenessPolicy.queuedIngestCeiling)
+        #expect(TurnLivenessPolicy.ceiling(for: .ingest) == 600)
+    }
+
+    /// `ceiling(for: .lint)` also uses the 600s ceiling — lint runs are the
+    /// other unattended pipeline kind. Same rationale as `.ingest`: nobody is
+    /// watching, the UI chip doesn't apply, so a stall must not burn 30 minutes.
+    @Test func ceilingForLintIsQueuedCeiling() {
+        #expect(TurnLivenessPolicy.ceiling(for: .lint) == TurnLivenessPolicy.queuedIngestCeiling)
+        #expect(TurnLivenessPolicy.ceiling(for: .lint) == 600)
+    }
+
+    /// Regression guard: queued-ingestion and interactive ceilings MUST differ.
+    /// If a future refactor merges them (deliberately or by typo), the whole
+    /// point of #609 is silently lost — assert the contract directly.
+    @Test func queuedCeilingIsLowerThanInteractive() {
+        #expect(TurnLivenessPolicy.queuedIngestCeiling < TurnLivenessPolicy.defaultCeilingTimeout)
+    }
 }

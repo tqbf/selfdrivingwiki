@@ -403,7 +403,9 @@ struct ACPIngestCollapsedRoutingTests {
         tempDir: URL
     ) -> AgentLauncher {
         let launcher = AgentLauncher()
-        launcher.resolveBackend = { _, _ in
+        // #609: resolveBackend now takes (policy, budget, ceiling) — ignore
+        // all three; the #604 collapse pin only counts invocations, not args.
+        launcher.resolveBackend = { _, _, _ in
             counter.increment()
             return backend
         }

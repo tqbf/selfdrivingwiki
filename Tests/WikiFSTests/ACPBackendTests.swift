@@ -796,4 +796,40 @@ import ACPModel
         let max = await backend.maxConcurrentExecutorCount()
         #expect(max == 1)
     }
+
+    // MARK: - #609: turn ceiling threading
+
+    /// The default `ACPBackend()` ceiling is the interactive 1800s — preserved
+    /// pre-#609 behavior. Chat (`startInteractiveQuery`) relies on this default
+    /// (passed explicitly via `TurnLivenessPolicy.ceiling(for: .chat)`).
+    @Test
+    func ceilingTimeoutDefaultsToInteractive() async {
+        let backend = ACPBackend()
+        let ceiling = await backend.ceilingTimeout()
+        #expect(ceiling == TurnLivenessPolicy.defaultCeilingTimeout)
+        #expect(ceiling == 1800)
+    }
+
+    /// An explicit `turnCeilingTimeout: 600` threads through untouched — the
+    /// value the launcher passes for ingest/lint (queued pipelines). Pinned so
+    /// a future refactor can't accidentally ignore the parameter and fall back
+    /// to the default.
+    @Test
+    func ceilingTimeoutExplicitValueThreaded() async {
+        let backend = ACPBackend(turnCeilingTimeout: 600)
+        let ceiling = await backend.ceilingTimeout()
+        #expect(ceiling == 600)
+    }
+
+    /// #609 contract: the queued-ingestion ceiling (600s) is lower than the
+    /// interactive default (1800s). Pinned at the construction level so the
+    /// two values cannot drift equal at the type level either.
+    @Test
+    func queuedCeilingLowerThanInteractive() async {
+        let interactive = ACPBackend()
+        let queued = ACPBackend(turnCeilingTimeout: TurnLivenessPolicy.queuedIngestCeiling)
+        let interactiveCeiling = await interactive.ceilingTimeout()
+        let queuedCeiling = await queued.ceilingTimeout()
+        #expect(queuedCeiling < interactiveCeiling)
+    }
 }

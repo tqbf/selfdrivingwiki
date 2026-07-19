@@ -1309,6 +1309,16 @@ public actor ACPBackend: AgentBackend {
         maxConcurrentExecutors
     }
 
+    /// The turn ceiling (seconds) this backend was constructed with. #609:
+    /// `TurnLivenessPolicy.ceiling(for:)` decides per context — the launcher
+    /// threads the chosen value here, so a stalled ingest turn burns 600s
+    /// (queued) rather than 1800s (interactive default). Exposed for tests
+    /// (the launcher wiring + the factory threading). Mirrors the
+    /// `maxConcurrentExecutorCount()` accessor shape.
+    func ceilingTimeout() -> TimeInterval {
+        turnCeilingTimeout
+    }
+
     // MARK: - Model discovery (#329)
 
     /// The models the agent advertised for a session (`session/new` →

@@ -36,6 +36,29 @@ import ACPModel
         #expect(alwaysAsk is ACPBackend)
     }
 
+    /// #609: `makeBackend` exposes `turnCeilingTimeout` and threads it into the
+    /// `ACPBackend` constructor untouched. The launcher picks the value via
+    /// `TurnLivenessPolicy.ceiling(for:)`; this test pins the factory plumbing
+    /// (default interactive → 1800s; explicit 600s → the queued-ingestion
+    /// ceiling) so a future refactor can't silently drop the parameter.
+    @Test func factoryThreadsTurnCeilingTimeout() async {
+        // Default (omitted) = interactive 1800s — preserves pre-#609 behavior
+        // for callers that don't differentiate (and matches the underlying
+        // `ACPBackend.init` default).
+        let interactive = AgentBackendFactory.makeBackend(policy: .bypass)
+        let interactiveACP = await (interactive as! ACPBackend).ceilingTimeout()
+        #expect(interactiveACP == TurnLivenessPolicy.defaultCeilingTimeout)
+        #expect(interactiveACP == 1800)
+
+        // Explicit queued-ingestion ceiling (600s) — what ingest/lint pass.
+        let queued = AgentBackendFactory.makeBackend(
+            policy: .bypass,
+            turnCeilingTimeout: TurnLivenessPolicy.queuedIngestCeiling)
+        let queuedACP = await (queued as! ACPBackend).ceilingTimeout()
+        #expect(queuedACP == TurnLivenessPolicy.queuedIngestCeiling)
+        #expect(queuedACP == 600)
+    }
+
     // MARK: - ACP provider hints (AgentProvider → profile)
 
     /// The resolved executable path becomes `acpAgentPath`; the rest of the

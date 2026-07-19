@@ -202,8 +202,12 @@ public final class AgentLauncher {
     /// #606: second parameter is the deferred-permission budget — nil = no
     /// timer (interactive chat), non-nil = auto-reject after this `Duration`.
     /// Ingest/lint pass `.seconds(60)`; chat passes `nil`.
-    @ObservationIgnored var resolveBackend: (PermissionPolicy, Duration?) -> AgentBackend = {
-        AgentBackendFactory.makeBackend(policy: $0, budget: $1)
+    ///
+    /// #609: third parameter is the turn ceiling — `TurnLivenessPolicy.ceiling(for:)`
+    /// decides per kind: `.chat` → 1800s (interactive default), `.ingest`/`.lint`
+    /// → 600s (unattended pipelines must not burn 30 minutes on a stall).
+    @ObservationIgnored var resolveBackend: (PermissionPolicy, Duration?, TimeInterval) -> AgentBackend = {
+        AgentBackendFactory.makeBackend(policy: $0, budget: $1, turnCeilingTimeout: $2)
     }
 
     /// The permission policy, resolved per operation kind. #607: previously one
@@ -946,12 +950,18 @@ public final class AgentLauncher {
         // valve); ingest/lint are unattended and MUST auto-reject so a stuck
         // permission can't burn the 1800s ceiling.
         let permissionBudget: Duration? = (permissionKind == .chat) ? nil : .seconds(60)
+        // #609: queued-ingestion ceiling is tighter than the interactive
+        // default so a stalled ingest/lint turn burns 10 minutes, not 30.
+        // `runACPIngestPlannerExecutors` (large-source ingest) reuses this
+        // `self.backend` — so the ceiling chosen here is the ceiling that
+        // planner/executor/finalizer phases run under.
+        let turnCeiling = TurnLivenessPolicy.ceiling(for: permissionKind)
 
         // #324: the launcher reads `agent-providers.json`, picks the default
         // (or selected) provider, and resolves its PATH command + Keychain key
         // into providerHints. The app is ACP-only.
         let provider = resolveSelectedProvider()
-        self.backend = resolveBackend(policy, permissionBudget)
+        self.backend = resolveBackend(policy, permissionBudget, turnCeiling)
 
         // Resolve the provider's spawn command (PATH-resolved because the
         // swift-acp SDK's launch() does NOT do PATH lookup) + the Keychain-backed
@@ -2139,9 +2149,13 @@ public final class AgentLauncher {
         // ingest/lint. #606: chat is interactive, so no auto-reject budget —
         // the UI chip is the release valve, preserving the prior indefinite-
         // suspend behavior. (`nil` budget ⇒ no timer on `deferPermission`.)
+        // #609: chat uses the interactive 1800s ceiling — long reasoning
+        // chains are legitimate in a user-attended session, and the user can
+        // cancel via the UI chip.
         let policy: PermissionPolicy = resolvePermissionMode(.chat)
         let permissionBudget: Duration? = nil
-        DebugLog.agent("startInteractiveQuery: permissionPolicy=\(policy) budget=nil (interactive)")
+        let turnCeiling = TurnLivenessPolicy.ceiling(for: .chat)
+        DebugLog.agent("startInteractiveQuery: permissionPolicy=\(policy) budget=nil (interactive) ceiling=\(turnCeiling)s")
 
         // #324: the launcher reads `agent-providers.json` and picks the
         // default (or selected) provider. The app is ACP-only.
@@ -2171,7 +2185,7 @@ public final class AgentLauncher {
             return
         }
 
-        self.backend = resolveBackend(policy, permissionBudget)
+        self.backend = resolveBackend(policy, permissionBudget, turnCeiling)
 
         // Resolve the provider's spawn command (PATH-resolved) + the
         // Keychain-backed API key (keyed by provider id).
