@@ -591,6 +591,12 @@ struct ChatView: View {
                     }
                     .help("Open the complete debug trace folder (ACP messages, permissions, usage)")
                 }
+                // Pin action buttons at the leading edge and the outline
+                // toggle at the trailing edge so the row's layout is
+                // independent of the parent's proposed width (which changes
+                // when the outline pane or the header expands/collapses —
+                // keeps "Show in List" and friends in a fixed position).
+                Spacer()
                 Button {
                     DebugLog.tabs("ChatView: Toggle Outline tapped")
                     chatOutlineExpanded.toggle()
