@@ -4,8 +4,7 @@ import WikiFSEngine
 
 /// Settings → **Agents** tab (Phase 3 of `plans/acp-multi-provider.md`):
 /// replaces the old "Agent" + "Providers" tabs with one view over
-/// `AgentProvidersConfig` — the editable multi-provider list, per-stage
-/// (planner/executor/finalizer) provider/model routing, and the permission
+/// `AgentProvidersConfig` — the editable multi-provider list and the permission
 /// mode picker (moved here from the old Agent tab).
 ///
 /// Persists via `AgentProvidersConfig.save(to:)` on every edit — no explicit
@@ -38,7 +37,6 @@ struct AgentsSettingsView: View {
     var body: some View {
         Form {
             providersSection
-            stagesSection
             permissionSection
         }
         .formStyle(.grouped)
@@ -61,7 +59,7 @@ struct AgentsSettingsView: View {
             Button("Delete", role: .destructive) { confirmDelete() }
             Button("Cancel", role: .cancel) { providerPendingDeletion = nil }
         } message: {
-            Text("This removes its command, environment, and stage assignments. Its API key stays in the Keychain until overwritten.")
+            Text("This removes its command and environment. Its API key stays in the Keychain until overwritten.")
         }
     }
 
@@ -222,8 +220,7 @@ struct AgentsSettingsView: View {
                     providers: updated.providers,
                     providerModels: updated.providerModels,
                     selectedModelIds: updated.selectedModelIds,
-                    favoriteModelIds: updated.favoriteModelIds,
-                    stageAssignments: updated.stageAssignments))
+                    favoriteModelIds: updated.favoriteModelIds))
             })
     }
 
@@ -254,8 +251,7 @@ struct AgentsSettingsView: View {
             providers: providers,
             providerModels: config.providerModels,
             selectedModelIds: config.selectedModelIds,
-            favoriteModelIds: config.favoriteModelIds,
-            stageAssignments: config.stageAssignments)
+            favoriteModelIds: config.favoriteModelIds)
             .settingSelectedModel(selectedModelId, forProvider: updated.id))
     }
 
@@ -272,8 +268,7 @@ struct AgentsSettingsView: View {
             providers: updated.providers,
             providerModels: updated.providerModels,
             selectedModelIds: updated.selectedModelIds,
-            favoriteModelIds: updated.favoriteModelIds,
-            stageAssignments: updated.stageAssignments))
+            favoriteModelIds: updated.favoriteModelIds))
         selectedProviderID = seed.id
     }
 
@@ -297,8 +292,7 @@ struct AgentsSettingsView: View {
             providers: updated.providers,
             providerModels: updated.providerModels,
             selectedModelIds: updated.selectedModelIds,
-            favoriteModelIds: updated.favoriteModelIds,
-            stageAssignments: updated.stageAssignments))
+            favoriteModelIds: updated.favoriteModelIds))
         selectedProviderID = id
         editingProvider = blank
     }
@@ -313,99 +307,17 @@ struct AgentsSettingsView: View {
         guard let provider = providerPendingDeletion else { return }
         var updated = config
         updated.providers.removeAll { $0.id == provider.id }
-        // Re-running init() re-normalizes (promotes a new default if the
-        // deleted one was default) and prunes now-orphaned stage assignments.
+        // Re-running init() re-normalizes: promotes a new default if the
+        // deleted one was default.
         save(AgentProvidersConfig(
             providers: updated.providers,
             providerModels: updated.providerModels,
             selectedModelIds: updated.selectedModelIds,
-            favoriteModelIds: updated.favoriteModelIds,
-            stageAssignments: updated.stageAssignments))
+            favoriteModelIds: updated.favoriteModelIds))
         if selectedProviderID == provider.id {
             selectedProviderID = config.providers.first?.id
         }
         providerPendingDeletion = nil
-    }
-
-    // MARK: - Stages section
-
-    private var stagesSection: some View {
-        Section {
-            stageRow(.planner, label: "Planner")
-            stageRow(.executor, label: "Executor")
-            stageRow(.finalizer, label: "Finalizer")
-        } header: {
-            Text("Ingestion Stages")
-        } footer: {
-            Text("Unset stages use the default provider and its selected model.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func stageRow(_ stage: IngestStage, label: String) -> some View {
-        let assignment = config.stageAssignments[stage]
-        let providerId = assignment?.providerId
-        let provider = providerId.flatMap { config.provider(id: $0) }
-
-        return HStack {
-            Text(label)
-                .frame(width: 80, alignment: .leading)
-
-            Picker("", selection: providerPickerBinding(for: stage)) {
-                Text("App default").tag(Optional<String>.none)
-                ForEach(config.enabledProviders) { provider in
-                    Text(provider.label).tag(Optional(provider.id))
-                }
-            }
-            .labelsHidden()
-            .frame(maxWidth: .infinity)
-
-            Picker("", selection: modelPickerBinding(for: stage)) {
-                Text("Provider default").tag(Optional<String>.none)
-                ForEach(provider.map { config.cachedModels(forProvider: $0.id) } ?? []) { model in
-                    Text(model.name).tag(Optional(model.modelId))
-                }
-            }
-            .labelsHidden()
-            .frame(maxWidth: .infinity)
-            .disabled(provider == nil)
-        }
-    }
-
-    private func providerPickerBinding(for stage: IngestStage) -> Binding<String?> {
-        Binding(
-            get: { config.stageAssignments[stage]?.providerId },
-            set: { newValue in
-                var assignments = config.stageAssignments
-                if let newValue {
-                    assignments[stage] = StageAssignment(providerId: newValue, modelId: nil)
-                } else {
-                    assignments.removeValue(forKey: stage)
-                }
-                save(AgentProvidersConfig(
-                    providers: config.providers,
-                    providerModels: config.providerModels,
-                    selectedModelIds: config.selectedModelIds,
-                    favoriteModelIds: config.favoriteModelIds,
-                    stageAssignments: assignments))
-            })
-    }
-
-    private func modelPickerBinding(for stage: IngestStage) -> Binding<String?> {
-        Binding(
-            get: { config.stageAssignments[stage]?.modelId },
-            set: { newValue in
-                guard let providerId = config.stageAssignments[stage]?.providerId else { return }
-                var assignments = config.stageAssignments
-                assignments[stage] = StageAssignment(providerId: providerId, modelId: newValue)
-                save(AgentProvidersConfig(
-                    providers: config.providers,
-                    providerModels: config.providerModels,
-                    selectedModelIds: config.selectedModelIds,
-                    favoriteModelIds: config.favoriteModelIds,
-                    stageAssignments: assignments))
-            })
     }
 
     // MARK: - Permission mode (moved from the old Agent tab)

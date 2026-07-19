@@ -7,8 +7,8 @@ import WikiFSCore
 ///
 /// The guard is the shared contract behind two spawn-refusal sites in
 /// `AgentLauncher`:
-/// - `resolveStageRouting` (ingest — planner/executor/finalizer through one
-///   choke-point)
+/// - `runACPIngestPlannerExecutors` (ingest — one choke-point covering
+///   planner/executor/finalizer; #604 collapsed the removed per-stage routing)
 /// - `startInteractiveQuery` (interactive chat)
 ///
 /// These tests do NOT exercise the wiring; they pin the message contract

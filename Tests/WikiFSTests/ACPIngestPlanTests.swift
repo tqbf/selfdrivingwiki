@@ -218,46 +218,11 @@ import ACPModel
         #expect(prompt.contains("log append"))
     }
 
-    // MARK: - Per-stage provider/model resolution (Phase 2,
-    // plans/acp-multi-provider.md — replaces the deleted `findSonnetModelId`
-    // substring heuristic: executors now resolve independently via
-    // `AgentProvidersConfig.resolvedProvider(for:)`, same as planner/finalizer.)
-
-    @Test func testResolvedProviderPerStageCanDiffer() {
-        let hermes = AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"])
-        let opencode = AgentProvider(id: "opencode", label: "OpenCode", command: ["opencode", "acp"])
-        let config = AgentProvidersConfig(
-            providers: [.claudeAcpDefault, hermes, opencode],
-            stageAssignments: [
-                .planner: StageAssignment(providerId: "hermes", modelId: "hermes-large"),
-                .executor: StageAssignment(providerId: "opencode", modelId: "anthropic/claude-sonnet"),
-            ])
-
-        let planner = config.resolvedProvider(for: .planner)
-        #expect(planner.provider.id == "hermes")
-        #expect(planner.modelId == "hermes-large")
-
-        let executor = config.resolvedProvider(for: .executor)
-        #expect(executor.provider.id == "opencode")
-        #expect(executor.modelId == "anthropic/claude-sonnet")
-
-        // Finalizer has no assignment — falls back to the default provider.
-        let finalizer = config.resolvedProvider(for: .finalizer)
-        #expect(finalizer.provider.id == config.selectedProvider().id)
-    }
-
-    @Test func testResolvedProviderFallsBackWhenAssignedProviderDisabled() {
-        var opencode = AgentProvider(id: "opencode", label: "OpenCode", command: ["opencode", "acp"])
-        opencode.enabled = false
-        let config = AgentProvidersConfig(
-            providers: [.claudeAcpDefault, opencode],
-            stageAssignments: [.executor: StageAssignment(providerId: "opencode", modelId: "x")])
-
-        let executor = config.resolvedProvider(for: .executor)
-        // Disabled provider → falls back to the default provider, not a silent
-        // downgrade to some other model on the disabled provider.
-        #expect(executor.provider.id == config.selectedProvider().id)
-    }
+    // MARK: - Provider hints (Phase 2, plans/acp-multi-provider.md —
+    // #604 removed the per-stage routing previously exercised here; the
+    // providerHints threading tests below pin the still-relevant model-id
+    // propagation from `AgentProvidersConfig.selectedModelId(forProvider:)`
+    // into `ACPBackend.start`.)
 
     @Test func testProviderHintsIncludesProviderEnv() {
         let provider = AgentProvider(
@@ -272,10 +237,11 @@ import ACPModel
         #expect(hints[HintKey.env("HERMES_MODE")] == "fast")
     }
 
-    /// The per-stage resolved model id (`resolvedProvider(for:).modelId`) is
-    /// threaded into `acpSelectedModelId`, which `ACPBackend.start` reads to
-    /// call `session/set_model`. Pins the model-threading half of the per-stage
-    /// resolution hint building (Phase 2).
+    /// The resolved model id (`selectedModelId(forProvider:)`) is threaded
+    /// into `acpSelectedModelId`, which `ACPBackend.start` reads to call
+    /// `session/set_model`. Pins the model-threading half of the providerHints
+    /// construction (post-#604: planner/executor/finalizer all share this one
+    /// resolution at the top of `runACPIngestPlannerExecutors`).
     @Test func testProviderHintsThreadsSelectedModelId() {
         let provider = AgentProvider(id: "opencode", label: "OpenCode", command: ["opencode", "acp"])
         let hints = AgentBackendFactory.providerHints(
@@ -383,5 +349,160 @@ import ACPModel
 
         let recorded = await fake.startModelHints
         #expect(recorded == ["opus-4", "sonnet-4"])
+    }
+}
+
+/// #604 launcher-level pin: per-stage routing is gone, so the multi-phase
+/// ingest path (`runACPIngestPlannerExecutors`) must resolve ONE backend at
+/// the top (in `run()` prior to delegating) and reuse it across all three
+/// phases (planner → executors → finalizer) — never construct a backend
+/// per-stage, never call `resolveBackend` again after `run()` set
+/// `self.backend`. Drives `launcher.run(...)` end-to-end with a
+/// `FakeAgentBackend` + a large (>4 KB) source so `plan.isLargeSource`
+/// routes to the multi-phase path.
+///
+/// **Fork-from-planner is NOT pinned here** — `FakeAgentBackend` is not an
+/// `ACPBackend` (the fork optimization downcasts via
+/// `backend as? ACPBackend`), so each executor phase falls back to a fresh
+/// `backend.start()` on the SAME backend instance. That is the desired
+/// contract post-#604: the backend instance is reused across phases (no
+/// per-stage construction), even when fork is unsupported by the test double.
+/// A live ACP run would use the planner's session handle as the fork source
+/// on the same `self.backend` instance.
+@MainActor
+@Suite("ACPIngest collapsed routing (#604)")
+struct ACPIngestCollapsedRoutingTests {
+
+    /// A counter that tracks how many times `resolveBackend` was invoked.
+    /// Used to pin the #604 collapse: a single call means no per-stage
+    /// re-resolution. Final class + lock so the @Sendable closure can
+    /// increment from any actor.
+    private final class ResolveBackendCallCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _count = 0
+        func increment() {
+            lock.lock(); _count += 1; lock.unlock()
+        }
+        var count: Int {
+            lock.lock(); defer { lock.unlock() }
+            return _count
+        }
+    }
+
+    /// Build a launcher wired for an end-to-end multi-phase ingest on a
+    /// `FakeAgentBackend`. The provider (`fake-acp`) has a model selected
+    /// (`fake-model`) so `SpawnModelGuard` lets the run proceed.
+    ///
+    /// `tempDir` is created by the caller and lives for the test's duration
+    /// (the caller defers its removal) so `providersConfig()` reads inside
+    /// `run()` see the saved file. A `defer` here would wipe it before
+    /// `run()` runs.
+    private func makeLauncher(
+        backend: FakeAgentBackend,
+        counter: ResolveBackendCallCounter,
+        tempDir: URL
+    ) -> AgentLauncher {
+        let launcher = AgentLauncher()
+        launcher.resolveBackend = { _, _ in
+            counter.increment()
+            return backend
+        }
+        launcher.acpCredentialStore = InMemoryACPCredentialStore()
+        launcher.resolveSelectedProvider = {
+            AgentProvider(
+                id: "fake-acp",
+                label: "Fake",
+                command: ["/usr/bin/true"],
+                env: [:],
+                enabled: true,
+                isDefault: true
+            )
+        }
+        let config = AgentProvidersConfig(
+            providers: [
+                AgentProvider(id: "fake-acp", label: "Fake",
+                              command: ["/usr/bin/true"], enabled: true, isDefault: true)
+            ],
+            selectedModelIds: ["fake-acp": "fake-model"])
+        do {
+            try config.save(to: tempDir)
+        } catch {
+            // Per house rules — never bare try?. Rare save failure on a temp
+            // dir would mask the test wiring; surface it here.
+            Issue.record("Failed to save provider config to temp dir: \(error)")
+        }
+        launcher.resolveProvidersContainerDirectory = { tempDir }
+        launcher.containerDirectory = tempDir
+        return launcher
+    }
+
+    /// A source larger than `IngestPlan.tinySourceByteThreshold` (4 KB) so
+    /// `plan.isLargeSource == true` and `run()` delegates to the multi-phase
+    /// path at `AgentLauncher.swift:1022`.
+    private func largeSource() -> OperationRequest.StagedSource {
+        let pad = String(repeating: "# page\n", count: 600)  // ~4800 bytes
+        return OperationRequest.StagedSource(
+            bytes: Data(pad.utf8),
+            ext: "md",
+            displayPath: "sources/by-id/large.md"
+        )
+    }
+
+    @Test func runACPIngestResolvesOneBackendAcrossAllPhases() async throws {
+        // Plan the planner will write: one source file, one page assignment.
+        let planData = try JSONEncoder().encode(ACPIngestPlan(
+            pages: [ACPIngestPageAssignment(
+                title: "Padded Page", sourceFile: "large.md",
+                sourceRanges: "1-600", outline: "padding for size threshold")],
+            sourceIDs: ["01FAKE"]))
+        let fake = FakeAgentBackend(behaviors: [
+            // Phase 1 — planner: writes plan.json, emits a messageStop so
+            // runPhase returns the session.
+            FakeSessionBehavior(events: [.messageStop], planJSON: planData),
+            // Phase 2 — executor (one source file → one executor session).
+            FakeSessionBehavior(events: [.messageStop]),
+            // Phase 3 — finalizer.
+            FakeSessionBehavior(events: [.messageStop]),
+        ])
+        let counter = ResolveBackendCallCounter()
+        // Per-test tempDir lifecycle: defer in the test body, NOT in
+        // `makeLauncher`, so the saved agent-providers.json is present when
+        // `run()` calls `providersConfig()` on the main actor.
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-collapse-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let launcher = makeLauncher(backend: fake, counter: counter, tempDir: tempDir)
+
+        await launcher.run(
+            request: .ingest(sources: [largeSource()], stateMarkdown: "# State"),
+            wikiID: "test-wiki",
+            wikiRoot: "/tmp",
+            systemPrompt: "sys",
+            wikictlDirectory: "/tmp",
+            ingestingSourceIDs: [],
+            onEvent: nil,
+            onLock: {},
+            onUnlock: {}
+        )
+
+        // The collapse pin: `resolveBackend` was invoked EXACTLY ONCE — by
+        // `run()` at `:954` to build `self.backend`. `runACPIngestPlannerExecutors`
+        // reuses that instance and never calls `resolveBackend` again. A
+        // reintroduction of per-stage routing would push this to 3 (planner +
+        // executor + finalizer).
+        #expect(counter.count == 1)
+
+        // All three phases' `backend.start()` calls landed on the SAME fake
+        // instance: planner (1) + executor (1) + finalizer (1) = 3. This
+        // transitively pins "no per-stage backend construction" —
+        // resolveBackend would have been called 3 times if each phase built its
+        // own backend (and `startCount` then would be split across instances,
+        // never accumulating to 3 on one).
+        let startCount = await fake.startCount
+        #expect(startCount == 3, "All three phases (planner/executor/finalizer) must call backend.start on the same fake instance — preflightError=\(launcher.preflightError ?? "nil")")
+
+        // Run completed (finish() was called).
+        #expect(launcher.isRunning == false)
     }
 }

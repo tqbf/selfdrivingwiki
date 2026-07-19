@@ -6,8 +6,10 @@ import Foundation
 ///
 /// PURE and unit-tested. The decision is driven purely by source size against a
 /// named threshold — it is a source-size predicate, NOT a model or provider
-/// choice. WHICH provider/model runs each stage is resolved separately via
-/// `AgentProvidersConfig.resolvedProvider(for:)` (per-stage assignments).
+/// choice. WHICH provider/model runs the ingest is resolved separately by
+/// `AgentLauncher.runACPIngestPlannerExecutors` using the app default provider
+/// + its `selectedModelId` (#604 — per-stage assignment was removed; every
+/// phase shares one backend).
 ///
 /// The case names are historical (`singleOpus`/`opusCurator` date from the
 /// removed Claude-CLI backend's opus/sonnet tiering); only the tiny-vs-large

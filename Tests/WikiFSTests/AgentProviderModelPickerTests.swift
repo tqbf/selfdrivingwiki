@@ -136,10 +136,10 @@ import WikiFSCore
 
     @Test func preModelCacheFileDecodesWithEmptyCaches() throws {
         // A pre-#329 agent-providers.json (no providerModels / selectedModelIds
-        // / stageAssignments keys) must decode without a migration → empty
-        // caches (legacy behavior: "no model selected → agent default"). Phase
-        // 1 removes the claudeCachedModels injection, so no cached models are
-        // synthesized — a real list only appears after ACP discovery.
+        // keys) must decode without a migration → empty caches (legacy
+        // behavior: "no model selected → agent default"). Phase 1 removes the
+        // claudeCachedModels injection, so no cached models are synthesized
+        // — a real list only appears after ACP discovery.
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("provider-legacy-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -165,7 +165,6 @@ import WikiFSCore
         // No claude-acp force-insertion: the decoded provider list is exactly
         // what the legacy file specified.
         #expect(loaded.providers.map(\.id) == ["claude"])
-        #expect(loaded.stageAssignments.isEmpty)
     }
 
     @Test func settingCachedModelsReplacesAndPersists() {

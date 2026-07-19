@@ -1167,58 +1167,19 @@ public final class AgentLauncher {
     /// - Update `sessionHandle`/`currentRunToken` per phase so `stopAgent()` and
     ///   the watchdog track the live phase.
     /// - Call `finish()` exactly once at the end (success or unrecoverable failure).
-    /// One stage's resolved routing: the provider + model
-    /// (`AgentProvidersConfig.resolvedProvider(for:)`), the backend instance to
-    /// drive it (from `stageBackendCache`, keyed by `providerId|modelId` so
-    /// stages sharing a resolution reuse the same backend instance — Phase 2
-    /// connection cache), and the `BackendProfile.providerHints` to spawn it.
-    private struct StageRouting {
-        let provider: AgentProvider
-        let modelId: String?
-        let backend: AgentBackend
-        let providerHints: [String: String]
-    }
-
-    /// Resolve `stage`'s provider/model (`resolvedProvider(for:)`), the ACP spawn
-    /// command (PATH-resolved, bun-bundled-helper-special-cased) + Keychain API
-    /// key, and either reuse or create the backend for that (providerId, modelId)
-    /// pair via `cache`. Returns nil on a PATH-resolution failure (sets
-    /// `preflightError`) — the caller falls back to single-session ingest.
-    private func resolveStageRouting(
-        _ stage: IngestStage,
-        policy: PermissionPolicy,
-        budget: Duration?,
-        cache: inout [String: AgentBackend]
-    ) -> StageRouting? {
-        let (provider, modelId) = providersConfig().resolvedProvider(for: stage)
-        guard let spawn = resolveACPProviderSpawn(provider) else { return nil }
-        // Refuse to spawn without an explicit `selectedModelId`. Without this,
-        // the ACP subprocess silently falls through to its own first-listed
-        // upstream model (e.g. `opencode/big-pickle`, a free model nobody chose)
-        // — the diagnosed 2026-07-18 ingestion-stall root cause #6. Placed
-        // AFTER `resolveACPProviderSpawn` so the PATH-preflight error wins when
-        // both are wrong (a missing executable is more fundamental). See
-        // `tmp/ingestion-stall-diagnosis.md` and `SpawnModelGuard.swift`.
-        if let msg = SpawnModelGuard.validate(provider: provider, modelId: modelId) {
-            preflightError = msg
-            return nil
-        }
-        let cacheKey = "\(provider.id)|\(modelId ?? "")"
-        let backend: AgentBackend
-        if let cached = cache[cacheKey] {
-            backend = cached
-        } else {
-            backend = resolveBackend(policy, budget)
-            cache[cacheKey] = backend
-        }
-        let providerHints = AgentBackendFactory.providerHints(
-            provider: provider,
-            resolvedCommand: spawn.command,
-            apiKey: spawn.apiKey,
-            selectedModelId: modelId)
-        return StageRouting(provider: provider, modelId: modelId, backend: backend, providerHints: providerHints)
-    }
-
+    ///
+    /// #604: per-stage provider/model assignment was removed — every stage
+    /// (planner/executor/finalizer) now uses the **app default provider** + its
+    /// `selectedModelId`, identical to the single-session `run()` path.
+    /// `run()` at :954 has ALREADY assigned `self.backend = resolveBackend(...)`
+    /// before delegating here at :1022. This method resolves the (provider,
+    /// modelId, spawn, providerHints) ONCE at the top — re-deriving them is
+    /// cheap (no actor construction), and REUSES `self.backend` rather than
+    /// calling `resolveBackend` again (which would orphan the `ACPBackend`
+    /// actor `run()` already built). All three phases share that one backend
+    /// instance + one provider resolution. The fork-from-planner optimization
+    /// and `runParallelExecutors`/`runPhase`/`closePlannerSession` lifecycle
+    /// are unchanged.
     private func runACPIngestPlannerExecutors(
         scratch: URL,
         operation: WikiOperation,
@@ -1246,26 +1207,55 @@ public final class AgentLauncher {
         let sourceIDs = sourcePaths.map { WikiOperation.sourceID(fromPath: $0) }
         let sourceFileNames = stagedSourcePaths.map { ($0 as NSString).lastPathComponent }
 
-        // Per-stage provider/model routing (#324/Phase 2): planner, executors, and
-        // finalizer each resolve independently via `resolvedProvider(for:)` and
-        // may land on different providers. `stageBackendCache` keeps at most one
-        // live backend per distinct (providerId, modelId) resolution for the
-        // whole run — stages sharing a resolution reuse it. Phase 1
-        // (plans/acp-session-efficiency.md) changes the lifecycle: each phase
-        // now calls `backend.start()` (which reuses the warm subprocess for the
-        // second+ call on the same backend) and `closeSession()` at the phase
-        // boundary (frees session context, keeps the subprocess alive). The
-        // subprocess is terminated via `backend.cancel()` only at the very end.
+        // #324 + #604: the launcher reads `agent-providers.json`, picks the
+        // default (or selected) provider, and resolves its PATH command +
+        // Keychain key into providerHints. The app is ACP-only. Per #604
+        // (per-stage routing removal), the SAME resolution drives
+        // planner/executor/finalizer — exactly the same pattern the
+        // single-session `run()` path uses at :950-965.
         //
-        // #607: ingest policy reads its OWN `ingestPermissionMode` key, NOT the
-        // chat key — a user who chose `alwaysAsk` for chat no longer stalls an
-        // unattended ingest. #606: a deferred ingest permission auto-rejects
-        // after `.seconds(60)` so even a misconfigured ingest can't burn the
-        // 1800s ceiling (the sandbox already confines writes — `bypass` is the
-        // correct default for an unattended pipeline).
-        let policy: PermissionPolicy = resolvePermissionMode(.ingest)
-        let permissionBudget: Duration? = .seconds(60)
-        var stageBackendCache: [String: AgentBackend] = [:]
+        // #607: ingest policy reads its OWN `ingestPermissionMode` key (NOT
+        // the chat key) — a user who chose `alwaysAsk` for chat no longer
+        // stalls an unattended ingest. #606: a deferred ingest permission
+        // auto-rejects after `.seconds(60)` so even a misconfigured ingest
+        // can't burn the 1800s ceiling (the sandbox already confines writes —
+        // `bypass` is the correct default for an unattended pipeline). Note
+        // the policy + budget values themselves are read + consumed by
+        // `run()` at :944-948 when it builds `self.backend` via
+        // `resolveBackend(policy, permissionBudget)` BEFORE delegating here
+        // at :1022 — we REUSE `self.backend`, never call `resolveBackend`
+        // again (which would orphan the ACPBackend actor `run()` built).
+
+        // Resolve the ONE provider + spawn + hints all three phases will use.
+        let provider = resolveSelectedProvider()
+        let modelId = providersConfig().selectedModelId(forProvider: provider.id)
+        guard let spawn = resolveACPProviderSpawn(provider) else {
+            DebugLog.agent("runACPIngest: ACP exe missing for provider=\(provider.id) — aborting")
+            preflightError = "The agent executable for ‘\(provider.label)’ was not found on your PATH."
+            finish(status: -1)
+            return
+        }
+        // Refuse to spawn without an explicit `selectedModelId`. Without this,
+        // the ACP subprocess silently falls through to its own first-listed
+        // upstream model (e.g. `opencode/big-pickle`, a free model nobody chose)
+        // — the diagnosed 2026-07-18 ingestion-stall root cause #6. Mirrors
+        // the single-session `run()` path's guard AND `startInteractiveQuery`'s
+        // guard. See `tmp/ingestion-stall-diagnosis.md` and `SpawnModelGuard.swift`.
+        if let msg = SpawnModelGuard.validate(provider: provider, modelId: modelId) {
+            preflightError = msg
+            finish(status: -1)
+            return
+        }
+        let providerHints = AgentBackendFactory.providerHints(
+            provider: provider,
+            resolvedCommand: spawn.command,
+            apiKey: spawn.apiKey,
+            selectedModelId: modelId)
+        // `self.backend` was assigned by `run()` at :954 before delegating
+        // here — there is always an instance. Read it into a local so the
+        // phases below capture a stable Sendable reference (AgentBackend is
+        // Sendable; `self.backend` is `@ObservationIgnored var`).
+        let backend = self.backend
 
         // Build a shared CLI profile closure (sets the env vars `ACPBackend`
         // reads: WIKI_DB, WIKICTL, PATH).
@@ -1280,13 +1270,8 @@ public final class AgentLauncher {
         // --- Phase 1: Planner ---
         DebugLog.agent("runACPIngest: Phase 1 — Planner")
         currentIngestPhase = "planner"
-        guard let plannerRouting = resolveStageRouting(.planner, policy: policy, budget: permissionBudget, cache: &stageBackendCache) else {
-            DebugLog.agent("runACPIngest: planner routing failed (\(preflightError ?? "?")) — aborting")
-            finish(status: -1)
-            return
-        }
         let plannerProfile = BackendProfile(
-            providerHints: plannerRouting.providerHints,
+            providerHints: providerHints,
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
@@ -1296,14 +1281,14 @@ public final class AgentLauncher {
             sourceIDs: sourceIDs)
 
         guard let plannerSession = await runPhase(
-            backend: plannerRouting.backend,
+            backend: backend,
             profile: plannerProfile,
             systemPrompt: systemPrompt,
             prompt: plannerPrompt,
             phaseName: "planner"
         ) else {
             // Planner failed — fall back to single-session ACP ingest on the
-            // planner-stage resolution (Phase 2 fallback contract).
+            // same resolution (the #604 collapsed default provider).
             DebugLog.agent("runACPIngest: planner failed — falling back to single-session")
             await runACPIngestFallback(
                 operation: operation,
@@ -1311,12 +1296,14 @@ public final class AgentLauncher {
                 scratch: scratch,
                 systemPrompt: systemPrompt,
                 makeCLIProfile: makeCLIProfile,
-                routing: plannerRouting)
+                backend: backend,
+                provider: provider,
+                providerHints: providerHints)
             return
         }
 
         // Capture models (provider-level, not phase-level).
-        captureAndCacheModels(provider: plannerRouting.provider, session: plannerSession)
+        captureAndCacheModels(provider: provider, session: plannerSession)
         captureProcessID(session: plannerSession)
         // Phase 3: keep the planner session ALIVE through the executor phase so
         // it can be forked — the forked executor inherits the planner's
@@ -1342,82 +1329,80 @@ public final class AgentLauncher {
                 scratch: scratch,
                 systemPrompt: systemPrompt,
                 makeCLIProfile: makeCLIProfile,
-                routing: plannerRouting)
+                backend: backend,
+                provider: provider,
+                providerHints: providerHints)
             return
         }
         DebugLog.agent("runACPIngest: plan loaded — \(plan.pages.count) pages across \(plan.distinctSourceFiles.count) source file(s)")
 
         // --- Phase 2: Executors (one per source file) ---
-        if let executorRouting = resolveStageRouting(.executor, policy: policy, budget: permissionBudget, cache: &stageBackendCache) {
-            let executorProfile = BackendProfile(
-                providerHints: executorRouting.providerHints,
-                scratchDirectory: scratch,
-                isReadOnly: false,
-                cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
-            let maxConcurrent = await (executorRouting.backend as? ACPBackend)?.maxConcurrentExecutorCount() ?? 1
+        let executorProfile = BackendProfile(
+            providerHints: providerHints,
+            scratchDirectory: scratch,
+            isReadOnly: false,
+            cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
+        let maxConcurrent = await (backend as? ACPBackend)?.maxConcurrentExecutorCount() ?? 1
 
-            if maxConcurrent > 1 && plan.distinctSourceFiles.count > 1 {
-                // Phase 4: parallel executors via withTaskGroup. N source files
-                // are processed concurrently on N forked sessions of the same
-                // subprocess. Events are buffered per-session and flushed to the
-                // main actor as batches on each turn-end (avoiding interleaved
-                // streaming deltas that would garble the transcript).
-                DebugLog.agent("runACPIngest: Phase 2 — Parallel executors (maxConcurrent=\(maxConcurrent), \(plan.distinctSourceFiles.count) source file(s))")
-                currentIngestPhase = "executor[parallel]"
-                await runParallelExecutors(
-                    executorRouting: executorRouting,
-                    executorProfile: executorProfile,
-                    plan: plan,
+        if maxConcurrent > 1 && plan.distinctSourceFiles.count > 1 {
+            // Phase 4: parallel executors via withTaskGroup. N source files
+            // are processed concurrently on N forked sessions of the same
+            // subprocess. Events are buffered per-session and flushed to the
+            // main actor as batches on each turn-end (avoiding interleaved
+            // streaming deltas that would garble the transcript).
+            DebugLog.agent("runACPIngest: Phase 2 — Parallel executors (maxConcurrent=\(maxConcurrent), \(plan.distinctSourceFiles.count) source file(s))")
+            currentIngestPhase = "executor[parallel]"
+            await runParallelExecutors(
+                backend: backend,
+                provider: provider,
+                executorProfile: executorProfile,
+                plan: plan,
+                stateFilePath: stateFilePath,
+                sourceIDs: sourceIDs,
+                systemPrompt: systemPrompt,
+                maxConcurrent: maxConcurrent)
+        } else {
+            // Serial executors (Phase 3 behavior — current).
+            for sourceFile in plan.distinctSourceFiles {
+                guard isRunning else { break }  // cancelled
+                let assignments = plan.assignments(forSource: sourceFile)
+                guard !assignments.isEmpty else { continue }
+                let executorProfile = BackendProfile(
+                    providerHints: providerHints,
+                    scratchDirectory: scratch,
+                    isReadOnly: false,
+                    cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
+                let executorPrompt = ACPIngestPrompts.executorPrompt(
                     stateFilePath: stateFilePath,
-                    sourceIDs: sourceIDs,
+                    assignments: assignments,
+                    allPageTitles: plan.allPageTitles,
+                    sourceIDs: sourceIDs)
+                DebugLog.agent("runACPIngest: Phase 2 — Executor[\(sourceFile)] (\(assignments.count) page(s))")
+                currentIngestPhase = "executor[\(sourceFile)]"
+                // Partial failure: log and continue to next executor.
+                // Phase 3: if the planner session is still alive, try to fork it
+                // so the executor inherits the planner's source context. If fork
+                // is unsupported (or the planner session was already closed), the
+                // runPhase helper falls back to a fresh `backend.start()`.
+                let forkFrom = (backend as? ACPBackend != nil) ? plannerSessionHandle : nil
+                if let session = await runPhase(
+                    backend: backend,
+                    profile: executorProfile,
                     systemPrompt: systemPrompt,
-                    maxConcurrent: maxConcurrent)
-            } else {
-                // Serial executors (Phase 3 behavior — current).
-                for sourceFile in plan.distinctSourceFiles {
-                    guard isRunning else { break }  // cancelled
-                    let assignments = plan.assignments(forSource: sourceFile)
-                    guard !assignments.isEmpty else { continue }
-                    let executorProfile = BackendProfile(
-                        providerHints: executorRouting.providerHints,
-                        scratchDirectory: scratch,
-                        isReadOnly: false,
-                        cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
-                    let executorPrompt = ACPIngestPrompts.executorPrompt(
-                        stateFilePath: stateFilePath,
-                        assignments: assignments,
-                        allPageTitles: plan.allPageTitles,
-                        sourceIDs: sourceIDs)
-                    DebugLog.agent("runACPIngest: Phase 2 — Executor[\(sourceFile)] (\(assignments.count) page(s))")
-                    currentIngestPhase = "executor[\(sourceFile)]"
-                    // Partial failure: log and continue to next executor.
-                    // Phase 3: if the planner session is still alive, try to fork it
-                    // so the executor inherits the planner's source context. If fork
-                    // is unsupported (or the planner session was already closed), the
-                    // runPhase helper falls back to a fresh `backend.start()`.
-                    let forkFrom = (executorRouting.backend as? ACPBackend != nil) ? plannerSessionHandle : nil
-                    if let session = await runPhase(
-                        backend: executorRouting.backend,
-                        profile: executorProfile,
-                        systemPrompt: systemPrompt,
-                        prompt: executorPrompt,
-                        phaseName: "executor[\(sourceFile)]",
-                        forkFrom: forkFrom
-                    ) {
-                        await capturePhaseUsage(backend: executorRouting.backend, session: session, providerLabel: executorRouting.provider.label)
-                        if let acp = executorRouting.backend as? ACPBackend {
-                            await acp.closeSession(session)
-                        } else {
-                            await executorRouting.backend.cancel(session)
-                        }
+                    prompt: executorPrompt,
+                    phaseName: "executor[\(sourceFile)]",
+                    forkFrom: forkFrom
+                ) {
+                    await capturePhaseUsage(backend: backend, session: session, providerLabel: provider.label)
+                    if let acp = backend as? ACPBackend {
+                        await acp.closeSession(session)
                     } else {
-                        DebugLog.agent("runACPIngest: executor[\(sourceFile)] FAILED — skipping (partial failure)")
+                        await backend.cancel(session)
                     }
+                } else {
+                    DebugLog.agent("runACPIngest: executor[\(sourceFile)] FAILED — skipping (partial failure)")
                 }
             }
-        } else {
-            DebugLog.agent("runACPIngest: executor routing failed (\(preflightError ?? "?")) — skipping executor phase")
-            preflightError = nil
         }
 
         // Phase 3: all executor forks are done — close the planner session now.
@@ -1425,11 +1410,11 @@ public final class AgentLauncher {
         // alive (e.g., the planner failed early and we fell back), this is nil.
         if let plannerSession = plannerSessionHandle {
             DebugLog.agent("runACPIngest: closing planner session (all forks done)")
-            await capturePhaseUsage(backend: plannerRouting.backend, session: plannerSession, providerLabel: plannerRouting.provider.label)
-            if let acp = plannerRouting.backend as? ACPBackend {
+            await capturePhaseUsage(backend: backend, session: plannerSession, providerLabel: provider.label)
+            if let acp = backend as? ACPBackend {
                 await acp.closeSession(plannerSession)
             } else {
-                await plannerRouting.backend.cancel(plannerSession)
+                await backend.cancel(plannerSession)
             }
             plannerSessionHandle = nil
         }
@@ -1441,14 +1426,8 @@ public final class AgentLauncher {
         }
 
         // --- Phase 3: Finalizer ---
-        guard let finalizerRouting = resolveStageRouting(.finalizer, policy: policy, budget: permissionBudget, cache: &stageBackendCache) else {
-            DebugLog.agent("runACPIngest: finalizer routing failed (\(preflightError ?? "?")) — aborting")
-            preflightError = nil
-            finish(status: -1)
-            return
-        }
         let finalizerProfile = BackendProfile(
-            providerHints: finalizerRouting.providerHints,
+            providerHints: providerHints,
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
@@ -1459,30 +1438,26 @@ public final class AgentLauncher {
         DebugLog.agent("runACPIngest: Phase 3 — Finalizer")
         currentIngestPhase = "finalizer"
         if let session = await runPhase(
-            backend: finalizerRouting.backend,
+            backend: backend,
             profile: finalizerProfile,
             systemPrompt: systemPrompt,
             prompt: finalizerPrompt,
             phaseName: "finalizer"
         ) {
-            await capturePhaseUsage(backend: finalizerRouting.backend, session: session, providerLabel: finalizerRouting.provider.label)
-            if let acp = finalizerRouting.backend as? ACPBackend {
+            await capturePhaseUsage(backend: backend, session: session, providerLabel: provider.label)
+            if let acp = backend as? ACPBackend {
                 await acp.closeSession(session)
             } else {
-                await finalizerRouting.backend.cancel(session)
+                await backend.cancel(session)
             }
         }
 
-        // Phase 1: terminate ALL warm subprocesses now that all phases are done.
-        // Each backend in the cache may have a warm process still alive (its
-        // session was closed via `closeSession`, which frees the session context
-        // but keeps the subprocess). `cancel()` tears down the warm process even
-        // when the session record is already gone (closed). We pass a dummy
-        // SessionHandle — cancel() checks `warmProcess` independently of the
-        // session map.
-        for (_, backend) in stageBackendCache {
-            await backend.cancel(SessionHandle(id: ""))
-        }
+        // Phase 1: terminate the warm subprocess now that all phases are done.
+        // (`closeSession` freed the session contexts but keeps the subprocess
+        // alive; `cancel()` tears it down even after the session record is
+        // gone — we pass a dummy SessionHandle because cancel() targets
+        // `warmProcess` independently of the session map.)
+        await backend.cancel(SessionHandle(id: ""))
 
         finish(status: 0)
     }
@@ -1510,7 +1485,8 @@ public final class AgentLauncher {
     ///   child tasks complete, and the task group returns.
     /// - The generation gate holds one slot for the whole run — no gate change.
     private func runParallelExecutors(
-        executorRouting: StageRouting,
+        backend: AgentBackend,
+        provider: AgentProvider,
         executorProfile: BackendProfile,
         plan: ACPIngestPlan,
         stateFilePath: String,
@@ -1518,9 +1494,9 @@ public final class AgentLauncher {
         systemPrompt: String,
         maxConcurrent: Int
     ) async {
-        let backend = executorRouting.backend      // Sendable (AgentBackend: Sendable)
-        let acp = executorRouting.backend as? ACPBackend  // Sendable (actor)
-        let profile = executorProfile              // Sendable
+        let backend = backend                         // Sendable (AgentBackend: Sendable)
+        let acp = backend as? ACPBackend             // Sendable (actor)
+        let profile = executorProfile                // Sendable
         let allPageTitles = plan.allPageTitles      // [String] — Sendable
         // Fork from the planner session if the backend is ACP (Phase 3).
         let forkFrom = (acp != nil) ? plannerSessionHandle : nil
@@ -1557,7 +1533,7 @@ public final class AgentLauncher {
                 if active >= maxConcurrent {
                     if let result = await group.next() {
                         if let session = result.session {
-                            await capturePhaseUsage(backend: backend, session: session, providerLabel: executorRouting.provider.label)
+                            await capturePhaseUsage(backend: backend, session: session, providerLabel: provider.label)
                             if let acp { await acp.closeSession(session) }
                             else { await backend.cancel(session) }
                         }
@@ -1648,7 +1624,7 @@ public final class AgentLauncher {
             // Drain remaining in-flight tasks.
             for await result in group {
                 if let session = result.session, isRunning {
-                    await capturePhaseUsage(backend: backend, session: session, providerLabel: executorRouting.provider.label)
+                    await capturePhaseUsage(backend: backend, session: session, providerLabel: provider.label)
                     if let acp { await acp.closeSession(session) }
                     else { await backend.cancel(session) }
                 } else if let session = result.session {
@@ -1682,8 +1658,7 @@ public final class AgentLauncher {
     /// prompt, drain to `.messageStop`/`.result`, then return the session
     /// (caller cancels). Sets `self.backend` to `backend` so `stopAgent()`, the
     /// watchdog, and `PermissionResolving` downcasts (`captureAndCacheModels`,
-    /// `captureProcessID`, permission polling) target the phase's actual backend
-    /// — required now that stages may resolve to different providers (Phase 2).
+    /// `captureProcessID`, permission polling) target the phase's actual backend.
     /// The `onExit` closure is phase-tracking only — it logs but does NOT call
     /// `finish()`. That is the critical lifecycle invariant: `finish()` is called
     /// exactly once by `runACPIngestPlannerExecutors()` at the very end.
@@ -1768,19 +1743,22 @@ public final class AgentLauncher {
     /// Fallback: single-session ACP ingest when the planner fails or produces no
     /// valid `plan.json`. Sends the original one-shot ingest prompt (with the
     /// "no sub-agents" instruction) in one session, then calls `finish()`. Keeps
-    /// using the PLANNER-stage resolution (`routing`) — Phase 2 fallback
-    /// contract: the fallback never re-resolves the executor/finalizer stages.
+    /// using the SAME collapsed (#604) resolution `runACPIngestPlannerExecutors`
+    /// already resolved at its top — the fallback never re-resolves a backend
+    /// (re-resolving would orphan the `ACPBackend` actor `run()` built).
     private func runACPIngestFallback(
         operation: WikiOperation,
         wikiRoot: String,
         scratch: URL,
         systemPrompt: String,
         makeCLIProfile: (WikiOperation) -> CLIProfile,
-        routing: StageRouting
+        backend: AgentBackend,
+        provider: AgentProvider,
+        providerHints: [String: String]
     ) async {
         currentIngestPhase = "fallback-single"
         let profile = BackendProfile(
-            providerHints: routing.providerHints,
+            providerHints: providerHints,
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
@@ -1788,16 +1766,16 @@ public final class AgentLauncher {
         promptText += "\n\nIMPORTANT: Do NOT dispatch sub-agents, background tasks, or async agents. Do NOT use sleep or ScheduleWakeup. Read all sources, process them, and write all wiki pages directly in THIS session — everything must complete before you stop."
 
         if let session = await runPhase(
-            backend: routing.backend,
+            backend: backend,
             profile: profile,
             systemPrompt: systemPrompt,
             prompt: promptText,
             phaseName: "fallback-single"
         ) {
-            captureAndCacheModels(provider: routing.provider, session: session)
+            captureAndCacheModels(provider: provider, session: session)
             captureProcessID(session: session)
-            await capturePhaseUsage(backend: routing.backend, session: session, providerLabel: routing.provider.label)
-            await routing.backend.cancel(session)
+            await capturePhaseUsage(backend: backend, session: session, providerLabel: provider.label)
+            await backend.cancel(session)
             finish(status: 0)
         } else {
             finish(status: -1)
@@ -2172,9 +2150,11 @@ public final class AgentLauncher {
         DebugLog.agent("startInteractiveQuery: provider=\(provider.id) selectedModel=\(resolvedSelectedModel ?? "nil")")
 
         // Refuse to spawn without an explicit `selectedModelId`. Mirrors the
-        // ingest path's `resolveStageRouting` guard. Without this, chat silently
-        // falls through to the ACP subprocess's first-listed upstream model. See
-        // `tmp/ingestion-stall-diagnosis.md` and `SpawnModelGuard.swift`.
+        // ingest path's `SpawnModelGuard` guard (now at the top of
+        // `runACPIngestPlannerExecutors` after #604 collapsed per-stage routing).
+        // Without this, chat silently falls through to the ACP subprocess's
+        // first-listed upstream model. See `tmp/ingestion-stall-diagnosis.md`
+        // and `SpawnModelGuard.swift`.
         //
         // State contract: this early-return site is in the PREFLIGHT section
         // (the comment at the top of this function — "no gate held — early
