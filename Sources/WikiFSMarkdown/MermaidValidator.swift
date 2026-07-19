@@ -4,25 +4,40 @@ import JavaScriptCore
 // MARK: - MermaidValidator
 
 /// Extracts ` ```mermaid ` fenced blocks from markdown and validates each one's
-/// syntax with the vendored **merval** library (a zero-dependency Mermaid
-/// validator), run in a `JavaScriptCore` `JSContext`.
+/// syntax with the SAME vendored **mermaid v11.16.0** library that renders
+/// diagrams (`Resources/mermaid.min.js`, copied into the app bundle as
+/// `mermaid.js` by `build.sh`), run in a `JavaScriptCore` `JSContext`.
 ///
-/// **No Node required at runtime.** merval ships as ESM, so it is bundled
-/// (one-time, via esbuild) into a single self-contained IIFE
-/// (`Resources/merval.bundle.js`, copied into the app bundle as `merval.js` by
-/// `build.sh`). At runtime this loads that file into a system `JSContext` and
-/// calls `globalThis.__merval.validateMermaid`. `JavaScriptCore` is a macOS
-/// system framework — available everywhere, no install, no network.
+/// **No Node required at runtime.** mermaid.min.js is a single UMD/IIFE file
+/// loaded directly into a system `JSContext`; we call `mermaid.parse(text)` to
+/// validate. `JavaScriptCore` is a macOS system framework — available
+/// everywhere, no install, no network.
 ///
-/// **What merval catches vs. misses.** merval validates *structure* — missing
-/// arrows, dangling edges, malformed node brackets, unsupported diagram types.
-/// It does NOT catch Mermaid's *semantic* gotchas (reserved words like `end`,
-/// unquoted special characters). The agent's default system prompt carries those
-/// authoring rules; this validator is the structural backstop.
+/// **Why mermaid.parse() instead of merval.** The previous validator used
+/// `merval.bundle.js`, a third-party zero-dependency validator pinned to an
+/// older Mermaid grammar. It rejected valid v11 syntax like `A@{ shape: delay }`
+/// (the official docs form) so users couldn't save pages with v11 diagrams.
+/// Switching to `mermaid.parse()` eliminates the version skew permanently: the
+/// validator and the renderer use the EXACT same library, so anything that
+/// renders also validates and vice versa.
 ///
-/// **Version skew.** merval is validated against Mermaid CLI v11.12.0, while the
-/// reader renders with Mermaid 10.9.6. Rare v10/v11 divergences may slip through
-/// either way; structural errors are stable across both.
+/// **JSC + mermaid gotchas.**
+/// 1. `mermaid.parse()` ALWAYS returns a Promise (in JSC and Node). It never
+///    throws synchronously. The wrapper installs `.then`/`.catch` callbacks that
+///    mutate a holder object, then we **flush the JSC microtask queue** before
+///    reading the result. `JSPerformMicrotaskCheckpoint` isn't exposed by the
+///    Swift overlay — we `dlsym` it from the system framework.
+/// 2. mermaid.min.js bundles DOMPurify, whose factory returns `undefined`
+///    without a DOM, then mermaid calls `Zs.addHook(...)` at runtime → crash.
+///    A minimal DOM/timer polyfill is installed BEFORE evaluating the mermaid
+///    bundle. See `domPolyfillJS`.
+///
+/// **Leniency note.** mermaid is more lenient than merval was. Things merval
+/// rejected (e.g. `flowchart LR\n  A B` — two unconnected words) are now VALID.
+/// All genuine syntax errors come back as a single `code: "PARSE_ERROR"` (merval
+/// had `MISSING_ARROW`, `UNKNOWN_DIAGRAM_TYPE`, …). The first line of
+/// `error.message` is the user-facing summary; a line number is extracted via
+/// `/line\s+(\d+)/i` when present.
 ///
 /// **Scope of validation here.** `validate(markdown:)` returns one result per
 /// mermaid block (valid or not); `invalidBlocks(markdown:)` filters to the bad
@@ -30,12 +45,13 @@ import JavaScriptCore
 /// dependency) handling ``` and ~~~~ fences.
 public final class MermaidValidator: @unchecked Sendable {
 
-    /// One block's validation outcome from merval.
+    /// One block's validation outcome from mermaid.parse().
     public struct BlockResult: Equatable, Sendable {
         /// 0-based index of the block within the document's mermaid blocks.
         public let index: Int
         public let isValid: Bool
-        /// `'flowchart'`, `'sequence'`, … — `nil` if merval couldn't classify it.
+        /// `'flowchart'`, `'sequence'`, … — derived from the first token of the
+        /// block's first line. `nil` if the block is empty/blank.
         public let diagramType: String?
         public let errors: [Issue]
 
@@ -51,9 +67,10 @@ public final class MermaidValidator: @unchecked Sendable {
     private let lock = NSLock()
     private let exceptionSink = ExceptionSink()
 
-    /// Load the bundled merval source into a fresh `JSContext`. Returns `nil` if
-    /// the source doesn't expose the expected global (e.g. a corrupt/empty file),
-    /// so callers degrade gracefully (treat as "no validation available").
+    /// Load the bundled mermaid source into a fresh `JSContext` and install the
+    /// `globalThis.__merval.validateMermaid` wrapper. Returns `nil` if the
+    /// wrapper can't be installed (e.g. a corrupt/empty bundle), so callers
+    /// degrade gracefully (treat as "no validation available").
     public init?(jsSource: String) {
         guard !jsSource.isEmpty,
               let context = JSContext() else { return nil }
@@ -64,17 +81,37 @@ public final class MermaidValidator: @unchecked Sendable {
         context.exceptionHandler = { _, value in
             sink.set(value?.toString())
         }
-        // merval is silent in its validate path, but JSC has no `console` by
-        // default — install a no-op one so any stray log can't throw a
-        // ReferenceError. A no-arg block ignores any arguments JS passes.
+        // mermaid is chatty; JSC has no `console` by default — install a no-op
+        // one so any stray log can't throw a ReferenceError. A no-arg block
+        // ignores any arguments JS passes.
         let noop: @convention(block) () -> Void = {}
         let console = JSValue(newObjectIn: context)
-        for name in ["log", "error", "warn", "info", "debug"] {
+        for name in ["log", "error", "warn", "info", "debug", "trace"] {
             console?.setObject(noop, forKeyedSubscript: name as NSCopying & NSObjectProtocol)
         }
         context.setObject(console, forKeyedSubscript: "console" as NSCopying & NSObjectProtocol)
 
+        // DOM/timer polyfill MUST be installed before evaluating mermaid.min.js
+        // — see class doc. Sufficient for DOMPurify's factory to return a usable
+        // instance and for mermaid.parse() to run without throwing.
+        context.evaluateScript(Self.domPolyfillJS)
+
         context.evaluateScript(jsSource)
+
+        // initialize is idempotent; wrap in try/catch so a partly-initialized
+        // bundle doesn't fail construction (the wrapper still works).
+        context.evaluateScript(
+            "try { mermaid.initialize({ startOnLoad: false, securityLevel: 'strict' }); } " +
+            "catch (e) { /* initialize is idempotent; ignore */ }"
+        )
+
+        // Install the validateMermaid wrapper. Sets up a holder `r`, kicks off
+        // `mermaid.parse(text)`, attaches Promise callbacks that mutate `r`.
+        // The Swift side flushes the microtask queue after calling, then reads
+        // `r` back. The wrapper name `__merval` is retained for call-site
+        // stability (the global is private to this file).
+        context.evaluateScript(Self.wrapperJS)
+
         guard let merval = context.objectForKeyedSubscript("__merval" as NSCopying & NSObjectProtocol),
               let validate = merval.objectForKeyedSubscript("validateMermaid" as NSCopying & NSObjectProtocol),
               validate.isObject else { return nil }
@@ -84,8 +121,8 @@ public final class MermaidValidator: @unchecked Sendable {
     }
 
     /// Validate every ` ```mermaid ` block in `markdown`, returning one result
-    /// per block (including valid ones). A JS exception on a block is surfaced as
-    /// a single `Issue` (so the page can still save with a clear error).
+    /// per block (including valid ones). A JS exception on a block is surfaced
+    /// as a single `Issue` (so the page can still save with a clear error).
     public func validate(markdown: String) -> [BlockResult] {
         let blocks = Self.mermaidBlocks(in: markdown)
         lock.lock()
@@ -118,14 +155,15 @@ public final class MermaidValidator: @unchecked Sendable {
         return lines.joined(separator: "\n")
     }
 
-    /// Resolve the vendored `merval.js` for the current runtime and build a
+    /// Resolve the vendored `mermaid.js` for the current runtime and build a
     /// validator, or `nil` when unavailable (dev/`swift test`) so callers skip
     /// validation rather than failing. Tries the main-bundle resource first
-    /// (in-app editor), then `../Resources/merval.js` relative to the executable
+    /// (in-app editor), then `../Resources/mermaid.js` relative to the executable
     /// — the same resolution the bundled `wikictl` helper uses for
-    /// `wiki-identifiers.env` (executable lives in `Contents/Helpers`).
+    /// `wiki-identifiers.env` (executable lives in `Contents/Helpers`). The same
+    /// `mermaid.js` is used by the reader for rendering.
     public static func loadDefault() -> MermaidValidator? {
-        if let url = Bundle.main.url(forResource: "merval", withExtension: "js"),
+        if let url = Bundle.main.url(forResource: "mermaid", withExtension: "js"),
            let src = try? String(contentsOf: url, encoding: .utf8), !src.isEmpty {
             return MermaidValidator(jsSource: src)
         }
@@ -133,17 +171,17 @@ public final class MermaidValidator: @unchecked Sendable {
             ?? CommandLine.arguments.first.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
         guard let exeDir else { return nil }
         let candidate = exeDir.deletingLastPathComponent()
-            .appendingPathComponent("Resources/merval.js")
+            .appendingPathComponent("Resources/mermaid.js")
         guard let src = try? String(contentsOf: candidate, encoding: .utf8), !src.isEmpty else {
             return nil
         }
         return MermaidValidator(jsSource: src)
     }
 
-    /// A process-wide validator built ONCE from the bundled `merval.js` (or `nil`
-    /// if unavailable). Use on hot paths (e.g. the debounced editor autosave) to
-    /// avoid rebuilding a `JSContext` + re-evaluating the bundle on every save.
-    /// `let` → initialized exactly once (thread-safe dispatch_once).
+    /// A process-wide validator built ONCE from the bundled `mermaid.js` (or
+    /// `nil` if unavailable). Use on hot paths (e.g. the debounced editor
+    /// autosave) to avoid rebuilding a `JSContext` + re-evaluating the bundle on
+    /// every save. `let` → initialized exactly once (thread-safe dispatch_once).
     public static let shared: MermaidValidator? = MermaidValidator.loadDefault()
 
     // MARK: - Block extraction (pure, testable)
@@ -224,17 +262,34 @@ public final class MermaidValidator: @unchecked Sendable {
         // to return a result isn't misattributed the earlier block's message.
         exceptionSink.set(nil)
         guard let result = validate.call(withArguments: [source]),
-              result.isObject,
-              let dict = result.toDictionary() as? [String: Any] else {
-            // validateMermaid threw or returned nothing — report as an error so
-            // the caller surfaces it rather than silently passing.
+              result.isObject else {
+            // validateMermaid threw synchronously — report as an error so the
+            // caller surfaces it rather than silently passing.
             return BlockResult(index: index, isValid: false, diagramType: nil,
                                errors: [.init(line: nil, code: "VALIDATOR_ERROR",
                                               message: jsException())])
         }
+        // mermaid.parse() returns a Promise — its .then/.catch callbacks fire
+        // during the microtask checkpoint. Without this flush, `done` would
+        // still be `false` and every block would look unresolved.
+        Self.flushMicrotasks()
+        guard let dict = result.toDictionary() as? [String: Any] else {
+            return BlockResult(index: index, isValid: false, diagramType: nil,
+                               errors: [.init(line: nil, code: "VALIDATOR_ERROR",
+                                              message: jsException())])
+        }
+        let done = (dict["done"] as? Bool) ?? false
         let isValid = (dict["isValid"] as? Bool) ?? false
         let diagramType = (dict["diagramType"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let errors = ((dict["errors"] as? [Any]) ?? []).compactMap { MermaidValidator.issue($0) }
+        // `done == false` after the checkpoint means the Promise never settled
+        // in one checkpoint — shouldn't happen, but surface it as a hard error
+        // rather than silently passing the block.
+        if !done {
+            return BlockResult(index: index, isValid: false, diagramType: diagramType,
+                               errors: [.init(line: nil, code: "VALIDATOR_ERROR",
+                                              message: "mermaid.parse() Promise did not settle")])
+        }
         return BlockResult(index: index, isValid: isValid, diagramType: diagramType, errors: errors)
     }
 
@@ -252,6 +307,174 @@ public final class MermaidValidator: @unchecked Sendable {
         }
         return "mermaid validation returned no result"
     }
+
+    // MARK: - JSC microtask checkpoint
+
+    /// Flush the JSC microtask queue so `mermaid.parse()`'s Promise callbacks
+    /// fire. Swift's JavaScriptCore overlay does NOT expose
+    /// `JSPerformMicrotaskCheckpoint()`; resolve it via `dlsym` from the system
+    /// framework. No-op (silent) if the symbol can't be found — the validator
+    /// then reports `VALIDATOR_ERROR`, which is a safer failure mode than
+    /// silently approving an unresolved block.
+    private static func flushMicrotasks() {
+        typealias Fn = @convention(c) () -> Void
+        if let handle = dlopen("/System/Library/Frameworks/JavaScriptCore.framework/JavaScriptCore", RTLD_NOW),
+           let sym = dlsym(handle, "JSPerformMicrotaskCheckpoint") {
+            unsafeBitCast(sym, to: Fn.self)()
+        }
+    }
+
+    // MARK: - JS sources (DOM polyfill + validateMermaid wrapper)
+
+    /// Minimal DOM/timer/window polyfill sufficient for mermaid.min.js
+    /// (which bundles DOMPurify) to load and run `mermaid.parse()` in a bare
+    /// JSContext. Verified working — see `tmp/mermaid-test/test_polyfill.swift`.
+    /// Keep in sync with that scratch test if mermaid ever needs more stubs.
+    private static let domPolyfillJS = """
+(function(){
+  // JSC has NO timer functions by default — install no-op stubs.
+  globalThis.__timers = globalThis.__timers || { nextId: 1 };
+  globalThis.setTimeout = function(fn){ var id = globalThis.__timers.nextId++; return id; };
+  globalThis.clearTimeout = function(id){};
+  globalThis.setInterval = function(fn){ var id = globalThis.__timers.nextId++; return id; };
+  globalThis.clearInterval = function(id){};
+  // structuredClone — needed by some diagram types (e.g. pie). JSON round-trip
+  // is sufficient for mermaid's internal use.
+  if (typeof globalThis.structuredClone !== 'function') {
+    globalThis.structuredClone = function(o){ return JSON.parse(JSON.stringify(o)); };
+  }
+  function Noop(){}
+  function makeNode(tag){
+    var node = {
+      tagName: (tag||'').toUpperCase(),
+      nodeName: (tag||'').toUpperCase(),
+      nodeType: 1,
+      children: [], childNodes: [],
+      attributes: {}, style: {},
+      classList: { add: Noop, remove: Noop, contains: function(){ return false; }, toggle: Noop },
+      getAttribute: function(k){ return Object.prototype.hasOwnProperty.call(this.attributes, k) ? this.attributes[k] : null; },
+      setAttribute: function(k,v){ this.attributes[k] = String(v); },
+      removeAttribute: function(k){ delete this.attributes[k]; },
+      hasAttribute: function(k){ return Object.prototype.hasOwnProperty.call(this.attributes, k); },
+      appendChild: function(c){ this.children.push(c); this.childNodes.push(c); c.parentNode = this; return c; },
+      removeChild: function(c){ var i = this.children.indexOf(c); if(i>=0){ this.children.splice(i,1); this.childNodes.splice(i,1);} return c; },
+      insertBefore: function(c,r){ this.appendChild(c); return c; },
+      replaceChild: function(n,o){ return o; },
+      cloneNode: function(){ return makeNode(this.tagName); },
+      querySelectorAll: function(){ return []; },
+      querySelector: function(){ return null; },
+      addEventListener: Noop, removeEventListener: Noop,
+      textContent: '', innerHTML: '', outerHTML: '',
+      firstChild: null, lastChild: null, parentNode: null,
+      ownerDocument: null
+    };
+    return node;
+  }
+  var emptyDoc = {
+    nodeType: 9,
+    documentElement: makeNode('html'),
+    head: makeNode('head'),
+    body: makeNode('body'),
+    createElement: makeNode,
+    createElementNS: function(ns,tag){ return makeNode(tag); },
+    createTextNode: function(t){ return { nodeType:3, nodeValue: String(t), textContent: String(t) }; },
+    createComment: function(t){ return { nodeType:8, nodeValue: String(t) }; },
+    createDocumentFragment: function(){ return makeNode('fragment'); },
+    getElementById: function(){ return null; },
+    getElementsByTagName: function(){ return []; },
+    getElementsByClassName: function(){ return []; },
+    querySelector: function(){ return null; },
+    querySelectorAll: function(){ return []; },
+    addEventListener: Noop, removeEventListener: Noop,
+    implementation: {
+      createHTMLDocument: function(){ return emptyDoc; },
+      createDocument: function(){ return emptyDoc; },
+      hasFeature: function(){ return true; }
+    },
+    defaultView: null
+  };
+  emptyDoc.defaultView = null;
+  var win = {
+    document: emptyDoc,
+    Document: Noop, Node: Noop, Element: Noop,
+    addEventListener: Noop, removeEventListener: Noop,
+    navigator: { userAgent: 'jsc-polyfill' },
+    location: { href: 'about:blank', protocol: 'about:' },
+    matchMedia: function(){ return { matches: false, addListener: Noop, removeListener: Noop, addEventListener: Noop, removeEventListener: Noop }; },
+    requestAnimationFrame: function(cb){ return setTimeout(function(){ cb(Date.now()); }, 0); },
+    cancelAnimationFrame: function(){},
+    getComputedStyle: function(){ return { getPropertyValue: function(){ return ''; } }; },
+    TextEncoder: function(){
+      this.encode = function(s){
+        var bytes = [];
+        for (var i = 0; i < s.length; i++) {
+          var c = s.charCodeAt(i);
+          if (c < 0x80) bytes.push(c);
+          else if (c < 0x800) { bytes.push(0xC0|(c>>6), 0x80|(c&0x3F)); }
+          else { bytes.push(0xE0|(c>>12), 0x80|((c>>6)&0x3F), 0x80|(c&0x3F)); }
+        }
+        return { length: bytes.length, buffer: new Uint8Array(bytes).buffer };
+      };
+    },
+    TextDecoder: function(){ this.decode = function(){ return ''; }; },
+    setTimeout: setTimeout, clearTimeout: clearTimeout,
+    setInterval: setInterval, clearInterval: clearInterval,
+    Map: Map, Set: Set, Promise: Promise, Uint8Array: Uint8Array
+  };
+  emptyDoc.defaultView = win;
+  globalThis.window = win;
+  globalThis.document = emptyDoc;
+  globalThis.TextEncoder = win.TextEncoder;
+  globalThis.TextDecoder = win.TextDecoder;
+  globalThis.navigator = win.navigator;
+  globalThis.location = win.location;
+  globalThis.requestAnimationFrame = win.requestAnimationFrame;
+  globalThis.cancelAnimationFrame = win.cancelAnimationFrame;
+  globalThis.matchMedia = win.matchMedia;
+  globalThis.self = win;
+})();
+"""
+
+    /// The `globalThis.__merval.validateMermaid(text)` wrapper. Returns a holder
+    /// object `r`; the Swift side calls `flushMicrotasks()` after invoking it,
+    /// then reads `r.done` / `r.isValid` / `r.errors` / `r.diagramType`. The
+    /// try/catch is defensive against mermaid builds that throw synchronously
+    /// (verified v11.16.0 always returns a Promise, but the catch makes the
+    /// wrapper robust to future builds).
+    private static let wrapperJS = """
+globalThis.__merval = {
+  validateMermaid: function(text){
+    var r = { done: false, isValid: false, diagramType: null, errors: [] };
+    try {
+      var firstLine = String(text || '').split(/\\r?\\n/)[0].trim();
+      var m = firstLine.match(/^(\\w+)/);
+      if (m) r.diagramType = m[1];
+      var p = mermaid.parse(text);
+      if (p && typeof p.then === 'function') {
+        p.then(function(){
+          r.done = true; r.isValid = true;
+        }).catch(function(e){
+          r.done = true; r.isValid = false;
+          var msg = (e && e.message) ? e.message : String(e);
+          var lineMatch = String(msg).match(/line\\s+(\\d+)/i);
+          var line = lineMatch ? parseInt(lineMatch[1], 10) : null;
+          r.errors.push({ line: line, code: 'PARSE_ERROR', message: String(msg).split('\\n')[0] });
+        });
+      } else {
+        // Not a Promise (defensive) — treat as success.
+        r.done = true; r.isValid = true;
+      }
+    } catch(e) {
+      r.done = true; r.isValid = false;
+      var msg = (e && e.message) ? e.message : String(e);
+      var lineMatch = String(msg).match(/line\\s+(\\d+)/i);
+      var line = lineMatch ? parseInt(lineMatch[1], 10) : null;
+      r.errors.push({ line: line, code: 'PARSE_ERROR', message: String(msg).split('\\n')[0] });
+    }
+    return r;
+  }
+};
+"""
 }
 
 /// Thread-safe holder for the most recent `JSContext` exception, so the

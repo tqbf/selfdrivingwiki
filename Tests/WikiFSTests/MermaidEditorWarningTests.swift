@@ -5,7 +5,7 @@ import Testing
 /// In-app editor (non-blocking) warning path: `WikiStoreModel.save()` sets
 /// `mermaidSaveWarning` for a broken ```mermaid block, clears it once fixed, and
 /// clears it on a page switch. The validator is injected from the committed repo
-/// bundle (`Resources/merval.bundle.js`), so these run under `swift test` with no
+/// bundle (`Resources/mermaid.min.js`), so these run under `swift test` with no
 /// app bundle — the same JavaScriptCore-no-Node story as MermaidValidatorTests.
 @MainActor
 struct MermaidEditorWarningTests {
@@ -19,10 +19,10 @@ struct MermaidEditorWarningTests {
     private func repoValidator() throws -> MermaidValidator {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
-            .appendingPathComponent("../../Resources/merval.bundle.js")
+            .appendingPathComponent("../../Resources/mermaid.min.js")
         guard let src = try? String(contentsOf: url, encoding: .utf8), !src.isEmpty,
               let v = MermaidValidator(jsSource: src) else {
-            throw Failure("Resources/merval.bundle.js unavailable or failed to load")
+            throw Failure("Resources/mermaid.min.js unavailable or failed to load")
         }
         return v
     }
@@ -32,17 +32,20 @@ struct MermaidEditorWarningTests {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.mermaidValidator = try repoValidator()
         model.newPage(title: "Diagrams")
-        model.draftBody = "```mermaid\nflowchart LR\n  A B\n```"
+        // `A B` is now valid under mermaid v11 (leniency change in #669); use a
+        // genuinely-invalid body so the warning fires.
+        model.draftBody = "```mermaid\nflowchart LR\n  A[unclosed\n```"
         model.save()
         // Non-blocking: the save still happened, but the warning is surfaced.
-        #expect(model.mermaidSaveWarning?.contains("MISSING_ARROW") == true)
+        #expect(model.mermaidSaveWarning != nil)
+        #expect(model.mermaidSaveWarning?.contains("PARSE_ERROR") == true)
     }
 
     @Test func saveClearsWarningOnceFixed() throws {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.mermaidValidator = try repoValidator()
         model.newPage(title: "Diagrams")
-        model.draftBody = "```mermaid\nflowchart LR\n  A B\n```"
+        model.draftBody = "```mermaid\nflowchart LR\n  A[unclosed\n```"
         model.save()
         #expect(model.mermaidSaveWarning != nil)
         // Fix the block and re-save → warning clears.
@@ -55,7 +58,7 @@ struct MermaidEditorWarningTests {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.mermaidValidator = try repoValidator()
         model.newPage(title: "Bad")
-        model.draftBody = "```mermaid\nflowchart LR\n  A B\n```"
+        model.draftBody = "```mermaid\nflowchart LR\n  A[unclosed\n```"
         model.save()
         #expect(model.mermaidSaveWarning != nil)
         // Selecting another page reloads drafts, which must clear the stale banner.
