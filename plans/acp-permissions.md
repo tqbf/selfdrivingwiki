@@ -649,7 +649,7 @@ Add to `Tests/WikiFSTests/AgentLauncherPermissionModeTests.swift` (fast-tier):
 ### 8.4 CI
 
 - `swift build` clean.
-- Fast tier: `swift test --skip 'EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests|SQLiteStatementLifecycleIntegrationTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|ChatSummaryTests|ProjectionTreeTests'`
+- Fast tier: `swift test --skip 'EnumeratorDeletionTests|StoreEmissionTests|StoreEmissionReentrancyTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SplitDiffSnapshotTests|FullTextSearchTests|ChatSearchTests|SessionManagerTests|QuoteHighlightWebViewTests|SidebarDropBuilderIntegrationTests'`
   — green. If a new slow suite is introduced, tag `.integration` AND append
   its name to the `--skip` regex in `.github/workflows/ci.yml` (both Swift
   jobs run; the integration job is the gating one).
