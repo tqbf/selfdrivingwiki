@@ -11,7 +11,7 @@ import WebKit
 /// JS that emits the right text but doesn't actually produce a `<mark>`). If
 /// these fail, the highlight JS itself is broken; if they pass, the bug is in
 /// the trigger path (the pending-anchor consume that decides to run it).
-@Suite(.tags(.integration), .timeLimit(.minutes(5)))
+@Suite(.timeLimit(.minutes(5)))
 @MainActor
 struct QuoteHighlightWebViewTests {
 

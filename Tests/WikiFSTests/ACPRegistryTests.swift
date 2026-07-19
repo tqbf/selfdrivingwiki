@@ -318,13 +318,13 @@ struct ACPRegistryTests {
 
     // MARK: - Live registry round-trip (integration)
 
-    @Test(.tags(.integration), .timeLimit(.minutes(2)))
+    @Test(.timeLimit(.minutes(2)))
     func loadAgentsReturnsNonEmpty() async {
         // The full chain — fresh cache / live fetch / stale cache / bundled
         // snapshot / hardcoded fallback — must always yield SOME non-empty
         // catalog. Never throws, never crashes, never blocks indefinitely.
-        // Tagged `.integration`: hits the network if no fresh cache (10s
-        // timeout) — too slow for the fast tier.
+        // Hits the network if no fresh cache (10s timeout) with a 2-min
+        // per-test ceiling as the safety net.
         let agents = await ACPProviderCatalog.loadAgents()
         #expect(!agents.isEmpty)
         // The fallback (the only absolute floor) always has Claude-acp.

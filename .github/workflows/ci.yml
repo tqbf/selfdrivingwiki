@@ -8,6 +8,9 @@ on:
 
 jobs:
   swift:
+    # Full `swift test` — no skip, no tier split. The in-memory SQLite
+    # fixtures (#658) reduced the full suite from 30+ min to ~1.5 min, so the
+    # fast/integration tier split and `.integration` tags are no longer needed.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,60 +42,11 @@ jobs:
             swift build
             echo "SWIFT=swift" >> "$GITHUB_ENV"
           fi
-      - name: Test (fast tier — slow SQLite suites skipped, issue #292)
-        # Fast tier — quick PR feedback. The slow SQLite integration suites
-        # (tagged .integration in Tests/WikiFSTests/TestTags.swift) are skipped
-        # by name: `swift test` does not yet filter by tag (SwiftPM's --skip is
-        # name-regex only; tag filtering is xcodebuild-only). The full suite
-        # (including these) runs in the parallel `swift-integration` job below
-        # (issue #364) — promote that job to a required status check so a
-        # failing AC test blocks merge. Still run `swift test` locally before
-        # merge for fast iteration — see AGENTS.md.
-        # To add a slow suite: tag it `.integration` AND append its name here.
-        # `GenerationGateLaneTests` was removed from this list (issue #651) —
-        # it's a pure-concurrency suite (no SQLite) and belongs in the fast tier.
-        env:
-          SKIP: 'EnumeratorDeletionTests|StoreEmissionTests|StoreEmissionReentrancyTests|BlobVacuumTests|AgentCASTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SplitDiffSnapshotTests|FullTextSearchTests|ChatSearchTests|SessionManagerTests|QuoteHighlightWebViewTests|SidebarDropBuilderIntegrationTests|CLITantivyLegResolverTests|ACPPermissionTimeoutTests|TantivyAutocompleteTests|ACPRegistryTests/loadAgentsReturnsNonEmpty'
-        run: $SWIFT test --skip "$SKIP"
-
-  swift-integration:
-    # Full test suite — including the SQLite integration suites the fast-tier
-    # `swift` job skips (issue #364). Runs in parallel so it doesn't slow down
-    # PR feedback; promote this job to a required status check in branch
-    # protection so a failing AC test blocks merge.
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Select Xcode (mlx-swift needs Swift 6.3)
-        run: |
-          # macos-latest may default the `swift` command to the CLT toolchain
-          # (Swift 6.1), but mlx-swift 0.31.x requires 6.3. Force Xcode.
-          ls /Applications/Xcode*.app 2>/dev/null
-          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | tail -1)" || true
-          swift --version || xcrun swift --version
-      - name: Generate codegen files (version + prompts)
-        run: make version prompts
-      - name: Build
-        run: |
-          if xcrun swift build 2>/dev/null; then
-            echo "SWIFT=xcrun swift" >> "$GITHUB_ENV"
-          else
-            swift build
-            echo "SWIFT=swift" >> "$GITHUB_ENV"
-          fi
-      - name: Test (full suite — integration suites included, issue #364)
-        # `QueueEngineTests` and `ACPPermissionTimeoutTests` are skipped here
-        # (but NOT in the fast `swift` job): both are fast, timing-sensitive
-        # suites that are fully and reliably covered by the fast tier. They're
-        # fundamentally flaky in THIS tier because the heavy CPU-bound SQLite
-        # suites hog the cooperative thread pool without yielding, starving
-        # their worker Tasks / `Task.sleep` windows (issue #448, issue #664).
-        # ACPPermissionTimeoutTests is the identified cause of the 6-hour
-        # `swift-integration` CI hang — its `.serialized` + `.timeLimit` traits
-        # (in Tests/WikiFSTests/ACPPermissionTimeoutTests.swift) and this skip
-        # together guarantee it can't hang the job. The fast tier (which skips
-        # those heavy suites) runs it reliably.
-        run: $SWIFT test --skip 'QueueEngineTests|ACPPermissionTimeoutTests'
+      - name: Test (full suite — in-memory fixtures, #658)
+        # The full suite runs in ~1.5 min via in-memory SQLite fixtures (#658);
+        # the previous fast/integration tier split + `.integration` tags are
+        # retired (no slow disk I/O to skip). See AGENTS.md.
+        run: $SWIFT test
 
   python:
     runs-on: ubuntu-latest

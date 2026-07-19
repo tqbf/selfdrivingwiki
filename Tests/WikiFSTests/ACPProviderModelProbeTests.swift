@@ -473,7 +473,6 @@ struct ACPProviderModelProbeTests {
 /// ACP_SMOKE=1 ANTHROPIC_API_KEY=sk-... swift test --filter ACPProviderModelProbeLiveTests
 /// ```
 @Suite(
-    .tags(.integration),
     .timeLimit(.minutes(5)),
     .disabled(
         if: ProcessInfo.processInfo.environment["ACP_SMOKE"] == nil,

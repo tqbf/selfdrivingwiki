@@ -55,7 +55,7 @@ struct ACPProviderDiscoveryTests {
 
     // MARK: - Live (this machine's PATH)
 
-    @Test(.tags(.integration))
+    @Test
     func liveDiscoveryMatchesFilesystem() {
         // Machine-agnostic: for each catalog agent, discovery must report it
         // installed iff its binary is actually on the login-shell PATH. No

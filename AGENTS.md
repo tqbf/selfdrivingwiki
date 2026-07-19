@@ -207,26 +207,14 @@ Persistent chats are two tables: `chats` (one row per conversation) and
 **Swift** (from repo root):
 ```
 swift build          # compile
-swift test           # full suite (run locally before merge)
-# fast tier — what the CI `swift` job runs; skips the slow SQLite integration suites:
-swift test --skip 'EnumeratorDeletionTests|StoreEmissionTests|StoreEmissionReentrancyTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SplitDiffSnapshotTests|FullTextSearchTests|ChatSearchTests|SessionManagerTests|QuoteHighlightWebViewTests|SidebarDropBuilderIntegrationTests|CLITantivyLegResolverTests'
+swift test           # full suite — ~1.5 min via in-memory SQLite fixtures (#658)
 swift test --filter PdfExtractionServiceTests  # pdf extraction only
 ```
 
-CI runs **two Swift jobs** (issue #364):
-- **`swift`** (fast tier, issue #292) — skips the slow SQLite integration
-  suites for quick PR feedback. These suites open real databases and dominate
-  runtime (notably `ProjectionTreeTests` working-set tests at 165s+ each, #291).
-  They are tagged `.integration` (`Tests/WikiFSTests/TestTags.swift`); `swift
-  test` does not yet filter by tag, so the fast tier skips them by name.
-- **`swift-integration`** — runs the full `swift test` (no skip), so the
-  integration suites (and any AC tests in them) gate merges. **Promote this
-  job to a required status check in branch protection** so a failing AC test
-  blocks merge. Still run `swift test` locally before merging for fast iteration.
-
-To mark a new slow suite, add `.tags(.integration)` AND append its name to the
-fast-tier `--skip` regex in `.github/workflows/ci.yml` (it will still run in
-the `swift-integration` job).
+`swift test` runs the full suite in ~1.5 minutes (in-memory fixtures since
+#658). Run it before every PR. CI has a single `swift` job that runs the full
+suite — there is no tier split and no skip list anymore (the slow disk-I/O
+they worked around is gone).
 
 **Python / pdf2md** (from `tools/pdf2md`):
 ```

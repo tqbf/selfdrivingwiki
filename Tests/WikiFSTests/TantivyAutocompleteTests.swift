@@ -10,11 +10,7 @@ import WikiFSSearch
 /// prefix-fuzzy on title (the #638 case the plan-reviewer corrected us on:
 /// MUST use the query-string path with `prefix: true`, NOT the structured
 /// `.fuzzy` enum which has no `prefix`).
-///
-/// Marked `.integration` (opens a real Tantivy index) AND added to the
-/// fast-tier `--skip` regex in `.github/workflows/ci.yml` per the testing
-/// rules. The `swift-integration` job runs them to gate merges.
-@Suite(.tags(.integration))
+@Suite
 struct TantivyAutocompleteTests {
 
     // MARK: - In-memory content source (mirror of TantivyShadowIndexTests)

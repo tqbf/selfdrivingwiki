@@ -14,7 +14,7 @@ import WikiFSCore
 /// They rely on the `databaseURL` injection seam (Phase B.0) so the projection
 /// is exercisable without the App Group sandbox (`ProjectionTests` could only
 /// test pure functions before it).
-@Suite(.tags(.integration), .timeLimit(.minutes(5)))
+@Suite(.timeLimit(.minutes(5)))
 struct ProjectionTreeTests {
 
     /// A seeded projection: two pages, a text source (no `.md` sibling), and a

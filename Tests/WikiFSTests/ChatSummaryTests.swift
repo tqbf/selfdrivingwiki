@@ -12,7 +12,7 @@ import Testing
 ///     iterates `[AgentEvent]` without a live launcher; fast tier.
 ///   - **Store round-trip** — `updateChatSummary` + `listChats()` on a real
 ///     SQLite DB; tagged `.integration` (opens a real store).
-@Suite(.tags(.integration), .timeLimit(.minutes(5)))
+@Suite(.timeLimit(.minutes(5)))
 struct ChatSummaryTests {
 
     // MARK: - Pure extract: ChatSummary.summaryExtract
@@ -91,7 +91,7 @@ struct ChatSummaryTests {
 
     // MARK: - Store round-trip (integration)
 
-    @Test(.tags(.integration))
+    @Test
     func summaryRoundTrip_updateAndReadBack() throws {
         let store = try TestStoreFactory.inMemory()
         let chat = try store.createChat(kind: .edit, title: "Test Chat")
@@ -108,7 +108,7 @@ struct ChatSummaryTests {
         #expect(after?.summaryAt != nil)
     }
 
-    @Test(.tags(.integration))
+    @Test
     func summaryNullForExistingChats_afterMigration() throws {
         // A fresh DB is already at v36; createChat inserts a row with NULL
         // summary/summary_at. listChats() must return nil for both.
@@ -121,7 +121,7 @@ struct ChatSummaryTests {
         #expect(row?.summaryAt == nil)
     }
 
-    @Test(.tags(.integration))
+    @Test
     func summaryBumpsUpdatedAt() throws {
         let store = try TestStoreFactory.inMemory()
         let chat = try store.createChat(kind: .edit, title: "Timestamp Chat")
