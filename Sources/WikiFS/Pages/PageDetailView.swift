@@ -76,6 +76,13 @@ struct PageDetailView: View {
                         }
                         .keyboardShortcut(.escape, modifiers: [])
 
+                        // Pin action buttons at the leading edge and the
+                        // outline toggle at the trailing edge so the row's
+                        // layout is independent of the parent's proposed width
+                        // (which changes when the outline pane or the header
+                        // expands/collapses — keeps "Show in List" and friends
+                        // in a fixed position).
+                        Spacer()
                         Button {
                             DebugLog.tabs("PageDetailView: Toggle Outline tapped (editing)")
                             isOutlineExpanded.toggle()
@@ -128,6 +135,10 @@ struct PageDetailView: View {
                             }
                             .help("Reveal this page file in Finder")
                         }
+                        // Pin action buttons at the leading edge and the outline
+                        // toggle at the trailing edge (see the matching comment
+                        // in the editing branch above).
+                        Spacer()
                         Button {
                             DebugLog.tabs("PageDetailView: Toggle Outline tapped")
                             isOutlineExpanded.toggle()
