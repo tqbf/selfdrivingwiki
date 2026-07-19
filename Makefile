@@ -303,6 +303,7 @@ reload: install
 install: build prune-provider-registrations
 	@if [ ! -d "$(APP)" ]; then echo "✗ $(APP) missing — build failed?"; exit 1; fi
 	@pkill -f "$(EXT_NAME).appex" 2>/dev/null && echo "✓ killed stale $(EXT_NAME) process" || true
+	@pkill -f "$(INSTALLED_APP)/Contents/MacOS/$(APP_NAME)" 2>/dev/null && echo "✓ killed running $(APP_NAME)" || true
 	rm -rf "$(INSTALLED_APP)"
 	cp -R "$(APP)" /Applications/
 	@echo "✓ copied to $(INSTALLED_APP)"
