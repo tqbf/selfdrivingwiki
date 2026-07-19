@@ -49,6 +49,17 @@ struct AgentsSettingsView: View {
                 credentialStore: credentialStore,
                 onSave: { updated, selectedModelId in
                     applyEdit(updated, selectedModelId: selectedModelId)
+                },
+                onRefreshModels: { provider, models in
+                    // #640: durable-persist path for probe-discovered models.
+                    // Runs on the parent (which owns `containerDirectory` +
+                    // `@State config`). Uses `settingCachedModels` directly so
+                    // ALL existing fields carry over (maxConcurrent in
+                    // particular — the parent's `save(_:)` helper drops it,
+                    // pre-existing bug at AgentsSettingsView.swift:250-255,
+                    // :360-362). `@Sendable` so the sheet's `Task` can call
+                    // it across actors.
+                    await persistDiscoveredModels(models, forProvider: provider.id)
                 })
         }
         .confirmationDialog(
@@ -361,6 +372,33 @@ struct AgentsSettingsView: View {
         config = updated
         try? config.save(to: containerDirectory)
     }
+
+    /// #640: persist probe-discovered models durably. Uses
+    /// `settingCachedModels` DIRECTLY (NOT the parent's `save(_:)` helper) —
+    /// the helper reconstructs the config from a hand-rolled subset of fields
+    /// and DROPS `maxConcurrent` (pre-existing bug, see
+    /// `AgentsSettingsView.swift:250-255` / `:360-362`). `settingCachedModels`
+    /// is the PURE value-returning mutator the launcher's
+    /// `cacheDiscoveredModels` already uses (`AgentLauncher.swift:297-309`) —
+    /// it carries every field forward. The probe is the Settings-driven
+    /// equivalent of that launcher path.
+    ///
+    /// `@MainActor`: mutates `@State config` and writes the sidecar. Called
+    /// from the editor sheet's refresh Task via `await MainActor.run { … }`
+    /// (the probe itself runs off-main; only the persist is on-main).
+    @MainActor
+    private func persistDiscoveredModels(_ models: [CachedModelInfo], forProvider id: String) async {
+        let updated = config.settingCachedModels(models, forProvider: id)
+        do {
+            try updated.save(to: containerDirectory)
+        } catch {
+            // House rule: never bare `try?`. The write may fail (read-only
+            // mount, permission) — log so it's visible in Console.app.
+            DebugLog.store("persistDiscoveredModels save failed (provider=\(id)): \(error.localizedDescription)")
+        }
+        config = updated
+        DebugLog.store("persistDiscoveredModels: provider=\(id) models=\(models.count) → saved")
+    }
 }
 
 // MARK: - Provider editor
@@ -379,9 +417,35 @@ private struct ProviderEditorView: View {
     @State private var selectedModelId: String
     @State private var isAvailable: Bool = false
 
-    let cachedModels: [CachedModelInfo]
+    /// #640: the cached-model list is now mutable local state (was `let`) so
+    /// the model `Picker` repopulates immediately on Refresh without re-
+    /// presenting the sheet. Seeded from the parent's `config.cachedModels`
+    /// at `init`; updated in-place when a refresh succeeds.
+    @State private var cachedModels: [CachedModelInfo]
+    /// #640: per-provider refresh lifecycle state. Mirrors Paseo's
+    /// `refreshProvider` status model
+    /// (`provider-snapshot-manager.ts:716-787`): `idle` → `loading` →
+    /// `ready`/`error`. On `.error`, `cachedModels` is NOT wiped (the
+    /// last-known list stays visible).
+    @State private var modelRefreshState: ModelRefreshState = .idle
+
     let credentialStore: any ACPCredentialStore
     let onSave: (AgentProvider, String?) -> Void
+    /// #640: durable-persist callback for discovered models. The probe calls
+    /// this on success so the discovered list lands in `agent-providers.json`
+    /// immediately (survives the user never clicking Save — same behavior as
+    /// the launcher's post-spawn `cacheDiscoveredModels`). nil when the parent
+    /// does not support refresh (kept optional for the hosted-test seam).
+    let onRefreshModels: (@Sendable (AgentProvider, [CachedModelInfo]) async -> Void)?
+
+    /// #640: the probe's lifecycle state. Equatable so SwiftUI skips body
+    /// re-renders when the state hasn't changed (e.g. `.idle` → `.idle`).
+    enum ModelRefreshState: Equatable {
+        case idle
+        case loading
+        case ready([CachedModelInfo])
+        case error(String)
+    }
 
     private struct EnvRow: Identifiable {
         let id = UUID()
@@ -394,7 +458,8 @@ private struct ProviderEditorView: View {
         cachedModels: [CachedModelInfo],
         selectedModelId: String,
         credentialStore: any ACPCredentialStore,
-        onSave: @escaping (AgentProvider, String?) -> Void
+        onSave: @escaping (AgentProvider, String?) -> Void,
+        onRefreshModels: (@Sendable (AgentProvider, [CachedModelInfo]) async -> Void)? = nil
     ) {
         self.originalID = provider.id
         self._label = State(initialValue: provider.label)
@@ -404,9 +469,10 @@ private struct ProviderEditorView: View {
             .map { EnvRow(key: $0.key, value: $0.value) })
         self._apiKey = State(initialValue: "")
         self._selectedModelId = State(initialValue: selectedModelId)
-        self.cachedModels = cachedModels
+        self._cachedModels = State(initialValue: cachedModels)
         self.credentialStore = credentialStore
         self.onSave = onSave
+        self.onRefreshModels = onRefreshModels
     }
 
     var body: some View {
@@ -480,21 +546,33 @@ private struct ProviderEditorView: View {
                     }
                     HStack {
                         Button("Refresh Models") {
-                            // No-op: model discovery only happens on a live
-                            // ACP session/new response (see AgentLauncher /
-                            // ACPBackend), which this editor cannot spin up
-                            // without a wiki context. Left disabled with a
-                            // tooltip explaining why — wiring a real refresh
-                            // here is a follow-up once that path is exposed
-                            // outside the launcher.
+                            refreshModels()
                         }
-                        .disabled(true)
-                        .help("Models are captured automatically the first time you chat with this provider.")
+                        .disabled(onRefreshModels == nil)
+                        .help("Fetches the models this provider advertises. Requires the executable on PATH.")
                         Spacer()
-                        if cachedModels.isEmpty {
-                            Text("No models captured yet")
+                        switch modelRefreshState {
+                        case .idle:
+                            if cachedModels.isEmpty {
+                                Text("No models captured yet")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        case .loading:
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Discovering models…")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                        case .ready:
+                            // The picker above already shows the count; no extra
+                            // caption needed (keeps the row tight).
+                            EmptyView()
+                        case .error(let message):
+                            Text(message)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .lineLimit(2)
                         }
                     }
                 } header: {
@@ -533,6 +611,105 @@ private struct ProviderEditorView: View {
             let result = await Task.detached { PathPreflight.resolveOnLoginShell(executable: exe) }.value
             await MainActor.run {
                 isAvailable = if case .found = result { true } else { false }
+            }
+        }
+    }
+
+    /// #640: drive the ACP model-discovery probe for THIS provider. Mirrors
+    /// Paseo's `refreshProvider`
+    /// (`provider-snapshot-manager.ts:716-787`): an availability pre-check,
+    /// then a throwaway `initialize` + `session/new` probe (60s timeout), then
+    /// on success persist + repaint; on failure set `.error` but keep the
+    /// last-known list. Runs OFF the main actor (the probe is `Sendable`);
+    /// crosses back to `@MainActor` for the persist + UI update.
+    ///
+    /// `modelRefreshState` transitions: `idle`/`ready`/`error` → `loading`
+    /// → `ready` (success) / `error` (failure). `cachedModels` is replaced
+    /// ONLY on success — a failure keeps the last-known list visible (Paseo
+    /// parity: `provider-snapshot-manager.ts:773-786` overwrites status/error
+    /// fields only).
+    private func refreshModels() {
+        // Availability pre-check (Paseo parity, :748-756 — `client.isAvailable`).
+        // This is the SSW analogue: PathPreflight on the login-shell PATH.
+        // Done on-main with the `isAvailable` state already computed by
+        // `refreshAvailability()` — no spawn if the executable isn't found.
+        guard isAvailable else {
+            modelRefreshState = .error("Executable not found on PATH")
+            return
+        }
+        // Reviewer finding #4: build the provider from the editor's current
+        // state, mirroring `save()`'s construction verbatim — the probe needs
+        // the resolved command path (PATH resolution happens internally in
+        // `resolveSpawnConfig` via `providerHints`). `enabled`/`isDefault` are
+        // preserved by the parent on Save; the probe doesn't read them.
+        let words = ShellWords.split(commandText)
+        let env: [String: String] = envRows.reduce(into: [:]) { result, row in
+            let key = row.key.trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty else { return }
+            result[key] = row.value
+        }
+        let providerForProbe = AgentProvider(
+            id: originalID,
+            label: label.trimmingCharacters(in: .whitespaces),
+            command: words.isEmpty ? nil : words,
+            env: env,
+            enabled: true,
+            isDefault: false)
+        let apiKeyForProbe = apiKey.isEmpty ? nil : apiKey
+
+        modelRefreshState = .loading
+        DebugLog.agent("ProviderEditorView.refreshModels: starting probe provider=\(originalID)")
+        Task {
+            // The probe struct captures only Sendable config; the SDK Client
+            // actor is the concurrency boundary. All subprocess I/O runs here,
+            // off-main.
+            let probe = ACPProviderModelProbe(
+                provider: providerForProbe,
+                resolvedCommand: words,
+                apiKey: apiKeyForProbe)
+            let outcome: Result<[CachedModelInfo], Error>
+            do {
+                let models = try await probe.discoverModels()
+                if ACPProviderModelProbe.shouldThrowNoModels(models) {
+                    // The probe completed successfully but the agent advertised
+                    // no models (older agents). Surface a specific error rather
+                    // than wiping the cache.
+                    DebugLog.agent("ProviderEditorView.refreshModels: probe OK but no models advertised provider=\(originalID)")
+                    outcome = .failure(ACPProviderModelProbeError.noModelsAdvertised)
+                } else {
+                    DebugLog.agent("ProviderEditorView.refreshModels: probe OK models=\(models.count) provider=\(originalID)")
+                    outcome = .success(models)
+                }
+            } catch {
+                DebugLog.agent("ProviderEditorView.refreshModels: probe failed provider=\(originalID): \(error.localizedDescription)")
+                outcome = .failure(error)
+            }
+            // Cross back to @MainActor for the persist + UI update.
+            await MainActor.run {
+                switch outcome {
+                case .success(let models):
+                    cachedModels = models
+                    modelRefreshState = .ready(models)
+                    // Persist durably — survives even if the user never clicks
+                    // Save (matches the launcher's post-spawn
+                    // `cacheDiscoveredModels` semantics).
+                    if let onRefreshModels {
+                        Task {
+                            await onRefreshModels(providerForProbe, models)
+                        }
+                    }
+                case .failure(let error):
+                    // LAST-KNOWN list retained — only the status/error fields
+                    // change (Paseo parity). The model picker keeps showing
+                    // `cachedModels`; only the inline status updates.
+                    let message: String
+                    if let probeErr = error as? ACPProviderModelProbeError {
+                        message = probeErr.localizedDescription
+                    } else {
+                        message = error.localizedDescription
+                    }
+                    modelRefreshState = .error(message)
+                }
             }
         }
     }
