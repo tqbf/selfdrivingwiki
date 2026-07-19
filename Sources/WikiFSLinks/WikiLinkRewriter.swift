@@ -68,6 +68,63 @@ public enum WikiLinkRewriter {
             // Idempotency fast path: already canonical → leave untouched.
             if WikiLinkParser.isCanonicalULID(bareTarget) { continue }
 
+            // Issue #619: try-resolve-whole at the canonicalize seam. When the
+            // regex split target|alias but the real display name contains a
+            // literal `|` (common with YouTube titles the app itself ingests,
+            // e.g. `But what is cross-entropy? | Compression is Intelligence
+            // Part 2`), the split target is truncated and never resolves. So
+            // BEFORE treating `|` as the alias separator, reconstruct the
+            // whole name (`bareTarget` + `|` + normalized alias) and ask the
+            // injected resolvers. If it matches (Pass 1: exact case-insensitive
+            // `display_name` match), canonicalize as a single target whose
+            // auto-alias is the whole reconstructed name — mirroring the
+            // no-alias branch so the user's intended display text survives.
+            //
+            // Scoped to the no-fragment / no-pin case (the issue's repro) to
+            // avoid fragment-in-alias ambiguity; `#`-in-name already resolves
+            // via `candidateSplits` below. If neither candidate resolves, fall
+            // through to today's behavior (`|` was a real alias separator).
+            if rawAlias != nil, fragment == nil, pin == nil,
+               let rawAliasValue = fixed.alias {
+                let normalizedAlias = WikiText.normalized(rawAliasValue)
+                if !normalizedAlias.isEmpty {
+                    // Try spaced first (the YouTube-title convention), then the
+                    // unspaced form — both hit Pass 1's exact match. The first
+                    // resolver hit determines which reconstruction we serialize
+                    // as the auto-alias, so what the user sees rendered matches
+                    // the store's display_name spelling.
+                    let candidates = [
+                        "\(bareTarget) | \(normalizedAlias)",
+                        "\(bareTarget)|\(normalizedAlias)",
+                    ]
+                    var wholeID: PageID? = nil
+                    var wholeName: String? = nil
+                    for candidate in candidates {
+                        let id: PageID?
+                        switch kind {
+                        case .source: id = try resolveSource(candidate)
+                        case .chat:   id = try resolveChat(candidate)
+                        case .page:   id = try resolvePage(candidate)
+                        }
+                        if let id {
+                            wholeID = id
+                            wholeName = candidate
+                            break
+                        }
+                    }
+                    if let resolvedID = wholeID, let resolvedName = wholeName {
+                        let prefix = kind.linkPrefix
+                        let canonicalTarget = prefix + resolvedID.rawValue
+                        let replacement = "[[\(canonicalTarget)|\(resolvedName)]]"
+                        let mutable = NSMutableString(string: result)
+                        mutable.replaceCharacters(in: fullRange, with: replacement)
+                        result = mutable as String
+                        changed = true
+                        continue
+                    }
+                }
+            }
+
             // Resolve (longest-name-wins). Walk candidate splits ourselves so we
             // capture the id in a single pass (resolvedSplit only yields a Split,
             // not the id). Unresolved → forward link, leave byte-identical.

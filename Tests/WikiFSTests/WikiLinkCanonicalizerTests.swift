@@ -99,6 +99,134 @@ struct WikiLinkCanonicalizerTests {
         #expect(out == nil)
     }
 
+    // MARK: - Issue #619 — pipe in source/page/chat name (try-resolve-whole)
+
+    @Test func canonicalizesSourceLinkWithEmbeddedPipe() throws {
+        // The reported repro: a YouTube title shipped with ` | ` lands as a
+        // `source:` link. Without the try-resolve-whole path, the regex splits
+        // `name | rest` into target=`name` (truncated) + alias=`rest`, and the
+        // source never resolves. With the fix, the whole `name | rest` resolves
+        // against the store and is canonicalized as a single target whose
+        // auto-alias is the whole display name.
+        let name = "But what is cross-entropy? | Compression is Intelligence Part 2"
+        let (rp, rs) = resolvers(sources: [name: paperID])
+        let out = try WikiLinkRewriter.canonicalize(
+            in: "[[source:\(name)]]", resolvePage: rp, resolveSource: rs)
+        #expect(out == "[[source:\(paperID)|\(name)]]")
+    }
+
+    @Test func canonicalizesSourceLinkWithEmbeddedPipeAndEmbeddedWhitespace() throws {
+        // Alias-side leading spaces (the regex captures `[^\]]+` after `|`, so a
+        // spaced form yields a leading-space alias) must be normalized away
+        // before the whole-name lookup. Regression guard for the
+        // `WikiText.normalized(alias)` step inside the try-resolve-whole branch.
+        let (rp, rs) = resolvers(sources: ["Foo | Bar": paperID])
+        // User wrote `[[source:Foo | Bar]]` — regex captures target=`source:Foo `
+        // and alias=` Bar` (NOTE leading space). Whole-name reconstruction
+        // must still resolve against `Foo | Bar` (no leading-space store name).
+        let out = try WikiLinkRewriter.canonicalize(
+            in: "[[source:Foo | Bar]]", resolvePage: rp, resolveSource: rs)
+        #expect(out == "[[source:\(paperID)|Foo | Bar]]")
+    }
+
+    @Test func canonicalizesSourceLinkWithEmbeddedPipeNoSpacesAroundPipe() throws {
+        // When the display_name literally contains `|` with NO surrounding
+        // spaces (e.g. `Foo|Bar`), the unspaced reconstruction must still
+        // resolve. The branch tries spaced form first (miss), then the
+        // unspaced form (hit).
+        let (rp, rs) = resolvers(sources: ["Foo|Bar": paperID])
+        let out = try WikiLinkRewriter.canonicalize(
+            in: "[[source:Foo|Bar]]", resolvePage: rp, resolveSource: rs)
+        #expect(out == "[[source:\(paperID)|Foo|Bar]]")
+    }
+
+    @Test func canonicalizesPageLinkWithEmbeddedPipe() throws {
+        // The fix is not source-specific — page links whose TITLE contains `|`
+        // resolve too (page is the default kind when no prefix is present).
+        let name = "Agentic Static Analysis | C# Security Auditing"
+        let (rp, rs) = resolvers(pages: [name: homeID])
+        let out = try WikiLinkRewriter.canonicalize(
+            in: "[[\(name)]]", resolvePage: rp, resolveSource: rs)
+        #expect(out == "[[page:\(homeID)|\(name)]]")
+    }
+
+    @Test func canonicalizesChatLinkWithEmbeddedPipe() throws {
+        // Chat resolver gets the same try-resolve-whole treatment via the
+        // injected `resolveChat` closure (which defaults to nil elsewhere).
+        let name = "Standup | 2026-01-01"
+        let rc: (String) throws -> PageID? = { _ in PageID(rawValue: "01JCHATCHATCHATCHATCHATCHAT") }
+        let rp: (String) throws -> PageID? = { _ in nil }
+        let rs: (String) throws -> PageID? = { _ in nil }
+        let out = try WikiLinkRewriter.canonicalize(
+            in: "[[chat:\(name)]]", resolvePage: rp, resolveSource: rs, resolveChat: rc)
+        #expect(out == "[[chat:01JCHATCHATCHATCHATCHATCHAT|\(name)]]")
+    }
+
+    @Test func canonicalizesEmbedWithEmbeddedPipeInSourceName() throws {
+        // The `!` embed prefix must survive the try-resolve-whole rewrite —
+        // `fullRange` covers the `[[…]]` span only, so the leading `!` is left
+        // byte-for-byte where the user put it (the same as the no-alias branch).
+        let name = "Figure | Cross Entropy"
+        let (rp, rs) = resolvers(sources: [name: paperID])
+        let out = try WikiLinkRewriter.canonicalize(
+            in: "![[source:\(name)]]", resolvePage: rp, resolveSource: rs)
+        #expect(out == "![[source:\(paperID)|\(name)]]")
+    }
+
+    @Test func leavesVerbatimWhenEmbeddedPipeDoesNotResolve() throws {
+        // AC: existing `[[target|alias]]` syntax where the whole `target | alias`
+        // is NOT a real resource name is unchanged — alias split still fires for
+        // the (resolvable) target half. (Mirrors `preservesExistingAlias` but
+        // with a `|`-bearing candidate that doesn't exist as a name.)
+        let (rp, rs) = resolvers(pages: ["Home": homeID])
+        // Whole `"Home | the front page"` is not a page; the truncated `"Home"`
+        // is — so the regular alias-split path canonicalizes the target slice.
+        let out = try WikiLinkRewriter.canonicalize(
+            in: "[[Home | the front page]]", resolvePage: rp, resolveSource: rs)
+        #expect(out == "[[page:\(homeID)| the front page]]")
+    }
+
+    @Test func leavesVerbatimWhenNeitherSpacedNorUnspacedWholeResolves() throws {
+        // The try-resolve-whole branch falls through silently when the user's
+        // `[[target|alias]]` is a genuine alias link and neither `target|alias`
+        // nor `target | alias` is a real resource name. Forward link is then
+        // left byte-identical (regular alias-split path also fails because the
+        // truncated target doesn't resolve either).
+        let (rp, rs) = resolvers()  // empty namespace — nothing resolves
+        let out = try WikiLinkRewriter.canonicalize(
+            in: "[[source:But what is cross-entropy? | Compression is Intelligence Part 2]]",
+            resolvePage: rp, resolveSource: rs)
+        #expect(out == nil)  // forward link, unchanged
+    }
+
+    @Test func embeddedPipeCanonicalRoundTripsStably() throws {
+        // AC: after canonicalization, the resulting `[[source:<ULID>|name|pipe]]`
+        // re-parses + re-canonicalizes as a no-op (ULID is pipe-free; the alias
+        // group `[^\]]+` accepts `|`). The idempotency fast path holds.
+        let name = "But what is cross-entropy? | Compression is Intelligence Part 2"
+        let (rp, rs) = resolvers(sources: [name: paperID])
+        let once = try WikiLinkRewriter.canonicalize(
+            in: "[[source:\(name)]]", resolvePage: rp, resolveSource: rs)!
+        let twice = try WikiLinkRewriter.canonicalize(in: once, resolvePage: rp, resolveSource: rs)
+        #expect(twice == nil)  // second pass is a no-op
+        #expect(once == "[[source:\(paperID)|\(name)]]")
+    }
+
+    @Test func embeddedPipeWithQuotedFragmentStillResolvesBareName() throws {
+        // Regression guard for the `#"…"` quoted-anchor path through canonicalize
+        // (the parser's `#"first option | second option"` absorption is already
+        // covered in `WikiLinkParserTests`). When the `|` lives INSIDE a quoted
+        // anchor, the regex absorbs it (no alias split), so `rawAlias == nil`
+        // and the try-resolve-whole branch is correctly skipped — today's
+        // behavior (resolve bare name, carry the fragment into the canonical
+        // target, auto-insert `|<bareTarget>`) is unchanged.
+        let (rp, rs) = resolvers(sources: ["Some Page": paperID])
+        let out = try WikiLinkRewriter.canonicalize(
+            in: "[[source:Some Page#\"first option | second option\"]]",
+            resolvePage: rp, resolveSource: rs)
+        #expect(out == "[[source:\(paperID)#\"first option | second option\"|Some Page]]")
+    }
+
     // MARK: - AC.4 — idempotency
 
     @Test func canonicalizingAlreadyCanonicalIsNoOp() throws {

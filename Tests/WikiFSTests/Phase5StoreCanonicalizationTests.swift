@@ -220,4 +220,85 @@ struct Phase5StoreCanonicalizationTests {
         #expect(afterSecond.bodyMarkdown == bodyAfterFirst)
         #expect(try second.changeToken() == tokenAfterFirst)
     }
+
+    // MARK: - Issue #619 — pipe in source display_name, end-to-end through PageUpsert
+
+    @Test func upsertCanonicalizesSourceLinkWithPipeInDisplayName() throws {
+        // The issue's repro: a source whose `display_name` contains a literal
+        // `|`. Under the app's normal ingestion flow, `WikiNameRules.sanitized`
+        // (called by `addSource`/`renameSource` at every write boundary, and by
+        // the v17→v18 migration for pre-existing rows) replaces `|` → `-` so
+        // the invariant "every stored name is linkable" holds. To stage the rare
+        // but reachable state where a `|` survives into the DB (manual SQL
+        // edit, a future code path that bypasses sanitization, …), this test
+        // plants the row directly via raw `sqlite3_exec` — the same bypass
+        // pattern `buildRewoundV22DB()` uses to rewind `user_version`.
+        let url = tempDatabaseURL()
+        let displayName = "But what is cross-entropy? | Compression is Intelligence Part 2"
+        // 26-char Crockford Base32 ID (X/Y/Z are valid; I/L/O/U are excluded).
+        let sourceID = "01HXXXXXXXXXXXXXXXXXXXXXXX"
+
+        // 1) Initialize schema (fresh, at the current schema version). Deinit
+        //    closes the connection.
+        _ = try GRDBWikiStore(databaseURL: url)
+
+        // 2) Plant a `sources` row with a literal `|` in `display_name`,
+        //    bypassing the sanitization the public API enforces. Single-quote
+        //    safe (the title has no apostrophes). The rest of the NOT NULL
+        //    columns get sensible values; defaults cover the rest.
+        var db: OpaquePointer?
+        sqlite3_open(url.path, &db)
+        let now = Date().timeIntervalSince1970
+        let insertSQL = """
+        INSERT INTO sources (id, filename, byte_size, created_at, updated_at, display_name, role)
+        VALUES ('\(sourceID)', 'video-dQw4w9WgXcQ-transcript.md', 0, \(now), \(now), '\(displayName)', 'primary');
+        """
+        sqlite3_exec(db, insertSQL, nil, nil, nil)
+        sqlite3_close(db)
+
+        // 3) Reopen through the store. Schema is already at the current
+        //    version, so no migration runs and the planted row survives
+        //    verbatim (with its `|`).
+        let store = try GRDBWikiStore(databaseURL: url)
+
+        // Sanity: the planted source resolves by its whole `|`-bearing name
+        // (Pass 1: exact case-insensitive `display_name` match).
+        let resolved = try store.resolveSourceByName(displayName)
+        #expect(resolved?.rawValue == sourceID,
+                "planted source with `|` in display_name must resolve by name")
+
+        // 4) Save a page whose body cites the source by its whole display name.
+        //    Without the issue #619 fix, the regex splits `[[source:Name | p…]]`
+        //    into target=`Name ` + alias=`p…` (truncated) and the resolver would
+        //    never match the truncated `Name` — the link stays a forward link.
+        //    With the try-resolve-whole branch at the canonicalize seam, the
+        //    reconstituted whole name resolves against the store and the link
+        //    canonicalizes as `[[source:<ULID>|<whole name with pipe>]]`.
+        let outcome = try PageUpsert.upsert(in: store, id: nil, title: "Linker",
+            body: "Cite [[source:\(displayName)]].")
+
+        let stored = try store.getPage(id: outcome.id)
+        let expectedCanonical = "[[source:\(sourceID)|\(displayName)]]"
+        #expect(stored.bodyMarkdown.contains(expectedCanonical),
+                "expected canonical form in stored body, got: \(stored.bodyMarkdown)")
+        #expect(!stored.bodyMarkdown.contains("[[source:\(displayName)]]"),
+                "raw display-name form should be gone: \(stored.bodyMarkdown)")
+
+        // 5) Re-parse: the canonical body yields a `source_links` edge pointing
+        //    at the embedded-pipe source id (the ULID target survives parse).
+        let links = try store.listAllSourceLinks().filter { $0.from == outcome.id.rawValue }
+        #expect(links.contains { $0.to == sourceID },
+                "source_links edge should point at the embedded-pipe source id")
+
+        // 6) Idempotency: re-saving the canonical body is a no-op. The target
+        //    slice is now a 26-char ULID, which trips the idempotency fast path
+        //    (WikiLinkRewriter.swift, `isCanonicalULID`), so neither the
+        //    try-resolve-whole branch nor the regular resolve block fires.
+        let before = stored.bodyMarkdown
+        _ = try PageUpsert.upsert(in: store, id: outcome.id, title: "Linker",
+            body: stored.bodyMarkdown)
+        let after = try store.getPage(id: outcome.id)
+        #expect(after.bodyMarkdown == before,
+                "re-saving a canonical embedded-pipe body must be a no-op")
+    }
 }
