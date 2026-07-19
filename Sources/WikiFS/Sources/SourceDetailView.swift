@@ -254,6 +254,30 @@ struct SourceDetailView: View {
         isMarkdownNative || hasMarkdown
     }
 
+    /// `true` when this source is a STANDALONE Mermaid diagram (`.mmd` /
+    /// `text/mermaid` / `text/x-mermaid`) — as opposed to a markdown document
+    /// that merely CONTAINS a fenced ```mermaid block. The outline parses
+    /// markdown headings, which a pure diagram source has none of; suppress
+    /// the outline sidebar and its toggle for these sources (issue #642).
+    /// Uses mime + extension (not a content scan) so it's stable before the
+    /// raw bytes load.
+    private var isPureMermaidSource: Bool {
+        if MimeType.isMermaid(file.mimeType) { return true }
+        let ext = file.ext.lowercased()
+        return ext == MermaidSourceDetector.mermaidExtension || ext == "mermaid"
+    }
+
+    /// `true` when the outline sidebar is meaningful for this source: there's
+    /// markdown content AND it isn't a pure Mermaid diagram. Gates both the
+    /// outline pane and its toggle button so a `.mmd` source never shows a
+    /// useless empty outline (and never gets stuck with the pane open and no
+    /// way to close it — `isOutlineExpanded` is global `@AppStorage`, so
+    /// without this guard it leaks from a previous markdown source).
+    /// Issue #642.
+    private var isOutlineApplicable: Bool {
+        !isPureMermaidSource && isMarkdownEditable
+    }
+
     private var displayName: String {
         let name = file.effectiveName
         return name.isEmpty ? "Untitled" : name
@@ -493,12 +517,14 @@ struct SourceDetailView: View {
                         }
                         .keyboardShortcut(.escape, modifiers: [])
 
-                        Button {
-                            isOutlineExpanded.toggle()
-                        } label: {
-                            Image(systemName: "sidebar.right")
+                        if isOutlineApplicable {
+                            Button {
+                                isOutlineExpanded.toggle()
+                            } label: {
+                                Image(systemName: "sidebar.right")
+                            }
+                            .help("Toggle Outline")
                         }
-                        .help("Toggle Outline")
                     }
                 } else {
                     // Row 1 — primary source actions: the extraction chip leads
@@ -595,7 +621,7 @@ struct SourceDetailView: View {
                             }
                             .help("Reveal this source file in Finder")
                         }
-                        if isMarkdownEditable {
+                        if isOutlineApplicable {
                             Button {
                                 isOutlineExpanded.toggle()
                             } label: {
@@ -752,7 +778,12 @@ struct SourceDetailView: View {
     private var contentAndOutline: some View {
         HStack(spacing: 0) {
             contentArea
-            if isOutlineExpanded, let markdown = currentMarkdownContent {
+            // `isOutlineApplicable` excludes pure Mermaid sources (`.mmd` /
+            // `text/mermaid`) — the outline parses markdown headings, which a
+            // diagram source has none of. Without this guard the pane leaks
+            // open from a previous markdown source via the global
+            // `@AppStorage("isOutlineExpanded")` flag (issue #642).
+            if isOutlineExpanded, isOutlineApplicable, let markdown = currentMarkdownContent {
                 outlineView(markdown: markdown)
             }
         }
