@@ -104,5 +104,11 @@ public enum ACPProviderCatalog {
             summary: "The open source coding agent over ACP.",
             detectExecutable: "kilo",
             command: ["kilo", "acp"]),
+        KnownACPAgent(
+            id: "opencode",
+            label: "OpenCode",
+            summary: "Open-source terminal AI coding agent with multi-provider support.",
+            detectExecutable: "opencode",
+            command: ["opencode", "acp"]),
     ]
 }
