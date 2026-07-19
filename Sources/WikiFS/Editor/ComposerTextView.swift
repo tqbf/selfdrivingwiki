@@ -107,6 +107,27 @@ struct ComposerTextView: NSViewRepresentable {
     /// The coordinator reads this fresh on every schedule.
     var debounce: UInt64 = ComposerTextView.autocompleteDebounce
 
+    /// Cancellable handle for one scheduled debounce work. Mirrors the
+    /// `ChangeCoalescer.Handle` pattern (`Sources/WikiFSCore/Store/ChangeCoalescer.swift:23`):
+    /// the coordinator cancels the prior handle on each reschedule so only
+    /// the latest survives. Production's handle calls `task.cancel()`; a test
+    /// manual scheduler's handle just removes the work from a pending dict.
+    final class DebounceHandle {
+        let cancel: () -> Void
+        init(cancel: @escaping () -> Void) { self.cancel = cancel }
+    }
+
+    /// Optional debounce scheduler seam (issue #661). When `nil` (default), the
+    /// coordinator uses a built-in `Task.sleep`-based scheduler (production
+    /// behavior — unchanged from before this seam). Tests inject a manual
+    /// scheduler that captures work for an explicit `fireAll()` call so timing
+    /// is fully deterministic with no real `Task.sleep`: the prior
+    /// `Task.sleep`-based approach deadlocked CI for 6 hours under heavy
+    /// integration-tier load because the `@MainActor`-isolated Task bodies
+    /// never got scheduled within the polling timeout. Pattern mirrors
+    /// `Tests/WikiFSTests/ChangeCoalescerTests.swift`'s `ManualScheduler`.
+    var scheduleDebounce: ((UInt64, @escaping () async -> Void) -> DebounceHandle)? = nil
+
     // MARK: - Height clamping (pure, testable)
 
     /// Clamp + inset constants. `verticalInsetPerSide` is applied to the text
@@ -310,10 +331,14 @@ struct ComposerTextView: NSViewRepresentable {
         /// via `doCommandBy:`, so a local `NSEvent` monitor is the only path.
         /// Mirrors `OmniboxSearchField.swift:242-252`.
         private var keyMonitor: Any?
-        /// The in-flight autocomplete Task. Cancelled and replaced on every
-        /// keystroke that lands inside an open-link trigger (AC #5). Visible
-        /// to tests so they can assert it was cancelled.
-        fileprivate var autocompleteTask: Task<Void, Never>?
+        /// The in-flight autocomplete schedule handle. Cancelled and replaced on
+        /// every keystroke that lands inside an open-link trigger (AC #5). When
+        /// `parent.scheduleDebounce` is nil (production), this is a
+        /// `DebounceHandle { task.cancel() }` wrapping a real `Task.sleep` Task.
+        /// When a test manual scheduler is injected, this is a handle that just
+        /// removes the work from the scheduler's pending dict (so the work is
+        /// never run until the test calls `fireAll()`).
+        fileprivate var pendingHandle: ComposerTextView.DebounceHandle?
 
         init(_ parent: ComposerTextView) {
             self.parent = parent
@@ -373,8 +398,18 @@ struct ComposerTextView: NSViewRepresentable {
 
         /// Cancel any in-flight query and start a fresh debounced one for
         /// `trigger`. AC #5: typing fast cancels stale in-flight queries.
+        ///
+        /// Routes the post-debounce work through `parent.scheduleDebounce`
+        /// (when injected — tests) or an inline `Task.sleep`-based scheduler
+        /// (production / default, kept inline here so the Task body inherits
+        /// `@MainActor` from `scheduleAutocomplete` — same as pre-#661). Issue
+        /// #661: extracting the debounce sleep into a seam lets tests drive
+        /// the timing deterministically with a `ManualScheduler` rather than
+        /// relying on `Task.sleep` (which deadlocked CI under heavy
+        /// integration-tier load).
         fileprivate func scheduleAutocomplete(trigger: WikiLinkPrefixScanner.OpenWikiLink) {
-            autocompleteTask?.cancel()
+            pendingHandle?.cancel()
+            pendingHandle = nil
             guard let hooks = parent.autocomplete else { return }
             // Capture the partial at schedule time — a later keystroke that
             // reschedules will see a different trigger and cancel this one
@@ -382,25 +417,43 @@ struct ComposerTextView: NSViewRepresentable {
             let partial = trigger.partial
             let kind = trigger.kind
             let debounce = parent.debounce
-            autocompleteTask = Task { [weak self] in
+            // The post-debounce work: fetch + apply-if-still-current. Shared
+            // between the test manual scheduler and the production default.
+            let work: () async -> Void = { [weak self] in
                 guard let self else { return }
-                do {
-                    try await Task.sleep(for: .milliseconds(debounce))
-                } catch {
-                    // Cancelled during the sleep — bail without applying.
-                    return
-                }
-                guard !Task.isCancelled else { return }
                 let results = await hooks.fetch(partial, kind)
-                guard !Task.isCancelled else { return }
                 // Only apply if this trigger is still current (a later keystroke
-                // may have replaced us and already shown its own results).
+                // may have replaced us and already shown its own results). The
+                // MainActor.run hop guarantees self access is isolated
+                // regardless of which scheduler ran us.
                 await MainActor.run { [weak self] in
                     guard let self,
                           self.currentTrigger?.partial == partial,
                           self.currentTrigger?.kind == kind else { return }
                     self.applyResults(results)
                 }
+            }
+            if let scheduler = parent.scheduleDebounce {
+                // Test path: the manual scheduler captures `work` for an
+                // explicit `fireAll()` — no real `Task.sleep`, no Task body
+                // scheduling race under load.
+                pendingHandle = scheduler(debounce, work)
+            } else {
+                // Production default: Task.sleep + Task body (inherits
+                // `@MainActor` from `scheduleAutocomplete` so coordinator
+                // access from `work` is isolated). Cancelled via task.cancel()
+                // — same shape as `WikiChangeBridge.schedule()` at
+                // `Sources/WikiFS/Window/WikiChangeBridge.swift:116-122`.
+                let task = Task {
+                    do {
+                        try await Task.sleep(for: .milliseconds(debounce))
+                    } catch {
+                        return  // cancelled during the sleep — bail without applying
+                    }
+                    guard !Task.isCancelled else { return }
+                    await work()
+                }
+                pendingHandle = DebounceHandle { task.cancel() }
             }
         }
 
@@ -453,8 +506,8 @@ struct ComposerTextView: NSViewRepresentable {
         /// hosting view can't leak across view rebuilds.
         @MainActor
         fileprivate func teardownAutocomplete() {
-            autocompleteTask?.cancel()
-            autocompleteTask = nil
+            pendingHandle?.cancel()
+            pendingHandle = nil
             removeKeyMonitor()
             currentTrigger = nil
             autocompleteResults = []

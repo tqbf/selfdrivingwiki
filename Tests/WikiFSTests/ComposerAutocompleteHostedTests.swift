@@ -6,31 +6,21 @@ import Testing
 @testable import WikiFSLinks
 @testable import WikiFSSearch
 
-/// Hosted-window integration tests for the chat composer's autocomplete
-/// pipeline: prefix detection → debounced Tantivy query → result application.
-/// Issues #436 / #638, plan §6a/§6d.
-///
-/// **Reviewer correction #3:** includes a dedicated debounce-cancel test
-/// (AC #5) that drives the Coordinator's schedule with two partials in
-/// quick succession and asserts only the final partial's result is applied.
-///
-/// The composer's NSTextView is hosted in a real `NSWindow` so the
-/// delegate/notification paths fire end-to-end (`reproducing-live-ui-bugs`
-/// skill: ground-truth via the real delegate seam, not a mocked one).
+/// Deterministic tests for the chat composer's autocomplete pipeline:
+/// prefix detection → debounced Tantivy query → result application.
+/// Issues #436 / #638, plan §6a/§6d. Issue #661: the prior real-`Task.sleep`
+/// approach deadlocked CI under heavy integration-tier load — these tests use
+/// an injected `ManualScheduler` (pattern from
+/// `Tests/WikiFSTests/ChangeCoalescerTests.swift`) so the coordinator captures
+/// the post-debounce work without running it, and the test fires it
+/// explicitly via `fireAll()`. No `Task.sleep` anywhere in this file.
 ///
 /// `@MainActor` because AppKit + SwiftUI hosting is main-actor-isolated.
-/// `.serialized` because each test drives the main-actor Task scheduler with
-/// real `Task.sleep` waits — running them in parallel (the default) saturates
-/// the cooperative pool and starves the debounce Tasks, making the timing
-/// assertions flaky. Serial execution keeps each test's waits deterministic.
-///
-/// `.tags(.integration)` because the Task-scheduler timing is not reliable
-/// under heavy cooperative-pool load — the suite deadlocked CI for 6 hours
-/// when run alongside the full integration tier. The fast CI tier skips it;
-/// `swift-integration` runs it (where its serial + polling approach is
-/// reliable enough). The deterministic-clock rewrite is tracked as follow-up.
+/// `.serialized` because the `ManualScheduler` instances are suite-local —
+/// serial keeps each test's state isolated from the next (also it's the
+/// natural shape for an actor-driven `fireAll()`).
 @MainActor
-@Suite(.serialized, .tags(.integration))
+@Suite(.serialized)
 struct ComposerAutocompleteHostedTests {
 
     // MARK: - Hosted composer builder
@@ -47,8 +37,8 @@ struct ComposerAutocompleteHostedTests {
 
     /// Records `fetch` calls and injects canned results. Captured by the
     /// autocomplete closures so tests can observe the coordinator's behavior.
-    /// An `actor` so it's `Sendable`-safe to call from the coordinator's
-    /// detached `Task` (Swift 6 strict concurrency).
+    /// An `actor` so it's `Sendable`-safe to call from the captured work
+    /// closure (Swift 6 strict concurrency).
     actor FakeAutocomplete {
         /// Recorded (partial, kind) pairs in fetch-call order.
         private(set) var fetchCalls: [(partial: String, kind: ParsedLink.LinkType)] = []
@@ -62,6 +52,68 @@ struct ComposerAutocompleteHostedTests {
         func fetch(_ partial: String, _ kind: ParsedLink.LinkType) async -> [TantivyShadowSearchResult] {
             fetchCalls.append((partial, kind))
             return nextResult
+        }
+    }
+
+    /// Captures scheduled debounce work so the test can fire it on demand —
+    /// the same pattern `ChangeCoalescerTests` uses, with one addition: this
+    /// is a `@unchecked Sendable` class (crosses isolation boundaries between
+    /// the @MainActor test body, the schedule seam closure stored in
+    /// ComposerTextView, and the captured async work) with an NSLock guarding
+    /// its state. Mirrors `OmniboxSearchField.Coordinator`'s `@unchecked
+    /// Sendable` shape for the same reason.
+    final class ManualScheduler: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pending: [Int: () async -> Void] = [:]
+        private var nextID = 0
+        private var _cancelledIDs: [Int] = []
+
+        var pendingCount: Int {
+            lock.lock(); defer { lock.unlock() }
+            return pending.count
+        }
+
+        var cancelledIDs: [Int] {
+            lock.lock(); defer { lock.unlock() }
+            return _cancelledIDs
+        }
+
+        func schedule(_ debounce: UInt64, _ work: @escaping () async -> Void) -> ComposerTextView.DebounceHandle {
+            lock.lock()
+            let id = nextID
+            nextID += 1
+            pending[id] = work
+            lock.unlock()
+            return ComposerTextView.DebounceHandle { [weak self] in
+                self?.cancel(id: id)
+            }
+        }
+
+        private func cancel(id: Int) {
+            lock.lock()
+            pending[id] = nil
+            _cancelledIDs.append(id)
+            lock.unlock()
+        }
+
+        /// Drain pending work under the lock (sync — `NSLock.unlock()` is
+        /// unavailable from async contexts in Swift 6).
+        private func drainPending() -> [() async -> Void] {
+            lock.lock()
+            let items = pending.sorted { $0.key < $1.key }.map(\.value)
+            pending.removeAll()
+            lock.unlock()
+            return items
+        }
+
+        /// Fire every still-pending scheduled item (in scheduling order). The
+        /// captured work runs to completion (its `await`s resolve).
+        func fireAll() async {
+            // Drain under the lock so concurrent schedules can't observe
+            // half-fired state. Work closures themselves run outside the lock
+            // so they can't deadlock against a reschedule.
+            let items = drainPending()
+            for work in items { await work() }
         }
     }
 
@@ -81,14 +133,12 @@ struct ComposerAutocompleteHostedTests {
         text: Binding<String>,
         autocomplete: ComposerTextView.AutocompleteHooks?,
         measuredHeight: Binding<CGFloat>,
-        debounce: UInt64 = 5
+        scheduler: ManualScheduler
     ) -> (window: NSWindow, textView: NSTextView, coordinator: ComposerTextView.Coordinator) {
-        // `debounce` defaults to 5 ms (vs. the 150 ms production default) so
-        // the schedule/cancel timing is deterministic without long `Task.sleep`
-        // waits — the suite is heavy (2700+ tests competing for the
-        // cooperative pool) and a tight 5 ms debounce window makes the cancel
-        // assertion insensitive to pool saturation. Production gets the 150 ms
-        // default via `ComposerTextView.debounce`'s default.
+        // Inject the manual scheduler so the coordinator captures work for
+        // `fireAll()` instead of creating a real `Task.sleep` Task. Production
+        // leaves `scheduleDebounce = nil` (the default) and gets the inline
+        // Task.sleep path.
         let parent = ComposerTextView(
             text: text,
             isEditable: true,
@@ -96,7 +146,8 @@ struct ComposerAutocompleteHostedTests {
             onSubmit: {},
             measuredHeight: measuredHeight,
             autocomplete: autocomplete,
-            debounce: debounce
+            debounce: 150,  // production value — the schedule seam means this is never actually slept
+            scheduleDebounce: { _, work in scheduler.schedule(0, work) }
         )
         let coordinator = ComposerTextView.Coordinator(parent)
         let textView = ComposerTextView.makeConfiguredTextView(font: bodyFont)
@@ -120,25 +171,22 @@ struct ComposerAutocompleteHostedTests {
         coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
     }
 
-    // MARK: - AC #5: debounce + cancel (reviewer correction #3)
+    // MARK: - AC #5: debounce + cancel (reviewer correction #3 — now deterministic via #661)
 
     @Test func debouncedQueryCancelsStaleInFlightPartial() async {
         // Drive the coordinator's schedule with two partials in quick
-        // succession. The first must be cancelled before its fetch lands; only
-        // the second partial's fetch fires.
-        //
-        // Robustness: under heavy cooperative-pool load (this suite runs
-        // alongside 2700+ others), a fixed `Task.sleep` wait can return
-        // BEFORE the second schedule's @MainActor-isolated Task body gets a
-        // chance to run — which looks like "no fetch ran" (false failure).
-        // The poll loop below waits adaptively: it exits as soon as the
-        // second partial ("Erl") lands in `fetchCalls`, with a generous 3s
-        // ceiling so a slow CI runner still completes.
+        // succession. The first must be cancelled before its fetch runs; only
+        // the second partial's fetch fires. This was previously flaky under
+        // heavy cooperative-pool load (the @MainActor-isolated Task body
+        // created by the real Task.sleep scheduler never got scheduled within
+        // the polling timeout — see issue #661). The injected `ManualScheduler`
+        // makes it fully deterministic: schedule work, cancel, fire.
         var text = ""
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
+        let scheduler = ManualScheduler()
         let fake = FakeAutocomplete()
         await fake.setNextResult([
             TantivyShadowSearchResult(documentID: "page:01PAGE0001", kind: .page,
@@ -150,64 +198,38 @@ struct ComposerAutocompleteHostedTests {
         )
 
         let (_, textView, coordinator) = makeHostedComposer(
-            text: textBinding, autocomplete: hooks, measuredHeight: heightBinding)
+            text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
 
-        // First keystroke (inside the first debounce window).
+        // First keystroke: schedule #1 is captured in the manual scheduler.
         type("[[page:Er", into: textView, coordinator: coordinator)
-        // Yield ONCE so the scheduler's Task is allocated. Do NOT wait out
-        // the debounce — we want the second keystroke to land inside the
-        // debounce window.
-        await Task.yield()
+        #expect(scheduler.pendingCount == 1)
+        #expect(scheduler.cancelledIDs.isEmpty)
 
-        // Second keystroke — still inside the first's debounce window. Its
-        // `scheduleAutocomplete` cancels the first Task before its sleep
-        // completes, so the first `hooks.fetch` never runs.
+        // Second keystroke: cancels #1, schedules #2. No fetch ran yet — the
+        // manual scheduler doesn't run work until `fireAll()`.
         type("[[page:Erl", into: textView, coordinator: coordinator)
+        #expect(scheduler.pendingCount == 1, "exactly one schedule alive (the second; the first was cancelled)")
+        #expect(scheduler.cancelledIDs == [0], "the first schedule was cancelled before its work ran")
 
-        // Poll for the SECOND partial ("Erl") to land in fetchCalls. If the
-        // cancel worked, "Erl" is the ONLY entry (the first fetch never
-        // ran). If the cancel failed, BOTH "Er" and "Erl" land — the
-        // assertion below catches that.
-        let calls = await Self.waitForPartial("Erl", in: fake, timeout: .seconds(3))
+        // Fire pending work — only #2's fetch should run because #1 was cancelled.
+        await scheduler.fireAll()
 
-        // The headline check: exactly one fetch ran, for the SECOND partial.
-        // This proves the first schedule was cancelled BEFORE its fetch ran
-        // (AC #5: cancel stale in-flight queries — the second schedule's
-        // cancel landed during the first schedule's debounce sleep).
+        let calls = await fake.fetchCalls
         #expect(calls.count == 1, "the second schedule should have cancelled the first BEFORE its fetch ran; got \(calls)")
         #expect(calls.first?.partial == "Erl")
         #expect(calls.first?.kind == .page)
     }
 
-    /// Poll `fake.fetchCalls` until it contains an entry with `partial`, or
-    /// `timeout` elapses. Returns the snapshot at exit. Adaptive so the cancel
-    /// test doesn't flake under heavy cooperative-pool load (a fixed
-    /// `Task.sleep` can return before the @MainActor Task body gets to run).
-    private static func waitForPartial(
-        _ partial: String,
-        in fake: FakeAutocomplete,
-        timeout: Duration
-    ) async -> [(partial: String, kind: ParsedLink.LinkType)] {
-        let deadline = Date().addingTimeInterval(Double(timeout.components.seconds))
-        var snapshot: [(partial: String, kind: ParsedLink.LinkType)] = []
-        while Date() < deadline {
-            snapshot = await fake.fetchCalls
-            if snapshot.contains(where: { $0.partial == partial }) { return snapshot }
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-        return snapshot
-    }
-
     @Test func onlyLatestPartialTriggersAFetchWhenTypingRapidly() async {
         // Stronger version of the cancel test: type three partials in rapid
-        // succession (faster than the debounce). Only the LAST one should
-        // trigger a fetch — the debounce collapses the first two into the
-        // third.
+        // succession (faster than the debounce — captured, not run). Only the
+        // LAST one should trigger a fetch — the debounce cancels the first two.
         var text = ""
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
+        let scheduler = ManualScheduler()
         let fake = FakeAutocomplete()
         let hooks = ComposerTextView.AutocompleteHooks(
             fetch: { partial, kind in await fake.fetch(partial, kind) },
@@ -215,20 +237,22 @@ struct ComposerAutocompleteHostedTests {
         )
 
         let (_, textView, coordinator) = makeHostedComposer(
-            text: textBinding, autocomplete: hooks, measuredHeight: heightBinding)
+            text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
 
         // Type three keystrokes inside the debounce window. No `await` between
-        // them — each schedule arrives inside the prior's debounce sleep.
+        // them. Each schedule arrives inside the prior's debounce window.
         for prefix in ["[[page:E", "[[page:Er", "[[page:Erl"] {
             type(prefix, into: textView, coordinator: coordinator)
         }
 
-        // Poll for the FINAL partial ("Erl") to land — adaptive so the test
-        // doesn't flake under heavy cooperative-pool load (a fixed
-        // `Task.sleep` can return before the @MainActor Task body runs).
-        let calls = await Self.waitForPartial("Erl", in: fake, timeout: .seconds(3))
+        // Two cancellations (the first two were superseded); one pending.
+        #expect(scheduler.cancelledIDs == [0, 1], "the first two schedules were cancelled on reschedule")
+        #expect(scheduler.pendingCount == 1, "only the final schedule is alive")
 
-        // Exactly one fetch should have run, for the final partial.
+        // Fire pending work — only the final partial's fetch should run.
+        await scheduler.fireAll()
+
+        let calls = await fake.fetchCalls
         #expect(calls.count == 1, "rapid typing should debounce to one fetch; got \(calls)")
         #expect(calls.first?.partial == "Erl")
     }
@@ -241,6 +265,7 @@ struct ComposerAutocompleteHostedTests {
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
+        let scheduler = ManualScheduler()
         let fake = FakeAutocomplete()
         await fake.setNextResult([
             TantivyShadowSearchResult(documentID: "page:01PAGE0001", kind: .page,
@@ -254,10 +279,15 @@ struct ComposerAutocompleteHostedTests {
         )
 
         let (_, textView, coordinator) = makeHostedComposer(
-            text: textBinding, autocomplete: hooks, measuredHeight: heightBinding)
+            text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
 
         type("[[page:Erl", into: textView, coordinator: coordinator)
-        let calls = await Self.waitForPartial("Erl", in: fake, timeout: .seconds(3))
+        #expect(scheduler.pendingCount == 1)
+        #expect(scheduler.cancelledIDs.isEmpty)
+
+        await scheduler.fireAll()
+
+        let calls = await fake.fetchCalls
         #expect(calls.count == 1)
         #expect(calls.first?.partial == "Erl")
         #expect(calls.first?.kind == .page)
@@ -271,6 +301,7 @@ struct ComposerAutocompleteHostedTests {
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
+        let scheduler = ManualScheduler()
         let fake = FakeAutocomplete()
         let hooks = ComposerTextView.AutocompleteHooks(
             fetch: { partial, kind in await fake.fetch(partial, kind) },
@@ -278,10 +309,13 @@ struct ComposerAutocompleteHostedTests {
         )
 
         let (_, textView, coordinator) = makeHostedComposer(
-            text: textBinding, autocomplete: hooks, measuredHeight: heightBinding)
+            text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
 
+        // Plain text — no `[[` trigger. Nothing is scheduled.
         type("Just a regular message", into: textView, coordinator: coordinator)
-        try? await Task.sleep(for: .milliseconds(500))
+        #expect(scheduler.pendingCount == 0, "no schedule should be created without an open-link trigger")
+
+        await scheduler.fireAll()
 
         let calls = await fake.fetchCalls
         #expect(calls.isEmpty, "no fetch should fire without an open-link trigger")
@@ -293,6 +327,7 @@ struct ComposerAutocompleteHostedTests {
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
+        let scheduler = ManualScheduler()
         let fake = FakeAutocomplete()
         let hooks = ComposerTextView.AutocompleteHooks(
             fetch: { partial, kind in await fake.fetch(partial, kind) },
@@ -300,10 +335,12 @@ struct ComposerAutocompleteHostedTests {
         )
 
         let (_, textView, coordinator) = makeHostedComposer(
-            text: textBinding, autocomplete: hooks, measuredHeight: heightBinding)
+            text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
 
         type("[[page:Erickson]]", into: textView, coordinator: coordinator)
-        try? await Task.sleep(for: .milliseconds(500))
+        #expect(scheduler.pendingCount == 0, "no schedule should be created for a closed link")
+
+        await scheduler.fireAll()
 
         let calls = await fake.fetchCalls
         #expect(calls.isEmpty, "no fetch should fire for a closed link")
@@ -317,6 +354,7 @@ struct ComposerAutocompleteHostedTests {
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
+        let scheduler = ManualScheduler()
         let fake = FakeAutocomplete()
         let hooks = ComposerTextView.AutocompleteHooks(
             fetch: { partial, kind in await fake.fetch(partial, kind) },
@@ -324,11 +362,13 @@ struct ComposerAutocompleteHostedTests {
         )
 
         let (_, textView, coordinator) = makeHostedComposer(
-            text: textBinding, autocomplete: hooks, measuredHeight: heightBinding)
+            text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
 
         // Multi-line text with a `[[` on one line and content on the next.
         type("[[page:Erl\nmore stuff", into: textView, coordinator: coordinator)
-        try? await Task.sleep(for: .milliseconds(500))
+        #expect(scheduler.pendingCount == 0, "newline in the trigger should bail (paste/multi-line guard)")
+
+        await scheduler.fireAll()
 
         let calls = await fake.fetchCalls
         #expect(calls.isEmpty, "newline in the trigger should bail (paste/multi-line guard)")
@@ -340,6 +380,7 @@ struct ComposerAutocompleteHostedTests {
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
+        let scheduler = ManualScheduler()
         let fake = FakeAutocomplete()
         let hooks = ComposerTextView.AutocompleteHooks(
             fetch: { partial, kind in await fake.fetch(partial, kind) },
@@ -347,14 +388,45 @@ struct ComposerAutocompleteHostedTests {
         )
 
         let (_, textView, coordinator) = makeHostedComposer(
-            text: textBinding, autocomplete: hooks, measuredHeight: heightBinding)
+            text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
 
         // Paste: `[[page:` + maxPartialSpan+1 chars → over the cap.
         let long = String(repeating: "a", count: WikiLinkPrefixScanner.maxPartialSpan + 1)
         type("[[page:\(long)", into: textView, coordinator: coordinator)
-        try? await Task.sleep(for: .milliseconds(500))
+        #expect(scheduler.pendingCount == 0, "overlong partial should bail (paste guard)")
+
+        await scheduler.fireAll()
 
         let calls = await fake.fetchCalls
         #expect(calls.isEmpty, "overlong partial should bail (paste guard)")
+    }
+
+    // MARK: - Schedule-not-fired → no fetch (proves work is captured, not run eagerly)
+
+    @Test func scheduleWithoutFireDoesNotRunFetch() async {
+        // The ManualScheduler captures work without running it. So scheduling
+        // without firing must NOT call fetch — this is the load-bearing
+        // property that makes issue #661's fix deterministic: no real
+        // `Task.sleep`, no Task body scheduling race, just capture-and-fire.
+        var text = ""
+        var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
+        let textBinding = Binding(get: { text }, set: { text = $0 })
+        let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
+
+        let scheduler = ManualScheduler()
+        let fake = FakeAutocomplete()
+        let hooks = ComposerTextView.AutocompleteHooks(
+            fetch: { partial, kind in await fake.fetch(partial, kind) },
+            format: Self.formatHit
+        )
+
+        let (_, textView, coordinator) = makeHostedComposer(
+            text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
+
+        type("[[page:Erl", into: textView, coordinator: coordinator)
+        #expect(scheduler.pendingCount == 1)
+        // No fireAll — fetch must not have run.
+        let calls = await fake.fetchCalls
+        #expect(calls.isEmpty, "scheduled work must not run until fireAll()")
     }
 }

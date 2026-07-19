@@ -52,7 +52,7 @@ jobs:
         # `GenerationGateLaneTests` was removed from this list (issue #651) —
         # it's a pure-concurrency suite (no SQLite) and belongs in the fast tier.
         env:
-          SKIP: 'EnumeratorDeletionTests|StoreEmissionTests|StoreEmissionReentrancyTests|BlobVacuumTests|AgentCASTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SplitDiffSnapshotTests|FullTextSearchTests|ChatSearchTests|SessionManagerTests|QuoteHighlightWebViewTests|SidebarDropBuilderIntegrationTests|CLITantivyLegResolverTests|ACPPermissionTimeoutTests|TantivyAutocompleteTests|ComposerAutocompleteHostedTests'
+          SKIP: 'EnumeratorDeletionTests|StoreEmissionTests|StoreEmissionReentrancyTests|BlobVacuumTests|AgentCASTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SplitDiffSnapshotTests|FullTextSearchTests|ChatSearchTests|SessionManagerTests|QuoteHighlightWebViewTests|SidebarDropBuilderIntegrationTests|CLITantivyLegResolverTests|ACPPermissionTimeoutTests|TantivyAutocompleteTests'
         run: $SWIFT test --skip "$SKIP"
 
   swift-integration:
