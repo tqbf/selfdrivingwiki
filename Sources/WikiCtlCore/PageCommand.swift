@@ -30,13 +30,14 @@ public enum PageCommand {
     public enum Action: Equatable {
         case list(json: Bool)
         case get(Selector, json: Bool = false, workspace: String? = nil)
-        /// `upsert` always carries the body (read from `--body-file`); the
-        /// optional id forces updating a specific page, otherwise the title
-        /// resolves create-or-update. `expectHead` carries the CAS expectation
-        /// (the `head_version_id` the caller read before editing); when non-nil,
-        /// the upsert routes through `appendPageVersion` and a mismatch throws
-        /// `PageConflictError` (Phase 1: agent CAS writes).
-        case upsert(id: PageID?, title: String, body: String, expectHead: String? = nil, workspace: String? = nil, author: String? = nil)
+        /// `add` (formerly `upsert`) always carries the body source (read
+        /// inline or from `--body-file`); the optional id forces updating a
+        /// specific page, otherwise the title resolves create-or-update.
+        /// `expectHead` carries the CAS expectation (the `head_version_id` the
+        /// caller read before editing); when non-nil, the upsert routes through
+        /// `appendPageVersion` and a mismatch throws `PageConflictError`
+        /// (Phase 1: agent CAS writes).
+        case add(id: PageID?, title: String, body: BodySource, expectHead: String? = nil, workspace: String? = nil, author: String? = nil)
         case delete(id: PageID)
         /// Semantic search: find pages by meaning (cosine similarity via
         /// sqlite-vec), falling back to LIKE title match.
@@ -85,7 +86,8 @@ public enum PageCommand {
             return try list(in: store, json: json)
         case .get(let selector, let json, let workspace):
             return try get(selector, in: store, json: json, workspace: workspace)
-        case .upsert(let id, let title, let body, let expectHead, let workspace, let author):
+        case .add(let id, let title, let bodySource, let expectHead, let workspace, let author):
+            let body = try resolveBodySource(bodySource)
             return try upsert(id: id, title: title, body: body, expectHead: expectHead, workspace: workspace, author: author, in: store, validator: validator, linter: linter)
         case .delete(let id):
             return try delete(id: id, in: store)

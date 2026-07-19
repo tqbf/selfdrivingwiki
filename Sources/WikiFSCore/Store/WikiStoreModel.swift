@@ -1392,7 +1392,7 @@ public final class WikiStoreModel {
 
     /// Apply the markdown linter's auto-fix to the current draft body and save.
     /// Replaces cosmetic issues (trailing whitespace, blank-line spacing, etc.)
-    /// in-place — the same normalization `wikictl page upsert` applies, but
+    /// in-place — the same normalization `wikictl page add` applies, but
     /// triggered manually from the in-app editor. No-op when the linter is
     /// unavailable or the body is already clean.
     public func fixMarkdownInDraft() {

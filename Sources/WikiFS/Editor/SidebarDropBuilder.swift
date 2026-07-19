@@ -1,5 +1,7 @@
 import Foundation
 import WikiFSCore
+import WikiFSLinks
+import WikiFSSearch
 
 /// `@MainActor` factory that builds the editor drop-insertion `String` for a
 /// sidebar drag-drop from the live `WikiStoreModel`. Handed to
@@ -86,5 +88,48 @@ enum SidebarDropBuilder {
         case .source: return .source
         case .chat:   return .chat
         }
+    }
+
+    // MARK: - Wiki-link autocomplete hooks (issue #680)
+
+    /// Build the chat-composer-style autocomplete hooks (`fetch` + `format`)
+    /// for the page/source **markdown editor** from the live Tantivy search
+    /// service. Returns `nil` when no Tantivy service is attached (no wiki
+    /// open) — the editor then behaves exactly as before autocomplete was
+    /// added.
+    ///
+    /// Reuses the same Tantivy fuzzy `search.autocomplete(partial:kinds:...)`
+    /// path the chat composer uses (`ChatView.chatAutocompleteHooks` at
+    /// `Sources/WikiFS/Chats/ChatView.swift:736`), and the same canonical-form
+    /// `DroppedLinkFormatter.link(...)` builder the sidebar-drop insertion
+    /// uses (#616). The two pure kind-mapping helpers
+    /// (`WikiLinkAutocompleteController.tantivyKind(for:)` /
+    /// `.parsedLinkType(from:)`) live on the controller so they're next to
+    /// their only non-ChatView caller — kept as `nonisolated static` to be
+    /// test-reachable.
+    static func wikiLinkAutocompleteHooks(
+        store: WikiStoreModel
+    ) -> WikiLinkAutocompleteHooks? {
+        guard let search = store.tantivySearch else { return nil }
+        return WikiLinkAutocompleteHooks(
+            fetch: { partial, kind in
+                let tantivyKind = WikiLinkAutocompleteController.tantivyKind(for: kind)
+                return await search.autocomplete(
+                    partial: partial,
+                    kinds: [tantivyKind],
+                    distance: 2,
+                    limit: 8)
+            },
+            format: { hit in
+                // Map the search hit back to a ParsedLink.LinkType for the
+                // formatter (single source of truth for the `[[kind:ULID|…]]`
+                // prefix string).
+                let linkType = WikiLinkAutocompleteController.parsedLinkType(from: hit.kind)
+                return DroppedLinkFormatter.link(
+                    for: linkType,
+                    id: hit.ulid,
+                    displayName: hit.title)
+            }
+        )
     }
 }

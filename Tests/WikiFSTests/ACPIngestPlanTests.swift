@@ -266,7 +266,7 @@ import ACPModel
 
         let fake = FakeAgentBackend(behaviors: [
             FakeSessionBehavior(events: [.assistantText("Planning..."), .messageStop], planJSON: planData),
-            FakeSessionBehavior(events: [.toolUse(name: "Bash", inputSummary: "wikictl page upsert"), .messageStop]),
+            FakeSessionBehavior(events: [.toolUse(name: "Bash", inputSummary: "wikictl page add"), .messageStop]),
             FakeSessionBehavior(events: [.toolUse(name: "Bash", inputSummary: "wikictl index set"), .messageStop]),
         ])
 

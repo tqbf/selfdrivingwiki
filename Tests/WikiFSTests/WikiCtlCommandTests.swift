@@ -21,7 +21,7 @@ struct WikiCtlCommandTests {
     @Test func parsesWikiFromFlag() throws {
         let invocation = try ArgumentParser.parse(["--wiki", "WIKI1", "page", "list"], env: noEnv)
         #expect(invocation.wikiSelector == "WIKI1")
-        #expect(invocation.command == .list(json: false))
+        #expect(invocation.command == .page(.list(json: false)))
     }
 
     @Test func parsesWikiFromEnvWhenFlagAbsent() throws {
@@ -30,7 +30,7 @@ struct WikiCtlCommandTests {
             env: { $0 == "WIKI_DB" ? "ENVWIKI" : nil }
         )
         #expect(invocation.wikiSelector == "ENVWIKI")
-        #expect(invocation.command == .list(json: true))
+        #expect(invocation.command == .page(.list(json: true)))
     }
 
     @Test func flagBeatsEnvForWikiSelector() throws {
@@ -50,11 +50,11 @@ struct WikiCtlCommandTests {
     @Test func parsesGetByTitleAndByID() throws {
         let byTitle = try ArgumentParser.parse(
             ["--wiki", "W", "page", "get", "--title", "Home"], env: noEnv)
-        #expect(byTitle.command == .get(.title("Home"), json: false))
+        #expect(byTitle.command == .page(.get(.title("Home"), json: false)))
 
         let byID = try ArgumentParser.parse(
             ["--wiki", "W", "page", "get", "--id", "01ABC"], env: noEnv)
-        #expect(byID.command == .get(.id(PageID(rawValue: "01ABC")), json: false))
+        #expect(byID.command == .page(.get(.id(PageID(rawValue: "01ABC")), json: false)))
     }
 
     @Test func getRequiresExactlyOneSelector() {
@@ -69,33 +69,33 @@ struct WikiCtlCommandTests {
 
     @Test func parsesUpsertWithAndWithoutID() throws {
         let create = try ArgumentParser.parse(
-            ["--wiki", "W", "page", "upsert", "--title", "T", "--body-file", "-"], env: noEnv)
-        #expect(create.command == .upsert(id: nil, title: "T", bodyFile: "-", author: nil))
+            ["--wiki", "W", "page", "add", "--title", "T", "--body-file", "-"], env: noEnv)
+        #expect(create.command == .page(.add(id: nil, title: "T", body: .file("-"), expectHead: nil, workspace: nil, author: nil)))
 
         let update = try ArgumentParser.parse(
-            ["--wiki", "W", "page", "upsert", "--title", "T", "--id", "01X", "--body-file", "body.md"],
+            ["--wiki", "W", "page", "add", "--title", "T", "--id", "01X", "--body-file", "body.md"],
             env: noEnv)
-        #expect(update.command == .upsert(id: PageID(rawValue: "01X"), title: "T", bodyFile: "body.md", author: nil))
+        #expect(update.command == .page(.add(id: PageID(rawValue: "01X"), title: "T", body: .file("body.md"), expectHead: nil, workspace: nil, author: nil)))
     }
 
     @Test func upsertRequiresTitleAndBodyFile() {
         #expect(throws: ArgumentParser.Failure.self) {
             try ArgumentParser.parse(
-                ["--wiki", "W", "page", "upsert", "--body-file", "-"], env: noEnv)
+                ["--wiki", "W", "page", "add", "--body-file", "-"], env: noEnv)
         }
         #expect(throws: ArgumentParser.Failure.self) {
             try ArgumentParser.parse(
-                ["--wiki", "W", "page", "upsert", "--title", "T"], env: noEnv)
+                ["--wiki", "W", "page", "add", "--title", "T"], env: noEnv)
         }
     }
 
     @Test func parsesUpsertAuthorFlag() throws {
         let inv = try ArgumentParser.parse(
-            ["--wiki", "W", "page", "upsert", "--title", "T", "--body-file", "-",
+            ["--wiki", "W", "page", "add", "--title", "T", "--body-file", "-",
              "--author", "chat:01ABC"],
             env: noEnv)
-        guard case .upsert(_, _, _, _, _, let author) = inv.command else {
-            Issue.record("expected .upsert")
+        guard case .page(.add(_, _, _, _, _, let author)) = inv.command else {
+            Issue.record("expected .page(.add)")
             return
         }
         #expect(author == "chat:01ABC")
@@ -105,12 +105,12 @@ struct WikiCtlCommandTests {
 
     @Test func wikiAuthorEnvStampsProvenanceWhenFlagAbsent() throws {
         let inv = try ArgumentParser.parse(
-            ["--wiki", "W", "page", "upsert", "--title", "T", "--body-file", "-"],
+            ["--wiki", "W", "page", "add", "--title", "T", "--body-file", "-"],
             env: { _ in nil })
         let applied = ArgumentParser.applyEnv(
             inv.command, env: ["WIKI_AUTHOR": "chat:01DEF"])
-        guard case .upsert(_, _, _, _, _, let author) = applied else {
-            Issue.record("expected .upsert")
+        guard case .page(.add(_, _, _, _, _, let author)) = applied else {
+            Issue.record("expected .page(.add)")
             return
         }
         #expect(author == "chat:01DEF")
@@ -118,13 +118,13 @@ struct WikiCtlCommandTests {
 
     @Test func explicitAuthorFlagWinsOverEnv() throws {
         let inv = try ArgumentParser.parse(
-            ["--wiki", "W", "page", "upsert", "--title", "T", "--body-file", "-",
+            ["--wiki", "W", "page", "add", "--title", "T", "--body-file", "-",
              "--author", "agent:ingest"],
             env: { _ in nil })
         let applied = ArgumentParser.applyEnv(
             inv.command, env: ["WIKI_AUTHOR": "chat:01DEF"])
-        guard case .upsert(_, _, _, _, _, let author) = applied else {
-            Issue.record("expected .upsert")
+        guard case .page(.add(_, _, _, _, _, let author)) = applied else {
+            Issue.record("expected .page(.add)")
             return
         }
         #expect(author == "agent:ingest")
@@ -132,11 +132,11 @@ struct WikiCtlCommandTests {
 
     @Test func wikiAuthorEnvIgnoredWhenAbsent() throws {
         let inv = try ArgumentParser.parse(
-            ["--wiki", "W", "page", "upsert", "--title", "T", "--body-file", "-"],
+            ["--wiki", "W", "page", "add", "--title", "T", "--body-file", "-"],
             env: { _ in nil })
         let applied = ArgumentParser.applyEnv(inv.command, env: [:])
-        guard case .upsert(_, _, _, _, _, let author) = applied else {
-            Issue.record("expected .upsert")
+        guard case .page(.add(_, _, _, _, _, let author)) = applied else {
+            Issue.record("expected .page(.add)")
             return
         }
         #expect(author == nil)
@@ -145,7 +145,7 @@ struct WikiCtlCommandTests {
     @Test func parsesDelete() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "page", "delete", "--id", "01Z"], env: noEnv)
-        #expect(invocation.command == .delete(id: PageID(rawValue: "01Z")))
+        #expect(invocation.command == .page(.delete(id: PageID(rawValue: "01Z"))))
     }
 
     @Test func rejectsUnknownCommand() {
@@ -158,32 +158,32 @@ struct WikiCtlCommandTests {
 
     @Test func parsesSearchWithQueryAndDefaultLimit() throws {
         let invocation = try ArgumentParser.parse(
-            ["--wiki", "W", "search", "--query", "electric cars"], env: noEnv)
-        #expect(invocation.command == .search(query: "electric cars", limit: 10))
+            ["--wiki", "W", "page", "search", "--query", "electric cars"], env: noEnv)
+        #expect(invocation.command == .page(.search(query: "electric cars", limit: 10)))
     }
 
     @Test func parsesSearchWithCustomLimit() throws {
         let invocation = try ArgumentParser.parse(
-            ["search", "--query", "ai", "--limit", "5"],
+            ["page", "search", "--query", "ai", "--limit", "5"],
             env: { _ in "W" })
-        #expect(invocation.command == .search(query: "ai", limit: 5))
+        #expect(invocation.command == .page(.search(query: "ai", limit: 5)))
     }
 
     @Test func searchRequiresQuery() {
         #expect(throws: ArgumentParser.Failure.self) {
-            try ArgumentParser.parse(["--wiki", "W", "search", "--limit", "10"], env: noEnv)
+            try ArgumentParser.parse(["--wiki", "W", "page", "search", "--limit", "10"], env: noEnv)
         }
     }
 
     @Test func searchRejectsLimitZero() {
         #expect(throws: ArgumentParser.Failure.self) {
-            try ArgumentParser.parse(["--wiki", "W", "search", "--query", "x", "--limit", "0"], env: noEnv)
+            try ArgumentParser.parse(["--wiki", "W", "page", "search", "--query", "x", "--limit", "0"], env: noEnv)
         }
     }
 
     @Test func searchRejectsLimitOver100() {
         #expect(throws: ArgumentParser.Failure.self) {
-            try ArgumentParser.parse(["--wiki", "W", "search", "--query", "x", "--limit", "101"], env: noEnv)
+            try ArgumentParser.parse(["--wiki", "W", "page", "search", "--query", "x", "--limit", "101"], env: noEnv)
         }
     }
 
@@ -192,7 +192,7 @@ struct WikiCtlCommandTests {
     @Test func upsertCommitsAndReturnsID() throws {
         let store = try tempStore()
         let result = try PageCommand.run(
-            .upsert(id: nil, title: "Created", body: "hello"), in: store)
+            .add(id: nil, title: "Created", body: .inline("hello")), in: store)
         #expect(result.didCommit)
         let resolvedID = try store.resolveTitleToID("Created")?.rawValue
         #expect(result.output == resolvedID)
@@ -202,7 +202,7 @@ struct WikiCtlCommandTests {
     @Test func upsertWithoutAuthorLeavesProvenanceNil() throws {
         let store = try tempStore()
         let result = try PageCommand.run(
-            .upsert(id: nil, title: "NoProv", body: "hi"), in: store)
+            .add(id: nil, title: "NoProv", body: .inline("hi")), in: store)
         let page = try store.getPage(id: PageID(rawValue: result.output))
         #expect(page.createdBy == nil)
         #expect(page.lastEditedBy == nil)
@@ -211,8 +211,8 @@ struct WikiCtlCommandTests {
     @Test func upsertWithAuthorStampsCreatedAndLastEditedBy() throws {
         let store = try tempStore()
         let result = try PageCommand.run(
-            .upsert(id: nil, title: "Prov", body: "v1",
-                    author: "chat:01ABC"), in: store)
+            .add(id: nil, title: "Prov", body: .inline("v1"),
+                     author: "chat:01ABC"), in: store)
         let page = try store.getPage(id: PageID(rawValue: result.output))
         #expect(page.createdBy == "chat:01ABC")
         #expect(page.lastEditedBy == "chat:01ABC")
@@ -221,11 +221,11 @@ struct WikiCtlCommandTests {
     @Test func upsertWithAuthorOnUpdateSetsLastEditedByOnly() throws {
         let store = try tempStore()
         let created = try PageCommand.run(
-            .upsert(id: nil, title: "Edit", body: "v1",
-                    author: "user"), in: store)
+            .add(id: nil, title: "Edit", body: .inline("v1"),
+                     author: "user"), in: store)
         _ = try PageCommand.run(
-            .upsert(id: PageID(rawValue: created.output), title: "Edit",
-                    body: "v2", author: "chat:01DEF"), in: store)
+            .add(id: PageID(rawValue: created.output), title: "Edit",
+                     body: .inline("v2"), author: "chat:01DEF"), in: store)
         let page = try store.getPage(id: PageID(rawValue: created.output))
         #expect(page.createdBy == "user")
         #expect(page.lastEditedBy == "chat:01DEF")
@@ -233,7 +233,7 @@ struct WikiCtlCommandTests {
 
     @Test func getReturnsBodyAndDoesNotCommit() throws {
         let store = try tempStore()
-        _ = try PageCommand.run(.upsert(id: nil, title: "Doc", body: "the body"), in: store)
+        _ = try PageCommand.run(.add(id: nil, title: "Doc", body: .inline("the body")), in: store)
         let result = try PageCommand.run(.get(.title("Doc"), json: false), in: store)
         #expect(result.output == "the body")
         #expect(!result.didCommit)
@@ -248,7 +248,7 @@ struct WikiCtlCommandTests {
 
     @Test func listTSVHasIDTitlePathPerLine() throws {
         let store = try tempStore()
-        _ = try PageCommand.run(.upsert(id: nil, title: "Alpha", body: "stub"), in: store)
+        _ = try PageCommand.run(.add(id: nil, title: "Alpha", body: .inline("stub")), in: store)
         let result = try PageCommand.run(.list(json: false), in: store)
         #expect(!result.didCommit)
         let columns = result.output.split(separator: "\t")
@@ -259,8 +259,8 @@ struct WikiCtlCommandTests {
 
     @Test func listJSONIsOneObjectPerLine() throws {
         let store = try tempStore()
-        _ = try PageCommand.run(.upsert(id: nil, title: "One", body: "stub"), in: store)
-        _ = try PageCommand.run(.upsert(id: nil, title: "Two", body: "stub"), in: store)
+        _ = try PageCommand.run(.add(id: nil, title: "One", body: .inline("stub")), in: store)
+        _ = try PageCommand.run(.add(id: nil, title: "Two", body: .inline("stub")), in: store)
         let result = try PageCommand.run(.list(json: true), in: store)
         let lines = result.output.split(separator: "\n")
         #expect(lines.count == 2)
@@ -274,7 +274,7 @@ struct WikiCtlCommandTests {
 
     @Test func deleteCommitsAndRemovesPage() throws {
         let store = try tempStore()
-        let created = try PageCommand.run(.upsert(id: nil, title: "Doomed", body: "stub"), in: store)
+        let created = try PageCommand.run(.add(id: nil, title: "Doomed", body: .inline("stub")), in: store)
         let id = PageID(rawValue: created.output)
         let result = try PageCommand.run(.delete(id: id), in: store)
         #expect(result.didCommit)
@@ -291,8 +291,8 @@ struct WikiCtlCommandTests {
 
     @Test func searchReturnsTSVAndDoesNotCommit() throws {
         let store = try tempStore()
-        let carsUpsert = try PageCommand.run(.upsert(id: nil, title: "Cars", body: "electric vehicles"), in: store)
-        _ = try PageCommand.run(.upsert(id: nil, title: "Recipes", body: "baking bread"), in: store)
+        let carsUpsert = try PageCommand.run(.add(id: nil, title: "Cars", body: .inline("electric vehicles")), in: store)
+        _ = try PageCommand.run(.add(id: nil, title: "Recipes", body: .inline("baking bread")), in: store)
         // Fabricate a Tantivy-style leg that targets only the Cars page (what
         // a real Tantivy "car" query would surface). The store treats the leg
         // as the pre-ranked BM25 signal; with no page_chunks the cosine leg is
@@ -672,19 +672,19 @@ struct WikiCtlCommandTests {
     @Test func parsesEditMarkdownWithContent() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "edit-markdown", "--id", "01ABC", "--content", "new body"], env: noEnv)
-        #expect(invocation.command == .sourceEditMarkdown(.id(PageID(rawValue: "01ABC")), contentOrFile: "new body", isFile: false))
+        #expect(invocation.command == .source(.editMarkdown(.id(PageID(rawValue: "01ABC")), content: .inline("new body"))))
     }
 
     @Test func parsesEditMarkdownWithFile() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "edit-markdown", "--id", "01ABC", "--file", "edit.md"], env: noEnv)
-        #expect(invocation.command == .sourceEditMarkdown(.id(PageID(rawValue: "01ABC")), contentOrFile: "edit.md", isFile: true))
+        #expect(invocation.command == .source(.editMarkdown(.id(PageID(rawValue: "01ABC")), content: .file("edit.md"))))
     }
 
     @Test func parsesEditMarkdownByName() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "edit-markdown", "--name", "report.md", "--content", "updated"], env: noEnv)
-        #expect(invocation.command == .sourceEditMarkdown(.name("report.md"), contentOrFile: "updated", isFile: false))
+        #expect(invocation.command == .source(.editMarkdown(.name("report.md"), content: .inline("updated"))))
     }
 
     @Test func editMarkdownRejectsBothContentAndFile() {
@@ -721,7 +721,7 @@ struct WikiCtlCommandTests {
         usleep(2000)
         // Run edit-markdown which appends a "user" version.
         let result = try SourceCommand.run(
-            .editMarkdown(.id(ingested.id), content: "edited"), in: store, cwd: "/tmp")
+            .editMarkdown(.id(ingested.id), content: .inline("edited")), in: store, cwd: "/tmp")
         #expect(result.didCommit)
 
         // Verify the chain has 2 versions.
@@ -747,7 +747,7 @@ struct WikiCtlCommandTests {
         // Small delay ensures the next ULID is strictly later.
         usleep(2000)
         let result = try SourceCommand.run(
-            .editMarkdown(.id(ingested.id), content: "edited"), in: store, cwd: "/tmp")
+            .editMarkdown(.id(ingested.id), content: .inline("edited")), in: store, cwd: "/tmp")
         #expect(result.didCommit)
         let head = try store.processedMarkdownHead(sourceID: ingested.id)
         #expect(head?.content == "edited")
@@ -759,7 +759,7 @@ struct WikiCtlCommandTests {
         let ingested = try store.addSource(filename: "doc.pdf", data: Data("%PDF".utf8))
         do {
             _ = try SourceCommand.run(
-                .editMarkdown(.id(ingested.id), content: "edited"), in: store, cwd: "/tmp")
+                .editMarkdown(.id(ingested.id), content: .inline("edited")), in: store, cwd: "/tmp")
             Issue.record("expected SourceCommand.Failure")
         } catch let error as SourceCommand.Failure {
             #expect(error.description == "no processed markdown for this source")
@@ -776,7 +776,7 @@ struct WikiCtlCommandTests {
         // Small delay ensures the next ULID is strictly later.
         usleep(2000)
         let result = try SourceCommand.run(
-            .editMarkdown(.name("unique.md"), content: "v2"), in: store, cwd: "/tmp")
+            .editMarkdown(.name("unique.md"), content: .inline("v2")), in: store, cwd: "/tmp")
         #expect(result.didCommit)
         let head = try store.processedMarkdownHead(sourceID: ingested.id)
         #expect(head?.content == "v2")
@@ -790,7 +790,7 @@ struct WikiCtlCommandTests {
         #expect(name.hasPrefix(WikiChangeNotification.baseName))
     }
 
-    // MARK: - Markdown auto-fix (wikictl page upsert)
+    // MARK: - Markdown auto-fix (wikictl page add)
 
     /// Resolve the committed bundles relative to this test file for injection.
     private func repoMarkdownLinter() throws -> MarkdownLinter {
@@ -827,7 +827,7 @@ struct WikiCtlCommandTests {
         let store = try tempStore()
         let messy = "#No space\ntrailing   \n\n\n\ntext"
         let result = try PageCommand.run(
-            .upsert(id: nil, title: "Messy", body: messy),
+            .add(id: nil, title: "Messy", body: .inline(messy)),
             in: store, linter: l)
         #expect(result.didCommit)
         // The stored body must be the NORMALIZED text.
@@ -842,7 +842,7 @@ struct WikiCtlCommandTests {
         let store = try tempStore()
         let messy = "#No space\ntrailing   \n"
         _ = try PageCommand.run(
-            .upsert(id: nil, title: "Raw", body: messy),
+            .add(id: nil, title: "Raw", body: .inline(messy)),
             in: store, linter: nil)
         let stored = try store.getPage(id: try store.resolveTitleToID("Raw")!).bodyMarkdown
         #expect(stored == messy)
@@ -859,7 +859,7 @@ struct WikiCtlCommandTests {
         // Trailing spaces on the heading + no blank line before the fence.
         let body = "# Title   \n\(fence)mermaid\nflowchart LR\nA-->B\n\(fence)\nmore text"
         let result = try PageCommand.run(
-            .upsert(id: nil, title: "Composition", body: body),
+            .add(id: nil, title: "Composition", body: .inline(body)),
             in: store, validator: v, linter: l)
         #expect(result.didCommit)
         let stored = try store.getPage(id: PageID(rawValue: result.output)).bodyMarkdown
@@ -883,7 +883,7 @@ struct WikiCtlCommandTests {
         let body = "# Title\n\n\(fence)mermaid\nflowchart LR\nA[unclosed\n\(fence)\n"
         do {
             _ = try PageCommand.run(
-                .upsert(id: nil, title: "Bad Mermaid", body: body),
+                .add(id: nil, title: "Bad Mermaid", body: .inline(body)),
                 in: store, validator: v, linter: l)
             Issue.record("expected upsert to abort on invalid mermaid")
         } catch let PageCommand.Failure.message(text) {
@@ -899,20 +899,20 @@ struct WikiCtlCommandTests {
         let store = try tempStore()
         // 1. Empty body is refused at the CLI boundary.
         do {
-            _ = try PageCommand.run(.upsert(id: nil, title: "X", body: ""), in: store)
+            _ = try PageCommand.run(.add(id: nil, title: "X", body: .inline("")), in: store)
             Issue.record("expected empty-body upsert to throw")
         } catch let PageCommand.Failure.message(text) {
             #expect(text.contains("empty body"))
         }
         // 2. Whitespace-only body is also refused.
         do {
-            _ = try PageCommand.run(.upsert(id: nil, title: "X", body: "  \n\t "), in: store)
+            _ = try PageCommand.run(.add(id: nil, title: "X", body: .inline("  \n\t ")), in: store)
             Issue.record("expected whitespace-only upsert to throw")
         } catch let PageCommand.Failure.message(text) {
             #expect(text.contains("empty body"))
         }
         // 3. A non-empty body succeeds, commits, and returns a non-empty id.
-        let result = try PageCommand.run(.upsert(id: nil, title: "Y", body: "hello"), in: store)
+        let result = try PageCommand.run(.add(id: nil, title: "Y", body: .inline("hello")), in: store)
         #expect(result.didCommit)
         #expect(!result.output.isEmpty)
     }
@@ -1001,7 +1001,7 @@ struct WikiCtlCommandTests {
     @Test func parsesSourceRefresh() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "refresh", "--id", "01ABC"], env: noEnv)
-        #expect(invocation.command == .sourceRefresh(.id(PageID(rawValue: "01ABC"))))
+        #expect(invocation.command == .source(.refresh(.id(PageID(rawValue: "01ABC")))))
     }
 
     // MARK: - source refresh (Phase 3b)

@@ -46,7 +46,7 @@ import Foundation
     }
 
     @Test func toolUseRoundTrips() throws {
-        let event = AgentEvent.toolUse(name: "Bash", inputSummary: "wikictl page upsert --title \"X\"")
+        let event = AgentEvent.toolUse(name: "Bash", inputSummary: "wikictl page add --title \"X\"")
         #expect(try roundTrip(event) == event)
     }
 
