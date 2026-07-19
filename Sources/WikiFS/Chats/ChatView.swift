@@ -359,6 +359,18 @@ struct ChatView: View {
             }
             withChatOutline {
                 VStack(spacing: 0) {
+                    // Pre-spawn failure banner (#613): surfaces a previously
+                    // captured `launcher.preflightError` so a rolled-back chat
+                    // doesn't silently revert to the empty draft composer. The
+                    // rollback (deleting the dead chat row) still happens — this
+                    // only explains WHY the draft is visible. Mirrors the amber
+                    // turn-failed banner visual from `ChatWebView`.
+                    if let bannerError = preflightBannerMessage {
+                        preflightBanner(bannerError)
+                            .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
+                            .padding(.top, chatSummary != nil ? ChatMetrics.sectionSpacing / 2 : ChatMetrics.chatTopInset)
+                            .padding(.bottom, ChatMetrics.sectionSpacing / 2)
+                    }
                     ChatTranscriptView(
                         events: displayMessages,
                         timestamps: displayTimestamps,
@@ -374,7 +386,9 @@ struct ChatView: View {
                     )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
-                        .padding(.top, chatSummary != nil ? 0 : ChatMetrics.chatTopInset)
+                        .padding(.top, preflightBannerMessage == nil
+                            ? (chatSummary != nil ? 0 : ChatMetrics.chatTopInset)
+                            : 0)
                     if transcriptIsRunning && launcher.isGenerating {
                         thinkingIndicator
                             .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
@@ -560,6 +574,92 @@ struct ChatView: View {
         .padding(.horizontal, PageEditorMetrics.contentInset)
         .padding(.top, PageEditorMetrics.contentInset)
         .padding(.bottom, ChatMetrics.sectionSpacing)
+    }
+
+    // MARK: - Preflight-error banner (issue #613)
+
+    /// Pure predicate for whether the chat surface should render a preflight-error
+    /// banner. Returns true when `launcher.preflightError` is non-empty AND the
+    /// surface is NOT the active live session — i.e. the chat reverted to the
+    /// draft composer after `AgentOperationRunner.startChat` rolled back a dead
+    /// chat row. A live chat never shows a preflight banner because a live
+    /// session implies the spawn succeeded (`preflightError` would be nil).
+    ///
+    /// Mirrors the existing pattern in `AgentQueueView.preflightBanner` (the
+    /// ingest activity window) but applies it to the chat surface so a failed
+    /// Ask/Edit spawn doesn't silently revert to an empty composer. The banner
+    /// surface is purely additive — the rollback (deleting the dead chat row)
+    /// still happens in `AgentOperationRunner.startChat:114`; this only
+    /// explains WHY the draft is visible.
+    nonisolated static func shouldShowPreflightBanner(
+        preflightError: String?,
+        chatID: PageID?,
+        isLiveChat: Bool
+    ) -> Bool {
+        guard let message = preflightError, !message.isEmpty else { return false }
+        return chatID == nil || !isLiveChat
+    }
+
+    /// The preflight error message to surface in the banner, or nil when the
+    /// banner should not render. Forwards `preflightError` verbatim — the textual
+    /// content the user sees is the message captured at the spawn choke-point
+    /// (`AgentLauncher.startInteractiveQuery` / `backend.start` catch). Kept
+    /// static so tests can verify the text-pass-through without a SwiftUI view
+    /// tree (following the `composerCaptionText` / `canSendPredicate` pattern).
+    nonisolated static func preflightBannerMessage(
+        preflightError: String?,
+        chatID: PageID?,
+        isLiveChat: Bool
+    ) -> String? {
+        guard shouldShowPreflightBanner(
+            preflightError: preflightError,
+            chatID: chatID,
+            isLiveChat: isLiveChat) else { return nil }
+        return preflightError
+    }
+
+    /// The instance-level read of the banner message used by `chatSurface`.
+    private var preflightBannerMessage: String? {
+        Self.preflightBannerMessage(
+            preflightError: launcher.preflightError,
+            chatID: chatID,
+            isLiveChat: isLiveChat)
+    }
+
+    /// Pre-spawn failure banner for the chat surface. Mirrors the amber
+    /// turn-failed banner visual from `ChatWebView.turnFailedBannerHTML`
+    /// (`rgba(255, 159, 10, 0.12)` background, 3pt amber left border, amber
+    /// warning icon, amber bold label + primary body) so this reads as a
+    /// sibling of the chat's existing turn-failure banner rather than the
+    /// red `AgentQueueView.preflightBanner` (the ingest activity window's
+    /// separate visual language).
+    @ViewBuilder
+    private func preflightBanner(_ error: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.system(size: 14))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Couldn't start the chat")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.orange)
+                Text(error)
+                    .font(.callout)
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12))
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Color.orange)
+                .frame(width: 3)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
     // MARK: - Composer caption predicates
