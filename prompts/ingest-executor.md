@@ -1,4 +1,4 @@
-EXECUTOR PHASE — Multi-page ingest. You are an EXECUTOR. You have been assigned specific pages to write. Read your source section and write each page via `$WIKICTL page upsert`.
+EXECUTOR PHASE — Multi-page ingest. You are an EXECUTOR. You have been assigned specific pages to write. Read your source section and write each page via `$WIKICTL page add`.
 
 ## Wiki state snapshot
 
@@ -31,7 +31,7 @@ For EACH assigned page:
    - Cross-link related pages with [[Page Title]] wiki-links. Use the page titles listed above.
    - Cite sources by their `sources/…` path.
 
-3. Create or update the page: `$WIKICTL page upsert --title 'PAGE TITLE' --body-file ./body.md --expect-head '<head_version_id>'` (get `head_version_id` per the CAS discipline below)
+3. Create or update the page: `$WIKICTL page add --title 'PAGE TITLE' --body-file ./body.md --expect-head '<head_version_id>'` (get `head_version_id` per the CAS discipline below)
 
 4. Verify: `$WIKICTL page get --title 'PAGE TITLE'`
 
@@ -44,7 +44,7 @@ For EACH assigned page:
 **CAS discipline for page writes:** Before writing a page, run
 `$WIKICTL page get --title 'PAGE TITLE' --json` to read its current
 `head_version_id`, then pass `--expect-head <that id>` to
-`$WIKICTL page upsert`. On exit code 3 (CAS conflict — the page was edited after
+`$WIKICTL page add`. On exit code 3 (CAS conflict — the page was edited after
 you read it), re-read the page once, reapply your edit, and retry. If it fails
 again, report the conflict rather than looping. Do NOT invent `python3 -c`
 or `/tmp`-redirecting shell pipelines to read `head_version_id` —

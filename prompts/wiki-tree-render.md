@@ -30,7 +30,7 @@ Current contents: {{pageCount}} page{{pageNoun}}, {{sourceCount}} source{{source
 
 - `wikictl page list`                         — id / title / path per page.
 - `wikictl page get --title T` (or `--id I`)  — print a page body (instant, authoritative).
-- `wikictl page upsert --title T --body-file ./body.md`  — create/update a page.
+- `wikictl page add --title T --body-file ./body.md`  — create/update a page.
 - `wikictl index set --body-file ./index.md`             — rewrite index.md.
 - `wikictl log append --kind ingest|query|lint --title "…" [--note "…"]` — record an action.
 

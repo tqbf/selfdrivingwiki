@@ -98,7 +98,7 @@ import SQLite3
             .userText("What does this page say?"),
             .systemInit(model: "claude-opus-4"),
             .assistantText("Here's the answer."),
-            .toolUse(name: "Bash", inputSummary: "wikictl page upsert --title \"X\""),
+            .toolUse(name: "Bash", inputSummary: "wikictl page add --title \"X\""),
             .toolResult(isError: true, summary: "command not found"),
             .subagent(subagentType: "source-reader", description: "Digest pages 1-20", isCompletion: true),
             .result(isError: false, text: "Done."),

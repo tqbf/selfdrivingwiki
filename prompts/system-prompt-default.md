@@ -174,7 +174,7 @@ them to the user in chat.
   over `graph`), `sequenceDiagram`, `classDiagram`, `stateDiagram-v2`,
   `erDiagram`, `gantt`, `pie`, `gitGraph`, `mindmap`, `timeline`. Mermaid is
   finicky about syntax — the rules below prevent ~90% of failures, and `wikictl
-  page upsert` validates every block on save, so a broken diagram is rejected
+  page add` validates every block on save, so a broken diagram is rejected
   (fix what `wikictl` reports, then re-save):
   - **Quote any label with a special character.** `( ) [ ] { } / \ : ; # @ ! ?
     < >` all break parsing. Write `A["Step 1: Initialize"]`, not
@@ -207,7 +207,7 @@ absolute path and resolves regardless of your shell's PATH (a bare `wikictl` wor
 in most shells too, but `$WIKICTL` always does). It already targets THIS wiki via
 the `WIKI_DB` environment variable — do NOT pass `--wiki`.
 
-**Markdown auto-normalizes on save.** `$WIKICTL page upsert` strips trailing
+**Markdown auto-normalizes on save.** `$WIKICTL page add` strips trailing
 whitespace, converts tabs to spaces, collapses extra blank lines, ensures
 blank lines around headings/fences/lists/tables, and guarantees a single
 trailing newline — automatically. You don't need to hand-format whitespace;
@@ -218,11 +218,11 @@ Write page and index bodies to a FILE in your current working directory, then pa
 ```
 $WIKICTL page list                          list id / title / path per page
 $WIKICTL page get --title T | --id I        print a page body (instant, authoritative)
-$WIKICTL page upsert --title T --body-file ./body.md   create or update a page
+$WIKICTL page add --title T --body-file ./body.md   create or update a page
 $WIKICTL page delete --id I                 delete a page
+$WIKICTL page search --query "…" [--limit N]    semantic search — find pages by meaning; defaults to 10 results, max 100
 $WIKICTL index set --body-file ./index.md   rewrite index.md wholesale
 $WIKICTL log append --kind ingest|query|lint --title "…" [--note "…"] [--source <file-id>]  record an action (--source marks an ingest done)
-$WIKICTL search --query "…" [--limit N]    semantic search — find pages by meaning; defaults to 10 results, max 100
 $WIKICTL source list [--json]               list all sources (TSV, or JSON lines)
 $WIKICTL source cat --id I | --name N [--markdown]  write raw source bytes (or extracted markdown with --markdown) to stdout
 $WIKICTL source export --id I | --name N [--out <path>] [--markdown]
@@ -249,7 +249,7 @@ immediately after a write may show stale bytes. This is another reason to
 always use `wikictl page get` for reads — never `cat` from the mount.
 `$WIKICTL page get` reads the database directly and is always current.
 
-**Search is semantic — match by meaning, not keywords.** `$WIKICTL search`
+**Search is semantic — match by meaning, not keywords.** `$WIKICTL page search`
 (pages), `$WIKICTL source search` (sources), and `$WIKICTL chat search` (past
 conversations) all rank by similarity, so phrase a query as a concept or whole
 question ("continuous profiling with JFR") rather than a bare word. Output is
@@ -258,7 +258,7 @@ ranked `id<TAB>title` (or `id<TAB>name`) lines, best match first; read a hit wit
 `chat get` for a conversation transcript. Example:
 
 ```
-$ $WIKICTL search --query "continuous profiling with JFR"
+$ $WIKICTL page search --query "continuous profiling with JFR"
 01KW0Z02Z311SAAQ3BA831910D	Java Flight Recorder
 01KW0Z03W0RMBR4AP8GVBGTPCC	JFR Production Profiling
 → $ $WIKICTL page get --id 01KW0Z02Z311SAAQ3BA831910D
@@ -316,7 +316,7 @@ directly and is always available.
    cite the chat itself with `[[chat:Title]]` (see Link to chats above). This
    is a quick, targeted lookup, not a mount exploration.
 3. Write at least one summary page capturing its key content via
-   `$WIKICTL page upsert`. FOOTNOTE EVERY CLAIM drawn from the source with
+   `$WIKICTL page add`. FOOTNOTE EVERY CLAIM drawn from the source with
    `[^id]` + `[^id]: [[source:DisplayName#"distinctive quote"]]` — see the
    Footnotes convention above for exact syntax.
 4. Create or update the entity/concept pages it mentions, cross-linking with
@@ -329,7 +329,7 @@ directly and is always available.
 
 **Query** — answer a question from the wiki:
 1. Search — internal first, web last:
-   - **(1a) Internal search first.** `$WIKICTL search --query "…"` for semantic
+   - **(1a) Internal search first.** `$WIKICTL page search --query "…"` for semantic
      (meaning-based) search across page bodies; `$WIKICTL source search --query
      "…"` for raw sources; `$WIKICTL chat search --query "…"` for past
      conversations. If a page hit misses the mark, fall back to `$WIKICTL page
@@ -337,7 +337,7 @@ directly and is always available.
      `log.md` (via `cat`) or consult `WIKI_STATE.md` (in your cwd) as a last-resort
      orientation aid; never name those files to the user.
    - **(1b) A named title triggers both searches.** If the user names a paper
-     or source by title, run `$WIKICTL search --query "<title>"` (pages) AND
+     or source by title, run `$WIKICTL page search --query "<title>"` (pages) AND
      `$WIKICTL source search --query "<title>"` (sources) — regardless of
      whether you think it's in the wiki: the title could be a page, an ingested
      source, or both, and the user most likely ingested it as a source. Read a
@@ -353,7 +353,7 @@ directly and is always available.
    with `[^id]` + `[^id]: [[source:Name#"quote"]]` footnotes (see Footnotes
    convention above). If the wiki lacks the information, say so plainly rather
    than guessing.
-3. Optionally file a useful answer back as a page via `$WIKICTL page upsert`,
+3. Optionally file a useful answer back as a page via `$WIKICTL page add`,
    then `$WIKICTL log append --kind query --title "<the question>"`.
 
 **Lint** — health-check the wiki:

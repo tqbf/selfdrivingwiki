@@ -120,7 +120,7 @@ public enum SandboxProfile {
     /// Generate a READ-ONLY seatbelt profile that allows writes to scratch (the agent
     /// needs a writable cwd for temp files) but DENIES writes to the wiki database.
     /// Used when the query agent runs without "Allow wiki edits" — it physically
-    /// prevents `wikictl page upsert` / `wikictl index set` / `wikictl log append`
+    /// prevents `wikictl page add` / `wikictl index set` / `wikictl log append`
     /// from writing, regardless of prompt instructions.
     ///
     /// - Parameter pdf2mdScriptPath: when non-nil, emits the same `pdf2md` exec/read

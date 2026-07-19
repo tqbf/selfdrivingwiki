@@ -31,7 +31,7 @@ import JavaScriptCore
 /// **`[[wiki-links]]`** are inert text to markdownlint — no false positives.
 ///
 /// **Two write surfaces** (both mirror `MermaidValidator`):
-/// - **Agent path** — `wikictl page upsert`: `fix()` is applied BEFORE the write
+/// - **Agent path** — `wikictl page add`: `fix()` is applied BEFORE the write
 ///   (markdown-fix → mermaid-validate → `PageUpsert`). Frictionless under the
 ///   cosmetic-only config (every rule is auto-fixable).
 /// - **In-app path** — `WikiStoreModel.save`: `lint()` computes findings and sets

@@ -160,7 +160,7 @@ public enum ACPIngestPrompts {
     }
 
     /// The executor task prompt. Instructs Sonnet to read its assigned source
-    /// section and write each page via `$WIKICTL page upsert`. Cross-references
+    /// section and write each page via `$WIKICTL page add`. Cross-references
     /// all page titles for linking.
     public static func executorPrompt(
         stateFilePath: String,

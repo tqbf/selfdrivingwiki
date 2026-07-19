@@ -125,10 +125,11 @@ func run() async -> Int32 {
     }
 }
 
-/// Execute a parsed `Command`, dispatching to `PageCommand` (the `page …` family),
-/// `LogIndexCommand` (the Phase-B `log append` / `index set`), or `SourceCommand`
-/// (the `source …` family for raw source reads). The deferred body read (`-` = stdin,
-/// else a file path) happens here — the only I/O the parser left for `main`.
+/// Execute a parsed `Command`, dispatching to `PageCommand` (the `page …`
+/// family), `LogIndexCommand` (the Phase-B `log append` / `index set`), or
+/// `SourceCommand` (the `source …` family for raw source reads). The deferred
+/// body read (`-` = stdin, else a file path) happens inside the action's `run`
+/// via `resolveBodySource` — the only I/O the parser left for execution time.
 ///
 /// `wikiID` + `containerDirectory` thread the on-disk Tantivy index path
 /// (`<container>/search-index/<wikiID>/`) to the three search cases so they
@@ -142,89 +143,45 @@ func execute(
     containerDirectory: URL
 ) throws -> SourceCommand.Result {
     switch command {
-    case .list(let json):
-        let r = try PageCommand.run(.list(json: json), in: store)
-        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
-    case .get(let selector, let json, let workspace):
-        let r = try PageCommand.run(.get(selector, json: json, workspace: workspace), in: store)
-        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
-    case .delete(let id):
-        let r = try PageCommand.run(.delete(id: id), in: store)
-        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
-    case .upsert(let id, let title, let bodyFile, let expectHead, let workspace, let author):
-        let body = try readBody(from: bodyFile)
-        let r = try PageCommand.run(.upsert(id: id, title: title, body: body, expectHead: expectHead, workspace: workspace, author: author), in: store)
+    case .page(let action):
+        let leg: [WikiPageSummary]? = cliPageLegIfSearch(action, wikiID: wikiID, containerDirectory: containerDirectory, store: store)
+        let r = try PageCommand.run(action, in: store, bm25Leg: leg)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .logAppend(let kind, let title, let note, let source):
         let r = try LogIndexCommand.run(.logAppend(kind: kind, title: title, note: note, source: source), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .indexSet(let bodyFile, let workspace):
-        let body = try readBody(from: bodyFile)
+        let body = try readBodyFile(from: bodyFile)
         let r = try LogIndexCommand.run(.indexSet(body: body, workspace: workspace), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
-    case .search(let query, let limit):
-        // #637: route through the Tantivy BM25 leg (mirrors the sidebar's
-        // `WikiStoreModel.scheduleSearch()` → `resolveTantivyLeg` flow) so the
-        // CLI gets fuzzy matching (edit-distance 1 on title+body, already
-        // configured at TantivyIndexer.swift:108-111). Post-#634 a `nil` leg
-        // (Tantivy index unavailable/empty) means NO BM25 signal — the store's
-        // FTS5 fallback was dropped (#634); cosine still answers when vec and
-        // the embedding model are available.
-        let leg = CLITantivyLegResolver.resolvePageLeg(
-            wikiID: wikiID, containerDirectory: containerDirectory,
-            store: store, query: query, limit: limit)
-        let r = try PageCommand.run(.search(query: query, limit: limit), in: store, bm25Leg: leg)
-        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
-    case .pageHistory(let selector):
-        let r = try PageCommand.run(.history(selector), in: store)
-        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
-    case .pageRevert(let selector, let versionID):
-        let r = try PageCommand.run(.revert(selector, versionID: versionID), in: store)
-        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .source(let action):
+        if case .refresh(let selector) = action {
+            // `runRefresh` is async (network I/O). Bridge it to the sync
+            // `execute` context via a semaphore — the standard CLI async→sync
+            // pattern. Safe because `DispatchSemaphore.wait()` blocks only the
+            // main thread; the async task signals from its own continuation
+            // thread, which never needs to acquire the main thread to signal
+            // (signaling is thread-agnostic). WebsiteMaterializer does not hop
+            // to the main actor, so no deadlock.
+            let box = RefreshResultBox()
+            let semaphore = DispatchSemaphore(value: 0)
+            Task {
+                do {
+                    box.result = try await SourceCommand.runRefresh(
+                        selector, in: store, fetcher: URLSessionFetcher())
+                } catch {
+                    box.error = error
+                }
+                semaphore.signal()
+            }
+            semaphore.wait()
+            if let error = box.error { throw error }
+            return box.result ?? SourceCommand.Result(payload: .text(""), didCommit: false)
+        }
         return try SourceCommand.run(
             action, in: store,
             cwd: FileManager.default.currentDirectoryPath,
             bm25Leg: cliSourceLegIfSearch(action, wikiID: wikiID, containerDirectory: containerDirectory, store: store))
-    case .sourceEditMarkdown(let selector, let contentOrFile, let isFile):
-        let content: String
-        if isFile {
-            content = try readBody(from: contentOrFile)
-        } else {
-            content = contentOrFile
-        }
-        return try SourceCommand.run(
-            .editMarkdown(selector, content: content), in: store,
-            cwd: FileManager.default.currentDirectoryPath)
-    case .sourceRename(let selector, let to):
-        return try SourceCommand.run(
-            .rename(selector, to: to), in: store,
-            cwd: FileManager.default.currentDirectoryPath)
-    case .sourceSetActive(let selector, let versionID):
-        return try SourceCommand.run(
-            .setActive(selector, versionID: versionID), in: store,
-            cwd: FileManager.default.currentDirectoryPath)
-    case .sourceRefresh(let selector):
-        // `runRefresh` is async (network I/O). Bridge it to the sync `execute`
-        // context via a semaphore — the standard CLI async→sync pattern. Safe
-        // because `DispatchSemaphore.wait()` blocks only the main thread; the
-        // async task signals from its own continuation thread, which never needs
-        // to acquire the main thread to signal (signaling is thread-agnostic).
-        // WebsiteMaterializer does not hop to the main actor, so no deadlock.
-        let box = RefreshResultBox()
-        let semaphore = DispatchSemaphore(value: 0)
-        Task {
-            do {
-                box.result = try await SourceCommand.runRefresh(
-                    selector, in: store, fetcher: URLSessionFetcher())
-            } catch {
-                box.error = error
-            }
-            semaphore.signal()
-        }
-        semaphore.wait()
-        if let error = box.error { throw error }
-        return box.result ?? SourceCommand.Result(payload: .text(""), didCommit: false)
     case .admin(let action):
         return try AdminCommand.run(action, in: store)
     case .chat(let action):
@@ -282,6 +239,22 @@ private func cliSourceLegIfSearch(
         store: store, query: query, limit: limit)
 }
 
+/// #637: inspect a `PageCommand.Action` and, when it's `.search`, resolve a
+/// Tantivy BM25 leg to thread into `PageCommand.run(..., bm25Leg:)`. Returns
+/// `nil` for every other action. Mirrors `cliSourceLegIfSearch` so the
+/// `page search` / `source search` paths share the same resolve step.
+private func cliPageLegIfSearch(
+    _ action: PageCommand.Action,
+    wikiID: String,
+    containerDirectory: URL,
+    store: GRDBWikiStore
+) -> [WikiPageSummary]? {
+    guard case .search(let query, let limit) = action else { return nil }
+    return CLITantivyLegResolver.resolvePageLeg(
+        wikiID: wikiID, containerDirectory: containerDirectory,
+        store: store, query: query, limit: limit)
+}
+
 /// Thread-safe box for the wikictl async→sync semaphore bridge (Phase 3b).
 /// `@unchecked Sendable` — the semaphore guarantees the write (in the async
 /// task) happens-before the read (after `semaphore.wait()` returns), so the
@@ -302,12 +275,12 @@ final class RefreshResultBox: @unchecked Sendable {
 }
 
 /// Read an upsert body: `-` reads stdin to EOF; anything else is a file path.
+/// Now a thin shim to `readBodyFile` in WikiCtlCore so the body-read contract
+/// lives next to `BodySource`/`resolveBodySource`. Kept as a `wikictl`-local
+/// helper so existing callers in this file (e.g. `LogIndexCommand` indexSet)
+/// read cleanly.
 func readBody(from source: String) throws -> String {
-    if source == "-" {
-        let data = FileHandle.standardInput.readDataToEndOfFile()
-        return String(decoding: data, as: UTF8.self)
-    }
-    return try String(contentsOfFile: source, encoding: .utf8)
+    try readBodyFile(from: source)
 }
 
 // MARK: - wiki subcommands (via wikid daemon XPC)

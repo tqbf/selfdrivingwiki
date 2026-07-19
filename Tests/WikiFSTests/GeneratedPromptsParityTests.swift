@@ -99,7 +99,7 @@ struct GeneratedPromptsParityTests {
     // MARK: - AC1.5: prompt templates contain CAS discipline
 
     @Test func promptsContainCASDiscipline() {
-        // The prompts that invoke `page upsert` must teach the agent the
+        // The prompts that invoke `page add` must teach the agent the
         // read-head → thread-expectation → retry-once discipline (Phase 1).
         let promptsToCheck = [
             ("ingest-executor", GeneratedPrompts.ingestExecutor),

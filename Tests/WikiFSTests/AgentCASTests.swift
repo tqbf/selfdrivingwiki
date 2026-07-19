@@ -6,11 +6,11 @@ import Testing
 /// Tests for Phase 1: Agent CAS writes (`#multi-writer-hardening`).
 ///
 /// Covers:
-/// - `page upsert --expect-head <current>` succeeds and appends a version.
-/// - `page upsert --expect-head <stale>` exits with code 3, reports current head,
+/// - `page add --expect-head <current>` succeeds and appends a version.
+/// - `page add --expect-head <stale>` exits with code 3, reports current head,
 ///   leaves page byte-identical.
 /// - `page get` (text and `--json`) includes `head_version_id`.
-/// - Blind `page upsert` (no flag) preserves today's behavior.
+/// - Blind `page add` (no flag) preserves today's behavior.
 @MainActor
 @Suite(.timeLimit(.minutes(5)))
 struct AgentCASTests {
@@ -33,8 +33,8 @@ struct AgentCASTests {
 
         // Upsert with the correct head → should succeed (no conflict).
         let result = try PageCommand.run(
-            .upsert(id: page.id, title: "CAS Page", body: "v2 body",
-                    expectHead: head),
+            .add(id: page.id, title: "CAS Page", body: .inline("v2 body"),
+                     expectHead: head),
             in: store)
         #expect(result.didCommit == true)
 
@@ -65,8 +65,8 @@ struct AgentCASTests {
         // Now try to upsert with the STALE head → conflict.
         #expect(throws: PageConflictError.self) {
             _ = try PageCommand.run(
-                .upsert(id: page.id, title: "Stale Page", body: "v2 body (original)",
-                        expectHead: oldHead),
+                .add(id: page.id, title: "Stale Page", body: .inline("v2 body (original)"),
+                         expectHead: oldHead),
                 in: store)
         }
 
@@ -106,8 +106,8 @@ struct AgentCASTests {
 
         // No --expect-head flag → blind write (no CAS check, succeeds unconditionally).
         let result = try PageCommand.run(
-            .upsert(id: page.id, title: "Blind Page", body: "blind body",
-                    expectHead: nil),
+            .add(id: page.id, title: "Blind Page", body: .inline("blind body"),
+                     expectHead: nil),
             in: store)
         #expect(result.didCommit == true)
 
@@ -119,11 +119,11 @@ struct AgentCASTests {
 
     @Test func parserParsesExpectHead() throws {
         let invocation = try ArgumentParser.parse(
-            ["--wiki", "test", "page", "upsert", "--title", "Test",
+            ["--wiki", "test", "page", "add", "--title", "Test",
              "--body-file", "-", "--expect-head", "01ABC123"],
             env: { _ in nil })
-        guard case .upsert(_, let title, _, let expectHead, _, _) = invocation.command else {
-            Issue.record("expected .upsert")
+        guard case .page(.add(_, let title, _, let expectHead, _, _)) = invocation.command else {
+            Issue.record("expected .page(.add)")
             return
         }
         #expect(title == "Test")
@@ -134,8 +134,8 @@ struct AgentCASTests {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "test", "page", "get", "--title", "Test", "--json"],
             env: { _ in nil })
-        guard case .get(_, let json, _) = invocation.command else {
-            Issue.record("expected .get")
+        guard case .page(.get(_, let json, _)) = invocation.command else {
+            Issue.record("expected .page(.get)")
             return
         }
         #expect(json == true)
@@ -145,8 +145,8 @@ struct AgentCASTests {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "test", "page", "get", "--title", "Test"],
             env: { _ in nil })
-        guard case .get(_, let json, _) = invocation.command else {
-            Issue.record("expected .get")
+        guard case .page(.get(_, let json, _)) = invocation.command else {
+            Issue.record("expected .page(.get)")
             return
         }
         #expect(json == false)
@@ -154,11 +154,11 @@ struct AgentCASTests {
 
     @Test func parserUpsertWithoutExpectHeadDefaultsToNil() throws {
         let invocation = try ArgumentParser.parse(
-            ["--wiki", "test", "page", "upsert", "--title", "Test",
+            ["--wiki", "test", "page", "add", "--title", "Test",
              "--body-file", "-"],
             env: { _ in nil })
-        guard case .upsert(_, _, _, let expectHead, _, _) = invocation.command else {
-            Issue.record("expected .upsert")
+        guard case .page(.add(_, _, _, let expectHead, _, _)) = invocation.command else {
+            Issue.record("expected .page(.add)")
             return
         }
         #expect(expectHead == nil)

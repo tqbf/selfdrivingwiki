@@ -31,7 +31,7 @@ public enum PageUpsert {
     /// Create-or-update a page, then re-resolve its `[[wiki-links]]` against the
     /// current title graph — the single seam the app model and `wikictl` share.
     ///
-    /// Resolution order, matching the doc's `wikictl page upsert` contract:
+    /// Resolution order, matching the doc's `wikictl page add` contract:
     /// 1. If `id` is given, update THAT page (an explicit-id update; the title
     ///    is rewritten too, mirroring the in-app rename+edit path).
     /// 2. Otherwise resolve `title` → an existing page id via

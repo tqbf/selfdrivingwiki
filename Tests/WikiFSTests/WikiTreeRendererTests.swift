@@ -27,7 +27,7 @@ struct WikiTreeRendererTests {
         #expect(body.contains("indexes/"))
         #expect(body.contains("indexes/chats.jsonl"))
         // The wikictl cheatsheet uses the file-first body delivery form.
-        #expect(body.contains("wikictl page upsert --title T --body-file ./body.md"))
+        #expect(body.contains("wikictl page add --title T --body-file ./body.md"))
         #expect(body.contains("wikictl index set --body-file ./index.md"))
         #expect(body.contains("wikictl log append"))
         // Mount discipline.
