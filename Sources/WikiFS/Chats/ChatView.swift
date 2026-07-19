@@ -573,6 +573,24 @@ struct ChatView: View {
                     }
                     .help("Reveal this chat file in Finder")
                 }
+                // #671: persistent "Reveal Debug Folder" — reads from the
+                // launcher's in-memory chatID→path map (populated at spawn
+                // commit in `startInteractiveQuery`), falling back to the live
+                // session's `debugFolderURL` so an in-progress run reveals before
+                // the map entry is finalized. Visible for any chat that ran in
+                // this app session (live or reopened from history); absent for
+                // chats that never ran here or whose run failed preflight (no
+                // scratch dir → no debug folder). Mirrors ingestion's
+                // `ActivityWindowView.revealMenu(for:)`.
+                if let chatID,
+                   let debugURL = launcher.debugFolderURL(forChat: chatID.rawValue)
+                        ?? (isLiveChat ? launcher.debugFolderURL : nil) {
+                    Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
+                        DebugLog.agent("ChatView: Reveal Debug Folder tapped — id=\(chatID.rawValue)")
+                        NSWorkspace.shared.activateFileViewerSelecting([debugURL])
+                    }
+                    .help("Open the complete debug trace folder (ACP messages, permissions, usage)")
+                }
                 Button {
                     DebugLog.tabs("ChatView: Toggle Outline tapped")
                     chatOutlineExpanded.toggle()

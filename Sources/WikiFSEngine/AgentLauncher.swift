@@ -162,6 +162,15 @@ public final class AgentLauncher {
     /// when no run has started or the folder couldn't be created. Survives
     /// `finish()` so the UI can reveal it after the run completes.
     public private(set) var debugFolderURL: URL?
+    /// Per-chat in-memory map of `(logFileURL, debugFolderURL)` captured at
+    /// spawn commit in `startInteractiveQuery`. Lets the chat detail toolbar
+    /// reveal a chat's debug folder after the live session ends or the chat is
+    /// reopened from history (same app session only — cleared on restart,
+    /// mirroring ingestion's `QueueActivityTracker` lifetime). Keyed by chatID
+    /// string (the `PageID.rawValue` passed to `startInteractiveQuery`).
+    /// No file-provider emission — paths are read-only metadata, not store
+    /// mutations (the #129 `mutate()` rule does not apply to `AgentLauncher`).
+    public private(set) var chatLogPaths: [String: (log: URL?, debug: URL?)] = [:]
     /// The wall-clock start time of the current/last run, captured at spawn
     /// commit so `summary.json`'s duration is accurate even if `runStartedAt`
     /// (set inside `setGenerating(true)`) is reset.nil when no run has started.
@@ -276,6 +285,21 @@ public final class AgentLauncher {
     /// closure delegating to `PdfExtractionService.resolveScript()` at wiring
     /// time; tests/the daemon default to nil (no deny rule emitted).
     @ObservationIgnored public var pdf2mdScriptPathResolver: () -> String? = { nil }
+
+    /// Returns the persisted debug-folder URL for a chat that ran during this
+    /// app session, or nil if the chat never ran (or ran before this launch).
+    /// Reads from `chatLogPaths`, the in-memory map populated at spawn commit
+    /// in `startInteractiveQuery`. Mirrors `QueueActivityTracker.debugURL(for:)`.
+    public func debugFolderURL(forChat id: String) -> URL? {
+        chatLogPaths[id]?.debug
+    }
+
+    /// Returns the persisted run-log URL for a chat that ran during this app
+    /// session, or nil if the chat never ran. Companion to
+    /// `debugFolderURL(forChat:)`.
+    public func logFileURL(forChat id: String) -> URL? {
+        chatLogPaths[id]?.log
+    }
 
     /// Read the persisted provider config (loads + seeds on first run). The
     /// composer's provider selector binds to this for the providers list + the
@@ -2289,6 +2313,15 @@ public final class AgentLauncher {
         // persisted store. Set here (after resetRunArtifacts cleared any prior
         // value) so the flip is live from the first streamed token.
         activeChatID = chatID
+        // #671: capture (logFileURL, debugFolderURL) under chatID so the chat
+        // detail toolbar can reveal a chat's debug folder after the live session
+        // ends or the chat is reopened from history (same app session only —
+        // mirroring ingestion's `QueueActivityTracker` in-memory lifetime).
+        // Placed right after `activeChatID = chatID` and after `openLogFiles`
+        // (line above) so the binding + paths land atomically with the live flip.
+        if let chatID {
+            chatLogPaths[chatID] = (logFileURL, debugFolderURL)
+        }
         // Pre-display the user's message so it appears instantly — don't make
         // the user wait ~4s for backend.start (spawn + initialize + newSession)
         // before seeing their own text. `sendInteractiveMessage` will skip its
