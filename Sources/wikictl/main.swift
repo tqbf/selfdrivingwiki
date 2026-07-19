@@ -166,9 +166,10 @@ func execute(
         // #637: route through the Tantivy BM25 leg (mirrors the sidebar's
         // `WikiStoreModel.scheduleSearch()` → `resolveTantivyLeg` flow) so the
         // CLI gets fuzzy matching (edit-distance 1 on title+body, already
-        // configured at TantivyIndexer.swift:108-111) and survives #634's
-        // FTS5 drop. `nil` leg (Tantivy index unavailable/empty) → the store's
-        // existing FTS5 fallback (Phase 2 contract).
+        // configured at TantivyIndexer.swift:108-111). Post-#634 a `nil` leg
+        // (Tantivy index unavailable/empty) means NO BM25 signal — the store's
+        // FTS5 fallback was dropped (#634); cosine still answers when vec and
+        // the embedding model are available.
         let leg = CLITantivyLegResolver.resolvePageLeg(
             wikiID: wikiID, containerDirectory: containerDirectory,
             store: store, query: query, limit: limit)

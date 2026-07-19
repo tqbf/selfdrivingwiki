@@ -282,12 +282,27 @@ struct WikiCtlCommandTests {
     }
 
     // MARK: - Search dispatch
+    //
+    // Post-#634: `PageCommand.run(.search)` needs a `bm25Leg` to produce
+    // non-empty TSV — the store no longer has an FTS5 fallback. The CLI
+    // resolves a Tantivy leg in production (wikictl/main.swift); these tests
+    // fabricate one from the seeded pages so they exercise the TSV formatting
+    // contract without depending on a search index.
 
     @Test func searchReturnsTSVAndDoesNotCommit() throws {
         let store = try tempStore()
-        _ = try PageCommand.run(.upsert(id: nil, title: "Cars", body: "electric vehicles"), in: store)
+        let carsUpsert = try PageCommand.run(.upsert(id: nil, title: "Cars", body: "electric vehicles"), in: store)
         _ = try PageCommand.run(.upsert(id: nil, title: "Recipes", body: "baking bread"), in: store)
-        let result = try PageCommand.run(.search(query: "car", limit: 10), in: store)
+        // Fabricate a Tantivy-style leg that targets only the Cars page (what
+        // a real Tantivy "car" query would surface). The store treats the leg
+        // as the pre-ranked BM25 signal; with no page_chunks the cosine leg is
+        // empty so the fused output equals the leg exactly.
+        let carsID = PageID(rawValue: carsUpsert.output)
+        let carsLeg = WikiPageSummary(
+            id: carsID, title: "Cars",
+            updatedAt: Date(timeIntervalSince1970: 0),
+            createdAt: Date(timeIntervalSince1970: 0))
+        let result = try PageCommand.run(.search(query: "car", limit: 10), in: store, bm25Leg: [carsLeg])
         #expect(!result.didCommit)
         let lines = result.output.split(separator: "\n")
         #expect(!lines.isEmpty)
