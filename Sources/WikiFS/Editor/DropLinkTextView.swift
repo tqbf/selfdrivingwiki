@@ -65,6 +65,33 @@ final class DropLinkTextView: NSTextView {
         super.registerForDraggedTypes(combined)
     }
 
+    /// Eagerly register the sidebar drag type as soon as the view is placed in a
+    /// window.
+    ///
+    /// ROOT CAUSE of #616-regression: `NSTextView` registers its drag types
+    /// *lazily* — and in this SwiftUI-hosted, `drawsBackground = false`
+    /// configuration it never calls `registerForDraggedTypes` at all until the
+    /// user actually begins dragging *selected text out* of the editor. So a
+    /// freshly-opened editor had ZERO registered dragged types, AppKit never
+    /// routed a sidebar drag to it (no `draggingEntered`/`performDragOperation`
+    /// ever fired), and the drop silently did nothing. Relying on the
+    /// `registerForDraggedTypes` override to piggyback on NSTextView's own
+    /// registration (see the override above) never worked because that call was
+    /// never made.
+    ///
+    /// Registering here makes the editor a live drop target the moment it
+    /// appears, independent of first-responder / text-selection state. The
+    /// `registerForDraggedTypes` override still runs (it adds the sidebar type
+    /// ALONGSIDE whatever text types NSTextView later registers when the user
+    /// drags selected text), so drag-selected-text-to-move within the editor and
+    /// text drops from other apps keep working — this just guarantees the
+    /// sidebar type is present up front rather than never.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        registerForDraggedTypes([NSPasteboard.PasteboardType(UTType.wikiSidebarItem.identifier)])
+    }
+
     // MARK: - Drag destination
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -83,6 +110,20 @@ final class DropLinkTextView: NSTextView {
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
         if hasSidebarPayloads(sender.draggingPasteboard) { return .copy }
         return super.draggingUpdated(sender)
+    }
+
+    /// AppKit's drop handshake is `draggingEntered` → `prepareForDragOperation`
+    /// → `performDragOperation`. `NSView`'s default `prepareForDragOperation`
+    /// returns `true`, but `NSTextView` OVERRIDES it to accept only pasteboards
+    /// it can read as native text — and a `wikiSidebarItem` payload conforms to
+    /// `public.item` (NOT a text type), so NSTextView's override VETOES the drop
+    /// and `performDragOperation` is never called (the drag glyph shows `.copy`
+    /// from `draggingEntered`, but the release silently does nothing). Override
+    /// to accept sidebar drops explicitly; fall through to `super` for everything
+    /// else so NSTextView's own text-drop gating is unchanged.
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if hasSidebarPayloads(sender.draggingPasteboard) { return true }
+        return super.prepareForDragOperation(sender)
     }
 
     /// `true` only when the sidebar payloads were decoded AND the builder
@@ -108,7 +149,23 @@ final class DropLinkTextView: NSTextView {
         let dropPoint = convert(sender.draggingLocation, from: nil)
         let dropChar = characterIndexForInsertion(at: dropPoint)
         let range = NSRange(location: dropChar, length: 0)
-        replaceCharacters(in: range, with: text)   // fires textDidChange → @Binding
+
+        // Route the programmatic insert through the `shouldChangeText` /
+        // `didChangeText` bracket — NOT a bare `textStorage.replaceCharacters`.
+        // A raw text-storage mutation does NOT post `NSTextDidChangeNotification`,
+        // so the `NSTextViewDelegate.textDidChange` never fires, `parent.text`
+        // (the SwiftUI `@Binding` → `store.draftBody`) is never updated, and the
+        // very next `updateNSView` sees `textView.string != text` and REVERTS
+        // the insert back to the stale binding value (the drop appears to do
+        // nothing). `didChangeText()` posts the notification (→ binding sync) and
+        // `shouldChangeText` registers the edit for undo — the same path a typed
+        // edit takes.
+        guard shouldChangeText(in: range, replacementString: text) else {
+            DebugLog.editor("[drop] editor sidebar drop vetoed by shouldChangeText; nothing inserted")
+            return false
+        }
+        textStorage?.replaceCharacters(in: range, with: text)
+        didChangeText()
 
         // Move the caret to just AFTER the inserted text and reveal it. This is
         // the same outcome as typing the link by hand: caret ends up ready for

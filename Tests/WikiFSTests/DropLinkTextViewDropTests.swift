@@ -116,6 +116,41 @@ struct DropLinkTextViewDropTests {
         #expect(registered.contains(sidebarType))
         #expect(registered.contains(customType))
     }
+
+    // MARK: - Eager registration when hosted in a window (#616 live-drop fix)
+
+    /// THE regression test for the #616-in-the-app fix. `NSTextView` registers
+    /// its drag types *lazily* (only once the user begins dragging selected text
+    /// out of it), so a freshly-opened editor that the user never dragged FROM
+    /// had ZERO registered dragged types — AppKit never routed a sidebar drag to
+    /// it and the drop silently did nothing. `DropLinkTextView.viewDidMoveToWindow`
+    /// eagerly registers the sidebar type so the editor is a live drop target the
+    /// moment it appears. Pin that: put the view in a window WITHOUT ever making
+    /// it first responder or calling `registerForDraggedTypes` by hand, and the
+    /// sidebar type must already be registered.
+    @Test func viewDidMoveToWindow_eagerlyRegistersSidebarType() {
+        let tv = ScrollableTextEditor.makeConfiguredTextView(
+            font: .monospacedSystemFont(ofSize: 13, weight: .regular))
+        let sidebarType = NSPasteboard.PasteboardType(UTType.wikiSidebarItem.identifier)
+
+        // Before entering a window, NSTextView has not lazily registered its
+        // drag types — the sidebar type is NOT yet present. (If a future SDK
+        // starts eager-registering, this pre-condition may change; the
+        // post-condition below is the load-bearing assertion.)
+        #expect(!tv.registeredDraggedTypes.contains(sidebarType))
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        let scrollView = NSScrollView(frame: window.contentLayoutRect)
+        scrollView.documentView = tv
+        window.contentView = scrollView
+
+        // Placing the view in a window fires `viewDidMoveToWindow`, which must
+        // have eagerly registered the sidebar type — WITHOUT the view ever
+        // becoming first responder or us calling `registerForDraggedTypes`.
+        #expect(tv.registeredDraggedTypes.contains(sidebarType))
+    }
 }
 
 /// Tests for the store-side builder (`SidebarDropBuilder.insertionText`) — the
