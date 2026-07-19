@@ -69,5 +69,11 @@ struct CollapsibleDetailHeader<Expanded: View>: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .onTapGesture(count: 2) {
+            DebugLog.tabs("CollapsibleDetailHeader: header double-tapped — wasExpanded=\(isExpanded)")
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isExpanded.toggle()
+            }
+        }
     }
 }

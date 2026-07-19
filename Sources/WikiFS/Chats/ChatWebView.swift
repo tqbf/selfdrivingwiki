@@ -975,6 +975,13 @@ struct ChatWebView: NSViewRepresentable {
               btn.classList.remove('copied');
             }, 1500);
           });
+          document.addEventListener('dblclick', function(e) {
+            var summary = e.target.closest && e.target.closest('summary');
+            if (!summary) return;
+            var details = summary.closest('details');
+            if (!details) return;
+            details.open = !details.open;
+          });
         </script>
         </body></html>
         """
