@@ -105,6 +105,130 @@ struct MediaEmbedPlayerTests {
         #expect(MediaTitleFetcher.parseTitle(from: Data("not json".utf8)) == nil)
     }
 
+    // MARK: - MediaTitleFetcher.parseMetadata (#646)
+
+    @Test func parseMetadataDecodesFullBlob() throws {
+        // Vimeo-shaped: title + author + description + duration + thumbnail.
+        let json = """
+        {"title":"Orientation","author_name":"Vimeo Staff","author_url":"https://vimeo.com/staff",
+         "provider_name":"Vimeo","thumbnail_url":"https://i.vimeocdn.com/x.jpg",
+         "description":"A short orientation","duration":42}
+        """
+        let m = try #require(MediaTitleFetcher.parseMetadata(from: Data(json.utf8)))
+        #expect(m.title == "Orientation")
+        #expect(m.authorName == "Vimeo Staff")
+        #expect(m.authorURL == "https://vimeo.com/staff")
+        #expect(m.providerName == "Vimeo")
+        #expect(m.thumbnailURL == "https://i.vimeocdn.com/x.jpg")
+        #expect(m.descriptionText == "A short orientation")
+        #expect(m.durationSeconds == 42)
+    }
+
+    @Test func parseMetadataTolerantOfMissingFields() {
+        // YouTube-shape: title + author + provider + thumbnail, NO description/duration.
+        let json = #"{"title":"Wave","author_name":"Channel","provider_name":"YouTube"}"#
+        let m = MediaTitleFetcher.parseMetadata(from: Data(json.utf8))
+        #expect(m?.title == "Wave")
+        #expect(m?.authorName == "Channel")
+        #expect(m?.providerName == "YouTube")
+        #expect(m?.descriptionText == nil)
+        #expect(m?.durationSeconds == nil)
+    }
+
+    @Test func parseMetadataTrimsAndRejectsWhitespaceOnly() {
+        let json = #"{"title":"  Padded  ","description":"\n  \t"}"#
+        let m = MediaTitleFetcher.parseMetadata(from: Data(json.utf8))
+        #expect(m?.title == "Padded")
+        #expect(m?.descriptionText == nil)  // whitespace-only ⇒ nil
+    }
+
+    @Test func parseMetadataNilForNonJSON() {
+        #expect(MediaTitleFetcher.parseMetadata(from: Data("not json".utf8)) == nil)
+    }
+
+    @Test func parseMetadataDurationAcceptsNumericString() {
+        let json = #"{"title":"x","duration":"90"}"#
+        let m = MediaTitleFetcher.parseMetadata(from: Data(json.utf8))
+        #expect(m?.durationSeconds == 90)
+    }
+
+    // MARK: - MediaMarkdownSynthesizer (#646)
+
+    @Test func synthesizeIncludesAllMetadataFieldsWhenPresent() {
+        let m = MediaTitleFetcher.MediaOEmbedMetadata(
+            title: "Orientation", authorName: "Vimeo Staff",
+            authorURL: "https://vimeo.com/staff", providerName: "Vimeo",
+            thumbnailURL: "https://i.vimeocdn.com/x.jpg",
+            descriptionText: "A short orientation", durationSeconds: 3661)
+        let md = MediaMarkdownSynthesizer.synthesize(
+            url: "https://vimeo.com/1", metadata: m, fallbackTitle: "fallback")
+        #expect(md.hasPrefix("# Orientation\n"))
+        #expect(md.contains("[https://vimeo.com/1](https://vimeo.com/1)"))
+        #expect(md.contains("**Provider:** Vimeo"))
+        #expect(md.contains("**Author:** [Vimeo Staff](https://vimeo.com/staff)"))
+        #expect(md.contains("**Duration:** 1:01:01"))
+        #expect(md.contains("A short orientation"))
+        // No transcript section when none provided.
+        #expect(!md.contains("## Transcript"))
+    }
+
+    @Test func synthesizeFallsBackToTitleWhenMetadataNil() {
+        let md = MediaMarkdownSynthesizer.synthesize(
+            url: "https://example.com/a.mp3", metadata: nil,
+            fallbackTitle: "remote-example.com")
+        #expect(md.hasPrefix("# remote-example.com\n"))
+        #expect(md.contains("[https://example.com/a.mp3](https://example.com/a.mp3)"))
+        #expect(!md.contains("**Provider:**"))
+        #expect(!md.contains("**Author:**"))
+        #expect(!md.contains("**Duration:**"))
+        #expect(!md.contains("## Transcript"))
+    }
+
+    @Test func synthesizeUsesMetadataTitleOverFallback() {
+        let m = MediaTitleFetcher.MediaOEmbedMetadata(
+            title: "Real Title", authorName: nil, authorURL: nil,
+            providerName: nil, thumbnailURL: nil,
+            descriptionText: nil, durationSeconds: nil)
+        let md = MediaMarkdownSynthesizer.synthesize(
+            url: "https://x", metadata: m, fallbackTitle: "fallback-name")
+        #expect(md.hasPrefix("# Real Title\n"))
+    }
+
+    @Test func synthesizeAppendsTranscriptSectionWhenTranscriptProvided() {
+        let md = MediaMarkdownSynthesizer.synthesize(
+            url: "https://x", metadata: nil, fallbackTitle: "fallback",
+            transcript: "Hello world\nSecond cue")
+        #expect(md.contains("---"))
+        #expect(md.contains("## Transcript"))
+        #expect(md.contains("Hello world"))
+        #expect(md.contains("Second cue"))
+    }
+
+    @Test func synthesizeOmitsTranscriptSectionForEmptyTranscript() {
+        let md = MediaMarkdownSynthesizer.synthesize(
+            url: "https://x", metadata: nil, fallbackTitle: "fallback",
+            transcript: "")
+        #expect(!md.contains("## Transcript"))
+    }
+
+    @Test func synthesizeAuthorWithoutURLRendersPlain() {
+        let m = MediaTitleFetcher.MediaOEmbedMetadata(
+            title: "T", authorName: "Channel", authorURL: nil,
+            providerName: nil, thumbnailURL: nil,
+            descriptionText: nil, durationSeconds: nil)
+        let md = MediaMarkdownSynthesizer.synthesize(
+            url: "https://x", metadata: m, fallbackTitle: "fallback")
+        #expect(md.contains("**Author:** Channel"))
+        #expect(!md.contains("[Channel]"))
+    }
+
+    @Test func formatDurationHandlesMinutesAndHours() {
+        #expect(MediaMarkdownSynthesizer.formatDuration(0) == "0:00")
+        #expect(MediaMarkdownSynthesizer.formatDuration(59) == "0:59")
+        #expect(MediaMarkdownSynthesizer.formatDuration(90) == "1:30")
+        #expect(MediaMarkdownSynthesizer.formatDuration(3661) == "1:01:01")
+    }
+
     // MARK: - MediaEmbedPlayerHTML (iframe element + document)
 
     @Test func youTubeIframeEagerLoadsAndForwardsReferrer() throws {

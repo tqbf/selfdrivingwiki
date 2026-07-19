@@ -187,6 +187,122 @@ struct BytelessEmbedIntegrationTests {
         #expect(outcome.kind == .htmlConverted)
     }
 
+    // MARK: - #646: synthetic markdown for byteless sources
+
+    /// Serves a rich Vimeo-shaped oEmbed payload so the synthesizer can render
+    /// a readable page from real metadata (title + author + provider + duration
+    /// + description).
+    struct VimeoMetadataFetcher: URLFetchService.URLResourceFetcher {
+        func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse {
+            // Only oEmbed URLs are expected; explode for anything else.
+            let absolute = url.absoluteString
+            guard absolute.contains("/oembed") || absolute.contains("api/oembed") else {
+                throw URLFetchService.FetchError.network("not an oEmbed URL")
+            }
+            let body = """
+            {"title":"Orientation","author_name":"Vimeo Staff",
+             "author_url":"https://vimeo.com/staff","provider_name":"Vimeo",
+             "thumbnail_url":"https://i.vimeocdn.com/x.jpg",
+             "description":"A short orientation","duration":42}
+            """
+            return URLFetchService.FetchResponse(
+                data: Data(body.utf8), contentType: "application/json", finalURL: url)
+        }
+    }
+
+    /// Serves an empty 200 OK for oEmbed — simulates a reachable-but-empty
+    /// provider response. The fetcher's `data.isEmpty` guard rejects this; the
+    /// title-fetcher returns nil metadata, and the synthesizer falls back to
+    /// a URL + filename-only page.
+    struct EmptyOEmbedFetcher: URLFetchService.URLResourceFetcher {
+        func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse {
+            URLFetchService.FetchResponse(
+                data: Data(), contentType: "application/json", finalURL: url)
+        }
+    }
+
+    @Test func vimeoURLWritesSyntheticMarkdownFromFullMetadata() async throws {
+        let store = try tempStore()
+        store.eventBus = WikiEventBus(wikiID: "test")
+        let model = WikiStoreModel(store: store)
+        let outcome = try await model.addURL(
+            "https://vimeo.com/76979871", fetcher: VimeoMetadataFetcher())
+        #expect(outcome.kind == .videoEmbed)
+        let source = try #require(try store.listSources().first)
+        // The display name is the oEmbed title (not the synthetic `vimeo-<id>`).
+        #expect(source.effectiveName == "Orientation")
+        let md = try #require(try store.processedMarkdownHead(sourceID: source.id))
+        #expect(md.origin == .transcript)
+        #expect(md.technique == "byteless-oembed-synthetic")
+        #expect(md.content.hasPrefix("# Orientation\n"))
+        #expect(md.content.contains("[https://vimeo.com/76979871](https://vimeo.com/76979871)"))
+        #expect(md.content.contains("**Provider:** Vimeo"))
+        #expect(md.content.contains("**Author:** [Vimeo Staff](https://vimeo.com/staff)"))
+        #expect(md.content.contains("**Duration:** 0:42"))
+        #expect(md.content.contains("A short orientation"))
+        #expect(!md.content.contains("## Transcript"))
+    }
+
+    @Test func spotifyURLWritesSyntheticMarkdownEvenWithPartialMetadata() async throws {
+        let store = try tempStore()
+        store.eventBus = WikiEventBus(wikiID: "test")
+        let model = WikiStoreModel(store: store)
+        // ExplodingFetcher serves title + author only (Spotify-shape: no
+        // description / duration).
+        let outcome = try await model.addURL(
+            "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC",
+            fetcher: ExplodingFetcher())
+        #expect(outcome.kind == .audioEmbed)
+        let source = try #require(try store.listSources().first)
+        let md = try #require(try store.processedMarkdownHead(sourceID: source.id))
+        #expect(md.technique == "byteless-oembed-synthetic")
+        // Title from oEmbed (ExplodingFetcher serves "Exploding Fixture Title")
+        #expect(md.content.hasPrefix("# Exploding Fixture Title\n"))
+        #expect(md.content.contains("[https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC]"))
+        #expect(md.content.contains("**Author:** x"))
+        // No description / duration block for Spotify-shape metadata.
+        #expect(!md.content.contains("**Duration:**"))
+        #expect(!md.content.contains("## Transcript"))
+    }
+
+    @Test func remoteMediaWritesMinimalSyntheticMarkdownWhenNoOEmbed() async throws {
+        let store = try tempStore()
+        store.eventBus = WikiEventBus(wikiID: "test")
+        let model = WikiStoreModel(store: store)
+        // remote-media has no oEmbed endpoint → MediaTitleFetcher.oembedURL
+        // returns nil → fetchMediaMetadata returns nil → synthesizer renders
+        // a title-from-filename + URL-only page.
+        let outcome = try await model.addURL(
+            "https://radio.example.com/live.mp3", fetcher: ExplodingFetcher())
+        #expect(outcome.kind == .remoteMedia)
+        let source = try #require(try store.listSources().first)
+        let md = try #require(try store.processedMarkdownHead(sourceID: source.id))
+        #expect(md.technique == "byteless-oembed-synthetic")
+        // Title falls back to the effective name (filename "live.mp3").
+        #expect(md.content.hasPrefix("# live.mp3\n"))
+        #expect(md.content.contains("[https://radio.example.com/live.mp3]"))
+        // No metadata block (no oEmbed).
+        #expect(!md.content.contains("**Provider:**"))
+        #expect(!md.content.contains("**Author:**"))
+        #expect(!md.content.contains("**Duration:**"))
+    }
+
+    @Test func bytelessSyntheticMarkdownIsEmptyOEmbedFallback() async throws {
+        let store = try tempStore()
+        store.eventBus = WikiEventBus(wikiID: "test")
+        let model = WikiStoreModel(store: store)
+        // An empty oEmbed body ⇒ metadata = nil (best-effort) ⇒ minimal page.
+        let outcome = try await model.addURL(
+            "https://vimeo.com/1", fetcher: EmptyOEmbedFetcher())
+        #expect(outcome.kind == .videoEmbed)
+        let source = try #require(try store.listSources().first)
+        let md = try #require(try store.processedMarkdownHead(sourceID: source.id))
+        // No title in metadata → fallback to the synthetic filename.
+        #expect(md.content.hasPrefix("# vimeo-1\n"))
+        #expect(md.content.contains("[https://vimeo.com/1](https://vimeo.com/1)"))
+        #expect(!md.content.contains("**Provider:**"))
+    }
+
     // MARK: - #564: YouTube transcript extraction
 
     /// A fake YouTube fetcher that serves canned watch-page HTML + caption XML.
@@ -258,7 +374,7 @@ struct BytelessEmbedIntegrationTests {
         #expect(md.technique == "youtube-captions")
     }
 
-    @Test func youtubeURLWithNoCaptionsFallsBackToEmbedOnly() async throws {
+    @Test func youtubeURLWithNoCaptionsFallsBackToSyntheticMarkdown() async throws {
         let store = try tempStore()
         store.eventBus = WikiEventBus(wikiID: "test")
         let model = WikiStoreModel(store: store)
@@ -274,14 +390,22 @@ struct BytelessEmbedIntegrationTests {
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             fetcher: emptyFetcher)
         #endif
-        // No captions → embed only (current behavior), transcript failure swallowed.
+        // No captions → embed outcome (kind unchanged), transcript failure swallowed,
+        // BUT #646: a synthetic metadata-only markdown page is written so the reader
+        // still has something to show (the no-oEmbed path — this fixture doesn't
+        // serve the oEmbed endpoint, so the synthesizer renders URL + filename only).
         #expect(outcome.kind == .videoEmbed)
         let sources = try store.listSources()
         #expect(sources.count == 1)
         let source = try #require(sources.first)
-        #expect(source.byteSize == 0)  // byteless embed, no transcript stored
-        // No processed markdown version was created.
-        #expect(try store.processedMarkdownHead(sourceID: source.id) == nil)
+        #expect(source.byteSize == 0)  // byteless embed
+        // The synthetic markdown head exists (was nil pre-#646) and carries the URL.
+        let md = try #require(try store.processedMarkdownHead(sourceID: source.id))
+        #expect(md.origin == .transcript)
+        #expect(md.technique == "byteless-oembed-synthetic")
+        #expect(md.content.contains("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+        // No transcript cues present (captions weren't available).
+        #expect(!md.content.contains("Hello world"))
     }
 
     /// Serves a watch page that has no caption tracks → `.noCaptions`.

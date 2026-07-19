@@ -322,6 +322,12 @@ public final class WikiStoreModel {
     @ObservationIgnored private var isApplyingTabSelection = false
     private static let navigationHistoryLimit = 100
     private static let maxRecentlyClosedTabs = 10
+    /// Technique label for synthetic byteless-source markdown written from oEmbed
+    /// metadata + URL (no transcript). Issue #646.
+    private static let bytelessMetadataTechnique = "byteless-oembed-synthetic"
+    /// Technique label for synthetic byteless-source markdown written from oEmbed
+    /// metadata + URL + a transcript (e.g. YouTube captions). Issue #646.
+    private static let bytelessTranscriptTechnique = "byteless-oembed-transcript"
 
     public init(store: WikiStore) {
         self.store = store
@@ -2078,22 +2084,34 @@ public final class WikiStoreModel {
                 externalRef: match.planURL,
                 externalIdentity: match.externalIdentity),
             role: .primary)
-        // Best-effort provider display title via oEmbed (YouTube/Vimeo/Spotify/
-        // SoundCloud). Runs off-main, never blocks the embed; a nil title leaves
-        // the synthetic `youtube-<id>` name in place. Issue #572.
-        let resolvedTitle = await fetchMediaTitle(for: match, urlFetcher: urlFetcher)
-        if let title = resolvedTitle {
+        // Best-effort provider oEmbed metadata (YouTube/Vimeo/Spotify/
+        // SoundCloud). Runs off-main, never blocks the embed; a nil blob
+        // leaves the synthetic `youtube-<id>` name + a minimal markdown page
+        // in place. Issue #572 (display title); #646 extends to full metadata.
+        let metadata = await fetchMediaMetadata(for: match, urlFetcher: urlFetcher)
+        if let title = metadata?.title {
             do {
                 try store.setSourceDisplayName(id: summary.id, displayName: title)
             } catch {
                 DebugLog.store("byteless oEmbed title setSourceDisplayName failed (source=\(summary.id.rawValue)): \(error)")
             }
         }
+        // Issue #646: synthesize a readable markdown page from the URL + oEmbed
+        // metadata so the reader, File Provider `.md` sibling, and Tantivy all
+        // see real content for this byteless source. Best-effort: a write
+        // failure is logged, not thrown (the embed itself already landed).
+        writeSyntheticBytelessMarkdown(
+            sourceID: summary.id,
+            url: match.planURL,
+            metadata: metadata,
+            fallbackTitle: summary.effectiveName,
+            transcript: nil,
+            technique: Self.bytelessMetadataTechnique)
         // No manual reload — the bus fires reloadFromStore() async after each
-        // store write (addBytelessSource + setSourceDisplayName). The tab title
-        // is passed explicitly (the resolved title when available) so it needs
-        // no synchronous freshness.
-        openTab(.source(summary.id), title: resolvedTitle ?? summary.effectiveName)
+        // store write (addBytelessSource + setSourceDisplayName +
+        // appendProcessedMarkdown). The tab title is passed explicitly (the
+        // resolved title when available) so it needs no synchronous freshness.
+        openTab(.source(summary.id), title: metadata?.title ?? summary.effectiveName)
         return URLFetchService.FetchOutcome(
             filename: match.filename, byteSize: 0, kind: kind)
     }
@@ -2107,9 +2125,11 @@ public final class WikiStoreModel {
     ///
     /// Best-effort: a transcript failure (no captions, network, restricted video)
     /// is logged via `DebugLog` but NEVER blocks the embed — the embed source is
-    /// created first, then the transcript fetch runs off-main. Returns `nil` for
-    /// non-YouTube URLs so the caller falls through to `bytelessMediaOutcome`.
-    /// Issue #564 / #572.
+    /// created first, then the transcript fetch runs off-main. When the transcript
+    /// is unavailable, a metadata-only synthetic markdown page is written so the
+    /// source still has readable content in the reader + File Provider + Tantivy
+    /// (issue #646). Returns `nil` for non-YouTube URLs so the caller falls
+    /// through to `bytelessMediaOutcome`. Issue #564 / #572 / #646.
     private func youtubeEmbedAndTranscriptOutcome(
         _ rawInput: String,
         urlFetcher: any URLFetchService.URLResourceFetcher,
@@ -2132,22 +2152,29 @@ public final class WikiStoreModel {
                 externalIdentity: match.externalIdentity),
             role: .primary)
 
-        // Best-effort oEmbed title for the display name (#572). Runs off-main and
-        // never blocks: a nil leaves the synthetic `youtube-<id>` name in place.
-        // Fetched ONCE here and threaded to every return path so the title store
-        // write + tab title stay consistent regardless of the transcript outcome.
-        let resolvedTitle = await fetchMediaTitle(for: match, urlFetcher: urlFetcher)
-        if let title = resolvedTitle {
+        // Best-effort oEmbed metadata for the display name + the synthetic
+        // markdown page (#572 + #646). Runs off-main and never blocks: a nil
+        // blob leaves the synthetic `youtube-<id>` name in place. Fetched ONCE
+        // here and threaded to every return path so the title store write +
+        // tab title stay consistent regardless of the transcript outcome.
+        let metadata = await fetchMediaMetadata(for: match, urlFetcher: urlFetcher)
+        if let title = metadata?.title {
             do {
                 try store.setSourceDisplayName(id: summary.id, displayName: title)
             } catch {
                 DebugLog.store("YouTube oEmbed title setSourceDisplayName failed (source=\(summary.id.rawValue)): \(error)")
             }
         }
-        let tabTitle = resolvedTitle ?? summary.effectiveName
+        let tabTitle = metadata?.title ?? summary.effectiveName
 
         // No transcript fetcher → embed-only (e.g. app-store build, or a test).
+        // The source still gets a synthetic metadata markdown page so the
+        // reader has something to show (#646).
         guard let fetcher = youtubeFetcher else {
+            writeSyntheticBytelessMarkdown(
+                sourceID: summary.id, url: match.planURL, metadata: metadata,
+                fallbackTitle: tabTitle, transcript: nil,
+                technique: Self.bytelessMetadataTechnique)
             openTab(.source(summary.id), title: tabTitle)
             return URLFetchService.FetchOutcome(
                 filename: match.filename, byteSize: 0, kind: .videoEmbed)
@@ -2177,9 +2204,13 @@ public final class WikiStoreModel {
                     origin: .transcript, note: nil, technique: "youtube-captions")
             } catch {
                 // #475: don't silently swallow — the transcript would be lost
-                // with no trace. The embed source is already saved, so this is a
-                // partial-failure log, not a throw.
+                // with no trace. Fall back to the metadata-only synthetic page
+                // so the reader still has SOMETHING to show (#646).
                 DebugLog.store("YouTube transcript store failed (source=\(summary.id.rawValue)): \(error)")
+                writeSyntheticBytelessMarkdown(
+                    sourceID: summary.id, url: match.planURL, metadata: metadata,
+                    fallbackTitle: tabTitle, transcript: nil,
+                    technique: Self.bytelessMetadataTechnique)
                 openTab(.source(summary.id), title: tabTitle)
                 return URLFetchService.FetchOutcome(
                     filename: match.filename, byteSize: 0, kind: .videoEmbed)
@@ -2190,25 +2221,61 @@ public final class WikiStoreModel {
                 byteSize: transcript.markdown.utf8.count,
                 kind: .videoTranscript)
         }
-        // No transcript available — embed only (current behavior).
+        // No transcript available — fall back to a metadata-only synthetic
+        // markdown page so the reader + File Provider `.md` sibling + Tantivy
+        // still see real content for this embed (issue #646). Pre-#646 behavior
+        // left the source with no readable content at all.
+        writeSyntheticBytelessMarkdown(
+            sourceID: summary.id, url: match.planURL, metadata: metadata,
+            fallbackTitle: tabTitle, transcript: nil,
+            technique: Self.bytelessMetadataTechnique)
         openTab(.source(summary.id), title: tabTitle)
         return URLFetchService.FetchOutcome(
             filename: match.filename, byteSize: 0, kind: .videoEmbed)
     }
 
-    /// Off-main oEmbed title fetch for a byteless media match. The GET itself
-    /// runs in a detached `Task` so it can't stall the `@MainActor` model; a
-    /// `nil` leaves the synthetic name in place. Shared by the YouTube and the
-    /// generic provider paths so the title fetch is one code path. Issue #572.
-    private func fetchMediaTitle(
+    /// Off-main oEmbed metadata fetch for a byteless media match. The GET
+    /// itself runs in a detached `Task` so it can't stall the `@MainActor`
+    /// model; a `nil` leaves the synthetic name + minimal synthetic markdown
+    /// in place. Shared by the YouTube and the generic provider paths so the
+    /// oEmbed fetch is one code path. Issue #572; extended by #646 to surface
+    /// the full metadata blob (author / provider / description / duration).
+    private func fetchMediaMetadata(
         for match: MediaEmbedMatch,
         urlFetcher: any URLFetchService.URLResourceFetcher
-    ) async -> String? {
+    ) async -> MediaTitleFetcher.MediaOEmbedMetadata? {
         let matchCopy = match
         let fetcherCopy = urlFetcher
         return await Task.detached(priority: .userInitiated) {
-            await MediaTitleFetcher.title(for: matchCopy, fetcher: fetcherCopy)
+            await MediaTitleFetcher.metadata(for: matchCopy, fetcher: fetcherCopy)
         }.value
+    }
+
+    /// Best-effort synthetic markdown write for a byteless source. Renders via
+    /// `MediaMarkdownSynthesizer` and stores through `appendProcessedMarkdown`
+    /// so the reader + File Provider `.md` sibling + Tantivy all see it. Never
+    /// throws — the embed has already landed; a markdown failure is a partial-
+    /// failure log, not a throw (#475 discipline). Issue #646.
+    private func writeSyntheticBytelessMarkdown(
+        sourceID: PageID,
+        url: String,
+        metadata: MediaTitleFetcher.MediaOEmbedMetadata?,
+        fallbackTitle: String,
+        transcript: String?,
+        technique: String
+    ) {
+        let markdown = MediaMarkdownSynthesizer.synthesize(
+            url: url, metadata: metadata,
+            fallbackTitle: fallbackTitle, transcript: transcript)
+        do {
+            try store.appendProcessedMarkdown(
+                sourceID: sourceID, content: markdown,
+                origin: .transcript, note: nil, technique: technique)
+        } catch {
+            // #475: never silently swallow — log to Console.app so a partial
+            // failure is traceable. The source itself was already saved.
+            DebugLog.store("synthetic byteless markdown write failed (source=\(sourceID.rawValue), technique=\(technique)): \(error)")
+        }
     }
 
     /// The web-fetch ingest path (HTML→md / PDF / text / binary), shared by both
