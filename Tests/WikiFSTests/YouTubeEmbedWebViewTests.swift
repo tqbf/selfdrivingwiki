@@ -20,7 +20,7 @@ import WebKit
 ///   2. the painted iframe's `src` carries that same origin.
 /// A regression to `about:blank` (or a dropped `?origin=`) fails here — which the
 /// 1706 string-output tests could not catch.
-@Suite(.tags(.integration))
+@Suite(.tags(.integration), .timeLimit(.minutes(5)))
 @MainActor
 struct YouTubeEmbedWebViewTests {
 

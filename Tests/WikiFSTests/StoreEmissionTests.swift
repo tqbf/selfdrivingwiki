@@ -8,7 +8,7 @@ import Foundation
 /// `Task`), so a lock-guarded collector is polled until the event lands; because
 /// events arrive a runloop tick after `emit`, prerequisite mutations are awaited
 /// (then the collector cleared) before the mutation under test runs.
-@Suite(.tags(.integration))
+@Suite(.tags(.integration), .timeLimit(.minutes(5)))
 struct StoreEmissionTests {
 
     /// Lock-guarded, synchronous collector — the `@MainActor` handler appends

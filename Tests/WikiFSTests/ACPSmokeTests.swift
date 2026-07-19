@@ -30,6 +30,7 @@ import WikiFSCore
 /// - `ACP_SMOKE_PROMPT` (default `Reply with exactly: ACP_OK`).
 @Suite(
     .tags(.integration),
+    .timeLimit(.minutes(5)),
     .disabled(
         if: ProcessInfo.processInfo.environment["ACP_SMOKE"] == nil,
         "Set ACP_SMOKE=1 (and ANTHROPIC_API_KEY for a full turn) to run the live ACP smoke test.")

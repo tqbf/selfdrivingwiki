@@ -8,7 +8,7 @@ import Testing
 /// NOT app-gated — it runs fully under `swift test`. These cover the new
 /// capability the LIKE fallback lacked: matching the document **body** (not just
 /// the filename/title), plus cascade and the Reindex rebuild.
-@Suite(.tags(.integration))
+@Suite(.tags(.integration), .timeLimit(.minutes(5)))
 struct FullTextSearchTests {
 
     private func tempStore() throws -> GRDBWikiStore {

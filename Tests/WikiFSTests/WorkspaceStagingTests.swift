@@ -12,7 +12,7 @@ import Testing
 /// - Merge mints the `pages` row + root version from the staged blob.
 /// - Abandoning a workspace with created pages leaves zero rows on main.
 /// - The `workspace_refs` row-shape invariant holds.
-@Suite(.tags(.integration))
+@Suite(.tags(.integration), .timeLimit(.minutes(5)))
 @MainActor
 struct WorkspaceStagingTests {
 

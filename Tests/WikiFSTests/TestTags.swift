@@ -21,6 +21,14 @@ import Testing
 /// `.github/workflows/ci.yml` so it is excluded from quick PR feedback (it will
 /// still run in the `swift-integration` job). Pure-logic tests stay untagged so
 /// they always run in the fast tier.
+///
+/// **ALSO add `.timeLimit(.minutes(5))`** to every integration-tagged suite —
+/// e.g. `@Suite(.tags(.integration), .timeLimit(.minutes(5)))`. This is a
+/// safety net against CI hangs: the `swift-integration` job runs these suites
+/// under heavy parallel load and an unknown test can deadlock the cooperative
+/// pool, eventually tripping GitHub's 6-hour job timeout. The 5-minute per-test
+/// limit turns such a hang into a single failing test instead of an orphaned
+/// `swiftpm-testing` process. See `feature/integration-test-timeout`.
 extension Tag {
     @Tag static var integration: Tag
 }
