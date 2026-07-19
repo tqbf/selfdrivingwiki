@@ -163,25 +163,18 @@ else
 fi
 # sqlite-vec is now STATICALLY linked (Sources/CSqliteVec, -DSQLITE_CORE) and
 # registered per-connection — no runtime dylib to copy.
-# Vendored Mermaid 10.9.6 (UMD build) for rendering ```mermaid fenced blocks in
-# the reader. Copied as mermaid.js (dropping the `.min`) so the Bundle lookup is
-# a simple name=mermaid / ext=js — avoids a flaky double-extension resource
-# lookup. A plain JS resource needs no separate codesign step (sealed by the
-# outer .app), matching how wiki-identifiers.env is handled.
+# Vendored Mermaid v11.16.0 (UMD build). Used for BOTH rendering ```mermaid
+# fenced blocks in the reader AND validating them at save time (#669 — replaces
+# the third-party merval validator, eliminating version skew). Copied as
+# mermaid.js (dropping the `.min`) so the Bundle lookup is a simple name=mermaid
+# / ext=js — avoids a flaky double-extension resource lookup. A plain JS
+# resource needs no separate codesign step (sealed by the outer .app), matching
+# how wiki-identifiers.env is handled.
 MERMAID_JS="Resources/mermaid.min.js"
 if [ -f "${MERMAID_JS}" ]; then
   cp "${MERMAID_JS}" "${RESOURCES_DIR}/mermaid.js"
 else
-  echo "  (mermaid.min.js not found at ${MERMAID_JS} — mermaid blocks will render as code)"
-fi
-# Vendored merval (zero-dependency Mermaid syntax validator), bundled to a single
-# self-contained IIFE. Copied as merval.js so the loader's name/ext lookup is
-# simple. Runs in a JavaScriptCore JSContext at save time — no Node at runtime.
-MERVAL_JS="Resources/merval.bundle.js"
-if [ -f "${MERVAL_JS}" ]; then
-  cp "${MERVAL_JS}" "${RESOURCES_DIR}/merval.js"
-else
-  echo "  (merval.bundle.js not found at ${MERVAL_JS} — mermaid save-time validation will be skipped)"
+  echo "  (mermaid.min.js not found at ${MERMAID_JS} — mermaid blocks will render as code and save-time validation will be skipped)"
 fi
 # Vendored markdownlint (cosmetic markdown linter), bundled to a single
 # self-contained IIFE. Copied as markdownlint.js so the loader's name/ext lookup
