@@ -38,9 +38,16 @@ public struct ACPProviderModelProbe: Sendable {
     /// The provider whose agent subprocess the probe spawns. Captured by value
     /// (`AgentProvider` is `Sendable`).
     public let provider: AgentProvider
-    /// The PATH-resolved argv for the agent executable (first element is the
-    /// path; the rest are args). Same shape `ProviderEditorView.save()` builds
-    /// and `AgentBackendFactory.providerHints` consumes.
+    /// The PATH-resolved argv for the agent executable (first element MUST
+    /// be an absolute path; the rest are args). `AgentBackendFactory.
+    /// providerHints` consumes this verbatim as `acpAgentPath`/
+    /// `acpAgentArgs`. The swift-acp SDK's `Process.launch()` does NOT do
+    /// PATH lookup, so the caller MUST resolve against the login-shell PATH
+    /// before constructing the probe (mirror `AgentLauncher.
+    /// resolveACPProviderSpawn`). This is NOT the same shape
+    /// `ProviderEditorView.save()` stores — `save()` stores the BARE argv
+    /// (`AgentProvider.command`) and defers resolution to spawn time
+    /// (#640: passing bare here reproduces "file <exe> doesn't exist").
     public let resolvedCommand: [String]
     /// The Keychain-backed API key (nil when none is configured — many agents
     /// self-authenticate, e.g. Claude via OAuth, Hermes via ~/.hermes).
