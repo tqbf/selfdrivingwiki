@@ -394,7 +394,7 @@ public enum WikiLinkMarkdown {
     /// is served by `BlobSchemeHandler` (Phase 4a).
     private static func embedHTML(display: String, id: PageID, mimeType: String?, target: EmbedTarget?) -> String? {
         // 1. Byteless external media or inline diagram: provider iframe,
-        // direct-remote native tag, or a Mermaid diagram div.
+        // direct-remote native tag, or a fenced ```mermaid code block.
         if let target {
             switch target.kind {
             case .iframe:
@@ -414,20 +414,40 @@ public enum WikiLinkMarkdown {
             case .video:
                 return "<video src=\"\(embedEscape(target.url))\" controls class=\"wiki-embed\"></video>"
             case .diagram:
-                // #670 — inline Mermaid diagram. Emit a `<div class='mermaid'>`
-                // carrying the HTML-escaped source text; the reader's bundled
-                // `mermaid.min.js` (v11) scans the DOM for `.mermaid` divs,
-                // reads `div.textContent` (which un-escapes the entities below
-                // back to the raw diagram source), and renders an inline SVG.
-                // No per-embed JS — the reader's `mermaidBootstrapJS` is what
-                // initializes the library and calls `mermaid.run`.
+                // #670 — inline Mermaid diagram. Emit a fenced ```mermaid
+                // code block (NOT a raw `<div class="mermaid">…</div>`).
                 //
-                // Escape the same set `embedEscape` uses for alt text so `<`,
-                // `>`, `&`, and `"` survive the HTML parser intact (a mermaid
-                // arrow `A --> B` is literal text, but `A < B` would otherwise
-                // start a tag and break the surrounding markup).
-                let escaped = embedEscape(target.content ?? "")
-                return "<div class=\"mermaid\">\(escaped)</div>"
+                // Why a fenced code block instead of a raw div: the reader's
+                // body is parsed by swift-markdown before reaching the
+                // WKWebView. CommonMark's HTML-block rule (type 6, which
+                // `<div>` falls under) ends at the first blank line — so a
+                // diagram with a blank line inside its source, or an embed
+                // placed mid-paragraph / inside a list item, gets re-parsed
+                // as markdown: the contents are wrapped in `<p>`s, indent is
+                // reinterpreted as a code block, and `>` gets double-escaped
+                // to `&amp;gt;` (literal text `&gt;`). The scrambled
+                // `div.textContent` then trips `mermaid.parse()` with
+                // "Syntax error in text". A fenced code block is a
+                // first-class markdown construct that survives ALL of those
+                // contexts (paragraphs, lists, blockquotes, blank lines)
+                // intact — the same path every other ```mermaid block uses.
+                //
+                // The reader's `mermaidBootstrapJS` (in WikiReaderView) then
+                // scans for `code.language-mermaid`, reads
+                // `code.textContent` (which un-escapes the renderer's `&gt;`
+                // back to the raw `>`), creates a `<div class="mermaid">`
+                // with the un-escaped diagram text, and replaces the parent
+                // `<pre>` — then `mermaid.run({querySelector:'.mermaid'})`
+                // renders the SVG. Same pipeline as a hand-written fenced
+                // ```mermaid block.
+                //
+                // Escape hatch: pick a fence length strictly longer than any
+                // backtick run in the diagram source so a diagram containing
+                // ``` (or longer) doesn't prematurely close the fence. Default
+                // is 3 (standard GFM).
+                let source = target.content ?? ""
+                let n = String(repeating: "`", count: mermaidFenceLength(for: source))
+                return "\n\(n)mermaid\n\(source)\n\(n)\n"
             }
         }
         // 2. Byteful blob dispatch (Phase 4a) — unchanged.
@@ -480,6 +500,25 @@ public enum WikiLinkMarkdown {
          .replacingOccurrences(of: "<", with: "&lt;")
          .replacingOccurrences(of: ">", with: "&gt;")
          .replacingOccurrences(of: "\"", with: "&quot;")
+    }
+
+    /// Pick a fenced-code-block fence length strictly longer than any backtick
+    /// run in `source`, so a diagram containing ``` (or longer) doesn't close
+    /// the fence we emit. Default is 3 (standard GFM). CommonMark §4.5 says a
+    /// closing fence must be at least as long as the opening fence, so length
+    /// `maxRun + 1` is immune to any run inside the diagram body.
+    private static func mermaidFenceLength(for source: String) -> Int {
+        var maxRun = 0
+        var run = 0
+        for ch in source {
+            if ch == "`" {
+                run += 1
+                if run > maxRun { maxRun = run }
+            } else {
+                run = 0
+            }
+        }
+        return max(maxRun + 1, 3)
     }
 
     /// Collapse whitespace runs to one space and trim — delegates to the single
