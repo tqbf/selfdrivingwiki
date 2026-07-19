@@ -100,6 +100,16 @@ public enum AgentOperationRunner {
             },
             onSummary: chat.map { chat -> (@MainActor (PageID, String) -> Void) in
                 return { [weak store] id, summary in store?.updateChatSummary(chatID: id, summary: summary) }
+            },
+            // #681: persist the spawn's DebugRunLogger folder + log file paths
+            // so they survive app restarts. Same weak-store rule as above: a
+            // mid-session wiki switch degrades to a no-op, never a cross-wiki
+            // write. The callback fires inside the launcher right after its
+            // in-memory `chatLogPaths` map is populated (same spawn-commit step).
+            onPersistDebugPaths: chat.map { chat -> (@MainActor (PageID, URL?, URL?) -> Void) in
+                return { [weak store] id, debugFolder, logFile in
+                    store?.updateChatDebugPaths(id: id, debugFolder: debugFolder, logFile: logFile)
+                }
             }
         )
 
@@ -371,6 +381,13 @@ public enum AgentOperationRunner {
             },
             onSummary: { [weak store] id, summary in
                 store?.updateChatSummary(chatID: id, summary: summary)
+            },
+            // #681: continueChat reuses the chat's row, so re-persist the spawn's
+            // fresh DebugRunLogger paths into the SAME row — overwriting any
+            // prior value (a restarted chat gets a NEW debug folder under a new
+            // <UUID>/, so the old path is stale even if still on disk).
+            onPersistDebugPaths: { [weak store] id, debugFolder, logFile in
+                store?.updateChatDebugPaths(id: id, debugFolder: debugFolder, logFile: logFile)
             })
     }
 

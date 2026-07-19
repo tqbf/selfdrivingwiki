@@ -2182,7 +2182,8 @@ public final class AgentLauncher {
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
         onTranscript: (@MainActor ([AgentEvent]) -> Void)? = nil,
-        onSummary: (@MainActor (PageID, String) -> Void)? = nil
+        onSummary: (@MainActor (PageID, String) -> Void)? = nil,
+        onPersistDebugPaths: (@MainActor (PageID, URL?, URL?) -> Void)? = nil
     ) async {
         // No gate acquisition here — the interactive session does NOT hold the gate
         // for its lifetime, only per-turn (via sendInteractiveMessage). Two sessions
@@ -2321,6 +2322,16 @@ public final class AgentLauncher {
         // (line above) so the binding + paths land atomically with the live flip.
         if let chatID {
             chatLogPaths[chatID] = (logFileURL, debugFolderURL)
+            // #681: persist the same paths to `chats.debug_folder` / `chats.log_file`
+            // so they survive app restarts. The in-memory map above is cleared on
+            // relaunch; the DB row is the source of truth across launches.
+            // Fire-and-forget best-effort — a store failure is logged inside
+            // `WikiStoreModel.updateChatDebugPaths`, not propagated (missing
+            // paths degrade the Reveal Debug Folder affordance, not the chat).
+            if let onPersistDebugPaths {
+                let pageID = PageID(rawValue: chatID)
+                onPersistDebugPaths(pageID, debugFolderURL, logFileURL)
+            }
         }
         // Pre-display the user's message so it appears instantly — don't make
         // the user wait ~4s for backend.start (spawn + initialize + newSession)

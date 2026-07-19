@@ -35,11 +35,22 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
     /// When the summary was written, for staleness display. `nil` alongside
     /// `summary`.
     public var summaryAt: Date?
+    /// Absolute path to the chat's `DebugRunLogger` folder
+    /// (`~/Library/Caches/…/agent/<UUID>/debug/`), persisted at spawn commit
+    /// so a chat's debug logs survive app restarts (issue #681). `nil` when the
+    /// chat never ran here, ran before the v39 migration, or preflight failed
+    /// before a scratch directory was made.
+    public var debugFolder: String?
+    /// Absolute path to the chat's run-log file (the `DebugRunLogger` log file
+    /// inside `debugFolder`), persisted alongside `debugFolder` (issue #681).
+    /// `nil` alongside `debugFolder`.
+    public var logFile: String?
 
     public init(
         id: PageID, kind: ChatKind, title: String,
         createdAt: Date, updatedAt: Date, messageCount: Int,
-        summary: String? = nil, summaryAt: Date? = nil
+        summary: String? = nil, summaryAt: Date? = nil,
+        debugFolder: String? = nil, logFile: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -49,6 +60,8 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
         self.messageCount = messageCount
         self.summary = summary
         self.summaryAt = summaryAt
+        self.debugFolder = debugFolder
+        self.logFile = logFile
     }
 
     /// Derive a chat title from the first user message: first line, trimmed,

@@ -55,10 +55,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// The latest schema version stamped by `createFreshSchema()` (for a fresh
     /// DB) and by `migrateIfNeeded(_:in:)` after running the ladder (for an
     /// existing DB). MUST match `SQLiteWikiStore.currentSchemaVersion`: existing
-    /// databases produced by that store carry `PRAGMA user_version` up to 37, and
-    /// this store must recognize them as already-current so the ladder is a no-op
-    /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 38
+    /// databases produced by that store carry `PRAGMA user_version` up to the
+    /// value below, and this store must recognize them as already-current so the
+    /// ladder is a no-op on re-open (the proven `if version < N`)
+    private static let currentSchemaVersion = 39
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1141,8 +1141,25 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // `DROP TRIGGER IF EXISTS` so a fresh-DB forced through the ladder (which
         // never created them at v13/v28) is a no-op. Mirrors the SQLiteWikiStore
         // ladder's v37→v38 step.
-        if version < Self.currentSchemaVersion {
+        if version < 38 {
             try Self.dropFTS5TablesAndTriggers(in: db)
+            try db.execute(sql: "PRAGMA user_version = 38;")
+            version = 38
+        }
+
+        // Step 38 → 39 (issue #681 — persist chat debug-log paths): adds
+        // `debug_folder` and `log_file` nullable TEXT columns to `chats` so a
+        // chat's `DebugRunLogger` folder survives app restarts. Previously the
+        // chatID→folder mapping lived only in `AgentLauncher.chatLogPaths` (an
+        // in-memory map populated at spawn commit, cleared on launch), so after
+        // a restart a chat's on-disk debug logs were unfindable — even though
+        // they still existed in `~/Library/Caches/…/agent/<UUID>/debug/`. The
+        // columns are absolute paths as TEXT (nil = the chat ran but preflight
+        // failed before a scratch dir was made, or never ran here). Simple
+        // ALTER — no table rebuild for nullable columns; pragmas idempotent so
+        // a DB rewound for testing stamps v39 without re-adding them.
+        if version < Self.currentSchemaVersion {
+            try Self.migrateV38ToV39(in: db)
             try db.execute(sql: "PRAGMA user_version = \(Self.currentSchemaVersion);")
             version = Self.currentSchemaVersion
         }
@@ -1344,13 +1361,15 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     private static func createChatTablesV23(in db: Database) throws {
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS chats (
-            id         TEXT PRIMARY KEY,
-            kind       TEXT NOT NULL,
-            title      TEXT NOT NULL,
-            created_at REAL NOT NULL,
-            updated_at REAL NOT NULL,
-            summary    TEXT,
-            summary_at REAL
+            id           TEXT PRIMARY KEY,
+            kind         TEXT NOT NULL,
+            title        TEXT NOT NULL,
+            created_at   REAL NOT NULL,
+            updated_at   REAL NOT NULL,
+            summary      TEXT,
+            summary_at   REAL,
+            debug_folder TEXT,
+            log_file     TEXT
         );
         """)
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS chats_updated ON chats(updated_at);")
@@ -1432,6 +1451,28 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
     // MARK: - Data-migration helpers (v19 → v38)
+
+    /// The v38→v39 migration step (issue #681 — persist chat debug-log paths):
+    /// adds nullable TEXT `debug_folder` + `log_file` columns to `chats` so the
+    /// chatID→folder map (`AgentLauncher.chatLogPaths`, in-memory only) survives
+    /// app restarts. Both columns hold absolute paths (nil = the chat ran but
+    /// preflight failed before a scratch dir was made, or never ran here).
+    /// `pragma_table_info`-guarded so a rewound test DB stamps v39 without
+    /// re-adding the columns. Mirrors the v26→v27 `bookmark_nodes` column-add
+    /// pattern. No backfill: pre-v39 chats have no known debug folder (the
+    /// `DebugRunLogger` paths were never persisted for them), so existing rows
+    /// stay NULL — a future spawn for the same chatID will overwrite them.
+    /// Column defs match the fresh-path `CREATE TABLE chats` byte-for-byte.
+    private static func migrateV38ToV39(in db: Database) throws {
+        let hasDebugFolder = try Self.hasColumn("debug_folder", on: "chats", in: db)
+        if !hasDebugFolder {
+            try db.execute(sql: "ALTER TABLE chats ADD COLUMN debug_folder TEXT;")
+        }
+        let hasLogFile = try Self.hasColumn("log_file", on: "chats", in: db)
+        if !hasLogFile {
+            try db.execute(sql: "ALTER TABLE chats ADD COLUMN log_file TEXT;")
+        }
+    }
 
     /// The v19→20 migration step (graph-model Phase 1): move source content
     /// out of the mutable `sources.content` column into immutable,
@@ -2380,13 +2421,15 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // v25: persisted chat history (chats + chat_messages).
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS chats (
-            id         TEXT PRIMARY KEY,
-            kind       TEXT NOT NULL,
-            title      TEXT NOT NULL,
-            created_at REAL NOT NULL,
-            updated_at REAL NOT NULL,
-            summary    TEXT,
-            summary_at REAL
+            id           TEXT PRIMARY KEY,
+            kind         TEXT NOT NULL,
+            title        TEXT NOT NULL,
+            created_at   REAL NOT NULL,
+            updated_at   REAL NOT NULL,
+            summary      TEXT,
+            summary_at   REAL,
+            debug_folder TEXT,
+            log_file     TEXT
         );
         """)
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS chats_updated ON chats(updated_at);")
@@ -5446,17 +5489,21 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let rows = try Row.fetchAll(db, sql: """
             SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                    (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
-                   c.summary, c.summary_at
+                   c.summary, c.summary_at, c.debug_folder, c.log_file
             FROM chats c
             ORDER BY c.updated_at DESC, c.rowid DESC;
             """)
             return rows.map { row in
                 let summary: String? = row["summary"]
                 let summaryAt: Double? = row["summary_at"]
+                let debugFolder: String? = row["debug_folder"]
+                let logFile: String? = row["log_file"]
                 return Self.readChatSummary(
                     from: row,
                     summary: summary,
-                    summaryAt: summaryAt.map { Date(timeIntervalSince1970: $0) }
+                    summaryAt: summaryAt.map { Date(timeIntervalSince1970: $0) },
+                    debugFolder: debugFolder,
+                    logFile: logFile
                 )
             }
         }
@@ -5544,22 +5591,42 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    /// Persist a chat's debug-log folder + log-file absolute paths (issue #681).
+    /// NO-EMIT: debug paths are read-only metadata the File Provider never
+    /// indexes — the `nil` event skips the post-commit bus emit. Still routes
+    /// through `mutate()` for the atomic savepoint + WAL guard, like every
+    /// mutator. Does NOT bump `updated_at`: the chat's content didn't change.
+    public func updateChatDebugPaths(id: PageID, debugFolder: URL?, logFile: URL?) throws {
+        try mutate(event: { _ in nil }) { db in
+            try db.execute(sql: """
+            UPDATE chats SET debug_folder = ?, log_file = ?
+            WHERE id = ?;
+            """, arguments: [
+                debugFolder?.path, logFile?.path, id.rawValue
+            ])
+        }
+    }
+
     public func listAllChatsOrderedByID() throws -> [ChatSummary] {
         try dbWriter.read { db in
             let rows = try Row.fetchAll(db, sql: """
             SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                    (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
-                   c.summary, c.summary_at
+                   c.summary, c.summary_at, c.debug_folder, c.log_file
             FROM chats c
             ORDER BY c.id ASC;
             """)
             return rows.map { row in
                 let summary: String? = row["summary"]
                 let summaryAt: Double? = row["summary_at"]
+                let debugFolder: String? = row["debug_folder"]
+                let logFile: String? = row["log_file"]
                 return Self.readChatSummary(
                     from: row,
                     summary: summary,
-                    summaryAt: summaryAt.map { Date(timeIntervalSince1970: $0) }
+                    summaryAt: summaryAt.map { Date(timeIntervalSince1970: $0) },
+                    debugFolder: debugFolder,
+                    logFile: logFile
                 )
             }
         }
@@ -5868,13 +5935,15 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         (try? Row.fetchOne(db, sql: "SELECT vec_distance_cosine(x'00000000', x'00000000');")) != nil
     }
 
-    /// Read a ChatSummary from a GRDB Row. The `summary` and `summaryAt` columns
-    /// are passed in so this works for both the 6-column search variants (nil) and
-    /// the 8-column list variants. Mirrors SQLiteWikiStore.chatSummary(from:).
-    /// Columns (named): id, kind, title, created_at, updated_at, + an unnamed
-    /// message-count subquery at index 5.
+    /// Read a ChatSummary from a GRDB Row. The `summary`, `summaryAt`,
+    /// `debugFolder`, and `logFile` columns are passed in so this works for
+    /// both the 4-column search variants (all nil) and the full list variants.
+    /// Mirrors SQLiteWikiStore.chatSummary(from:). Columns (named): id, kind,
+    /// title, created_at, updated_at, + an unnamed message-count subquery at
+    /// index 5.
     private static func readChatSummary(
-        from row: Row, summary: String?, summaryAt: Date?
+        from row: Row, summary: String?, summaryAt: Date?,
+        debugFolder: String? = nil, logFile: String? = nil
     ) -> ChatSummary {
         ChatSummary(
             id: PageID(rawValue: row["id"]),
@@ -5884,7 +5953,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
             messageCount: row["msg_count"],
             summary: summary,
-            summaryAt: summaryAt
+            summaryAt: summaryAt,
+            debugFolder: debugFolder,
+            logFile: logFile
         )
     }
 
@@ -6771,17 +6842,21 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 sql: """
                 SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                        (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
-                       c.summary, c.summary_at
+                       c.summary, c.summary_at, c.debug_folder, c.log_file
                 FROM chats c WHERE c.id = ?;
                 """,
                 arguments: [id.rawValue]
             ) else { throw WikiStoreError.notFound(id) }
             let summary: String? = row["summary"]
             let summaryAt: Double? = row["summary_at"]
+            let debugFolder: String? = row["debug_folder"]
+            let logFile: String? = row["log_file"]
             return Self.readChatSummary(
                 from: row,
                 summary: summary,
-                summaryAt: summaryAt.map { Date(timeIntervalSince1970: $0) }
+                summaryAt: summaryAt.map { Date(timeIntervalSince1970: $0) },
+                debugFolder: debugFolder,
+                logFile: logFile
             )
         }
     }

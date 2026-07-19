@@ -573,17 +573,21 @@ struct ChatView: View {
                     }
                     .help("Reveal this chat file in Finder")
                 }
-                // #671: persistent "Reveal Debug Folder" — reads from the
-                // launcher's in-memory chatID→path map (populated at spawn
-                // commit in `startInteractiveQuery`), falling back to the live
-                // session's `debugFolderURL` so an in-progress run reveals before
-                // the map entry is finalized. Visible for any chat that ran in
-                // this app session (live or reopened from history); absent for
-                // chats that never ran here or whose run failed preflight (no
+                // #671 + #681: persistent "Reveal Debug Folder". Source of truth
+                // is the DB row (`ChatSummary.debugFolder`, persisted at spawn
+                // commit so paths survive app restarts). For a chat whose row
+                // hasn't been updated yet this launch (in-progress first run,
+                // DB write racing the toolbar render), fall back to the
+                // launcher's in-memory `chatLogPaths` map (same-session cache
+                // populated at spawn commit). The live session's
+                // `launcher.debugFolderURL` is the last-chance fallback — it
+                // resolves even before the map entry is finalized. Absent for
+                // chats that never ran here, or whose run failed preflight (no
                 // scratch dir → no debug folder). Mirrors ingestion's
                 // `ActivityWindowView.revealMenu(for:)`.
                 if let chatID,
-                   let debugURL = launcher.debugFolderURL(forChat: chatID.rawValue)
+                   let debugURL = chatSummary?.debugFolder.flatMap(URL.init(fileURLWithPath:))
+                        ?? launcher.debugFolderURL(forChat: chatID.rawValue)
                         ?? (isLiveChat ? launcher.debugFolderURL : nil) {
                     Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
                         DebugLog.agent("ChatView: Reveal Debug Folder tapped — id=\(chatID.rawValue)")

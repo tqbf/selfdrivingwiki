@@ -3518,6 +3518,19 @@ public final class WikiStoreModel {
         }
     }
 
+    /// Persist `DebugRunLogger` folder + log-file paths for a chat so they
+    /// survive app restarts (issue #681). Called by `AgentLauncher` at spawn
+    /// commit, right after the in-memory `chatLogPaths` map is populated. A
+    /// failure is logged, never thrown — losing the debug path is a degraded
+    /// experience, not a reason to abort the chat.
+    public func updateChatDebugPaths(id: PageID, debugFolder: URL?, logFile: URL?) {
+        do {
+            try store.updateChatDebugPaths(id: id, debugFolder: debugFolder, logFile: logFile)
+        } catch {
+            DebugLog.store("WikiStoreModel.updateChatDebugPaths failed: \(error)")
+        }
+    }
+
     public func deleteChat(id: PageID) {
         do {
             try store.deleteChat(id: id)

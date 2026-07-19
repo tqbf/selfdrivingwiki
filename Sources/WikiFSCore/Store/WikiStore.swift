@@ -624,6 +624,20 @@ public protocol WikiStore: Sendable {
     /// bumping `updated_at`. Throws `.notFound` if no chat has `id`.
     func updateChatSummary(chatID: PageID, summary: String) throws
 
+    /// Persist the chat's `DebugRunLogger` folder + log-file absolute paths so
+    /// they survive app restarts (issue #681). Called by `AgentLauncher` at
+    /// spawn commit, right after populating the in-memory `chatLogPaths` map.
+    /// Both arguments are absolute paths as TEXT; pass nil to clear (no
+    /// scratch dir was made — preflight failed before that point). No
+    /// `ResourceChangeEvent` emission: these are debug-log metadata only —
+    /// they're never read by the File Provider or any content surface
+    /// (`ResourceChangeEvent` exists to signal the projection/index layer,
+    /// which doesn't index debug paths). Routes through `mutate()` so the
+    /// change still applies atomically inside a savepoint, like every other
+    /// store mutator; the `nil` event simply skips the post-commit emit.
+    /// Does NOT bump `updated_at` (the chat's content didn't change).
+    func updateChatDebugPaths(id: PageID, debugFolder: URL?, logFile: URL?) throws
+
     /// All chat summaries ordered by ULID (creation order) — for the File
     /// Provider projection. Mirrors `listAllPagesOrderedByID()`.
     func listAllChatsOrderedByID() throws -> [ChatSummary]
