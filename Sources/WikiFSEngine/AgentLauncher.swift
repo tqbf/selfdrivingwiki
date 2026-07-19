@@ -2360,7 +2360,7 @@ public final class AgentLauncher {
                 // #397: chat-driven writes carry `chat:<chatID>` as their author
                 // provenance so created_by/last_edited_by points back to the
                 // originating conversation (resolvable via [[chat:…]]). An explicit
-                // `--author` on `wikictl page upsert` overrides this.
+                // `--author` on `wikictl page add` overrides this.
                 if let chatID {
                     hints[HintKey.env("WIKI_AUTHOR")] = "\(ResourceKind.chat.linkPrefix!)\(chatID)"
                 }

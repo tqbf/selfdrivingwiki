@@ -48,7 +48,7 @@ Read it FIRST to see what pages already exist. This avoids creating duplicates o
 - `sourceIDs`: the list of source IDs given above. Copy them verbatim.
 
 IMPORTANT:
-- Do NOT write any wiki pages in this phase. No `$WIKICTL page upsert`.
+- Do NOT write any wiki pages in this phase. No `$WIKICTL page add`.
 - Do NOT dispatch sub-agents, background tasks, or async agents.
 - Do NOT use sleep or ScheduleWakeup.
 - Write ONLY `plan.json` and stop.

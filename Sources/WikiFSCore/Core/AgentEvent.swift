@@ -90,7 +90,7 @@ public enum AgentEvent: Equatable, Sendable, Codable {
     /// The agent invoked a tool (`assistant` message → `tool_use` content block).
     /// `inputSummary` is a concise human-readable rendering of the tool's input
     /// (e.g. a `Bash` command, a `Read` path) so the line reads like
-    /// `Bash  wikictl page upsert --title "…"`.
+    /// `Bash  wikictl page add --title "…"`.
     case toolUse(name: String, inputSummary: String)
 
     /// A tool finished (`user` message → `tool_result` content block). `summary` is
@@ -597,7 +597,7 @@ public enum JSONValue: Decodable, Sendable {
 }
 
 /// Renders a concise, human-readable one-liner for a `tool_use` block's input, so
-/// the activity feed reads like `Bash  wikictl page upsert --title "…"` rather than
+/// the activity feed reads like `Bash  wikictl page add --title "…"` rather than
 /// a JSON blob. PURE and unit-tested: it special-cases the tools this app's agent
 /// actually uses (`Bash` → command, `Read`/`Write`/`Edit`/`Glob` → path/pattern)
 /// and falls back to a compact `key=value` join for anything else.

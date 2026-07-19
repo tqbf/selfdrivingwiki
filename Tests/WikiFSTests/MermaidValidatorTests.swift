@@ -188,7 +188,7 @@ struct MermaidValidatorTests {
         #expect(!bad[0].errors.isEmpty)
     }
 
-    // MARK: - wikictl page upsert integration (abort on invalid)
+    // MARK: - wikictl page add integration (abort on invalid)
 
     @Test func upsertAbortsOnInvalidMermaidBlock() throws {
         let v = try validator()
@@ -219,7 +219,7 @@ struct MermaidValidatorTests {
         try PageCommand.abortOnInvalidMermaid("just prose, no diagrams", validator: v)
     }
 
-    // MARK: - wikictl page upsert end-to-end (injected validator, real store)
+    // MARK: - wikictl page add end-to-end (injected validator, real store)
 
     private func tempDB() -> URL {
         FileManager.default.temporaryDirectory
@@ -231,7 +231,7 @@ struct MermaidValidatorTests {
         let store = try StoreBackend.current.makeStore(databaseURL: tempDB())
         let bad = "```mermaid\nflowchart LR\n  A[unclosed\n```"
         do {
-            _ = try PageCommand.run(.upsert(id: nil, title: "Diagrams", body: bad),
+            _ = try PageCommand.run(.add(id: nil, title: "Diagrams", body: .inline(bad)),
                                     in: store, validator: v)
             Issue.record("expected upsert to abort before writing")
         } catch let PageCommand.Failure.message(text) {
@@ -245,7 +245,7 @@ struct MermaidValidatorTests {
         let v = try validator()
         let store = try StoreBackend.current.makeStore(databaseURL: tempDB())
         let good = "# Diagrams\n\n```mermaid\nflowchart LR\n  A[\"X\"] --> B[\"Y\"]\n```"
-        let result = try PageCommand.run(.upsert(id: nil, title: "Diagrams", body: good),
+        let result = try PageCommand.run(.add(id: nil, title: "Diagrams", body: .inline(good)),
                                          in: store, validator: v)
         #expect(result.didCommit)
         #expect(try store.listPages(sortBy: .lastUpdated).count == 1)
@@ -257,7 +257,7 @@ struct MermaidValidatorTests {
         let v = try validator()
         let store = try StoreBackend.current.makeStore(databaseURL: tempDB())
         let good = "# Diagrams\n\n```mermaid\nflowchart LR\n  A@{ shape: delay }\n```"
-        let result = try PageCommand.run(.upsert(id: nil, title: "V11", body: good),
+        let result = try PageCommand.run(.add(id: nil, title: "V11", body: .inline(good)),
                                          in: store, validator: v)
         #expect(result.didCommit)
         #expect(try store.listPages(sortBy: .lastUpdated).count == 1)

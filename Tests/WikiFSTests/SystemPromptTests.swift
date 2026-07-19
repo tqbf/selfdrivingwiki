@@ -41,7 +41,7 @@ struct SystemPromptTests {
         // resolution does not depend on the agent's shell preserving PATH.
         #expect(body.contains("$WIKICTL page list"))
         #expect(body.contains("$WIKICTL page get"))
-        #expect(body.contains("$WIKICTL page upsert"))
+        #expect(body.contains("$WIKICTL page add"))
         #expect(body.contains("$WIKICTL page delete"))
         #expect(body.contains("$WIKICTL index set"))
         #expect(body.contains("$WIKICTL log append"))
@@ -91,7 +91,7 @@ struct SystemPromptTests {
         #expect(body.contains("PDF"))
         // Mermaid diagrams: authoring rules + save-time validation note.
         #expect(body.contains("```mermaid"))
-        #expect(body.contains("$WIKICTL page upsert"))
+        #expect(body.contains("$WIKICTL page add"))
     }
 
     // MARK: - Update persists + bumps version

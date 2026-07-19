@@ -190,9 +190,9 @@ struct IngestIsolationTests {
 
         let wsID = try store.createWorkspace(name: nil, activityID: nil)
 
-        // page upsert --workspace writes to the workspace, not main.
+        // page add --workspace writes to the workspace, not main.
         let result = try PageCommand.run(
-            .upsert(id: page.id, title: "Target", body: "ws edit", workspace: wsID),
+            .add(id: page.id, title: "Target", body: .inline("ws edit"), workspace: wsID),
             in: store)
         #expect(result.didCommit == true)
 

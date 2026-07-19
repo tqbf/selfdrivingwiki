@@ -39,7 +39,7 @@ public enum SourceCommand {
         case list(json: Bool)
         case cat(Selector, markdown: Bool)
         case export(Selector, out: String?, markdown: Bool)
-        case editMarkdown(Selector, content: String)
+        case editMarkdown(Selector, content: BodySource)
         case rename(Selector, to: String)
         case search(query: String, limit: Int)
         case setActive(Selector, versionID: PageID)
@@ -79,7 +79,8 @@ public enum SourceCommand {
             return try cat(selector, markdown: markdown, in: store)
         case .export(let selector, let out, let markdown):
             return try export(selector, out: out, markdown: markdown, in: store, cwd: cwd)
-        case .editMarkdown(let selector, let content):
+        case .editMarkdown(let selector, let contentSource):
+            let content = try resolveBodySource(contentSource)
             return try editMarkdown(selector, content: content, in: store)
         case .rename(let selector, let to):
             return try rename(selector, to: to, in: store)

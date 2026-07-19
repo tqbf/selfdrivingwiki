@@ -1087,7 +1087,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // Step 33 → 34 (#multi-writer-hardening Phase 3 — head-ref invariant):
         // backfills a `page-content` ref for every page that lacks one, and
         // seeds a root version for pages that have none (agent-created pages
-        // via blind `wikictl page upsert` never created a version row). After
+        // via blind `wikictl page add` never created a version row). After
         // v34, every page has an explicit ref → the MAX(id) fallback in
         // `pageHeadVersionIDLocked` is dead code for migrated data.
         if version < 34 {

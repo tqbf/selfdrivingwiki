@@ -9,7 +9,7 @@ import WikiFSCore
 /// Grammar (`plans/llm-wiki.md` Phase A + B surface):
 ///   wikictl [--wiki <id>] page list [--json]
 ///   wikictl [--wiki <id>] page get (--title X | --id Y)
-///   wikictl [--wiki <id>] page upsert --title X [--id Y] --body-file <path|->
+///   wikictl [--wiki <id>] page add --title X [--id Y] --body-file <path|->
 ///   wikictl [--wiki <id>] page delete --id Y
 ///   wikictl [--wiki <id>] log append --kind ingest|query|lint --title X [--note N] [--source <file-id>]
 ///   wikictl [--wiki <id>] index set --body-file <path|->
@@ -17,9 +17,10 @@ import WikiFSCore
 /// `--wiki` may be omitted when the `WIKI_DB` env var supplies the selector.
 public enum ArgumentParser {
 
-    /// A fully-parsed invocation: which wiki, what to do, and — for `upsert` —
-    /// where the body comes from. The body is NOT read here (that's I/O); the
-    /// parser only records the source so `main` reads it.
+    /// A fully-parsed invocation: which wiki, what to do, and — for `page add`
+    /// and `index set` — where the body comes from. The body is NOT read here
+    /// (that's I/O); the parser only records the source so the action's `run`
+    /// reads it.
     public struct Invocation: Equatable {
         public var wikiSelector: String
         public var command: Command
@@ -31,41 +32,21 @@ public enum ArgumentParser {
     }
 
     public enum Command: Equatable {
-        case list(json: Bool)
-        case get(PageCommand.Selector, json: Bool, workspace: String? = nil)
-        /// The body source is `-` for stdin or a file path; `main` reads it and
-        /// builds the final `PageCommand.Action`. `expectHead` carries the CAS
-        /// expectation for Phase 1 agent writes (nil = blind write).
-        case upsert(id: PageID?, title: String, bodyFile: String, expectHead: String? = nil, workspace: String? = nil, author: String? = nil)
-        case delete(id: PageID)
+        /// `wikictl page …` — page reads/writes (list, get, add, delete,
+        /// search, history, revert). The action carries `BodySource` for
+        /// `add`, resolved by `PageCommand.run` just before the write.
+        case page(PageCommand.Action)
         /// Phase B: append one dated log row. Carries its values directly (no
-        /// deferred I/O) — the note is optional. `source` is the ingested-file id
-        /// to stamp as ingested (only meaningful with `--kind ingest`).
+        /// deferred I/O) — the note is optional. `source` is the ingested-file
+        /// id to stamp as ingested (only meaningful with `--kind ingest`).
         case logAppend(kind: LogEntry.Kind, title: String, note: String?, source: PageID?)
-        /// Phase B: rewrite the singleton wiki-index body. Like `upsert`, the body
-        /// source is `-` for stdin or a file path; `main` reads it.
+        /// Phase B: rewrite the singleton wiki-index body. The body source is
+        /// `-` for stdin or a file path; `main` reads it.
         case indexSet(bodyFile: String, workspace: String? = nil)
-        /// Semantic search: find pages by meaning, not keyword. Returns ranked
-        /// results (most relevant first). Falls back to LIKE title match when
-        /// embeddings aren't available.
-        case search(query: String, limit: Int)
-        /// Page version history (W0, PR #312).
-        case pageHistory(PageCommand.Selector)
-        /// Revert a page to a specific version (W0, PR #312).
-        case pageRevert(PageCommand.Selector, versionID: String)
-        /// Source commands: list, read, export sources from SQLite.
+        /// Source commands: list, read, edit-markdown, rename, set-active,
+        /// refresh, semantic search — all routed through `source <subcommand>`.
+        /// `editMarkdown` carries `BodySource`, resolved by `SourceCommand.run`.
         case source(SourceCommand.Action)
-        /// Edit processed markdown for a source. When `isFile` is true,
-        /// `contentOrFile` is a file path (or `-` for stdin); when false it is
-        /// the literal markdown content. `main` resolves the file in the former
-        /// case before appending.
-        case sourceEditMarkdown(SourceCommand.Selector, contentOrFile: String, isFile: Bool)
-        /// Rename a source's display name and rewrite links pointing at it.
-        case sourceRename(SourceCommand.Selector, to: String)
-        /// Nominate a processed-markdown version as the active HEAD (Phase 2).
-        case sourceSetActive(SourceCommand.Selector, versionID: PageID)
-        /// Re-fetch a source via its provider, appending a new version (Phase 3b).
-        case sourceRefresh(SourceCommand.Selector)
         /// Maintenance operations (the `admin …` family). Currently: blob GC.
         case admin(AdminCommand.Action)
         /// Chat commands: list, read chat transcripts from SQLite.
@@ -105,25 +86,25 @@ public enum ArgumentParser {
       version [--json]                       print build version info; --json for machine-readable
       page list [--json]                     list pages (TSV, or JSON lines)
       page get  (--title X | --id Y) [--json] [--workspace W]
-                                             print a page body; --json adds head_version_id;
-                                             --workspace W reads the staged version
-      page upsert --title X [--id Y] --body-file <path|-> [--expect-head <ver>] [--workspace W] [--author <who>]
+                                              print a page body; --json adds head_version_id;
+                                              --workspace W reads the staged version
+      page add --title X [--id Y] --body-file <path|-> [--expect-head <ver>] [--workspace W] [--author <who>]
                                               create-or-update a page;
                                               --expect-head enables CAS (exit 3 on conflict);
                                               --workspace W writes into workspace W;
                                               --author <who> stamps created_by/last_edited_by (defaults to WIKI_AUTHOR env)
       page delete --id Y                     delete a page
+      page search --query X [--limit N]       semantic search (cosine similarity);
+                                              falls back to LIKE title match
       page history (--title X | --id Y)       show version history (W0)
       page revert (--title X | --id Y) --version V
                                               revert a page to version V (W0)
       log append --kind ingest|query|lint --title X [--note N] [--source <file-id>]
-                                             append one dated row to log.md;
-                                             --source stamps that file "Processed"
+                                              append one dated row to log.md;
+                                              --source stamps that file "Processed"
       index set --body-file <path|-> [--workspace W]
-                                             rewrite the curated index.md body;
-                                             --workspace W stages into workspace W
-      search --query X [--limit N]           semantic search (cosine similarity);
-                                             falls back to LIKE title match
+                                              rewrite the curated index.md body;
+                                              --workspace W stages into workspace W
       source list [--json]                    list sources (TSV, or JSON lines)
       source cat  (--id X | --name N) [--markdown]
                                               write raw source bytes (or extracted markdown
@@ -137,18 +118,20 @@ public enum ArgumentParser {
       source set-active (--id X | --name N) --version <smv-id>
                                               nominate a processed-markdown version
                                               as the active HEAD (extraction alt)
+      source rename (--id X | --name N) --to <new-name>
+                                              rename a source's display name
       source refresh (--id X | --name N)      re-fetch a website source via its
                                                provider, appending a new version
       admin vacuum-blobs [--apply] [--json]   report (and with --apply, reclaim)
                                                blobs no version row references
       admin vacuum-activities [--apply] [--json]
-                                             report (and with --apply, reclaim)
-                                               activities no version row references
+                                              report (and with --apply, reclaim)
+                                                activities no version row references
       admin vacuum-page-versions [--apply] [--json]
                                               report (and with --apply, reclaim)
                                                 page versions no ref/workspace references
       admin vacuum-all [--apply] [--json]    report (and with --apply, reclaim)
-                                               orphaned blobs, activities, and page versions
+                                                orphaned blobs, activities, and page versions
       chat list [--json]                     list chats (TSV, or JSON lines)
       chat get  (--id X | --title T)         print a chat transcript as markdown
       chat search --query X [--limit N]      semantic + keyword search of chats
@@ -224,8 +207,6 @@ public enum ArgumentParser {
             command = try parseLogCommand(Array(args.dropFirst()))
         case "index":
             command = try parseIndexCommand(Array(args.dropFirst()))
-        case "search":
-            command = try parseSearchCommand(Array(args.dropFirst()))
         case "source":
             command = try parseSourceCommand(Array(args.dropFirst()))
         case "admin":
@@ -245,42 +226,57 @@ public enum ArgumentParser {
     private static func parsePageCommand(_ args: [String]) throws -> Command {
         guard let sub = args.first else { throw Failure.usage("page: missing subcommand") }
         let rest = Array(args.dropFirst())
-        let options = try Options(rest)
+        let options = try Options(rest, booleanFlags: ["--json"])
 
         switch sub {
         case "list":
-            return .list(json: options.flag("--json"))
+            return .page(.list(json: options.flag("--json")))
 
         case "get":
-            return .get(try options.requireSelector(), json: options.flag("--json"), workspace: options.value("--workspace"))
+            return .page(.get(try options.requireSelector(), json: options.flag("--json"), workspace: options.value("--workspace")))
 
-        case "upsert":
+        case "add":
             guard let title = options.value("--title") else {
-                throw Failure.usage("page upsert: --title is required")
+                throw Failure.usage("page add: --title is required")
             }
             guard let bodyFile = options.value("--body-file") else {
-                throw Failure.usage("page upsert: --body-file is required (path or -)")
+                throw Failure.usage("page add: --body-file is required (path or -)")
             }
             let id = options.value("--id").map { PageID(rawValue: $0) }
             let expectHead = options.value("--expect-head")
             let workspace = options.value("--workspace")
             let author = options.value("--author")
-            return .upsert(id: id, title: title, bodyFile: bodyFile, expectHead: expectHead, workspace: workspace, author: author)
+            return .page(.add(id: id, title: title, body: .file(bodyFile), expectHead: expectHead, workspace: workspace, author: author))
 
         case "delete":
             guard let id = options.value("--id") else {
                 throw Failure.usage("page delete: --id is required")
             }
-            return .delete(id: PageID(rawValue: id))
+            return .page(.delete(id: PageID(rawValue: id)))
+
+        case "search":
+            guard let query = options.value("--query") else {
+                throw Failure.usage("page search: --query is required")
+            }
+            let limit: Int
+            if let raw = options.value("--limit") {
+                guard let n = Int(raw), n > 0, n <= 100 else {
+                    throw Failure.usage("page search: --limit must be 1–100")
+                }
+                limit = n
+            } else {
+                limit = 10
+            }
+            return .page(.search(query: query, limit: limit))
 
         case "history":
-            return .pageHistory(try options.requireSelector())
+            return .page(.history(try options.requireSelector()))
 
         case "revert":
             guard let versionID = options.value("--version") else {
                 throw Failure.usage("page revert: --version is required")
             }
-            return .pageRevert(try options.requireSelector(), versionID: versionID)
+            return .page(.revert(try options.requireSelector(), versionID: versionID))
 
         default:
             throw Failure.usage("page: unknown subcommand \(sub.debugDescription)")
@@ -307,23 +303,6 @@ public enum ArgumentParser {
         return .logAppend(kind: kind, title: title, note: options.value("--note"), source: source)
     }
 
-    private static func parseSearchCommand(_ args: [String]) throws -> Command {
-        let options = try Options(args)
-        guard let query = options.value("--query") else {
-            throw Failure.usage("search: --query is required")
-        }
-        let limit: Int
-        if let raw = options.value("--limit") {
-            guard let n = Int(raw), n > 0, n <= 100 else {
-                throw Failure.usage("search: --limit must be 1–100")
-            }
-            limit = n
-        } else {
-            limit = 10
-        }
-        return .search(query: query, limit: limit)
-    }
-
     private static func parseSourceCommand(_ args: [String]) throws -> Command {
         guard let sub = args.first else { throw Failure.usage("source: missing subcommand") }
         let rest = Array(args.dropFirst())
@@ -343,14 +322,28 @@ public enum ArgumentParser {
             return .source(.export(selector, out: options.value("--out"), markdown: options.flag("--markdown")))
 
         case "edit-markdown":
-            return try parseSourceEditMarkdown(options)
+            // `--content` is inline; `--file` defers to BodySource resolution
+            // (read at execution time, not parse time — the parser stays pure).
+            let selector = try options.requireSourceSelector()
+            let contentValue = options.value("--content")
+            let fileValue = options.value("--file")
+            switch (contentValue, fileValue) {
+            case (.some, .some):
+                throw Failure.usage("source edit-markdown: pass exactly one of --content / --file, not both")
+            case (.none, .none):
+                throw Failure.usage("source edit-markdown: pass --content <text> or --file <path>")
+            case (let content?, nil):
+                return .source(.editMarkdown(selector, content: .inline(content)))
+            case (nil, let file?):
+                return .source(.editMarkdown(selector, content: .file(file)))
+            }
 
         case "rename":
             let selector = try options.requireSourceSelector()
             guard let newName = options.value("--to"), !newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw Failure.usage("source rename: --to <new-display-name> is required")
             }
-            return .sourceRename(selector, to: newName)
+            return .source(.rename(selector, to: newName))
 
         case "set-active":
             let selector = try options.requireSourceSelector()
@@ -358,13 +351,13 @@ public enum ArgumentParser {
                   !raw.isEmpty else {
                 throw Failure.usage("source set-active: --version <smv-id> is required")
             }
-            return .sourceSetActive(selector, versionID: PageID(rawValue: raw))
+            return .source(.setActive(selector, versionID: PageID(rawValue: raw)))
 
         case "info":
             return .source(.info(try options.requireSourceSelector()))
 
         case "refresh":
-            return .sourceRefresh(try options.requireSourceSelector())
+            return .source(.refresh(try options.requireSourceSelector()))
 
         case "search":
             guard let query = options.value("--query") else {
@@ -383,24 +376,6 @@ public enum ArgumentParser {
 
         default:
             throw Failure.usage("source: unknown subcommand \(sub.debugDescription)")
-        }
-    }
-
-    private static func parseSourceEditMarkdown(_ options: Options) throws -> Command {
-        let selector = try options.requireSourceSelector()
-
-        let contentValue = options.value("--content")
-        let fileValue = options.value("--file")
-
-        switch (contentValue, fileValue) {
-        case (.some, .some):
-            throw Failure.usage("source edit-markdown: pass exactly one of --content / --file, not both")
-        case (.none, .none):
-            throw Failure.usage("source edit-markdown: pass --content <text> or --file <path>")
-        case (let content?, nil):
-            return .sourceEditMarkdown(selector, contentOrFile: content, isFile: false)
-        case (nil, let file?):
-            return .sourceEditMarkdown(selector, contentOrFile: file, isFile: true)
         }
     }
 
@@ -732,7 +707,7 @@ public enum ArgumentParser {
 
     /// Apply per-spawn environment variables to commands that support them but
     /// don't already have them set explicitly. This lets the agent subprocess
-    /// use plain `wikictl page get/upsert` / `index set` commands and have them
+    /// use plain `wikictl page get/add` / `index set` commands and have them
     /// automatically routed — the runner sets the env var before launching the
     /// agent process.
     ///
@@ -748,19 +723,19 @@ public enum ArgumentParser {
         let workspaceID = env["WIKI_WORKSPACE"]
         let author = env["WIKI_AUTHOR"]
         switch command {
-        case .get(let selector, let json, let workspace)
+        case .page(.get(let selector, let json, let workspace))
             where workspace == nil && workspaceID?.isEmpty == false:
-            return .get(selector, json: json, workspace: workspaceID)
-        case .upsert(let id, let title, let bodyFile, let expectHead, let workspace, let existingAuthor)
+            return .page(.get(selector, json: json, workspace: workspaceID))
+        case .page(.add(let id, let title, let bodySource, let expectHead, let workspace, let existingAuthor))
             where workspace == nil && workspaceID?.isEmpty == false:
-            return .upsert(id: id, title: title, bodyFile: bodyFile,
-                           expectHead: expectHead, workspace: workspaceID,
-                           author: existingAuthor ?? author)
-        case .upsert(let id, let title, let bodyFile, let expectHead, let workspace, let existingAuthor)
+            return .page(.add(id: id, title: title, body: bodySource,
+                             expectHead: expectHead, workspace: workspaceID,
+                             author: existingAuthor ?? author))
+        case .page(.add(let id, let title, let bodySource, let expectHead, let workspace, let existingAuthor))
             where existingAuthor == nil && author?.isEmpty == false:
-            return .upsert(id: id, title: title, bodyFile: bodyFile,
-                           expectHead: expectHead, workspace: workspace,
-                           author: author)
+            return .page(.add(id: id, title: title, body: bodySource,
+                             expectHead: expectHead, workspace: workspace,
+                             author: author))
         case .indexSet(let bodyFile, let workspace)
             where workspace == nil && workspaceID?.isEmpty == false:
             return .indexSet(bodyFile: bodyFile, workspace: workspaceID)
