@@ -63,6 +63,20 @@ public final class AgentLauncher {
     /// `resetRunArtifacts()`. Nil for runs without ACP backend usage data.
     @ObservationIgnored private var liveUsageProviderLabel: String?
 
+    /// #608: per-run callback invoked whenever the launcher surfaces or clears
+    /// a pending always-ask permission request. Receives the first pending
+    /// `PendingPermission` (ACP agents gate one write at a time, so there is
+    /// at most one) or `nil` when the prior request resolved (approve/reject)
+    /// or auto-rejected via the S1 timer. Mirrors `onAgentEvent` / `onLiveUsage`
+    /// lifecycle: installed in `run(...)` AFTER `resetRunArtifacts()` and
+    /// cleared in `finish()` and `resetRunArtifacts()` so a stale callback
+    /// from a prior run can't receive a new run's permission updates. Fired
+    /// from `refreshPendingPermissions()` whenever the snapshot actually
+    /// changes — the existing `pendingPollTask` already polls at 150ms while a
+    /// request is pending (300ms idle), so this just adds the Activity window
+    /// as a second consumer of the same poll (the first is `ChatView`).
+    @ObservationIgnored public var onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+
     /// Receives the per-turn token/cost delta for an interactive (Ask/Edit)
     /// chat session. The app layer installs this so the menu bar's "Today:
     /// X tokens" daily total includes interactive chat, not just queue-based
@@ -702,7 +716,19 @@ public final class AgentLauncher {
             return
         }
         let snapshot = await permBackend.pendingPermissions(sessionHandle: handle)
-        if snapshot != pendingPermissions { pendingPermissions = snapshot }
+        if snapshot != pendingPermissions {
+            pendingPermissions = snapshot
+            // #608: surface the change to the Activity window via the per-run
+            // callback (installed in `run(...)` for ingestion/lint). ACP agents
+            // gate one write at a time, so we forward the first pending
+            // request (or `nil` to clear the row once the continuation
+            // resolves). `ChatView` continues to read `pendingPermissions`
+            // directly via `@Observable` for its inline Approve/Reject chip —
+            // this callback is the parallel channel for the Activity window's
+            // per-item yellow row. No-op when the caller didn't install one
+            // (interactive chat passes nil).
+            onPendingPermission?(snapshot.first)
+        }
     }
 
     /// Resolve a pending permission request by its option id — the Approve/Reject
@@ -865,6 +891,13 @@ public final class AgentLauncher {
     ///   here, installed after `resetRunArtifacts()`. `nil` for callers that
     ///   don't need live-progress display. May never fire if the backend
     ///   doesn't stream usage updates.
+    /// - `onPendingPermission` is the per-pending-permission-change callback
+    ///   for THIS run (#608 Activity-window surfacing). Same lifecycle/install
+    ///   rule as `onEvent`/`onLiveUsage` — passed here, installed after
+    ///   `resetRunArtifacts()`. `nil` for callers that don't surface
+    ///   permission stalls (e.g. interactive chat reads `pendingPermissions`
+    ///   directly via `@Observable`). May never fire if the agent isn't
+    ///   configured for `always-ask`.
     /// - `providerLabel` is the configured provider's display label (e.g.
     ///   "Claude") for the run — attached to each live-usage snapshot so the
     ///   Activity window can show "Claude · Sonnet 4". The backend's
@@ -880,6 +913,7 @@ public final class AgentLauncher {
         workspaceID: String? = nil,
         onEvent: (@Sendable (AgentEvent) -> Void)? = nil,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)? = nil,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)? = nil,
         providerLabel: String? = nil,
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void
@@ -923,6 +957,12 @@ public final class AgentLauncher {
         // `finish()`/`resetRunArtifacts()`.
         self.onLiveUsage = onLiveUsage
         self.liveUsageProviderLabel = providerLabel
+        // #608: install the per-run pending-permission callback so the
+        // Activity window can surface "Permission pending: <cmd>" while a
+        // run is parked on an always-ask prompt. Same lifecycle/install rule
+        // as `onAgentEvent`/`onLiveUsage`. `refreshPendingPermissions()`
+        // fires it on every real change of `pendingPermissions`.
+        self.onPendingPermission = onPendingPermission
 
         // Resolved fresh at spawn time so Settings changes apply without a
         // restart.
@@ -2754,6 +2794,15 @@ public final class AgentLauncher {
         // provider's onUsagecallback.
         onLiveUsage = nil
         liveUsageProviderLabel = nil
+        // #608: detach the pending-permission callback after the run ends,
+        // mirroring onAgentEvent/onLiveUsage. Emit a final `nil` first so the
+        // Activity window's yellow row clears on terminal state — the
+        // continuation may have resolved via auto-reject timeout (which fires
+        // `refreshPendingPermissions()` and already emits), but a terminal
+        // state arriving first (cancelled mid-prompt, hard process death)
+        // needs this explicit clear or the row lingers.
+        onPendingPermission?(nil)
+        onPendingPermission = nil
         // Interactive usage tracking: detach the callback and clear the
         // snapshot baseline so a new run starts fresh (no stale delta base).
         onInteractiveUsage = nil
@@ -2858,6 +2907,16 @@ public final class AgentLauncher {
         // a stale callback from a prior run never receives a new run's updates.
         onLiveUsage = nil
         liveUsageProviderLabel = nil
+        // #608: clear the pending-permission callback so a stale callback from
+        // a prior run never receives a new run's permission updates. NO emit
+        // of `nil` here — `resetRunArtifacts()` runs at the START of every
+        // `run(...)` (before the new run's `onPendingPermission` is installed
+        // at line ~930), so emitting here would clear the prior run's row just
+        // before the new run's flow starts, which is correct but redundant —
+        // `finish()` for the prior run already emitted `nil`. Skipped to keep
+        // `resetRunArtifacts()` a pure reset (no side effects on the prior
+        // run's already-torn-down Activity state).
+        onPendingPermission = nil
         summaryGenerated = false
         persistedEventCount = 0
         firstMessagePrePersisted = false

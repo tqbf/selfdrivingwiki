@@ -43,6 +43,14 @@ public protocol QueueIngestionProvider: Sendable {
     ///   - onLogPaths: Called after the run with the run's `run.jsonl` log URL
     ///     and `debug/` folder URL (either may be nil if the run didn't
     ///     create them). `nil` for callers that don't need log-reveal UI.
+    ///   - onPendingPermission: Called whenever the launcher surfaces or
+    ///     clears a pending always-ask permission request for this run
+    ///     (issue #608). `nil` for callers that don't surface permission
+    ///     stalls in the Activity window. ACP agents gate one write at a
+    ///     time, so the closure fires with at most one `PendingPermission`
+    ///     at a time; a `nil` argument clears the prior request (resolved /
+    ///     rejected / auto-rejected). May never fire if the agent isn't
+    ///     configured for `always-ask`.
     func runIngestion(
         wikiID: String,
         sourceIDs: [PageID],
@@ -50,7 +58,8 @@ public protocol QueueIngestionProvider: Sendable {
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
-        onLogPaths: (@Sendable (URL?, URL?) -> Void)?
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
     ) async throws
 
     /// Run a whole-wiki lint health-check. Returns when the agent finishes.
@@ -61,13 +70,15 @@ public protocol QueueIngestionProvider: Sendable {
     ///   - onTranscript: Called with each typed agent event for this item.
     ///   - onUsage: Called after the run with cumulative usage, if captured.
     ///   - onLiveUsage: Called on each `usage_update` during the run (#544).
+    ///   - onPendingPermission: See ``runIngestion``'s parameter (#608).
     func runLint(
         wikiID: String,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
-        onLogPaths: (@Sendable (URL?, URL?) -> Void)?
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
     ) async throws
 
     /// Run a page-level lint health-check for the given pages. Returns when
@@ -80,6 +91,7 @@ public protocol QueueIngestionProvider: Sendable {
     ///   - onTranscript: Called with each typed agent event for this item.
     ///   - onUsage: Called after the run with cumulative usage, if captured.
     ///   - onLiveUsage: Called on each `usage_update` during the run (#544).
+    ///   - onPendingPermission: See ``runIngestion``'s parameter (#608).
     func runLintPages(
         wikiID: String,
         pageIDs: [PageID],
@@ -87,7 +99,8 @@ public protocol QueueIngestionProvider: Sendable {
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
-        onLogPaths: (@Sendable (URL?, URL?) -> Void)?
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
     ) async throws
 
     /// Quick readiness probe: checks whether the selected agent provider's
@@ -138,6 +151,7 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
     private let emitUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
     private let emitLiveUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
     private let emitLogPaths: @Sendable (QueueItem.ID, URL?, URL?) -> Void
+    private let emitPendingPermission: @Sendable (QueueItem.ID, PendingPermission?) -> Void
 
     public init(
         provider: any QueueIngestionProvider,
@@ -145,7 +159,8 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
         emitTranscript: @escaping @Sendable (QueueItem.ID, AgentEvent) -> Void,
         emitUsage: @escaping @Sendable (QueueItem.ID, SessionUsage) -> Void,
         emitLiveUsage: @escaping @Sendable (QueueItem.ID, SessionUsage) -> Void,
-        emitLogPaths: @escaping @Sendable (QueueItem.ID, URL?, URL?) -> Void
+        emitLogPaths: @escaping @Sendable (QueueItem.ID, URL?, URL?) -> Void,
+        emitPendingPermission: @escaping @Sendable (QueueItem.ID, PendingPermission?) -> Void
     ) {
         self.provider = provider
         self.emitProgress = emitProgress
@@ -153,6 +168,7 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
         self.emitUsage = emitUsage
         self.emitLiveUsage = emitLiveUsage
         self.emitLogPaths = emitLogPaths
+        self.emitPendingPermission = emitPendingPermission
     }
 
     public func providerID(for item: QueueItem) async -> String? {
@@ -169,7 +185,7 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
     }
 
     public func worker(for item: QueueItem) async throws -> any QueueWorker {
-        QueueIngestionWorker(provider: provider, emitProgress: emitProgress, emitTranscript: emitTranscript, emitUsage: emitUsage, emitLiveUsage: emitLiveUsage, emitLogPaths: emitLogPaths)
+        QueueIngestionWorker(provider: provider, emitProgress: emitProgress, emitTranscript: emitTranscript, emitUsage: emitUsage, emitLiveUsage: emitLiveUsage, emitLogPaths: emitLogPaths, emitPendingPermission: emitPendingPermission)
     }
 }
 
@@ -190,6 +206,7 @@ struct QueueIngestionWorker: QueueWorker {
     let emitUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
     let emitLiveUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
     let emitLogPaths: @Sendable (QueueItem.ID, URL?, URL?) -> Void
+    let emitPendingPermission: @Sendable (QueueItem.ID, PendingPermission?) -> Void
 
     func execute(_ item: QueueItem) async throws {
         // Pre-dispatch readiness gate (#440): check the agent provider's binary
@@ -218,6 +235,12 @@ struct QueueIngestionWorker: QueueWorker {
         let onLogPaths: (@Sendable (URL?, URL?) -> Void)? = { [itemID = item.id] logURL, debugURL in
             emitLogPaths(itemID, logURL, debugURL)
         }
+        // #608: forward the launcher's pending-permission snapshot so the
+        // Activity window can surface "Permission pending: <cmd>" while a
+        // run is parked on an always-ask prompt. `nil` clears the row.
+        let onPendingPermission: (@Sendable (PendingPermission?) -> Void)? = { [itemID = item.id] permission in
+            emitPendingPermission(itemID, permission)
+        }
 
         if let pageIDs = item.payload.lintPageIDs, !pageIDs.isEmpty {
             // Page-level lint.
@@ -228,7 +251,8 @@ struct QueueIngestionWorker: QueueWorker {
                 onTranscript: onTranscript,
                 onUsage: onUsage,
                 onLiveUsage: onLiveUsage,
-                onLogPaths: onLogPaths
+                onLogPaths: onLogPaths,
+                onPendingPermission: onPendingPermission
             )
         } else if item.payload.lintPageIDs != nil {
             // lintPageIDs is non-nil but empty → whole-wiki lint.
@@ -238,7 +262,8 @@ struct QueueIngestionWorker: QueueWorker {
                 onTranscript: onTranscript,
                 onUsage: onUsage,
                 onLiveUsage: onLiveUsage,
-                onLogPaths: onLogPaths
+                onLogPaths: onLogPaths,
+                onPendingPermission: onPendingPermission
             )
         } else {
             // Normal ingestion.
@@ -253,7 +278,8 @@ struct QueueIngestionWorker: QueueWorker {
                 onTranscript: onTranscript,
                 onUsage: onUsage,
                 onLiveUsage: onLiveUsage,
-                onLogPaths: onLogPaths
+                onLogPaths: onLogPaths,
+                onPendingPermission: onPendingPermission
             )
         }
     }

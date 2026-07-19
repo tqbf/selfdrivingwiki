@@ -427,6 +427,20 @@ public actor QueueEngine {
         }
     }
 
+    /// A `Sendable` closure the worker factory captures to yield
+    /// `.pendingPermission` events onto the engine's broadcaster (#608).
+    /// Surfaces the launcher's current pending-permission snapshot for an
+    /// item so the Activity window can render a yellow "Permission pending:
+    /// <cmd>" row while a run is parked on an always-ask prompt. `nil`
+    /// clears the row (resolved / rejected / auto-rejected). No persistence —
+    /// pending state is runtime-only; a restart mid-prompt resets the run to
+    /// `.queued` and a fresh prompt re-emits.
+    public func makeEmitPendingPermission() -> @Sendable (QueueItem.ID, PendingPermission?) -> Void {
+        return { [broadcaster] id, permission in
+            broadcaster.yield(.pendingPermission(id, permission))
+        }
+    }
+
     /// Load persisted agent events (transcript) for a queue item from the DB.
     /// Used by the Activity tracker to show transcripts for items rehydrated
     /// from a previous session. Deltas are folded into whole rows on the way

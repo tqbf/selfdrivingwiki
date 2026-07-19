@@ -106,6 +106,15 @@ public enum QueueEvent: Sendable {
     /// the Activity window can offer "Reveal Log" / "Reveal Debug Folder".
     /// `nil` when the run didn't create them (not started, preflight failure).
     case runPaths(QueueItem.ID, logURL: URL?, debugURL: URL?)
+    /// The run is parked on an always-ask permission prompt (issue #608).
+    /// Carries the pending permission request the launcher surfaced from the
+    /// backend via `pendingPollTask`. `nil` clears the Activity window's
+    /// yellow "Permission pending" row — the continuation resolved (approve,
+    /// reject) or the S1 auto-reject timer fired. Mirrors how `transcript` /
+    /// `liveUsage` flow: launcher → emit closure → engine broadcaster →
+    /// `QueueActivityTracker` → `ActivityWindowView`. ACP agents gate one
+    /// write at a time, so at most one pending request per item at a time.
+    case pendingPermission(QueueItem.ID, PendingPermission?)
 
     /// The item this event pertains to (if any).
     public var item: QueueItem? {
@@ -115,7 +124,7 @@ public enum QueueEvent: Sendable {
             return i
         case .failed(let i, _):
             return i
-        case .progress, .transcript, .liveUsage, .usage, .runPaths, .runStateChanged:
+        case .progress, .transcript, .liveUsage, .usage, .runPaths, .runStateChanged, .pendingPermission:
             return nil
         }
     }

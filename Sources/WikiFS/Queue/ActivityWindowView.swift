@@ -192,7 +192,8 @@ struct ActivityWindowView: View {
             subtitle: String(item.wikiID.prefix(8)),
             targetNames: [],
             usage: nil,
-            liveUsage: nil)
+            liveUsage: nil,
+            pendingPermission: nil)
         HStack(spacing: 8) {
             statusView(for: item)
                 .frame(width: 16)
@@ -235,6 +236,19 @@ struct ActivityWindowView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
+                }
+                // #608: surface a pending always-ask permission stall as a
+                // yellow "Permission pending: <cmd>" row. Mirrors how streamed
+                // `AgentEvent`s + live usage flow into the row — the tracker's
+                // `.pendingPermission` event sets/clears this. Reuses the
+                // `exclamationmark.triangle.fill` + `.orange` pattern from the
+                // Agents-settings model-warning (PR #605). ACP agents gate one
+                // write at a time, so at most one pending row per item.
+                if let permission = data.pendingPermission {
+                    PermissionPendingRow(
+                        permission: permission,
+                        font: .caption,
+                        lineLimit: 2)
                 }
             }
             Spacer(minLength: 4)
@@ -447,6 +461,22 @@ struct ActivityWindowView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                     }
+                }
+                // #608: surface a pending always-ask permission stall in the
+                // detail header too (mirrors how liveUsage + usage appear on
+                // both the sidebar row and the detail header). Same yellow
+                // `exclamationmark.triangle.fill` pattern as the sidebar row +
+                // the Agents-settings model-warning. Reads `pendingPermission`
+                // directly — the detail pane isn't driven by `RowDisplayData`,
+                // and the `@Observable` read here is safe (we're outside the
+                // sidebar's crash-prone `ForEachChild.updateValue` path that
+                // motivated the precompute in the first place).
+                if let permission = activityTracker.pendingPermission(for: item.id) {
+                    PermissionPendingRow(
+                        permission: permission,
+                        font: .callout,
+                        lineLimit: 3,
+                        textSelection: true)
                 }
                 // #544 live progress: show running token counts + model + elapsed
                 // during the run. Elapsed time ticks via TimelineView per second.
@@ -883,6 +913,12 @@ struct ActivityWindowView: View {
         let targetNames: [String]
         let usage: SessionUsage?
         let liveUsage: SessionUsage?
+        /// #608: pending always-ask permission for this item, or `nil` when
+        /// the run isn't blocked. Surfaces a yellow "Permission pending:
+        /// <cmd>" row below the status row in the sidebar — same pattern as
+        /// the Agents-settings model-warning (`exclamationmark.triangle.fill`
+        /// + `.orange`).
+        let pendingPermission: PendingPermission?
     }
 
     /// Snapshot all `@Observable`-derived display data for the given items into
@@ -896,6 +932,7 @@ struct ActivityWindowView: View {
         let sessions = sessionManager?.sessions ?? [:]
         let itemUsage = activityTracker.itemUsage
         let liveUsage = activityTracker.liveUsage
+        let pendingPermissions = activityTracker.pendingPermissions
 
         var result: [QueueItem.ID: RowDisplayData] = [:]
         result.reserveCapacity(items.count)
@@ -928,7 +965,8 @@ struct ActivityWindowView: View {
                 subtitle: computeRowSubtitle(for: item, wikiName: wikiName),
                 targetNames: targets,
                 usage: itemUsage[item.id],
-                liveUsage: liveUsage[item.id])
+                liveUsage: liveUsage[item.id],
+                pendingPermission: pendingPermissions[item.id])
         }
         return result
     }
@@ -1077,5 +1115,81 @@ struct ActivityWindowView: View {
         let hours = minutes / 60
         let remainingMinutes = minutes % 60
         return remainingMinutes == 0 ? "\(hours)h elapsed" : "\(hours)h \(remainingMinutes)m elapsed"
+    }
+}
+
+// MARK: - PermissionPendingRow (#608)
+
+/// A yellow "Permission pending: <cmd>" row shown inside the Activity window's
+/// sidebar row + detail header while a run is parked on an always-ask prompt.
+///
+/// Extracted as its own leaf so:
+/// - the sidebar + detail call sites stay DRY (rule 4.4: one Row, parameterized
+///   by data), and
+/// - render tests can host this view in isolation and assert the yellow row
+///   appears when a `permission` is set and disappears when cleared (the issue
+///   #608 verification spec).
+///
+/// The visual treatment mirrors `AgentsSettingsView.modelWarning`:
+/// `exclamationmark.triangle.fill` + `.orange` (PR #605). Pass `nil` to render
+/// nothing (the conditional `if let permission` at the call site already guards
+/// this, but the leaf is safe under both paths so the call site reads cleanly).
+struct PermissionPendingRow: View {
+    let permission: PendingPermission
+    var font: Font = .caption
+    var lineLimit: Int? = 2
+    var textSelection: Bool = false
+
+    var body: some View {
+        Label {
+            Text(ActivityWindowView.permissionPendingLabel(for: permission))
+                .lineLimit(lineLimit)
+                .if(textSelection) { view in view.textSelection(.enabled) }
+        } icon: {
+            Image(systemName: "exclamationmark.triangle.fill")
+        }
+        .font(font)
+        .foregroundStyle(.orange)
+        .help(permission.inputSummary ?? permission.title ?? "Permission pending")
+    }
+}
+
+private extension View {
+    /// Apply `transform` only when `condition` is true. Used to opt the row's
+    /// text into `.textSelection(.enabled)` only at the callout (detail
+    /// header) scale — at caption scale (sidebar row) text selection clutters
+    /// the row's hover affordances and isn't useful.
+    @ViewBuilder
+    func `if`(_ condition: Bool, transform: (Self) -> some View) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
+        }
+    }
+}
+
+extension ActivityWindowView {
+    /// #608: the caption shown on the yellow "Permission pending" row. Prefers
+    /// the tool name (e.g. "Edit file"); falls back to the input summary (the
+    /// path being edited) when the tool name is unavailable; final fallback is
+    /// the literal "Permission pending" so the row is informative even when
+    /// the backend's pending snapshot is sparse.
+    ///
+    /// `internal` (not `private`) + an `extension ActivityWindowView` so the
+    /// `@testable import WikiFS` render test can call it directly to assert
+    /// the format — without rendering the SwiftUI tree, which is brittle.
+    static func permissionPendingLabel(for permission: PendingPermission) -> String {
+        let cmd: String
+        if let toolName = permission.toolName, !toolName.isEmpty {
+            cmd = toolName
+        } else if let summary = permission.inputSummary, !summary.isEmpty {
+            cmd = summary
+        } else if let title = permission.title, !title.isEmpty {
+            cmd = title
+        } else {
+            return "Permission pending"
+        }
+        return "Permission pending: \(cmd)"
     }
 }

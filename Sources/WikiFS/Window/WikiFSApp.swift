@@ -163,6 +163,7 @@ struct WikiFSApp: App {
         let usageBox = UsageEmitBox()
         let liveUsageBox = LiveUsageEmitBox()
         let logPathsBox = LogPathsEmitBox()
+        let pendingPermissionBox = PendingPermissionEmitBox()
         let extractionFactory = QueueExtractionWorkerFactory(
             provider: extractionProvider,
             emitProgress: { id, line in progressBox.emit?(id, line) })
@@ -172,7 +173,8 @@ struct WikiFSApp: App {
             emitTranscript: { id, event in transcriptBox.emit?(id, event) },
             emitUsage: { id, usage in usageBox.emit?(id, usage) },
             emitLiveUsage: { id, usage in liveUsageBox.emit?(id, usage) },
-            emitLogPaths: { id, logURL, debugURL in logPathsBox.emit?(id, logURL, debugURL) })
+            emitLogPaths: { id, logURL, debugURL in logPathsBox.emit?(id, logURL, debugURL) },
+            emitPendingPermission: { id, permission in pendingPermissionBox.emit?(id, permission) })
         let workerFactory = CompositeWorkerFactory(factories: [
             .extraction: extractionFactory,
             .ingestion: ingestionFactory
@@ -188,6 +190,7 @@ struct WikiFSApp: App {
         Task { usageBox.emit = await queueEngine.makeEmitUsage() }
         Task { liveUsageBox.emit = await queueEngine.makeEmitLiveUsage() }
         Task { logPathsBox.emit = await queueEngine.makeEmitLogPaths() }
+        Task { pendingPermissionBox.emit = await queueEngine.makeEmitPendingPermission() }
         // Start the engine (rehydrate + crash recovery + initial dispatch).
         // Detached so the app's init isn't blocked; the engine is an actor so
         // `start()` is safe to call concurrently.
