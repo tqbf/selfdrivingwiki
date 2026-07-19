@@ -142,6 +142,13 @@ agents, NOT Polytoken):
   the shell mangles the formatting. Use plain text for the inline body, or write
   the body to a file first and use `gh pr edit --body-file <file>`.
 
+* **Scratch files go in `tmp/` (project-relative, gitignored), NOT `/tmp`
+  (system temp).** Writing to `/tmp` may require auto-approve permission in
+  sandboxed agent runtimes; `tmp/` is inside the project and always writable
+  without approval. Use `tmp/` for plan docs, PR drafts, issue bodies, debug
+  output, and any other throwaway artifacts. The directory is gitignored
+  (`.gitignore` line 24) so nothing lands in the tree.
+
 ## Agent prompts
 
 Agent-facing prompts (the system prompt, write rules, extraction prompts, the
