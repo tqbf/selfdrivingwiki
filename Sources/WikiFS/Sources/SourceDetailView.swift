@@ -970,7 +970,11 @@ struct SourceDetailView: View {
     @ViewBuilder
     private var splitContent: some View {
         HSplitView {
-            markdownContent
+            if isMermaidSource {
+                diagramCodeContent
+            } else {
+                markdownContent
+            }
             if isBytelessEmbedWithPlayer {
                 videoPlayerContent
             } else if isMermaidSource {
