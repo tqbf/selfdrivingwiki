@@ -130,4 +130,98 @@ struct MarkdownHTMLRendererTests {
         #expect(html.contains(#"<img src="wiki-blob://source/\#(id.rawValue)""#))
         #expect(html.contains("wiki-embed"))
     }
+
+    // MARK: - Mermaid embed survives the markdown→HTML pipeline (#736).
+
+    /// A `.mmd` source embed (`![[source:diagram.mmd]]`) must survive the
+    /// reader's `MarkdownHTMLRenderer` as a single intact
+    /// `<pre><code class="language-mermaid">…</code></pre>` whose
+    /// `textContent` CSS-decodes back to the original diagram source —
+    /// otherwise the reader's `mermaidBootstrapJS` reads garbled
+    /// `code.textContent` and `mermaid.parse()` fails with
+    /// "Syntax error in text". This checks the four contexts that broke the
+    /// previous raw-`<div>` emit: paragraph surrounds, a blank line inside
+    /// the diagram, the embed inside a list item, and the embed mid-paragraph.
+    @Test func mermaidEmbedSurvivesMarkdownRendererInAllContexts() {
+        let id = PageID(rawValue: "01HTESTMERMAID0000000000001")
+        let cases: [(String, String, String)] = [
+            ("paragraph-surround",
+             "intro.\n\n![[source:diagram.mmd]]\n\noutro.",
+             "graph TD\n    A --> B\n    B --> C\n"),
+            ("blank-line-in-diagram",
+             "intro.\n\n![[source:diagram.mmd]]\n\noutro.",
+             "graph TD\n    A --> B\n\n    B --> C\n"),
+            ("inside-list",
+             "- before\n- ![[source:diagram.mmd]]\n- after",
+             "graph TD\n    A --> B\n    B --> C\n"),
+            ("mid-paragraph",
+             "text ![[source:diagram.mmd]] more text",
+             "graph TD\n    A --> B\n    B --> C\n"),
+        ]
+        for (label, body, diagramSource) in cases {
+            let prepared = WikiLinkMarkdown.linkified(
+                body,
+                isResolved: { _, _ in true },
+                embedInfo: { _ in
+                    WikiLinkMarkdown.SourceEmbedInfo(
+                        id: id, mimeType: MimeType.mermaid,
+                        target: EmbedTarget(
+                            kind: .diagram,
+                            url: "wiki://source/\(id.rawValue)",
+                            content: diagramSource)
+                    )
+                }
+            )
+            let html = MarkdownHTMLRenderer.render(prepared)
+            // Exactly one mermaid code element survives.
+            let mermaidCount = html.components(
+                separatedBy: "class=\"language-mermaid\"").count - 1
+            #expect(mermaidCount == 1,
+                    "\(label): expected one `<code class=\"language-mermaid\">`, got \(mermaidCount). HTML:\n\(html)")
+            // visitCodeBlock escapes `>` exactly ONCE → `&gt;`. The previous
+            // raw-div path double-escaped to `&amp;gt;` (literal `&gt;`) in
+            // some contexts, tripping mermaid's parser.
+            #expect(html.contains("A --&gt; B"),
+                    "\(label): expected `A --&gt; B` in HTML:\n\(html)")
+            #expect(!html.contains("&amp;gt;"),
+                    "\(label): double-escaped `&amp;gt;` (literal `&gt;`) in HTML:\n\(html)")
+            // The diagram text is NOT wrapped in `<p>` tags by the markdown
+            // converter — it flows into the `<pre><code>` unchanged.
+            #expect(!html.contains("<p>graph TD"),
+                    "\(label): diagram body wrapped in `<p>`. HTML:\n\(html)")
+            // The `<pre>` wraps the `<code>` — no orphaned fragments.
+            #expect(html.contains("<pre><code class=\"language-mermaid\">"),
+                    "\(label): missing `<pre><code class=\"language-mermaid\">`. HTML:\n\(html)")
+        }
+    }
+
+    /// Mermaid source containing a ``` triple-backtick run (rare, but
+    /// possible in node labels) must not prematurely close the fence we
+    /// emit: we pick a fence length strictly longer than any run in the
+    /// diagram body (CommonMark §4.5).
+    @Test func mermaidEmbedWithBackticksInSourceUsesLongerFence() {
+        let id = PageID(rawValue: "01HTESTMERMAID0000000000002")
+        let diagram = "graph TD\n    A[\"has ``` triple backticks\"] --> B"
+        let prepared = WikiLinkMarkdown.linkified(
+            "![[source:diagram.mmd]]",
+            isResolved: { _, _ in true },
+            embedInfo: { _ in
+                WikiLinkMarkdown.SourceEmbedInfo(
+                    id: id, mimeType: MimeType.mermaid,
+                    target: EmbedTarget(
+                        kind: .diagram,
+                        url: "wiki://source/\(id.rawValue)", content: diagram)
+                )
+            }
+        )
+        let html = MarkdownHTMLRenderer.render(prepared)
+        // The 3-backtick run inside the body is preserved verbatim, AND the
+        // outer fence (4+ backticks) keeps the block intact.
+        #expect(html.contains("\"has ``` triple backticks\""))
+        #expect(html.contains("class=\"language-mermaid\""))
+        // No premature close → only one code element.
+        let count = html.components(
+            separatedBy: "class=\"language-mermaid\"").count - 1
+        #expect(count == 1)
+    }
 }

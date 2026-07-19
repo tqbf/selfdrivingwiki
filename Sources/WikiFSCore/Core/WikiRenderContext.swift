@@ -168,9 +168,11 @@ public struct WikiRenderContext: Sendable {
         //      `text/mermaid` / `text/x-mermaid` (cheap detector arms —
         //      mime + filename only, no content scan) resolves to a `.diagram`
         //      EmbedTarget carrying the raw source text. The renderer emits
-        //      `<div class='mermaid'>…</div>`; the bundled mermaid.min.js (v11)
-        //      picks it up and inlines an SVG. Diagram takes precedence over
-        //      the descriptor path because a `.mmd` source is byteful (it
+        //      a fenced ```mermaid code block (#736 changed it from a raw div
+        //      that broke under markdown conversion); the reader's
+        //      `mermaidBootstrapJS` turns it into a `<div class="mermaid">`
+        //      before invoking mermaid.min.js (v11). Diagram takes precedence
+        //      over the descriptor path because a `.mmd` source is byteful (it
         //      carries real text bytes) and therefore absent from
         //      `embedDescriptors()` (which is `WHERE sv.blob_hash IS NULL`) —
         //      a diagram source would otherwise fall through to the byteful

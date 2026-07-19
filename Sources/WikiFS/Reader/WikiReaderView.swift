@@ -192,11 +192,13 @@ struct WikiReaderView: View {
         let width = Int(PageEditorMetrics.readableContentWidth)
         let inset = Int(PageEditorMetrics.contentInset)
         // Embed the vendored Mermaid library + bootstrap only when the page
-        // actually contains a mermaid block (the exact class visitCodeBlock
-        // emits, OR a `<div class="mermaid">` emitted directly by a diagram
-        // embed — #670) and the library is bundled. Otherwise the block stays
-        // a normal `<pre><code>` — graceful degradation for swift test / dev
-        // runs with no bundle, and no ~3 MB parse cost for diagram-free pages.
+        // actually contains a mermaid block: `class="language-mermaid"` (the
+        // class `visitCodeBlock` emits for both ``` ```mermaid ``` fences AND
+        // `![[source:…]]` diagram embeds since #736) OR a `<div class="mermaid">`
+        // (the fallback path emitted directly by the old div-emit contract).
+        // Otherwise the block stays a normal `<pre><code>` — graceful
+        // degradation for swift test / dev runs with no bundle, and no ~3 MB
+        // parse cost for diagram-free pages.
         var mermaidScripts = ""
         if (body.contains("class=\"language-mermaid\"")
                 || body.contains("class=\"mermaid\"")),
