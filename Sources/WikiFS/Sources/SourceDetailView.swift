@@ -531,6 +531,12 @@ struct SourceDetailView: View {
                         .keyboardShortcut(.escape, modifiers: [])
 
                         if isOutlineApplicable {
+                            // Pin save/cancel at the leading edge and the
+                            // outline toggle at the trailing edge so the row's
+                            // layout is independent of the parent's proposed
+                            // width (which changes when the outline pane or
+                            // the header expands/collapses).
+                            Spacer()
                             Button {
                                 DebugLog.tabs("SourceDetailView: Toggle Outline tapped (editing)")
                                 isOutlineExpanded.toggle()
@@ -645,6 +651,10 @@ struct SourceDetailView: View {
                             .help("Reveal this source file in Finder")
                         }
                         if isOutlineApplicable {
+                            // Pin action buttons at the leading edge and the
+                            // outline toggle at the trailing edge (see the
+                            // matching comment in the editing branch above).
+                            Spacer()
                             Button {
                                 DebugLog.tabs("SourceDetailView: Toggle Outline tapped")
                                 isOutlineExpanded.toggle()

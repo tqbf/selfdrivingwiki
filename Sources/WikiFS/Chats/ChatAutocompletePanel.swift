@@ -10,9 +10,15 @@ import WikiFSSearch
 /// `NSTextView` keeps first responder while the dropdown floats above — the
 /// exact property the omnibox relies on for typing-while-navigating.
 ///
-/// Anchored ABOVE the composer (the composer sits near the bottom of the chat
-/// window, so a below-anchor dropdown would be clipped). Tracks the parent
-/// window via `addChildWindow(_:ordered:)` so it follows window moves.
+/// Positioning: anchored relative to the **caret line** of the composer
+/// (`present(caretRect:in:placement:)`), not the composer's view bounds —
+/// a multi-line composer is several lines tall, so positioning relative to the
+/// view bounds would put the panel far above the caret. The composer uses
+/// ``Placement/above`` (the composer sits near the bottom of the chat window,
+/// so a below-caret dropdown would be clipped); the editor autocomplete (#680,
+/// not yet implemented) will reuse this panel with `.below` or `.auto`.
+/// Tracks the parent window via `addChildWindow(_:ordered:)` so it follows
+/// window moves.
 @MainActor
 final class ChatAutocompletePanel: NSPanel {
     private var hosting: NSHostingView<AnyView>?
@@ -68,39 +74,180 @@ final class ChatAutocompletePanel: NSPanel {
         setContentSize(NSSize(width: width, height: host.fittingSize.height))
     }
 
-    /// Position the panel **above** the anchor view and attach it as a child
-    /// window so it tracks window moves. The composer sits near the bottom of
-    /// the chat window, so a below-anchor placement (the omnibox convention)
-    /// would be clipped.
+    /// Preferred placement of the dropdown relative to the caret. Extracted as
+    /// a type so the editor autocomplete (#680) can reuse the chat panel with
+    /// different placement heuristics than the chat composer.
     ///
-    /// `minY` floor: clamp the panel origin to at least the window's content
-    /// min Y + a small margin so a very-tall dropdown (the composer just
-    /// opened at the bottom of a short window) never overflows the title bar.
-    /// If the panel doesn't fit above the anchor, fall back to below.
-    func present(above anchor: NSView) {
-        guard let window = anchor.window else { return }
-        let rectInWindow = anchor.convert(anchor.bounds, to: nil)
-        let rectOnScreen = window.convertToScreen(rectInWindow)
-        let aboveOrigin = NSPoint(
-            x: rectOnScreen.minX,
-            y: rectOnScreen.maxY + frame.height + 4)
-        // If above-origin places the panel's top above the parent window's top,
-        // fall back to below (composer-height + 4pt gap).
-        let parentTopY = window.convertToScreen(
-            NSRect(x: 0, y: 0, width: 0, height: window.frame.height)).maxY
-        let origin: NSPoint
-        if aboveOrigin.y + frame.height > parentTopY - 8 {
-            // Not enough room above — pop BELOW the anchor instead.
-            origin = NSPoint(x: rectOnScreen.minX,
-                             y: rectOnScreen.minY - frame.height - 4)
-        } else {
-            origin = aboveOrigin
+    /// - `.above`: chat composer convention (composer lives near the bottom of
+    ///   the chat window, so below-caret would be clipped against the window's
+    ///   bottom edge).
+    /// - `.below`: editor convention (the editor is a tall NSTextView in the
+    ///   middle of the window, so there's more room below the caret than
+    ///   above).
+    /// - `.auto`: pick whichever side has more room between the caret and the
+    ///   parent window's edges — same idea as the original chat panel logic,
+    ///   but measured against the CARET rect, not the entire text view's
+    ///   bounds.
+    enum Placement: Sendable {
+        case above
+        case below
+        case auto
+    }
+
+    /// Pure, testable: compute the panel's screen-coordinate origin (bottom-
+    /// left corner) given a caret rect (in screen coordinates), the panel's
+    /// own size, the parent window's frame, and a preferred placement.
+    ///
+    /// macOS screen coordinates are bottom-left origin, so "above the caret"
+    /// = larger Y, "below" = smaller Y. The panel's origin is its bottom-left
+    /// corner, so:
+    ///   - above → origin.y = `caretRect.maxY + gap` (panel bottom sits `gap`
+    ///     above the caret's top edge, extends upward).
+    ///   - below → origin.y = `caretRect.minY - height - gap` (panel top sits
+    ///     `gap` below the caret's bottom edge, extends downward).
+    ///
+    /// The 8pt margin matches the historical behavior — don't visually touch
+    /// the parent window's title bar (top) or bottom edge. When the preferred
+    /// side doesn't have room, fall back to the other side (matches the
+    /// original chat behavior; preserves the "panel still appears" property).
+    nonisolated static func origin(
+        caretRect: NSRect,
+        panelSize: NSSize,
+        windowFrame: NSRect,
+        placement: Placement,
+        gap: CGFloat = 4,
+        horizontalOffset: CGFloat = 0
+    ) -> NSPoint {
+        let aboveOriginY = caretRect.maxY + gap
+        let belowOriginY = caretRect.minY - panelSize.height - gap
+        let roomAbove = (windowFrame.maxY - 8) - panelSize.height - caretRect.maxY - gap
+        let roomBelow = caretRect.minY - (windowFrame.minY + 8) - panelSize.height - gap
+        let x = caretRect.minX + horizontalOffset
+        switch placement {
+        case .above:
+            return roomAbove >= 0
+                ? NSPoint(x: x, y: aboveOriginY)
+                : NSPoint(x: x, y: belowOriginY)
+        case .below:
+            return roomBelow >= 0
+                ? NSPoint(x: x, y: belowOriginY)
+                : NSPoint(x: x, y: aboveOriginY)
+        case .auto:
+            // Tie → above (chat composer is the more common consumer).
+            if roomBelow > roomAbove {
+                return NSPoint(x: x, y: belowOriginY)
+            }
+            return NSPoint(x: x, y: aboveOriginY)
         }
+    }
+
+    /// Position the panel relative to a caret rect (in screen coordinates) and
+    /// attach it as a child window so it tracks window moves. The composer
+    /// coordinator computes the caret rect via ``caretRect(in:)`` and passes it
+    /// here; the panel itself stays free of NSTextView/AppKit-layout concerns.
+    ///
+    /// - Parameters:
+    ///   - caretRect: rect (screen coordinates) of the line containing the
+    ///     caret. Passing a 0-height rect (just the caret point) is fine — the
+    ///     positioning math measures "above/below the caret point" rather than
+    ///     "above/below the caret's line", but `.auto` still has both sides to
+    ///     compare against.
+    ///   - window: the parent window to attach to (and to measure room
+    ///     against).
+    ///   - placement: preferred direction (default `.above` — chat composer
+    ///     convention).
+    ///   - gap: vertical gap between the caret rect and the panel (default
+    ///     4pt).
+    ///   - horizontalOffset: extra horizontal offset added to the computed
+    ///     origin (default 0).
+    func present(
+        caretRect: NSRect,
+        in window: NSWindow,
+        placement: Placement = .above,
+        gap: CGFloat = 4,
+        horizontalOffset: CGFloat = 0
+    ) {
+        let origin = Self.origin(
+            caretRect: caretRect,
+            panelSize: frame.size,
+            windowFrame: window.frame,
+            placement: placement,
+            gap: gap,
+            horizontalOffset: horizontalOffset)
         setFrameOrigin(origin)
         if parent == nil {
             window.addChildWindow(self, ordered: .above)
         }
         orderFront(nil)
+    }
+
+    /// Compute the rect (in screen coordinates) of the line that contains an
+    /// `NSTextView`'s caret. Returns nil if the live AppKit state is unusable
+    /// (no `layoutManager`, `textContainer`, or `window`), in which case the
+    /// caller should fall back to positioning relative to the text view's
+    /// bounds (see `ComposerTextView.Coordinator.presentPanel()`).
+    ///
+    /// Canonical AppKit recipe:
+    /// 1. `ensureLayout(for: textContainer)` so the layout manager has line
+    ///    fragments for the current text.
+    /// 2. Map the caret's character location → glyph location via
+    ///    `glyphRange(forCharacterRange:)` (a 0-length character range → 0-
+    ///    length glyph range, but the location is what we need).
+    /// 3. `lineFragmentRect(forGlyphAt:effectiveRange:)` returns the line's
+    ///    rect in text-container coordinate space (with the line's full
+    ///    height — important so "above vs below" measures against the full
+    ///    line, not a 0-height point).
+    /// 4. Offset by `textContainerOrigin` → text-view coordinate space.
+    /// 5. `convert(_:to: nil)` → window coordinate space.
+    /// 6. `convertToScreen(_:)` → screen coordinate space.
+    @MainActor
+    static func caretRect(in textView: NSTextView) -> NSRect? {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer,
+              let window = textView.window else { return nil }
+        let sel = textView.selectedRange()  // (location, 0) for a plain caret
+        let stringLength = (textView.string as NSString).length
+        guard sel.location >= 0, sel.location <= stringLength else { return nil }
+        layoutManager.ensureLayout(for: textContainer)
+
+        // Empty document: no glyphs to anchor a line fragment rect to. Use
+        // the text container origin (top of the text area) so the caller can
+        // still position the panel at the right vertical location.
+        let glyphCount = layoutManager.numberOfGlyphs
+        guard glyphCount > 0 else {
+            let originInTextView = textView.textContainerOrigin
+            let rectInWindow = textView.convert(
+                NSRect(origin: originInTextView, size: .zero),
+                to: nil)
+            return window.convertToScreen(rectInWindow)
+        }
+
+        // Map the caret's character location → glyph location. For a 0-length
+        // character range this returns a 0-length glyph range, but the
+        // location is what we want.
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: NSRange(location: sel.location, length: 0),
+            actualCharacterRange: nil)
+        // Caret at end-of-document: glyphRange.location may equal glyphCount.
+        // Clamp to the last valid glyph index so lineFragmentRect doesn't
+        // return .zero.
+        let safeGlyphIndex: Int
+        if glyphRange.location != NSNotFound, glyphRange.location < glyphCount {
+            safeGlyphIndex = glyphRange.location
+        } else {
+            safeGlyphIndex = glyphCount - 1
+        }
+        let lineFragmentRect = layoutManager.lineFragmentRect(
+            forGlyphAt: safeGlyphIndex,
+            effectiveRange: nil)
+        let textContainerOrigin = textView.textContainerOrigin
+        let rectInTextView = NSRect(
+            x: lineFragmentRect.minX + textContainerOrigin.x,
+            y: lineFragmentRect.minY + textContainerOrigin.y,
+            width: lineFragmentRect.width,
+            height: lineFragmentRect.height)
+        let rectInWindow = textView.convert(rectInTextView, to: nil)
+        return window.convertToScreen(rectInWindow)
     }
 }
 

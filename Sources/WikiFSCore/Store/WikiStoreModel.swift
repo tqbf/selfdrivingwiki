@@ -152,6 +152,23 @@ public final class WikiStoreModel {
         tabs.first { $0.id == activeTabID }
     }
 
+    /// `true` when the active tab is showing the markdown editor — a
+    /// `PageDetailView` or `SourceDetailView` in edit mode (the two surfaces
+    /// backed by `DropLinkTextView`; see `Sources/WikiFS/Editor/DropLinkTextView.swift`).
+    /// Both views sync their local `@State isEditing` into `EditorTab.isEditing`
+    /// via `setTabEditing(tabID:isEditing:)`, so reading the tab here is the
+    /// single source of truth.
+    ///
+    /// Used by `WikiDetailView.body` to gate its parent-level `.dropDestination`
+    /// on `wikiSidebarItem`: while editing, the destination is removed so a
+    /// sidebar drag inserts a `[[wikilink]]` at the editor's drop point (issue #616)
+    /// instead of opening a new tab. Other surfaces (`SystemPromptDetailView`,
+    /// `ChatView`, welcome screen, reader mode) never set `isEditing`, so they
+    /// keep the tab-opening drop behavior — matching the original semantics.
+    public var isActiveTabEditing: Bool {
+        activeTab?.isEditing ?? false
+    }
+
     /// The removable list of ingested files (Phase 5). Like `summaries`, this is
     /// ALWAYS rebuilt from `store.listSources()` after a change, never
     /// incrementally patched (§3.1). Most-recent-first.

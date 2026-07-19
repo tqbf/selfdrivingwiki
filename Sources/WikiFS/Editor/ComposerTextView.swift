@@ -472,6 +472,12 @@ struct ComposerTextView: NSViewRepresentable {
 
         /// Show (or refresh) the dropdown above the composer. Installs the
         /// local ↑/↓/Escape monitor (reviewer correction #2).
+        ///
+        /// Positioning (#680 prep): the panel anchors to the **caret line**,
+        /// not the text view's bounds — for a multi-line composer, view-bounds
+        /// anchoring would put the dropdown far above the caret. Falls back to
+        /// the text view's bounds only if `caretRect(in:)` returns nil (live
+        /// AppKit state not ready, e.g. no layoutManager).
         @MainActor
         private func presentPanel() {
             guard parent.autocomplete != nil else { return }
@@ -485,7 +491,20 @@ struct ComposerTextView: NSViewRepresentable {
                     self?.commitSelection(result)
                 }
             }
-            panel.present(above: anchor)
+            guard let window = anchor.window else {
+                // No window yet — can't attach as child. Bail; the next
+                // keystroke will retry once the view is in a window.
+                return
+            }
+            // Prefer the caret-line rect; fall back to the text view's bounds
+            // if the live AppKit state isn't usable (no layoutManager, no
+            // textContainer, empty document with no glyphs). Bounds-based
+            // placement still uses the same caret-rect math (so the rect's
+            // max/min Y just becomes the view's top/bottom instead of the
+            // caret line's), preserving the "just above with 4pt gap" behavior.
+            let caretRect = ChatAutocompletePanel.caretRect(in: anchor)
+                ?? window.convertToScreen(anchor.convert(anchor.bounds, to: nil))
+            panel.present(caretRect: caretRect, in: window, placement: .above)
             installKeyMonitor()
         }
 

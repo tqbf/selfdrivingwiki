@@ -37,6 +37,11 @@ struct AgentsSettingsView: View {
     /// hardcoded seed buttons (Add Claude / Add Hermes / Add OpenCode) with
     /// a non-destructive, catalog-driven sheet. Cancel = no change (AC.2).
     @State private var showAddSheet = false
+    /// Per-view collapse state for the `CollapsibleDetailHeader`. Starts
+    /// expanded — a Settings panel is something the user opened to interact
+    /// with, so showing the form by default (rather than hiding it behind a
+    /// chevron) avoids a friction click on every visit.
+    @State private var isExpanded = true
 
     @AppStorage(AgentLauncher.PermissionModeKey.chat)   private var chatModeRaw   = PermissionPolicy.bypass.rawValue
     @AppStorage(AgentLauncher.PermissionModeKey.ingest) private var ingestModeRaw = PermissionPolicy.bypass.rawValue
@@ -57,57 +62,69 @@ struct AgentsSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            providersSection
-            permissionSection
-        }
-        .formStyle(.grouped)
-        .frame(minWidth: 560, minHeight: 520)
-        // #663: the Add Provider sheet. Non-destructive (nothing is written
-        // until an Add button is pressed — AC.2). The handoff to the editor
-        // uses `DispatchQueue.main.async` (see correction §5): letting this
-        // sheet finish dismissing before the editor presents avoids the
-        // SwiftUI hazard where the second sheet silently fails when the
-        // first is mid-dismissal.
-        .sheet(isPresented: $showAddSheet) {
-            AddProviderSheet(
-                existingIDs: Set(config.providers.map(\.id)),
-                onAdd: { provider in appendProvider(provider) },
-                onAddNeedsEditor: { provider in
-                    showAddSheet = false
-                    DispatchQueue.main.async { editingProvider = provider }
-                })
-        }
-        .sheet(item: $editingProvider) { provider in
-            ProviderEditorView(
-                provider: provider,
-                cachedModels: config.cachedModels(forProvider: provider.id),
-                selectedModelId: config.selectedModelId(forProvider: provider.id) ?? "",
-                credentialStore: credentialStore,
-                onSave: { updated, selectedModelId in
-                    applyEdit(updated, selectedModelId: selectedModelId)
-                },
-                onRefreshModels: { provider, models in
-                    // #640: durable-persist path for probe-discovered models.
-                    // Runs on the parent (which owns `containerDirectory` +
-                    // `@State config`). Uses `settingCachedModels` directly so
-                    // ALL existing fields carry over (maxConcurrent in
-                    // particular — the parent's `save(_:)` helper drops it,
-                    // pre-existing bug at AgentsSettingsView.swift:250-255,
-                    // :360-362). `@Sendable` so the sheet's `Task` can call
-                    // it across actors.
-                    await persistDiscoveredModels(models, forProvider: provider.id)
-                })
-        }
-        .confirmationDialog(
-            "Delete \(providerPendingDeletion?.label ?? "provider")?",
-            isPresented: isShowingDeleteConfirmation,
-            titleVisibility: .visible
+        // Collapsible title bar matching `PageDetailView` / `SourceDetailView`
+        // / `ChatView`. Collapsed shows just the "Agents" title row; expanded
+        // reveals the Form below. The title is non-editable (a fixed label
+        // for the whole settings tab), so `isTitleDisabled` pins it.
+        CollapsibleDetailHeader(
+            systemImage: "cpu",
+            title: "Agents",
+            isTitleDisabled: true,
+            isExpanded: $isExpanded,
+            onTitleCommit: { _ in }
         ) {
-            Button("Delete", role: .destructive) { confirmDelete() }
-            Button("Cancel", role: .cancel) { providerPendingDeletion = nil }
-        } message: {
-            Text("This removes its command and environment. Its API key stays in the Keychain until overwritten.")
+            Form {
+                providersSection
+                permissionSection
+            }
+            .formStyle(.grouped)
+            .frame(minWidth: 560, minHeight: 520)
+            // #663: the Add Provider sheet. Non-destructive (nothing is written
+            // until an Add button is pressed — AC.2). The handoff to the editor
+            // uses `DispatchQueue.main.async` (see correction §5): letting this
+            // sheet finish dismissing before the editor presents avoids the
+            // SwiftUI hazard where the second sheet silently fails when the
+            // first is mid-dismissal.
+            .sheet(isPresented: $showAddSheet) {
+                AddProviderSheet(
+                    existingIDs: Set(config.providers.map(\.id)),
+                    onAdd: { provider in appendProvider(provider) },
+                    onAddNeedsEditor: { provider in
+                        showAddSheet = false
+                        DispatchQueue.main.async { editingProvider = provider }
+                    })
+            }
+            .sheet(item: $editingProvider) { provider in
+                ProviderEditorView(
+                    provider: provider,
+                    cachedModels: config.cachedModels(forProvider: provider.id),
+                    selectedModelId: config.selectedModelId(forProvider: provider.id) ?? "",
+                    credentialStore: credentialStore,
+                    onSave: { updated, selectedModelId in
+                        applyEdit(updated, selectedModelId: selectedModelId)
+                    },
+                    onRefreshModels: { provider, models in
+                        // #640: durable-persist path for probe-discovered models.
+                        // Runs on the parent (which owns `containerDirectory` +
+                        // `@State config`). Uses `settingCachedModels` directly so
+                        // ALL existing fields carry over (maxConcurrent in
+                        // particular — the parent's `save(_:)` helper drops it,
+                        // pre-existing bug at AgentsSettingsView.swift:250-255,
+                        // :360-362). `@Sendable` so the sheet's `Task` can call
+                        // it across actors.
+                        await persistDiscoveredModels(models, forProvider: provider.id)
+                    })
+            }
+            .confirmationDialog(
+                "Delete \(providerPendingDeletion?.label ?? "provider")?",
+                isPresented: isShowingDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) { confirmDelete() }
+                Button("Cancel", role: .cancel) { providerPendingDeletion = nil }
+            } message: {
+                Text("This removes its command and environment. Its API key stays in the Keychain until overwritten.")
+            }
         }
     }
 
