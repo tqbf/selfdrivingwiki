@@ -692,8 +692,39 @@ struct SourceDetailView: View {
             } else {
                 Label("Apple Podcast", systemImage: "waveform")
             }
+        case "youtube", "vimeo", "spotify", "soundcloud", "remote-media":
+            // Phase 4b byteless media providers. The watch/listen URL lives on
+            // `origin.plan` (the pasted link, normalized); never "File" — these
+            // sources carry no file bytes. (Issue #618.)
+            let info = mediaProviderInfo(origin.agentName)
+            let urlString = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
+            if let url = URL(string: urlString), url.scheme != nil {
+                Button {
+                    NSWorkspace.shared.open(url)
+                } label: {
+                    Label(info.label, systemImage: info.systemImage)
+                }
+                .buttonStyle(.link)
+                .help("\(info.helpVerb): \(urlString)")
+            } else {
+                Label(info.label, systemImage: info.systemImage)
+            }
         default:
             Label("File", systemImage: "doc")
+        }
+    }
+
+    /// Provider-correct display text, SF Symbol, and tooltip verb for the
+    /// Phase 4b byteless media providers (`youtube`/`vimeo`/`spotify`/
+    /// `soundcloud`/`remote-media`). Used by `providerOriginTag(_:)`.
+    private func mediaProviderInfo(_ agentName: String) -> (label: String, systemImage: String, helpVerb: String) {
+        switch agentName {
+        case "youtube":      return ("YouTube", "play.rectangle", "Open video")
+        case "vimeo":        return ("Vimeo", "play.rectangle", "Open video")
+        case "spotify":      return ("Spotify", "music.note", "Open track")
+        case "soundcloud":   return ("SoundCloud", "waveform", "Open track")
+        case "remote-media": return ("Media", "music.note", "Open media")
+        default:             return ("Media", "music.note", "Open media")
         }
     }
 
