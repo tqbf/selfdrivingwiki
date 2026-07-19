@@ -20,7 +20,7 @@ import WikiFSEngine
 /// `byteSize == 0`) whose transcript never arrived has neither, so it must
 /// not be ingested. That is the regression these tests pin down.
 @MainActor
-@Suite(.tags(.integration), .timeLimit(.minutes(5)))
+@Suite(.timeLimit(.minutes(5)))
 struct IngestGateTests {
 
     private func tempStore() throws -> GRDBWikiStore {

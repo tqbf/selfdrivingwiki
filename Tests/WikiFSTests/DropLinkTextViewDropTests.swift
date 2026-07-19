@@ -129,7 +129,7 @@ struct DropLinkTextViewDropTests {
 /// the fast-tier `--skip` regex in `.github/workflows/ci.yml` so it runs only
 /// in the `swift-integration` job.
 @MainActor
-@Suite(.tags(.integration), .timeLimit(.minutes(5)))
+@Suite(.timeLimit(.minutes(5)))
 struct SidebarDropBuilderIntegrationTests {
 
     /// Resolve a fresh in-memory store + `WikiStoreModel`. Mirrors
@@ -144,7 +144,7 @@ struct SidebarDropBuilderIntegrationTests {
     /// A page drop resolves the page's title via `store.resolveAttachmentName`
     /// and emits `[[page:<ULID>|<Title>]]`. Creates one page, then drops a
     /// payload pointing at it.
-    @Test(.tags(.integration)) func pageDrop_resolvesTitleAndEmitsCanonicalLink() throws {
+    @Test func pageDrop_resolvesTitleAndEmitsCanonicalLink() throws {
         let (model, _) = try makeModel()
         model.newPage(title: "Home Page")
         guard case .page(let pageID) = model.selection else {
@@ -168,7 +168,7 @@ struct SidebarDropBuilderIntegrationTests {
     /// shape — `plans/drag-wikilinks.md` Step 3). The folder's leaf list is
     /// already flat when it arrives (no depth info survives the pasteboard),
     /// so each `- [[…]]` line is at depth 0.
-    @Test(.tags(.integration)) func multiPayloadDrop_emitsFlatDepth0MarkdownList() throws {
+    @Test func multiPayloadDrop_emitsFlatDepth0MarkdownList() throws {
         let (model, _) = try makeModel()
         model.newPage(title: "Alpha")
         guard case .page(let pageA) = model.selection else {
@@ -200,7 +200,7 @@ struct SidebarDropBuilderIntegrationTests {
     /// A stale target (deleted page → `resolveAttachmentName` returns nil →
     /// alias falls back to the raw ULID). The link is still canonical and
     /// resolves by id at render; the editor surface doesn't crash or refuse.
-    @Test(.tags(.integration)) func staleTarget_emitsLinkWithULIDAsAlias() throws {
+    @Test func staleTarget_emitsLinkWithULIDAsAlias() throws {
         let (model, _) = try makeModel()
         // No page exists at this id — the resolution path returns nil.
         let ulid = ULID.generate()
@@ -212,7 +212,7 @@ struct SidebarDropBuilderIntegrationTests {
 
     /// An empty payload list (an empty bookmark folder) is rejected without
     /// dirtying the editor — `insertionText` returns nil.
-    @Test(.tags(.integration)) func emptyPayloadList_isRejected() throws {
+    @Test func emptyPayloadList_isRejected() throws {
         let (model, _) = try makeModel()
         let out = SidebarDropBuilder.insertionText(for: [], store: model)
         #expect(out == nil)

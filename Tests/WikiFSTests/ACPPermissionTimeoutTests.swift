@@ -14,19 +14,16 @@ import ACPModel
 /// is the load-bearing correctness property — covered by tests #2, #3, #6
 /// (`plans/acp-permissions.md` §4.1 note #1, §8.2).
 ///
-/// Tagged `.integration` AND `.serialized` (issue #664): this suite is the
-/// identified cause of the 6-hour `swift-integration` CI hang. It uses real
-/// `Task`s, `Task.sleep`, and `CheckedContinuation` to exercise race-safety
-/// timing windows — under heavy parallel SQLite integration load the
-/// cooperative thread pool is starved, the carefully-tuned `budget` windows
-/// slip, and a continuation can suspend indefinitely (the same flakiness shape
-/// as `QueueEngineTests`, issue #448). `.serialized` removes intra-suite
-/// concurrency; `.timeLimit(.minutes(5))` is the per-test safety net; the
-/// skip-list entries below keep it out of the parallel-integration tier
-/// entirely (it's covered reliably in the fast tier, where the heavy SQLite
-/// suites are skipped and the cooperative pool isn't starved).
+/// `.serialized` AND `.timeLimit(.minutes(5))` (issue #664): this suite uses
+/// real `Task`s, `Task.sleep`, and `CheckedContinuation` to exercise
+/// race-safety timing windows. `.serialized` removes intra-suite concurrency
+/// so its carefully-tuned `budget` windows don't slip when multiple tests
+/// in the suite compete for the cooperative thread pool; `.timeLimit` is the
+/// per-test safety net against a hung continuation. Historically this suite
+/// was the identified cause of a 6-hour CI hang when run in parallel with the
+/// heavy SQLite integration suites — see #664 / #448 (`QueueEngineTests`
+/// shares the same flakiness shape).
 @Suite(
-    .tags(.integration),
     .timeLimit(.minutes(5)),
     .serialized
 )

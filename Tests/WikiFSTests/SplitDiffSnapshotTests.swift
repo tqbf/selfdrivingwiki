@@ -10,7 +10,7 @@ import Testing
 /// dark window, lets async work settle, then writes PNGs so the redesigned diff
 /// and chrome can be eyeballed (the "acceptance test is a screenshot" this
 /// layout rework needs). A light structural assertion keeps them honest.
-@Suite(.tags(.integration), .timeLimit(.minutes(5)))
+@Suite(.timeLimit(.minutes(5)))
 @MainActor
 struct SplitDiffSnapshotTests {
 

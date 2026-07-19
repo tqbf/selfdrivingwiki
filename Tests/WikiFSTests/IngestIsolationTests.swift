@@ -16,7 +16,7 @@ import Testing
 /// Store-layer tests only — the end-to-end agent pipeline (subprocess spawn +
 /// WIKI_WORKSPACE env propagation) requires manual validation.
 @MainActor
-@Suite(.tags(.integration), .timeLimit(.minutes(5)))
+@Suite(.timeLimit(.minutes(5)))
 struct IngestIsolationTests {
 
     private func tempStore() throws -> GRDBWikiStore {

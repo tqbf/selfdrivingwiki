@@ -7,7 +7,7 @@ import WikiFSCore
 /// Tests that `WikiFSEnumerator.enumerateChanges` reports deletions via
 /// `didDeleteItems(_:)` (issue #111). Without that call, rows removed from
 /// SQLite linger in the File Provider projection forever.
-@Suite(.tags(.integration), .timeLimit(.minutes(5)))
+@Suite(.timeLimit(.minutes(5)))
 struct EnumeratorDeletionTests {
 
     // MARK: - Mock observers

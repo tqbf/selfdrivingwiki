@@ -17,7 +17,7 @@ import Testing
 /// These are fast: they open a temp SQLite DB, build a small Tantivy index
 /// (3-5 docs), and call one resolver method per test. They live in the fast
 /// CI tier (not skip-listed).
-@Suite(.tags(.integration), .timeLimit(.minutes(5)))
+@Suite(.timeLimit(.minutes(5)))
 struct CLITantivyLegResolverTests {
 
     // MARK: - Helpers
@@ -41,7 +41,7 @@ struct CLITantivyLegResolverTests {
 
     // MARK: - resolvePageLeg
 
-    @Test(.tags(.integration)) func resolvePageLegReturnsNilWhenIndexEmpty() throws {
+    @Test func resolvePageLegReturnsNilWhenIndexEmpty() throws {
         let (container, fm) = try makeTempContainer()
         defer { try? fm.removeItem(at: container) }
         let wikiID = "01TEST0001"
@@ -56,7 +56,7 @@ struct CLITantivyLegResolverTests {
         #expect(leg == nil)
     }
 
-    @Test(.tags(.integration)) func resolvePageLegReturnsIndexedPagesInBestFirstOrder() async throws {
+    @Test func resolvePageLegReturnsIndexedPagesInBestFirstOrder() async throws {
         let (container, fm) = try makeTempContainer()
         defer { try? fm.removeItem(at: container) }
         let wikiID = "01TEST0002"
@@ -85,7 +85,7 @@ struct CLITantivyLegResolverTests {
         #expect(leg?.first?.id == a.id)
     }
 
-    @Test(.tags(.integration)) func resolvePageLegSurfacesFuzzyTypoMatches() async throws {
+    @Test func resolvePageLegSurfacesFuzzyTypoMatches() async throws {
         // AC #637: `wikictl page search "erikson"` (one-character typo) returns
         // "Erickson"-style pages. Tantivy's `fuzzyFields` are configured with
         // edit-distance 1 on title + body (`TantivyIndexer.swift:108-111`),
@@ -112,7 +112,7 @@ struct CLITantivyLegResolverTests {
 
     // MARK: - resolveSourceLeg
 
-    @Test(.tags(.integration)) func resolveSourceLegReturnsIndexedSources() async throws {
+    @Test func resolveSourceLegReturnsIndexedSources() async throws {
         let (container, fm) = try makeTempContainer()
         defer { try? fm.removeItem(at: container) }
         let wikiID = "01TEST0004"
@@ -137,7 +137,7 @@ struct CLITantivyLegResolverTests {
 
     // MARK: - resolveChatLeg
 
-    @Test(.tags(.integration)) func resolveChatLegReturnsIndexedChats() async throws {
+    @Test func resolveChatLegReturnsIndexedChats() async throws {
         let (container, fm) = try makeTempContainer()
         defer { try? fm.removeItem(at: container) }
         let wikiID = "01TEST0005"

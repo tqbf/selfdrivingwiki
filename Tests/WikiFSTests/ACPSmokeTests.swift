@@ -29,7 +29,6 @@ import WikiFSCore
 ///   advertises `authMethods` → `ACPBackendError.missingAPIKey`).
 /// - `ACP_SMOKE_PROMPT` (default `Reply with exactly: ACP_OK`).
 @Suite(
-    .tags(.integration),
     .timeLimit(.minutes(5)),
     .disabled(
         if: ProcessInfo.processInfo.environment["ACP_SMOKE"] == nil,
