@@ -23,8 +23,14 @@ import Testing
 /// real `Task.sleep` waits — running them in parallel (the default) saturates
 /// the cooperative pool and starves the debounce Tasks, making the timing
 /// assertions flaky. Serial execution keeps each test's waits deterministic.
+///
+/// `.tags(.integration)` because the Task-scheduler timing is not reliable
+/// under heavy cooperative-pool load — the suite deadlocked CI for 6 hours
+/// when run alongside the full integration tier. The fast CI tier skips it;
+/// `swift-integration` runs it (where its serial + polling approach is
+/// reliable enough). The deterministic-clock rewrite is tracked as follow-up.
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .tags(.integration))
 struct ComposerAutocompleteHostedTests {
 
     // MARK: - Hosted composer builder
