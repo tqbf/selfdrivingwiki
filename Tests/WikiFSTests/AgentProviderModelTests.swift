@@ -218,24 +218,26 @@ import ACPModel
 
     // MARK: - SpawnModelGuard precondition (diagnosed 2026-07-18 bug state)
 
-    @Test func resolvedProviderReturnsNilModelWhenNothingConfigured() {
+    @Test func selectedModelIdIsNilWhenNothingConfigured() {
         // Reproduce the diagnosed-bug precondition: the resolved provider has
-        // no `selectedModelIds` entry, so `resolvedProvider(for:)` returns a
-        // nil `modelId`. The launcher's `SpawnModelGuard` keys on exactly this
+        // no `selectedModelIds` entry, so its `selectedModelId(forProvider:)`
+        // returns nil. The launcher's `SpawnModelGuard` keys on exactly this
         // state to refuse spawn — this test pins the precondition so the guard
         // has a stable contract.
         //
         // The state: opencode is the default provider (the user manually set
         // `isDefault = true` — note `.opencodeDefault` ships with
         // `isDefault: false`, so we override) AND has no `selectedModelIds`
-        // entry. `resolvedProvider(for:)` falls back to `selectedProvider()`
-        // (the stage assignment is empty) → returns `(opencode, nil)`.
+        // entry → `selectedModelId(forProvider:)` returns nil. (#604 removed
+        // the per-stage assignment API; this is the same precondition the
+        // collapsed single-resolution path uses.)
         var opencodeAsDefault = AgentProvider.opencodeDefault
         opencodeAsDefault.isDefault = true
         let config = AgentProvidersConfig(providers: [opencodeAsDefault])
-        let resolved = config.resolvedProvider(for: .planner)
-        #expect(resolved.provider.id == "opencode")
-        #expect(resolved.modelId == nil)
+        let provider = config.selectedProvider()
+        let modelId = config.selectedModelId(forProvider: provider.id)
+        #expect(provider.id == "opencode")
+        #expect(modelId == nil)
         // This is the exact state `SpawnModelGuard.validate` refuses to spawn on
         // — confirmed by `SpawnModelGuardTests.returnsErrorMessageWhenModelIdIsNil`.
     }
@@ -366,15 +368,18 @@ import ACPModel
 
 /// Phase 1 (acp-multi-provider) tests: old-JSON decode compatibility,
 /// empty-list reseed, default promotion when the default provider is deleted,
-/// and `IngestStage`/`StageAssignment` resolution + fallback + pruning. Pure
-/// logic only — no live agent subprocess.
+/// and the legacy `stageAssignments` JSON key ignored on decode (#604 removed
+/// per-stage routing; the key is silently dropped). Pure logic only — no live
+/// agent subprocess.
 @Suite struct AgentProvidersConfigPhase1Tests {
 
     // MARK: - Old-JSON decode compatibility
 
-    /// A pre-Phase-1 `agent-providers.json` (has `env`/`enabled` but no
-    /// `stageAssignments` key) must decode without a migration.
-    @Test func oldJSONWithoutStageAssignmentsDecodes() throws {
+    /// A legacy `agent-providers.json` that contains a stale `stageAssignments`
+    /// key (#604 removed the field; the key is no longer in `CodingKeys`)
+    /// MUST decode without error — `JSONDecoder` silently ignores unknown
+    /// keys. The stale data is dropped; providers + selections are intact.
+    @Test func legacyJSONWithStagesKeyDecodesAndIgnoresIt() throws {
         let legacyJSON = """
         {
           "providers": [
@@ -383,15 +388,16 @@ import ACPModel
           ],
           "providerModels": {},
           "selectedModelIds": {},
-          "favoriteModelIds": {}
+          "favoriteModelIds": {},
+          "stageAssignments": {"planner": {"providerId": "hermes", "modelId": "x"}}
         }
         """
         let loaded = try JSONDecoder().decode(AgentProvidersConfig.self, from: legacyJSON.data(using: .utf8)!)
         #expect(loaded.providers.map(\.id) == ["claude-acp", "hermes"])
         #expect(loaded.provider(id: "hermes")?.env == ["ZAI_API_KEY": "x"])
-        #expect(loaded.stageAssignments.isEmpty)
-        // Every stage falls back to selectedProvider() with no assignment.
-        #expect(loaded.resolvedProvider(for: .planner).provider.id == "claude-acp")
+        // The stages key was silently dropped — there is no `stageAssignments`
+        // property anymore. The default provider resolves normally.
+        #expect(loaded.selectedProvider().id == "claude-acp")
     }
 
     // MARK: - Empty-list reseed
@@ -430,72 +436,27 @@ import ACPModel
         #expect(config.defaultProvider.id == "b")
     }
 
-    // MARK: - Stage assignment resolution + fallback + pruning
+    // MARK: - #604: all ingest stages resolve to the app default provider
 
-    @Test func resolvedProviderUsesStageAssignment() {
+    /// After #604, per-stage routing is gone: the launcher resolves ONE
+    /// (provider, modelId) pair via `selectedProvider()` + `selectedModelId`,
+    /// and all three phases (planner/executor/finalizer) share it. Pin that
+    /// this pair is what the (removed) per-stage resolution would have
+    /// returned, so a future re-add of per-stage routing doesn't silently
+    /// bypass the default.
+    @Test func ingestStagesResolveToAppDefaultProvider() {
         let config = AgentProvidersConfig(
             providers: [
                 AgentProvider(id: "claude-acp", label: "Claude", command: ["bun"], enabled: true, isDefault: true),
                 AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
             ],
-            stageAssignments: [.planner: StageAssignment(providerId: "hermes", modelId: "glm-4.7")])
-        let resolved = config.resolvedProvider(for: .planner)
-        #expect(resolved.provider.id == "hermes")
-        #expect(resolved.modelId == "glm-4.7")
-    }
-
-    @Test func resolvedProviderFallsBackToSelectedModelIdWhenAssignmentHasNoModel() {
-        let config = AgentProvidersConfig(
-            providers: [
-                AgentProvider(id: "claude-acp", label: "Claude", command: ["bun"], enabled: true, isDefault: true),
-                AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
-            ],
-            selectedModelIds: ["hermes": "glm-4.7"],
-            stageAssignments: [.executor: StageAssignment(providerId: "hermes", modelId: nil)])
-        let resolved = config.resolvedProvider(for: .executor)
-        #expect(resolved.provider.id == "hermes")
-        #expect(resolved.modelId == "glm-4.7")
-    }
-
-    @Test func resolvedProviderFallsBackToSelectedProviderWhenStageUnassigned() {
-        let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude-acp", label: "Claude", command: ["bun"], enabled: true, isDefault: true),
-            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
-        ])
-        // .finalizer has no assignment at all.
-        let resolved = config.resolvedProvider(for: .finalizer)
-        #expect(resolved.provider.id == "claude-acp")
-    }
-
-    @Test func stageAssignmentPrunedWhenProviderDeleted() {
-        // Build with an assignment, then rebuild without that provider — the
-        // constructor prunes the now-dangling assignment.
-        let withAssignment = AgentProvidersConfig(
-            providers: [
-                AgentProvider(id: "claude-acp", label: "Claude", command: ["bun"], enabled: true, isDefault: true),
-                AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
-            ],
-            stageAssignments: [.planner: StageAssignment(providerId: "hermes")])
-        #expect(withAssignment.stageAssignments[.planner] != nil)
-
-        let afterDeletingHermes = AgentProvidersConfig(
-            providers: withAssignment.providers.filter { $0.id != "hermes" },
-            stageAssignments: withAssignment.stageAssignments)
-        #expect(afterDeletingHermes.stageAssignments[.planner] == nil)
-        // Falls back to selectedProvider() now that the assignment is pruned.
-        #expect(afterDeletingHermes.resolvedProvider(for: .planner).provider.id == "claude-acp")
-    }
-
-    @Test func stageAssignmentPrunedWhenProviderDisabled() {
-        let config = AgentProvidersConfig(
-            providers: [
-                AgentProvider(id: "claude-acp", label: "Claude", command: ["bun"], enabled: true, isDefault: true),
-                AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: false, isDefault: false),
-            ],
-            stageAssignments: [.executor: StageAssignment(providerId: "hermes")])
-        // hermes is disabled → the assignment is pruned at construction time.
-        #expect(config.stageAssignments[.executor] == nil)
-        #expect(config.resolvedProvider(for: .executor).provider.id == "claude-acp")
+            selectedModelIds: ["claude-acp": "sonnet"])
+        let provider = config.selectedProvider()
+        let modelId = config.selectedModelId(forProvider: provider.id)
+        #expect(provider.id == "claude-acp")
+        #expect(modelId == "sonnet")
+        // The planner/executor/finalizer no longer have a distinct API;
+        // they all use this single resolution.
     }
 
     // MARK: - Claude no longer force-inserted

@@ -53,13 +53,6 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// Secrets-free; forward-compatible (a pre-favorites file decodes to empty).
     public var favoriteModelIds: [String: [String]]
 
-    /// Per-stage provider/model routing for ACP ingestion (planner/executor/
-    /// finalizer). Missing/empty = every stage falls back to
-    /// `selectedProvider()` — today's single-backend behavior is unchanged.
-    /// Pruned in `normalized()`: an assignment pointing at a deleted or
-    /// disabled provider is dropped rather than silently resolved elsewhere.
-    public var stageAssignments: [IngestStage: StageAssignment]
-
     /// Per-provider concurrent ingestion limits for the `QueueEngine`
     /// (Phase 2). Keyed by `AgentProvider.id`. A missing key (or 0) means the
     /// engine uses its default limit of 1. Forward-compatible: a pre-Phase-2
@@ -71,7 +64,6 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         providerModels: [String: [CachedModelInfo]] = [:],
         selectedModelIds: [String: String] = [:],
         favoriteModelIds: [String: [String]] = [:],
-        stageAssignments: [IngestStage: StageAssignment] = [:],
         maxConcurrent: [String: Int] = [:]
     ) {
         let normalizedProviders = AgentProvidersConfig.normalized(providers)
@@ -79,11 +71,6 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         self.providerModels = providerModels
         self.selectedModelIds = selectedModelIds
         self.favoriteModelIds = favoriteModelIds
-        // Prune against the NORMALIZED provider set so a stale/disabled
-        // assignment never survives construction.
-        self.stageAssignments = stageAssignments.filter { _, assignment in
-            normalizedProviders.contains(where: { $0.id == assignment.providerId && $0.enabled })
-        }
         self.maxConcurrent = maxConcurrent
     }
 
@@ -94,7 +81,6 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         case providerModels
         case selectedModelIds
         case favoriteModelIds
-        case stageAssignments
         case maxConcurrent
     }
 
@@ -109,14 +95,14 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         self.providerModels = try c.decodeIfPresent([String: [CachedModelInfo]].self, forKey: .providerModels) ?? [:]
         self.selectedModelIds = try c.decodeIfPresent([String: String].self, forKey: .selectedModelIds) ?? [:]
         self.favoriteModelIds = try c.decodeIfPresent([String: [String]].self, forKey: .favoriteModelIds) ?? [:]
-        // A file with no `stageAssignments` key (every pre-Phase-1 file) decodes
-        // to empty — every stage falls back to `selectedProvider()`.
-        let decodedAssignments = try c.decodeIfPresent([IngestStage: StageAssignment].self, forKey: .stageAssignments) ?? [:]
-        self.stageAssignments = decodedAssignments.filter { _, assignment in
-            normalizedProviders.contains(where: { $0.id == assignment.providerId && $0.enabled })
-        }
         // Forward-compatible: pre-Phase-2 files have no `maxConcurrent` key.
         self.maxConcurrent = try c.decodeIfPresent([String: Int].self, forKey: .maxConcurrent) ?? [:]
+        // NOTE: a legacy `stageAssignments` key in `agent-providers.json` is
+        // silently ignored — it is not in `CodingKeys`, so `JSONDecoder`
+        // skips it. The per-stage assignment feature was removed (#604): every
+        // ingest stage (planner/executor/finalizer) now resolves to the app
+        // default provider + its `selectedModelId`. The stale key is naturally
+        // migrated away on the next save (the field is gone).
     }
 
     /// JSON filename in the App Group container. Distinct from
@@ -200,7 +186,6 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             providerModels: providerModels,
             selectedModelIds: selectedModelIds,
             favoriteModelIds: favoriteModelIds,
-            stageAssignments: stageAssignments,
             maxConcurrent: maxConcurrent)
     }
 
@@ -247,7 +232,6 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             providerModels: cache,
             selectedModelIds: selectedModelIds,
             favoriteModelIds: favoriteModelIds,
-            stageAssignments: stageAssignments,
             maxConcurrent: maxConcurrent)
     }
 
@@ -268,7 +252,6 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             providerModels: providerModels,
             selectedModelIds: selections,
             favoriteModelIds: favoriteModelIds,
-            stageAssignments: stageAssignments,
             maxConcurrent: maxConcurrent)
     }
 
@@ -306,25 +289,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             providerModels: providerModels,
             selectedModelIds: selectedModelIds,
             favoriteModelIds: favorites,
-            stageAssignments: stageAssignments,
             maxConcurrent: maxConcurrent)
-    }
-
-    // MARK: - Ingestion stage routing (Phase 1 — core model only)
-
-    /// Resolve the provider + model a stage should use. Falls back to
-    /// `(selectedProvider(), selectedModelId(forProvider:))` when the stage has
-    /// no assignment, or its assignment was pruned (deleted/disabled provider)
-    /// in `normalized()`/`init`. PURE.
-    public func resolvedProvider(for stage: IngestStage) -> (provider: AgentProvider, modelId: String?) {
-        if let assignment = stageAssignments[stage],
-           let provider = provider(id: assignment.providerId),
-           provider.enabled {
-            let modelId = assignment.modelId ?? selectedModelId(forProvider: provider.id)
-            return (provider, modelId)
-        }
-        let fallback = selectedProvider()
-        return (fallback, selectedModelId(forProvider: fallback.id))
     }
 
     // MARK: - Seed (pure)
@@ -386,13 +351,21 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
                 providerModels: config.providerModels,
                 selectedModelIds: selectedModelIds,
                 favoriteModelIds: config.favoriteModelIds,
-                stageAssignments: config.stageAssignments,
                 maxConcurrent: config.maxConcurrent)
         }
         // Missing / corrupt / empty → seed + persist.
         DebugLog.store("AgentProvidersConfig.loadOrSeed: SEED (file missing/corrupt/empty)")
         let seeded = seed(discovered: discover())
-        try? seeded.save(to: directory)
+        do {
+            try seeded.save(to: directory)
+        } catch {
+            // Per house rules — never bare `try?`. Persisting the seed is
+            // best-effort here (the file may be on a read-only mount during
+            // first-launch discovery); the in-memory seed is returned either
+            // way so the launcher can continue, and the next write attempt
+            // (Settings edit) surfaces a real error if the dir is unwritable.
+            DebugLog.store("AgentProvidersConfig.loadOrSeed: failed to persist seed — \(error.localizedDescription)")
+        }
         return seeded
     }
 }

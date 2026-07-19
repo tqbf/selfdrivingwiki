@@ -12,8 +12,9 @@ import WikiFSCore
 /// at Agents settings. See `tmp/ingestion-stall-diagnosis.md` (2026-07-18).
 ///
 /// PURE — no actor, no I/O. Unit-tested directly. Called from two launch sites:
-/// - `AgentLauncher.resolveStageRouting` (ingest — covers planner/executor/
-///   finalizer through one choke-point)
+/// - `AgentLauncher.runACPIngestPlannerExecutors` (ingest — one choke-point
+///   covering planner/executor/finalizer; #604 collapsed the removed
+///   per-stage routing into a single resolution)
 /// - `AgentLauncher.startInteractiveQuery` (interactive chat)
 enum SpawnModelGuard {
     /// Returns `nil` when spawning is allowed (a non-empty `modelId` is set for
