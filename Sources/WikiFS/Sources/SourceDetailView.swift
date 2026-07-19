@@ -26,6 +26,12 @@ struct SourceDetailView: View {
     /// (i.e., the query agent with "Allow wiki edits" checked). Disables the
     /// Ingest button so the user sees it's unavailable before clicking.
     let isEditLockedExternally: Bool
+    /// The wiki this source belongs to. Used as the FP domain selector for
+    /// Share / Reveal in Finder, which route through `FileProviderFacade`'s
+    /// `getUserVisibleURL`. Multi-window means the shared `activeWikiID` is
+    /// last-activate-wins, so passing the session's explicit `wikiID` here is
+    /// required to reach the correct FP extension (issue #672).
+    let wikiID: String
     let runIngest: (PageID) -> Void
     /// Shared launcher — used by the standalone `runExtraction` to take the
     /// extraction slot (so a standalone extract and an ingest-path extract serialize
@@ -511,6 +517,7 @@ struct SourceDetailView: View {
                 if isEditing {
                     HStack(spacing: 10) {
                         Button("Save Changes", systemImage: "checkmark.circle") {
+                            DebugLog.tabs("SourceDetailView: Save Changes tapped")
                             commitEdit()
                         }
                         .keyboardShortcut("s", modifiers: .command)
@@ -518,12 +525,14 @@ struct SourceDetailView: View {
                                   || (headVersion?.content == editBuffer))
 
                         Button("Cancel", systemImage: "xmark.circle") {
+                            DebugLog.tabs("SourceDetailView: Cancel tapped")
                             isEditing = false
                         }
                         .keyboardShortcut(.escape, modifiers: [])
 
                         if isOutlineApplicable {
                             Button {
+                                DebugLog.tabs("SourceDetailView: Toggle Outline tapped (editing)")
                                 isOutlineExpanded.toggle()
                             } label: {
                                 Image(systemName: "sidebar.right")
@@ -546,6 +555,7 @@ struct SourceDetailView: View {
                             // secondary until there's markdown worth ingesting.
                             Button(isExtracting ? "Extracting…" : "Extract",
                                    systemImage: "doc.plaintext") {
+                                DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue)")
                                 Task {
                                     await runExtraction()
                                 }
@@ -566,6 +576,7 @@ struct SourceDetailView: View {
                         // re-fetch and append a new version.
                         if isRefreshable, !needsExtraction {
                             Button("Refresh", systemImage: "arrow.clockwise") {
+                                DebugLog.extraction("SourceDetailView: Refresh tapped — id=\(file.id.rawValue)")
                                 Task { await runRefresh() }
                             }
                             .disabled(isRefreshing)
@@ -577,6 +588,7 @@ struct SourceDetailView: View {
                     HStack(spacing: 10) {
                         if isMarkdownEditable {
                             Button("Edit", systemImage: "pencil") {
+                                DebugLog.tabs("SourceDetailView: Edit tapped — id=\(file.id.rawValue)")
                                 // Source the buffer from the resolved content so
                                 // a native `.mmd` (no processed-markdown head)
                                 // edits its raw diagram source, not an empty
@@ -608,8 +620,8 @@ struct SourceDetailView: View {
                             Button("Share", systemImage: "square.and.arrow.up") {
                                 DebugLog.fileprovider("SourceDetailView: Share tapped — id=\(file.id.rawValue)")
                                 Task {
-                                    guard let url = await fileProvider.resolveSourceByNameURL(id: file.id) else {
-                                        DebugLog.fileprovider("Share source detail: resolveSourceByNameURL returned nil — id=\(file.id.rawValue)")
+                                    guard let url = await fileProvider.resolveSourceByNameURL(id: file.id, wikiID: wikiID) else {
+                                        DebugLog.fileprovider("Share source detail: resolveSourceByNameURL returned nil — id=\(file.id.rawValue) wikiID=\(wikiID)")
                                         return
                                     }
                                     DebugLog.fileprovider("Share source detail: \(url.lastPathComponent)")
@@ -628,12 +640,13 @@ struct SourceDetailView: View {
                             .help("Share this source file")
                             Button("Reveal in Finder", systemImage: "folder") {
                                 DebugLog.fileprovider("SourceDetailView: Reveal in Finder tapped — id=\(file.id.rawValue)")
-                                Task { await fileProvider.revealSourceInFinder(id: file.id) }
+                                Task { await fileProvider.revealSourceInFinder(id: file.id, wikiID: wikiID) }
                             }
                             .help("Reveal this source file in Finder")
                         }
                         if isOutlineApplicable {
                             Button {
+                                DebugLog.tabs("SourceDetailView: Toggle Outline tapped")
                                 isOutlineExpanded.toggle()
                             } label: {
                                 Image(systemName: "sidebar.right")

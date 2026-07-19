@@ -324,16 +324,16 @@ final class FileProviderFacade: ChangeSignaler {
         }
     }
 
-    func revealPageInFinder(id: PageID) async {
-        guard let url = await resolvePageByTitleURL(id: id) else { return }
+    func revealPageInFinder(id: PageID, wikiID: String? = nil) async {
+        guard let url = await resolvePageByTitleURL(id: id, wikiID: wikiID) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     /// Reveal a chat transcript file in Finder via its `chat-by-name` leaf
     /// identifier. Mirrors `revealPageInFinder`. Best-effort: silently no-ops if
     /// the domain isn't active or the daemon can't resolve the item.
-    func revealChatInFinder(id: PageID) async {
-        guard let url = await resolveChatByNameURL(id: id) else { return }
+    func revealChatInFinder(id: PageID, wikiID: String? = nil) async {
+        guard let url = await resolveChatByNameURL(id: id, wikiID: wikiID) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
@@ -342,9 +342,18 @@ final class FileProviderFacade: ChangeSignaler {
     /// `page-by-title` identifier (the same resolution `share`/`reveal` use) and
     /// hands it to `NSWorkspace`. URL asked at click time. Pass `appURL` to
     /// launch a specific app instead of the default handler.
-    func openPage(id: PageID, with appURL: URL? = nil) async {
-        guard let url = await resolvePageByTitleURL(id: id) else {
-            DebugLog.agent("openPage: FAILED resolving URL for id=\(id.rawValue)")
+    ///
+    /// Pass an explicit `wikiID` (instead of relying on the shared
+    /// `activeWikiID`) when the caller has session context — multi-window means
+    /// the shared `activeWikiID` is last-activate-wins, so a page from wiki A
+    /// viewed while wiki B's window was last activated would otherwise resolve
+    /// against wiki B's domain (issue #672: detail-view "Share" / "Reveal in
+    /// Finder" buttons routing to the wrong wiki's extension → "file doesn't
+    /// exist"). Detail views pass `session.wikiID`; legacy call sites without
+    /// session context leave the default (`activeWikiID`).
+    func openPage(id: PageID, with appURL: URL? = nil, wikiID: String? = nil) async {
+        guard let url = await resolvePageByTitleURL(id: id, wikiID: wikiID) else {
+            DebugLog.agent("openPage: FAILED resolving URL for id=\(id.rawValue) wikiID=\(wikiID ?? "nil(active=\(activeWikiID ?? "nil"))")")
             status = "Couldn’t resolve page for open."
             return
         }
@@ -357,9 +366,9 @@ final class FileProviderFacade: ChangeSignaler {
     /// (the same resolution `revealChatInFinder` uses) and hands it to
     /// `NSWorkspace`. Pass `appURL` to launch a specific app instead of the
     /// default handler. Mirrors `openPage`.
-    func openChat(id: PageID, with appURL: URL? = nil) async {
-        guard let url = await resolveChatByNameURL(id: id) else {
-            DebugLog.agent("openChat: FAILED resolving URL for id=\(id.rawValue)")
+    func openChat(id: PageID, with appURL: URL? = nil, wikiID: String? = nil) async {
+        guard let url = await resolveChatByNameURL(id: id, wikiID: wikiID) else {
+            DebugLog.agent("openChat: FAILED resolving URL for id=\(id.rawValue) wikiID=\(wikiID ?? "nil(active=\(activeWikiID ?? "nil"))")")
             status = "Couldn’t resolve chat for open."
             return
         }
@@ -391,8 +400,8 @@ final class FileProviderFacade: ChangeSignaler {
         }
     }
 
-    func revealSourceInFinder(id: PageID) async {
-        guard let url = await resolveSourceByNameURL(id: id) else { return }
+    func revealSourceInFinder(id: PageID, wikiID: String? = nil) async {
+        guard let url = await resolveSourceByNameURL(id: id, wikiID: wikiID) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
@@ -402,9 +411,22 @@ final class FileProviderFacade: ChangeSignaler {
     /// is human-readable (display name + short-id + extension), exactly what
     /// `sourceNode` projects under `sources/by-name/`.  Returns `nil` if the
     /// domain isn't active or the daemon can't resolve the item.
-    func resolveSourceByNameURL(id: PageID) async -> URL? {
-        guard let wikiID = activeWikiID else { return nil }
-        let domain = domain(id: wikiID, displayName: wikiID)
+    ///
+    /// `wikiID` selects the File Provider domain (one per wiki). Without an
+    /// explicit value it falls back to `activeWikiID` — but in multi-window
+    /// scenarios where two wiki windows are open at once, `activeWikiID` is
+    /// last-activate-wins, so callers with `WikiSession` context MUST pass
+    /// `session.wikiID` to avoid the request being routed to the wrong wiki's
+    /// FP extension (issue #672). The returned "file doesn't exist" error from
+    /// `getUserVisibleURL` is the symptom of routing to the wrong domain — the
+    /// extension reads the wrong wiki's DB and naturally doesn't find the item.
+    func resolveSourceByNameURL(id: PageID, wikiID: String? = nil) async -> URL? {
+        let resolvedWikiID = wikiID ?? activeWikiID
+        guard let wiki = resolvedWikiID else {
+            DebugLog.fileprovider("resolveSourceByNameURL: no wikiID (explicit=nil, active=nil) — id=\(id.rawValue)")
+            return nil
+        }
+        let domain = domain(id: wiki, displayName: wiki)
         guard let manager = NSFileProviderManager(for: domain) else { return nil }
         let identifier = NSFileProviderItemIdentifier(WikiFSContainerID.sourceByName(id.rawValue))
         do {
@@ -412,10 +434,10 @@ final class FileProviderFacade: ChangeSignaler {
                 manager: manager,
                 itemIdentifier: identifier,
                 timeout: .seconds(5))
-            DebugLog.fileprovider("resolveSourceByNameURL: resolved \(url.lastPathComponent)")
+            DebugLog.fileprovider("resolveSourceByNameURL: resolved \(url.lastPathComponent) wikiID=\(wiki)")
             return url
         } catch {
-            DebugLog.fileprovider("resolveSourceByNameURL: failed — \(error.localizedDescription)")
+            DebugLog.fileprovider("resolveSourceByNameURL: failed wikiID=\(wiki) explicitWikiIDArg=\(wikiID ?? "nil") activeWikiID=\(activeWikiID ?? "nil") — \(error.localizedDescription)")
             return nil
         }
     }
@@ -424,18 +446,26 @@ final class FileProviderFacade: ChangeSignaler {
     /// identifier.  Mirrors `resolveSourceByNameURL` but for pages — the daemon
     /// returns the canonical URL so the filename is human-readable and guaranteed
     /// to resolve.  Returns `nil` if the domain isn't active.
-    func resolvePageByTitleURL(id: PageID) async -> URL? {
-        guard let wikiID = activeWikiID else { return nil }
-        let domain = domain(id: wikiID, displayName: wikiID)
+    ///
+    /// See `resolveSourceByNameURL` for the `wikiID` parameter's role (issue #672).
+    func resolvePageByTitleURL(id: PageID, wikiID: String? = nil) async -> URL? {
+        let resolvedWikiID = wikiID ?? activeWikiID
+        guard let wiki = resolvedWikiID else {
+            DebugLog.fileprovider("resolvePageByTitleURL: no wikiID (explicit=nil, active=nil) — id=\(id.rawValue)")
+            return nil
+        }
+        let domain = domain(id: wiki, displayName: wiki)
         guard let manager = NSFileProviderManager(for: domain) else { return nil }
         let identifier = NSFileProviderItemIdentifier("page-by-title:\(id.rawValue)")
         do {
-            return try await userVisibleURL(
+            let url = try await userVisibleURL(
                 manager: manager,
                 itemIdentifier: identifier,
                 timeout: .seconds(5))
+            DebugLog.fileprovider("resolvePageByTitleURL: resolved \(url.lastPathComponent) wikiID=\(wiki)")
+            return url
         } catch {
-            DebugLog.fileprovider("resolvePageByTitleURL: failed — \(error.localizedDescription)")
+            DebugLog.fileprovider("resolvePageByTitleURL: failed wikiID=\(wiki) explicitWikiIDArg=\(wikiID ?? "nil") activeWikiID=\(activeWikiID ?? "nil") — \(error.localizedDescription)")
             return nil
         }
     }
@@ -445,9 +475,15 @@ final class FileProviderFacade: ChangeSignaler {
     /// — the daemon returns the canonical URL directly, so no path construction
     /// and no cold-cache race. Returns `nil` if the domain isn't active or the
     /// daemon can't resolve the item.
-    func resolveChatByNameURL(id: PageID) async -> URL? {
-        guard let wikiID = activeWikiID else { return nil }
-        let domain = domain(id: wikiID, displayName: wikiID)
+    ///
+    /// See `resolveSourceByNameURL` for the `wikiID` parameter's role (issue #672).
+    func resolveChatByNameURL(id: PageID, wikiID: String? = nil) async -> URL? {
+        let resolvedWikiID = wikiID ?? activeWikiID
+        guard let wiki = resolvedWikiID else {
+            DebugLog.fileprovider("resolveChatByNameURL: no wikiID (explicit=nil, active=nil) — id=\(id.rawValue)")
+            return nil
+        }
+        let domain = domain(id: wiki, displayName: wiki)
         guard let manager = NSFileProviderManager(for: domain) else { return nil }
         let identifier = NSFileProviderItemIdentifier(WikiFSContainerID.chatByName(id.rawValue))
         do {
@@ -455,10 +491,10 @@ final class FileProviderFacade: ChangeSignaler {
                 manager: manager,
                 itemIdentifier: identifier,
                 timeout: .seconds(5))
-            DebugLog.fileprovider("resolveChatByNameURL: resolved \(url.lastPathComponent)")
+            DebugLog.fileprovider("resolveChatByNameURL: resolved \(url.lastPathComponent) wikiID=\(wiki)")
             return url
         } catch {
-            DebugLog.fileprovider("resolveChatByNameURL: failed — \(error.localizedDescription)")
+            DebugLog.fileprovider("resolveChatByNameURL: failed wikiID=\(wiki) explicitWikiIDArg=\(wikiID ?? "nil") activeWikiID=\(activeWikiID ?? "nil") — \(error.localizedDescription)")
             return nil
         }
     }

@@ -540,14 +540,20 @@ struct ChatView: View {
             HStack(spacing: 10) {
                 if let chatID {
                     Button("Show in List", systemImage: "sidebar.left") {
+                        DebugLog.tabs("ChatView: Show in List tapped — id=\(chatID.rawValue)")
                         store.requestSidebarReveal(.chat(chatID))
                     }
                     .help("Reveal this chat in the sidebar")
                 }
                 if fileProvider.path != nil, let chatID {
                     Button("Share", systemImage: "square.and.arrow.up") {
+                        DebugLog.fileprovider("ChatView: Share tapped — id=\(chatID.rawValue)")
                         Task {
-                            guard let url = await fileProvider.resolveChatByNameURL(id: chatID) else { return }
+                            guard let url = await fileProvider.resolveChatByNameURL(id: chatID, wikiID: session.wikiID) else {
+                                DebugLog.fileprovider("Share chat detail: resolveChatByNameURL returned nil — id=\(chatID.rawValue) wikiID=\(session.wikiID)")
+                                return
+                            }
+                            DebugLog.fileprovider("Share chat detail: \(url.lastPathComponent)")
                             let picker = NSSharingServicePicker(items: [url])
                             let mouseScreen = NSEvent.mouseLocation
                             guard let window = NSApplication.shared.keyWindow,
@@ -562,11 +568,13 @@ struct ChatView: View {
                     }
                     .help("Share this chat")
                     Button("Reveal in Finder", systemImage: "folder") {
-                        Task { await fileProvider.revealChatInFinder(id: chatID) }
+                        DebugLog.fileprovider("ChatView: Reveal in Finder tapped — id=\(chatID.rawValue)")
+                        Task { await fileProvider.revealChatInFinder(id: chatID, wikiID: session.wikiID) }
                     }
                     .help("Reveal this chat file in Finder")
                 }
                 Button {
+                    DebugLog.tabs("ChatView: Toggle Outline tapped")
                     chatOutlineExpanded.toggle()
                 } label: {
                     Image(systemName: "sidebar.right")

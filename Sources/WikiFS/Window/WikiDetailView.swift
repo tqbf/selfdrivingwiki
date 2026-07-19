@@ -162,6 +162,7 @@ struct WikiDetailView: View {
                     isThisFileExtracting: tracker.extractingSourceIDs.contains(file.id),
                     // No edit lock — CAS prevents data races. Only extraction locks editing.
                     isEditLockedExternally: false,
+                    wikiID: session.wikiID,
                     runIngest: runIngest,
                     launcher: launcher,
                     extractionCoordinator: extractionCoordinator,

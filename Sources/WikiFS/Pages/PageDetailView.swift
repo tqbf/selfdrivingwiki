@@ -64,17 +64,20 @@ struct PageDetailView: View {
                 HStack(spacing: 10) {
                     if isEditing {
                         Button("Save Changes", systemImage: "checkmark.circle") {
+                            DebugLog.tabs("PageDetailView: Save Changes tapped")
                             commitEdit()
                         }
                         .keyboardShortcut("s", modifiers: .command)
                         .disabled(store.draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                         Button("Cancel", systemImage: "xmark.circle") {
+                            DebugLog.tabs("PageDetailView: Cancel tapped")
                             cancelEdit()
                         }
                         .keyboardShortcut(.escape, modifiers: [])
 
                         Button {
+                            DebugLog.tabs("PageDetailView: Toggle Outline tapped (editing)")
                             isOutlineExpanded.toggle()
                         } label: {
                             Image(systemName: "sidebar.right")
@@ -82,21 +85,30 @@ struct PageDetailView: View {
                         .help("Toggle Outline")
                     } else {
                         Button("Edit",
-                               systemImage: "pencil") { isEditing = true }
+                               systemImage: "pencil") {
+                            DebugLog.tabs("PageDetailView: Edit tapped")
+                            isEditing = true
+                        }
                             .help("Edit this page manually")
                         if case .page = store.selection {
                             lintButton
                         }
                         if case .page(let pageID) = store.selection {
                             Button("Show in List", systemImage: "sidebar.left") {
+                                DebugLog.tabs("PageDetailView: Show in List tapped — id=\(pageID.rawValue)")
                                 store.requestSidebarReveal(.page(pageID))
                             }
                             .help("Reveal this page in the sidebar")
                         }
                         if fileProvider.path != nil, case .page(let pageID) = store.selection {
                             Button("Share", systemImage: "square.and.arrow.up") {
+                                DebugLog.fileprovider("PageDetailView: Share tapped — id=\(pageID.rawValue)")
                                 Task {
-                                    guard let url = await fileProvider.resolvePageByTitleURL(id: pageID) else { return }
+                                    guard let url = await fileProvider.resolvePageByTitleURL(id: pageID, wikiID: session.wikiID) else {
+                                        DebugLog.fileprovider("Share page detail: resolvePageByTitleURL returned nil — id=\(pageID.rawValue) wikiID=\(session.wikiID)")
+                                        return
+                                    }
+                                    DebugLog.fileprovider("Share page detail: \(url.lastPathComponent)")
                                     let picker = NSSharingServicePicker(items: [url])
                                     let mouseScreen = NSEvent.mouseLocation
                                     guard let window = NSApplication.shared.keyWindow,
@@ -111,11 +123,13 @@ struct PageDetailView: View {
                             }
                             .help("Share this page")
                             Button("Reveal in Finder", systemImage: "folder") {
-                                Task { await fileProvider.revealPageInFinder(id: pageID) }
+                                DebugLog.fileprovider("PageDetailView: Reveal in Finder tapped — id=\(pageID.rawValue)")
+                                Task { await fileProvider.revealPageInFinder(id: pageID, wikiID: session.wikiID) }
                             }
                             .help("Reveal this page file in Finder")
                         }
                         Button {
+                            DebugLog.tabs("PageDetailView: Toggle Outline tapped")
                             isOutlineExpanded.toggle()
                         } label: {
                             Image(systemName: "sidebar.right")
